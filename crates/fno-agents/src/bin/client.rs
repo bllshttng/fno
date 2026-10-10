@@ -680,6 +680,11 @@ async fn run(args: Vec<String>) -> i32 {
         if args.get(1).map(String::as_str) == Some("gh-budget") {
             return fno_agents::gh_budget::run_gh_budget(&args[2..]);
         }
+        // `cutover` quiesces the writers and snapshots the stores for a
+        // machine move; it rides this action for the same reason.
+        if args.get(1).map(String::as_str) == Some("cutover") {
+            return fno_agents::cutover::run_cutover(&args[2..]).await;
+        }
         if args.len() < 2 {
             match fno_agents::gh_budget::run_gh_budget_stdin_door() {
                 -1 => {}
