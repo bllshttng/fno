@@ -333,7 +333,11 @@ the Python surface resolves the journal defaults",
         eprintln!("error: --until is before --since");
         return 1;
     }
-    let (rows, malformed) = read_rows(&events, cutoff, top);
+    let (mut rows, malformed) = read_rows(&events, cutoff, top);
+    // Chronological order, untimestamped last: the NoProgress legacy join
+    // takes the session's LATEST earlier loop_check row, and journals are
+    // read project-then-global, so read order is not time order.
+    rows.sort_by_key(|r| (r.ts.is_none(), r.ts));
     let fold = fold_rows(&rows);
     if json_output {
         println!(

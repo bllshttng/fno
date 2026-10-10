@@ -121,8 +121,8 @@ pub(crate) fn sandbox_ingest(home: &AgentsHome, emitter: &EventEmitter, now: i64
         if offset > file.size {
             offset = 0;
         }
-        let buckets = scan_transcript(&file.path, offset);
-        let new_offset = next_offset(&file.path, offset);
+        let (buckets, scanned) = scan_transcript(&file.path, offset);
+        let new_offset = offset + scanned;
         files_scanned += 1;
         for (bucket, hits) in buckets {
             let _ = emitter.emit(
@@ -160,32 +160,41 @@ pub(crate) fn sandbox_ingest(home: &AgentsHome, emitter: &EventEmitter, now: i64
 }
 
 /// Scan one transcript from `offset`, aggregating refusals into
-/// (class, rule, path) buckets, one `sandbox_denial` row each.
-fn scan_transcript(path: &Path, offset: u64) -> Vec<(DenialBucket, usize)> {
+/// (class, rule, path) buckets, one `sandbox_denial` row each. Returns the
+/// buckets plus the byte count actually scanned: the offset only advances
+/// over complete lines, and a short read advances by what it read, never
+/// by what it was offered.
+fn scan_transcript(path: &Path, offset: u64) -> (Vec<(DenialBucket, usize)>, u64) {
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), 0),
     };
     let end = file.metadata().map(|m| m.len()).unwrap_or(0);
     if offset >= end {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
     let read_len = (end - offset).min(MAX_SCAN_BYTES_PER_FILE);
     if file.seek(SeekFrom::Start(offset)).is_err() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
     let mut buf = vec![0u8; read_len as usize];
-    if file.read_exact(&mut buf).is_err() {
-        return Vec::new();
+    let mut scanned = 0usize;
+    if file.read_exact(&mut buf).is_ok() {
+        scanned = read_len as usize;
     }
     // Slice to the last complete line: a tail cut mid-line is re-read by
     // the next pass from the offset this pass records.
-    let text = String::from_utf8_lossy(&buf);
-    let scan_to = text.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = buf[..scanned]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    scanned = line_end;
+    let text = String::from_utf8_lossy(&buf[..scanned]);
 
     let mut order: Vec<String> = Vec::new();
     let mut buckets: HashMap<String, (DenialBucket, usize)> = HashMap::new();
-    for line in text[..scan_to].lines() {
+    for line in text.lines() {
         for (rule, path) in output_denial_markers(line) {
             let key = format!("{}|{}", rule, path);
             let entry = buckets.entry(key.clone()).or_insert_with(|| {
@@ -203,10 +212,14 @@ fn scan_transcript(path: &Path, offset: u64) -> Vec<(DenialBucket, usize)> {
             entry.1 += 1;
         }
     }
-    order
-        .into_iter()
-        .map(|k| buckets.remove(&k).expect("inserted above"))
-        .collect()
+    let scanned64 = scanned as u64;
+    (
+        order
+            .into_iter()
+            .map(|k| buckets.remove(&k).expect("inserted above"))
+            .collect(),
+        scanned64,
+    )
 }
 
 /// The denial markers in one rollout line, each as (rule, refused path).
@@ -275,22 +288,6 @@ fn refused_path_around(output: &str, hit: usize) -> Option<String> {
 
 fn is_path_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '~')
-}
-
-/// The byte offset the next pass reads from: this pass's end, or the file
-/// size when this pass consumed the tail.
-fn next_offset(path: &Path, offset: u64) -> u64 {
-    std::fs::metadata(path)
-        .map(|m| m.len())
-        .map(|len| {
-            let consumed = offset + MAX_SCAN_BYTES_PER_FILE;
-            if consumed > len {
-                len
-            } else {
-                consumed
-            }
-        })
-        .unwrap_or(offset)
 }
 
 #[cfg(test)]
@@ -367,5 +364,29 @@ mod tests {
         let markers = output_denial_markers(&line);
         assert_eq!(markers.len(), 1);
         assert_eq!(markers[0].1, "");
+    }
+
+    #[test]
+    fn scan_advances_only_over_complete_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-10-06T00-00-00-0f0e1d2c-3b4a-4958-8675-3092f4c1b2a3.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{{\"partial",
+                line_with_output("ps failed to run: Operation not permitted (os error 1)")
+            ),
+        )
+        .unwrap();
+        let (buckets, scanned) = scan_transcript(&path, 0);
+        assert_eq!(buckets.len(), 1);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(scanned as usize, text.rfind('\n').unwrap() + 1);
+        // The partial tail is re-read by the next pass, and advances nothing.
+        let (again, rescanned) = scan_transcript(&path, scanned);
+        assert!(again.is_empty());
+        assert_eq!(rescanned, 0);
     }
 }
