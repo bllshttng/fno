@@ -20,7 +20,7 @@ use crate::client_verbs::parse_iso8601 as parse_loose_ts;
 use crate::evals_macro::canonical_json;
 use crate::evals_macro::parse_since;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 const EXIT_USAGE: i32 = 2;
