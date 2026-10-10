@@ -954,6 +954,15 @@ def test_interrupted_live_send_keeps_the_stored_copy(
     assert stored["id"] == msg_id
     assert "kept body words" in stored["body"]
 
+    # The same staging writes the bus row first, so the killed send is also
+    # drainable: the body's only home is on the bus before any inject.
+    from fno.bus.log import iter_messages
+
+    staged = [m for m in iter_messages() if m.id == msg_id]
+    assert len(staged) == 1
+    assert staged[0].delivery is None
+    assert "kept body words" in staged[0].body
+
 
 # ---------------------------------------------------------------------------
 # a2a US7b / AC3-HP: the mux PaneSend live rung. A resolved session that is

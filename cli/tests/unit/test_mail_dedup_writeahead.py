@@ -294,8 +294,14 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
     assert res.exit_code == 0, f"exit={res.exit_code} out={res.output!r}"
 
     rows = list(iter_messages())
-    assert len(rows) == 1
-    audit = rows[0]
+    # Staged body row first, hosted receipt second; one id, two rows.
+    assert len(rows) == 2
+    staged, audit = rows
+    assert staged.id == audit.id
+    assert (staged.from_, staged.to, staged.kind, staged.delivery) == (
+        "web", recipient, "send", None
+    )
+    assert staged.body == injected[0]
     assert audit.id in res.output
     assert (audit.from_, audit.to, audit.kind, audit.delivery) == (
         "web", recipient, "send", "hosted"
@@ -305,6 +311,7 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
         "to_session": "abcd1234-1111-7222-8333-444455556666",
         "to_harness": "claude",
     }
+    # The hosted receipt supersedes the staged twin: nothing left to drain.
     assert scan_unread(recipient) == []
 
     sent = runner.invoke(app, ["mail", "sent", "--from-name", "web", "--json"])
@@ -335,6 +342,8 @@ def test_live_recipient_hosted_writes_audit_only_outbox_row(
 def test_live_recipient_audit_failure_does_not_queue_retry(
     runner, tmp_path, monkeypatch
 ):
+    """The receipt row fails AFTER a confirmed inject: the staged body row is
+    already on the bus, so nothing dangles and a retry would double-deliver."""
     from fno.bus.log import iter_messages
     from fno.cli import app
 
@@ -353,9 +362,11 @@ def test_live_recipient_audit_failure_does_not_queue_retry(
 
     assert res.exit_code == 0, res.output
     assert "delivered (hosted)" in res.stdout
-    assert "outbox record failed" in (res.stderr or "")
+    assert "receipt row failed" in (res.stderr or "")
     assert "do not retry" in (res.stderr or "")
-    assert list(iter_messages()) == []
+    rows = list(iter_messages())
+    assert [m.delivery for m in rows] == [None]
+    assert "hi" in rows[0].body
 
 
 def test_live_recipient_live_miss_writes_durable(runner, tmp_path, monkeypatch):
@@ -377,3 +388,60 @@ def test_live_recipient_live_miss_writes_durable(runner, tmp_path, monkeypatch):
     unread = scan_unread(recipient)
     assert unread, "the live-first durable fallback did not write"
     assert all(m.kind != "withdraw" for m in unread)
+
+
+def test_staged_row_rescues_a_missed_live_inject(runner, tmp_path, monkeypatch):
+    """A missed inject leaves the staged body row and the durable fallback under
+    one id; the drain surface shows the message exactly once, body intact."""
+    from fno.bus.cursor import scan_unread
+    from fno.bus.log import iter_messages
+    from fno.cli import app
+
+    use_tmpdir(monkeypatch, tmp_path)
+    recipient = _register_claude_peer("red")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
+    monkeypatch.setattr("fno.agents.dispatch._deliver_live", lambda *_a, **_k: False)
+
+    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
+    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
+
+    rows = [m for m in iter_messages() if m.to == recipient]
+    assert len(rows) == 2, "expected the staged row and its durable fallback"
+    assert len({m.id for m in rows}) == 1, "the twins stopped sharing an id"
+    assert all("hi" in m.body for m in rows)
+    unread = scan_unread(recipient)
+    assert len(unread) == 1, "one id surfaced twice to the drain"
+    assert "hi" in unread[0].body
+
+
+def test_stage_failure_skips_the_live_attempt(runner, tmp_path, monkeypatch):
+    """The bus door refuses the stage, so the inject never runs: a confirmed
+    inject into an id with no row is the dangling-Read-line bug. The durable
+    floor carries the message instead."""
+    from fno.bus.cursor import scan_unread
+    from fno.cli import app
+
+    use_tmpdir(monkeypatch, tmp_path)
+    recipient = _register_claude_peer("red")
+    monkeypatch.setattr(
+        "fno.agents.dispatch._registered_family1_state", lambda _e: "working"
+    )
+
+    def _no_stage(**_kw):
+        raise OSError("bus lock timeout")
+
+    def _no_live(*_a, **_k):
+        raise AssertionError("live lane ran on an unstaged send")
+
+    monkeypatch.setattr("fno.bus.log.stage_before_live", _no_stage)
+    monkeypatch.setattr("fno.agents.dispatch._deliver_live", _no_live)
+
+    res = runner.invoke(app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"])
+    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
+    assert "body row not staged" in (res.stderr or "")
+
+    unread = scan_unread(recipient)
+    assert unread, "the durable floor did not carry the unstaged message"
+    assert all(m.delivery is None for m in unread)

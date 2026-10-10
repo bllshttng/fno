@@ -417,6 +417,65 @@ def is_deliverable(env: Envelope) -> bool:
     return delivery not in (HOSTED_DELIVERY, TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
 
 
+def stage_before_live(
+    *,
+    msg_id: str,
+    sender: str,
+    recipient: str,
+    body: str,
+    thread: Optional[str] = None,
+    from_harness: Optional[str] = None,
+    to_harness: Optional[str] = None,
+    request_id: Optional[str] = None,
+    in_reply_to: Optional[str] = None,
+    from_session: Optional[str] = None,
+    from_model: Optional[str] = None,
+    to_kind: Optional[str] = None,
+    word_count: Optional[int] = None,
+    to_session: Optional[str] = None,
+    subject: Optional[str] = None,
+) -> Envelope:
+    """Append the message-only body row (``delivery=None``) BEFORE the live inject.
+
+    The bus row is the body's only home: the injected text tells the recipient
+    an id, and every read of that id lands on this row. Staging first means a
+    confirmed inject can never outlive its body -- the failure a post-confirm
+    append turns into a dangling Read line plus a do-not-retry receipt. A miss
+    leaves the row deliverable, so the drain delivers it exactly as a durable
+    copy.
+
+    The stage rides the append door's record seam: a message kind with no
+    delivery mark records to chats BEFORE the bus write and fails closed, so a
+    staged row that reports success landed in both stores. The receipt row
+    (:func:`record_hosted_delivery`) lands under the same id on confirmation,
+    and the drain skips the staged twin (W2 transcript check, then
+    :func:`hosted_ids` supersession in ``scan_unread``). A drain that fires
+    mid-inject can still print a duplicate: a duplicate is strictly better
+    than a drop."""
+    meta = {k: v for k, v in (("to_session", to_session), ("to_harness", to_harness)) if v}
+    env = Envelope.new(
+        id=msg_id,
+        thread=thread or msg_id,
+        from_=sender,
+        to=recipient,
+        kind="send",
+        body=body,
+        from_harness=from_harness,
+        to_harness=to_harness,
+        request_id=request_id,
+        in_reply_to=in_reply_to,
+        delivery=None,
+        from_session=from_session,
+        from_model=from_model,
+        to_kind=to_kind,
+        word_count=word_count,
+        meta=meta or None,
+        subject=subject,
+    )
+    append(env)
+    return env
+
+
 def record_hosted_delivery(
     *,
     msg_id: str,
@@ -434,14 +493,14 @@ def record_hosted_delivery(
     word_count: Optional[int] = None,
     to_session: Optional[str] = None,
     subject: Optional[str] = None,
-    before_live: bool = False,
 ) -> Envelope:
     """Append one audit-only record after confirmed hosted delivery. ``to_session``/
     ``to_harness`` name the session actually injected into, for the landed check
     (which reads the ``to_harness`` meta copy).
 
-    ``before_live`` writes first: the chats record only, before the live attempt,
-    so an interrupt cannot lose it and no drain sees it twice."""
+    The receipt row shares its id with the body row :func:`stage_before_live`
+    wrote ahead of the inject; this row is the one that proves the delivery and
+    supersedes the staged twin for every reader."""
     meta = {k: v for k, v in (("to_session", to_session), ("to_harness", to_harness)) if v}
     env = Envelope.new(
         id=msg_id,
@@ -454,7 +513,7 @@ def record_hosted_delivery(
         to_harness=to_harness,
         request_id=request_id,
         in_reply_to=in_reply_to,
-        delivery=None if before_live else HOSTED_DELIVERY,
+        delivery=HOSTED_DELIVERY,
         from_session=from_session,
         from_model=from_model,
         to_kind=to_kind,
@@ -462,10 +521,7 @@ def record_hosted_delivery(
         meta=meta or None,
         subject=subject,
     )
-    if before_live:
-        chats_verb(["append"], json.loads(to_json_line(env)))
-    else:
-        append(env)
+    append(env)
     return env
 
 
@@ -623,6 +679,14 @@ def landed_ids(msgs: list[Envelope]) -> set[str]:
             continue
         out.add(target.id)
     return out
+
+
+def hosted_ids(msgs: list[Envelope]) -> set[str]:
+    """Ids a hosted receipt supersedes (mirrors ``landed_ids``): the inject
+    confirmed, so the transcript carries the body and the staged twin must not
+    deliver. A TYPED row does not supersede: pane bytes are not proven
+    consumed, and the staged row is the recovery when a pane discarded them."""
+    return {m.id for m in msgs if m.delivery == HOSTED_DELIVERY}
 
 
 def iter_thread(thread_id: str, *, warn: bool = True) -> Iterator[Envelope]:

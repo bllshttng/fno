@@ -1105,12 +1105,16 @@ def rebuild_render(recipient: str) -> int:
     from fno.bus.log import Envelope, is_deliverable, iter_messages
 
     # Collect this recipient's envelopes, grouped by thread, preserving log
-    # (oldest-first) order within each thread.
+    # (oldest-first) order within each thread. One row per id: a staged body
+    # row and its durable fallback twin share an id, so the render matches the
+    # drain's one-print-per-id.
     threads: dict[str, list[Envelope]] = {}
     order: list[str] = []
+    seen: set[str] = set()
     for env in iter_messages():
-        if env.to != recipient or not is_deliverable(env):
+        if env.to != recipient or not is_deliverable(env) or env.id in seen:
             continue
+        seen.add(env.id)
         tid = env.thread or env.id
         if tid not in threads:
             threads[tid] = []

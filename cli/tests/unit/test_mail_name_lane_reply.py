@@ -564,7 +564,7 @@ def test_name_lane_audit_failure_keeps_hosted_receipt(
 
     assert result.exit_code == 0, result.output
     assert "delivered (hosted)" in result.stdout
-    assert "outbox record failed" in (result.stderr or "")
+    assert "receipt row failed" in (result.stderr or "")
     assert "do not retry" in (result.stderr or "")
     assert all(m.delivery != "hosted" for m in _bus_msgs())
 

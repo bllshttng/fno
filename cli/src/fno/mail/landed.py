@@ -179,6 +179,13 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
 
     now = _dt.now(tz=_tz.utc)
     all_msgs = list(iter_messages())
+    # One id, one row, the receipt's state: a staged body row and its receipt
+    # share an id, and the receipt (hosted, typed, durable fallback) is the
+    # truthful final state the unclaimed scan must read.
+    seen: dict = {}
+    for m in all_msgs:
+        seen[m.id] = m
+    all_msgs = list(seen.values())
     retracted = withdrawn_ids(all_msgs)
     already_landed = landed_ids(all_msgs)
     abandon_ttl = load_settings().inbox.landed_abandon_ttl
@@ -189,6 +196,10 @@ def _sent_unclaimed(handle: str, ttl_seconds: int) -> list:
         and m.delivery not in (TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
         and not _age_exceeds(m.ts, abandon_ttl, now)
     ]
+    by_id: dict[str, Envelope] = {}
+    for m in sent:
+        by_id[m.id] = m
+    sent = list(by_id.values())
     if not sent:
         return []
     pos = {m.id: i for i, m in enumerate(all_msgs)}
