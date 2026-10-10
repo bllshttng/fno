@@ -92,6 +92,43 @@ def intel_command() -> None:
 doctor_app.command("lanes", hidden=True)(lanes_command)
 
 
+# `doctor stalls` shells to the Rust fold; hidden per the new-verb
+# convention. The flag surface is the binary's, never Python's.
+@doctor_app.command(
+    "stalls",
+    hidden=True,
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+def stalls_command(ctx: typer.Context) -> None:
+    """Why work stalls: one cause table over the event journals.
+
+    Cause, rows, distinct sessions, first/last day, per-cause detail; the
+    unattributed leftover is its own row and never folds away. Flags are the
+    binary's: `--since 7d|ISO`, `--until ISO`, `--json`.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.paths import event_journals
+    from fno.rust_binary import resolve_binary
+
+    args = list(ctx.args)
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("fno doctor stalls: the fno-agents binary was not found; run `fno doctor update --rust`.", err=True)
+        raise typer.Exit(code=2)
+    argv = [str(binary), "stalls", *args]
+    if not any(a == "--events" or a.startswith("--events=") for a in args):
+        for path in event_journals():
+            argv += ["--events", str(path)]
+    result = subprocess.run(argv, check=False, capture_output=True, text=True)
+    if result.stdout:
+        typer.echo(result.stdout, nl=False)
+    if result.stderr:
+        typer.echo(result.stderr, nl=False, err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
 def _route_harness(verb: str, argv: list[str]) -> None:
     from fno.agents.rust_runtime import refuse_without_binary, route_to_rust
     from fno.rust_binary import resolve_installed_binary
