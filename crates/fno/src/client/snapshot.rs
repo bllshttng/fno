@@ -293,7 +293,7 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     if let Some(home) = crate::live_store_fence::passwd_home() {
         cmd.env("HOME", home);
     }
-    let status = cmd
+    let mut child = cmd
         .arg("--headless=new")
         // Without its own profile dir a headless shot exits 2 whenever the
         // user's own Chrome is running, which is most of the time.
@@ -306,10 +306,47 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
         .arg(format!("file://{}", page.display()))
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|e| format!("cannot run {}: {e}", chrome.display()));
+        .spawn()
+        .map_err(|e| format!("cannot run {}: {e}", chrome.display()))?;
+    // Headless chrome can write the screenshot and then hang forever under
+    // load, wedging the whole shot run. The png on disk is the success
+    // signal: a short grace after it lands, then kill. A render with no png
+    // gets a hard two-minute bound.
+    let hard = Instant::now() + Duration::from_secs(120);
+    let mut grace: Option<Instant> = None;
+    let mut status: Option<std::process::ExitStatus> = None;
+    loop {
+        if out_abs.exists() && grace.is_none() {
+            grace = Some(Instant::now() + Duration::from_secs(5));
+        }
+        let bound = grace.map_or(hard, |g| g.min(hard));
+        match child.try_wait() {
+            Ok(Some(s)) => {
+                status = Some(s);
+                break;
+            }
+            Ok(None) if Instant::now() >= bound => {
+                let png_landed = out_abs.exists();
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_dir_all(&dir);
+                if png_landed {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "{} hung past 120s and wrote no png",
+                    chrome.display()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                return Err(format!("cannot wait for {}: {e}", chrome.display()));
+            }
+        }
+    }
     let _ = std::fs::remove_dir_all(&dir);
-    match status? {
+    match status.expect("loop breaks on exit, bound, or a wait error") {
         s if s.success() && out_abs.exists() => Ok(()),
         s => Err(format!("{} exited {s} and wrote no png", chrome.display())),
     }
