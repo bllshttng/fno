@@ -160,6 +160,12 @@ pub fn preflight(
 /// Takes the params OBJECT: a non-object value reads as fieldless, and every
 /// skip below fires the same way it would for a missing provider.
 pub fn spawn_preflight_refuses(params: &serde_json::Value, substrate: &str) -> bool {
+    // FNO_SPAWN_GATE=0 is the operator bypass both gate implementations
+    // honor. This preflight is gate-adjacent: the bypass excuses it the same
+    // way, so a lane exercised under the bypass keeps its own refusal order.
+    if std::env::var_os("FNO_SPAWN_GATE").is_some_and(|v| v == "0") {
+        return false;
+    }
     let provider = params
         .get("provider")
         .and_then(|v| v.as_str())
