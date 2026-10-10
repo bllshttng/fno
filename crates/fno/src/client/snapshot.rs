@@ -506,12 +506,10 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             // A fresh root has no feed rows, so the changed view rendered
             // with nothing to judge. Refuse the shot.
             if view.feed.as_ref().is_none_or(|f| f.win.items.is_empty()) {
-                return Err(
-                    "feed view rendered empty: this root has no feed rows; \
+                return Err("feed view rendered empty: this root has no feed rows; \
 shoot a root seeded with questions, mail or backlog activity \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
-                );
+                    .into());
             }
         }
         Some(ViewKind::RowMenu) => {
