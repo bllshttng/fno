@@ -1660,7 +1660,7 @@ pub fn run_chats(args: &[String]) -> i32 {
             }
         }
         "stage" => {
-            // The pre-live body row (x-2c12): the caller sends RAW fields on
+            // The pre-live body row: the caller sends RAW fields on
             // stdin, this mints the envelope with no delivery mark and rides
             // the same door as bus-append, so the chats record lands
             // fail-closed before the bus write. The envelope contract lives
