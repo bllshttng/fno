@@ -1254,6 +1254,62 @@ event_types:
           description: "The refusing session's id, when ambient identity is present. Pairs a refusal with a later passing send for the retry-rate query."
     consumers: [operator]
 
+  - name: sandbox_denial
+    description: "One harness sandbox/permission refusal ingested from a transcript into the event store (the stalls report's raw material; transcripts alone were invisible to every reader). One row per (session, class, refused path) per ingest pass, with a hit count. Only the errno-bearing runtime shape counts; a transcript quoting a denial is prose, not a refusal."
+    sources: [daemon]
+    data:
+      required: [harness, session_id, class, rule, hits]
+      properties:
+        harness:
+          type: string
+          enum: [codex, claude]
+          description: "Which harness's transcript the refusal came from; codex is ingested today, claude rides another node."
+        session_id:
+          type: string
+          description: "The transcript's harness session id (the rollout uuid for codex)."
+        class:
+          type: string
+          enum: [git_write, claim_lock, readonly_db, home_config, daemon_io, other]
+          description: "What the refusal hit, derived from the refused path: canonical .git writes, claim node locks, the read-only backlog store, codex home config, a blocked command with no path, or other."
+        rule:
+          type: string
+          enum: [operation_not_permitted, read_only_file_system, readonly_database]
+          description: "The refusing marker: the errno-suffixed runtime shape or SQLite's own sentence."
+        path:
+          type: [string, "null"]
+          description: "The refused path when the output named one; null when it did not. A pathless refusal still counts."
+        hits:
+          type: integer
+          description: "How many tool-output lines matched this (rule, path) in the ingested byte range."
+        transcript:
+          type: [string, "null"]
+          description: "The transcript file the denial came from."
+    consumers: [operator]
+
+  - name: sandbox_ingest
+    description: "One sandbox-denial ingest pass, INCLUDING a quiet one: a tick that stays silent cannot be told from a tick that never ran. The claude half rides another node."
+    sources: [daemon]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [ok, skipped]
+          description: "ok on a completed pass; skipped when a dispatch pause suspends the pass."
+        files_scanned:
+          type: integer
+          description: "Transcripts read this pass (bounded: newest first, capped count and bytes)."
+        denials:
+          type: integer
+          description: "Total refusal hits found this pass."
+        rows:
+          type: integer
+          description: "sandbox_denial rows emitted this pass (one per (session, class, path) bucket)."
+        reason:
+          type: [string, "null"]
+          description: "On a skipped pass: the dispatch pause's skip reason."
+    consumers: [operator]
+
   - name: backlog_freshness_verdict
     description: "One row per fno backlog freshness run: the premise and plan verdicts it read against current main, so the false-positive rate is measurable before any verdict is ever allowed to block (v1 warns only)."
     sources: [backlog]

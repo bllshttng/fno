@@ -59,6 +59,10 @@ pub(super) struct FleetArms {
     // store nobody touched, so an extra run is a no-op; the gate exists so a
     // slow head probe never stacks.
     park_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Sandbox-denial ingest: same one-in-flight discipline. The pass reads
+    // only new transcript bytes since its offset state, so an extra run is
+    // cheap; the gate exists so a large first-contact scan never stacks.
+    sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl FleetArms {
@@ -100,6 +104,7 @@ impl FleetArms {
             gc_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stale_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -317,6 +322,21 @@ impl FleetArms {
                 park_sweep(&home, &emitter, now_epoch_secs(), &|| {
                     sweeps::sweep_all_roots(&home)
                 });
+            });
+        }
+        // Sandbox-denial ingest: codex transcripts -> sandbox_denial rows,
+        // hourly, off-loop. The claude half rides another node; the row
+        // shape's harness field is the seam.
+        if !self
+            .sandbox_ingest_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.sandbox_ingest_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sandbox_ingest(&home, &emitter, now_epoch_secs());
             });
         }
         crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());

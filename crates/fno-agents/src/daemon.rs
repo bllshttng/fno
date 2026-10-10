@@ -6900,6 +6900,10 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
 /// split out for the file budget; each is stamp-gated and pause-aware.
 pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
+/// The sandbox-denial ingester (codex transcripts -> sandbox_denial rows),
+/// split out for the file budget; interval stamp + offset state, no pause.
+pub(crate) mod sandbox_ingest;
+pub(crate) use sandbox_ingest::{sandbox_ingest, SANDBOX_INGEST_INTERVAL_SECS};
 #[cfg(test)]
 pub(crate) use sweeps::{parse_stale_sweep, STALE_SWEEP_INTERVAL_SECS};
 // Test-only report imports live in this tail block beside the sweeps ones:

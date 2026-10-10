@@ -1495,6 +1495,11 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // The sandbox-denial ingester: codex transcript refusals -> one row per
+    // (session, class, path) with a hit count, plus the pass summary row.
+    // The claude half rides another node; harness is the seam.
+    "sandbox_denial",
+    "sandbox_ingest",
     // Reconcile's post-close emits (the Python twins declared both in
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
