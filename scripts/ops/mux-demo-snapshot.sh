@@ -70,6 +70,11 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     printf '[dev]\nsource = "%s"\n' "$FNO_DEMO_PY_SOURCE"
   fi
 } >"$ROOT/config.toml"
+# The bootstrap's dev-pin reader resolves HOME/.fno/config.toml and runs
+# before FNO_CONFIG is honored, so the pin has to live at the stock HOME
+# path too or the python leg provisions from PyPI and mismatches the binary.
+mkdir -p "$ROOT/.fno"
+cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
 export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/agents"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
@@ -111,7 +116,7 @@ file p2 "Remove the legacy coupon service"
 file p3 "Move image resizing to a queue worker"
 file p3 "Support Apple Pay on the checkout page"
 file p2 "Unify the three checkout config surfaces into one documented schema with a migration guide and a deprecation window"
-file p3 "Migrate the billing webhooks to the retry queue with backoff, jitter, and a dead-letter queue for poison events"
+file p3 "Split the merchant onboarding wizard into three steps with save-and-resume and a progress indicator"
 
 # The three panes work the first three nodes: a claim moves each node to In
 # Progress, and a session row names the harness session its pane runs.
@@ -227,10 +232,13 @@ run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 3 --name docs >/dev/null
 
 # The registry rows that name each pane's harness, model and state. The
-# server reads the registry on an interval, so wait a few seconds for it.
-python3 - "$ROOT/agents/registry.json" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
+# store is the registry table in the root's graph.db: agents/registry.json
+# is a fence directory an older write can only die on. The rows land after
+# the panes start, and the server reads the registry on an interval, so
+# wait a few seconds for it.
+python3 - "$ROOT/db/graph.db" "$SERVER" "$ROOT/code/checkout" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, sys, datetime
-path, server, cwd = sys.argv[1:4]
+db, server, cwd = sys.argv[1:4]
 sids = sys.argv[4:7]
 ids = [int(p) for p in sys.argv[7:]]
 now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -254,7 +262,7 @@ def thread(name, harness, how, attach=None):
         "liveness_measured_at": now, "created_at": now, "last_message_at": now,
         "mux": None,
     } | ({} if attach is None else {"attach_id": attach})
-json.dump({"schema_version": 1, "agents": [
+agents = [
     row("archer", "codex", "gpt-6-sol", ids[0], "working", sids[1]),
     row("scout", "claude", "opus", ids[1], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2], "working", sids[2]),
@@ -267,13 +275,46 @@ json.dump({"schema_version": 1, "agents": [
     thread("planner", "codex", "idle", attach="demo-attach-1"),
     thread("indexer", "claude", "unmeasured"),
     thread("migrator", "opencode", "exited"),
-]}, open(path, "w"))
+]
+
+# The table is the store (save_document's encoding): identity is
+# session:<harness>:<sid> or fno:<id>, payload is the row itself. The
+# fence directory above is never touched. A revision bump is what a
+# polling reader keys on.
+import sqlite3
+conn = sqlite3.connect(db)
+records = []
+for i, agent in enumerate(agents):
+    sid = agent.get("harness_session_id")
+    if sid:
+        identity = f"session:{agent['harness']}:{sid}"
+    else:
+        fid = agent.get("fno_id") or f"fno-demo-{agent['name']}"
+        agent["fno_id"] = fid
+        identity = f"fno:{fid}"
+    records.append((identity, i, json.dumps(agent)))
+conn.execute("DELETE FROM registry")
+conn.executemany(
+    "INSERT INTO registry(identity,ordinal,payload) VALUES (?,?,?)", records
+)
+row = conn.execute(
+    "SELECT value FROM registry_meta WHERE key='revision'"
+).fetchone()
+rev = int(row[0]) + 1 if row and str(row[0]).isdigit() else 1
+conn.execute(
+    "INSERT INTO registry_meta(key,value) VALUES ('revision',?) "
+    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+    (str(rev),),
+)
+conn.commit()
+conn.close()
 PY
 
 # Mail and feed events. The bell, the Messages tab and the activity feed read
-# stores the board fixture never wrote, so those views shot empty.
-# Both stores are append-only JSONL with a documented row shape, so the seed
-# writes them directly: chats/<chat>/messages.jsonl and questions.jsonl.
+# stores the board fixture never wrote, so those views shot empty. Both are
+# append-only JSONL with a documented row shape, so the seed writes them
+# directly. With FNO_AGENTS_HOME=<root>/agents the projections resolve the
+# stores at <root>: chats/<chat>/messages.jsonl and questions.jsonl.
 python3 - "$ROOT" <<'PY'
 import json, os, sys, datetime
 root = sys.argv[1]
@@ -284,7 +325,7 @@ def ts(mins_ago):
 
 # Chats store: from/to join the registry rows above, so threads resolve to
 # seeded agents. The fleet: broadcast lands on the bell's Announcements tab.
-chats = f"{root}/.fno/chats"
+chats = f"{root}/chats"
 
 def msg(i, mins_ago, frm, to, body):
     return {"type": "message", "kind": "send", "v": 1, "id": f"fmail-demo-{i}",
@@ -328,7 +369,7 @@ qs = [
     {"ts": ts(26), "type": "operator_decision", "source": "target",
      "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate"}},
 ]
-with open(f"{root}/.fno/questions.jsonl", "w") as f:
+with open(f"{root}/questions.jsonl", "w") as f:
     for q in qs:
         f.write(json.dumps(q) + "\n")
 PY
