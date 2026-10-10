@@ -155,10 +155,9 @@ pub fn preflight(
 /// printed and the caller must exit 2. Sits before the gate queue so an
 /// untrusted workspace costs no queue wait and no routing, and the refusal
 /// is one loud stderr line instead of a paid-then-silent harness death.
-pub fn spawn_preflight_refuses(
-    params: &serde_json::Map<String, serde_json::Value>,
-    substrate: &str,
-) -> bool {
+/// Takes the params OBJECT: a non-object value reads as fieldless, and every
+/// skip below fires the same way it would for a missing provider.
+pub fn spawn_preflight_refuses(params: &serde_json::Value, substrate: &str) -> bool {
     let provider = params
         .get("provider")
         .and_then(|v| v.as_str())
