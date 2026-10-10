@@ -10,6 +10,11 @@
 //!
 //! Read-only by contract: fno never flips the flag. Trust is the user's to
 //! accept.
+//!
+//! Leg boundary: the preflight runs in the fno-agents client, which every
+//! `fno agents spawn` passes through - including an `--account` run, whose
+//! Python re-exec happens after this check. Only a manually pinned
+//! `FNO_AGENTS_RUNTIME=python` invocation skips it.
 
 use std::path::{Path, PathBuf};
 
@@ -22,25 +27,13 @@ use std::path::{Path, PathBuf};
 /// reads `$HOME` there, so a machine that keeps those two trust stores in
 /// disagreement can pass or refuse one rung off. The refusal names the file
 /// it read, so the remedy stays actionable.
-pub fn resolved_config_root(account: Option<&str>, config_cwd: &Path) -> PathBuf {
-    if let Some(id) = account.map(str::trim).filter(|v| !v.is_empty()) {
-        let records = crate::agents_config::config_value_deep(config_cwd, &["accounts", "records"])
-            .or_else(|| {
-                crate::agents_config::config_value_deep(config_cwd, &["providers", "records"])
-            })
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default();
-        for record in &records {
-            if record.get("id").and_then(|v| v.as_str()) == Some(id) {
-                if let Some(dir) = record.get("config_dir").and_then(|v| v.as_str()) {
-                    let trimmed = dir.trim();
-                    if !trimmed.is_empty() {
-                        return expand_home(trimmed);
-                    }
-                }
-                break;
-            }
-        }
+pub fn resolved_config_root(account: Option<&str>) -> PathBuf {
+    if let Some(dir) = account
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .and_then(account_record_config_dir)
+    {
+        return dir;
     }
     if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
         return PathBuf::from(cfg);
@@ -48,6 +41,32 @@ pub fn resolved_config_root(account: Option<&str>, config_cwd: &Path) -> PathBuf
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+/// The `config_dir` of one account record, read from the GLOBAL config only:
+/// Python's `--account` resolver calls `load_providers(repo_root=None)`, so a
+/// project-local accounts block never reaches it, and the preflight that
+/// predicts the pinned dir must not read one either.
+fn account_record_config_dir(id: &str) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(crate::agents_config::global_config_path()?).ok()?;
+    let table = crate::agents_config::parse_config(&content)?;
+    let records = table
+        .get("accounts")
+        .or_else(|| table.get("providers"))?
+        .get("records")?
+        .as_array()?;
+    for record in records.iter().rev() {
+        // Last wins, matching Python's by_id dict on a duplicate id.
+        if record.get("id").and_then(|v| v.as_str()) == Some(id) {
+            return record
+                .get("config_dir")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(expand_home);
+        }
+    }
+    None
 }
 
 fn expand_home(raw: &str) -> PathBuf {
@@ -78,10 +97,13 @@ pub enum Verdict {
 /// absolute path, and the caller may have passed a symlinked spelling.
 pub fn check(root: &Path, cwd: &Path) -> Verdict {
     let config_json = root.join(".claude.json");
+    // One read, one parse: the candidates below retest keys, not the file.
+    let parsed: Option<serde_json::Value> = std::fs::read_to_string(&config_json)
+        .ok()
+        .and_then(|data| serde_json::from_str(&data).ok());
     let trusted = |key: &str| -> Option<bool> {
-        let data = std::fs::read_to_string(&config_json).ok()?;
-        let parsed: serde_json::Value = serde_json::from_str(&data).ok()?;
         parsed
+            .as_ref()?
             .get("projects")?
             .get(key)?
             .get("hasTrustDialogAccepted")
@@ -107,7 +129,6 @@ pub fn preflight(
     substrate: &str,
     account: Option<&str>,
     cwd: &str,
-    config_cwd: &Path,
 ) -> Result<Verdict, Skip> {
     if provider != "claude" {
         return Err(Skip::NotClaude);
@@ -126,7 +147,7 @@ pub fn preflight(
             Err(_) => return Err(Skip::UnresolvableCwd),
         }
     };
-    let root = resolved_config_root(account, config_cwd);
+    let root = resolved_config_root(account);
     Ok(check(&root, &dir))
 }
 
@@ -150,7 +171,6 @@ pub fn spawn_preflight_refuses(
             .get("cwd")
             .and_then(|v| v.as_str())
             .unwrap_or_default(),
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
     ) else {
         return false;
     };
@@ -207,17 +227,16 @@ mod tests {
     fn preflight_skip_matrix() {
         // Non-claude and pane skip; a relative cwd is legal input (it joins
         // the caller dir) and reaches the check.
-        let config_cwd = Path::new("/tmp");
         assert!(matches!(
-            preflight("codex", "bg", None, "/tmp/w", config_cwd),
+            preflight("codex", "bg", None, "/tmp/w"),
             Err(Skip::NotClaude)
         ));
         assert!(matches!(
-            preflight("claude", "pane", None, "/tmp/w", config_cwd),
+            preflight("claude", "pane", None, "/tmp/w"),
             Err(Skip::InteractivePane)
         ));
         assert!(
-            preflight("claude", "bg", None, "relative/dir", config_cwd).is_ok(),
+            preflight("claude", "bg", None, "relative/dir").is_ok(),
             "relative cwd reaches the check"
         );
     }
@@ -230,23 +249,24 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         let cfg_dir = root.join("claude-alt");
         fs::create_dir_all(&cfg_dir).unwrap();
-        // FNO_CONFIG pins the candidate list to exactly this file, isolating
-        // the read from the operator's global config.
-        let fixture = root.join("config.toml");
+        // FNO_GLOBAL_SETTINGS_PATH relocates the GLOBAL config the same way
+        // the Python loader honors: the sibling config.toml of the named file.
+        let fixture = root.join("settings.yaml");
+        let config = root.join("config.toml");
         fs::write(
-            &fixture,
+            &config,
             format!(
                 "[[accounts.records]]\nid = \"alt\"\nconfig_dir = \"{}\"\n",
                 cfg_dir.display()
             ),
         )
         .unwrap();
-        let prev = std::env::var_os("FNO_CONFIG");
-        std::env::set_var("FNO_CONFIG", &fixture);
-        let got = resolved_config_root(Some("alt"), &root);
-        let _ = std::env::remove_var("FNO_CONFIG");
+        let prev = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &fixture);
+        let got = resolved_config_root(Some("alt"));
+        let _ = std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
         if let Some(v) = prev {
-            std::env::set_var("FNO_CONFIG", v);
+            std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v);
         }
         assert_eq!(got, PathBuf::from(cfg_dir), "record config_dir wins");
         let _ = fs::remove_dir_all(&root);
