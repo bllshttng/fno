@@ -314,7 +314,7 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     // gets a hard two-minute bound.
     let hard = Instant::now() + Duration::from_secs(120);
     let mut grace: Option<Instant> = None;
-    let mut status: Option<std::process::ExitStatus> = None;
+    let status;
     loop {
         if out_abs.exists() && grace.is_none() {
             grace = Some(Instant::now() + Duration::from_secs(5));
