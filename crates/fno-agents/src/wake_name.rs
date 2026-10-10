@@ -195,7 +195,10 @@ mod tests {
     #[test]
     fn transcript_rung_answers_the_last_non_wake_name() {
         let home = tempfile::tempdir().unwrap();
-        let projects = home.path().join(".claude").join("projects").join("work");
+        let claude_home = ClaudeHome::at(home.path());
+        // The fixture plants the transcript where the production accessor
+        // looks, so a store-layout move follows the accessor, not this test.
+        let projects = claude_home.project_dirs()[0].join("work");
         std::fs::create_dir_all(&projects).unwrap();
         let uuid = "7ada6c8a-1111-2222-3333-444444444444";
         std::fs::write(
@@ -208,7 +211,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let claude_home = ClaudeHome::at(home.path());
         assert_eq!(
             lookup_transcript(&claude_home, uuid).as_deref(),
             Some("t-rename-later"),
@@ -221,7 +223,8 @@ mod tests {
     #[test]
     fn transcript_rung_skips_unspawnable_titles_and_missing_stores() {
         let home = tempfile::tempdir().unwrap();
-        let projects = home.path().join(".claude").join("projects").join("work");
+        let claude_home = ClaudeHome::at(home.path());
+        let projects = claude_home.project_dirs()[0].join("work");
         std::fs::create_dir_all(&projects).unwrap();
         let uuid = "7ada6c8a-1111-2222-3333-444444444444";
         std::fs::write(
@@ -233,7 +236,6 @@ mod tests {
             ),
         )
         .unwrap();
-        let claude_home = ClaudeHome::at(home.path());
         assert_eq!(lookup_transcript(&claude_home, uuid), None);
         assert_eq!(
             lookup_transcript(&ClaudeHome::at(home.path().join("none")), uuid),
