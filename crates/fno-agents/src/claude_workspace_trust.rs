@@ -81,12 +81,14 @@ fn expand_home(raw: &str) -> PathBuf {
 /// Why the preflight stays silent: a non-claude harness has no trust dialog,
 /// a pane can answer it interactively (that IS the remedy), and a cwd that
 /// never resolves names a dir the spawn would refuse on its own.
+#[derive(Debug)]
 pub enum Skip {
     NotClaude,
     InteractivePane,
     UnresolvableCwd,
 }
 
+#[derive(Debug)]
 pub enum Verdict {
     Trusted,
     Untrusted { config_json: String },
