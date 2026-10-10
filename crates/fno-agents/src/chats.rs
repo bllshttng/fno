@@ -1686,15 +1686,30 @@ pub fn run_chats(args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            let id = match obj.get("id").and_then(Value::as_str) {
+            // The record vocabulary rides both spellings: the Python send
+            // paths hold msg_id/sender/recipient, the envelope says
+            // id/from/to.
+            let id = match obj
+                .get("id")
+                .or_else(|| obj.get("msg_id"))
+                .and_then(Value::as_str)
+            {
                 Some(s) if !s.is_empty() => s,
                 _ => {
                     eprintln!("chats stage: id is required (the receipt row shares it)");
                     return 1;
                 }
             };
-            let from = obj.get("from").and_then(Value::as_str).unwrap_or("");
-            let to = obj.get("to").and_then(Value::as_str).unwrap_or("");
+            let from = obj
+                .get("from")
+                .or_else(|| obj.get("sender"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let to = obj
+                .get("to")
+                .or_else(|| obj.get("recipient"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let body = obj.get("body").and_then(Value::as_str).unwrap_or("");
             if from.is_empty() || to.is_empty() {
                 eprintln!("chats stage: from and to are required");

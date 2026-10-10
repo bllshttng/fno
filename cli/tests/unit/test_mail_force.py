@@ -221,7 +221,8 @@ def test_a_refused_pane_write_leaves_only_the_staged_row(_tmp_state, monkeypatch
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "take option 3", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code != 0
@@ -419,6 +420,9 @@ def test_force_refuses_a_bus_only_recipient_up_front(_tmp_state, monkeypatch):
     """
     entry, sent = _install(monkeypatch)
     entry.delivery_policy = "bus-only"
+    # Hermetic gate: the in-process hold answer, never the installed binary's
+    # (whose hold store is whatever the machine deployed).
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
 
     result = runner.invoke(
         mail_app,
