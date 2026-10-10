@@ -1102,7 +1102,7 @@ def rebuild_render(recipient: str) -> int:
     render shows every message as unread in the markdown view. The canonical
     consume position is the per-recipient bus cursor, which this never touches.
     """
-    from fno.bus.log import Envelope, is_deliverable, iter_messages
+    from fno.bus.log import Envelope, dedupe_by_id, is_deliverable, iter_messages
 
     # Collect this recipient's envelopes, grouped by thread, preserving log
     # (oldest-first) order within each thread. One row per id: a staged body
@@ -1110,11 +1110,9 @@ def rebuild_render(recipient: str) -> int:
     # drain's one-print-per-id.
     threads: dict[str, list[Envelope]] = {}
     order: list[str] = []
-    seen: set[str] = set()
-    for env in iter_messages():
-        if env.to != recipient or not is_deliverable(env) or env.id in seen:
-            continue
-        seen.add(env.id)
+    for env in dedupe_by_id(
+        (e for e in iter_messages() if e.to == recipient and is_deliverable(e))
+    ):
         tid = env.thread or env.id
         if tid not in threads:
             threads[tid] = []

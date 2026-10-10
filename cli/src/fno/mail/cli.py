@@ -1792,7 +1792,6 @@ def _forced_pane_send(
     it. Returns True when the bytes were written.
     """
     from fno.agents.dispatch import _mux_pane_send
-    from fno.bus.log import record_typed_delivery
 
     from fno.mail.thread_force import prepare_forced_entry
 
@@ -1859,26 +1858,28 @@ def _forced_pane_send(
         )
         raise typer.Exit(code=1)
 
-    # Stage the body row before the first keystroke: the bus row is the body's
-    # only home, and a staging failure types nothing -- typing into an id whose
-    # row never landed is the dangling-Read-line bug this prevents.
-    from fno.bus.log import stage_before_live
+    # One field set feeds both rows: the staged body row before the first
+    # keystroke and the typed receipt after confirmation. The bus row is the
+    # body's only home, so a staging failure types nothing -- typing into an
+    # id whose row never landed is the dangling-Read-line bug this prevents.
+    from fno.bus.log import record_typed_delivery, stage_before_live
 
+    record: dict[str, Any] = dict(
+        msg_id=msg_id,
+        sender=sender,
+        recipient=recipient,
+        body=record_body or wrapped,
+        from_harness=sender_harness,
+        to_harness=provider,
+        in_reply_to=reply_to,
+        from_session=sender_session,
+        from_model=sender_model,
+        to_kind="name",
+        word_count=authored_words,
+        subject=subject,
+    )
     try:
-        stage_before_live(
-            msg_id=msg_id,
-            sender=sender,
-            recipient=recipient,
-            body=record_body or wrapped,
-            from_harness=sender_harness,
-            to_harness=provider,
-            in_reply_to=reply_to,
-            from_session=sender_session,
-            from_model=sender_model,
-            to_kind="name",
-            word_count=authored_words,
-            subject=subject,
-        )
+        stage_before_live(**record)
     except Exception as exc:  # noqa: BLE001 - nothing typed, nothing confirmed
         _release_budget(reservation)
         print(
@@ -1907,20 +1908,9 @@ def _forced_pane_send(
 
     try:
         record_typed_delivery(
-            msg_id=msg_id,
-            sender=sender,
-            recipient=recipient,
-            body=record_body or wrapped,
+            **record,
             pane_id=str(pane_id),
             mux_session=str(mux_session) if mux_session else None,
-            from_harness=sender_harness,
-            to_harness=provider,
-            in_reply_to=reply_to,
-            from_session=sender_session,
-            from_model=sender_model,
-            to_kind="name",
-            word_count=authored_words,
-            subject=subject,
         )
     except Exception as exc:  # noqa: BLE001 - the bytes are already typed
         print(
@@ -4331,7 +4321,13 @@ def cmd_sent(
     that the agent read or acted on it -- that fourth state isn't observable.
     """
     from fno.agents.self_stamp import stamp_from
-    from fno.bus.log import HOSTED_DELIVERY, TYPED_DELIVERY, iter_messages, withdrawn_ids
+    from fno.bus.log import (
+        HOSTED_DELIVERY,
+        TYPED_DELIVERY,
+        dedupe_by_id,
+        iter_messages,
+        withdrawn_ids,
+    )
     from fno.config import load_settings
     from fno.mail.landed import _sent_unclaimed, age_minutes, landed_states
 
@@ -4346,13 +4342,9 @@ def cmd_sent(
     handle = stamp_from(from_name)
 
     is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    all_msgs = list(iter_messages())
     # One id, one row, the receipt's state: a staged body row and its receipt
     # share an id, and the outbox lists the send once, in its final state.
-    seen: dict[str, Any] = {}
-    for m in all_msgs:
-        seen[m.id] = m
-    all_msgs = list(seen.values())
+    all_msgs = dedupe_by_id(iter_messages(), last=True)
     if unclaimed_only:
         msgs = _sent_unclaimed(handle, load_settings().inbox.unclaimed_ttl)
         unclaimed_ids = {m.id for m in msgs}

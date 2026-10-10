@@ -152,7 +152,7 @@ def scan_unread(
     (cv-d54ddd45). By-name reads pass ``exclude_from=None`` (a direct address is
     never a self-echo).
     """
-    from fno.bus.log import hosted_ids, withdrawn_ids
+    from fno.bus.log import HOSTED_DELIVERY, dedupe_by_id, withdrawn_ids
 
     cursor = read_cursor(name)
     msgs = list(iter_messages(warn=warn)) if messages is None else messages
@@ -171,16 +171,12 @@ def scan_unread(
     # body and a drain must not print the twin. A typed receipt does NOT
     # supersede (pane bytes are not proven consumed; the staged row is the
     # recovery when the pane discarded them).
-    superseded = hosted_ids(msgs)
+    superseded = {m.id for m in msgs if m.delivery == HOSTED_DELIVERY}
     # One row per id, first in log order wins: a staged body row and its
     # durable fallback twin share an id, and without this the twin seated past
     # an acked cursor re-surfaces on every later drain as a skipped-duplicate
-    # marker that never converges. First wins, not last: a typed receipt must
-    # not swallow its staged recovery row.
-    seen: dict[str, Envelope] = {}
-    for m in msgs:
-        seen.setdefault(m.id, m)
-    msgs = list(seen.values())
+    # marker that never converges.
+    msgs = dedupe_by_id(msgs)
     excl = exclude_from or set()
 
     def _mine(m: Envelope) -> bool:

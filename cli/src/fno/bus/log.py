@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 from fno.rust_binary import VerbUnavailable, chats_verb
 from fno.time_budget import validate_timeout_budget
@@ -417,63 +417,20 @@ def is_deliverable(env: Envelope) -> bool:
     return delivery not in (HOSTED_DELIVERY, TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
 
 
-def stage_before_live(
-    *,
-    msg_id: str,
-    sender: str,
-    recipient: str,
-    body: str,
-    thread: Optional[str] = None,
-    from_harness: Optional[str] = None,
-    to_harness: Optional[str] = None,
-    request_id: Optional[str] = None,
-    in_reply_to: Optional[str] = None,
-    from_session: Optional[str] = None,
-    from_model: Optional[str] = None,
-    to_kind: Optional[str] = None,
-    word_count: Optional[int] = None,
-    to_session: Optional[str] = None,
-    subject: Optional[str] = None,
-) -> Envelope:
-    """Append the message-only body row (``delivery=None``) BEFORE the live inject.
+def stage_before_live(**fields: Any) -> None:
+    """Stage the message-only body row (no delivery mark) BEFORE the live inject.
 
-    The bus row is the body's only home: the injected text tells the recipient
-    an id, and every read of that id lands on this row. Staging first means a
-    confirmed inject can never outlive its body -- the failure a post-confirm
-    append turns into a dangling Read line plus a do-not-retry receipt. A miss
-    leaves the row deliverable, so the drain delivers it exactly as a durable
-    copy.
-
-    The stage rides the append door's record seam: a message kind with no
-    delivery mark records to chats BEFORE the bus write and fails closed, so a
-    staged row that reports success landed in both stores. The receipt row
-    (:func:`record_hosted_delivery`) lands under the same id on confirmation,
-    and the drain skips the staged twin (W2 transcript check, then
-    :func:`hosted_ids` supersession in ``scan_unread``). A drain that fires
-    mid-inject can still print a duplicate: a duplicate is strictly better
-    than a drop."""
-    meta = {k: v for k, v in (("to_session", to_session), ("to_harness", to_harness)) if v}
-    env = Envelope.new(
-        id=msg_id,
-        thread=thread or msg_id,
-        from_=sender,
-        to=recipient,
-        kind="send",
-        body=body,
-        from_harness=from_harness,
-        to_harness=to_harness,
-        request_id=request_id,
-        in_reply_to=in_reply_to,
-        delivery=None,
-        from_session=from_session,
-        from_model=from_model,
-        to_kind=to_kind,
-        word_count=word_count,
-        meta=meta or None,
-        subject=subject,
+    The bus row is the body's only home, so a confirmed inject can never
+    outlive it, and a miss leaves the row deliverable exactly as a durable
+    copy. The envelope contract lives in the door: the Rust ``chats stage``
+    verb (crates/fno-agents/src/chats.rs) validates the fields, mints the row,
+    and records chats fail-closed before the bus write. ``id`` is required;
+    the receipt row (:func:`record_hosted_delivery`) shares it on confirmation
+    and supersedes the staged twin at the drain."""
+    chats_verb(
+        ["stage", str(bus_log_path())],
+        {k: v for k, v in fields.items() if v is not None},
     )
-    append(env)
-    return env
 
 
 def record_hosted_delivery(
@@ -647,6 +604,20 @@ def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
     return out
 
 
+def dedupe_by_id(msgs: list[Envelope], *, last: bool = False) -> list[Envelope]:
+    """One row per id. A staged body row and its receipt or durable-fallback
+    twin share an id. First wins unless ``last``: a typed receipt must not
+    swallow its staged recovery row, while the outbox and unclaimed scans read
+    the receipt row's final state."""
+    seen: dict[str, Envelope] = {}
+    for m in msgs:
+        if last:
+            seen[m.id] = m
+        else:
+            seen.setdefault(m.id, m)
+    return list(seen.values())
+
+
 def record_landed(*, msg_id: str, sender: str, recipient: str) -> Envelope:
     """Append one control row proving ``msg_id`` reached ``recipient``'s transcript.
 
@@ -679,14 +650,6 @@ def landed_ids(msgs: list[Envelope]) -> set[str]:
             continue
         out.add(target.id)
     return out
-
-
-def hosted_ids(msgs: list[Envelope]) -> set[str]:
-    """Ids a hosted receipt supersedes (mirrors ``landed_ids``): the inject
-    confirmed, so the transcript carries the body and the staged twin must not
-    deliver. A TYPED row does not supersede: pane bytes are not proven
-    consumed, and the staged row is the recovery when a pane discarded them."""
-    return {m.id for m in msgs if m.delivery == HOSTED_DELIVERY}
 
 
 def iter_thread(thread_id: str, *, warn: bool = True) -> Iterator[Envelope]:
