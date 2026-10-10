@@ -336,7 +336,7 @@ impl FleetArms {
             let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
             tokio::task::spawn_blocking(move || {
                 let _gate = SweepGate(flag);
-                sandbox_ingest(&home, &emitter, now_epoch_secs());
+                sandbox_ingest::sandbox_ingest(&home, &emitter, now_epoch_secs());
             });
         }
         crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());
