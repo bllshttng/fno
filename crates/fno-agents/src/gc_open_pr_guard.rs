@@ -27,7 +27,11 @@ pub enum OpenPrVerdict {
     /// The PR reads merged or closed: this session has nothing left to
     /// drive, and the row falls through to the grace gate.
     Settled { node: String, pr: u64 },
-    /// The read failed, or no reader was supplied: hold, and say so.
+    /// The read failed, or no reader was supplied: not evidence. A caller
+    /// with no reader reads the graph record alone (roster_reap holds);
+    /// the live sweep treats it as unknown - the row falls to its
+    /// transcript-only gates, and the recorded-state backstop still holds
+    /// a recorded open PR at the commit gate.
     Unread { node: String, pr: u64 },
     /// No candidate: no pr_number, a recorded merge, or this session
     /// never drove the node.
