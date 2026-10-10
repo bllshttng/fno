@@ -145,7 +145,7 @@ fn bounded_run_kills_a_forked_process_group_on_timeout() {
 fn bounded_kind(run: &BoundedRun) -> &'static str {
     match run {
         BoundedRun::Completed(_) => "Completed",
-        BoundedRun::TimedOut(_) => "TimedOut",
+        BoundedRun::TimedOut(..) => "TimedOut",
         BoundedRun::SpawnFailed(_) => "SpawnFailed",
         BoundedRun::WaitFailed => "WaitFailed",
         BoundedRun::Refused => "Refused",

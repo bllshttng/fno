@@ -87,7 +87,7 @@ pub(super) fn run_bounded(
     // but a straggler holding the pipe write end must cost the tail, never
     // a hang on the stop path.
     let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    let stderr_drain = std::thread::spawn(move || {
+    let _stderr_drain = std::thread::spawn(move || {
         // Retain only the LAST `BOUNDED_STDERR_TAIL_CAP` bytes while still
         // draining to EOF: an unbounded write must not buy an unbounded
         // allocation, but stopping the read early would block a child that

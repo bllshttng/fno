@@ -46,7 +46,6 @@ struct DenialBucket {
     class: &'static str,
     rule: &'static str,
     path: String,
-    hits: usize,
 }
 
 /// (rule, the marker literal). `readonly_database` keys on SQLite's own
@@ -204,7 +203,6 @@ fn scan_transcript(path: &Path, offset: u64) -> (Vec<(DenialBucket, usize)>, u64
                         class: denial_class(rule, &path),
                         rule,
                         path,
-                        hits: 0,
                     },
                     0,
                 )
@@ -256,9 +254,12 @@ fn output_denial_markers(line: &str) -> Vec<(&'static str, String)> {
             }
         }
         _ => None,
-    }?;
+    };
+    let Some(output) = output else {
+        return Vec::new();
+    };
     let mut out = Vec::new();
-    for (rule, marker) in DENIAL_RULES.iter() {
+    for &(rule, marker) in DENIAL_RULES.iter() {
         let mut from = 0usize;
         while let Some(at) = output[from..].find(marker) {
             let hit = from + at;
@@ -344,7 +345,10 @@ mod tests {
             "git_write"
         );
         assert_eq!(
-            denial_class("operation_not_permitted", "/space/worktrees/w1/x-a1b2.lock"),
+            denial_class(
+                "operation_not_permitted",
+                "/space/worktrees/w1/claim-a1b2.lock"
+            ),
             "claim_lock"
         );
         assert_eq!(

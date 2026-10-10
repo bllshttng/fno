@@ -1084,10 +1084,11 @@ pub(crate) fn decide_with_payload(
     // stall report reads them off the row instead of re-joining the
     // previous loop_check row by hand.
     let term_row_extra = |reason: &str, message: &str, extra: serde_json::Value| {
-        let mut row = serde_json::json!({
-            "session_id": session_id, "reason": reason, "message": message
-        });
-        if let (Some(row), serde_json::Value::Object(extra)) = (row.as_object_mut(), extra) {
+        let mut row = serde_json::Map::new();
+        row.insert("session_id".into(), serde_json::json!(session_id));
+        row.insert("reason".into(), serde_json::json!(reason));
+        row.insert("message".into(), serde_json::json!(message));
+        if let serde_json::Value::Object(extra) = extra {
             row.extend(extra);
         }
         emit("termination", serde_json::Value::Object(row));

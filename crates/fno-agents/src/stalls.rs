@@ -72,6 +72,7 @@ struct Row {
     day: Option<String>,
     event_type: Option<String>,
     session: Option<String>,
+    node: Option<String>,
     data: Value,
 }
 
@@ -102,6 +103,21 @@ impl Row {
                 .and_then(|v| v.as_str())
                 .or_else(|| event.get("session_id").and_then(|v| v.as_str()))
                 .map(str::to_string),
+            node: ["node_id", "graph_node_id"]
+                .iter()
+                .find_map(|k| {
+                    event
+                        .get(k)
+                        .or_else(|| data.get(k))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    data.get("key")
+                        .and_then(|v| v.as_str())
+                        .filter(|k| k.starts_with("node:"))
+                        .map(|k| k["node:".len()..].to_string())
+                }),
             data,
         }
     }
@@ -216,6 +232,9 @@ fn fold_rows(rows: &[Row]) -> Fold {
         if let Some(session) = &row.session {
             entry.sessions.insert(session.clone());
         }
+        if let Some(node) = &row.node {
+            entry.nodes.insert(node.clone());
+        }
         if let Some(day) = &row.day {
             if entry.first_day.is_none() || *day < entry.first_day.clone().unwrap_or_default() {
                 entry.first_day = Some(day.clone());
@@ -309,7 +328,7 @@ pub fn run_stalls(args: &[String]) -> i32 {
             "--json" | "-J" => json_output = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
-                0
+                return 0;
             }
             other => return usage(&format!("stalls: unknown flag {other:?}")),
         }
@@ -333,7 +352,8 @@ the Python surface resolves the journal defaults",
         eprintln!("error: --until is before --since");
         return 1;
     }
-    let (mut rows, malformed) = read_rows(&events, cutoff, top);
+    let (mut rows, malformed) =
+        read_rows(&events, cutoff.timestamp_millis(), top.timestamp_millis());
     // Chronological order, untimestamped last: the NoProgress legacy join
     // takes the session's LATEST earlier loop_check row, and journals are
     // read project-then-global, so read order is not time order.
@@ -462,6 +482,7 @@ fn table_json(fold: &Fold, since: &str, malformed: usize) -> Value {
                 "sessions": row.sessions.len(),
                 "first_day": row.first_day,
                 "last_day": row.last_day,
+                "nodes": row.nodes,
                 "detail": row.detail,
             })
         }).collect::<Vec<_>>(),
@@ -469,10 +490,12 @@ fn table_json(fold: &Fold, since: &str, malformed: usize) -> Value {
 }
 
 /// The text table. Every registry row prints even at zero, so an absent
-/// cause reads as a measured zero, never as an absent question.
+/// cause reads as a measured zero, never as an absent question. The node
+/// column names the nodes the cause's own rows carry (up to two), not a
+/// hard-coded fix-owner map: ownership the rows do not prove stays "-".
 fn print_table(fold: &Fold, since: &str, malformed: usize) {
     println!("stalls: window starts {since}; {malformed} journal line(s) skipped");
-    println!("cause                  rows  sessions  first       last        detail");
+    println!("cause                  rows  sessions  first       last        nodes      detail");
     for cause in CAUSES {
         let row = &fold.table[*cause];
         let detail = if row.detail.is_empty() {
@@ -484,13 +507,24 @@ fn print_table(fold: &Fold, since: &str, malformed: usize) {
                 .collect::<Vec<_>>()
                 .join(",")
         };
+        let nodes = if row.nodes.is_empty() {
+            "-".to_string()
+        } else {
+            row.nodes
+                .iter()
+                .take(2)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         println!(
-            "{:<22} {:>4}  {:>8}  {:<10}  {:<10}  {}",
+            "{:<22} {:>4}  {:>8}  {:<10}  {:<10}  {:<9}  {}",
             cause,
             row.rows,
             row.sessions.len(),
             row.first_day.clone().unwrap_or_else(|| "-".into()),
             row.last_day.clone().unwrap_or_else(|| "-".into()),
+            nodes,
             detail
         );
     }
