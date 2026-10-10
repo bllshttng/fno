@@ -14,7 +14,7 @@ Every reader parses both shapes through the one scanner (`node_branch::node_ids`
 
 ## Who runs the linker
 
-The `WorktreeCreate` hook and `worktree-manager.sh setup` run the checkout's own `scripts/setup/setup-worktree.sh` through `scripts/lib/worktree-config.sh`. That lib also holds the one `worktree.*` config reader, which asks `fno config get`. A bare `git worktree add` runs no linker. Skip the setup line and `internal/` is a real directory: a plan written there never reaches canonical, and nothing warns.
+The `WorktreeCreate` hook and `worktree-manager.sh setup` run the checkout's own `scripts/setup/setup-worktree.sh` through `scripts/lib/worktree-config.sh`. That lib also holds the one `worktree.*` config reader, which asks `fno config get`. A bare `git worktree add` runs no linker. Skip the setup line and the vault link is a real directory: a plan written there never reaches canonical, and nothing warns.
 
 ## The refusal shape
 
