@@ -81,6 +81,21 @@ pub(crate) fn spawn_safe_name(value: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
+/// The stamp a registry-row DROP uses: the retirement sweep (and every
+/// future drop path that holds a row) records the row's name here through
+/// this one door, the same best-effort contract the stop seams honor - a
+/// failed write costs a later wake its name, never the drop.
+pub(crate) fn stamp_from_row(home: &AgentsHome, entry: &crate::state::RegistryEntry) {
+    if let Some(sid) = entry
+        .harness_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        record(home, sid, &entry.name);
+    }
+}
+
 /// A transcript past this many bytes is skipped: the rung is best-effort,
 /// and a wake must not pay a multi-MB scan to answer a name. Titles ride
 /// normal records, so the cap only sheds pathological files.

@@ -3247,14 +3247,10 @@ pub(crate) fn commit_retirements(
     // emit + summary report only what really happened.
     let retiring: std::collections::BTreeSet<String> = to_retire.keys().cloned().collect();
     let write = state::update_registry(&home.registry_json(), |r| {
-        // Revalidate shared-cwd occupancy against the registry as it
-        // stands right now, under the lock: `run`'s snapshot is
-        // stop-confirmation, receipt-write, and probe seconds old by the
-        // time a prune is about to fire, and a newly registered agent on
-        // that cwd is invisible to a check run against the old snapshot.
-        // The same-cwd tie among rows retiring THIS pass was already
-        // settled once in `run`; only a row NOT in `to_retire` counts as
-        // a fresh occupant here.
+        // `run`'s snapshot is stop-confirmation, receipt-write, and probe
+        // seconds old by the time a prune fires, so revalidate shared-cwd
+        // occupancy under the lock; ties among rows retiring this pass were
+        // settled in `run`, so only a row NOT in `to_retire` is a fresh occupant.
         for order in to_retire.values_mut() {
             if order.tree != TreeAction::Prune {
                 continue;
@@ -3356,18 +3352,9 @@ pub(crate) fn commit_retirements(
                     report.retired_names.remove(&e.name);
                     continue;
                 }
-                // The wake-name tombstone rides the drop: retirement is a row
-                // drop with no stop seam, so this stamp is what a later wake
-                // reads. Best-effort: a failed write costs a later wake its
-                // name, never the retirement.
-                if let Some(sid) = e
-                    .harness_session_id
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                {
-                    crate::wake_name::record(home, sid, &e.name);
-                }
+                // Retirement is a row drop with no stop seam; the stamp is
+                // what a later wake reads.
+                crate::wake_name::stamp_from_row(home, e);
                 let (receipt_node, node_resolution) = match node_id.as_deref() {
                     Some(node) => (Some(node.to_string()), "name"),
                     None => graph_join
