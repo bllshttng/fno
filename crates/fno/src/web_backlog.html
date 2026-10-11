@@ -180,6 +180,7 @@ button, select, input { font: inherit; }
 #searchbar .slabel { color: var(--overlay1); font-size: 12px; }
 #f-qerr { color: var(--red); font-size: 12px; padding: 4px 14px; min-height: 0; }
 #f-qerr:empty { display: none; }
+#searchbar[hidden] { display: none; }
 #searchbox { flex: 1 1 auto; position: relative; display: flex; }
 #f-q { flex: 1 1 auto; width: 100%; font-size: 13px; background: var(--base); color: var(--text); border: 1px solid var(--surface1); border-radius: 0; padding: 5px 44px 5px 10px; min-height: 30px; }
 #f-q:focus { border-color: var(--text); outline: none; }
@@ -864,6 +865,12 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   // off. The payload's allowlists already stripped them; this reads the
   // same flag the writer stamped.
   const PUBLIC = SNAPSHOT && snap.public === true;
+  if (PUBLIC) {
+    // The public payload carries no search maps: an advertised box that
+    // silently filters nothing is worse than none.
+    const bar = document.getElementById("searchbar");
+    if (bar) bar.hidden = true;
+  }
   const state = {
     lanes: initial.get("lanes") || "project",
     view: initial.get("view") || "kanban",

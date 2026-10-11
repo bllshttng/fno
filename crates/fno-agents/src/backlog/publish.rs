@@ -73,6 +73,16 @@ pub fn run(args: &[String]) -> i32 {
         eprintln!("publish: --out and --exec refuse together; pick one target");
         return 2;
     }
+    // The public projection reads the local graph; under an external tracker
+    // backend it would publish a stale or unrelated board. The same refusal
+    // the roadmap door runs.
+    if super::workflows::active_backend_name() != "graph" {
+        eprintln!(
+            "publish: the public projection reads the local graph, which is \
+             unavailable under an external tracker backend"
+        );
+        return 2;
+    }
     let project = match project {
         Some(p) => p,
         None => {
@@ -121,25 +131,33 @@ fn publish(
     url: Option<&str>,
 ) -> Result<String, String> {
     let staged = render_public(project)?;
-    if let Some(dir) = out {
-        let target = publish_out(&staged.dir, Path::new(dir))?;
-        return Ok(format!(
-            "published {} cards for {project} to {dir}: {}",
-            staged.cards,
-            url.unwrap_or(&target)
-        ));
-    }
-    if let Some(text) = exec {
-        publish_exec(&staged.dir, text)?;
-        let tail = url
-            .map(|u| u.to_string())
-            .unwrap_or_else(|| "published (pass --url to print the address)".to_string());
-        return Ok(format!(
-            "published {} cards for {project} to exec: {tail}",
-            staged.cards
-        ));
-    }
-    publish_ghpages(project, &staged.dir, staged.cards)
+    // The stage is scratch: every target consumes the staged page before it
+    // returns (the gh-pages blob lands in git's object db, the uploader gets
+    // its own path), so the dir goes away on the success and error paths
+    // alike. The scheduler shape from the docs runs this every 15 minutes.
+    let result = (|| {
+        if let Some(dir) = out {
+            let target = publish_out(&staged.dir, Path::new(dir))?;
+            return Ok(format!(
+                "published {} cards for {project} to {dir}: {}",
+                staged.cards,
+                url.unwrap_or(&target)
+            ));
+        }
+        if let Some(text) = exec {
+            publish_exec(&staged.dir, text)?;
+            let tail = url
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| "published (pass --url to print the address)".to_string());
+            return Ok(format!(
+                "published {} cards for {project} to exec: {tail}",
+                staged.cards
+            ));
+        }
+        publish_ghpages(project, &staged.dir, staged.cards)
+    })();
+    let _ = std::fs::remove_dir_all(&staged.dir);
+    result
 }
 
 /// Render the public projection into a fresh stage dir through the front
@@ -547,27 +565,19 @@ fn publish_ghpages(project: &str, stage: &Path, cards: u64) -> Result<String, St
     })?;
     let pushed = push_ghpages_tree(&root, &stage.join("index.html"))?;
     let state = pages_state(&owner, &repo);
-    let board_url = |state: &Pages| -> String {
-        let base = match state {
-            Pages::Enabled { html_url } => html_url.trim_end_matches('/').to_string(),
-            _ => format!("https://{owner}.github.io/{repo}"),
-        };
-        format!("{base}/backlog/")
-    };
-    if !pushed {
-        if let Pages::Mismatch(desc) = &state {
-            return Err(format!(
-                "the board is unchanged, but Pages serves {desc}; it is not live there. \
-                 Switch Pages to gh-pages /, or publish with --out into the folder Pages serves"
-            ));
-        }
-        return Ok(format!(
-            "unchanged: {cards} card(s) for {project} on gh-pages: {}",
-            board_url(&state)
-        ));
-    }
+    // A URL is only claimed when Pages is verified to serve gh-pages /, or
+    // when this run just enabled it. Every other state refuses: an unreadable
+    // or mismatched Pages source means the printed address would not be live.
     match &state {
+        Pages::Enabled { .. } => {}
         Pages::NotFound => {
+            if !pushed {
+                return Err(format!(
+                    "the board is unchanged, but Pages was never enabled for \
+                     {owner}/{repo}; nothing is live there. Enable Pages (gh-pages, /) \
+                     or publish with --out or --exec"
+                ));
+            }
             enable_pages(&owner, &repo).map_err(|e| {
                 format!(
                     "pushed gh-pages, but enabling Pages failed: {e}. The branch is pushed; \
@@ -576,26 +586,35 @@ fn publish_ghpages(project: &str, stage: &Path, cards: u64) -> Result<String, St
             })?;
         }
         Pages::Mismatch(desc) => {
+            let prefix = if pushed {
+                "pushed gh-pages, but"
+            } else {
+                "the board is unchanged, but"
+            };
             return Err(format!(
-                "pushed gh-pages, but Pages serves {desc}; the board is not live there. \
+                "{prefix} Pages serves {desc}; the board is not live there. \
                  Switch Pages to gh-pages /, or publish with --out into the folder Pages serves"
             ));
         }
-        _ => {}
+        Pages::Unavailable(why) => {
+            let prefix = if pushed {
+                "pushed gh-pages, but"
+            } else {
+                "the board is unchanged, but"
+            };
+            return Err(format!(
+                "{prefix} the Pages state is unreadable ({why}); the board \
+                 is not confirmed live. Check Pages serves gh-pages / for {owner}/{repo}, \
+                 or publish with --out or --exec"
+            ));
+        }
     }
     let url_line = match &state {
-        Pages::Enabled { .. } => board_url(&state),
-        _ => {
-            let guessed = guessed_pages_url(&owner, &repo);
-            let why = match &state {
-                Pages::Unavailable(text) => format!(" ({text})"),
-                _ => String::new(),
-            };
-            eprintln!(
-                "publish: confirm Pages is on for {owner}/{repo} (gh-pages, /){why}; the board reads at"
-            );
-            guessed
+        Pages::Enabled { html_url } => {
+            format!("{}/backlog/", html_url.trim_end_matches('/'))
         }
+        // Pages just came on for gh-pages /: the canonical address.
+        _ => guessed_pages_url(&owner, &repo),
     };
     Ok(format!(
         "published {cards} cards for {project} to gh-pages: {url_line}",
