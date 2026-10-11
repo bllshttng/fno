@@ -605,8 +605,7 @@ fn one_line(text: &str) -> String {
     out
 }
 
-/// The content-confirm marker for a typed inject: the typed text up to its
-/// first line break - the header line, whatever form the turn carries.
+/// The content-confirm marker for a typed inject: the typed text up to its first line break.
 fn typed_marker(text: &str) -> String {
     let typed = one_line(text);
     match typed.find('\n') {
