@@ -421,7 +421,10 @@ pub fn draw_successor_name(
                 });
             }
             claim_name(name, claims_root)?;
-            return Ok(crate::team_names::display(name, 1));
+            // The accept keeps the proposal as typed: the row already
+            // carries this exact spelling, and the seam's adoption compares
+            // against it.
+            return Ok(name.to_string());
         }
     }
     // Fresh draw (no proposal, or an explicit redraw): the history flock is
