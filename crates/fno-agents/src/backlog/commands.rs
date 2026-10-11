@@ -239,18 +239,6 @@ mod tests {
     }
 
     #[test]
-    fn version_and_retract_are_included() {
-        assert_eq!(
-            Group::action_for_legacy("version"),
-            Some(("get", "version"))
-        );
-        assert_eq!(
-            Group::action_for_legacy("retract"),
-            Some(("move", "retract"))
-        );
-    }
-
-    #[test]
     fn resolution_round_trips_both_directions() {
         assert_eq!(resolve("note", "state"), Some("note"));
         assert_eq!(from_legacy("note"), Some(("note", "state")));

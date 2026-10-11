@@ -630,19 +630,6 @@ mod tests {
         (dir, page)
     }
 
-    /// git orders a tree's name as `name/`, so `lib-thing` sorts before
-    /// the `lib` tree. mktree writes what it reads; the key must match.
-    #[test]
-    fn tree_entries_sort_in_git_order() {
-        let mut lines = vec![
-            "040000 tree b\tlib".to_string(),
-            "100644 blob a\tlib-thing".to_string(),
-        ];
-        lines.sort_by_key(tree_sort_key);
-        assert_eq!(lines[0], "100644 blob a\tlib-thing");
-        assert_eq!(lines[1], "040000 tree b\tlib");
-    }
-
     #[test]
     fn the_out_target_writes_the_page_and_names_the_url() {
         let (_stage, page) = stage_page("out", "<html>board</html>");
@@ -715,6 +702,16 @@ mod tests {
             ],
         )
         .unwrap();
+
+        // git orders a tree's name as `name/`, so `lib-thing` sorts before
+        // the `lib` tree. mktree writes what it reads; the key must match.
+        let mut order = vec![
+            "040000 tree b\tlib".to_string(),
+            "100644 blob a\tlib-thing".to_string(),
+        ];
+        order.sort_by_key(|l| tree_sort_key(l.as_str()));
+        assert_eq!(order[0], "100644 blob a\tlib-thing");
+        assert_eq!(order[1], "040000 tree b\tlib");
 
         let (_stage, page) = stage_page("gh", "<html>public board</html>");
         assert!(push_ghpages_tree(&work.0, &page).unwrap());
