@@ -584,22 +584,22 @@ FIELD_META: dict[str, Meta] = {
     ),
     "worktree.auto_install": Meta(
         "advanced",
-        "Run dependency install when a new worktree is set up (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Run dependency install when a new worktree is set up (read by hooks/worktree-setup.sh and worktree-manager.sh); "
         "set false to skip it. Default true.",
     ),
     "worktree.setup_command": Meta(
         "advanced",
         "Explicit setup command run after a new worktree is created, whatever auto_install says "
-        "(read by skills/speculate/scripts/worktree-setup.sh). Default empty.",
+        "(read by hooks/worktree-setup.sh and worktree-manager.sh). Default empty.",
     ),
     "worktree.skip_verification": Meta(
         "advanced",
         "Skip the post-setup verification step in a new worktree (read by "
-        "skills/speculate/scripts/worktree-setup.sh). Default false.",
+        "hooks/worktree-setup.sh). Default false.",
     ),
     "worktree.test_command": Meta(
         "advanced",
-        "Verification command for a new worktree (read by skills/speculate/scripts/worktree-setup.sh); "
+        "Verification command for a new worktree (read by hooks/worktree-setup.sh); "
         "falls back to the script's own detection when empty. Default empty.",
     ),
     "guards.preset": Meta(
@@ -608,6 +608,10 @@ FIELD_META: dict[str, Meta] = {
         "two destructive-write guards stay on), or off. Read in Rust by "
         "guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.",
     ),
+    # --- config.store.* (global config only; read in Rust by store_remote.rs) ---
+    "store.remote_url": Meta("never", "The sqld primary every machine dials out to (an http:// URL on a private network). Set, the claim keys that decide dispatch run on the primary. Read from the global config only. Unset = local store, no socket. Default unset."),
+    "store.remote_token": Meta("never", "Bearer token for store.remote_url, when the primary asks for one. Default unset."),
+    "store.share_backlog": Meta("never", "true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false."),
     "worktree.prune_done": Meta(
         "advanced",
         "How far the merged sweep's done-node arm goes on a done tree with "
