@@ -22,6 +22,9 @@
 //!   reported and left alone -- fixing it here would put main's problem in
 //!   someone else's diff.
 
+use crate::heal_sweep::{
+    checks_digest, last_sweep_states, open_pr_numbers, open_pr_sweeps, PrSweepState,
+};
 use crate::pr_push::{job_id, READ_TIMEOUT};
 use regex::Regex;
 use serde_json::Value;
@@ -980,8 +983,12 @@ fn findings_for(
     pr: &str,
     head: &str,
     cached_inherited: Option<&Vec<String>>,
+    pre_read: Option<Value>,
 ) -> Result<Vec<Finding>, String> {
-    let checks = read_checks(a, head)?;
+    let checks = match pre_read {
+        Some(v) => v,
+        None => read_checks(a, head)?,
+    };
     // `None` means the main-head read did not answer, which is NOT the same
     // as "main is green". Defaulting it to an empty set silently reclassified
     // every inherited failure as this PR's own, so the caller is told instead
@@ -1343,6 +1350,7 @@ pub fn run_heal(argv: &[String]) -> i32 {
             &reran_keys,
             &[], // no acted PRs on the single-PR path: the status line's
             // acted list is a drive-loop readout
+            &std::collections::BTreeMap::new(),
             0.0,
         );
     }
@@ -1384,24 +1392,6 @@ pub(crate) fn worse_of(a: i32, b: i32) -> i32 {
     } else {
         a
     }
-}
-
-/// The PR numbers in a slurped REST pulls listing (an array of pages, each a
-/// JSON array of PRs).
-pub(crate) fn open_pr_numbers(pages: &[Value]) -> Vec<String> {
-    let mut out = Vec::new();
-    for page in pages {
-        let rows = match page {
-            Value::Array(rows) => rows.clone(),
-            other => vec![other.clone()],
-        };
-        for row in rows {
-            if let Some(n) = row.get("number").and_then(|v| v.as_u64()) {
-                out.push(n.to_string());
-            }
-        }
-    }
-    out
 }
 
 // ── the drive loop (--all --apply) ───────────────────────────────────────────
@@ -2154,6 +2144,7 @@ fn emit_tick_event(
     dry_run: bool,
     reran_keys: &[String],
     acted_prs: &[String],
+    pr_states: &std::collections::BTreeMap<String, PrSweepState>,
     duration_s: f64,
 ) {
     let path = journal_path(a);
@@ -2193,6 +2184,11 @@ fn emit_tick_event(
         // render as "acted on nothing" whatever the run did.
         let nums: Vec<u64> = acted_prs.iter().filter_map(|p| p.parse().ok()).collect();
         fields.insert("acted_prs".to_string(), serde_json::json!(nums));
+    }
+    // The next sweep's skip baseline; omitted when empty so a row that
+    // records no world never displaces the last real one.
+    if !pr_states.is_empty() {
+        fields.insert("pr_states".to_string(), serde_json::json!(pr_states));
     }
     fields.insert(
         "duration_s".to_string(),
@@ -2251,16 +2247,11 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         }
     };
     let worktrees = worktrees_by_branch(&a.git_bin, &a.cwd);
-    // One main-HEAD read per invocation, shared by every PR: the failing
-    // checks of origin/main do not change between PRs in one cycle, and N
-    // reads per tick is exactly the shared-quota spend the broker refuses.
-    let inherited_once = crate::loopcheck::main_head_failing_checks(&a.gh_bin, &a.cwd);
-    if inherited_once.is_none() {
-        println!(
-            "note: could not read main's HEAD, so no row can be shown as inherited; \
-             a failure below may be main's rather than this PR's"
-        );
-    }
+    // One main-HEAD read per invocation, shared by every PR that reaches
+    // classification -- computed on first need, so an all-unchanged sweep
+    // (the idle-sweep case this skip exists for) never pays it.
+    let mut inherited_cache: Option<Option<Vec<String>>> = None;
+    let mut inherited_note = false;
     let claims_root = if a.claims_root.is_empty() {
         None
     } else {
@@ -2295,16 +2286,20 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         }
     };
     // One journal read per run for each ledger: every (sha, run id) any tick
-    // ever reran, and every (sha, run id, check) already recorded as a flake.
+    // ever reran, every (sha, run id, check) already recorded as a flake, and
+    // the last sweep's per-PR world the skip gate compares against.
     let rerun_keys_ever = journal_rerun_keys(&journal_path(a));
     let flake_guards = journal_flake_guards(&journal_path(a));
+    let prior_states = last_sweep_states(&journal_path(a), &a.cwd.to_string_lossy().as_ref());
+    let mut sweep_states: std::collections::BTreeMap<String, PrSweepState> =
+        std::collections::BTreeMap::new();
     let mut worst = EXIT_CLEAN;
     // The root's slice of the drive budget: past it, every PR not yet
     // reached gets one receipt and waits for the next tick.
     let deadline = a
         .deadline
         .unwrap_or_else(|| std::time::Instant::now() + DRIVE_BUDGET);
-    for pr in open_pr_numbers(&pages) {
+    for (pr, listing_head, listing_row) in open_pr_sweeps(&pages) {
         bump(&mut counts, "seen");
         if std::time::Instant::now() >= deadline {
             bump(&mut counts, "skip_deadline");
@@ -2312,6 +2307,61 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                 &pr,
                 "skip_deadline",
                 "the drive budget for this root is spent",
+            );
+            continue;
+        }
+        // The unchanged-PR skip: one checks read keyed on the listing's free
+        // head sha; when sha AND digest both match the last sweep's record,
+        // the pulls read, the claim gate, the job logs and the flake scan
+        // are repeated work. Doors that stay open: a live rebase trigger, a
+        // head with a rerun in its history (the rerun ladder's second
+        // verdict needs the re-classification), and any dry run, whose
+        // exit-0 contract means nothing red.
+        let mut digest_read = match listing_head.as_deref() {
+            Some(h) => read_checks(a, h).ok(),
+            None => None,
+        };
+        let digest = digest_read.as_ref().and_then(checks_digest);
+        if let (Some(h), Some(dg)) = (&listing_head, &digest) {
+            sweep_states.insert(
+                pr.clone(),
+                PrSweepState {
+                    head: h.clone(),
+                    digest: dg.clone(),
+                },
+            );
+        }
+        let unchanged = match (
+            listing_head.as_deref(),
+            digest.as_deref(),
+            prior_states.get(&pr),
+        ) {
+            (Some(h), Some(dg), Some(prior)) => {
+                prior.head == h
+                    && prior.digest == dg
+                    && listing_row.get("mergeable").and_then(Value::as_bool) != Some(false)
+                    && merge_slot_holder_pr(
+                        listing_row
+                            .pointer("/base/ref")
+                            .and_then(Value::as_str)
+                            .unwrap_or(""),
+                        claims_root,
+                        &a.cwd,
+                    )
+                    .is_none()
+                    && !rerun_keys_ever
+                        .iter()
+                        .any(|k| k.as_str().starts_with(format!("{h}:").as_str()))
+            }
+            _ => false,
+        };
+        if unchanged && !dry_run {
+            println!("skip unchanged: head sha and checks digest match the last sweep");
+            bump(&mut counts, "skip_unchanged");
+            receipt(
+                &pr,
+                "skip_unchanged",
+                "head sha and checks digest match the last sweep",
             );
             continue;
         }
@@ -2456,13 +2506,31 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         if !dry_run {
             detect_flakes(a, &head, &rerun_keys_ever, &flake_guards);
         }
+        // The skip's own read rides along when the live head matches the
+        // digest's sha; findings_for reuses it instead of a second read.
+        let pre_read = if listing_head.as_deref() == Some(state.head.as_str()) {
+            digest_read.take()
+        } else {
+            None
+        };
+        // A failed shared read classifies with an empty set, same as the
+        // per-PR read it replaces; the note (once per run) names it.
+        let cached = inherited_cache
+            .get_or_insert_with(|| crate::loopcheck::main_head_failing_checks(&a.gh_bin, &a.cwd));
+        if cached.is_none() && !inherited_note {
+            println!(
+                "note: could not read main's HEAD, so no row can be shown as inherited; \
+                 a failure below may be main's rather than this PR's"
+            );
+            inherited_note = true;
+        }
+        let empty_inherited: Vec<String> = Vec::new();
         let findings = match findings_for(
             a,
             &pr,
             &head,
-            // A failed shared read classifies with an empty set, same as the
-            // per-PR read it replaces; the note above already named it.
-            inherited_once.as_ref().or(Some(&Vec::new())),
+            Some(cached.as_ref().unwrap_or(&empty_inherited)),
+            pre_read,
         ) {
             Ok(f) => f,
             Err(msg) => {
@@ -2604,6 +2672,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         dry_run,
         &reran_keys,
         &acted_prs,
+        &sweep_states,
         t0.elapsed().as_secs_f64(),
     );
     let skipped: Vec<String> = counts
@@ -2645,7 +2714,7 @@ fn run_one(a: &Args, pr: &str) -> (i32, Vec<String>) {
             return (EXIT_CWD_REFUSAL, Vec::new());
         }
     }
-    let mut findings = match findings_for(a, pr, &head, None) {
+    let mut findings = match findings_for(a, pr, &head, None, None) {
         Ok(f) => f,
         Err(msg) => {
             eprintln!("pr-heal: {msg}");
@@ -3894,6 +3963,116 @@ exit 0
             events.contains("\"still_red\":1"),
             "the demoted rerun is still red, never healed: {events}"
         );
+    }
+
+    #[test]
+    fn unchanged_skip_rows() {
+        // Sweep 2 over an unchanged world: every PR skips on (head, digest),
+        // no per-PR pulls read, no job log, no remedy, and the lazy
+        // main-HEAD read never fires. The tick row records the world the
+        // next sweep compares against.
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        stub_gh_drive(d, false);
+        stub_git_drive(d);
+        stub_cargo(d);
+        stub_fno(d);
+        hold_claim(d);
+        std::fs::create_dir_all(d.join("wt/crates/fno-agents")).unwrap();
+        let code1 = run_heal(&drive_args(d, &[]));
+        assert_eq!(code1, EXIT_CLEAN, "sweep 1 heals the free PR: {code1}");
+        let pulls_sweep1 = log_of(d, "gh.log").matches("pulls/").count();
+        let logs_sweep1 = log_of(d, "gh.log").matches("/logs").count();
+        let cargo_sweep1 = log_of(d, "cargo.log");
+
+        let code2 = run_heal(&drive_args(d, &[]));
+        assert_eq!(
+            code2, EXIT_CLEAN,
+            "an all-skipped sweep exits clean: {code2}"
+        );
+        let gh_sweep2 = log_of(d, "gh.log");
+        assert_eq!(
+            gh_sweep2.matches("pulls/").count(),
+            pulls_sweep1,
+            "a skipped PR is never pulls-read: {gh_sweep2}"
+        );
+        assert_eq!(
+            gh_sweep2.matches("/logs").count(),
+            logs_sweep1,
+            "a skipped PR reads no job log: {gh_sweep2}"
+        );
+        assert_eq!(
+            log_of(d, "cargo.log"),
+            cargo_sweep1,
+            "a skipped PR runs no remedy"
+        );
+        // The main-HEAD read is lazy: an all-skipped sweep never pays it.
+        let run_list_before = gh_sweep2.matches("run list").count();
+        let code2b = run_heal(&drive_args(d, &[]));
+        assert_eq!(code2b, EXIT_CLEAN);
+        assert_eq!(
+            log_of(d, "gh.log").matches("run list").count(),
+            run_list_before,
+            "an all-skipped sweep never reads main's HEAD"
+        );
+        // The rehearsal never takes the skip: over the same unchanged world
+        // its exit still means "red PRs exist", never "the rehearsal ran".
+        let code_dry = run_heal(&drive_args(d, &["--dry-run"]));
+        assert_eq!(
+            code_dry, EXIT_ESCALATIONS,
+            "a rehearsal reports the unchanged red: {code_dry}"
+        );
+        let events = log_of(d, "events.jsonl");
+        assert!(events.contains("\"skip_unchanged\":3"), "{events}");
+        // The recorded world is the next sweep's baseline.
+        assert!(events.contains("\"pr_states\""), "{events}");
+        for sha in ["aaa1", "bbb2", "ccc3"] {
+            assert!(
+                events.contains(&format!("\"head\":\"{sha}\"")),
+                "state for {sha}: {events}"
+            );
+        }
+
+        // Sweep 3: PR 1 gains a commit, so it is processed (and healed
+        // again) while the untouched PRs keep skipping. The stub's `fixed`
+        // marker stands for the dirt sweep 1's remedy left before its commit
+        // carried it; the marker goes the way of the pushed fix.
+        let _ = std::fs::remove_file(d.join("fixed"));
+        let body = r#"#!/bin/sh
+D="$(dirname "$0")"
+echo "gh $*" >> "$D/gh.log"
+for a in "$@"; do case "$a" in
+  *'pulls?state=open'*)
+     echo '[{"number":1,"head":{"sha":"aaa2","ref":"feature/x-1111"},"body":"b"},{"number":2,"head":{"sha":"bbb2","ref":"feature/x-2222"},"body":"b"},{"number":3,"head":{"sha":"ccc3","ref":"patch-1","repo":{"full_name":"stranger/footnote"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"FIRST_TIMER","body":"b"}]'
+     exit 0 ;;
+  *pulls/1*) echo '{"head":{"sha":"aaa2","ref":"feature/x-1111","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","body":"b"}'; exit 0 ;;
+  *pulls/2*) echo '{"head":{"sha":"bbb2","ref":"feature/x-2222","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","body":"b"}'; exit 0 ;;
+  *pulls/3*) echo '{"head":{"sha":"ccc3","ref":"patch-1","repo":{"full_name":"stranger/footnote"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"FIRST_TIMER","body":"b"}'; exit 0 ;;
+  *check-runs) echo '{"check_runs":[{"name":"cargo fmt --check (pinned)","status":"completed","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/1/job/9"}]}'; exit 0 ;;
+  */logs) echo "Diff in /w/w/crates/fno-agents/src/x.rs:1:"; exit 0 ;;
+  */status) echo '{"statuses":[]}'; exit 0 ;;
+esac; done
+echo '[]'
+"#;
+        write_exec(d, "gh", body);
+        let pulls_before_sweep3 = log_of(d, "gh.log").matches("pulls/1").count();
+        let code3 = run_heal(&drive_args(d, &[]));
+        assert_eq!(code3, EXIT_CLEAN, "the pushed PR heals again: {code3}");
+        let gh_sweep3 = log_of(d, "gh.log");
+        assert!(
+            gh_sweep3.matches("pulls/1").count() > pulls_before_sweep3,
+            "the changed PR is pulls-read: {gh_sweep3}"
+        );
+        // The last tick row folds this sweep's counts.
+        let events3 = log_of(d, "events.jsonl");
+        let last = events3
+            .lines()
+            .filter(|l| l.contains("pr_heal_tick"))
+            .last()
+            .expect("a tick row exists");
+        assert!(last.contains("\"healed\":1"), "{last}");
+        assert!(last.contains("\"skip_unchanged\":2"), "{last}");
+        assert!(last.contains("\"aaa2\""), "the new head recorded: {last}");
     }
 
     // ── the rerun remedy ──────────────────────────────────────────────────
