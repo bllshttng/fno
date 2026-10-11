@@ -110,7 +110,7 @@ fn valid_provider_name(provider: &str) -> bool {
 pub(crate) fn vendor_lane_readings(config_cwd: &Path, registry_path: Option<&Path>) -> Value {
     let caps = provider_lane_caps(config_cwd);
     let mut warnings = Vec::new();
-    let (questions_raw, schema_error) = match registry_path {
+    let (questions_raw, watched, schema_error) = match registry_path {
         Some(path) => {
             let schema_error = check_registry_schema(path, &mut warnings).err().map(|_| {
                 warnings
