@@ -483,7 +483,7 @@ cross-host target answered over the ssh fallback leave no bus rows"
 /// Binary-direct entry from `fno-agents mail-remote <send|peek|status> ...`.
 /// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
 pub fn run(args: &[String]) -> i32 {
-    match args.first().and_then(|a| a.to_str()) {
+    match args.first().map(|a| a.as_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
         Some("status") => cmd_status(&args[1..]),
