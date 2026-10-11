@@ -34,10 +34,12 @@ assert_eq() {
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# A PATH with the coreutils the library needs and no fno on it.
+# A PATH with the coreutils the library needs and no fno on it. bash must be
+# on it too: `env PATH=... bash -c` resolves bash from the NEW PATH, and the
+# stub's `#!/usr/bin/env bash` shebang searches it as well.
 BIN="$TMP/bin"
 mkdir -p "$BIN"
-for tool in dirname tail; do
+for tool in bash dirname tail; do
     ln -s "$(command -v "$tool")" "$BIN/$tool"
 done
 
@@ -61,6 +63,12 @@ ask() {
         CFG_TEST_DEFAULT="$default" \
         bash -c 'source "$CFG_TEST_CONFIG_SH"; get_config "$CFG_TEST_KEY" "$CFG_TEST_DEFAULT"'
 }
+
+echo "test_control_subshell_runs"
+# A non-plans key through the tiers proves the subshell bash actually ran, so
+# an empty answer below can never pass vacuously.
+out=$(ask "$BIN" max_iterations CTRL)
+assert_eq "subshell bash runs and tiers answer the default" "CTRL" "$out"
 
 echo "test_chain_resolves_both_plans_keys"
 printf 'plans.focused_path = "/planted/local"\n' > "$TMP/local.toml"
