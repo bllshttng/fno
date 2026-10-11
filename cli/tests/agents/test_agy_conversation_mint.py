@@ -108,8 +108,9 @@ def test_mint_reads_the_conversation_id_and_pins_the_argv(monkeypatch, tmp_path,
     assert "--output-format" in seen["argv"] and "stream-json" in seen["argv"]
     assert "--dangerously-skip-permissions" in seen["argv"]
     assert seen["cwd"] == str(tmp_path)
-    # The 1.3.3 print turn never exits on its own: a found id terminates it.
-    assert seen["proc"].terminated
+    # The 1.3.3 print turn never exits on its own: a found id terminates it
+    # and reaps it (terminate + wait).
+    assert seen["proc"].terminated and seen["proc"].waited
 
 
 @pytest.mark.dev_build
@@ -166,17 +167,6 @@ def test_a_timed_out_mint_refuses_rather_than_inventing_an_id(monkeypatch, tmp_p
     assert "minted no conversation id" in str(caught.value)
     # A wedged mint is never left behind.
     assert proc.terminated
-
-
-@pytest.mark.dev_build
-def test_a_holding_turn_yields_the_id_and_is_terminated(monkeypatch, tmp_path, rust_door):
-    """The measured 1.3.3 shape: the turn prints the init line then the Stop
-    hook holds the process alive; the mint reads the id and terminates it."""
-    proc = _FakeAgy([INIT_LINE], hold=True)
-    _agy_only_popen(monkeypatch, lambda argv, kwargs: proc)
-
-    assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
-    assert proc.terminated and proc.waited
 
 
 def test_store_path_names_agys_own_conversation_db():
