@@ -54,16 +54,20 @@ def require_conversation_id(conversation_id: str) -> str:
     return text
 
 
-def _conversation_id_from_line(raw: bytes) -> str:
-    """The conversation_id of one stream-json line, or empty when the line is
-    not JSON or carries no such key (harness chatter, the final result)."""
+def _conversation_id_from_line(raw: bytes) -> tuple[str, bool]:
+    """(conversation_id, saw_json_object) of one stream-json line: one parse
+    answers both questions. Empty id when the line is not JSON or carries no
+    such key (harness chatter, the final result)."""
     try:
         obj = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError:
-        return ""
-    if isinstance(obj, dict) and obj.get("conversation_id"):
-        return str(obj["conversation_id"])
-    return ""
+        return "", False
+    if isinstance(obj, dict):
+        cid = obj.get("conversation_id")
+        if cid:
+            return str(cid), True
+        return "", True
+    return "", False
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -113,25 +117,21 @@ def _stream_conversation_id(
         pending += chunk
         while b"\n" in pending:
             line, pending = pending.split(b"\n", 1)
-            conversation_id = _conversation_id_from_line(line)
+            conversation_id, saw_json_line = _conversation_id_from_line(line)
+            saw_json = saw_json or saw_json_line
             if conversation_id:
                 tail_str = tail.decode("utf-8", errors="replace")
-                return conversation_id, True, tail_str, False
+                return conversation_id, saw_json, tail_str, False
             if line.strip():
-                try:
-                    obj = json.loads(line.decode("utf-8", errors="replace"))
-                except ValueError:
-                    obj = None
-                if isinstance(obj, dict):
-                    saw_json = True
                 tail.extend(line[:400])
                 if len(tail) > 4096:
                     del tail[: len(tail) - 4096]
     if pending.strip():
-        conversation_id = _conversation_id_from_line(pending)
+        conversation_id, saw_json_line = _conversation_id_from_line(pending)
+        saw_json = saw_json or saw_json_line
         if conversation_id:
             tail_str = tail.decode("utf-8", errors="replace")
-            return conversation_id, True, tail_str, False
+            return conversation_id, saw_json, tail_str, False
         tail.extend(pending[:400])
     return "", saw_json, tail.decode("utf-8", errors="replace"), False
 
