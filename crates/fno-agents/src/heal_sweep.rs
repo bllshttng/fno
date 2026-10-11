@@ -139,24 +139,25 @@ mod tests {
 
     #[test]
     fn checks_digest_rows() {
-        // Same rows, different payload order: the digest is the PR's world,
-        // never the listing's row order.
-        let green_world = json!({"check_runs":[
-            {"name":"ci","status":"completed","conclusion":"success"},
-            {"name":"fmt","status":"completed","conclusion":"failure"}
-        ]});
-        let same_world = json!({"check_runs":[
-            {"name":"fmt","status":"completed","conclusion":"failure"},
-            {"name":"ci","status":"completed","conclusion":"success"}
-        ]});
+        // The shape read_checks answers: a flat rows array carrying name and
+        // bucket. Same rows, different payload order: the digest is the PR's
+        // world, never the listing's row order.
+        let green_world = json!([
+            {"name":"ci","bucket":"pass","link":""},
+            {"name":"fmt","bucket":"fail","link":""}
+        ]);
+        let same_world = json!([
+            {"name":"fmt","bucket":"fail","link":""},
+            {"name":"ci","bucket":"pass","link":""}
+        ]);
         assert_eq!(checks_digest(&green_world), checks_digest(&same_world));
 
         // A bucket flip changes the digest: a rerun that reached a verdict
         // reopens the PR to the loop.
-        let flipped = json!({"check_runs":[
-            {"name":"ci","status":"completed","conclusion":"failure"},
-            {"name":"fmt","status":"completed","conclusion":"failure"}
-        ]});
+        let flipped = json!([
+            {"name":"ci","bucket":"fail","link":""},
+            {"name":"fmt","bucket":"fail","link":""}
+        ]);
         assert_ne!(checks_digest(&green_world), checks_digest(&flipped));
 
         // An unreadable payload is never evidence of unchanged.
