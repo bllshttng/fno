@@ -7,8 +7,9 @@
 
 use std::ffi::OsString;
 
-/// The full argv, `agents` leading. The claimed tail runs from the target
-/// onward; `None` forwards byte-verbatim.
+/// The full argv, `agents` leading. The claimed tail runs from the verb
+/// onward (`send|peek` first), the shape `mail_remote::run` routes on;
+/// `None` forwards byte-verbatim.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
@@ -23,14 +24,14 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
             if !target.contains('@') {
                 return None;
             }
-            tail = args[3..].to_vec();
+            tail = args[2..].to_vec();
         }
         "peek" => {
             let target = args.get(2)?.to_str()?;
             if !target.contains('@') {
                 return None;
             }
-            tail = args[2..].to_vec();
+            tail = args[1..].to_vec();
         }
         _ => return None,
     }
@@ -48,7 +49,7 @@ mod tests {
     #[test]
     fn classify_claims_only_at_host_targets() {
         // A mail send with an @host target is claimed; the tail runs from
-        // the target onward.
+        // the verb onward, the shape mail_remote::run routes on.
         let argv = classify(&os(&["agents", "mail", "send", "nemo@mbp3", "hello"]))
             .expect("@host send is claimed");
         assert_eq!(argv, os(&["send", "nemo@mbp3", "hello"]));
