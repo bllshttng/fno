@@ -7932,7 +7932,7 @@ impl Core {
         // live; the spawn (keeper handshake bounded at seconds per shell
         // candidate) runs off the loop and the landing finishes the gesture.
         if let Some(job) = shell_job {
-            self.spawn_attach_shell_after(job, id, view.0);
+            self.spawn_attach_shell_after(job, id, view.0, view.1);
         }
     }
 

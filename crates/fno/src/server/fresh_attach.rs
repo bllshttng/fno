@@ -15,9 +15,15 @@ impl Core {
     /// spawned on the blocking pool. Runs at the end of `attach`, after the
     /// model, client, restore hook, first Layout, and cold-attach snapshot
     /// are already out.
-    pub(super) fn spawn_attach_shell_after(&mut self, job: AttachShellJob, client: u64, sid: u64) {
+    pub(super) fn spawn_attach_shell_after(
+        &mut self,
+        job: AttachShellJob,
+        client: u64,
+        sid: u64,
+        tid: u64,
+    ) {
         self.spawn_attach_shell_then(job, move |core, result| {
-            core.attach_shell_landed(client, sid, result)
+            core.attach_shell_landed(client, sid, tid, result)
         });
     }
 
@@ -33,6 +39,7 @@ impl Core {
         &mut self,
         client: u64,
         sid: u64,
+        tid: u64,
         result: Result<u64, String>,
     ) -> Flow {
         match result {
@@ -42,24 +49,28 @@ impl Core {
                 Flow::Continue
             }
             Err(e) => {
-                let tid = self
+                // Remove the PLACEHOLDER tab by id, not index 0: the tab is
+                // live and mutable during the window, and a client-added tab
+                // may now hold index 0. The placeholder already gone (closed
+                // by its own close cascade) leaves nothing to remove.
+                let found = self
                     .session
                     .squad(sid)
-                    .and_then(|sq| sq.tabs.first())
-                    .map(|t| t.id);
-                let ident = self.squad_identity(sid);
-                let outcome = self.session.remove_tab(sid, 0);
-                let squad_dead = matches!(
-                    outcome,
-                    RemoveOutcome::SquadRemoved | RemoveOutcome::SessionEmpty
-                );
-                if squad_dead {
-                    self.squad_members.remove(&sid);
-                    if let Some((name, key)) = ident {
-                        self.persist_remove(&name, &key);
+                    .and_then(|sq| sq.tabs.iter().position(|t| t.id == tid));
+                let mut squad_dead = false;
+                if let Some(idx) = found {
+                    let ident = self.squad_identity(sid);
+                    let outcome = self.session.remove_tab(sid, idx);
+                    squad_dead = matches!(
+                        outcome,
+                        RemoveOutcome::SquadRemoved | RemoveOutcome::SessionEmpty
+                    );
+                    if squad_dead {
+                        self.squad_members.remove(&sid);
+                        if let Some((name, key)) = ident {
+                            self.persist_remove(&name, &key);
+                        }
                     }
-                }
-                if let Some(tid) = tid {
                     self.tab_areas.remove(&tid);
                 }
                 // Refuse every client attached onto the placeholder squad (the

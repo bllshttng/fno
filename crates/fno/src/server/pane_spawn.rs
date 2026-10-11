@@ -219,6 +219,8 @@ impl AttachShellJob {
 /// A spawn in flight: the tail to run when it lands, plus the output its
 /// reader thread produced before the pane was registered (the reader starts
 /// inside the blocking half, so that output can win the race to the loop).
+/// `early_input` holds keys typed at the not-yet-live pane (a fresh-squad
+/// attach's placeholder leaf), replayed into the pty at registration.
 struct PendingSpawn {
     argv: Vec<String>,
     rows: u16,
@@ -227,6 +229,7 @@ struct PendingSpawn {
     client: Option<u64>,
     tail: SpawnTail,
     early_output: Vec<u8>,
+    early_input: Vec<u8>,
 }
 
 /// The in-flight state the async boundary needs. Gates are REQUIRED: once a
@@ -493,6 +496,7 @@ impl Core {
                 client,
                 tail: Box::new(tail),
                 early_output: Vec::new(),
+                early_input: Vec::new(),
             },
         );
         if cfg!(test) {
@@ -536,10 +540,18 @@ impl Core {
             client,
             tail,
             early_output,
+            early_input,
         } = pending;
         let result = outcome.and_then(|spawned| {
             self.register_spawned(id, &argv, rows, cols, &cwd, spawned, &early_output)
         });
+        if let Ok(pid) = result {
+            if !early_input.is_empty() {
+                if let Some(entry) = self.panes.get_mut(&pid) {
+                    let _ = entry.pty.write_input(&early_input);
+                }
+            }
+        }
         let flow = tail(self, result);
         if let Some(client) = client {
             self.finish_parked_reply_after_spawn(client);
@@ -553,6 +565,20 @@ impl Core {
         match self.spawn_flight.pending.get_mut(&pid) {
             Some(pending) => {
                 pending.early_output.extend_from_slice(bytes);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Input typed at a pane whose spawn is still in flight. True when the
+    /// bytes were kept for replay into the pty at registration - dropping
+    /// them would lose the commands a user types the moment the responsive
+    /// layout appears.
+    pub(super) fn buffer_in_flight_input(&mut self, pid: u64, bytes: &[u8]) -> bool {
+        match self.spawn_flight.pending.get_mut(&pid) {
+            Some(pending) => {
+                pending.early_input.extend_from_slice(bytes);
                 true
             }
             None => false,

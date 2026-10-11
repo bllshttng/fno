@@ -135,7 +135,10 @@ fn fresh_attach_pushes_its_layout_while_the_keeper_handshake_stalls() {
     let _server = spawn_server(
         &sock,
         &[
-            ("SHELL", "/bin/sh"),
+            // The fresh attach's shell must take the keeper road for the
+            // stub to be exec'd: shell integration supports bash/zsh only,
+            // so /bin/sh would fall straight through to the inline spawn.
+            ("SHELL", "/bin/bash"),
             ("FNO_AGENTS_WORKER_BIN", stub.to_str().unwrap()),
         ],
     );
@@ -173,7 +176,16 @@ fn fresh_attach_pushes_its_layout_while_the_keeper_handshake_stalls() {
         "the stub's stall marker arrived after the handshake could have ended; the timing proof is void"
     );
 
+    // Input typed at the placeholder during the window: buffered for the
+    // pending spawn, replayed into the shell at registration.
+    c.input(b"echo WIN\n");
+
     // The stalled spawn still lands: the handshake times out, the shell
     // falls back inline (unkept), and the pane paints.
     c.wait_prompt(pane);
+
+    // Keys typed during the window were buffered for the pending spawn, not
+    // dropped on the missing pane entry: the command runs once the shell
+    // lands.
+    c.wait_pane_text(10, pane, |t| t.contains("echo WIN"));
 }
