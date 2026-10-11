@@ -194,11 +194,28 @@ fn a_wedged_child_still_reports_timed_out_with_its_real_bound() {
     }
 }
 
-/// A timeout keeps the stderr the child printed before the bound: the
-/// network-vs-GitHub evidence a killed read used to drop, which is what a
-/// timeout row needs to name what it waited on.
+/// A timeout keeps the stderr the child printed before the bound, and the
+/// cause field reads only what the row proves: table over (tail -> waited_on)
+/// plus one live kill proving the tail survives.
 #[test]
-fn a_timeout_keeps_the_stderr_printed_before_the_bound() {
+fn timeout_rows_keep_their_tail_and_waited_on_reads_row_evidence_only() {
+    // The classifier table: evidence in, cause out, nothing guessed.
+    let timeout = |tail: &str| {
+        GhReadError::timed_out("read", std::time::Duration::from_secs(1), tail.to_string())
+    };
+    for (tail, want) in [
+        ("", "unknown"),
+        ("gh: Could not resolve host", "network"),
+        ("gh budget: held locally", "budget_lock"),
+    ] {
+        assert_eq!(timeout(tail).waited_on(), want, "tail {tail:?}");
+    }
+    let failed = GhReadError::failed("read", "gh: HTTP 403 secondary rate limit".to_string());
+    assert_eq!(failed.waited_on(), "github");
+    let failed_plain = GhReadError::failed("read", "exit 1".to_string());
+    assert_eq!(failed_plain.waited_on(), "unknown");
+    // The live kill: the tail the child printed before the bound survives
+    // into the timeout payload, the evidence the table above reads.
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_exec(
         tmp.path(),
@@ -218,27 +235,6 @@ fn a_timeout_keeps_the_stderr_printed_before_the_bound() {
         }
         other => panic!("expected TimedOut, got {}", bounded_kind(&other)),
     }
-}
-
-/// The cause field reads only what the row proves: the budget gate's own
-/// refusal text, GitHub's wording on a failed read, network markers on a
-/// killed child - and unknown when none exist.
-#[test]
-fn waited_on_reads_row_evidence_only() {
-    let timeout = |tail: &str| {
-        GhReadError::timed_out("read", std::time::Duration::from_secs(1), tail.to_string())
-    };
-    assert_eq!(timeout("").waited_on(), "unknown");
-    assert_eq!(timeout("gh: Could not resolve host").waited_on(), "network");
-    assert_eq!(
-        timeout("gh budget: held locally").waited_on(),
-        "budget_lock"
-    );
-
-    let failed = GhReadError::failed("read", "gh: HTTP 403 secondary rate limit".to_string());
-    assert_eq!(failed.waited_on(), "github");
-    let failed_plain = GhReadError::failed("read", "exit 1".to_string());
-    assert_eq!(failed_plain.waited_on(), "unknown");
 }
 
 #[test]

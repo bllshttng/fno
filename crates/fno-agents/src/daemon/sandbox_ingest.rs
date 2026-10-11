@@ -305,20 +305,24 @@ mod tests {
     }
 
     #[test]
-    fn tool_output_denials_are_counted_with_paths() {
-        let line = line_with_output(
-            "error: cannot write /Users/me/repo/.git/index.lock: Operation not permitted (os error 1)",
-        );
-        let markers = output_denial_markers(&line);
-        assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0].0, "operation_not_permitted");
-        assert_eq!(markers[0].1, "/Users/me/repo/.git/index.lock");
-    }
-
-    #[test]
-    fn prose_quoting_a_marker_is_not_a_denial() {
-        // A doc line inside a message payload: the false-positive shape the
-        // hand analysis counted as hits.
+    fn sandbox_denial_markers_classes_and_offsets_follow_their_contracts() {
+        // Marker table: (output, want rule, want path). Only tool-output
+        // payload shapes count; a message payload quoting the marker is
+        // prose, the false-positive shape the hand analysis counted.
+        for (output, want_rule, want_path) in [
+            (
+                "error: cannot write /Users/me/repo/.git/index.lock: Operation not permitted (os error 1)",
+                "operation_not_permitted",
+                "/Users/me/repo/.git/index.lock",
+            ),
+            ("ps failed to run: Operation not permitted (os error 1)", "operation_not_permitted", ""),
+        ] {
+            let line = line_with_output(output);
+            let markers = output_denial_markers(&line);
+            assert_eq!(markers.len(), 1, "output {output:?}");
+            assert_eq!(markers[0].0, want_rule);
+            assert_eq!(markers[0].1, want_path);
+        }
         let prose = json!({
             "timestamp": "2026-10-06T05:29:59Z",
             "type": "response_item",
@@ -326,52 +330,37 @@ mod tests {
         })
         .to_string();
         assert!(output_denial_markers(&prose).is_empty());
-    }
-
-    #[test]
-    fn readonly_database_counts_and_classifies() {
-        let line = line_with_output(
+        // Class buckets: (rule, path -> class), matching the hand
+        // analysis's buckets.
+        for (rule, path, want) in [
+            (
+                "operation_not_permitted",
+                "/repo/.git/FETCH_HEAD",
+                "git_write",
+            ),
+            (
+                "operation_not_permitted",
+                "/space/worktrees/w1/claim-a1b2.lock",
+                "claim_lock",
+            ),
+            (
+                "operation_not_permitted",
+                "/Users/me/.codex/agents/w.toml",
+                "home_config",
+            ),
+            ("operation_not_permitted", "", "daemon_io"),
+            ("operation_not_permitted", "/srv/data.csv", "other"),
+        ] {
+            assert_eq!(denial_class(rule, path), want, "path {path:?}");
+        }
+        let readonly = line_with_output(
             "sqlite error: attempt to write a readonly database at /Users/me/.fno/graph.db",
         );
-        let markers = output_denial_markers(&line);
+        let markers = output_denial_markers(&readonly);
         assert_eq!(markers[0].0, "readonly_database");
         assert_eq!(denial_class(markers[0].0, &markers[0].1), "readonly_db");
-    }
-
-    #[test]
-    fn classes_follow_the_hand_analysis_buckets() {
-        assert_eq!(
-            denial_class("operation_not_permitted", "/repo/.git/FETCH_HEAD"),
-            "git_write"
-        );
-        assert_eq!(
-            denial_class(
-                "operation_not_permitted",
-                "/space/worktrees/w1/claim-a1b2.lock"
-            ),
-            "claim_lock"
-        );
-        assert_eq!(
-            denial_class("operation_not_permitted", "/Users/me/.codex/agents/w.toml"),
-            "home_config"
-        );
-        assert_eq!(denial_class("operation_not_permitted", ""), "daemon_io");
-        assert_eq!(
-            denial_class("operation_not_permitted", "/srv/data.csv"),
-            "other"
-        );
-    }
-
-    #[test]
-    fn a_pathless_denial_still_counts() {
-        let line = line_with_output("ps failed to run: Operation not permitted (os error 1)");
-        let markers = output_denial_markers(&line);
-        assert_eq!(markers.len(), 1);
-        assert_eq!(markers[0].1, "");
-    }
-
-    #[test]
-    fn scan_advances_only_over_complete_lines() {
+        // Offset contract: the pass advances only over complete lines, so
+        // a partial tail is re-read by the next pass and advances nothing.
         let dir = tempfile::tempdir().unwrap();
         let path = dir
             .path()
@@ -388,7 +377,6 @@ mod tests {
         assert_eq!(buckets.len(), 1);
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(scanned as usize, text.rfind('\n').unwrap() + 1);
-        // The partial tail is re-read by the next pass, and advances nothing.
         let (again, rescanned) = scan_transcript(&path, scanned);
         assert!(again.is_empty());
         assert_eq!(rescanned, 0);

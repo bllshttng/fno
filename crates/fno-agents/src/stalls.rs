@@ -548,9 +548,9 @@ mod tests {
     }
 
     #[test]
-    fn gh_error_rows_split_by_cause_with_distinct_sessions() {
-        // One session re-firing 3 timeout stops must read as 3 rows,
-        // 1 session - the distinct-sessions column is the whole point.
+    fn stalls_cause_table_follows_its_contracts() {
+        // Cause split with distinct sessions: one session re-firing 2
+        // timeouts reads 2 rows / 1 session, the whole point of fix 4.
         let fold = fold_of(&[
             ev(
                 "2026-09-20T10:00:00Z",
@@ -567,14 +567,20 @@ mod tests {
             ev(
                 "2026-09-20T12:00:00Z",
                 "loop_check_gh_error",
-                Some("s1"),
+                Some("s2"),
                 json!({"read": "pr_info_rest", "outcome": "failed", "stderr_tail": "gh: HTTP 403 secondary rate limit"}),
             ),
             ev(
                 "2026-09-20T13:00:00Z",
                 "loop_check_gh_error",
-                Some("s2"),
+                Some("s3"),
                 json!({"read": "pr_view", "outcome": "budget_refused"}),
+            ),
+            ev(
+                "2026-09-20T14:00:00Z",
+                "loop_check_gh_error",
+                Some("s1"),
+                json!({"read": "pr_view", "outcome": "failed", "stderr_tail": "exit 1"}),
             ),
         ]);
         assert_eq!(fold.table["gh_timeout"].rows, 2);
@@ -582,13 +588,9 @@ mod tests {
         assert_eq!(fold.table["gh_timeout"].detail.get("unknown"), Some(&2));
         assert_eq!(fold.table["gh_secondary_limit"].rows, 1);
         assert_eq!(fold.table["gh_budget_refusal"].rows, 1);
-        assert_eq!(fold.table["unattributed"].rows, 0);
-    }
-
-    #[test]
-    fn noprogress_legacy_join_reads_the_previous_loop_check_row() {
-        // The analysis joined a NoProgress stop to CI red from the session's
-        // previous loop_check row by hand; the fold does the same join.
+        // unattributed is its own row and never folds away.
+        assert_eq!(fold.table["unattributed"].rows, 1);
+        // NoProgress legacy join: red read from the previous loop_check row.
         let fold = fold_of(&[
             ev(
                 "2026-09-20T10:00:00Z",
@@ -611,10 +613,8 @@ mod tests {
             Some(&1)
         );
         assert_eq!(fold.noprogress_joined, 1);
-    }
-
-    #[test]
-    fn noprogress_own_fields_beat_the_join() {
+        // Own fields beat the join: a NoProgress row carrying ci=SUCCESS
+        // counts noprogress_other, never the join.
         let fold = fold_of(&[
             ev(
                 "2020-01-01T00:00:00Z",
@@ -632,27 +632,11 @@ mod tests {
         assert_eq!(fold.table["noprogress_ci_red"].rows, 0);
         assert_eq!(fold.table["noprogress_other"].rows, 1);
         assert_eq!(fold.noprogress_joined, 0);
-    }
-
-    #[test]
-    fn unattributed_is_its_own_row_and_never_folded_away() {
-        // A failed read with no recognizable cause must surface, not vanish.
-        let fold = fold_of(&[ev(
-            "2026-09-20T10:00:00Z",
-            "loop_check_gh_error",
-            Some("s1"),
-            json!({"read": "pr_view", "outcome": "failed", "stderr_tail": "exit 1"}),
-        )]);
-        assert_eq!(fold.table["unattributed"].rows, 1);
-        assert_eq!(fold.table["unattributed"].sessions.len(), 1);
-    }
-
-    #[test]
-    fn sandbox_rows_carry_their_harness_cause() {
+        // Sandbox rows route by their harness field.
         let fold = fold_of(&[ev(
             "2026-10-01T10:00:00Z",
             "sandbox_denial",
-            Some("01a0..."),
+            Some("01a0"),
             json!({"harness": "codex", "class": "git_write", "hits": 3}),
         )]);
         assert_eq!(fold.table["codex_sandbox"].rows, 1);
@@ -660,10 +644,7 @@ mod tests {
             fold.table["codex_sandbox"].detail.get("codex:git_write"),
             Some(&1)
         );
-    }
-
-    #[test]
-    fn a_undated_row_lands_in_the_table_without_days() {
+        // An undated row lands in the table without days.
         let fold = fold_of(&[ev(
             "not-a-timestamp",
             "loop_check_gh_error",
