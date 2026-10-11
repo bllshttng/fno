@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
+use std::time::Duration;
 
 /// The `fno board-render` verb: read the request from stdin
 /// (`{"targets": [{"path", "scope"}], "vault"}`), gather once, write every
@@ -96,7 +97,17 @@ struct Receipt {
     failed: Vec<Value>,
 }
 
+/// The gather deadline for one `fno board-render` run. The callers' 600s
+/// bound (roadmap_public.py) now arrives at a receipt long before it: a
+/// gather still riding at 120s is wedged, not slow, and the page it owes is
+/// never written half-fresh.
+pub const RENDER_DEADLINE: Duration = std::time::Duration::from_secs(120);
+
 fn render_request(request: &Request) -> Result<Receipt, String> {
+    render_request_within(request, RENDER_DEADLINE)
+}
+
+fn render_request_within(request: &Request, deadline: Duration) -> Result<Receipt, String> {
     // Leads are read once at render time from the agent registry and
     // stamped: the page header says when the leads were read, and a lead
     // change alone does not re-render the page. A public render drops the
@@ -112,7 +123,32 @@ fn render_request(request: &Request) -> Result<Receipt, String> {
         .build()
         .map_err(|e| format!("cannot start the async runtime: {e}"))?;
     let leads_at = (!agents.is_empty()).then_some(now);
-    let gathered = runtime.block_on(backlog_model::gather(&graph, agents));
+    // The deadline arms the gather alone: it is the leg that hung (four
+    // sequential store reads). Target writes after it stay unbounded - each
+    // is one atomic file write. `shutdown_background` lets the drop skip the
+    // stuck blocking reads, which finish or die on their own deadlines. The
+    // timeout arms inside the async block: the timer registration belongs to
+    // the runtime block_on is about to enter.
+    let gathered = match runtime.block_on(async {
+        tokio::time::timeout(deadline, backlog_model::gather(&graph, agents)).await
+    }) {
+        Ok(gathered) => gathered,
+        Err(_elapsed) => {
+            runtime.shutdown_background();
+            let error = format!(
+                "board render deadline: the store gather did not finish in {}s",
+                deadline.as_secs()
+            );
+            return Ok(Receipt {
+                written: Vec::new(),
+                failed: request
+                    .targets
+                    .iter()
+                    .map(|t| json!({ "path": t.path, "error": error }))
+                    .collect(),
+            });
+        }
+    };
     let public = request.public.is_some();
     let mut inputs = match &request.public {
         Some(spec) => inputs_from_rows(&select_public_rows(&gathered.rows, &spec.project)?),
@@ -680,6 +716,71 @@ pub fn classify(args: &[std::ffi::OsString]) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// The gather deadline arms wedged runs and rides healthy ones: a
+    /// never-answering store read fails every target inside the caller's
+    /// proof bound with the deadline named, and a finishing gather still
+    /// writes every target.
+    #[test]
+    fn the_gather_deadline_fails_wedged_runs_and_rides_healthy_ones() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-board-deadline-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let graph = dir.join("graph.json");
+        // A keeper socket that accepts and never answers: the gather's store
+        // read wedges exactly the way the contended-graph hang did.
+        let listener =
+            std::os::unix::net::UnixListener::bind(dir.join("graph.json.store.sock")).unwrap();
+        std::env::set_var("FNO_GRAPH_JSON", &graph);
+        let request = Request {
+            targets: vec![Target {
+                path: dir.join("board.html").to_string_lossy().into_owned(),
+                scope: None,
+            }],
+            vault: None,
+            public: None,
+        };
+        let started = std::time::Instant::now();
+        let receipt = render_request_within(&request, Duration::from_secs(1)).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "took {:?}, the caller's 3s proof bound",
+            started.elapsed()
+        );
+        assert!(receipt.written.is_empty(), "{:?}", receipt.written);
+        assert_eq!(receipt.failed.len(), 1, "{:?}", receipt.failed);
+        assert!(
+            receipt.failed[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("deadline"),
+            "{:?}",
+            receipt.failed
+        );
+        drop(listener);
+        // The healthy half: an instant worker stub answers the gather (the
+        // refused socket routes to the exec lane) and every target writes.
+        let stub = dir.join("worker-instant");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"result\":{\"rows\":[]}}\\n'\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("FNO_AGENTS_WORKER", &stub);
+        let receipt = render_request_within(&request, Duration::from_secs(10)).unwrap();
+        assert!(receipt.failed.is_empty(), "{:?}", receipt.failed);
+        assert_eq!(receipt.written.len(), 1, "{:?}", receipt.written);
+        assert!(dir.join("board.html").exists());
+        std::env::remove_var("FNO_GRAPH_JSON");
+        std::env::remove_var("FNO_AGENTS_WORKER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The payload rides BEFORE the page's own script (so it exists when the
     /// script runs), the body gains the snapshot flag, and the page tail

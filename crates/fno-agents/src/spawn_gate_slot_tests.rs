@@ -345,7 +345,7 @@ fn succession_refuses_ambiguous_caller_session() {
     .unwrap();
 
     assert_eq!(
-        spawn_gate_lanes::succession_replaces(&rows, Some("session-shared"), "x-epic", "successor"),
+        spawn_gate_lanes::succession_replaces(&rows, Some("session-shared"), "x-epic"),
         Err("caller_ambiguous")
     );
 }

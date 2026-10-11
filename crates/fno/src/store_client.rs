@@ -169,6 +169,11 @@ fn dead_socket(err: &str) -> bool {
     err == "absent" || err == "no_listener"
 }
 
+/// The store-exec deadline: the Python client's `_EXEC_TIMEOUT_S`
+/// (cli/src/fno/graph/store.py). The two legs agree at 60s so a caller
+/// cannot observe one lane hanging past the other's bound.
+const EXEC_DEADLINE: Duration = Duration::from_secs(60);
+
 /// One request through the `--store-exec` one-shot lane. The child serves it
 /// through the keeper's own dispatch and exits, so a store with no resident
 /// keeper never grows one (a keeper's memory grows with requests
@@ -177,7 +182,23 @@ fn dead_socket(err: &str) -> bool {
 /// optimistic version/digest transaction is unchanged. The child reads
 /// stdin to EOF before replying, so write-then-read cannot deadlock.
 fn exec_call(graph: &Path, method: &str, params: Value) -> Result<Value, String> {
-    use std::io::Write as _;
+    exec_call_within(graph, method, params, EXEC_DEADLINE)
+}
+
+/// [`exec_call`] with the deadline as a parameter, so a test can pass a
+/// short one. `wait_with_output` is not enough: under load a contended graph
+/// kept children alive past every caller bound, so this polls `try_wait`
+/// and kills past the deadline. Stdout is drained on a helper thread: a
+/// reply bigger than the pipe buffer would otherwise wedge the poll against
+/// a child blocked on write.
+fn exec_call_within(
+    graph: &Path,
+    method: &str,
+    params: Value,
+    deadline: Duration,
+) -> Result<Value, String> {
+    use std::io::{Read as _, Write as _};
+    use std::os::unix::process::CommandExt;
 
     let binary = worker_binary().ok_or_else(crate::product_boundary::graph_worker_missing_error)?;
     let request = json!({"id": 1, "method": method, "params": params});
@@ -187,6 +208,10 @@ fn exec_call(graph: &Path, method: &str, params: Value) -> Result<Value, String>
             "--graph",
             graph.to_str().unwrap_or_default(),
         ])
+        // Own process group: the deadline kill takes the worker's
+        // descendants with it, or a grandchild holding the stdout pipe
+        // keeps the drain joined past the caller's bound.
+        .process_group(0)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -205,17 +230,63 @@ fn exec_call(graph: &Path, method: &str, params: Value) -> Result<Value, String>
             format!("cannot send the store request: {e}")
         })?;
     // stdin dropped here: the child sees EOF and answers.
-    let out = child
-        .wait_with_output()
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or("cannot open the store-exec stdout")?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        stdout
+            .read_to_end(&mut buf)
+            .map(|_| buf)
+            .map_err(|e| e.to_string())
+    });
+    let expires = std::time::Instant::now() + deadline;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if std::time::Instant::now() >= expires {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(format!("store-exec failed: {e}"));
+            }
+        }
+    };
+    let Some(status) = status else {
+        // Deadline fired: take down the whole group and reap, or a
+        // long-lived mux server accumulates one zombie per timed-out read.
+        // SAFETY: process_group(0) made the child a group leader, so its
+        // pid is the pgid; killpg signals that group and cannot fail on a
+        // live leader.
+        unsafe {
+            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        let _ = reader.join();
+        return Err(format!(
+            "store-exec timed out after {}s; a write may not be confirmed, read before retrying",
+            deadline.as_secs()
+        ));
+    };
+    let buf = reader
+        .join()
+        .map_err(|_| "store-exec reader thread panicked".to_string())?
         .map_err(|e| format!("store-exec failed: {e}"))?;
-    if out.stdout.is_empty() {
+    if buf.is_empty() {
         return Err(format!(
             "store-exec exited with code {} and no reply",
-            out.status.code().unwrap_or(-1)
+            status.code().unwrap_or(-1)
         ));
     }
-    let reply: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("store-exec reply is not JSON: {e}"))?;
+    let reply: Value =
+        serde_json::from_slice(&buf).map_err(|e| format!("store-exec reply is not JSON: {e}"))?;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         return Ok(reply.get("result").cloned().unwrap_or(Value::Null));
     }
@@ -598,6 +669,45 @@ mod tests {
         );
         let err = call(&graph, "commit", json!({})).unwrap_err();
         assert!(err.contains("version conflict"), "{err}");
+        std::env::remove_var("FNO_AGENTS_WORKER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The deadline bounds a slow child and never costs a healthy one: a
+    /// stub past the deadline dies with a `timed out` error inside the
+    /// caller's bound (the process-group kill reaps it), and an instant
+    /// reply rides any deadline unchanged.
+    #[test]
+    fn the_exec_deadline_bounds_slow_children_and_rides_instant_ones() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-store-exec-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let graph = dir.join("graph.json");
+        std::env::set_var(
+            "FNO_AGENTS_WORKER",
+            stub_worker(
+                &dir,
+                "worker-instant",
+                "printf '{\"ok\":true,\"result\":{\"backend\":\"sqlite\",\"version\":\"v1\"}}\n'",
+            ),
+        );
+        let reply =
+            exec_call_within(&graph, "export_status", json!({}), Duration::from_secs(1)).unwrap();
+        assert_eq!(reply["backend"], json!("sqlite"));
+        std::env::set_var(
+            "FNO_AGENTS_WORKER",
+            stub_worker(&dir, "worker-slow", "sleep 5\n"),
+        );
+        let started = std::time::Instant::now();
+        let err = exec_call_within(&graph, "export_status", json!({}), Duration::from_secs(1))
+            .unwrap_err();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "took {:?}, the caller's 3s proof bound",
+            started.elapsed()
+        );
+        assert!(err.contains("timed out"), "{err}");
         std::env::remove_var("FNO_AGENTS_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
     }

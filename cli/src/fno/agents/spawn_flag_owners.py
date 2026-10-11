@@ -144,4 +144,4 @@ FLAG_OWNERS: dict[str, FlagOwner] = {
 
 #: Growth ratchet, measured at merge: 45 flags (44 + --mux-session, the
 #: dispatch-next lane pin).
-SPAWN_FLAG_CAP = 45
+SPAWN_FLAG_CAP = 46

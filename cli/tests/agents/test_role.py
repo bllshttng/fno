@@ -159,6 +159,12 @@ def _spawn_promoted(monkeypatch, tmp_path, *, grantor_env: Optional[str], **role
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     else:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", grantor_env)
+    if role.get("succession"):
+        # The machine names successors: seal the pending draw so the typed
+        # name counts as accepting it.
+        from tests.agents._name_draw_seed import seed_pending_draw
+
+        seed_pending_draw("Avery", role["role_scope"])
 
     from fno.agents.mux_spawn import dispatch_spawn_pane
 
@@ -318,6 +324,10 @@ def test_settle_spawn_role_outcomes(tmp_path: Path, monkeypatch, native_backlog_
 
     def plan_for(rows, succession=False):
         update_registry(lambda _: rows)
+        if succession:
+            from tests.agents._name_draw_seed import seed_pending_draw
+
+            seed_pending_draw("Avery", "epic-x")
         refusal, plan = plan_spawn_role("epic-x", None, succession, proposed_name="Avery" if succession else None)
         assert refusal is None
         assert plan is not None
@@ -404,6 +414,9 @@ def test_settle_spawn_role_reown_skips_a_provenance_less_child(
         spawned_by_session="caller-sess",
     )
     update_registry(lambda _: [caller, child])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     rows, outcome, vacated = settle_spawn_role(
@@ -432,6 +445,9 @@ def test_settle_spawn_role_declines_when_rust_is_unavailable(
     use_tmpdir(monkeypatch, tmp_path)
     caller = _role_row("caller")
     update_registry(lambda _: [caller])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     assert plan is not None

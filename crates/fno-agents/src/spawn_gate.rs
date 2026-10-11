@@ -1800,7 +1800,6 @@ fn decide_gate(
                                 &live,
                                 input.caller_session.as_deref(),
                                 scope,
-                                &name,
                             )
                         });
                         last_succession_error = succession

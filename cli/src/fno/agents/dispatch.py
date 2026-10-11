@@ -84,6 +84,7 @@ from fno.agents.registry import (
     update_registry,
 )
 from fno.agents.role import (
+    adopt_drawn_name,
     calling_agent_row,
     role_validation_error,
     journal_spawn_role,
@@ -2499,6 +2500,7 @@ def dispatch_spawn(
             message, role_level, role_scope, succession, harness, parent_edge,
             name=name, revive=bool(resume_session_id))
         message = promotion["message"]
+        name = adopt_drawn_name(succession, promotion.get("plan"), name)
 
     # 3b. Codex thread spawns are held by the Rust app-server lane. The Python
     # runtime delegates there instead of silently downgrading to a one-shot.
@@ -2633,6 +2635,7 @@ def dispatch_spawn(
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
+                name = adopt_drawn_name(succession, role_plan, name)
 
             # a revive must come back on the route the row was born with
             # unless this invocation resolved one of its own; raises exit 2 when
@@ -4860,27 +4863,13 @@ def _daemon_rpc(
 # off-thread and wants the full ceiling for its own reason: a genuine multi-hop
 # stream exchange. The first hop needs the same number for the reason below.
 _SWITCHBOARD_READ_TIMEOUT = 130.0
-# The FIRST hop's read budget. SYNCHRONOUS -- the sender blocks on it -- so a
-# tighter value than the relay's is tempting, and a 15s one shipped here. It is
-# unsafe, and the ceiling is not ours to pick: `agent.switchboard_v2` does not
-# ack and return. `handle_switchboard` drives B's WHOLE turn before it answers,
-# bounded by SWITCHBOARD_TURN_TIMEOUT_MS (120s) + SWITCHBOARD_DRIVE_GRACE_S (5s).
-# Reading for less than 125s abandons a turn the daemon is still driving: the
-# body already reached B, `_switchboard_exchange` returns None, and
-# `_deliver_live` falls through and injects the SAME body a second time under a
-# receipt that says durable. Most real model turns run past 15s, so that was the
-# common case, not the edge.
-#
-# Capping the daemon instead (`timeout_ms` in params) is worse: a drive that
-# misses its deadline stamps B orphaned, so a short cap marks every slow-but-
-# healthy peer dead.
-#
-# The complaint behind the 15s is real -- a wedged daemon held a sender for the
-# full budget, twice killed by hand at 90s and 120s. The fix belongs on the
-# daemon side (ack first, drive after), not in a client read cap. Until that
-# lands, the sender pays the daemon's own ceiling. The common non-stream case
-# still fast-fails in about a second: every pre-drive check is bounded, the
-# stream probe at STREAM_PROBE_TIMEOUT_S = 2s.
+# The FIRST hop's read budget. SYNCHRONOUS: `agent.switchboard_v2` does not
+# ack and return; `handle_switchboard` drives B's WHOLE turn before it answers
+# (SWITCHBOARD_TURN_TIMEOUT_MS + SWITCHBOARD_DRIVE_GRACE_S). Reading under
+# 125s abandons a turn the daemon still drives and injects the SAME body a
+# second time under a durable receipt. Capping the daemon instead stamps every
+# slow-but-healthy peer orphaned; the wedged-daemon fix belongs daemon-side,
+# so the sender pays this ceiling.
 _SWITCHBOARD_FIRST_HOP_READ_TIMEOUT = _SWITCHBOARD_READ_TIMEOUT
 # A SHORT connect timeout: every claude send now tries the switchboard first, so
 # a DOWN/wedged daemon must not tax the common (non-stream) path — it should fail
@@ -7098,20 +7087,11 @@ def _deliver_live(
     ):
         return True
 
-    # Live inject over control.sock (adopted `claude --bg`, the fno-agents
-    # mail-inject verb, G1; node). This is the SOLE claude live lane: the
-    # PTY worker.sock lane retired with daemon PTY hosting, and
-    # the redundant MCP-channel fast lane retired here (US5) because it reported
-    # hosted on an unconfirmed bytes-written push (Locked Decision 4) while
-    # reaching no peer the control.sock lane cannot. The mail-inject verb resolves
-    # the handle itself via ClaudeRoster (accepts the full session uuid or 8-hex
-    # short id) and confirms transcript growth before reporting delivered.
-    #
-    # Recipient resolution guarantees no former MCP recipient is stranded:
-    # mcp_channel_id is minted 1:1 from short_id, so it IS a roster-resolvable
-    # id. Live rows can carry
-    # an empty plain `short_id`, so mcp_channel_id is the load-bearing
-    # fallback for an MCP-registered row whose short_id field was since cleared.
+    # Live inject over control.sock: the SOLE claude live lane since the
+    # PTY worker.sock and MCP-channel lanes retired. The mail-inject verb
+    # resolves the handle via ClaudeRoster (uuid or 8-hex short id) and
+    # confirms transcript growth before reporting delivered; mcp_channel_id
+    # (minted 1:1 from short_id) stays the fallback for a cleared short_id.
     recipient = entry.harness_session_id or entry.short_id or entry.mcp_channel_id
     if not recipient:
         _record("no-recipient")

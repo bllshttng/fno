@@ -1216,10 +1216,10 @@ def _validate_company_work(entries: list[dict]) -> None:
 def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     """Everything that follows a landed publish, shared by the commit cycle
     and the typed-op cycle: the dropped-row warning, the closure claim
-    releases, the readiness overlay, the board renders, and the drain-daemon
-    nudge. The file leg ran all of these after its lock dropped; the client
-    runs them after the keeper's publish lands, which is the same position
-    relative to other writers."""
+    releases, the readiness overlay, and the drain-daemon nudge. The file leg
+    ran all of these after its lock dropped; the client runs them after the
+    keeper's publish lands, which is the same position relative to other
+    writers."""
     path = Path(path)
     dropped = outcome.get("dropped", 0)
     backup = outcome.get("backup")
