@@ -1133,6 +1133,74 @@ def _make_codex_bind_probe(
     return _probe
 
 
+#: Codex 0.148+ parks a fresh pane on a `Hooks need review` modal whenever a
+#: hook is new or changed. The argv arm clears it on bypass postures with
+#: --dangerously-bypass-hook-trust, and the readiness gate refuses + reaps when
+#: its frame read catches the modal before any payload is committed - both
+#: deliberate. The gap is the paint race: the modal can land after the gate's
+#: single read, and the bind loop then declines for the whole window with no
+#: lane acting (x-d545, measured live on codex 0.156.1).
+_CODEX_HOOK_REVIEW_MODAL_RE = re.compile(r"hooks need review", re.I)
+
+
+def _make_codex_hook_modal_responder(
+    mux: dict,
+    runner: Callable[..., "subprocess.CompletedProcess[str]"],
+    condition: Optional[list] = None,
+) -> Callable[[str], Optional[str]]:
+    """Answer a codex hooks-review modal once from the bind wait (x-d545).
+
+    :func:`_await_pane_binding` hands each fresh pane tail to the returned
+    responder. On the modal it sends one `3` + Enter keystroke - the modal's
+    option 3, continue WITHOUT trusting, the answer a bounded pane already
+    implies: untrusted hooks simply do not run. Answering belongs here and not
+    at the readiness gate because the gate fires before any payload exists,
+    where refusing costs nothing; by bind time the spawn is committed and a
+    parked pane holds a slot while executing nothing.
+
+    The answer is sent exactly once and never retried, on the same doctrine as
+    the seed submit: a send that raised may still have landed, and a second
+    `3` into a modal that already closed would type a turn. A later tick that
+    still sees the modal downgrades the condition note to "still parked"
+    instead of sending again.
+    """
+    answered = False
+
+    def _respond(tail: str) -> Optional[str]:
+        nonlocal answered
+        if not _CODEX_HOOK_REVIEW_MODAL_RE.search(tail):
+            return None
+        if not answered:
+            answered = True
+            try:
+                _run_mux(
+                    [
+                        "mux", "pane", "send", "--session", str(mux["session"]),
+                        str(mux["pane_id"]), "--text", "3", "--submit", "--raw",
+                    ],
+                    runner,
+                )
+            except DispatchAskError as exc:
+                note = f"hooks-review modal answer send failed: {exc}"
+                if condition is not None:
+                    condition[:] = [note]
+                return note
+            note = (
+                "hooks-review modal answered once with 'continue without "
+                "trusting' (option 3)"
+            )
+            if condition is not None:
+                condition[:] = [note]
+            print(f"spawn: pane {mux.get('pane_id')}: {note}", file=sys.stderr)
+            return note
+        note = "hooks-review modal still parked after the option-3 answer"
+        if condition is not None:
+            condition[:] = [note]
+        return note
+
+    return _respond
+
+
 def pane_passthrough_tokens(
     passthrough: Optional[Sequence[str]],
     emitted: Sequence[str],
@@ -2427,6 +2495,7 @@ def _await_pane_binding(
     sleep: Optional[Callable] = None,
     label: str = "the worker",
     condition_sink: Optional[list] = None,
+    modal_responder: Optional[Callable[[str], Optional[str]]] = None,
 ) -> PaneBinding:
     """Wait out the gap between "a pane exists" and "a worker reached its provider".
 
@@ -2467,6 +2536,12 @@ def _await_pane_binding(
     wait reads it onto every outcome. That is what lets a blown window report
     what it OBSERVED rather than only how long it waited - the defect four
     measured `binding-window-expired` failures had in common.
+
+    ``modal_responder`` is the one provider-aware hook besides ``bind_probe``:
+    handed each fresh non-empty tail, it may answer a provider modal that
+    would otherwise park the pane for the whole window (codex's hooks-review
+    modal, x-d545). It sees only what this loop already read; it never adds a
+    read or a send of its own beyond the answer it records.
     """
     naptime = sleep or time.sleep
     window = max(window_s if window_s is not None else _binding_window_s(), 0.0)
@@ -2512,6 +2587,8 @@ def _await_pane_binding(
         fresh = _read_pane_tail(mux, runner)
         if fresh.strip():
             tail = fresh
+            if modal_responder is not None:
+                modal_responder(fresh)
         # Checked BETWEEN probes, not only at the tick boundary: one tick issues
         # three subprocesses, so a slow mux would otherwise carry the loop far
         # past the ceiling even with each probe individually bounded.
@@ -4213,6 +4290,11 @@ def dispatch_spawn_pane(
                     window_s=binding_window_s,
                     label="codex",
                     condition_sink=bind_condition,
+                    modal_responder=_make_codex_hook_modal_responder(
+                        {"session": session, "pane_id": pane_id},
+                        runner,
+                        bind_condition,
+                    ),
                 )
                 session_uuid = binding.session_id
                 pane_alive = binding.pane_alive
