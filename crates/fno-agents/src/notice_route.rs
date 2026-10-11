@@ -441,7 +441,9 @@ fn refusal_subject(group: &OwnerGroup) -> String {
         .unwrap_or("reconcile held nodes open");
     let mut flat = String::new();
     for word in cause.split_whitespace() {
-        if flat.chars().count() + word.len() + 1 > 280 {
+        // The cap clears the longest common refusal plus its cause
+        // wrapper, so the remedy verb survives the cut.
+        if flat.chars().count() + word.len() + 1 > 400 {
             break;
         }
         if !flat.is_empty() {
@@ -1696,7 +1698,7 @@ mod tests {
         assert!(!subject.contains('\n'));
         assert!(subject.contains("ab-d327"));
         assert!(subject.contains("fno backlog idea"));
-        assert!(subject.chars().count() <= 280);
+        assert!(subject.chars().count() <= 400);
         let body = question_page_body(&group, &subject);
         let title_line = body
             .lines()
