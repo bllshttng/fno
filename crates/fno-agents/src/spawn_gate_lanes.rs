@@ -998,11 +998,13 @@ pub(crate) fn check_account_login(
         account,
         crate::reentry::shell_account_binding,
         crate::claude_login::probe_config_dir,
+        crate::claude_login::record_verdict_ambient,
         warnings,
     )
 }
 
-/// The decision body, split for tests: `binding` and `probe` are injected, so
+/// The decision body, split for tests: `binding`, `probe` and `record` are
+/// injected, so
 /// a test never shells out. Rules, in order:
 /// 1. no account or `default`: admit, nothing is called (the quota lock's rule).
 /// 2. a route to any provider other than anthropic: admit, nothing is called
@@ -1016,11 +1018,15 @@ pub(crate) fn check_account_login(
 ///    unparseable output, a non-auth error) pushes a note and admits - a
 ///    silent fail-open would hide a probe broken by a future claude flag
 ///    rename, so the note is the lane's one honesty signal.
+/// A DECIDED verdict (logged in or out) also goes to `record` before the
+/// result returns, so launch-time picking sees the refusal without paying
+/// for another probe; an inconclusive one records nothing.
 pub(crate) fn check_account_login_with(
     route_provider: Option<&str>,
     account: &str,
     binding: impl Fn(&str) -> Result<Option<String>, String>,
     probe: impl Fn(&Path) -> crate::claude_login::Login,
+    record: impl Fn(&str, &Path, &crate::claude_login::Login),
     warnings: &mut Vec<String>,
 ) -> Result<(), crate::spawn_gate::Refusal> {
     use crate::claude_login::Login;
@@ -1037,7 +1043,10 @@ pub(crate) fn check_account_login_with(
     };
     let dir = PathBuf::from(dir);
     match probe(&dir) {
-        Login::LoggedIn => Ok(()),
+        Login::LoggedIn => {
+            record(account, &dir, &Login::LoggedIn);
+            Ok(())
+        }
         Login::Unknown(why) => {
             warnings.push(format!(
                 "spawn-gate note: account {account} login probe inconclusive ({why}); not refusing on it"
@@ -1046,6 +1055,7 @@ pub(crate) fn check_account_login_with(
         }
         Login::LoggedOut(detail) => {
             let remedy = crate::claude_login::login_command(&dir);
+            record(account, &dir, &Login::LoggedOut(detail.clone()));
             warnings.push(format!(
                 "spawn-gate: account {account} cannot log in ({detail}); refusing; no worker launched; run: {remedy}"
             ));
@@ -2418,35 +2428,73 @@ mod tests {
         (binding, probe, calls)
     }
 
+    /// The recorder most rules pass: a decision must be free to record
+    /// nothing when the rule never reached a verdict.
+    fn no_record(_account: &str, _dir: &Path, _verdict: &Login) {}
+
+    /// A recorder that captures what it was told, for the persistence rules.
+    fn capturing_record() -> (
+        impl Fn(&str, &Path, &Login),
+        std::rc::Rc<std::cell::RefCell<Vec<(String, Login)>>>,
+    ) {
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        let record = move |account: &str, _dir: &Path, verdict: &Login| {
+            sink.borrow_mut()
+                .push((account.to_string(), verdict.clone()));
+        };
+        (record, seen)
+    }
+
     /// Rule 1: no account or `default` admits and calls nothing.
     #[test]
     fn login_lane_rows() {
         for account in ["", "default"] {
             let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
             let mut warnings = Vec::new();
-            assert!(check_account_login_with(None, account, binding, probe, &mut warnings).is_ok());
+            assert!(check_account_login_with(
+                None,
+                account,
+                binding,
+                probe,
+                no_record,
+                &mut warnings
+            )
+            .is_ok());
             assert_eq!(calls.get(), 0, "account {account:?} must call nothing");
             assert!(warnings.is_empty());
         }
 
         let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(
-            check_account_login_with(Some("zai"), "makers", binding, probe, &mut warnings).is_ok()
-        );
+        assert!(check_account_login_with(
+            Some("zai"),
+            "makers",
+            binding,
+            probe,
+            no_record,
+            &mut warnings
+        )
+        .is_ok());
         assert_eq!(calls.get(), 0);
         assert!(warnings.is_empty());
 
         let (binding, probe, calls) =
             login_lane_fakes(Err("no such account".to_string()), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(calls.get(), 1, "binding once, probe never");
         assert!(warnings.is_empty());
 
         let (binding, probe, calls) = login_lane_fakes(Ok(None), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(calls.get(), 1, "binding once, probe never");
         assert!(warnings.is_empty());
 
@@ -2455,8 +2503,9 @@ mod tests {
             Login::LoggedOut("Login expired".to_string()),
         );
         let mut warnings = Vec::new();
-        let err = check_account_login_with(None, "makers", binding, probe, &mut warnings)
-            .expect_err("a logged-out account must refuse");
+        let err =
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .expect_err("a logged-out account must refuse");
         assert_eq!(err.exit_code, crate::spawn_gate::EXIT_PROVIDER_CAP);
         let receipt = err.receipt.expect("refusal carries the receipt");
         assert_eq!(receipt["reason"], "account_not_logged_in");
@@ -2479,7 +2528,10 @@ mod tests {
             Login::Unknown("probe timed out after 20s".to_string()),
         );
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert_eq!(
             warnings.len(),
             1,
@@ -2490,7 +2542,10 @@ mod tests {
         let (binding, probe, _calls) =
             login_lane_fakes(Ok(Some("/tmp/acct".to_string())), Login::LoggedIn);
         let mut warnings = Vec::new();
-        assert!(check_account_login_with(None, "makers", binding, probe, &mut warnings).is_ok());
+        assert!(
+            check_account_login_with(None, "makers", binding, probe, no_record, &mut warnings)
+                .is_ok()
+        );
         assert!(warnings.is_empty());
     }
 
@@ -2509,6 +2564,52 @@ mod tests {
     /// Rule 5, inconclusive: admit, but push the one honesty note.
 
     /// Rule 5, logged-in: admit with no note.
+
+    /// A decided verdict reaches the recorder before the result returns;
+    /// an inconclusive one records nothing.
+    #[test]
+    fn login_lane_records_decided_verdicts_only() {
+        let (binding, probe, _calls) = login_lane_fakes(
+            Ok(Some("/tmp/acct".to_string())),
+            Login::LoggedOut("Login expired".to_string()),
+        );
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_err(), "logged out must refuse");
+        assert_eq!(
+            seen.borrow().as_slice(),
+            vec![(
+                "makers".to_string(),
+                Login::LoggedOut("Login expired".to_string())
+            )],
+            "exactly one refusal record"
+        );
+
+        let (binding, probe, _calls) =
+            login_lane_fakes(Ok(Some("/tmp/acct".to_string())), Login::LoggedIn);
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_ok());
+        assert_eq!(
+            seen.borrow().as_slice(),
+            vec![("makers".to_string(), Login::LoggedIn)],
+        );
+
+        let (binding, probe, _calls) = login_lane_fakes(
+            Ok(Some("/tmp/acct".to_string())),
+            Login::Unknown("probe timed out after 20s".to_string()),
+        );
+        let (record, seen) = capturing_record();
+        let mut warnings = Vec::new();
+        let result =
+            check_account_login_with(None, "makers", binding, probe, record, &mut warnings);
+        assert!(result.is_ok(), "inconclusive admits");
+        assert!(seen.borrow().is_empty(), "unknown records nothing");
+    }
 
     #[test]
     fn questions_journal_read_reaches_the_store() {
