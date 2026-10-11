@@ -414,6 +414,9 @@ def test_settle_spawn_role_reown_skips_a_provenance_less_child(
         spawned_by_session="caller-sess",
     )
     update_registry(lambda _: [caller, child])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     rows, outcome, vacated = settle_spawn_role(
@@ -442,6 +445,9 @@ def test_settle_spawn_role_declines_when_rust_is_unavailable(
     use_tmpdir(monkeypatch, tmp_path)
     caller = _role_row("caller")
     update_registry(lambda _: [caller])
+    from tests.agents._name_draw_seed import seed_pending_draw
+
+    seed_pending_draw("Avery", "epic-x")
     refusal, plan = plan_spawn_role("epic-x", None, True, proposed_name="Avery")
     assert refusal is None
     assert plan is not None

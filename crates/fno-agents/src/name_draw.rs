@@ -355,14 +355,16 @@ fn random_index(len: usize) -> Result<usize, String> {
 
 /// Take the `name:` claim for `name`: the cross-host gate. The holder names
 /// this machine, so a peer's live claim refuses our draw (HeldByOther) and
-/// our own re-acquire (the accept) is idempotent. The lease is ten years: a
-/// name is used forever within any horizon the lease outlives, and the local
-/// history keeps refusing it after that.
+/// our own re-acquire (the accept) is idempotent. The lease sits at the
+/// claim store's one-day ceiling: the lease only arbitrates the tight race
+/// between two hosts drawing the same free name, and the row outlives its
+/// lease - the used-name read takes every `name:` row including expired
+/// ones, so a name whose claim expired stays un drawable forever.
 fn claim_name(name: &str, root: Option<&Path>) -> Result<(), String> {
     let key = format!("name:{}", name.to_ascii_lowercase());
     let opts = crate::claims::AcquireOpts {
         pid_unavailable: true,
-        ttl_ms: Some(10 * 365 * 24 * 3_600_000),
+        ttl_ms: Some(86_400_000),
         reason: Some("successor name draw; a name is used once".into()),
         root: root.map(Path::to_path_buf),
         ..Default::default()
