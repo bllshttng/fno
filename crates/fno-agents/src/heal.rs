@@ -2185,9 +2185,8 @@ fn emit_tick_event(
         let nums: Vec<u64> = acted_prs.iter().filter_map(|p| p.parse().ok()).collect();
         fields.insert("acted_prs".to_string(), serde_json::json!(nums));
     }
-    // The next sweep's skip baseline. Omitted when empty so rows that record
-    // no world (the single-PR path's rows) never displace the last real one
-    // in last_sweep_states.
+    // The next sweep's skip baseline; omitted when empty so a row that
+    // records no world never displaces the last real one.
     if !pr_states.is_empty() {
         fields.insert("pr_states".to_string(), serde_json::json!(pr_states));
     }
@@ -2312,18 +2311,17 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             continue;
         }
         // The unchanged-PR skip: one checks read keyed on the listing's free
-        // head sha. When the sha AND the checks digest both match the last
-        // sweep's record, nothing on this PR can have changed, so the pulls
-        // read, the claim gate, the job logs and the flake scan are all
-        // repeated work. Two doors stay open on purpose: a live rebase
-        // trigger (a conflicting PR, or the merge-slot holder) and a head
-        // with a rerun in its history -- the rerun ladder's "second red is
-        // the verdict" escalation only exists if the PR is re-classified.
+        // head sha; when sha AND digest both match the last sweep's record,
+        // the pulls read, the claim gate, the job logs and the flake scan
+        // are repeated work. Doors that stay open: a live rebase trigger, a
+        // head with a rerun in its history (the rerun ladder's second
+        // verdict needs the re-classification), and any dry run, whose
+        // exit-0 contract means nothing red.
         let mut digest_read = match listing_head.as_deref() {
             Some(h) => read_checks(a, h).ok(),
             None => None,
         };
-        let digest = digest_read.as_ref().and_then(|v| checks_digest(v));
+        let digest = digest_read.as_ref().and_then(checks_digest);
         if let (Some(h), Some(dg)) = (&listing_head, &digest) {
             sweep_states.insert(
                 pr.clone(),
@@ -2357,7 +2355,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
             }
             _ => false,
         };
-        if unchanged {
+        if unchanged && !dry_run {
             println!("skip unchanged: head sha and checks digest match the last sweep");
             bump(&mut counts, "skip_unchanged");
             receipt(
@@ -2508,9 +2506,8 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
         if !dry_run {
             detect_flakes(a, &head, &rerun_keys_ever, &flake_guards);
         }
-        // The skip's own read rides along: when the live head matches the
-        // sha the digest was computed for, findings_for consumes it instead
-        // of paying a second checks read for the same head.
+        // The skip's own read rides along when the live head matches the
+        // digest's sha; findings_for reuses it instead of a second read.
         let pre_read = if listing_head.as_deref() == Some(state.head.as_str()) {
             digest_read.take()
         } else {
@@ -4018,6 +4015,13 @@ exit 0
             run_list_before,
             "an all-skipped sweep never reads main's HEAD"
         );
+        // The rehearsal never takes the skip: over the same unchanged world
+        // its exit still means "red PRs exist", never "the rehearsal ran".
+        let code_dry = run_heal(&drive_args(d, &["--dry-run"]));
+        assert_eq!(
+            code_dry, EXIT_ESCALATIONS,
+            "a rehearsal reports the unchanged red: {code_dry}"
+        );
         let events = log_of(d, "events.jsonl");
         assert!(events.contains("\"skip_unchanged\":3"), "{events}");
         // The recorded world is the next sweep's baseline.
@@ -4029,11 +4033,10 @@ exit 0
             );
         }
 
-        // Sweep 3: PR 1 gains a commit. Its head no longer matches the
-        // record, so it is processed (and healed again) while the two
-        // untouched PRs keep skipping. The stub's `fixed` marker stands for
-        // the dirt a real remedy left before its commit; sweep 1's commit
-        // carried it, so the marker goes the way of the pushed fix.
+        // Sweep 3: PR 1 gains a commit, so it is processed (and healed
+        // again) while the untouched PRs keep skipping. The stub's `fixed`
+        // marker stands for the dirt sweep 1's remedy left before its commit
+        // carried it; the marker goes the way of the pushed fix.
         let _ = std::fs::remove_file(d.join("fixed"));
         let body = r#"#!/bin/sh
 D="$(dirname "$0")"
