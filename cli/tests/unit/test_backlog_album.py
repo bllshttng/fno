@@ -5,15 +5,13 @@ done nodes sorted newest-first; a card with no gift says so rather than hiding.
 """
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 import json
 from pathlib import Path
 
-from typer.testing import CliRunner
 
-from fno.cli import app
 
-runner = CliRunner()
 
 
 def _route(tmp_path: Path, monkeypatch) -> Path:
@@ -70,7 +68,7 @@ def test_json_sorted_desc_gift_only_when_present(tmp_path, monkeypatch):
             },
         ],
     )
-    r = runner.invoke(app, ["backlog", "album", "--json"])
+    r = native_backlog("backlog", "album", "--json")
     assert r.exit_code == 0, r.output
     cards = json.loads(r.output)
     # Newest first, superseded excluded.
@@ -100,7 +98,7 @@ def test_text_names_no_gift_rather_than_hiding(tmp_path, monkeypatch):
             },
         ],
     )
-    r = runner.invoke(app, ["backlog", "album"])
+    r = native_backlog("backlog", "album")
     assert r.exit_code == 0, r.output
     assert "album: 2 shipped" in r.output
     assert "PR #883" in r.output
@@ -122,7 +120,7 @@ def test_paging_offset_and_limit(tmp_path, monkeypatch):
             for i in range(5)
         ],
     )
-    r = runner.invoke(app, ["backlog", "album", "--json", "--limit", "2", "--offset", "1"])
+    r = native_backlog("backlog", "album", "--json", "--limit", "2", "--offset", "1")
     assert r.exit_code == 0, r.output
     cards = json.loads(r.output)
     assert [c["id"] for c in cards] == ["x-page003", "x-page002"]
@@ -149,14 +147,14 @@ def test_json_and_text_carry_a_urlless_pr_number_gift(tmp_path, monkeypatch):
             },
         ],
     )
-    r = runner.invoke(app, ["backlog", "album", "--json"])
+    r = native_backlog("backlog", "album", "--json")
     assert r.exit_code == 0, r.output
     cards = {c["id"]: c for c in json.loads(r.output)}
     assert cards["x-gift001"]["pr_number"] == 902, "machine surface keeps the url-less gift"
     assert "pr_url" not in cards["x-gift001"]
     assert cards["x-url0001"]["pr_url"].endswith("/pull/491")
     # Text mode: pr_number prints verbatim; a url-only card parses the tail.
-    t = runner.invoke(app, ["backlog", "album"])
+    t = native_backlog("backlog", "album")
     assert t.exit_code == 0, t.output
     assert "PR #902" in t.output
     assert "PR 491" in t.output
@@ -175,7 +173,7 @@ def test_offset_past_the_end_names_the_range_not_an_inverted_one(tmp_path, monke
             }
         ],
     )
-    r = runner.invoke(app, ["backlog", "album", "--offset", "5"])
+    r = native_backlog("backlog", "album", "--offset", "5")
     assert r.exit_code == 0, r.output
     assert "offset 5 is past the end" in r.output
     assert "showing 6-5" not in r.output
@@ -183,10 +181,10 @@ def test_offset_past_the_end_names_the_range_not_an_inverted_one(tmp_path, monke
 
 def test_absent_archive_is_empty_not_an_error(tmp_path, monkeypatch):
     _route(tmp_path, monkeypatch)  # never seeded
-    r = runner.invoke(app, ["backlog", "album"])
+    r = native_backlog("backlog", "album")
     assert r.exit_code == 0, r.output
     assert "album is empty" in r.output
-    r = runner.invoke(app, ["backlog", "album", "--json"])
+    r = native_backlog("backlog", "album", "--json")
     assert r.exit_code == 0, r.output
     assert json.loads(r.output) == []
 
@@ -213,7 +211,7 @@ def test_legacy_completed_row_without_status_is_a_card(tmp_path, monkeypatch):
             },
         ],
     )
-    r = runner.invoke(app, ["backlog", "album", "--json"])
+    r = native_backlog("backlog", "album", "--json")
     assert r.exit_code == 0, r.output
     cards = json.loads(r.output)
     assert [c["id"] for c in cards] == ["x-leg0001"]

@@ -19,11 +19,8 @@ pytestmark = requires_rust
 import json  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-from typer.testing import CliRunner  # noqa: E402
 
-from fno.cli import app  # noqa: E402
 
-runner = CliRunner()
 
 
 def _route(tmp_path, monkeypatch) -> tuple[Path, Path]:
@@ -133,9 +130,9 @@ def test_find_corrupt_archive_is_miss_not_crash(tmp_path, monkeypatch):
 def test_album_empty_archive_says_so(tmp_path, monkeypatch):
     g, _archive = _route(tmp_path, monkeypatch)
     _seed(g, [])
-    r = runner.invoke(app, ["backlog", "album"])
-    assert r.exit_code == 0, r.output
-    assert "The album is empty." in r.output
+    code, out, err = _native_backlog("album")
+    assert code == 0, err
+    assert "The album is empty." in out
 
 
 def test_album_sorts_newest_first_and_shows_the_gift(tmp_path, monkeypatch):
@@ -148,9 +145,9 @@ def test_album_sorts_newest_first_and_shows_the_gift(tmp_path, monkeypatch):
          "completed_at": "2026-06-01T00:00:00Z", "pr_number": 1,
          "pr_url": "https://github.com/x/y/pull/1"},
     ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "album"])
-    assert r.exit_code == 0, r.output
-    lines = [line for line in r.output.splitlines() if line.strip()]
+    code, out, err = _native_backlog("album")
+    assert code == 0, err
+    lines = [line for line in out.splitlines() if line.strip()]
     assert lines[0].startswith("album: 2 shipped")
     assert lines[1].startswith("2026-06-01")
     assert "PR #1" in lines[1]
@@ -167,10 +164,10 @@ def test_album_excludes_superseded(tmp_path, monkeypatch):
         {"id": "ab-super001", "title": "Eclipsed", "status": "superseded",
          "superseded_by": "ab-done0001", "completed_at": "2026-06-02T00:00:00Z"},
     ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "album"])
-    assert r.exit_code == 0, r.output
-    assert "ab-done0001" in r.output
-    assert "ab-super001" not in r.output
+    code, out, err = _native_backlog("album")
+    assert code == 0, err
+    assert "ab-done0001" in out
+    assert "ab-super001" not in out
 
 
 def test_album_project_filter(tmp_path, monkeypatch):
@@ -182,10 +179,10 @@ def test_album_project_filter(tmp_path, monkeypatch):
         {"id": "ab-p2", "title": "P2", "status": "done",
          "completed_at": "2026-01-02T00:00:00Z", "project": "beta"},
     ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "album", "--project", "alpha"])
-    assert r.exit_code == 0, r.output
-    assert "ab-p1" in r.output
-    assert "ab-p2" not in r.output
+    code, out, err = _native_backlog("album", "--project", "alpha")
+    assert code == 0, err
+    assert "ab-p1" in out
+    assert "ab-p2" not in out
 
 
 def test_album_json_output_and_limit(tmp_path, monkeypatch):
@@ -196,9 +193,9 @@ def test_album_json_output_and_limit(tmp_path, monkeypatch):
          "completed_at": f"2026-01-{i:02d}T00:00:00Z"}
         for i in range(1, 6)
     ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "album", "--limit", "2", "--json"])
-    assert r.exit_code == 0, r.output
-    hits = json.loads(r.output)
+    code, out, err = _native_backlog("album", "--limit", "2", "--json")
+    assert code == 0, err
+    hits = json.loads(out)
     assert len(hits) == 2
     assert hits[0]["id"] == "ab-0005"  # newest first
     # Cards, not full entries: the gift appears only when recorded.
@@ -213,9 +210,9 @@ def test_album_reports_overflow_count(tmp_path, monkeypatch):
          "completed_at": f"2026-01-{i:02d}T00:00:00Z"}
         for i in range(1, 6)
     ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "album", "--limit", "2"])
-    assert r.exit_code == 0, r.output
-    assert "3 more" in r.output
+    code, out, err = _native_backlog("album", "--limit", "2")
+    assert code == 0, err
+    assert "3 more" in out
 
 
 def test_entries_with_archive_never_returns_duplicate_ids(tmp_path, monkeypatch):

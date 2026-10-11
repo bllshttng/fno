@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 
 from fno.cli import app
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 runner = CliRunner()
 
@@ -899,12 +900,12 @@ def test_ac1_hp_graph_archive(tmp_graph):
     ])
 
     # Dry-run default: nothing moves.
-    r = _invoke("backlog", "archive")
+    r = native_backlog("backlog", "archive")
     assert r.exit_code == 0
     assert "dry-run" in r.output
     assert read_archive_entries(tmp_graph) == []
 
-    r = _invoke("backlog", "archive", "--apply", "--older-than-days", "0")
+    r = native_backlog("backlog", "archive", "--apply", "--older-than-days", "0")
     assert r.exit_code == 0
 
     archived_ids = {e["id"] for e in read_archive_entries(tmp_graph)}
@@ -1044,15 +1045,15 @@ def test_priority_migration_command_is_dry_run_then_idempotent(tmp_graph):
             {"id": "ab-old00002", "title": "Legacy 2", "priority": "p0"},
         ]
     }))
-    dry = _invoke("backlog", "migrate-priorities")
+    dry = native_backlog("backlog", "migrate-priorities")
     assert dry.exit_code == 0, dry.output
     assert json.loads(dry.stdout)["legacy_p0"] == 2
     assert _read_graph(tmp_graph)[0]["priority"] == "p0"
-    applied = _invoke("backlog", "migrate-priorities", "--apply")
+    applied = native_backlog("backlog", "migrate-priorities", "--apply")
     assert json.loads(applied.stdout)["rebanded_to_p1"] == 2
-    second = _invoke("backlog", "migrate-priorities", "--apply")
+    second = native_backlog("backlog", "migrate-priorities", "--apply")
     assert json.loads(second.stdout)["already_migrated"] == 2
-    rollback = _invoke("backlog", "migrate-priorities", "--rollback")
+    rollback = native_backlog("backlog", "migrate-priorities", "--rollback")
     assert json.loads(rollback.stdout)["restored_to_p0"] == 2
     assert all(row["priority"] == "p0" for row in _read_graph(tmp_graph))
 
@@ -1196,7 +1197,7 @@ def test_update_completion_note_unknown_node_errors(tmp_graph):
 
 # The unpatched transport, captured at collection: the note-evidence stubs
 # below delegate every non-gate verb to it.
-from fno.rust_binary import verb_call as _real_verb_call
+from fno.rust_binary import verb_call as _real_verb_call  # noqa: E402
 
 
 def _note_node():
