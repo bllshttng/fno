@@ -702,7 +702,11 @@ fn run_request() -> i32 {
             let (a, r) = advance::auto_continue_resolve(v["project_root"].as_str().map(Path::new));
             Ok(json!({"armed":a,"rank":r}))
         }
-        "fire-pending" => Ok(super::advance_contract::fire_pending(
+        "fire-pending" => {
+            super::advance_contract::queue_pending(s(&v, "node_id"), Path::new(s(&v, "root")))
+                .map(|v| v.unwrap_or(Value::Null))
+        }
+        "fire-pending-now" => Ok(super::advance_contract::fire_pending(
             s(&v, "node_id"),
             Path::new(s(&v, "root")),
         )

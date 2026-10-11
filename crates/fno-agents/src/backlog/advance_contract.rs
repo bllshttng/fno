@@ -211,3 +211,34 @@ pub fn fire_pending(id: &str, root: &Path) -> Option<Value> {
         json!({"decision":r.decision,"reason":r.reason,"node_id":r.node_id,"short_id":r.short_id,"detail":r.detail,"notes":r.notes}),
     )
 }
+
+pub fn queue_pending(id: &str, root: &Path) -> Result<Option<Value>, String> {
+    if !advance::claim_is_live(&format!("reconcile:{id}")) {
+        return Ok(None);
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(exe)
+        .args(["backlog", "advance", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let request = json!({"op":"fire-pending-now","node_id":id,"root":root});
+    use std::io::Write;
+    let written = child
+        .stdin
+        .take()
+        .ok_or("pending reconcile child has no input pipe")?
+        .write_all(request.to_string().as_bytes());
+    if let Err(e) = written {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e.to_string());
+    }
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(Some(json!({"decision":"scheduled","node_id":id,"pid":pid})))
+}

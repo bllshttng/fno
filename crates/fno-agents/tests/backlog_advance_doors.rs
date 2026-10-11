@@ -174,7 +174,7 @@ fn join_width_tracks_dependency_frontiers_and_collision_serialization() {
         );
     }
     for edges in ["- id: a\n  surface: [a.rs]\n  blocked_by: [missing]","- id: a\n  surface: [a.rs]\n  blocked_by: [b]\n- id: b\n  surface: [b.rs]\n  blocked_by: [a]"] {
-        let p=world.plan(&plan(edges,"- wave: 1\n  tasks: [a, b]"));let out=world.run(&["backlog","join","width",p.to_str().unwrap()],None);assert!(!out.status.success());assert!(out.stdout.is_empty());
+        let wave=if edges.contains("- id: b") {"- wave: 1\n  tasks: [a, b]"} else {"- wave: 1\n  tasks: [a]"};let p=world.plan(&plan(edges,wave));let out=world.run(&["backlog","join","width",p.to_str().unwrap()],None);assert!(!out.status.success());assert!(out.stdout.is_empty());
     }
     let p=world.plan(&plan("- id: a\n  surface: [a.rs]\n- id: b\n  surface: [b.rs]\n  blocked_by: []\n- id: c\n  surface: [c.rs]","- wave: 1\n  tasks: [a]\n- wave: 2\n  tasks: [b, c]"));
     assert_eq!(width(&plan_graph(&p).unwrap()).unwrap(), 2);
@@ -280,6 +280,36 @@ fn join_refusal_codes_have_one_outcome_event_and_do_not_launch() {
         w.run(&["backlog", "join", "x-aaaa"], None).status.code(),
         Some(2)
     );
+    let pid = std::process::id().to_string();
+    let acquired = w.run(
+        &[
+            "claim",
+            "acquire",
+            "node:x-aaaa",
+            "--holder",
+            "fixture-holder",
+            "--pid",
+            &pid,
+            "--ttl-ms",
+            "180000",
+        ],
+        None,
+    );
+    assert!(acquired.status.success());
+    let missing = w.run(&["backlog", "join", "x-aaaa"], None);
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("names no holder worktree"));
+    let released = w.run(
+        &[
+            "claim",
+            "release",
+            "node:x-aaaa",
+            "--holder",
+            "fixture-holder",
+        ],
+        None,
+    );
+    assert!(released.status.success());
     w.claim("x-aaaa", &w.root);
     let out = w.run(&["backlog", "join", "x-aaaa"], None);
     assert_eq!(
@@ -293,7 +323,7 @@ fn join_refusal_codes_have_one_outcome_event_and_do_not_launch() {
         .iter()
         .filter(|r| r["type"] == "join_refused" || r["kind"] == "join_refused")
         .collect::<Vec<_>>();
-    assert_eq!(refusals.len(), 2);
+    assert_eq!(refusals.len(), 3);
     assert!(events
         .iter()
         .all(|r| r["type"] != "join_dispatched" && r["kind"] != "join_dispatched"));
@@ -521,7 +551,7 @@ fn pending_contract_reconcile_keeps_its_sentinel_until_a_worker_owns_the_pass() 
         .env("LAUNCH_LOG", &log);
     let receipt = decode(&w.output(
         c,
-        Some(&json!({"op":"fire-pending","node_id":"x-aaaa","root":w.root})),
+        Some(&json!({"op":"fire-pending-now","node_id":"x-aaaa","root":w.root})),
     ));
     assert_eq!(receipt["decision"], "dispatched", "{receipt}");
     assert!(std::fs::read_to_string(log)

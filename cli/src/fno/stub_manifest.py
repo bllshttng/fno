@@ -288,9 +288,9 @@ def cmd_write(
     try:
         from fno.rust_binary import verb_call
 
-        fired = verb_call(["backlog", "advance", "--stdin"], {"op": "fire-pending", "node_id": node, "root": str(root)}, timeout=700)
-        if fired and fired.get("decision") == "dispatched":
-            typer.echo(f"reconcile dispatched for pending sentinel: {node}", err=True)
+        fired = verb_call(["backlog", "advance", "--stdin"], {"op": "fire-pending", "node_id": node, "root": str(root)}, timeout=30)
+        if fired and fired.get("decision") == "scheduled":
+            typer.echo(f"reconcile scheduled for pending sentinel: {node}", err=True)
     except Exception as exc:  # noqa: BLE001 - the manifest write is the contract
         typer.echo(f"stub-manifest: pending-reconcile re-fire skipped: {exc}", err=True)
 

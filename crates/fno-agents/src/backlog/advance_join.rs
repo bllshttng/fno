@@ -331,7 +331,7 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
     }
     let worktree = record
         .as_ref()
-        .and_then(|r| r.metadata["worktree"].as_str())
+        .and_then(|r| r.metadata.get("worktree").and_then(Value::as_str))
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             fail(
