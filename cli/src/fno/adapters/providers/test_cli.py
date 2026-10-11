@@ -1695,6 +1695,7 @@ class TestPick:
         assert verdict.account == "readyrule"
 
         # All refused: exit 4, and the reason names the login remedy.
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-alt"))
         self._plant_login_refusal("makers", str(tmp_path / "claude-main"))
         verdict = _pick_verdict(tmp_path)
         assert verdict.account is None
