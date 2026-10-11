@@ -66,7 +66,9 @@ pub fn mint_msg_id() -> String {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    format!("fmail-{hash:012x}")
+    // The mask is load-bearing: `012x` is a minimum width, not a cap, so an
+    // unmasked u64 prints up to 16 hex digits. Low 48 bits = exactly 12.
+    format!("fmail-{:012x}", hash & 0xffff_ffff_ffff)
 }
 
 /// Create the bus table. `IF NOT EXISTS`, so every host can run it at first
