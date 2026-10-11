@@ -153,7 +153,7 @@ pub fn resolve_daemon_bin() -> PathBuf {
 /// working flock (`flock_self_test`), so failing open here preserves today's
 /// behavior and its error message rather than wedging every verb behind a
 /// question the filesystem cannot answer.
-fn daemon_lock_is_free(home: &AgentsHome) -> bool {
+pub(crate) fn daemon_lock_is_free(home: &AgentsHome) -> bool {
     let file = match std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -692,6 +692,49 @@ async fn terminate_confirmed(
         Ok(Termination::Escalated)
     } else {
         Ok(Termination::Survived)
+    }
+}
+
+/// What [`stop_daemon`] found and did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonStop {
+    /// No daemon answered, or the recorded pid was no longer ours.
+    WasDown,
+    /// The daemon exited on SIGTERM.
+    Exited { pid: u32 },
+    /// The daemon ignored SIGTERM past the grace and was SIGKILLed.
+    Escalated { pid: u32 },
+}
+
+/// Stop the serving daemon and start nothing: the termination half of
+/// `restart_daemon` with the same pid-reuse guard and the same refusal to
+/// claim a stop that did not happen. The cutover quiesce uses it, because a
+/// snapshot taken beside a live daemon is not a snapshot.
+pub async fn stop_daemon(home: &AgentsHome) -> Result<DaemonStop, RestartError> {
+    let status = Request::new(1, "agent.status", json!({}));
+    let result = match call_if_running(home, &status).await {
+        Ok(resp) => resp.result().cloned(),
+        Err(ClientError::DaemonNotRunning) => None,
+        Err(e) => return Err(RestartError::Client(e)),
+    };
+    let Some(result) = result else {
+        return Ok(DaemonStop::WasDown);
+    };
+    let daemon = result.get("daemon");
+    let pid = daemon
+        .and_then(|d| d.get("pid"))
+        .and_then(Value::as_u64)
+        .ok_or(RestartError::StatusMissingPid)? as u32;
+    let recorded_start = daemon
+        .and_then(|d| d.get("pid_start_time"))
+        .and_then(Value::as_u64);
+    if !crate::daemon::pid_is_ours(pid, recorded_start) {
+        return Ok(DaemonStop::WasDown);
+    }
+    match terminate_confirmed(pid, recorded_start, RESTART_SIGTERM_GRACE).await? {
+        Termination::Exited => Ok(DaemonStop::Exited { pid }),
+        Termination::Escalated => Ok(DaemonStop::Escalated { pid }),
+        Termination::Survived => Err(RestartError::DidNotDie { pid }),
     }
 }
 

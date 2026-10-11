@@ -106,7 +106,7 @@ fn same_file_key(p: &Path) -> (u64, u64) {
 }
 
 /// Per-table row counts: the copy check and the verify record.
-fn table_counts(conn: &Connection) -> Result<BTreeMap<String, i64>, String> {
+pub(crate) fn table_counts(conn: &Connection) -> Result<BTreeMap<String, i64>, String> {
     let mut stmt = conn
         .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
         .map_err(|e| e.to_string())?;
