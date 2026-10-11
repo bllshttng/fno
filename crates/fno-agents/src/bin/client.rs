@@ -347,6 +347,15 @@ async fn run(args: Vec<String>) -> i32 {
         return fno_agents::mail_envelope::run(&args[1..]);
     }
 
+    // `mail-remote` is the cross-host relay verb: the front
+    // door claims an `@host` target on `agents mail send` / `agents peek`
+    // and execs it here. Binary-direct like `mail-inject` (the front door is
+    // the only caller), NOT a routable `fno agents` verb, so the parity
+    // guard does not see it.
+    if matches!(verb, "mail-remote") {
+        return fno_agents::mail_remote::run(&args[1..]);
+    }
+
     // Binary-direct mail transport for the events and note Python adapters.
     // It is intentionally not a routable `fno agents` verb.
     if matches!(verb, "machine-mail-send") {
