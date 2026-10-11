@@ -497,7 +497,7 @@ Before any public file is replaced, the shared gate scans every emitted title fo
 
 ## Publish a public board
 
-One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection: only open rows (in progress, ready, blocked, idea), only rows not marked `--no-public`, and every title cleared through the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
+One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection. Only open rows (in progress, ready, blocked, idea) and rows not marked `--no-public` appear. Every title clears the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
 
 ```bash
 fno backlog publish --project fno --out site/backlog
