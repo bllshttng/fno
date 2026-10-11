@@ -26,7 +26,7 @@ pub(super) fn conflicting_reason(pr: &PrInfo) -> Option<String> {
     Some(format!(
         "PR #{} is CONFLICTING at {}. A conflicting PR has no merge ref, so GitHub \
          starts no new check run on this head, and any check already on it ran \
-         before the base moved. Rebase onto the base (`fno do pr rebase`), push, \
+         before the base moved. Integrate the base (`fno do pr push`), \
          then re-arm the wait.",
         pr.number,
         short_sha(&pr.head_oid)
@@ -139,7 +139,7 @@ pub(super) fn merge_slot_reason(
     if pr.base_behind {
         return Some(format!(
             "PR #{}: the base moved past this head while PR #{} holds the merge \
-             slot - rebase onto the base (`fno do pr rebase`), push, then re-check.",
+             slot - integrate the base (`fno do pr push`), then re-check.",
             pr.number, holder
         ));
     }
@@ -264,16 +264,16 @@ mod tests {
         assert_eq!(async_wait_class(&pr, true, true), None);
         let reason = build_block_reason(&pr, "abc", true, true);
         assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr rebase"), "got: {reason}");
+        assert!(reason.contains("fno do pr push"), "got: {reason}");
         assert!(reason.contains("no new check run"), "got: {reason}");
         assert!(reason.contains("before the base moved"), "got: {reason}");
     }
 
     #[test]
-    fn block_reason_names_the_rebase_not_a_wait() {
+    fn block_reason_names_the_push_not_a_wait() {
         let reason = build_block_reason(&conflicting_pr(), "abc", true, true);
         assert!(reason.contains("CONFLICTING"), "got: {reason}");
-        assert!(reason.contains("fno do pr rebase"), "got: {reason}");
+        assert!(reason.contains("fno do pr push"), "got: {reason}");
         assert!(!reason.contains("CI still running"), "got: {reason}");
         assert!(
             !reason.contains("declare ci.declared_none"),

@@ -397,7 +397,7 @@ pub(crate) fn overlap_blocker<P: Probes>(
             return Some(Blocker::held(
                 "base_overlap",
                 "stale base: overlap probe unavailable (base moved; could not \
-                 compare file sets); run fno do pr rebase, then retry",
+                 compare file sets); run fno do pr push, then retry",
             ));
         }
     };
@@ -407,7 +407,7 @@ pub(crate) fn overlap_blocker<P: Probes>(
             return Some(Blocker::held(
                 "base_overlap",
                 "stale base: overlap probe unavailable (the PR's own file \
-                 read failed); run fno do pr rebase, then retry",
+                 read failed); run fno do pr push, then retry",
             ));
         }
     };
@@ -430,7 +430,7 @@ pub(crate) fn overlap_blocker<P: Probes>(
         "base_overlap",
         format!(
             "stale base: base move touches files this PR also changes ({shown}{extra}); \
-             run fno do pr rebase, then retry"
+             run fno do pr push, then retry"
         ),
     ))
 }
