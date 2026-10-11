@@ -1228,8 +1228,8 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                     .unwrap_or("unknown")
                     .to_string();
                 // The whole inner rides under the header: display and
-                // render_message regenerate their own view of the body, so a
-                // delivered-body sentence drop here would lose the sentence.
+                // render_message regenerate their own view of the body at
+                // read time, so nothing is dropped here.
                 let third = crate::mail_header::header_third_field(None, &inner);
                 Some((
                     crate::mail_header::render_header(

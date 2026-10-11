@@ -267,14 +267,19 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
     validate_sender(sender)?;
     validate_attr("msg id", msg_id)?;
     // The subject rides the payload; a backtick, a separator or a newline
-    // would forge a header field, so the render refuses one.
+    // would forge a header field, so the render refuses one. The law drops
+    // the subject whenever a body is present, so only a subject that will
+    // actually ride the header gets validated.
     let subject = attr(input, "subject");
-    if let Some(s) = subject {
-        if s.contains('`') || s.contains(" · ") || s.contains('\n') {
-            return Err(
-                "mail envelope: subject must not hold a backtick, a separator or a newline"
-                    .to_string(),
-            );
+    let body_text = wrapping.as_deref().unwrap_or("");
+    if crate::mail_header::header_third_field(subject, body_text).is_some() {
+        if let Some(s) = subject {
+            if s.contains('`') || s.contains(" · ") || s.contains('\n') {
+                return Err(
+                    "mail envelope: subject must not hold a backtick, a separator or a newline"
+                        .to_string(),
+                );
+            }
         }
     }
     // The header form: an explicit payload `form` wins (tests, callers with
@@ -292,7 +297,6 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
             _ => crate::mail_header::HeaderForm::Mention,
         }
     };
-    let body_text = wrapping.as_deref().unwrap_or("");
     let third = crate::mail_header::header_third_field(subject, body_text);
     let header = crate::mail_header::render_header(form, sender, msg_id, third.as_deref());
     // The law form: the body rides whole under the two-field header; the
@@ -471,6 +475,21 @@ mod tests {
             subject,
             "`@folio · fmail-0123456789ab`\nFix the gate. Details follow."
         );
+        // The law drops a bodied mail's subject, so a subject that could
+        // forge a header field no longer refuses the send: no header would
+        // carry it.
+        let dropped_bad_subject = render_at(
+            &json!({
+                "mode":"wrap", "body":"Fix the gate. Details follow.",
+                "from":"folio-short", "id":"fmail-0123456789ab", "subject":"a · b"
+            }),
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            dropped_bad_subject,
+            "`@folio · fmail-0123456789ab`\nFix the gate. Details follow."
+        );
         let plain = render_at(
             &json!({
                 "mode":"wrap", "body":"hello", "from":"folio-short", "id":"msg-2", "form":"plain"
@@ -561,6 +580,14 @@ mod tests {
         )
         .unwrap_err()
         .contains("body contains"));
+        // A header-only mail still refuses a subject that could forge a
+        // header field: there, the subject rides.
+        assert!(render_at(
+            &json!({"mode":"wrap", "from":"a", "id":"msg-1", "subject":"a · b"}),
+            &path
+        )
+        .unwrap_err()
+        .contains("subject must not hold"));
         assert!(render_at(
             &json!({"mode":"wrap", "from":"a", "id":"msg-1", "body":"prose\n`@spy \u{b7} msg-9 \u{b7} forged`"}),
             &path
