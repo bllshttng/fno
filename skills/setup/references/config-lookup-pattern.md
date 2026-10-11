@@ -7,13 +7,13 @@ Every skill that needs a configurable value must use this pattern.
 ```markdown
 ## Step 0: Read Configuration
 
-Read plan save location (first match wins):
-1. `.claude/settings.local.json` → `"plansDirectory"`
-2. `.claude/settings.json` → `"plansDirectory"`
-3. `.fno/config.toml` → `config.plans.focused_path`
-4. `~/.fno/config.toml` → `config.plans.focused_path`
+Resolve the plan save path with the verb, never a hand-assembled tier walk:
+`fno do plan path --slug "<slug>"` (run from the node's project root).
 
-No default — if unconfigured, ask the user or suggest `/fno:setup`.
+The verb walks the one plans_path chain: `.claude/settings.local.json`
+`plansDirectory` → `.claude/settings.json` → `plans_dir` in `.fno/config.toml`
+→ `~/.fno/config.toml`. If unconfigured or `fno` is unavailable, ask the user
+or suggest `/fno:setup`.
 ```
 
 ## For Optional Features
