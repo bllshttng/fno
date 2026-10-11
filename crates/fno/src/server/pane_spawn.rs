@@ -35,6 +35,7 @@ pub(super) const KEEPER_ROAD: bool = cfg!(not(test));
 /// the synchronous road (`spawn_pane_kept`) registers inline with its own
 /// notice and no unkept mark; the attach road (`AttachShellJob`) defers
 /// registration and marks the fallback unkept.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) enum ShellWalk {
     Kept {
         shell: PtyShell,

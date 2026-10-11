@@ -143,10 +143,7 @@ mod fresh_attach_tests {
     use super::super::server_tests::empty_core;
     use super::*;
 
-    fn attach_fresh(
-        core: &mut Core,
-        id: u64,
-    ) -> (mpsc::Sender<ServerMsg>, mpsc::Receiver<ServerMsg>) {
+    fn attach_fresh(core: &mut Core, id: u64) -> mpsc::Receiver<ServerMsg> {
         let (tx, rx) = mpsc::channel::<ServerMsg>(64);
         core.attach(
             id,
@@ -158,7 +155,7 @@ mod fresh_attach_tests {
             Arc::default(),
             Arc::new(Notify::new()),
         );
-        (tx, rx)
+        rx
     }
 
     #[test]
@@ -169,7 +166,7 @@ mod fresh_attach_tests {
         // rely on, held by the placeholder-plus-inline-landing flow.
         let mut core = empty_core();
         core.shells = vec!["/bin/cat".into()];
-        let (_tx, _rx) = attach_fresh(&mut core, 1);
+        let _rx = attach_fresh(&mut core, 1);
         assert_eq!(core.session.squads.len(), 1, "the fresh squad exists");
         let sq = core.session.squad(1).expect("fresh squad");
         assert_eq!(sq.tabs.len(), 1);
@@ -189,7 +186,7 @@ mod fresh_attach_tests {
         // row) removed, the client Byed and dropped.
         let mut core = empty_core();
         core.shells = Vec::new(); // no candidate can spawn
-        let (_tx, mut rx) = attach_fresh(&mut core, 1);
+        let mut rx = attach_fresh(&mut core, 1);
         assert!(
             core.session.squads.is_empty(),
             "the placeholder squad is torn down"
