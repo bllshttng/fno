@@ -1549,7 +1549,8 @@ def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
             except json.JSONDecodeError:
                 continue
             data = record.get("data") if isinstance(record, dict) else None
-            if isinstance(data, dict) and data.get("repo") == repo and data.get("pr") == cand.pr_number:
+            if isinstance(data, dict) and record.get("type") == "merge_cleanup_requested" \
+                    and data.get("repo") == repo and data.get("pr") == cand.pr_number:
                 return
         _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
             _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])

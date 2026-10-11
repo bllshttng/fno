@@ -36,7 +36,7 @@ The removal contract, missing until 174 trees piled up (74 GB). Four buckets, on
 - **clean + unmerged** - never auto-pruned. Report the branch so a human judges (open PR or abandoned work).
 - **clean + merged** - prune the TREE, keep the BRANCH.
 - **unborn** - a branch with no commit of its own is never merged, whatever the merge-base says. Setup refuses it (`reason=unborn`, row `kept (unborn)`), so a fresh dispatch survives. Detail: [worktree-mechanics](../../docs/architecture/worktree-mechanics.md).
-- **Trigger: MERGE, never node-done.** A merged PR with no request standing gets its order from the PR-watch tick. Outside merges share the grace. Fires: `fno do pr merge` and the post-merge ritual. The daemon reaper pays after a grace window.
+- **Trigger: MERGE, never node-done.** Fires: `fno do pr merge`, the post-merge ritual. The daemon reaper pays after a grace window.
 - **Gate: `reapable`** (`fno agents workspace worktree reapable`) enforces the buckets, not each caller.
 - **Backstop: the daemon's `cleanup --merged` sweep**. It also reaps outside merges.
 

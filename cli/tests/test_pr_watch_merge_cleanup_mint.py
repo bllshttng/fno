@@ -117,12 +117,23 @@ class TestDefaultEnsureMergeCleanup:
 class TestTickMintsOnMergedArm:
     """The tick calls the mint on the merged arm, before the parked check."""
 
-    def _tick(self, tmp_path, monkeypatch, candidates, obs_map, *, node_live=False, delivery=None):
+    def _tick(self, tmp_path, monkeypatch, candidates, obs_map, *, seed=(), listing_absent=(),
+              node_live=False, delivery=None):
         import fno.pr_watch._dispatch as d
         from fno.pr_watch._dispatch import tick
         from fno.pr_watch._state import WatermarkStore
 
         store_path = tmp_path / "state.json"
+        if seed:
+            cache = WatermarkStore(path=store_path)
+            for pr_number in seed:
+                cache.set("owner/repo#" + str(pr_number), {
+                    "last_review_ts": None,
+                    "last_seen_state": "OPEN",
+                    "merge_dispatched": False,
+                    "retries": 0,
+                    "parked": None,
+                })
         if delivery:
             delivery_path = store_path.with_name(store_path.stem + "-delivery" + store_path.suffix)
             store = WatermarkStore(path=delivery_path)
@@ -163,7 +174,9 @@ class TestTickMintsOnMergedArm:
             store_path=store_path,
             discover_fn=discover,
             read_pr_state_fn=read_state,
-            read_tracked_states_fn=lambda keys: ({k: "OPEN" for k in keys}, 0),
+            read_tracked_states_fn=lambda keys: (
+                {k: "OPEN" for k in keys if k not in listing_absent}, 0
+            ),
             fire_skill_fn=lambda *a, **k: None,
             dispatch_ritual_fn=lambda cand, obs, fire: None,
             emit=lambda t, dd: None,
@@ -196,7 +209,11 @@ class TestTickMintsOnMergedArm:
             monkeypatch,
             candidates=cands,
             obs_map=obs_map,
+            seed=(1, 2, 3, 4),
+            listing_absent=("owner/repo#5",),
             delivery={"owner/repo#5": {"parked": "auto-run-disabled"}},
         )
 
-        assert seen == [(1, "MERGED"), (3, "MERGED"), (5, "MERGED")]
+        # 2 reaches the call open (the default's own gate declines it);
+        # 4 dies at the no-checkout wall; 5 rides the parked-relic synth.
+        assert seen == [(1, "MERGED"), (2, "OPEN"), (3, "MERGED"), (5, "MERGED")]
