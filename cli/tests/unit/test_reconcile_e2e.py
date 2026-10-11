@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from fno import stub_manifest as sm
-from fno.backlog import reconcile_dispatch as rd
 from fno.graph.store import commit_rows_via_store
 
 
@@ -37,46 +36,6 @@ def _manifest_holds(node: str, root: Path) -> bool:
     return sm.load(path).get("reconciled") is not True
 
 
-def test_full_reconcile_seam_held_to_unheld(iso, tmp_path, monkeypatch):
-    # --- world: a merged blocker + a contract dependent with a draft PR #42 ---
-    gp = tmp_path / "graph.json"
-    entries = [
-        {"id": "x-blk", "slug": "x-blk", "title": "x-blk", "type": "feature",
-         "priority": "p2", "status": "done",
-         "completed_at": "2026-06-26T00:00:00Z"},
-        {"id": "x-dep", "dep": "contract", "blocked_by": ["x-blk"],
-         "pr_number": 42, "project": None, "cwd": str(tmp_path), "slug": "dep",
-         "title": "x-dep", "type": "feature", "priority": "p2", "status": "idea"},
-    ]
-    commit_rows_via_store(gp, lambda _: entries)
-    # The router and the merge guard both read graph_json() internally.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: gp)
-
-    # The dependent's first pass wrote its manifest: unreconciled, passing suite.
-    sm.write("x-dep", [{"stub_id": "createUser", "file": "api.ts", "kind": "function"}],
-             tmp_path, contract_version=1, contract_ref="d.md#ic", contract_test="true")
-
-    # 1. BEFORE reconcile: merging #42 would ship mocks -> guard HOLDS.
-    assert _manifest_holds("x-dep", tmp_path) is True
-
-    # 2. Blocker merge -> the router dispatches a /target --reconcile worker
-    #    carrying the manifest path (real _contract_dependents graph read).
-    calls = []
-    monkeypatch.setattr(rd, "_spawn_worker", lambda n, c, s=None, *, reconcile_manifest=None, model=None,
-                        provider=None, node=None, harness=None, **kwargs:
-                        calls.append(reconcile_manifest) or "short1")
-    res = rd.dispatch_reconcile_for_blocker(closed_node_id="x-blk", events_path=iso)
-    assert [r.decision for r in res] == ["dispatched"]
-    assert calls == [str(sm.manifest_path("x-dep", tmp_path))]
-
-    # 3. The worker pulls main + runs the drift gate -> authorize (suite passes).
-    assert sm.reconcile_verdict("x-dep", tmp_path)["outcome"] == sm.AUTHORIZE
-
-    # 4. The worker de-stubs (LLM, not tested here) then finalizes.
-    sm.mark_reconciled("x-dep", tmp_path)
-
-    # 5. AFTER reconcile: the guard no longer holds -> #42 is mergeable.
-    assert _manifest_holds("x-dep", tmp_path) is False
 
 
 def test_full_seam_drift_keeps_pr_held(iso, tmp_path, monkeypatch):

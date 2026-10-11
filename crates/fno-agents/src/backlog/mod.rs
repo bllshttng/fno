@@ -4,8 +4,13 @@
 //! Every mutation writes only the changed nodes' rows in one transaction.
 
 pub mod advance;
+pub mod advance_cli;
+pub mod advance_contract;
 pub mod advance_dispatch;
+pub mod advance_explain;
 pub mod advance_fill;
+pub mod advance_join;
+pub mod advance_lanes;
 pub mod advance_settings;
 pub mod api;
 pub mod autobrief;

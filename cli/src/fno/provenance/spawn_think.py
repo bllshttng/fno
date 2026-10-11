@@ -874,7 +874,7 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
-        from fno.backlog.advance import _gate_refusal_detail
+        from fno.rust_binary import verb_call
 
         raise SpawnError(
             f"fno agents spawn exited {proc.returncode}: "

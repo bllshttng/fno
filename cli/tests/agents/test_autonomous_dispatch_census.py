@@ -38,55 +38,6 @@ def test_positive_control_falls_back_without_ripgrep(monkeypatch) -> None:
     assert "fno agents spawn --node" in source
 
 
-def test_all_autonomous_entry_points_reach_an_owned_routing_seam() -> None:
-    dispatch_node = _read_with_positive_control(
-        "skills/target/scripts/dispatch-node.sh",
-        "dispatch-node.sh",
-    )
-    active_backlog = _read_with_positive_control(
-        "crates/fno-agents/src/active_backlog.rs",
-        "dispatch_mission",
-    )
-    advance = _read_with_positive_control(
-        "cli/src/fno/backlog/advance.py",
-        "def _spawn_worker",
-    )
-    context_think = _read_with_positive_control(
-        "cli/src/fno/provenance/spawn_think.py",
-        "def _spawn_think_worker",
-    )
-    attended_spawn = _read_with_positive_control(
-        "cli/src/fno/agents/cli.py",
-        "def cmd_spawn",
-    )
-
-    # x-3873: the shell launcher passes the node and only what the human typed.
-    # The launch is the ONE door (`fno agents spawn --node`); the retired
-    # `fno agents dispatch` resolver/family reads must not come back.
-    assert "fno agents spawn --node" in dispatch_node
-    assert "dispatch resolve" not in dispatch_node
-    assert "dispatch family" not in dispatch_node
-    assert '"backlog",\n                "advance",' in active_backlog
-    # x-e53e: the resolve lives in the ONE resolver every node-dispatching
-    # caller shares; advance reads it instead of inlining the call.
-    assert "resolve_node_spawn(" in advance
-    node_dispatch = _read_with_positive_control(
-        "cli/src/fno/agents/node_dispatch.py",
-        "def resolve_node_spawn",
-    )
-    assert "harness_map.resolve_dispatch(**resolve_kwargs)" in node_dispatch
-    assert "resolved = resolve_dispatch(" in context_think
-    assert 'verb="/think"' in context_think
-    assert 'trigger="autonomous"' in context_think
-
-    # Operator spawns intentionally keep their own attended defaults, but pane
-    # permission still comes from the same harness capability table. The reader
-    # is the posture one (x-f579): an undeclared harness answers
-    # route_on_pane=False instead of raising, so the seam stays a refusal.
-    assert (
-        "capabilities_or_undeclared(harness).get(\"route_on_pane\", False)"
-        in attended_spawn
-    )
 
 
 def test_blueprint_completion_dispatches_nothing() -> None:

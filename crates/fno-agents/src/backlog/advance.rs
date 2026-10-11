@@ -1339,6 +1339,8 @@ pub fn direct_dependents(
             "slug": e.get("slug").or_else(|| e.get("title")),
             "cwd": e.get("cwd"),
             "model": e.get("model"),
+            "provider": e.get("provider"),
+            "effort": e.get("effort"),
             "difficulty": e.get("difficulty"),
             "dispatch_verb": e.get("dispatch_verb"),
             "cross_project": e.get("project").and_then(Value::as_str).or(None)

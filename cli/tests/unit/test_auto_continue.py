@@ -95,9 +95,12 @@ def test_auto_continue_malformed_whole_block_fails_safe(
 
 
 def _resolver():
-    from fno.backlog.advance import auto_continue_enabled
+    from fno.rust_binary import verb_call
 
-    return auto_continue_enabled
+    return lambda project_root=None: verb_call(
+        ["backlog", "advance", "--stdin"],
+        {"op": "armed", "project_root": str(project_root) if project_root else None},
+    )["armed"]
 
 
 def test_resolver_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,11 +3,6 @@
 //! `fno/agents/node_dispatch.py` built, over the native owners it already
 //! has (naming, route-slot, graph store, settings, territory verdict).
 //!
-//! Status: the launch leg (the composed worker command) is the one seam
-//! still Python-owned; until its port lands the module exposes the resolved
-//! pieces and refuses a launch with a named gap rather than guessing. The
-//! grouped CLI door does not route `advance`/`join`/`dispatch-lanes` natively
-//! until the leg lands, so the shipped surface is unchanged.
 
 use crate::backlog::dispatch_resolve::grid_lane_for;
 use serde_json::{json, Value};
@@ -358,12 +353,7 @@ pub fn node_spawn_argv(
     cmd
 }
 
-/// The one node-dispatch launch. The composed worker command (the verb
-/// command the lifecycle table and the harness resolver compose) is the one
-/// seam still Python-owned: until its port lands this launch REFUSES with a
-/// named gap rather than guessing a command, so a wired door can never
-/// launch a wrong worker. The caller releases its dispatch reservation on
-/// any error return, keeping the node re-dispatchable.
+/// Resolve and launch a node through the shared spawn door.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_worker(
     node_id: &str,
@@ -394,6 +384,26 @@ pub fn spawn_worker(
         source,
     )
     .map_err(SpawnOutcome::Failed)?;
+    launch_resolved(
+        node_id,
+        node,
+        args,
+        dispatch_reservation,
+        caller,
+        source,
+        events_path,
+    )
+}
+
+pub fn launch_resolved(
+    node_id: &str,
+    node: &Value,
+    args: NodeSpawnArgs,
+    dispatch_reservation: Option<(&str, &str)>,
+    caller: &str,
+    source: Option<&str>,
+    events_path: Option<&Path>,
+) -> Result<SpawnOk, SpawnOutcome> {
     // The one launch row, proof of a launch that happened; built before the
     // reuse arm so a retasked dispatch emits the same row with reuse keys.
     let mut row = json!({
@@ -413,30 +423,11 @@ pub fn spawn_worker(
         "grid": args.grid_reason.clone().unwrap_or_default(),
         "decision": args.decision.join("; "),
     });
-    // A blueprint dispatch reuses the earliest finished planner on the epic
-    // first. The reuse transaction (retask + reap) is still Python-owned, so
-    // a retaskable candidate REFUSES instead of cold-spawning over it - a
-    // second planner would double-bill the same leg. Cold-spawning stays the
-    // fallthrough when no candidate exists.
-    if args.verb.trim_start_matches('/') == "blueprint" {
-        match finished_planner(node_id, args.node_cwd.as_deref()) {
-            Ok(Some(candidate)) => {
-                if let Some((key, holder)) = dispatch_reservation {
-                    super::advance::safe_release(key, holder);
-                }
-                return Err(SpawnOutcome::Failed(SpawnFailure::already_running(
-                    format!(
-                        "blueprint reuse arm unported: finished planner {} holds a \
-                         retaskable leg on this epic; the reuse transaction is \
-                         still Python-owned",
-                        candidate.name
-                    ),
-                )));
-            }
+    if !args.is_reconcile && args.verb.trim_start_matches('/') == "blueprint" {
+        match reuse_planner(node_id, &args, &mut row, dispatch_reservation, events_path) {
+            Ok(Some(identity)) => return Ok((identity, row)),
             Ok(None) => {}
-            Err(e) => {
-                eprintln!("advance: WARNING: reuse read failed, cold-spawning {node_id}: {e}");
-            }
+            Err(e) => return Err(e),
         }
     }
     // The stamp lands on the cold-spawn path only: a reuse dispatch runs no
@@ -468,11 +459,7 @@ pub fn spawn_worker(
     if let Some((key, holder)) = dispatch_reservation {
         super::advance::safe_release(key, holder);
     }
-    let Ok(exe) = std::env::current_exe() else {
-        return Err(SpawnOutcome::Failed(SpawnFailure::general(
-            "fno agents spawn: no fno-agents binary to launch",
-        )));
-    };
+    let exe = crate::scrape::fno_bin();
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(&argv);
     // The resolver's env is AUTHORITATIVE: a stale inherited TARGET_NO_MERGE
@@ -665,6 +652,8 @@ fn base_project_id(canonical_root: &Path) -> String {
 /// reuse arm needs.
 struct RetaskCandidate {
     name: String,
+    substrate: String,
+    harness_session_id: Option<String>,
 }
 
 /// The earliest-finished live blueprint worker on the same epic, else None.
@@ -749,6 +738,8 @@ fn finished_planner(
                 received,
                 RetaskCandidate {
                     name: entry.name.clone(),
+                    substrate: entry.substrate.clone().unwrap_or_default(),
+                    harness_session_id: entry.harness_session_id.clone(),
                 },
             ));
         }
@@ -771,6 +762,25 @@ pub fn resolve_node_spawn(
     verb: Option<&str>,
     brief: Option<&str>,
     source: Option<&str>,
+) -> Result<NodeSpawnArgs, SpawnFailure> {
+    resolve_node_spawn_inner(
+        node_id, node_cwd, node_slug, node, model, provider, harness, verb, brief, source, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_node_spawn_inner(
+    node_id: &str,
+    node_cwd: Option<&str>,
+    node_slug: Option<&str>,
+    node: &Value,
+    model: Option<&str>,
+    provider: Option<&str>,
+    harness: Option<&str>,
+    verb: Option<&str>,
+    brief: Option<&str>,
+    source: Option<&str>,
+    command: Option<&str>,
 ) -> Result<NodeSpawnArgs, SpawnFailure> {
     let general = |m: String| SpawnFailure::general(m);
     let node_obj = node.as_object().ok_or_else(|| {
@@ -814,7 +824,11 @@ pub fn resolve_node_spawn(
         .map(str::to_string)
         .or_else(|| node_cwd.map(str::to_string))
         .unwrap_or_else(|| root_of());
-    let lifecycle = verb_answer_for(node, &cfg_root).map_err(|e| general(e))?;
+    let lifecycle = if command.is_some() {
+        (Some("/target".into()), "reconcile".into())
+    } else {
+        verb_answer_for(node, &cfg_root).map_err(general)?
+    };
     let effective_verb = lifecycle.0.clone();
     let verb_code = crate::naming::verb_code_for(
         effective_verb
@@ -831,7 +845,7 @@ pub fn resolve_node_spawn(
     let launch = provider.map(str::trim).filter(|s| !s.is_empty());
     // Capacity-grid deferral: the lane is picked HERE, at the seam that can
     // read live capacity. An explicit harness skips the consult.
-    let mut harness_v: Option<String> = None;
+    let mut harness_v: Option<String> = harness.map(str::to_string);
     let mut grid_route: Option<String> = None;
     let mut grid_account: Option<String> = None;
     let mut grid_why: Option<String> = None;
@@ -915,9 +929,17 @@ pub fn resolve_node_spawn(
             .or(launch_axis.as_deref()),
         substrate: None,
         node_id: Some(node_id),
-        command: None,
-        verb: node_verb.as_deref().or(declared_verb.as_deref()),
-        lifecycle: Some(lifecycle),
+        command,
+        verb: if command.is_some() {
+            None
+        } else {
+            node_verb.as_deref().or(declared_verb.as_deref())
+        },
+        lifecycle: if command.is_some() {
+            None
+        } else {
+            Some(lifecycle)
+        },
         brief,
         merge_posture: None,
         trigger: "autonomous".to_string(),
@@ -987,9 +1009,175 @@ pub fn resolve_node_spawn(
         session_phase: descriptor_phase,
         grid_reason: grid_why,
         decision: resolved.decision,
-        is_reconcile: false,
+        is_reconcile: command.is_some(),
         env: run_env,
     })
+}
+
+pub fn resolve_reconcile_spawn(
+    node: &Value,
+    root: &str,
+    manifest: &Path,
+) -> Result<NodeSpawnArgs, SpawnOutcome> {
+    let id = node.get("id").and_then(Value::as_str).unwrap_or("");
+    let model = node_model(
+        node,
+        None,
+        node.get("provider").and_then(Value::as_str),
+        false,
+    );
+    let command = format!("/target --reconcile {} {{id}}", manifest.display());
+    resolve_node_spawn_inner(
+        id,
+        Some(root),
+        node.get("slug").and_then(Value::as_str),
+        node,
+        model.as_deref(),
+        node.get("provider").and_then(Value::as_str),
+        None,
+        Some("/target"),
+        None,
+        Some("rd"),
+        Some(&command),
+    )
+    .map_err(SpawnOutcome::Failed)
+}
+
+fn reuse_planner(
+    node: &str,
+    args: &NodeSpawnArgs,
+    row: &mut Value,
+    reservation: Option<(&str, &str)>,
+    events: Option<&Path>,
+) -> Result<Option<String>, SpawnOutcome> {
+    let candidate = match finished_planner(node, args.node_cwd.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("advance: WARNING: reuse read failed, cold-spawning {node}: {e}");
+            return Ok(None);
+        }
+    };
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    if let Some((key, holder)) = reservation {
+        super::advance::safe_release(key, holder);
+    }
+    let key = format!("dispatch:{node}");
+    let holder = format!("retask:{}", std::process::id());
+    if let Some(reason) = super::advance::node_dispatch_block_reason(
+        node,
+        args.node_cwd.as_deref(),
+        None,
+        None,
+        events,
+    ) {
+        return Err(SpawnOutcome::AlreadyRunning(format!(
+            "retask guard refused {node}: {reason}"
+        )));
+    }
+    match crate::claims::acquire(
+        &key,
+        &holder,
+        crate::claims::AcquireOpts {
+            ttl_ms: Some(180_000),
+            ..Default::default()
+        },
+    ) {
+        crate::claims::AcquireOutcome::Acquired(_) => {}
+        crate::claims::AcquireOutcome::HeldByOther { .. } => {
+            return Err(SpawnOutcome::AlreadyRunning(format!(
+                "retask guard refused {node}: reservation held"
+            )))
+        }
+        crate::claims::AcquireOutcome::Error(e) => {
+            return Err(SpawnOutcome::Failed(SpawnFailure::general(e)))
+        }
+    }
+    let name = crate::naming::dispatch_agent_name(None, "bp", node, None, None, None, None)
+        .map_err(|e| SpawnOutcome::Failed(SpawnFailure::general(e.to_string())))?;
+    let node_key = format!("node:{node}");
+    let node_holder = format!("spawn-handover:{name}");
+    match crate::claims::acquire(
+        &node_key,
+        &node_holder,
+        crate::claims::AcquireOpts {
+            ttl_ms: Some(180_000),
+            metadata: Some(serde_json::Map::from_iter([(
+                "worktree".into(),
+                json!(args.node_cwd),
+            )])),
+            ..Default::default()
+        },
+    ) {
+        crate::claims::AcquireOutcome::Acquired(_) => {}
+        _ => {
+            super::advance::safe_release(&key, &holder);
+            return Err(SpawnOutcome::AlreadyRunning(format!(
+                "retask guard refused {node}: node held"
+            )));
+        }
+    }
+    let argv = [
+        "agents",
+        "retask",
+        &candidate.name,
+        "--node",
+        node,
+        "--json",
+    ]
+    .map(str::to_string);
+    let out =
+        super::advance::bounded_command_env(Path::new(&crate::scrape::fno_bin()), &argv, 600, &[]);
+    let receipt = out
+        .as_ref()
+        .ok()
+        .and_then(|o| serde_json::from_str::<Value>(&o.stdout).ok())
+        .unwrap_or(Value::Null);
+    if receipt["status"] == "retasked" {
+        let identity = receipt["current_session_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        if !identity.is_empty() {
+            row["short_id"] = json!(identity);
+            row["agent_name"] = receipt["registry_name"].clone();
+            row["substrate"] = json!(candidate.substrate);
+            row["retask"] = json!("retasked");
+            row["reused_worker"] = json!(candidate.name);
+            finish_spawn(row, events, None, &[]);
+            return Ok(Some(identity));
+        }
+        return Err(SpawnOutcome::Failed(SpawnFailure::general(format!("retask of {} onto {node} reported success without session identity; inspect it before another launch",candidate.name))));
+    }
+    super::advance::safe_release(&key, &holder);
+    super::advance::safe_release(&node_key, &node_holder);
+    let reason = receipt["reason"]
+        .as_str()
+        .or(receipt["status"].as_str())
+        .unwrap_or("retask unanswered");
+    if receipt["cleared"] == true {
+        let worker = receipt["registry_name"].as_str().unwrap_or(&candidate.name);
+        let argv = ["agents", "rm", worker, "--force"].map(str::to_string);
+        let reaped = super::advance::bounded_command_env(
+            Path::new(&crate::scrape::fno_bin()),
+            &argv,
+            60,
+            &[],
+        )
+        .map(|o| o.code == 0)
+        .unwrap_or(false);
+        if !reaped {
+            return Err(SpawnOutcome::Failed(SpawnFailure::general(format!("retask of {worker} onto {node} refused after clear: {reason}; reap failed; resume handle {}; run fno agents rm {worker} --force",candidate.harness_session_id.as_deref().unwrap_or("unknown")))));
+        }
+    } else if out.is_err() || receipt.is_null() {
+        return Err(SpawnOutcome::Failed(SpawnFailure::general(format!(
+            "retask of {} onto {node} has no outcome receipt; inspect it before cold-spawning",
+            candidate.name
+        ))));
+    }
+    row["retask_fallthrough"] = json!(format!("{}: {reason}", candidate.name));
+    Ok(None)
 }
 
 fn root_of() -> String {
