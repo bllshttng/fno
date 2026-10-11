@@ -213,6 +213,7 @@ pub mod harness_roster;
 pub mod harness_verbs;
 pub mod heal;
 pub mod heal_pid;
+pub mod heal_sweep;
 pub mod help_router;
 pub mod hold_label;
 pub mod honesty_sweep;
