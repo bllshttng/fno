@@ -51,15 +51,17 @@ A machine cannot probe a peer's pids. So for a row another machine wrote, only t
 
 ## Cross-host mail
 
-A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on the primary. Each host's daemon pulls the rows that name it, on `agents.remote.pull_interval_secs` (a global-config key, default 15 seconds), and injects each through the receiver's own local send, so lane selection, holds, and receipts stay the local path's. The row order is the primary's `seq`, never host clocks.
+A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on the primary. The primary's `seq` is the only row order. Host clocks never sort rows.
 
-The sender reads as `<user>@<host>/<session name>` in the row's `from_id`. That field is written by the sender, so it proves nothing by itself: the tailnet is the boundary, and the raw allowlist is a second check, not a proof of identity (operator ruling, 2026-10-10). A row with `raw = 1` (the pane-typing lane) is refused unless its `from_id` head matches a sender in `agents.remote.raw_senders`, a global-config list; the default empty list refuses every cross-host raw row.
+Each host's daemon pulls its rows on `agents.remote.pull_interval_secs`. That key lives in the global config, default 15 seconds. The pull injects each row through the receiver's own local send. Lane selection, holds, and receipts stay the local path's.
 
-Rows wait up to 7 days for their host (`MAIL_TTL_SECS`); the expire leg flips past-due rows to `expired`, and a pull that finds the name unknown leaves the row pending until then. `INSERT OR IGNORE` on the unique `msg_id` makes a retry after an ambiguous timeout a no-op, and the receiver's seen ledger (`mail_seen.jsonl` in the agents state root) keeps a redelivered row from injecting twice: delivery is at-least-once at the bus and once at the receiver.
+The sender reads as `<user>@<host>/<session name>` in the row's `from_id`. The sender writes that field itself, so it proves nothing alone. The tailnet is the boundary. The raw allowlist is a second check, never a proof of identity (operator ruling, 2026-10-10). A `raw = 1` row is the pane-typing lane. The pull refuses it unless `agents.remote.raw_senders` lists the sender head. The empty default refuses every cross-host raw row.
 
-When the primary is unreachable, the send queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`; the daemon's flush leg drains it when the store answers again. With no `store.remote_url` set at all, a cross-host send relays over ssh: the remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane (it would stamp the remote machine's identity; pass `--from-name`).
+A row waits up to 7 days for its host (`MAIL_TTL_SECS`). The expire leg flips past-due rows to `expired`. A pull that finds the name unknown leaves the row pending until then. `INSERT OR IGNORE` on the unique `msg_id` makes a retry after an ambiguous timeout a no-op. The receiver's seen ledger (`mail_seen.jsonl` in the agents state root) keeps a redelivered row from injecting twice. Delivery is at-least-once at the bus and once at the receiver.
 
-Host spellings normalize on write and on pull: lowercase, trailing `.local` dropped, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
+The primary can be unreachable. The send then queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`. The flush leg drains it when the store answers again. No `store.remote_url` at all means the ssh fallback: the remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane. The reason: that flag stamps whichever machine runs the verb, so pass `--from-name`.
+
+Host spellings normalize on write and on pull. Lowercase, and a trailing `.local` drops, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 
 ## The lease heartbeat
 

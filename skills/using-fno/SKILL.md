@@ -74,9 +74,9 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **Sending with a reply address.** `send <name>` self-stamps your handle; `--to-project` stamps the project (add `--from-self` to hold for the answer). Only `fno whoami`'s `mail:` line is a valid `--from-name`.
 
-**Cross-host (`<name>@<host>`).** `fno agents mail send <name>@<host> <msg>` writes one row on the shared primary (`store.remote_url`); the target host's daemon injects it through the receiver's own local send, holds intact, and the row waits up to 7 days. The sender reads outcomes with `fno-agents mail-remote status`. Cross-host `--raw` refuses unless the receiver lists the sender in `agents.remote.raw_senders`. With no store configured, the send relays over ssh and `--from-self` refuses there (use `--from-name`).
+**Cross-host (`<name>@<host>`).** `fno agents mail send <name>@<host> <msg>` writes one row on the shared primary (`store.remote_url`). The target host's daemon injects it through the receiver's own local send, holds intact. The row waits up to 7 days. The sender reads outcomes with `fno-agents mail-remote status`. Cross-host `--raw` refuses unless the receiver lists the sender in `agents.remote.raw_senders`. No store configured means the send relays over ssh. `--from-self` refuses there, so pass `--from-name`.
 
-**Cross-host peek.** `fno agents peek <handle>@<host>` always relays over ssh (transcripts never ride the store); the remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there.
+**Cross-host peek.** `fno agents peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there.
 
 **Observing = `fno agents peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents logs <name>` is registry-scoped.
 
