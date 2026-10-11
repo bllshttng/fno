@@ -734,8 +734,13 @@ fn run_request() -> i32 {
                 None,
                 None,
             );
+            let warning = if v["emit_events"].as_bool().unwrap_or(true) {
+                o.contested_warning(s(&v, "node_id"))
+            } else {
+                None
+            };
             Ok(
-                json!({"verdict":o.verdict,"claim_state":o.claim_state,"holder":o.holder,"truth_status":o.truth_status,"action":o.action,"worker":o.worker,"block_reason":o.block_reason,"worked_error":o.worked_error,"blocks_dispatch":o.blocks_dispatch(),"refusal_reason":o.refusal_reason()}),
+                json!({"verdict":o.verdict,"claim_state":o.claim_state,"holder":o.holder,"truth_status":o.truth_status,"action":o.action,"worker":o.worker,"block_reason":o.block_reason,"worked_error":o.worked_error,"blocks_dispatch":o.blocks_dispatch(),"refusal_reason":o.refusal_reason(),"warning":warning}),
             )
         }
         "guard" => Ok(

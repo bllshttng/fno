@@ -516,10 +516,7 @@ def test_a_worked_authority_outage_names_itself_not_a_running_worker(
     (three free nodes were refused as already-running while their leads fell
     back to a costlier lane). The verdict says unknown and the detail carries
     the reader failure verbatim."""
-    def _raise(**_kw):
-        raise RuntimeError("roster timeout")
-
-    monkeypatch.setattr("fno.graph.statuses.live_worked_node_ids", _raise)
+    _native_worker_observation(monkeypatch, "", worked_error="roster timeout")
     res = _invoke("x-9999", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.output)
@@ -535,10 +532,7 @@ def test_a_worker_row_block_with_no_claim_names_the_row(
     occupant, so the reason is its own token, `worker` rides the payload, and
     no claim holder is named - `unproven-claim` asserted a claim that does not
     exist and dropped the only actionable field."""
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-8888": ["lead-a792-control"]},
-    )
+    _native_worker_observation(monkeypatch, "lead-a792-control")
     res = _invoke("x-8888", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.output)
@@ -553,6 +547,23 @@ def test_a_worker_row_block_with_no_claim_names_the_row(
 
 
 # --- x-c08a: the refusal names the worker ROW, never the claim ----------------
+
+
+def _native_worker_observation(monkeypatch, worker, *, worked_error=None, warning=None):
+    from fno import rust_binary
+
+    call = rust_binary.verb_call
+
+    def observe(verb, payload, *args, **kwargs):
+        if verb == ["backlog", "advance", "--stdin"] and payload.get("op") == "claim":
+            return {"holder": "unknown", "truth_status": "unknown", "worker": worker,
+                    "action": "blocked", "blocks_dispatch": True,
+                    "block_reason": "worked-authority-unavailable" if worked_error else f"held: worked overlay: {worker}",
+                    "verdict": "dead_predecessor", "worked_error": worked_error,
+                    "warning": warning}
+        return call(verb, payload, *args, **kwargs)
+
+    monkeypatch.setattr(rust_binary, "verb_call", observe)
 
 
 def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
@@ -577,10 +588,7 @@ def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
     update_claim("node:x-6f98", expires_at=1)
     assert claim_status("node:x-6f98", root=_global_claims_root())["state"] == "stale"
 
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-6f98": ["bp-6f98-locked-decision"]},
-    )
+    _native_worker_observation(monkeypatch, "bp-6f98-locked-decision")
     res = _invoke("x-6f98", "--holder", "probe:1", "--no-reserve", "--json")
     assert res.exit_code == 0
     obj = json.loads(res.stdout)
@@ -610,10 +618,7 @@ def test_the_contested_dispatch_warning_leads_with_the_worker_row(
         "node:x-6f99", "spawn-handover:bp-6f99-planner", pid=dead_pid, ttl_ms=60_000
     )
     update_claim("node:x-6f99", expires_at=1)
-    monkeypatch.setattr(
-        "fno.graph.statuses.live_worked_node_ids",
-        lambda **_kw: {"x-6f99": ["bp-6f99-planner"]},
-    )
+    _native_worker_observation(monkeypatch, "bp-6f99-planner", warning="dispatch blocked for x-6f99: worker row bp-6f99-planner is on the node")
     res = _invoke("x-6f99", "--holder", "dispatch-node:444", "--json")
     assert res.exit_code == 0
     assert json.loads(res.stdout)["reason"] == "worker-row"

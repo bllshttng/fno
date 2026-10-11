@@ -52,6 +52,9 @@ COLLAPSE_FLAGS_REL = Path("scripts") / "ci" / "verb-collapse-flags.txt"
 NATIVE_SERVED_LEAVES = {
     "agents mail show",
     "mail show",
+    "backlog advance",
+    "backlog dispatch-lanes",
+    "backlog join",
     "backlog rank",
     "backlog reopen",
     "backlog session add",
@@ -331,6 +334,9 @@ def iter_python_leaves():
                         f"{path} {flag}" for flag in _hidden_option_tokens(sub)
                     )
                 cmd = collapse_click_group(cmd, keep=set(collapse_keep))
+                for native in sorted(NATIVE_SERVED_LEAVES):
+                    if native.startswith(name + " ") and native.removeprefix(name + " ") in collapse_keep:
+                        yield native, None
             if hasattr(cmd, "list_commands"):
                 ctx = click.Context(cmd, info_name=name)
                 yielded = False

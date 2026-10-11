@@ -147,6 +147,22 @@ pub struct DispatchClaimObservation {
 }
 
 impl DispatchClaimObservation {
+    pub fn contested_warning(&self, node_id: &str) -> Option<String> {
+        let state = self.claim_state.as_deref()?;
+        if state != "stale" && state != "suspect" {
+            return None;
+        }
+        let lead = if self.worker.is_empty() {
+            String::new()
+        } else {
+            format!("worker row {} is on the node; ", self.worker)
+        };
+        Some(format!(
+            "dispatch {} for {node_id}: {lead}node claim is {state}, prior holder={}, truth_status={}",
+            self.action, self.holder, self.truth_status
+        ))
+    }
+
     pub fn blocks_dispatch(&self) -> bool {
         matches!(
             self.action.as_str(),
@@ -871,31 +887,7 @@ pub fn observe_node_claim(
         }
         advance_emit(EVENT_CLAIM_OBSERVED, data, events_path);
     }
-    if emit_events {
-        if let Some(state) = &claim_state {
-            if state == "stale" || state == "suspect" {
-                // Lead with the worker when one is on the node: this line
-                // pointed at a stale claim while the row was the occupant,
-                // and an operator followed it to a claim that read UNCLAIMED.
-                let lead = if worker.is_empty() {
-                    String::new()
-                } else {
-                    format!("worker row {worker} is on the node; ")
-                };
-                let message = format!(
-                    "dispatch {action} for {node_id}: {lead}node claim is {state}, \
-prior holder={holder}, truth_status={truth_status}"
-                );
-                eprintln!("advance: WARNING: {message}");
-                crate::operator_notice::notify_operator(
-                    "footnote: contested node dispatch",
-                    &message,
-                    None,
-                );
-            }
-        }
-    }
-    DispatchClaimObservation {
+    let observation = DispatchClaimObservation {
         verdict,
         claim_state,
         holder,
@@ -904,7 +896,18 @@ prior holder={holder}, truth_status={truth_status}"
         worker,
         block_reason,
         worked_error,
+    };
+    if emit_events {
+        if let Some(message) = observation.contested_warning(node_id) {
+            eprintln!("advance: WARNING: {message}");
+            crate::operator_notice::notify_operator(
+                "footnote: contested node dispatch",
+                &message,
+                None,
+            );
+        }
     }
+    observation
 }
 
 /// The truth row's state word, or "unknown" when nothing answers. The claim

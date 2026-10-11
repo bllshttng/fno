@@ -12,8 +12,8 @@ The init hook reads `fno backlog join width <plan>` and `fno backlog join armed 
 
 | Category | Disposition |
 |---|---|
-| Verb baseline | The source registrar removes the three Python leaves. Regenerate through the source-aware verb ratchet. Native command compatibility remains in the backlog catalog. |
-| Collapse map and flags | Retired Python leaf rows and the hidden continuation inventory are removed. |
+| Verb baseline | The source registrar retires the three Python leaves and tracks their native owners. The kept advance leaf remains public without its retired hidden continuation flag. Regenerate through the source-aware verb ratchet. |
+| Collapse map and flags | Native owners retain the three command rows. The retired hidden continuation inventory is removed. |
 | Lifecycle roster | The Python command roster removes the three native commands. Existing lifecycle pairs remain covered. |
 | Alias parameters | Native parsers own the short and long flags. Descriptor configuration tests retain their independent contracts. |
 | Seam crossings | Regenerate after replacing the reconcile wheel call and retiring Python resolver construction. |

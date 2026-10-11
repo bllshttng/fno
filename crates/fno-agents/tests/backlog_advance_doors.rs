@@ -17,17 +17,19 @@ impl World {
         std::fs::create_dir_all(&root).unwrap();
         let config = root.join("config.toml");
         std::fs::write(&config,format!("state_dir = {:?}\n[agents]\nmax_live = 4\n[agents.defaults]\nprovider = \"claude\"\nmodel = \"glm-5.3-flash[1m]\"\n",root.to_string_lossy())).unwrap();
-        std::fs::write(root.join("graph.json"), rows.to_string()).unwrap();
+        fno_agents::graph_store::seed_rows(&root.join("graph.json"), rows.as_array().unwrap())
+            .unwrap();
         std::fs::create_dir_all(dir.path().join("agents")).unwrap();
-        let w = Self { dir, root, config };
-        let _ = w.run(&["backlog", "get", "--all"], None);
-        w
+        Self { dir, root, config }
     }
     fn command(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
         c.current_dir(&self.root)
             .env("FNO_CONFIG", &self.config)
             .env("FNO_STATE_DIR", &self.root)
+            .env("FNO_TRACKER_BACKEND", "graph")
+            .env("FNO_CONFIG_SEARCH_ROOT", self.dir.path())
+            .envs(fno_agents::test_run::self_owner_env())
             .env("FNO_EVENTS_PATH", self.root.join("events.jsonl"))
             .env("FNO_AGENTS_HOME", self.dir.path().join("agents"))
             .env("FNO_CLAIMS_ROOT", self.dir.path().join("claims"))
@@ -113,11 +115,13 @@ impl World {
         let roots = [self.root.clone(), self.dir.path().join("agents")];
         let mut out = Vec::new();
         for root in roots {
-            if let Ok(text) = std::fs::read_to_string(root.join("events.jsonl")) {
-                out.extend(
-                    text.lines()
-                        .filter_map(|l| serde_json::from_str::<Value>(l).ok()),
-                );
+            let journal = root.join("events.jsonl");
+            if fno_agents::event_store::store_path(&journal).is_file() {
+                for row in
+                    fno_agents::event_store::query_events(&journal, &Default::default()).unwrap()
+                {
+                    out.push(serde_json::from_str::<Value>(&row.line).unwrap());
+                }
             }
         }
         out
@@ -136,7 +140,9 @@ fn row(id: &str, extra: Value) -> Value {
 fn decode(out: &Output) -> Value {
     assert!(
         out.status.success(),
-        "{}",
+        "status={} stdout={} stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     serde_json::from_slice(&out.stdout)
@@ -510,7 +516,9 @@ fn closed_advance_is_single_flight_and_epic_scopes_are_independent() {
     assert_eq!(value["decision"], "held");
     assert!(value["held"] == true);
     assert!(w.events().iter().all(|e| e["type"] != "advance_dispatched"));
-    let value = decode(&w.run(&["backlog", "advance", "--epic", "x-aaaa", "--json"], None));
+    let out = w.run(&["backlog", "advance", "--epic", "x-aaaa", "--json"], None);
+    assert_eq!(out.status.code(), Some(1));
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(value["error"], "no-such-node");
 }
 

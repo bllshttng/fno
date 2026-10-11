@@ -874,9 +874,12 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
-        from fno.rust_binary import verb_call
+        from fno.rust_binary import VerbUnavailable, verb_call
 
-        detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
+        try:
+            detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": stderr or proc.stdout or ""})["detail"]
+        except VerbUnavailable as exc:
+            detail = f"{stderr or proc.stdout or ''} (gate detail unavailable: {exc})"
         raise SpawnError(f"fno agents spawn exited {proc.returncode}: {detail}")
     short_id = _parse_short_id(proc.stdout or "")
     if short_id:

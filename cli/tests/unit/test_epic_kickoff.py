@@ -23,7 +23,6 @@ from pathlib import Path
 
 import pytest
 
-from fno.claims.core import acquire_claim, claim_status
 
 
 @pytest.fixture
@@ -260,32 +259,22 @@ def test_auto_close_short_note_without_unverified_marker():
 # ---------------------------------------------------------------------------
 
 
-def _cli_output(r) -> str:
-    """stdout + stderr, tolerant of Click's mix_stderr version differences."""
-    out = r.stdout or ""
-    try:
-        out += r.stderr or ""
-    except (ValueError, AttributeError):
-        pass  # stderr not separately captured on this Click version
-    return out
-
-
 def test_cli_epic_and_closed_mutually_exclusive(iso, tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    from fno.cli import app
+    import subprocess
+    from fno.rust_binary import resolve_binary
 
-    r = CliRunner().invoke(app, ["backlog", "advance", "--epic", "x-EPIC", "--closed", "x-1"])
-    assert r.exit_code == 2
-    assert "mutually exclusive" in _cli_output(r)
+    r = subprocess.run([str(resolve_binary()), "backlog", "advance", "--epic", "x-EPIC", "--closed", "x-1"], capture_output=True, text=True)
+    assert r.returncode == 2
+    assert "mutually exclusive" in r.stderr
 
 
 def test_cli_stop_requires_epic(iso, tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    from fno.cli import app
+    import subprocess
+    from fno.rust_binary import resolve_binary
 
-    r = CliRunner().invoke(app, ["backlog", "advance", "--stop"])
-    assert r.exit_code == 2
-    assert "require --epic" in _cli_output(r)
+    r = subprocess.run([str(resolve_binary()), "backlog", "advance", "--stop"], capture_output=True, text=True)
+    assert r.returncode == 2
+    assert "require --epic" in r.stderr
 
 
 # ---------------------------------------------------------------------------

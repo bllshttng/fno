@@ -335,6 +335,8 @@ def _spawn_guard_decision(
         "op": "claim", "node_id": node_id, "cwd": cwd,
         "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
     }))
+    if getattr(observation, "warning", None):
+        print(f"advance: WARNING: {observation.warning}", file=sys.stderr)
     common = {
         "holder": observation.holder,
         "truth_status": observation.truth_status,

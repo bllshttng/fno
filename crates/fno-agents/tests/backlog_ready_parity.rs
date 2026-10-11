@@ -729,13 +729,6 @@ fn normalize_volatile(v: &Value) -> Value {
     }
 }
 
-fn normalized_text(v: &Value) -> String {
-    format!(
-        "{}\n",
-        serde_json::to_string_pretty(&normalize_volatile(v)).unwrap()
-    )
-}
-
 /// The rows value carried a refusal: the golden surface is the exit code.
 fn golden_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/backlog_ready")
@@ -753,8 +746,8 @@ fn characterization_ready_selection_matches_the_frozen_goldens() {
         let golden = std::fs::read_to_string(golden_dir().join(format!("{}.out", case.name)))
             .expect("frozen rows");
         assert_eq!(
-            normalized_text(&rs["rows"]),
-            golden,
+            normalize_volatile(&rs["rows"]),
+            serde_json::from_str::<Value>(&golden).expect("frozen rows JSON"),
             "[{}] survivor contract",
             case.name
         );

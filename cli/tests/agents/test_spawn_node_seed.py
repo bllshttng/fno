@@ -58,6 +58,7 @@ def _stub_pane_path(monkeypatch, *, rec=None, brief=("the brief", "explicit")):
             pass
 
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
+    monkeypatch.setattr("fno.agents.cli._spawn_guard_decision", lambda *a, **k: ({"verdict": "dispatchable"}, 0))
     monkeypatch.setattr(
         mux_spawn,
         "resolve_provenance",
