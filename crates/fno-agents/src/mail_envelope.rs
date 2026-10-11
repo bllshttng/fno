@@ -293,9 +293,11 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         }
     };
     let body_text = wrapping.as_deref().unwrap_or("");
-    let third = crate::mail_header::header_subject(subject, body_text);
-    let header = crate::mail_header::render_header(form, sender, msg_id, &third);
-    let delivered = crate::mail_header::delivered_body(subject, body_text);
+    let third = crate::mail_header::header_third_field(subject, body_text);
+    let header = crate::mail_header::render_header(form, sender, msg_id, third.as_deref());
+    // The law form: the body rides whole under the two-field header; the
+    // sentence-drop at delivery died with the third field.
+    let delivered = body_text;
     Ok(match wrapping {
         Some(_) if fence_requested(input) => {
             let fence = fence_for(&delivered);
@@ -440,12 +442,9 @@ mod tests {
             &path,
         )
         .unwrap();
-        assert_eq!(
-            rendered,
-            "`@folio \u{b7} msg-1 \u{b7} Fix the gate.`\nThen ship."
-        );
-        // No subject: the third field is the body's first sentence, and the
-        // delivered body drops that sentence, so it shows once (AC10-HP).
+        assert_eq!(rendered, "`@folio · msg-1`\nFix the gate. Then ship.");
+        // The law form: no third field when a body is present, and the
+        // body rides whole - the text never shows twice (AC10-HP).
         let body_once = render_at(
             &json!({
                 "mode":"wrap", "body":"Fix the gate. Details follow.",
@@ -456,26 +455,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             body_once,
-            "`@folio \u{b7} fmail-0123456789ab \u{b7} Fix the gate.`\nDetails follow."
+            "`@folio · fmail-0123456789ab`\nFix the gate. Details follow."
         );
-        // A first sentence longer than the summary cut stays whole: the
-        // header shows only its first 12 words, and dropping the sentence
-        // would silently lose the words past the cut (AC10).
-        let long = render_at(
-            &json!({
-                "mode":"wrap",
-                "body":"one two three four five six seven eight nine ten eleven twelve thirteen. Rest here.",
-                "from":"folio-short", "id":"fmail-0123456789ab"
-            }),
-            &path,
-        )
-        .unwrap();
-        assert_eq!(
-            long,
-            "`@folio \u{b7} fmail-0123456789ab \u{b7} one two three four five six seven eight nine ten eleven twelve`\none two three four five six seven eight nine ten eleven twelve thirteen. Rest here."
-        );
-        // A given subject rides the header and the body follows whole
-        // (AC11-HP).
+        // A given subject drops when a body is present; it rides only a
+        // header-only mail (the law).
         let subject = render_at(
             &json!({
                 "mode":"wrap", "body":"Fix the gate. Details follow.",
@@ -486,7 +469,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             subject,
-            "`@folio \u{b7} fmail-0123456789ab \u{b7} gate fix`\nFix the gate. Details follow."
+            "`@folio · fmail-0123456789ab`\nFix the gate. Details follow."
         );
         let plain = render_at(
             &json!({
@@ -495,16 +478,13 @@ mod tests {
             &path,
         )
         .unwrap();
-        assert!(
-            plain.starts_with("`folio \u{b7} msg-2 \u{b7} hello`\nhello"),
-            "{plain}"
-        );
+        assert!(plain.starts_with("`folio · msg-2`\nhello"), "{plain}");
         let header = render_at(
             &json!({"mode":"tag", "from":"quill-short", "id":"msg-3"}),
             &path,
         )
         .unwrap();
-        assert_eq!(header, "`@quill \u{b7} msg-3 \u{b7} (empty)`");
+        assert_eq!(header, "`@quill · msg-3 · (empty)`");
         // The pane lane's fenced delivery (payload `fence`, or FNO_MAIL_FENCE=1
         // on the pane-prepare child): the body rides a backtick run one longer
         // than any run it holds; the header line stays readable.
@@ -518,7 +498,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             fenced,
-            "`@folio \u{b7} msg-4 \u{b7} hi '''x''' there`\n````fno-pane\nhi ```x``` there\n````",
+            "`@folio · msg-4`\n````fno-pane\nhi ```x``` there\n````",
         );
         // The fence clears: a run one longer than anything the body holds.
         assert_eq!(fence_for("hi ```x``` there"), "````");
@@ -534,10 +514,7 @@ mod tests {
             &path,
         )
         .unwrap();
-        assert_eq!(
-            plain,
-            "`@folio \u{b7} msg-4 \u{b7} hi '''x''' there`\nhi ```x``` there",
-        );
+        assert_eq!(plain, "`@folio · msg-4`\nhi ```x``` there",);
         // The Messages tab reads the fenced pane delivery as its plain body.
         assert_eq!(
             crate::mail_header::display_body(&fenced),
@@ -651,6 +628,6 @@ mod tests {
             completed_while_locked,
             "envelope render waited for the registry lock"
         );
-        assert_eq!(rendered, "`@folio \u{b7} msg-9 \u{b7} hello`\nhello");
+        assert_eq!(rendered, "`@folio · msg-9`\nhello");
     }
 }

@@ -102,7 +102,14 @@ function headerControls($, event, line, turn, requestId) {
   if (senderAt < 0) return null
 
   const afterId = line.slice(idAt + turn.id.length)
-  if (!afterId.startsWith(' · ')) return null
+  // The law form's header ends right after the id (no third field); a
+  // stored three-field header still shows its subject.
+  let subject = ''
+  if (afterId.startsWith(' · ')) {
+    subject = afterId.slice(3)
+  } else if (afterId.trim() !== '' && afterId.trim() !== '`') {
+    return null
+  }
 
   let prefix = line.slice(0, senderAt)
   if (prefix.endsWith('`')) prefix = prefix.slice(0, -1)
@@ -112,7 +119,6 @@ function headerControls($, event, line, turn, requestId) {
   // backtick whose remainder is the line end or the " ⏎ " body separator,
   // matching the producer's split_header_span; a backtick inside the
   // subject is not a fence.
-  let subject = afterId.slice(3)
   for (let at = subject.indexOf('`'); at >= 0; at = subject.indexOf('`', at + 1)) {
     const tail = subject.slice(at + 1)
     if (!tail || tail.startsWith(' ⏎ ')) {
