@@ -16,7 +16,7 @@ The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:`
 
 Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and `flight:` name resources of one machine. A cargo lock shared across machines serializes builds that never touch each other.
 
-The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status.
+The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
 
 ## The shared backlog
 
@@ -48,6 +48,18 @@ A later fno version that adds a backlog column does not change the primary. Writ
 ## The store clock decides a peer's lease
 
 A machine cannot probe a peer's pids. So for a row another machine wrote, only the lease decides, read on the primary's clock. A takeover of a peer's row carries `claims.expires_at <= <store clock>` in its compare-and-swap. Two machines with skewed clocks still agree on the moment a lease ran out.
+
+## Cross-host mail
+
+A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on the primary. Each host's daemon pulls the rows that name it, on `agents.remote.pull_interval_secs` (a global-config key, default 15 seconds), and injects each through the receiver's own local send, so lane selection, holds, and receipts stay the local path's. The row order is the primary's `seq`, never host clocks.
+
+The sender reads as `<user>@<host>/<session name>` in the row's `from_id`. That field is written by the sender, so it proves nothing by itself: the tailnet is the boundary, and the raw allowlist is a second check, not a proof of identity (operator ruling, 2026-10-10). A row with `raw = 1` (the pane-typing lane) is refused unless its `from_id` head matches a sender in `agents.remote.raw_senders`, a global-config list; the default empty list refuses every cross-host raw row.
+
+Rows wait up to 7 days for their host (`MAIL_TTL_SECS`); the expire leg flips past-due rows to `expired`, and a pull that finds the name unknown leaves the row pending until then. `INSERT OR IGNORE` on the unique `msg_id` makes a retry after an ambiguous timeout a no-op, and the receiver's seen ledger (`mail_seen.jsonl` in the agents state root) keeps a redelivered row from injecting twice: delivery is at-least-once at the bus and once at the receiver.
+
+When the primary is unreachable, the send queues the row in `mail_outbox.jsonl` and reports `queued (local, store unreachable)`; the daemon's flush leg drains it when the store answers again. With no `store.remote_url` set at all, a cross-host send relays over ssh: the remote machine's own `fno` answers, its exit code and receipt pass through, and `--from-self` refuses on that lane (it would stamp the remote machine's identity; pass `--from-name`).
+
+Host spellings normalize on write and on pull: lowercase, trailing `.local` dropped, so `iMac2D2.local` and `imac2d2` are one host. The two-machine walk-through is the same throwaway-primary drill as [the shared backlog](#start-sharing).
 
 ## The lease heartbeat
 
