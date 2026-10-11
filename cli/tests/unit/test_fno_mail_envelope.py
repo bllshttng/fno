@@ -58,18 +58,18 @@ def test_harness_for_provider_preserves_known_and_unrecognized_nonblank():
 
 
 def test_wrap_opens_with_the_delivered_header():
-    # The one delivered shape: a backticked header line, then the whole body.
+    # The one delivered shape (user law d-b720d23c): a two-field backticked
+    # header line, then the whole body. The subject drops whenever a body
+    # is present, so the text shows once.
     assert (
         wrap_fno_mail("ship it", from_="7d1f8bdc", id="fmail-abc123def456")
-        == "`@7d1f8bdc · fmail-abc123def456 · ship it`\nship it"
+        == "`@7d1f8bdc · fmail-abc123def456`\nship it"
     )
     body = "line one\nline two"
     wrapped = wrap_fno_mail(body, from_="aaaa1111", id="fmail-abc123def456")
-    # The summary is the body's first sentence, and the delivered body
-    # drops that sentence (it is the header's third field), so the text
-    # shows once. Header plus rest is still the whole message.
-    assert wrapped == "`@aaaa1111 · fmail-abc123def456 · line one`\nline two"
-    # An empty body renders the (empty) summary.
+    assert wrapped == "`@aaaa1111 · fmail-abc123def456`\nline one\nline two"
+    # An empty body renders the (empty) summary: no body carries the
+    # message, so the header keeps a third field.
     assert wrap_fno_mail("", from_="aaaa1111", id="fmail-abc123def456") == (
         "`@aaaa1111 · fmail-abc123def456 · (empty)`\n"
     )
@@ -111,12 +111,12 @@ def test_the_header_carries_the_registry_name_and_no_rank_attributes(
         to_session="reader-session",
         harness="claude",
     )
-    assert wrapped.startswith("`@folio · fmail-abc123def456 · hi`")
+    assert wrapped.startswith("`@folio · fmail-abc123def456`\nhi")
     for gone in ("from_rank", "from_name", "to_rank", "to_name"):
         assert gone not in wrapped
     # A handle that resolves to no live row keeps the raw from value.
     plain = envelope.wrap_fno_mail("hi", from_="stranger", id="fmail-abc123def456")
-    assert plain.startswith("`@stranger · fmail-abc123def456 · hi`")
+    assert plain.startswith("`@stranger · fmail-abc123def456`\nhi")
 
 
 def test_the_codex_row_names_the_sender(monkeypatch, tmp_path):
@@ -136,13 +136,14 @@ def test_the_codex_row_names_the_sender(monkeypatch, tmp_path):
         id="fmail-abc123def456",
         harness="codex",
     )
-    assert wrapped.startswith("`@quill · fmail-abc123def456 · hi`")
+    assert wrapped.startswith("`@quill · fmail-abc123def456`\nhi")
 
 
 def test_envelope_overhead_budget(monkeypatch, tmp_path):
-    # The header is the whole envelope: 55 characters over a 25-character
-    # body, role-independent now that rank rides the registry. Raising the
-    # bound is a decision a PR must argue, not a test fix.
+    # The header is the whole envelope: 26 characters over a 25-character
+    # body under the two-field law form, role-independent now that rank
+    # rides the registry. Raising the bound is a decision a PR must argue,
+    # not a test fix.
     import fno.mail.envelope as envelope
     body = "ship the compact envelope"
     full_id = "0199a1b2-3c4d-7e8f-9a0b-1c2d3e4f5a6b"
@@ -161,7 +162,7 @@ def test_envelope_overhead_budget(monkeypatch, tmp_path):
         harness="claude",
     )
     assert wrapped.startswith(
-        "`@a · fmail-fea270b82c41 · ship the compact envelope`\n"
+        "`@a · fmail-fea270b82c41`\nship the compact envelope"
     )
     assert len(wrapped) - len(body) <= 80
 
