@@ -861,6 +861,15 @@ pub(crate) fn succession_replaces(
         .is_some_and(|vacate| vacate.len() == 1 && vacate[0].as_str() == Some(row.name.as_str()));
     if answer.get("outcome").and_then(Value::as_str) == Some("succeeded") && vacates_caller {
         Ok(row.name.clone())
+    } else if answer
+        .get("refusal")
+        .and_then(Value::as_str)
+        .is_some_and(|text| text.contains("the machine draws successor names"))
+    {
+        // This lane settles occupancy only: it never carries a draw, so a
+        // hand-off here refuses with the teaching text instead of the
+        // misleading not-sole-holder.
+        Err("the machine draws successor names and this lane does not draw: hand the team over from a seam that draws (spawn --promote --hand-off with no --name, or --redraw)")
     } else {
         Err("caller_not_sole_holder")
     }

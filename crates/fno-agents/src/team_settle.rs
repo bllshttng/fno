@@ -668,10 +668,9 @@ mod tests {
             store["teams"]["scope"]["pending_succession"]["successor_session"],
             "new-session"
         );
-        let history = std::fs::read_to_string(
-            crate::team_names::history_path(&team_store(tmp.path())),
-        )
-        .unwrap();
+        let history =
+            std::fs::read_to_string(crate::team_names::history_path(&team_store(tmp.path())))
+                .unwrap();
         assert!(history.contains(&format!("\"kind\": \"bound\"")));
         assert!(history.contains(&drawn.to_ascii_lowercase()));
     }
@@ -724,6 +723,13 @@ mod tests {
 
     #[test]
     fn grant_rows() {
+        // The succession arms answer home-free BY CONTRACT ("no declared home
+        // reads as no store"), so they hold the env lock while they run: a
+        // parallel home-guarded test must not leak FNO_AGENTS_HOME in and
+        // turn the draw on mid-test.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": false,
             "caller": {"kind": "human"}, "rows": [],

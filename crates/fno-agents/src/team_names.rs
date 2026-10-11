@@ -1012,7 +1012,7 @@ pub fn carry_succession(
     pending: Option<PendingSuccession>,
 ) -> Result<Option<PendingSuccession>, String> {
     let pending = pending.ok_or(
-        "--hand-off requires --name <Name>; the outgoing lead chooses a fresh person name",
+        "--hand-off without a successor: the settle draws the successor name; accept it (--name <drawn>) or ask for a redraw (--redraw)",
     )?;
     if !valid_person_name(&pending.successor_name) {
         return Err(

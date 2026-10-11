@@ -422,42 +422,52 @@ pub fn draw_successor_name(
             return Ok(crate::team_names::display(name, 1));
         }
     }
-    // Fresh draw (no proposal, or an explicit redraw): exclude everything
-    // used, then make the name visible to peer hosts before anyone launches.
-    let mut used = crate::team_names::used_names(store_path, registry_path)?;
-    let pool: Vec<&str> = NAME_POOL
-        .iter()
-        .copied()
-        .filter(|n| !used.contains(&n.to_ascii_lowercase()))
-        .collect();
-    if pool.is_empty() {
-        return Err("the name pool is exhausted; extend NAME_POOL in name_draw.rs".into());
-    }
-    let mut last_error = String::from("no draw was attempted");
-    for _ in 0..pool.len().min(5) {
-        let pick = pool[random_index(pool.len())?];
-        match claim_name(pick, claims_root) {
-            Ok(()) => {
-                crate::team_names::history_append(
-                    store_path,
-                    crate::team_names::NameHistoryEntry {
-                        name: pick.to_ascii_lowercase(),
-                        scope: canon.clone(),
-                        session: None,
-                        kind: "drawn".into(),
-                        ts: crate::daemon::now_rfc3339_like(),
-                    },
-                )?;
-                return Ok(crate::team_names::display(pick, 1));
-            }
-            Err(e) => {
-                last_error = e;
+    // Fresh draw (no proposal, or an explicit redraw): the history flock is
+    // held across filter, claim and append, so two draws on this host can
+    // never pick the same free name; a peer host is closed out by the claim
+    // itself.
+    let lock = crate::state::acquire_exclusive(&crate::state::lock_path(
+        &crate::team_names::history_path(store_path),
+    ))
+    .map_err(|e| e.to_string())?;
+    let drawn = (|| -> Result<String, String> {
+        let mut used = crate::team_names::used_names(store_path, registry_path)?;
+        let pool: Vec<&str> = NAME_POOL
+            .iter()
+            .copied()
+            .filter(|n| !used.contains(&n.to_ascii_lowercase()))
+            .collect();
+        if pool.is_empty() {
+            return Err("the name pool is exhausted; extend NAME_POOL in name_draw.rs".into());
+        }
+        let mut last_error = String::from("no draw was attempted");
+        for _ in 0..pool.len().min(5) {
+            let pick = pool[random_index(pool.len())?];
+            match claim_name(pick, claims_root) {
+                Ok(()) => {
+                    crate::team_names::history_append(
+                        store_path,
+                        crate::team_names::NameHistoryEntry {
+                            name: pick.to_ascii_lowercase(),
+                            scope: canon.clone(),
+                            session: None,
+                            kind: "drawn".into(),
+                            ts: crate::daemon::now_rfc3339_like(),
+                        },
+                    )?;
+                    return Ok(crate::team_names::display(pick, 1));
+                }
+                Err(e) => {
+                    last_error = e;
+                }
             }
         }
-    }
-    Err(format!(
-        "every drawn name is claimed on another host ({last_error}); ask for another redraw"
-    ))
+        Err(format!(
+            "every drawn name is claimed on another host ({last_error}); ask for another redraw"
+        ))
+    })();
+    let _ = lock.unlock();
+    drawn
 }
 
 /// The succession draw on a successful plan answer: the machine names the
@@ -522,8 +532,13 @@ mod tests {
         );
     }
 
+    // Folded to hold the net-3 test cap; one test per distinct contract:
+    // (1) a fresh draw answers a pooled never-used name, consumes it, and
+    // the used-name filter is absolute; (2) an explicit name must match the
+    // pending draw, and a redraw never repeats; (3) settle_draw declines the
+    // contract's violators and never redraws on the apply pass.
     #[test]
-    fn a_fresh_draw_answers_a_pooled_name_and_records_it() {
+    fn a_fresh_draw_answers_a_pooled_name_consumes_it_and_excludes_used_names() {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("team_names.json");
         let registry = tmp.path().join("registry.json");
@@ -532,20 +547,46 @@ mod tests {
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
                 .to_string(),
         );
+        // The draw answers a pool name and records it as the pending draw.
         let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
         let lowered = drawn.to_ascii_lowercase();
         assert!(NAME_POOL.contains(&lowered.as_str()), "{drawn}");
-        let pending = crate::team_names::pending_draw(&store, "x-aaaa")
-            .unwrap()
-            .unwrap();
+        let pending =
+            crate::team_names::pending_draw(&store, "x-aaaa").unwrap().unwrap();
         assert_eq!(pending, lowered);
-        // The draw is consumed: an identical re-draw (a second host) refuses.
-        let again = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()));
-        assert_ne!(again.unwrap(), drawn, "a consumed draw never repeats");
+        // A consumed draw never repeats: the second draw excludes it.
+        let again = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
+        assert_ne!(again, drawn);
+
+        // A separate store proves the exclusion absolute: retiring every
+        // pool name but one leaves the draw no choice.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let store2 = tmp2.path().join("team_names.json");
+        let registry2 = tmp2.path().join("registry.json");
+        crate::registry_store::seed_raw(
+            &registry2,
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
+                .to_string(),
+        );
+        for name in NAME_POOL.iter().skip(1) {
+            crate::team_names::history_append(
+                &store2,
+                crate::team_names::NameHistoryEntry {
+                    name: name.to_ascii_lowercase(),
+                    scope: "x-other".into(),
+                    session: None,
+                    kind: "bound".into(),
+                    ts: crate::daemon::now_rfc3339_like(),
+                },
+            )
+            .unwrap();
+        }
+        let forced = draw_successor_name(&store2, &registry2, "x-zzzz", None, false, Some(tmp2.path())).unwrap();
+        assert_eq!(forced.to_ascii_lowercase(), NAME_POOL[0]);
     }
 
     #[test]
-    fn an_explicit_name_must_match_the_pending_draw_or_refuse() {
+    fn an_explicit_name_must_match_the_pending_draw_and_a_redraw_never_repeats() {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("team_names.json");
         let registry = tmp.path().join("registry.json");
@@ -554,14 +595,29 @@ mod tests {
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
                 .to_string(),
         );
-        let err = draw_successor_name(&store, &registry, "x-aaaa", Some("imogen"), false, Some(tmp.path()))
-            .unwrap_err();
+        // No pending draw: a hand-typed name refuses with the teaching text.
+        let err = draw_successor_name(
+            &store,
+            &registry,
+            "x-aaaa",
+            Some("imogen"),
+            false,
+            Some(tmp.path()),
+        )
+        .unwrap_err();
         assert!(err.contains("the machine draws successor names"), "{err}");
         assert!(err.contains("--redraw"), "{err}");
-        // After a draw, the drawn name is accepted and anything else refuses.
+        // The drawn name is accepted; anything else refuses.
         let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
-        let ok = draw_successor_name(&store, &registry, "x-aaaa", Some(drawn.trim()), false, Some(tmp.path()))
-            .unwrap();
+        let ok = draw_successor_name(
+            &store,
+            &registry,
+            "x-aaaa",
+            Some(drawn.trim()),
+            false,
+            Some(tmp.path()),
+        )
+        .unwrap();
         assert_eq!(ok, drawn);
         let err = draw_successor_name(
             &store,
@@ -573,42 +629,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("Accept it"), "{err}");
-    }
-
-    #[test]
-    fn a_redraw_never_returns_the_previous_draw() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("team_names.json");
-        let registry = tmp.path().join("registry.json");
-        crate::registry_store::seed_raw(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
-                .to_string(),
-        );
-        let first = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
-        let second = draw_successor_name(&store, &registry, "x-aaaa", None, true, Some(tmp.path())).unwrap();
-        assert_ne!(
-            first, second,
-            "the redraw must exclude the consumed first draw"
-        );
-    }
-
-    #[test]
-    fn the_draw_excludes_used_names() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("team_names.json");
-        let registry = tmp.path().join("registry.json");
-        crate::registry_store::seed_raw(
-            &registry,
-            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
-                .to_string(),
-        );
-        // Retire every name in the pool but one and the draw must answer it.
-        for name in NAME_POOL.iter().skip(1) {
-            seed_history(&store, "x-other", name, "bound");
-        }
-        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
-        assert_eq!(drawn.to_ascii_lowercase(), NAME_POOL[0]);
+        // A redraw never returns the consumed draw.
+        let second =
+            draw_successor_name(&store, &registry, "x-aaaa", None, true, Some(tmp.path())).unwrap();
+        assert_ne!(drawn, second);
     }
 
     #[test]
