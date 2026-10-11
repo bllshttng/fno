@@ -497,7 +497,7 @@ Before any public file is replaced, the shared gate scans every emitted title fo
 
 ## Publish a public board
 
-One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection: open rows only (in progress, ready, blocked, idea), a row stays private when marked `--no-public`, and every title clears the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
+One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection: only open rows (in progress, ready, blocked, idea), only rows not marked `--no-public`, and every title cleared through the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
 
 ```bash
 fno backlog publish --project fno --out site/backlog
@@ -520,4 +520,4 @@ Keep it fresh with cron or launchd; a rerun over an unchanged graph writes byte-
 */15 * * * * fno backlog publish --project <slug>
 ```
 
-Cards whose titles carry a home path or session id are withheld with one warning line on stderr; the rest publish.
+Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.
