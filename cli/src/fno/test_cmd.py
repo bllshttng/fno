@@ -1807,10 +1807,11 @@ def _changed_steps(
         steps.append(by_name[_RUST_BUILD_STEP])
     if pytest_targets:
         targets = sorted(set(pytest_targets))
-        # xdist costs more than it saves on a handful of files.
-        par = " -n auto --maxprocesses=4 --dist=loadgroup" if len(targets) > 3 else ""
+        # TEMPORARY bisect probe (revert before the fix push): serial -v with
+        # no random order, so the last printed test name names the culprit
+        # when the runner dies mid-shard.
         steps.append((f"Pytest (changed subset, {len(targets)} file(s))", ".",
-                      f"uv run --project cli pytest --tb=short -q{par} "
+                      f"uv run --project cli pytest --tb=short -v -p no:randomly "
                       + " ".join(shlex.quote(t) for t in targets)))
     # The pytest shard DELETES the debug binary on exit (the @requires_rust
     # seam), so any shell harness after pytest needs a build of its own there;
