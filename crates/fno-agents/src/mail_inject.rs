@@ -2696,8 +2696,7 @@ mod tests {
     #[test]
     fn typed_marker_is_the_first_line_unchanged_by_flattening() {
         // The confirm marker comes from the TYPED text up to the first line
-        // break, so a multi-line body never moves the open tag the transcript
-        // grep matches.
+        // break, so a multi-line body never moves the open tag the grep matches.
         let envelope = "<fno_mail from=\"a1b2c3d4\" id=\"msg-1\">\nbody one\nbody two\n</fno_mail>";
         assert_eq!(
             typed_marker(envelope),
