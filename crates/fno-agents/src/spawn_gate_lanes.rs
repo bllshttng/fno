@@ -1692,10 +1692,8 @@ mod tests {
         (reg, watch_row)
     }
 
-    /// A worker whose PR is open and whose current watch waits on ci does not
-    /// hold a seat: the row parks (named with its blocker), a second working
-    /// row still counts, and the parked row's own worker reservation is
-    /// deduped rather than counted back.
+    /// A worker waiting on a ci watch parks; a working row still counts and
+    /// the parked row's own reservation is deduped, not counted back.
     #[test]
     fn provider_count_parks_a_worker_waiting_on_ci_watch() {
         let _guard = claims::test_env_lock()
