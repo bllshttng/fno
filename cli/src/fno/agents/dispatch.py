@@ -7719,11 +7719,8 @@ def dispatch_send(
                 # anything else so a sender crash before the recipient wakes does
                 # not lose the message. A recipient we WILL attempt live gets its
                 # body row staged just before the inject (stage_before_live
-                # below): the bus row is the body's only home, so it must already
-                # be on the bus when the inject confirms. The staged row is
-                # deliverable, and a drain that fires mid-inject can print a
-                # duplicate -- the W2 posture holds: a duplicate is strictly
-                # better than a drop.
+                # below): the bus row is the body's only home. A drain firing
+                # mid-inject can print a duplicate; a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -7756,12 +7753,8 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
-                    # Stage the body row first; a staging failure means the bus
-                    # door is unhealthy, so the inject would confirm into a
-                    # dangling id. Skip the live leg and let the durable floor
-                    # below carry the message. An mcp-channel-only row has no
-                    # drainable address, so there is nothing to stage and the
-                    # live leg runs as before.
+                    # Stage before the inject; a staging failure demotes to the
+                    # durable floor. An empty recipient (mcp-only row) stages nothing.
                     try:
                         if record["recipient"]:
                             stage_before_live(**record)
@@ -7784,11 +7777,7 @@ def dispatch_send(
                             try:
                                 record_hosted_delivery(**record)
                             except Exception as exc:  # noqa: BLE001 - delivery already succeeded
-                                print(
-                                    "delivery succeeded; receipt row failed; the staged "
-                                    f"bus row holds the body; do not retry: {exc}",
-                                    file=sys.stderr,
-                                )
+                                print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
                         else:
                             live_miss_reason = ";".join(_live_reason) if _live_reason else None
                             if live_miss_reason and existing.mux:
