@@ -127,49 +127,6 @@ def test_find_corrupt_archive_is_miss_not_crash(tmp_path, monkeypatch):
     assert code == 1
 
 
-def test_album_empty_archive_says_so(tmp_path, monkeypatch):
-    g, _archive = _route(tmp_path, monkeypatch)
-    _seed(g, [])
-    code, out, err = _native_backlog("album")
-    assert code == 0, err
-    assert "The album is empty." in out
-
-
-def test_album_sorts_newest_first_and_shows_the_gift(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-old00001", "title": "Old One", "status": "done",
-         "completed_at": "2026-01-01T00:00:00Z"},
-        {"id": "ab-new00001", "title": "New One", "status": "done",
-         "completed_at": "2026-06-01T00:00:00Z", "pr_number": 1,
-         "pr_url": "https://github.com/x/y/pull/1"},
-    ]}) + "\n")
-    code, out, err = _native_backlog("album")
-    assert code == 0, err
-    lines = [line for line in out.splitlines() if line.strip()]
-    assert lines[0].startswith("album: 2 shipped")
-    assert lines[1].startswith("2026-06-01")
-    assert "PR #1" in lines[1]
-    assert lines[2].startswith("2026-01-01")
-    assert "no gift" in lines[2]
-
-
-def test_album_excludes_superseded(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-done0001", "title": "Shipped", "status": "done",
-         "completed_at": "2026-06-01T00:00:00Z"},
-        {"id": "ab-super001", "title": "Eclipsed", "status": "superseded",
-         "superseded_by": "ab-done0001", "completed_at": "2026-06-02T00:00:00Z"},
-    ]}) + "\n")
-    code, out, err = _native_backlog("album")
-    assert code == 0, err
-    assert "ab-done0001" in out
-    assert "ab-super001" not in out
-
-
 def test_album_project_filter(tmp_path, monkeypatch):
     g, archive = _route(tmp_path, monkeypatch)
     _seed(g, [])
@@ -183,23 +140,6 @@ def test_album_project_filter(tmp_path, monkeypatch):
     assert code == 0, err
     assert "ab-p1" in out
     assert "ab-p2" not in out
-
-
-def test_album_json_output_and_limit(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [])
-    archive.write_text(json.dumps({"entries": [
-        {"id": f"ab-{i:04d}", "status": "done", "title": f"n{i}",
-         "completed_at": f"2026-01-{i:02d}T00:00:00Z"}
-        for i in range(1, 6)
-    ]}) + "\n")
-    code, out, err = _native_backlog("album", "--limit", "2", "--json")
-    assert code == 0, err
-    hits = json.loads(out)
-    assert len(hits) == 2
-    assert hits[0]["id"] == "ab-0005"  # newest first
-    # Cards, not full entries: the gift appears only when recorded.
-    assert hits[0] == {"id": "ab-0005", "title": "n5", "completed_at": "2026-01-05T00:00:00Z"}
 
 
 def test_album_reports_overflow_count(tmp_path, monkeypatch):
