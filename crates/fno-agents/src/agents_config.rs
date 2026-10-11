@@ -37,7 +37,7 @@ fn non_empty_env(key: &str) -> Option<std::ffi::OsString> {
 /// The per-user global config.toml, mirroring Python's `_global_settings_path` +
 /// `_prefer_toml`: read the config.toml SIBLING of `$FNO_GLOBAL_SETTINGS_PATH`
 /// when set, else `$HOME/.fno/config.toml`.
-fn global_config_path() -> Option<PathBuf> {
+pub(crate) fn global_config_path() -> Option<PathBuf> {
     if let Some(p) = non_empty_env("FNO_GLOBAL_SETTINGS_PATH") {
         return Some(PathBuf::from(p).with_file_name("config.toml"));
     }
@@ -148,7 +148,7 @@ fn warn_once_if_yaml(path: &Path) {
 
 /// Parse a flat config.toml body into a table; `None` on any parse error (a
 /// malformed file degrades every getter to its hang-safe default).
-fn parse_config(content: &str) -> Option<toml::Table> {
+pub(crate) fn parse_config(content: &str) -> Option<toml::Table> {
     content.parse::<toml::Table>().ok()
 }
 
