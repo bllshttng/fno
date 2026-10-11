@@ -279,7 +279,7 @@ def _make_codex_bind_probe(
 #: its frame read catches the modal before any payload is committed - both
 #: deliberate. The gap is the paint race: the modal can land after the gate's
 #: single read, and the bind loop then declines for the whole window with no
-#: lane acting (x-d545, measured live on codex 0.156.1).
+#: lane acting (measured live on codex 0.156.1).
 _CODEX_HOOK_REVIEW_MODAL_RE = re.compile(r"hooks need review", re.I)
 
 
@@ -288,7 +288,7 @@ def _make_codex_hook_modal_responder(
     runner: Callable[..., "subprocess.CompletedProcess[str]"],
     condition: Optional[list] = None,
 ) -> Callable[[str], Optional[str]]:
-    """Answer a codex hooks-review modal once from the bind wait (x-d545).
+    """Answer a codex hooks-review modal once from the bind wait.
 
     :func:`fno.agents.mux_spawn._await_pane_binding` hands each fresh pane
     tail to the returned responder. On the modal it sends one `3` + Enter

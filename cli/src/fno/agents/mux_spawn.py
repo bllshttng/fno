@@ -2311,7 +2311,7 @@ def _await_pane_binding(
     ``modal_responder`` is the one provider-aware hook besides ``bind_probe``:
     handed each fresh non-empty tail, it may answer a provider modal that
     would otherwise park the pane for the whole window (codex's hooks-review
-    modal, x-d545). It sees only what this loop already read; it never adds a
+    modal). It sees only what this loop already read; it never adds a
     read or a send of its own beyond the answer it records.
     """
     naptime = sleep or time.sleep
