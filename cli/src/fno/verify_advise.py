@@ -104,11 +104,10 @@ def run_verifier(prompt: str, cwd: Path, session_id: str, timeout: int = SPAWN_T
         timeout=timeout + 30,  # hard backstop over the spawn's own timeout
     )
     if out.returncode != 0:
-        from fno.backlog.advance import _gate_refusal_detail
+        from fno.rust_binary import verb_call
 
-        raise RuntimeError(
-            f"verifier spawn exit {out.returncode}: {_gate_refusal_detail(out.stderr)}"
-        )
+        detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": out.stderr})["detail"]
+        raise RuntimeError(f"verifier spawn exit {out.returncode}: {detail}")
     return out.stdout
 
 

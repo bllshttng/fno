@@ -48,14 +48,11 @@ backfill-deferred-kind
 # the store, so the read must refuse with the rest
 stuck-epics
 # orchestration that stamps nodes
-advance
 reconcile-findings
 lanes
 lane-fill
-dispatch-lanes
 # join spawns workers into a held worktree; the joiners, not join,
 # write task rows ()
-join
 # footnote-owned DATA with a graph-resident write path (refused until the
 # write moves to the sidecar seam)
 cost

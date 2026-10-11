@@ -151,7 +151,7 @@ pub(crate) mod coverage_status;
 mod findings;
 mod fire_history;
 mod gh_read;
-mod intent;
+pub(crate) mod intent;
 mod local_attestation;
 mod plan_fidelity;
 mod posture;

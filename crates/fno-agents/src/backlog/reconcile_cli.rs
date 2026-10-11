@@ -1712,9 +1712,9 @@ fn auto_continue(record: &MergeDriftRecord, post_entries: &[Value], stderr_log: 
         .and_then(Value::as_str)
         .map(str::to_string)
         .map(|raw| effective_reconcile_cwd(&raw, project.as_deref()));
-    let py = crate::scrape::fno_py();
+    let py = crate::scrape::fno_bin();
     let mut cmd = std::process::Command::new(py);
-    cmd.args(["backlog", "advance"]);
+    cmd.args(["backlog", "advance", "--closed", &record.node_id]);
     if let Some(project) = &project {
         cmd.args(["--project", project]);
     }

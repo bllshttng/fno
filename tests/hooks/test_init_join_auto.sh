@@ -13,7 +13,7 @@
 #                                  never width 1)
 #   join refused (rc 5 etc.)    -> init survives, refusal named
 #
-# Both probes (width, armed) are faked via a stub FNO_PYTHON interpreter, so
+# Both probes (width, armed) are faked via a stub fno command, so
 # the scenarios never read the host's real settings and never spawn real
 # workers. The stub records `backlog join` argv so the assertions pin the
 # node id, not just that some spawn happened.
@@ -77,7 +77,7 @@ tasks:
 
 # make_repo <varname> <orch-line> <fake-width> <fake-armed> <join-rc>
 #   orch-line: the frontmatter line for join, or "" for absent
-#   fake-width / fake-armed: what the stub interpreter answers; "" = probe fails
+#   fake-width / fake-armed: what the stub command answers; "" = probe fails
 make_repo() {
   local _varname="$1" _orch="$2" _w="$3" _a="$4" _jrc="$5" _dir
   _dir="$(mktemp -d -t init-mech-join.XXXXXX)" || fail "mktemp failed"
@@ -93,6 +93,14 @@ make_repo() {
   cat > "${_dir}/bin/fno" << STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "backlog" && "\$2" == "join" ]]; then
+  case "\${3:-}" in
+    width)
+      if [[ -n "${_w}" ]]; then printf '%s\\n' "${_w}"; exit 0; fi
+      exit 1 ;;
+    armed)
+      if [[ -n "${_a}" ]]; then printf '%s\\n' "${_a}"; exit 0; fi
+      exit 1 ;;
+  esac
   echo "\$*" >> "${_dir}/join-calls.log"
   exit ${_jrc}
 fi
@@ -100,19 +108,9 @@ exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
 
-  # Stub interpreter: init resolves FNO_PYTHON itself and would find the real
-  # checkout venv, so the test pins it first and the probes answer from here.
-  # argv: -m fno.backlog.join_trigger <width|armed> <arg>
+  # Other init paths may resolve Python; they must stay inside the fixture.
   cat > "${_dir}/bin/fakepython" << STUB
 #!/usr/bin/env bash
-case "\$3" in
-  width)
-    if [[ -n "${_w}" ]]; then printf '%s\n' "${_w}"; exit 0; fi
-    exit 1 ;;
-  armed)
-    if [[ -n "${_a}" ]]; then printf '%s\n' "${_a}"; exit 0; fi
-    exit 1 ;;
-esac
 exit 2
 STUB
   chmod +x "${_dir}/bin/fakepython"
