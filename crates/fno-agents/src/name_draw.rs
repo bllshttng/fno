@@ -450,7 +450,7 @@ pub fn draw_successor_name(
             let pick = pool[random_index(pool.len())?];
             match claim_name(pick, claims_root) {
                 Ok(()) => {
-                    crate::team_names::history_append(
+                    crate::team_names::history_append_locked(
                         store_path,
                         crate::team_names::NameHistoryEntry {
                             name: pick.to_ascii_lowercase(),

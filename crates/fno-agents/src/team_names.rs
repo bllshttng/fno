@@ -371,12 +371,24 @@ pub(crate) fn history_append(store_path: &Path, entry: NameHistoryEntry) -> Resu
     let path = history_path(store_path);
     let lock = crate::state::acquire_exclusive(&crate::state::lock_path(&path))
         .map_err(|e| e.to_string())?;
-    let out = history_read(store_path).and_then(|mut history| {
-        history.names.push(entry);
-        crate::state::write_json_atomic(&path, &history).map_err(|e| e.to_string())
-    });
+    let out = history_append_locked(store_path, entry);
     let _ = lock.unlock();
     out
+}
+
+/// [`history_append`] for a caller that already holds the sidecar lock (the
+/// draw's critical section). flock is per open file description, so a
+/// second `acquire_exclusive` on the same lock file from the same process
+/// blocks forever.
+pub(crate) fn history_append_locked(
+    store_path: &Path,
+    entry: NameHistoryEntry,
+) -> Result<(), String> {
+    let path = history_path(store_path);
+    history_read(store_path).and_then(|mut history| {
+        history.names.push(entry);
+        crate::state::write_json_atomic(&path, &history).map_err(|e| e.to_string())
+    })
 }
 
 /// Every name in the history, lowercased: the never-reuse floor.
