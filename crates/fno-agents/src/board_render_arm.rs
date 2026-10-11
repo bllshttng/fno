@@ -8,6 +8,7 @@
 //! its backoff moved here from graph_keeper.rs, whose resident-keeper
 //! trigger now calls them in this module.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
