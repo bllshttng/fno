@@ -4752,14 +4752,14 @@ mod tests {
         assert_eq!(outcome, Ok(()), "the envelope lands and confirms");
 
         let frames = handle.join().unwrap();
-        assert_eq!(frames.len(), 2, "one typed line, one CR frame");
+        assert_eq!(frames.len(), 2, "one typed frame, one CR frame");
         assert!(
             matches!(&frames[0], Frame::Input(b)
                 if !b.contains(&0x1b)
                     && std::str::from_utf8(b)
-                        .is_ok_and(|s| s.contains("<fno_mail") && !s.contains('\n'))
+                        .is_ok_and(|s| s.contains("<fno_mail") && s.contains('\n'))
                     && b.windows(6).any(|w| w == b"<fno_m")),
-            "the first frame is the typed one-line envelope, no paste guards"
+            "the first frame is the typed envelope with LF line breaks, no paste guards"
         );
         assert!(
             matches!(&frames[1], Frame::Input(b) if b.as_slice() == b"\r"),
