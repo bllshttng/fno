@@ -1190,6 +1190,7 @@ def pick_account(
     ordered = _pick_candidate_ids(config, combo_name)
     rows: list[tuple[str, str]] = []
     launchable: list[str] = []
+    refused_dirs: dict[str, Optional[str]] = {}
     for pid in ordered:
         if pid in excluded:
             rows.append((pid, "excluded"))
@@ -1217,20 +1218,28 @@ def pick_account(
             # and strand the node as skip-for-now. Skip it; pick the next live
             # one; refuse only when no live account is left.
             rows.append((pid, f"login probe refused: {refusal}"))
+            refused_dirs[pid] = overlay.config_dir
             continue
         launchable.append(pid)
 
     if not launchable:
         named = ", ".join(pid for pid, _ in rows) or "(no records)"
-        return PickVerdict(
-            None,
+        reason = (
             f"no launchable candidate among {named}: only an account with its "
             "own config dir can be pinned to a worker. Register one with "
             "`fno config accounts register <id> --config-dir <path>` (a full second "
-            "login in its own dir)",
-            rows,
-            PICK_EXIT_NO_CANDIDATE,
+            "login in its own dir)"
         )
+        if refused_dirs:
+            # The register instruction is the wrong remedy for a dead login;
+            # name the login command so an automated reader (the loop parses
+            # this reason) sees the fix the refusal actually wants.
+            remedies = "; ".join(
+                f"CLAUDE_CONFIG_DIR={refused_dirs[pid]} claude /login ({pid})"
+                for pid in refused_dirs
+            )
+            reason += f" login refused; remedy: {remedies}"
+        return PickVerdict(None, reason, rows, PICK_EXIT_NO_CANDIDATE)
 
     # Fill the TTL cache once per candidate before reading headroom, so a pick
     # acts on fresh numbers. refresh_usage is a no-op inside probe_ttl_seconds.

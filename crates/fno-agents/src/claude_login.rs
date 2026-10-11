@@ -369,30 +369,14 @@ mod tests {
         assert_eq!(row["detail"], "OAuth session expired");
         assert_eq!(row["config_dir"], "/tmp/acct");
         assert!(row["at_epoch"].is_i64());
-    }
 
-    #[test]
-    fn a_logged_in_verdict_overwrites_a_refusal() {
-        let root = tempfile::tempdir().unwrap();
-        let home = crate::paths::AgentsHome::at(root.path().to_path_buf());
-        let dir = Path::new("/tmp/acct");
-        record_verdict(
-            &home,
-            "makers",
-            dir,
-            &Login::LoggedOut("Login expired".to_string()),
-        );
+        // A live verdict overwrites the refusal; an inconclusive probe
+        // leaves the existing entry alone.
         record_verdict(&home, "makers", dir, &Login::LoggedIn);
         let row = read_probe(&home, "makers").expect("verdict recorded");
         assert_eq!(row["verdict"], "logged_in");
         assert!(row.get("detail").is_none());
-    }
 
-    #[test]
-    fn an_unknown_verdict_leaves_the_existing_entry_alone() {
-        let root = tempfile::tempdir().unwrap();
-        let home = crate::paths::AgentsHome::at(root.path().to_path_buf());
-        let dir = Path::new("/tmp/acct");
         record_verdict(
             &home,
             "makers",

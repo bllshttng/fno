@@ -334,6 +334,8 @@ def login_probe_refusal(
     try:
         raw = (paths.agents_home_dir() / "login-probes.json").read_text()
         row = json.loads(raw)["probes"][account_id]
+        if not isinstance(row, dict):
+            return None
     except (OSError, ValueError, KeyError, TypeError):
         return None
     if row.get("verdict") != "logged_out":
