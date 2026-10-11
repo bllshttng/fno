@@ -765,16 +765,25 @@ fn server_answers_queries_while_a_pane_spawn_is_wedged() {
     // (AC1-ERR: nothing spawnable, refuse THIS attach, the server keeps
     // serving), and the refusal names the syscall and the host check.
     a.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-    match read_msg_sync::<_, ServerMsg>(&mut a) {
-        Ok(ServerMsg::Layout { .. }) => {}
-        other => panic!("expected the placeholder Layout, got {other:?}"),
-    }
-    match read_msg_sync::<_, ServerMsg>(&mut a) {
-        Ok(ServerMsg::Bye { reason }) => {
-            assert!(reason.contains("openpty"), "{reason}");
-            assert!(reason.contains("ls /dev"), "{reason}");
+    // Interleaved pushes (a 1s core tick re-pushes Layouts) may arrive
+    // between the placeholder Layout and the refusal, so skip Layouts until
+    // the Bye lands, inside the same bound.
+    let bye_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match read_msg_sync::<_, ServerMsg>(&mut a) {
+            Ok(ServerMsg::Bye { reason }) => {
+                assert!(reason.contains("openpty"), "{reason}");
+                assert!(reason.contains("ls /dev"), "{reason}");
+                break;
+            }
+            Ok(ServerMsg::Layout { .. }) => {
+                assert!(
+                    Instant::now() < bye_deadline,
+                    "no Bye naming openpty arrived before the bound"
+                );
+            }
+            other => panic!("expected a Bye naming openpty, got {other:?}"),
         }
-        other => panic!("expected a Bye naming openpty, got {other:?}"),
     }
 }
 
