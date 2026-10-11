@@ -882,7 +882,7 @@ def _stale_message(span_hours: float, base: str) -> str:
         f"behind {base}.\n"
         "PRs from stale bases show phantom deletions (changes you never made "
         "appear as reverts).\n"
-        "fix:    fno do pr rebase --base=origin/main   (handles fetch + conflicts "
+        "fix:    fno do pr push   (integrates the base: handles fetch + conflicts "
         "+ repush guidance)\n"
         "bypass: FNO_PR_BASE_OK=stale-acknowledged  (deliberate old-base PR; "
         "emits gate_escape)"
