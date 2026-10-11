@@ -494,7 +494,7 @@ fn restore_stores(root: &Path, bundle: &Path) -> Result<Vec<(String, i64)>, Stri
         }
     }
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
-    let mut installed = Vec::new();
+    let mut installed: Vec<(String, i64)> = Vec::new();
     for store in &manifest.stores {
         install_store(root, bundle, store, &stamp).map_err(|e| {
             let done: Vec<&str> = installed.iter().map(|(rel, _)| rel.as_str()).collect();
