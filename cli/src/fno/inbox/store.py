@@ -1111,7 +1111,7 @@ def rebuild_render(recipient: str) -> int:
     threads: dict[str, list[Envelope]] = {}
     order: list[str] = []
     for env in dedupe_by_id(
-        (e for e in iter_messages() if e.to == recipient and is_deliverable(e))
+        [e for e in iter_messages() if e.to == recipient and is_deliverable(e)]
     ):
         tid = env.thread or env.id
         if tid not in threads:
