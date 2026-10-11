@@ -1,11 +1,7 @@
-//! `fno-agents` client entrypoint (Wave 3). Parses a verb + flags into a
-//! JSON-RPC request, lazy-starts the daemon, forwards the request, prints the
-//! result, and maps the daemon's error code to a process exit code.
-//!
-//! This is the thin Rust client the Python `fno agents <verb>` wrapper (Wave 6)
-//! will exec. Power users can call it directly. The argv surface here is the
-//! minimum that exercises every Wave 3 daemon verb end-to-end; the rich flag
-//! surface (`--stream`, `--watch`, ...) lands with its verbs in later waves.
+//! `fno-agents` client entrypoint. Parses a verb + flags into a JSON-RPC
+//! request, lazy-starts the daemon, forwards the request, prints the result,
+//! and maps the daemon's error code to a process exit code. Power users can
+//! call it directly.
 
 use clap::Parser as _;
 use fno_agents::cli_args::{refusal_line, RestartArgs, SpawnAxes};
