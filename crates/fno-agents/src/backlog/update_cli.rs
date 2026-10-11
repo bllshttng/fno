@@ -2296,12 +2296,12 @@ mod tests {
         .unwrap();
         let held = serde_json::json!({
             "id": "t-bf51", "slug": "bf51", "title": "bf51",
-            "status": "ready", "blocked_by": ["t-fcb4"],
+            "blocked_by": ["t-fcb4"],
             "plan_path": plan.display().to_string(),
             "cwd": dir.path().display().to_string(),
         });
         let blocker = serde_json::json!({
-            "id": "t-fcb4", "slug": "fcb4", "title": "fcb4", "status": "ready",
+            "id": "t-fcb4", "slug": "fcb4", "title": "fcb4",
             "cwd": dir.path().display().to_string(),
         });
         let rows = vec![held, blocker];
@@ -2332,7 +2332,7 @@ mod tests {
         .unwrap();
         let broken_row = serde_json::json!({
             "id": "t-bf51", "slug": "bf51", "title": "bf51",
-            "status": "ready", "blocked_by": ["t-fcb4"],
+            "blocked_by": ["t-fcb4"],
             "plan_path": broken.display().to_string(),
             "cwd": dir.path().display().to_string(),
         });
