@@ -233,7 +233,7 @@ pub(crate) fn repo_root(cwd: &Path) -> String {
 
 /// Project name -> work-map path lives in settings; the walk also answers
 /// detection (path -> name) through the same candidates.
-fn detect_project(cwd: &Path) -> Option<String> {
+pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     for doc in super::settings::config_candidates() {
         for (name, raw) in work_pairs(&doc) {
             let expanded = expand_home(&raw).to_string_lossy().into_owned();

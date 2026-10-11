@@ -51,8 +51,6 @@ def _seed(graph: Path, *rows) -> None:
 def world(tmp_path, monkeypatch):
     """A temp machine: graph + state root. Skips where no keeper binary
     can spawn."""
-    from fno.graph.store import _worker_binary
-
     graph = tmp_path / "graph.json"
     _seed(
         graph,
@@ -70,9 +68,12 @@ def world(tmp_path, monkeypatch):
 
 
 def _sweep(world) -> None:
-    from fno.graph.cli import cmd_archive
+    from tests.goldens._door import door_graph
 
-    cmd_archive(apply=True, older_than_days=30, roadmap_id=None)
+    code, out, err = door_graph(
+        world["graph"], "archive", "--apply", "--older-than-days", "30"
+    )
+    assert code == 0, out + err
 
 
 def test_sweep_stamps_archived_at_in_the_store(world):
@@ -93,7 +94,7 @@ def test_default_reads_drop_archived_include_archived_keeps_them(world):
 
 def test_import_skips_an_id_reuse_and_the_live_row_wins(tmp_path, monkeypatch):
     from fno.graph.api import wire_rows
-    from fno.graph.store import _client_for, _worker_binary
+    from fno.graph.store import _client_for
 
     graph = tmp_path / "graph.json"
     _seed(graph, _row("x-dup", title="already here"))

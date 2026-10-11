@@ -1,13 +1,13 @@
 //! The write-time title leak gate.
 //!
-//! The public roadmap render omits rows whose titles carry a leak class
-//! (`roadmap_public.LEAK_PATTERNS` on the Python side), but that gate fires
-//! at PUBLISH time: the page silently loses a row until a human reads the
-//! warning. This gate runs at the publication seam instead, so a leaking
-//! title never enters the graph. The render gate stays as the backstop; the
-//! two must never disagree about what counts as a leak, so the patterns below
-//! are a byte-for-byte port of `LEAK_PATTERNS`. Node ids and PR numbers are
-//! ruled public; home paths and session ids are not.
+//! The public roadmap render (`projections::run_roadmap`) omits rows whose
+//! titles carry a leak class, but that gate fires at PUBLISH time: the page
+//! silently loses a row until a human reads the warning. This gate runs at
+//! the publication seam instead, so a leaking title never enters the graph.
+//! The render calls `title_leak_classes` too, so the two cannot disagree.
+//! The front binary's public snapshot keeps its own copy of the patterns in
+//! `crates/fno/src/backlog_snapshot.rs`. Node ids and PR numbers are ruled
+//! public; home paths and session ids are not.
 
 use regex::Regex;
 use serde_json::Value;
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_matches_the_render_gate() {
-        // Byte-for-byte with cli/src/fno/graph/roadmap_public.py LEAK_PATTERNS:
+        // Byte-for-byte with LEAK_PATTERNS in crates/fno/src/backlog_snapshot.rs:
         // the probe and the gate can never disagree about what a leak is.
         assert!(title_leak_classes("PR #2612").is_empty());
         assert!(title_leak_classes("x-aaaa epic").is_empty());

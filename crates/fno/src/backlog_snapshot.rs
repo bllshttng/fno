@@ -454,10 +454,9 @@ fn in_public_backlog_set(row: &Value) -> bool {
     !(superseded && completed)
 }
 
-/// The one leak vocabulary, a byte-for-byte port of
-/// `roadmap_public.LEAK_PATTERNS` (also ported at
-/// `fno-agents title_gate.rs`): node ids and PR numbers are public; home
-/// paths and session ids are not.
+/// The one leak vocabulary, byte-for-byte with `fno-agents`
+/// `backlog/title_gate.rs`: node ids and PR numbers are public; home paths
+/// and session ids are not.
 static LEAK_PATTERNS: std::sync::LazyLock<Vec<(&'static str, regex::Regex)>> =
     std::sync::LazyLock::new(|| {
         vec![

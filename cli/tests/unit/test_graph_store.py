@@ -20,7 +20,6 @@ from fno.graph.store import (
     _read_json,
     commit_rows_via_store,
     read_graph_strict,
-    render_canonical_views,
 )
 
 
@@ -290,145 +289,6 @@ def test_touched_at_unchanged_on_blocked_node_unrelated_write(tmp_path):
     result = _read_json(path)
     blocked = next(e for e in result if e["id"] == "ab-blocked")
     assert blocked.get("touched_at") == "2020-01-01T00:00:00+00:00"
-
-
-def test_render_pass_fail_open_when_vault_root_raises(tmp_path, monkeypatch):
-    """A malformed settings file that makes vault_root() raise must not crash
-    the view pass (Codex P2 on PR #430): graph.json is already written, so the
-    Obsidian-gating decision falls open to no-scaffolding."""
-    import fno.paths as paths_mod
-
-    import fno.graph._constants as gc
-
-    def boom():
-        raise RuntimeError("malformed settings")
-
-    monkeypatch.setattr(paths_mod, "vault_root", boom)
-    path = tmp_path / "graph.json"
-    monkeypatch.setattr("fno.paths.graph_json", lambda: path)
-    monkeypatch.setitem(vars(gc), "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setitem(vars(gc), "GRAPH_HTML", tmp_path / "graph.html")
-
-    def mutator(entries):
-        entries.append({"id": "ab-failopen", "title": "FailOpen"})
-        return entries
-
-    # Must not raise despite vault_root() blowing up.
-    commit_rows_via_store(path, mutator)
-    render_canonical_views()
-    # The store write lands in graph.db; the json file is only an export.
-    result = read_graph_strict(path)
-    assert any(e.get("id") == "ab-failopen" for e in result)
-    # graph.md rendered, fail-open without Obsidian frontmatter.
-    md = (tmp_path / "graph.md").read_text()
-    assert "kanban-plugin: board" not in md
-
-
-def test_regression_view_pass_renders_the_store_not_global(tmp_path, monkeypatch, native_board_render):
-    """Regression: the view pass renders the canonical store it reads, never
-    the global ~/.fno targets.
-
-    Guards the board-server bug where running the test suite clobbered the
-    real ~/.fno/pages/graph.html (served by serve_board.py over Tailscale) with
-    single-fixture-node renders. Simulate the global location via a
-    monkeypatched state_dir; if the pass ever falls back to the global
-    default again, the fake_home assertions below trip instead of polluting
-    the developer's actual ~/.fno.
-    """
-    import fno.graph._constants as gc
-
-    fake_home = tmp_path / "fake_home_fno"
-    fake_home.mkdir()
-    monkeypatch.setattr(
-        "fno.graph._constants._state_dir", lambda: fake_home
-    )
-
-    graph_dir = tmp_path / "work"
-    graph_dir.mkdir()
-    path = graph_dir / "graph.json"
-    monkeypatch.setattr("fno.paths.graph_json", lambda: path)
-    monkeypatch.setitem(vars(gc), "GRAPH_HTML", graph_dir / "graph.html")
-    monkeypatch.setitem(vars(gc), "GRAPH_MD", graph_dir / "graph.md")
-
-    def mutator(entries):
-        entries.append({"id": "ab-sibling1", "title": "Sib"})
-        return entries
-
-    commit_rows_via_store(path, mutator)
-    render_canonical_views()
-
-    # Renders land beside the canonical store the pass read.
-    assert (graph_dir / "graph.html").exists()
-    assert (graph_dir / "graph.md").exists()
-    # The (simulated) global location is never written.
-    assert not (fake_home / "graph.html").exists()
-
-
-def test_canonical_graph_renders_to_board_targets(tmp_path, monkeypatch, native_board_render):
-    """A write to the canonical graph.json renders to GRAPH_HTML/GRAPH_MD
-    (what `fno backlog view` and serve_board.py read), not graph.json's
-    siblings.
-
-    Covers the config.paths.graph_json override case: when the configured
-    graph.json lives outside state_dir, the board targets stay in state_dir so
-    the served/opened board still reflects mutations.
-    """
-    import fno.graph._constants as gc
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    custom_dir = tmp_path / "custom"
-    custom_dir.mkdir()
-    graph_json = custom_dir / "graph.json"  # graph_json outside state_dir
-    # Pin the RESOLVER, not the facade: canonicality reads paths.graph_json(),
-    # and a facade setattr's undo bakes the path into the module (see
-    # test_archive_sweep). The render targets are read through the facade, so
-    # they patch by setitem to keep the undo unbaking.
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph_json)
-    monkeypatch.setitem(vars(gc), "GRAPH_HTML", state_dir / "graph.html")
-    monkeypatch.setitem(vars(gc), "GRAPH_MD", state_dir / "graph.md")
-
-    def mutator(entries):
-        entries.append({"id": "ab-canon01", "title": "Canon"})
-        return entries
-
-    commit_rows_via_store(graph_json, mutator)
-    render_canonical_views()
-
-    # Board targets (state_dir) get the render, not graph.json's siblings.
-    assert (state_dir / "graph.html").exists()
-    assert (state_dir / "graph.md").exists()
-    assert not (custom_dir / "graph.html").exists()
-
-
-def test_canonical_auto_render_keeps_archive_only_rows(tmp_path, monkeypatch, native_board_render):
-    """A write cannot clobber the private served board back to live-only."""
-    import fno.graph._constants as gc
-
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    graph_json = state_dir / "graph.json"
-    # The archived row is a stamped resident of the same store, not a sibling
-    # advisory file; it must be seeded before the first db open folds the seed.
-    seed_graph(graph_json, json.dumps({"entries": [
-            {"id": "ab-archive1", "title": "ARCHIVE-AUTO-RENDER-MARKER",
-             "status": "done", "project": "fno",
-             "archived_at": "2026-08-01T00:00:00Z"},
-        ]}))
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph_json)
-    monkeypatch.setattr(gc, "GRAPH_HTML", state_dir / "graph.html")
-    monkeypatch.setattr(gc, "GRAPH_MD", state_dir / "graph.md")
-    monkeypatch.setattr("fno.paths.graph_json", lambda: graph_json)
-    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
-
-    commit_rows_via_store(
-        graph_json,
-        lambda entries: [*entries, {"id": "ab-live0001", "title": "live"}],
-    )
-    render_canonical_views()
-
-    assert "ARCHIVE-AUTO-RENDER-MARKER" in (state_dir / "graph.html").read_text()
 
 
 def test_ac1_hp_read_graph_returns_with_defaults(tmp_path):
@@ -1005,7 +865,6 @@ def _run_tx(client, monkeypatch, record):
     # client (api.py binds _client_for at import, so the patch above does not
     # reach it); with a per-test state root that is a keeper spawn whose
     # poll sleeps land in `record` and read as retry delays. Not under test.
-    monkeypatch.setattr(store_mod, "render_view_projections", lambda *a, **k: None)
     # Patch the store's OWN time binding, never the shared time module: the
     # module object is global, so a background drain thread sleeping inside
     # this window would land in `record` too and read as a retry delay.
@@ -1317,3 +1176,27 @@ def test_cli_renders_empty_field_refusal_and_preserves_invalid_text(monkeypatch,
     with pytest.raises(RuntimeError) as invalid:
         store._raise_store_error("invalid", "unknown store method \"plan_refs\"")
     assert str(invalid.value) == 'store error (invalid): unknown store method "plan_refs"'
+
+
+def test_normalize_plan_path_caches_the_keeper_round_trip(monkeypatch):
+    """The keeper fold is pure, so one request serves every repeat of the
+    same input for the life of the process."""
+    import os
+
+    requests: list = []
+
+    class _FakeClient:
+        def request(self, method, params):
+            requests.append(params["path"])
+            return {"path": os.path.normpath(params["path"])}
+
+    monkeypatch.setattr(store_mod, "_client_for", lambda _graph: _FakeClient())
+    store_mod.normalize_plan_path.cache_clear()
+    try:
+        first = store_mod.normalize_plan_path("/plans/./p.md")
+        second = store_mod.normalize_plan_path("/plans/./p.md")
+        assert first == second == "/plans/p.md"
+        assert requests == ["/plans/./p.md"]
+    finally:
+        store_mod.normalize_plan_path.cache_clear()
+
