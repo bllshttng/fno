@@ -352,15 +352,15 @@ mod tests {
     }
 
     #[test]
-    fn behind_base_refuses_the_idle_and_names_the_rebase() {
-        // The actionable half of the node: a BEHIND base is rebase work to do
-        // now, so the hold must not idle, and the block reason must teach the
-        // rebase rather than the arm-and-tag ritual.
+    fn behind_base_refuses_the_idle_and_names_the_integrate() {
+        // The actionable half of the node: a BEHIND base is integrate work to
+        // do now, so the hold must not idle, and the block reason must teach
+        // the integrate rather than the arm-and-tag ritual.
         let mut pr = held_green_pr();
         pr.base_behind = true;
         assert_eq!(async_wait_class(&pr, true, true), None);
         let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("rebase"), "got: {reason}");
+        assert!(reason.contains("integrate the base"), "got: {reason}");
         assert!(
             !reason.contains("<watching"),
             "actionable hold must not teach the ritual: {reason}"
