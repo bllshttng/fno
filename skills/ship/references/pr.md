@@ -67,7 +67,7 @@ If `origin/main` is not the right base, set `BASE` to the correct branch. If it 
 
 ### 2a-bis. Stale-base guard (before any action)
 
-A branch cut from a stale local HEAD ships a PR full of phantom deletions. It can make changes appear as reverts. Refuse before creating the PR. The check fails open on a fetch flake and points at `fno do pr rebase`:
+A branch cut from a stale local HEAD ships a PR full of phantom deletions. It can make changes appear as reverts. Refuse before creating the PR. The check fails open on a fetch flake and the stale refusal names the fix: merge origin/main, then push:
 
 ```bash
 BASE="${BASE:-origin/main}"   # re-default: this block may run standalone

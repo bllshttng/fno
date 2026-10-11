@@ -102,8 +102,8 @@ pub(crate) fn wait_status(
                 .collect::<String>();
             let (stdout, stderr) = emit_tick(&payload, &lines, calls, ticks);
             let stderr = format!(
-                "{stderr}wait: PR {pr} is CONFLICTING at {head}. Rebase onto the \
-                 base (`fno do pr rebase`), push, then re-arm the wait.\n"
+                "{stderr}wait: PR {pr} is CONFLICTING at {head}. Integrate the \
+                 base (`fno do pr push`), then re-arm the wait.\n"
             );
             return (5, stdout, stderr);
         }
@@ -414,7 +414,7 @@ mod tests {
         );
         assert_eq!(code, 5, "the rebase receipt exit");
         assert!(stderr.contains("is CONFLICTING at abcdef12"), "{stderr}");
-        assert!(stderr.contains("Rebase onto the base"), "{stderr}");
+        assert!(stderr.contains("Integrate the base"), "{stderr}");
     }
 
     #[test]

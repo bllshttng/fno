@@ -417,7 +417,7 @@ def heal(
     help=(
         "Refuse a PR whose branch base is > 24h of main history behind "
         "origin/main (phantom-deletion guard). Exit 0 fresh|bypass|fail-open, "
-        "3 stale (points at `fno do pr rebase`), 4 unrelated histories. Bypass "
+        "3 stale (points at the git merge origin/main fix), 4 unrelated histories. Bypass "
         "with FNO_PR_BASE_OK=stale-acknowledged (emits gate_escape)."
     ),
 )
