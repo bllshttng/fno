@@ -712,6 +712,7 @@ async fn terminate_confirmed(
 async fn await_lock_free_or_rebound(
     home: &AgentsHome,
     old_pid: u32,
+    recorded_start: Option<u64>,
     bound: Duration,
 ) -> Result<Option<u32>, RestartError> {
     let start = Instant::now();
@@ -736,7 +737,7 @@ async fn await_lock_free_or_rebound(
         secs: bound.as_secs(),
         observed: describe_lock_wait(
             old_pid,
-            crate::daemon::pid_is_ours(old_pid, None),
+            crate::daemon::pid_is_ours(old_pid, recorded_start),
             &lock_observation(home),
         ),
     })
@@ -893,7 +894,14 @@ pub async fn restart_daemon(
                             return Err(RestartError::SigkillFailed { pid, reason })
                         }
                     }
-                    match await_lock_free_or_rebound(home, pid, teardown_bound()).await {
+                    match await_lock_free_or_rebound(
+                        home,
+                        pid,
+                        Some(recorded_start),
+                        teardown_bound(),
+                    )
+                    .await
+                    {
                         Ok(Some(new_pid)) => {
                             return Ok(RestartOutcome {
                                 old_pid: Some(pid),
@@ -1021,7 +1029,7 @@ pub async fn restart_daemon(
     // holds it - and a supervisor that re-binds a fresh daemon in that window
     // is a SUCCESS to adopt, not a wedge to fail on (see the helper).
     let escalated = termination == Termination::Escalated;
-    match await_lock_free_or_rebound(home, old_pid, teardown_bound()).await {
+    match await_lock_free_or_rebound(home, old_pid, recorded_start, teardown_bound()).await {
         Ok(Some(new_pid)) => {
             return Ok(RestartOutcome {
                 old_pid: Some(old_pid),
@@ -1278,7 +1286,8 @@ mod restart_rebound_tests {
         let old_pid: u32 = 424242;
         let new_pid: u32 = 424243;
         let server = serve_status(home.supervisor_sock(), u64::from(new_pid)).await;
-        let out = super::await_lock_free_or_rebound(&home, old_pid, Duration::from_secs(2)).await;
+        let out =
+            super::await_lock_free_or_rebound(&home, old_pid, None, Duration::from_secs(2)).await;
         server.abort();
         match out {
             Ok(Some(pid)) => assert_eq!(pid, new_pid, "the rebound daemon is adopted"),
@@ -1290,7 +1299,8 @@ mod restart_rebound_tests {
         let (home, root) = temp_home("wedge");
         let _lock = hold_lock(&home);
         let out =
-            super::await_lock_free_or_rebound(&home, 424242, Duration::from_millis(400)).await;
+            super::await_lock_free_or_rebound(&home, 424242, None, Duration::from_millis(400))
+                .await;
         match out {
             Err(RestartError::ForceDidNotFree {
                 pid,
@@ -1310,7 +1320,8 @@ mod restart_rebound_tests {
         // Free: the start-fresh arm answers on its first tick, no probe penalty.
         let (home, root) = temp_home("free");
         let started = std::time::Instant::now();
-        let out = super::await_lock_free_or_rebound(&home, 424242, Duration::from_secs(2)).await;
+        let out =
+            super::await_lock_free_or_rebound(&home, 424242, None, Duration::from_secs(2)).await;
         assert!(
             matches!(out, Ok(None)),
             "a free lock is the start-fresh arm, got {out:?}"
