@@ -261,20 +261,26 @@ fn publish_out(stage: &Path, dir: &Path) -> Result<String, String> {
     Ok(format!("file://{}", abs.display()))
 }
 
-/// The uploader target: one `sh -c` with `{file}` as the single-quoted
-/// staged path, stdio inherited so upload progress and errors are the
-/// user's own.
+/// The uploader target: one `sh -c` with the staged page as `$1`, stdio
+/// inherited so upload progress and errors are the user's own. The path is
+/// an argument, never spliced into the script text, so no character in the
+/// temp dir's name can break the uploader's command.
 fn publish_exec(stage: &Path, text: &str) -> Result<(), String> {
     if !text.contains("{file}") {
         return Err(
             "--exec needs {file} where the staged page goes; nothing was published".to_string(),
         );
     }
-    let quoted = format!("'{}'", stage.join("index.html").display());
-    let script = text.replace("{file}", &quoted);
+    // A `{file}` the user single-quoted loses its quotes, so the wrapped
+    // spelling keeps working; inside single quotes `"$1"` would not expand.
+    let script = text
+        .replace("'{file}'", "\"$1\"")
+        .replace("{file}", "\"$1\"");
     let status = Command::new("sh")
         .arg("-c")
         .arg(&script)
+        .arg("sh")
+        .arg(stage.join("index.html"))
         .status()
         .map_err(|e| format!("cannot run sh: {e}"))?;
     if !status.success() {
@@ -671,6 +677,22 @@ mod tests {
             err.contains("exited 7") && err.contains("nothing else was published"),
             "{err}"
         );
+    }
+
+    /// The staged path rides as `$1`, so a temp dir whose name carries a
+    /// single quote reaches the uploader intact; the old splice turned that
+    /// name into a shell syntax error. The wrapped `'{file}'` spelling
+    /// keeps working beside the bare one.
+    #[test]
+    fn exec_target_survives_a_quoted_temp_dir() {
+        let dir =
+            std::env::temp_dir().join(format!("fno-publish-quote'dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "data").unwrap();
+        publish_exec(&dir, "test -f {file}").unwrap();
+        publish_exec(&dir, "test -f '{file}'").unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
