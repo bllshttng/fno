@@ -111,12 +111,12 @@ def test_the_header_carries_the_registry_name_and_no_rank_attributes(
         to_session="reader-session",
         harness="claude",
     )
-    assert wrapped.startswith("`@folio · fmail-abc123def456 · hi`")
+    assert wrapped.startswith("`@folio · fmail-abc123def456`\nhi")
     for gone in ("from_rank", "from_name", "to_rank", "to_name"):
         assert gone not in wrapped
     # A handle that resolves to no live row keeps the raw from value.
     plain = envelope.wrap_fno_mail("hi", from_="stranger", id="fmail-abc123def456")
-    assert plain.startswith("`@stranger · fmail-abc123def456 · hi`")
+    assert plain.startswith("`@stranger · fmail-abc123def456`\nhi")
 
 
 def test_the_codex_row_names_the_sender(monkeypatch, tmp_path):
@@ -136,13 +136,14 @@ def test_the_codex_row_names_the_sender(monkeypatch, tmp_path):
         id="fmail-abc123def456",
         harness="codex",
     )
-    assert wrapped.startswith("`@quill · fmail-abc123def456 · hi`")
+    assert wrapped.startswith("`@quill · fmail-abc123def456`\nhi")
 
 
 def test_envelope_overhead_budget(monkeypatch, tmp_path):
-    # The header is the whole envelope: 55 characters over a 25-character
-    # body, role-independent now that rank rides the registry. Raising the
-    # bound is a decision a PR must argue, not a test fix.
+    # The header is the whole envelope: 26 characters over a 25-character
+    # body under the two-field law form, role-independent now that rank
+    # rides the registry. Raising the bound is a decision a PR must argue,
+    # not a test fix.
     import fno.mail.envelope as envelope
     body = "ship the compact envelope"
     full_id = "0199a1b2-3c4d-7e8f-9a0b-1c2d3e4f5a6b"
@@ -161,7 +162,7 @@ def test_envelope_overhead_budget(monkeypatch, tmp_path):
         harness="claude",
     )
     assert wrapped.startswith(
-        "`@a · fmail-fea270b82c41 · ship the compact envelope`\n"
+        "`@a · fmail-fea270b82c41`\nship the compact envelope"
     )
     assert len(wrapped) - len(body) <= 80
 
