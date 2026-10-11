@@ -513,6 +513,14 @@ fn handoffs_name_tokens(store_path: &Path) -> BTreeSet<String> {
 /// machine's graph.db otherwise). Best-effort: an unreadable store answers
 /// nothing here, because the draw's own acquire is the hard cross-host gate.
 fn claim_names() -> Result<BTreeSet<String>, String> {
+    // The ambient state root is fenced under test (paths.rs): read the rows
+    // only when the run declared a root, or outside tests. The listing is
+    // advisory - every local bind and draw already sits in the history, and
+    // the draw's own acquire stays the hard cross-host gate.
+    #[cfg(test)]
+    if std::env::var_os("FNO_CLAIMS_ROOT").is_none() {
+        return Ok(BTreeSet::new());
+    }
     let mut out = BTreeSet::new();
     for record in crate::claim_store::records_db(Some("name:"), true, None)? {
         if let Some(name) = record.key.strip_prefix("name:") {
@@ -520,6 +528,26 @@ fn claim_names() -> Result<BTreeSet<String>, String> {
         }
     }
     Ok(out)
+}
+
+/// The used set for a naming decision over `canon`, minus the live holder
+/// row's own name when the history never bound it: renaming or checking in
+/// with what the row already carries is the same person, not a reuse. A
+/// name the history bound stays refused even while the row carries it.
+pub(crate) fn used_for_canon(
+    store_path: &Path,
+    registry_path: &Path,
+    canon: &str,
+    live: &BTreeMap<String, crate::territory::Team>,
+) -> Result<BTreeSet<String>, String> {
+    let mut used = used_names(store_path, registry_path)?;
+    if let Some(team) = live.get(canon) {
+        let holder = team.holder.to_ascii_lowercase();
+        if !history_names(store_path)?.contains(&holder) {
+            used.remove(&holder);
+        }
+    }
+    Ok(used)
 }
 
 /// Name an un-named live team. Refusals (pattern, a duplicate live name,
@@ -541,7 +569,7 @@ pub fn name_team(
     }
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
-    let used = used_names(store_path, registry_path)?;
+    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
     let shown = update(store_path, |store| {
         let names = live_names_in(store, &live);
         if let Some(existing) = names.get(&canon) {
@@ -614,21 +642,15 @@ fn check_duplicate_name(
         ));
     }
     // A name is used once, fleet-wide and forever: any earlier lead, worker,
-    // draw or peer host's claim refuses here. Two exemptions: the team's own
-    // record (a rename to the current name), and the live holder row's own
-    // name (a checkin or rename that spells the team what its row already
-    // carries is not a reuse - it is the same person).
+    // draw or peer host's claim refuses here. Renaming a team to its own
+    // current name stays legal - the own record is excluded below.
     let lowered = name.to_ascii_lowercase();
     let own = store
         .teams
         .get(canon)
         .map(|rec| rec.name.to_ascii_lowercase())
         .unwrap_or_default();
-    let holder_row = live
-        .get(canon)
-        .map(|team| team.holder.to_ascii_lowercase())
-        .unwrap_or_default();
-    if own.as_str() != lowered && holder_row.as_str() != lowered && used.contains(&lowered) {
+    if own.as_str() != lowered && used.contains(&lowered) {
         return Err(format!(
             "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Pick (or draw) a fresh name",
             display(name, 1)
@@ -679,15 +701,14 @@ pub fn rename_team(
         return Ok(None);
     }
     let prior_record_name = record.name.to_ascii_lowercase();
+    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
     if !apply {
         let from = display(&record.name, record.generation);
         let to = display(new_name, 1);
         let names = live_names_in(&prior, &live);
-        let used = used_names(store_path, registry_path)?;
         check_duplicate_name(&prior, &names, &live, &used, &canon, new_name)?;
         return Ok(Some((from, to)));
     }
-    let used = used_names(store_path, registry_path)?;
     let result = update(store_path, |store| {
         let names = live_names_in(store, &live);
         check_duplicate_name(store, &names, &live, &used, &canon, new_name)?;
