@@ -2364,11 +2364,15 @@ enum RowResumeDisposition {
 enum ResumeOutcome {
     /// A pane now runs the session. Carries the pane id, its workspace and
     /// tab, and the vanished-cwd notice when the stored directory was gone.
+    /// `rebind_identity` is the (harness, harness session id) the gesture's
+    /// post-resume registry rebind fires with; `None` on the detached-pane
+    /// reattach, where the pane id never changed and no row went stale.
     Resumed {
         pane: u64,
         squad: u64,
         tab: TabId,
         notice: Option<String>,
+        rebind_identity: Option<(String, String)>,
     },
     /// The session already had a live pane and it was focused, never
     /// respawned (AC6-ERR). Carries where the pane lives.
@@ -5238,6 +5242,7 @@ impl Core {
                         squad,
                         tab,
                         notice: None,
+                        rebind_identity: None,
                     },
                     Err(reason) => ResumeOutcome::Refused {
                         reason: format!("reattach failed: {reason}"),
@@ -5424,6 +5429,7 @@ impl Core {
             squad: sid,
             tab: tid,
             notice: fallback_notice,
+            rebind_identity: Some((facts.harness.clone(), facts.harness_session_id.clone())),
         }
     }
 
@@ -9769,6 +9775,14 @@ impl Core {
                                     self.notice(client_id, notice);
                                 }
                                 self.notice(client_id, format!("resumed {}", facts.name));
+                                // The seat's fresh pane needs the same
+                                // registry rebind a gesture resume gets.
+                                self.resume_gesture_rebind(
+                                    client_id,
+                                    &facts.harness,
+                                    &facts.harness_session_id,
+                                    resumed,
+                                );
                             }
                             Err(error) => {
                                 self.held_workers.remove(&pid);
@@ -10215,55 +10229,10 @@ impl Core {
                 })
             }
             Command::ResumeAgent { name } => {
-                // Resume a paneless row through its own harness.
-                // Catalog gate first, the same posture as AttachAgent: the
-                // name must match a surfaced row, and the SERVER re-derives
-                // resumability (the client's Layout can be stale) - a row that
-                // gained a live pane between publish and click is refused
-                // here, never double-spawned. The gate walk lives in
-                // [`Core::resume_one`], shared with the bulk restore
-                // driver so the two surfaces cannot drift.
-                let (rows, cols) = self
-                    .clients
-                    .iter()
-                    .find(|c| c.id == client_id)
-                    .map(|c| c.dims)
-                    .unwrap_or((vp.rows, vp.cols));
-                match self.resume_one(&name, None, client_id, view, (rows, cols), false) {
-                    ResumeOutcome::Focused { pane, squad, tab } => {
-                        self.set_view(client_id, squad, tab);
-                        if let Some(tab) = self.viewed_tab_mut((squad, tab)) {
-                            tab.focus = pane;
-                        }
-                        self.notice(client_id, "already resumed; focused existing pane");
-                        self.push_layout(true);
-                    }
-                    ResumeOutcome::Refused { reason } => {
-                        self.notice(client_id, reason);
-                    }
-                    // The claude re-entry plan fired off-loop; the
-                    // ReentryPlanReady replay re-enters this command with the
-                    // verdict staged. Nothing to report yet.
-                    ResumeOutcome::PlanPending => {}
-                    ResumeOutcome::Resumed {
-                        pane,
-                        squad,
-                        tab,
-                        notice,
-                    } => {
-                        if let Some(notice) = notice {
-                            self.notice(client_id, notice);
-                        }
-                        self.set_view(client_id, squad, tab);
-                        if let Some(tab) = self.viewed_tab_mut((squad, tab)) {
-                            tab.focus = pane;
-                        }
-                        self.push_layout(true);
-                        self.notice(client_id, format!("resumed {name}"));
-                    }
-                    // The gesture never dry-runs.
-                    ResumeOutcome::Planned => {}
-                }
+                // Resume a paneless row through its own harness; the arm's
+                // body lives beside the gesture actions it shares the notice
+                // channel with (moved under the file-budget gate).
+                self.resume_agent_gesture(client_id, view, vp, name);
                 Flow::Continue
             }
             Command::DispatchNode { node, account } => {
