@@ -522,6 +522,22 @@ def test_missing_file_is_unreadable_and_not_dispatchable(tmp_path):
     assert is_dispatchable(entry) is False
 
 
+def test_a_missing_plan_on_an_in_review_node_reads_as_in_review(tmp_path):
+    """The plan did its job once the PR opened (x-f1e2): a file that vanished
+    while the node sat in review reads as the node's own rung, not
+    UNREADABLE, so the merge and spawn gates stop refusing a green PR. Any
+    other node status keeps failing closed."""
+    from fno.graph.ladder import Rung, is_dispatchable, plan_rung
+
+    gone = {"id": "x-gone", "plan_path": str(tmp_path / "gone.md"), "status": "in_review"}
+    building = {"id": "x-bld", "plan_path": str(tmp_path / "gone.md"), "status": "in_progress"}
+
+    assert plan_rung(gone) is Rung.IN_REVIEW
+    assert is_dispatchable(gone) is True
+    assert plan_rung(building) is Rung.UNREADABLE
+    assert is_dispatchable(building) is False
+
+
 @pytest.mark.parametrize("status", ["idea", "stub", "design"])
 def test_AC2_EDGE_a_linked_pre_design_plan_is_not_dispatchable(tmp_path, status):
     """The case that read `ready` before this change."""

@@ -261,9 +261,10 @@ def merge_hold_reason(pr_number: int, cwd: str) -> Optional[str]:
         _disarm_queued_auto_merge(pr_number, cwd, f"{verdict.guard_reason}: {hold.detail}")
         return f"{verdict.guard_reason}: {hold.detail}; refusing to assume unheld"
     _disarm_queued_auto_merge(pr_number, cwd, f"{verdict.guard_reason}: {hold.reason}")
+    suffix = f"; exempt={hold.exempt}" if hold.exempt else ""
     return (
         f"{verdict.guard_reason}: {hold.reason}; set_by={hold.set_by}; "
-        f"release_when={hold.release_when}; review_on={hold.review_on}"
+        f"release_when={hold.release_when}; review_on={hold.review_on}{suffix}"
     )
 
 

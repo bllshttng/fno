@@ -661,6 +661,12 @@ def _refuse_dispatch_hold(node: Optional[dict], entries: Optional[list] = None) 
         f"  set_by: {hold.set_by}\n"
         f"  release_when: {hold.release_when}\n"
         f"  review_on: {hold.review_on}\n"
+        + (
+            f"  exempt: {hold.exempt}\n"
+            if hold.exempt
+            else ""
+        )
+        +
         "Remove dispatch_hold only after the release condition is confirmed. "
         "Nothing was claimed.",
         err=True,
