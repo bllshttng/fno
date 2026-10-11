@@ -140,7 +140,7 @@ impl Core {
 
 #[cfg(test)]
 mod fresh_attach_tests {
-    use super::super::server_tests::empty_core;
+    use super::super::tests::empty_core;
     use super::*;
 
     fn attach_fresh(core: &mut Core, id: u64) -> mpsc::Receiver<ServerMsg> {
