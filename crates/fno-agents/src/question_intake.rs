@@ -128,7 +128,7 @@ pub fn run_question_intake() -> i32 {
     0
 }
 
-pub(crate) fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get("data")
         .and_then(|d| d.get(key))
         .or_else(|| v.get(key))

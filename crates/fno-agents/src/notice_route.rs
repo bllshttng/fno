@@ -209,6 +209,7 @@ fn emit_tick_row(
 /// One lead-scope warning lifted from a reconcile result file: the kind
 /// (the bucket the hook used to render), the node it names when it has
 /// one, and the cause text the hook printed, word for word.
+#[derive(Clone)]
 pub(crate) struct Warning {
     pub(crate) kind: &'static str,
     pub(crate) node: Option<String>,
@@ -361,7 +362,6 @@ fn route_groups(
     groups: BTreeMap<String, OwnerGroup>,
     now: i64,
     detail: &mut Vec<String>,
-    index: &Path,
 ) -> (u64, std::collections::BTreeSet<String>) {
     let mut acted = 0u64;
     let mut terminal = std::collections::BTreeSet::new();
@@ -373,7 +373,7 @@ fn route_groups(
         }
         let delivered = match group.owner.session.as_deref() {
             Some(sid) if !sid.trim().is_empty() => mail_owner(sid, &group, &fingerprint, now),
-            _ => file_question_page(&group, &fingerprint, now, index),
+            _ => file_question_page(&group, &fingerprint, now),
         };
         if delivered {
             acted += 1;
@@ -403,12 +403,14 @@ fn route_groups(
     (acted, terminal)
 }
 
-/// The dedupe key: sha256 over the sorted kind:node pairs. A repeat inside
-/// the open window is not resent (AC11).
+/// The dedupe key: sha256 over the sorted kind:node:cause triples. The
+/// cause rides so a changed refusal reason (a merged count moved) is a
+/// new notice, never a swallowed repeat; an identical repeat inside the
+/// open window is not resent (AC11).
 fn fingerprint_of(warnings: &[Warning]) -> String {
     let mut pairs: Vec<String> = warnings
         .iter()
-        .map(|w| format!("{}:{}", w.kind, w.node.as_deref().unwrap_or("")))
+        .map(|w| format!("{}:{}:{}", w.kind, w.node.as_deref().unwrap_or(""), w.cause))
         .collect();
     pairs.sort();
     let joined = pairs.join("|");
@@ -427,22 +429,25 @@ fn sent_recently(fingerprint: &str) -> bool {
     }
 }
 
-/// The question-page dedupe subject: the first warning's cause flattened
-/// to one capped line. It carries the node, the reason, and the remedy
-/// verb (the reconcile refusal text), which is what question-intake
-/// stores as the question, and it is the dedupe subject: a repeat pass
-/// over the same held node and reason matches the open page instead of
-/// filing a fresh one.
+/// The question-page dedupe subject: every warning's cause flattened to
+/// one capped line. It carries the nodes, the reasons, and the remedy
+/// verbs (the reconcile refusal text), which is what question-intake
+/// stores as the question. It is the dedupe subject: an identical repeat
+/// pass produces the same subject, so the intake's subject+node dedup
+/// holds one open page per warning set; any change to the set or to a
+/// reason mints a new subject and files fresh.
 fn refusal_subject(group: &OwnerGroup) -> String {
-    let cause = group
+    let joined = group
         .warnings
-        .first()
+        .iter()
         .map(|w| w.cause.as_str())
-        .unwrap_or("reconcile held nodes open");
+        .collect::<Vec<_>>()
+        .join(" | ");
     let mut flat = String::new();
-    for word in cause.split_whitespace() {
-        // The cap clears the longest common refusal plus its cause
-        // wrapper, so the remedy verb survives the cut.
+    for word in joined.split_whitespace() {
+        // The cap clears the first warnings whole-word; the trailing
+        // count suffix keeps sets of different sizes apart even when the
+        // tail beyond the cap is cut.
         if flat.chars().count() + word.len() + 1 > 400 {
             break;
         }
@@ -451,25 +456,11 @@ fn refusal_subject(group: &OwnerGroup) -> String {
         }
         flat.push_str(word);
     }
+    let more = group.warnings.len().saturating_sub(1);
+    if more > 0 {
+        flat.push_str(&format!(" (+{more} more warning(s) in the page body)"));
+    }
     flat
-}
-
-/// The open question already filed for this subject and node, if any. The
-/// dedupe reads the machine question index the intake door writes, so the
-/// window is the question's OPEN lifetime, not the 24h sent window: a
-/// repeat pass finds the page until a lead answers or clears it. The row
-/// shape mirrors question_intake's own fold (subject and node live under
-/// `data`).
-fn open_ask_id(index: &Path, subject: &str, node: &str) -> Option<String> {
-    let (asked, closed) = crate::question_intake::question_rows(index);
-    asked
-        .into_iter()
-        .filter(|(id, _)| !closed.contains(id))
-        .find(|(_, v)| {
-            crate::question_intake::str_field(v, "subject").map(str::trim) == Some(subject)
-                && crate::question_intake::str_field(v, "node").map(str::trim) == Some(node)
-        })
-        .map(|(id, _)| id)
 }
 
 /// One mail per owner through the system-sender lane with the resume
@@ -542,11 +533,12 @@ fn question_page_body(group: &OwnerGroup, subject: &str) -> String {
 
 /// The user-rung leg: one question page per warning group, filed through
 /// `fno inbox outstanding ask --question-file`. A repeat pass over the
-/// same held node and reason updates the open page instead of filing a
-/// new one: the dedupe reads the question index the intake door writes
-/// (the page's OPEN lifetime), and the subject it keys on carries the
-/// refusal line.
-fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64, index: &Path) -> bool {
+/// same warning set produces the same subject, so the intake door's own
+/// subject+node dedup refuses the second ask; that refusal ("already
+/// waits") counts as delivered and the page file is rewritten in place,
+/// so the open page is updated rather than filed anew. The index lives
+/// where the Python intake door resolves it; the router never derives it.
+fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
     let dir = match notice_route_dir() {
         Ok(d) => d,
         Err(_) => return false,
@@ -557,17 +549,6 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64, index: &P
     let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
     let subject = refusal_subject(group);
     let body = question_page_body(group, &subject);
-    // Dedupe first: an open page for this node and reason is updated in
-    // place (the file rewrite carries the current causes) and the pass
-    // counts as delivered - the question is already on the board.
-    let node = group.warnings.iter().find_map(|w| w.node.as_deref());
-    if let Some(node) = node {
-        if open_ask_id(index, &subject, node).is_some() {
-            let _ = std::fs::write(&page_path, body);
-            record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
-            return true;
-        }
-    }
     if std::fs::write(&page_path, body).is_err() {
         return false;
     }
@@ -576,7 +557,7 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64, index: &P
     cmd.arg(&page_path);
     cmd.args(["--subject"]);
     cmd.arg(&subject);
-    if let Some(node) = node {
+    if let Some(node) = group.warnings.iter().find_map(|w| w.node.as_deref()) {
         cmd.arg("--node");
         cmd.arg(node);
     }
@@ -589,9 +570,10 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64, index: &P
         record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
         return true;
     }
-    // The intake's own subject+node dedup refused a second ask (a race
-    // with a parallel pass or a hand ask): the page is already open, so
-    // this pass counts as delivered rather than retrying forever.
+    // The intake's subject+node dedup refused a repeat ask: the open page
+    // already covers this warning set, and the rewrite above refreshed
+    // its page file, so the pass counts as delivered rather than
+    // retrying forever.
     let stderr = String::from_utf8_lossy(&ran.stderr);
     if stderr.contains("already waits") {
         record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
@@ -642,8 +624,7 @@ pub(crate) fn run_pass(
             consumed.push((path, fed));
         }
     }
-    let index = crate::provider_cap::questions_path(&home);
-    let (acted, terminal) = route_groups(groups, now, &mut detail, &index);
+    let (acted, terminal) = route_groups(groups, now, &mut detail);
     // A result file is consumed only when every owner group it fed is
     // terminal (delivered now, or inside the dedupe window): one
     // undelivered group keeps the file on disk for the next tick, and the
@@ -1678,7 +1659,10 @@ mod tests {
         assert!(bare[0].cause.contains("--force --reason"));
 
         // The page subject flattens the refusal to one capped line, and
-        // the page body carries it as the title the intake stores.
+        // the page body carries it as the title the intake stores. The
+        // subject is deterministic: two passes over the same warning set
+        // produce the same dedupe subject, so the intake door's own
+        // subject+node dedup holds one open question.
         let group = OwnerGroup {
             owner: crate::owner_ladder::Owner {
                 rung: crate::owner_ladder::Rung::NodeLead,
@@ -1693,6 +1677,8 @@ mod tests {
         assert!(subject.contains("ab-d327"));
         assert!(subject.contains("fno backlog idea"));
         assert!(subject.chars().count() <= 400);
+        let again = refusal_subject(&group);
+        assert_eq!(subject, again);
         let body = question_page_body(&group, &subject);
         let title_line = body
             .lines()
@@ -1700,42 +1686,35 @@ mod tests {
             .expect("page carries a title heading");
         assert!(title_line.contains("ab-d327"));
 
-        // Two passes over one held node: the first ask is open, so the
-        // second pass finds it by subject+node and updates instead of
-        // filing a new one. A different node or reason never matches.
-        let dir = std::env::temp_dir().join(format!("notice-route-dedupe-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let index = dir.join("questions.jsonl");
-        let subject_str = subject.as_str();
-        let row = serde_json::json!({
-            "ts": "2026-10-10T00:00:00Z",
-            "type": "operator_question",
-            "source": "target",
-            "data": {
-                "question_id": "q-dedup01",
-                "question": subject_str,
-                "subject": subject_str,
-                "node": "ab-d327",
-                "blocks": [],
-                "options": [],
-                "ask": "resolve the named nodes"
-            }
+        // A set whose size grows mints a new subject even when the added
+        // warning's text is beyond the cap: the trailing count keeps
+        // sets of different sizes apart.
+        let mut grown = group.warnings.clone();
+        grown.push(Warning {
+            kind: "promise_unmet",
+            node: Some("ab-9999".to_string()),
+            cause: "last sweep held ab-9999 open on the promise gate".to_string(),
         });
-        use std::io::Write;
-        let mut handle = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&index)
-            .unwrap();
-        writeln!(handle, "{row}").unwrap();
-        drop(handle);
-        assert_eq!(
-            open_ask_id(&index, &subject, "ab-d327").as_deref(),
-            Some("q-dedup01")
-        );
-        assert_eq!(open_ask_id(&index, &subject, "x-other"), None);
-        assert_eq!(open_ask_id(&index, "other reason", "ab-d327"), None);
-        let _ = std::fs::remove_dir_all(&dir);
+        let grown_group = OwnerGroup {
+            owner: group.owner.clone(),
+            warnings: grown,
+        };
+        let grown_subject = refusal_subject(&grown_group);
+        assert_ne!(subject, grown_subject);
+        assert!(grown_subject.contains("(+1 more warning(s) in the page body)"));
+
+        // The fingerprint folds the cause, so a changed refusal reason is
+        // a new notice, never a swallowed repeat (the reviewer's P2).
+        let reason_b = reason.replace("only 4 merged", "only 5 merged");
+        let raw_b = serde_json::json!({
+            "promise_unmet": [{"node_id": "ab-d327", "reason": reason_b}]
+        })
+        .to_string();
+        let warnings_b = read_reconcile(&raw_b);
+        let fingerprint_a = fingerprint_of(&group.warnings);
+        let fingerprint_b = fingerprint_of(&warnings_b);
+        assert_ne!(fingerprint_a, fingerprint_b);
+        let fingerprint_again = fingerprint_of(&group.warnings);
+        assert_eq!(fingerprint_a, fingerprint_again);
     }
 }
