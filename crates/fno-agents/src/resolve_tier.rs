@@ -87,3 +87,47 @@ pub(crate) fn is_session_shaped(token: &str) -> bool {
     (token.len() == 8 && token.bytes().all(|b| b.is_ascii_alphanumeric()))
         || crate::resume_wake::is_uuid_shaped(&token.to_ascii_lowercase())
 }
+
+#[cfg(test)]
+mod exact_id_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The exact-id detector names a stored id only at the FULL tier.
+    /// The primary returns itself; a related or predecessor full id returns
+    /// the stored id the caller spelled (case-insensitively, the uuid
+    /// family's contract); a name, a short, or a predecessor's retired
+    /// short form returns None -- those keep the row's current session.
+    #[test]
+    fn detector_matches_full_ids_only() {
+        let entry = json!({
+            "name": "w1",
+            "harness_session_id": "77770001-2222-3333-4444-555555555555",
+            "related_session_id": "77770002-2222-3333-4444-555555555555",
+            "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
+        });
+        let matched = |token: &str| entry_matched_full_id(&entry, token);
+        assert_eq!(
+            matched("77770001-2222-3333-4444-555555555555").as_deref(),
+            Some("77770001-2222-3333-4444-555555555555")
+        );
+        assert_eq!(
+            matched("77770003-2222-3333-4444-555555555555").as_deref(),
+            Some("77770003-2222-3333-4444-555555555555")
+        );
+        assert_eq!(
+            matched("77770002-2222-3333-4444-555555555555").as_deref(),
+            Some("77770002-2222-3333-4444-555555555555")
+        );
+        assert_eq!(
+            matched("77770003-2222-3333-4444-555555555555".to_uppercase()).as_deref(),
+            Some("77770003-2222-3333-4444-555555555555")
+        );
+        assert!(matched("77770001").is_none(), "primary short keeps current");
+        assert!(
+            matched("77770003").is_none(),
+            "predecessor short stays retired"
+        );
+        assert!(matched("w1").is_none(), "a name never names a session");
+    }
+}

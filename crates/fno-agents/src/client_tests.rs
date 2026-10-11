@@ -2801,6 +2801,9 @@ impl Drop for ResumeEnvGuard {
 /// runtime".
 #[test]
 fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
+    // Serializes against the other env-mutating resume tests (shared
+    // FNO_AGENTS_HOME / CODEX_HOME / PATH mutation, parallel threads).
+    let _env = fno_agents::claims::test_env_lock();
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
@@ -2857,51 +2860,18 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
     assert_eq!(code, 16);
 }
 
-/// The exact-id detector names a stored id only at the FULL tier.
-/// The primary returns itself; a related or predecessor full id returns the
-/// stored id the caller spelled (case-insensitively, the uuid family's
-/// contract); a name, a short, or a predecessor's retired short form
-/// returns None -- those keep the row's current session.
-#[test]
-fn exact_id_detector_matches_full_ids_only() {
-    let entry = json!({
-        "name": "w1",
-        "harness_session_id": "77770001-2222-3333-4444-555555555555",
-        "related_session_id": "77770002-2222-3333-4444-555555555555",
-        "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
-    });
-    let matched = |token: &str| fno_agents::resolve_tier::entry_matched_full_id(&entry, token);
-    assert_eq!(
-        matched("77770001-2222-3333-4444-555555555555").as_deref(),
-        Some("77770001-2222-3333-4444-555555555555")
-    );
-    assert_eq!(
-        matched("77770003-2222-3333-4444-555555555555").as_deref(),
-        Some("77770003-2222-3333-4444-555555555555")
-    );
-    assert_eq!(
-        matched("77770002-2222-3333-4444-555555555555").as_deref(),
-        Some("77770002-2222-3333-4444-555555555555")
-    );
-    assert_eq!(
-        matched("77770003-2222-3333-4444-555555555555".to_uppercase()).as_deref(),
-        Some("77770003-2222-3333-4444-555555555555")
-    );
-    assert!(matched("77770001").is_none(), "primary short keeps current");
-    assert!(
-        matched("77770003").is_none(),
-        "predecessor short stays retired"
-    );
-    assert!(matched("w1").is_none(), "a name never names a session");
-}
-
 /// `resume <predecessor uuid>` on a live claude row refuses with
 /// the spawn --resume remedy and launches nothing - it never re-enters the
 /// row's current session. The refusal precedes the route and PATH work, so
 /// no stub is needed; the codex runtime test above covers the dispatch
-/// path this rides.
+/// path this rides. The detector's scoping contract is tested beside it,
+/// in resolve_tier's exact_id_tests.
 #[test]
 fn resume_by_predecessor_full_id_refuses_13() {
+    // Serialize against the sibling resume tests that mutate the same env
+    // vars: parallel threads swapping FNO_AGENTS_HOME read each other's
+    // registries mid-test.
+    let _env = fno_agents::claims::test_env_lock();
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
