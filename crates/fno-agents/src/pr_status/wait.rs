@@ -254,8 +254,16 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
     let mut poll = || {
-        let (code, payload, lines, tick_calls) = super::cache::cached_status(cwd_str, pr, false);
-        (code, payload, lines, tick_calls)
+        // The head guard: one light read per tick names the only head a
+        // cached row may answer for. After a push the newest row is the old
+        // head's settled record; serving it exited this wait at once having
+        // watched nothing. A refused head read guards with an impossible
+        // head, so only the degraded ride-out remains until it recovers.
+        let (head, head_calls) = super::cache::current_head(cwd, pr);
+        let guard = head.as_deref().unwrap_or("");
+        let (code, payload, lines, tick_calls) =
+            super::cache::cached_status(cwd_str, pr, false, Some(guard));
+        (code, payload, lines, tick_calls + head_calls)
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");

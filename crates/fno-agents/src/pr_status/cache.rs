@@ -187,7 +187,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .get("refresh")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (code, out, stderr_lines, calls) = cached_status(cwd_str, pr, refresh);
+    let (code, out, stderr_lines, calls) = cached_status(cwd_str, pr, refresh, None);
     let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
     let mut stderr = stderr_lines.join("\n");
     if !stderr.is_empty() {
@@ -204,10 +204,13 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// `cached_status`: the coalescing chokepoint. Head-keyed rows, one live
 /// read per TTL under the per-key flock, a zero-network backoff pre-check,
 /// and the fail-closed stale serve when the head read itself refuses.
+/// `require_head` guards the fresh serves for callers that already know the
+/// head (the wait): a row minted for a different head never answers.
 pub(crate) fn cached_status(
     cwd_str: &str,
     pr: u64,
     refresh: bool,
+    require_head: Option<&str>,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
@@ -230,15 +233,13 @@ pub(crate) fn cached_status(
     // answers with ZERO gh calls, the key-minting head read included. The
     // per-tick head check it replaces was the read that kept a cache "hit"
     // at ~6 calls; a head that moves mid-window is noticed one TTL late,
-    // which is the freshness contract the TTL already sells. `refresh` is
-    // the escape hatch.
+    // which is the freshness contract the TTL already sells. A caller that
+    // names a head is answered only by a row minted for that head, so a
+    // push never hands the wait the old head's settled record. `refresh`
+    // is the escape hatch.
     if !refresh {
-        if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
-            if now - num(&row, "ts") < ttl() as f64 {
-                if let Some(answer) = serve(&row, false) {
-                    return into_answer(answer, 0);
-                }
-            }
+        if let Some(answer) = fresh_serve(&dir, &slug_key, &pr.to_string(), now, require_head) {
+            return into_answer(answer, 0);
         }
     }
     // Backoff pre-check, zero network: inside a live refusal every waiter's
@@ -250,8 +251,13 @@ pub(crate) fn cached_status(
     {
         if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
             let stale = now - num(&row, "ts") >= ttl() as f64;
-            if let Some(answer) = serve(&row, stale) {
-                return into_answer(answer, 0);
+            // A stale row serves degraded either way; a fresh one must be
+            // minted for the required head, or the ride-out would lie
+            // settled about a head the push already superseded.
+            if stale || serve_head_ok(&row, require_head) {
+                if let Some(answer) = serve(&row, stale) {
+                    return into_answer(answer, 0);
+                }
             }
         }
     }
@@ -395,6 +401,59 @@ fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
     serde_json::from_str(&row).ok()
 }
 
+/// A row's head, from the payload it was written from.
+fn row_head(row: &Value) -> Option<&str> {
+    row.pointer("/output/head").and_then(Value::as_str)
+}
+
+/// The head guard on the pre-key serves: a caller that names a head (the
+/// wait, from its own light read) is never answered by a row minted for a
+/// different one. None (the status verb) keeps the zero-network serve.
+fn serve_head_ok(row: &Value, require_head: Option<&str>) -> bool {
+    match require_head {
+        None => true,
+        Some(head) => row_head(row) == Some(head),
+    }
+}
+
+/// The pre-network serve, head-guarded: the newest (slug, pr) row answers
+/// only inside the TTL and only when no head is required or the row was
+/// minted for that head.
+fn fresh_serve(
+    dir: &Path,
+    slug_key: &str,
+    pr: &str,
+    now: f64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let row = newest_row(dir, slug_key, pr)?;
+    if now - num(&row, "ts") >= ttl() as f64 {
+        return None;
+    }
+    if !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    serve(&row, false)
+}
+
+/// The light head read behind the wait's cache guard: the PR's current
+/// head sha with the gh calls it spent, or None when the read refuses
+/// (the caller then guards with an impossible head and rides the degraded
+/// serve until the read recovers).
+pub(crate) fn current_head(cwd: &Path, pr: u64) -> (Option<String>, usize) {
+    let Some(slug) = git_slug(cwd) else {
+        return (None, 0);
+    };
+    let probe = fresh_probe();
+    let head = read_head(&probe, cwd, &slug, pr).ok().and_then(|info| {
+        info.get("head_sha")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    (head, probe.calls.load(Ordering::SeqCst))
+}
+
 /// The light read that mints the key: the PR's head sha and state, one call.
 /// The full pulls payload rides along so the live read never re-fetches the
 /// same PR seconds later (one `pulls/{n}` read per status, not two).
@@ -532,4 +591,55 @@ fn into_answer(answer: (i32, String, String), calls: usize) -> (i32, Value, Vec<
     let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
     let _ = calls;
     (code, payload, lines, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_cache_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-pr-status-cache-{tag}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn seed_row(dir: &Path, name: &str, head: &str) {
+        let row = json!({
+            "ts": now_secs(),
+            "exit": 0,
+            "output": {"head": head, "verdict": "green", "settled": true, "green": true},
+        });
+        write_row(dir, name, &row);
+    }
+
+    #[test]
+    fn a_row_for_head_a_never_serves_a_wait_on_head_b() {
+        let dir = temp_cache_dir("mismatch");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("bbbbbb2222")).is_none(),
+            "a row minted for head A must not answer a wait on head B"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_guard_serves_the_matching_head_and_the_unguarded_status_verb() {
+        let dir = temp_cache_dir("match");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        let (code, stdout, _) =
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), Some("aaaaaaaa1111"))
+                .expect("the matching head serves");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(
+            fresh_serve(&dir, "Owner--Repo", "42", now_secs(), None).is_some(),
+            "no required head keeps the zero-network serve"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
