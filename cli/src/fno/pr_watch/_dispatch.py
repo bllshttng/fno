@@ -1060,6 +1060,8 @@ def _run_tick(
                     _mark_handled(delivery_state, key, "CLOSED")
                 continue
 
+            # An outside merge mints no request; the watch mints it before the parked check.
+            _default_ensure_merge_cleanup(cand, obs.state)
             # Suppression only. A parked entry synthesized from the delivery
             # sidecar (a retries-exhausted merge) must not dispatch again.
             # Parked STATE entries never reach here; the batch loop above
@@ -1527,6 +1529,32 @@ def _default_dispatch_ritual(cand: Any, obs: Any, fire_skill_fn: Callable) -> An
         node_id=getattr(cand, "node_id", None),
         repo_slug=getattr(cand, "repo_slug", None),
     )
+
+
+def _default_ensure_merge_cleanup(cand: Any, obs_state: str) -> None:
+    """Mint the reap order for a merged PR with none standing (once per merge, journal-gated)."""
+    try:
+        if obs_state != "MERGED" or getattr(cand, "repo_dir", None) is None \
+                or not Path(str(cand.repo_dir), ".git").exists():
+            return
+        from fno.agents.events import daemon_lifecycle_log
+        from fno.pr._merge import _emit_merge_cleanup_request, _manifest_file, \
+            _merge_request_repo_and_project
+        repo, _ = _merge_request_repo_and_project(str(cand.repo_dir))
+        for line in daemon_lifecycle_log().read_text(errors="replace").splitlines():
+            if '"merge_cleanup_requested"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            data = record.get("data") if isinstance(record, dict) else None
+            if isinstance(data, dict) and data.get("repo") == repo and data.get("pr") == cand.pr_number:
+                return
+        _emit_merge_cleanup_request(cand.pr_number, str(cand.repo_dir),
+            _manifest_file(str(cand.repo_dir)), [cand.node_id] if cand.node_id else [])
+    except Exception as exc:  # noqa: BLE001 - a mint never fails the tick
+        log.warning("pr-watch: merge-cleanup mint for PR #%d failed: %s", cand.pr_number, exc)
 
 
 def _default_read_pr_state(
