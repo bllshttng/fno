@@ -946,7 +946,7 @@ def test_interrupted_live_send_keeps_the_stored_copy(
         app, ["mail", "send", "9a063cd3", "kept body words", "--from-name", "web"]
     )
     assert len(typed) == 1
-    msg_id = typed[0].split(" · ")[1].rstrip("`")
+    msg_id = typed[0].splitlines()[0].split(" · ")[1].rstrip("`")
 
     from fno.rust_binary import chats_verb
 
