@@ -1370,13 +1370,21 @@ fn close_mutator(
         else {
             continue;
         };
-        // Idempotency: a node closed out-of-band between the scan and the
-        // lock is skipped.
+        // Idempotency: a node closed between the scan and the lock is not
+        // re-closed - but every record here resolved MERGED, so the stamp
+        // still lands. A parent sharing its children's PR is closed by the
+        // child's cascade earlier in this same pass, before its own record
+        // is reached; the cascade contract leaves merge_status unset, so
+        // without this the parent reads done with merge_status null.
         if entries[index]
             .get("completed_at")
             .map(|v| !v.is_null())
             .unwrap_or(false)
         {
+            entries[index]
+                .as_object_mut()
+                .expect("row is an object")
+                .insert("merge_status".into(), Value::String("merged".into()));
             continue;
         }
         // Locked recheck of the reopen guard: a reopen landing between the
@@ -2886,5 +2894,78 @@ mod tests {
             reparent_receipt_line(&pairs, ""),
             "re-parented 1 stranded child(ren) under terminal parents: x-kid -> (none)"
         );
+    }
+
+    #[test]
+    fn a_parent_closed_by_a_childs_cascade_still_gets_the_merge_stamp() {
+        // The parent shares its children's PR. The child's record processes
+        // first and its cascade closes the parent (the cascade contract
+        // leaves merge_status unset); the parent's own record then hits the
+        // idempotency skip and must still stamp what the pass resolved.
+        let mut entries = vec![
+            json!({"id": "ab-par001", "status": "in_progress", "pr_number": 7,
+                   "pr_url": "https://github.com/o/r/pull/7"}),
+            json!({"id": "ab-chil001", "status": "in_progress", "parent": "ab-par001",
+                   "pr_number": 7, "pr_url": "https://github.com/o/r/pull/7"}),
+        ];
+        let record = |nid: &str| MergeDriftRecord {
+            node_id: nid.into(),
+            plan_path: None,
+            pr_number: 7,
+            pr_url: Some("https://github.com/o/r/pull/7".into()),
+            pr_state: "MERGED".into(),
+            merged_at: Some("2026-10-04T00:00:00Z".into()),
+            error: None,
+            session_id: None,
+            cwd: None,
+            merge_sha: None,
+            changed_files: vec![],
+            files_truncated: false,
+            error_kind: None,
+            remedy: None,
+        };
+        let closeable = vec![record("ab-chil001"), record("ab-par001")];
+        let sweep = Sweep {
+            closeable: Vec::new(),
+            failures: Vec::new(),
+            strandable_epics: Vec::new(),
+            strandable_contained: Vec::new(),
+            strandable_orphans: Vec::new(),
+            owed_evidence: Vec::new(),
+            owed_failures: Vec::new(),
+            settlement: json!({}),
+        };
+        let result = std::cell::RefCell::new(CloseResult {
+            actually_closed: Vec::new(),
+            cascade_closed: Vec::new(),
+            contained_closed: Vec::new(),
+            contained_released: Vec::new(),
+            carried_stamped: Vec::new(),
+            reparented: Vec::new(),
+            supersession_unverified: Vec::new(),
+            settlement_receipts: Vec::new(),
+            contained_errors: Vec::new(),
+            held_recheck: Vec::new(),
+        });
+        let mut stderr_log = Vec::new();
+        close_mutator(
+            &mut entries,
+            &closeable,
+            &HashMap::new(),
+            &sweep,
+            &[],
+            false,
+            &HashMap::new(),
+            &result,
+            &mut stderr_log,
+        );
+        let result = result.into_inner();
+        // The child closed on its own record; the parent closed on the cascade.
+        assert_eq!(result.actually_closed.len(), 1);
+        assert_eq!(result.cascade_closed, vec!["ab-par001".to_string()]);
+        // And the parent still reads merged: the stamp the cascade skips is
+        // the parent's own record's leftover duty.
+        assert_eq!(entries[0]["merge_status"], "merged");
+        assert_eq!(entries[1]["merge_status"], "merged");
     }
 }
