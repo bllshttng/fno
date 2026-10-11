@@ -560,3 +560,94 @@ fn pending_contract_reconcile_keeps_its_sentinel_until_a_worker_owns_the_pass() 
     let status = decode(&w.run(&["claim", "status", "reconcile:x-aaaa"], None));
     assert_eq!(status["state"], "free");
 }
+
+#[cfg(unix)]
+#[test]
+fn advance_reads_real_selection_and_preserves_launch_pins() {
+    let seed = World::new(json!([]));
+    let p = seed.plan("---\nstatus: ready\ndifficulty: high\n---\n");
+    let w = World::new(json!([row(
+        "x-aaaa",
+        json!({"plan_path":p,"cwd":seed.root,"model":"glm-5.3-flash[1m]","provider":"claude","effort":"high"})
+    )]));
+    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  'agents truth '*) printf '%s\\n' '{}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
+    let log = w.dir.path().join("launches");
+    let invoke = || {
+        let mut c = w.command();
+        c.args([
+            "backlog",
+            "advance",
+            "--project",
+            "fixture",
+            "--model",
+            "glm-5.3-flash[1m]",
+            "--provider",
+            "claude",
+            "--json",
+        ])
+        .env("FNO_AUTO_CONTINUE", "1")
+        .env("FNO_BIN", &endpoint)
+        .env("NATIVE_DOOR", env!("CARGO_BIN_EXE_fno-agents"))
+        .env("LAUNCH_LOG", &log);
+        w.output(c, None)
+    };
+    let receipt = decode(&invoke());
+    assert_eq!(receipt["decision"], "dispatched", "{receipt}");
+    assert_eq!(receipt["node_id"], "x-aaaa");
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(calls.lines().count(), 1);
+    assert!(calls.contains("--effort high"));
+    assert!(calls.contains("--model glm-5.3-flash[1m]"));
+    w.claim("x-aaaa", &seed.root);
+    let _ = decode(&invoke());
+    assert_eq!(
+        std::fs::read_to_string(log).unwrap().lines().count(),
+        1,
+        "a live node must not launch twice"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_project_drives_dependents_even_when_next_selection_has_another_scope() {
+    let seed = World::new(json!([]));
+    let p = seed.plan("---\nstatus: ready\ndifficulty: high\n---\n");
+    let w = World::new(json!([
+        row(
+            "x-aaaa",
+            json!({"completed_at":chrono::Utc::now().to_rfc3339()})
+        ),
+        row(
+            "x-bbbb",
+            json!({"blocked_by":["x-aaaa"],"plan_path":p,"cwd":seed.root,"model":"glm-5.3-flash[1m]","provider":"claude"})
+        )
+    ]));
+    let endpoint=w.endpoint("case \"$*\" in\n  'agents spawn '*) printf '%s\\n' \"$*\" >> \"$LAUNCH_LOG\"; printf '%s\\n' '{\"short_id\":\"abcd1234\"}' ;;\n  'agents truth '*) printf '%s\\n' '{}' ;;\n  *) exec \"$NATIVE_DOOR\" \"$@\" ;;\nesac");
+    let log = w.dir.path().join("launches");
+    let mut c = w.command();
+    c.args([
+        "backlog",
+        "advance",
+        "--closed",
+        "x-aaaa",
+        "--project",
+        "other",
+        "--model",
+        "glm-5.3-flash[1m]",
+        "--provider",
+        "claude",
+        "--json",
+    ])
+    .env("FNO_AUTO_CONTINUE", "1")
+    .env("FNO_BIN", endpoint)
+    .env("NATIVE_DOOR", env!("CARGO_BIN_EXE_fno-agents"))
+    .env("LAUNCH_LOG", &log);
+    let _ = decode(&w.output(c, None));
+    let calls = std::fs::read_to_string(log).unwrap();
+    assert_eq!(calls.lines().count(), 1);
+    assert!(calls.contains("--node x-bbbb"));
+    assert!(w
+        .events()
+        .iter()
+        .any(|r| r["type"] == "advance_dispatched" && r["data"]["node_id"] == "x-bbbb"));
+}
