@@ -441,12 +441,11 @@ fn bus_names(store_path: &Path) -> BTreeSet<String> {
         return out;
     };
     for line in bytes.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
         for field in ["from", "to"] {
-            if let Some(name) = line
-                .split(&format!("\"{field}\":\""))
-                .nth(1)
-                .map(|rest| rest.split('"').next().unwrap_or(""))
-            {
+            if let Some(name) = row.get(field).and_then(serde_json::Value::as_str) {
                 if valid_person_name(name.trim()) {
                     out.insert(name.trim().to_ascii_lowercase());
                 }
