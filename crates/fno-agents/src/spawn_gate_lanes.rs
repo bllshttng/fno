@@ -1778,38 +1778,25 @@ mod tests {
         assert!(reading.parked.is_empty(), "{:?}", reading.parked);
         std::env::remove_var("FNO_CLAIMS_ROOT");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A blocker outside the seat-wait set never parked the row.
-    #[test]
-    fn provider_count_counts_a_worker_whose_blocker_is_not_a_seat_wait() {
-        let _guard = claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-lanes-watch3-{}", std::process::id()));
-        let (reg, watch_row) = stage_watch_home(&dir);
-        let a = "aaaaaaaa-0000-0000-0000-00000000000a";
-        let expires = chrono::Utc::now().timestamp_millis() + 600_000;
+        // A blocker outside the seat-wait set never parked the row either.
+        let dir2 = std::env::temp_dir().join(format!("fno-lanes-watch3-{}", std::process::id()));
+        let (reg2, watch_row2) = stage_watch_home(&dir2);
         std::fs::write(
-            dir.join("events.jsonl"),
-            format!("{}\n", watch_row(a, "local", expires)),
+            dir2.join("events.jsonl"),
+            format!("{}\n", watch_row2(a, "local", expires)),
         )
         .unwrap();
-        seed_worker_a_claim(&dir);
-        let me = std::process::id();
+        seed_worker_a_claim(&dir2);
         write_registry(
-            &reg,
+            &reg2,
             &[claude_row_json("a", a), live_row("good", "zai", Some(me))],
         );
-        let mut warnings = Vec::new();
-        let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
-        assert_eq!(
-            reading.count, 2,
-            "a non-seat-wait blocker never parked the row"
-        );
-        assert!(reading.parked.is_empty(), "{:?}", reading.parked);
+        let mut warnings2 = Vec::new();
+        let reading2 = provider_live_count(&reg2, "zai", None, &mut warnings2).unwrap();
+        assert_eq!(reading2.count, 2, "a non-seat-wait blocker never parked");
+        assert!(reading2.parked.is_empty(), "{:?}", reading2.parked);
         std::env::remove_var("FNO_CLAIMS_ROOT");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
     }
 
     /// An unreadable events journal warns and counts everyone.
