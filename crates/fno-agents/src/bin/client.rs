@@ -342,12 +342,10 @@ async fn run(args: Vec<String>) -> i32 {
     if matches!(verb, "mail-envelope") {
         return fno_agents::mail_envelope::run(&args[1..]);
     }
-
     // Cross-host relay verb; binary-direct like `mail-inject`. Contract: mail_remote's module docs.
     if matches!(verb, "mail-remote") {
         return fno_agents::mail_remote::run(&args[1..]);
     }
-
     // Binary-direct mail transport for the events and note Python adapters.
     // It is intentionally not a routable `fno agents` verb.
     if matches!(verb, "machine-mail-send") {
@@ -681,8 +679,6 @@ async fn run(args: Vec<String>) -> i32 {
         if args.get(1).map(String::as_str) == Some("gh-budget") {
             return fno_agents::gh_budget::run_gh_budget(&args[2..]);
         }
-        // `cutover` quiesces the writers and snapshots the stores for a
-        // machine move; it rides this action for the same reason.
         if args.get(1).map(String::as_str) == Some("cutover") {
             return fno_agents::cutover::run_cutover(&args[2..]).await;
         }
