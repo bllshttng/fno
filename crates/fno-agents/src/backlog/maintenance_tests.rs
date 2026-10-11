@@ -1,7 +1,7 @@
 use super::*;
 
 // 2026-09-09T15:46:29Z, the do-row fixtures' start.
-const START_MS: i64 = 1_789_314_389_000;
+const START_MS: i64 = 1_788_968_789_000;
 const CODEX_ID: &str = "01a06886-9405-74a1-8afd-5b67baf89604";
 const CLAUDE_SID: &str = "9f06a492-1111-4222-8333-444455556666";
 
