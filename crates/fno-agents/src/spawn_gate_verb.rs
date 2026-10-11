@@ -1001,12 +1001,14 @@ pub(crate) fn lanes_answer(
     // One journal read for the whole probe: every provider's lane count
     // judges the same waiting-worker question at the same instant.
     let questions_raw = spawn_gate_lanes::read_questions_journal(registry_path, warnings);
+    let watched = spawn_gate_lanes::watched_ids(registry_path, warnings);
     for provider in providers {
         let cap = caps.get(&provider).copied().flatten();
         match spawn_gate_lanes::provider_live_count_with_questions(
             registry_path,
             &provider,
             &questions_raw,
+            &watched,
             redeemer,
             warnings,
         ) {
@@ -1031,10 +1033,16 @@ pub(crate) fn lanes_answer(
                     json!(reading
                         .parked
                         .iter()
-                        .map(|(name, qid)| serde_json::json!({
-                            "name": name,
-                            "question_id": json!(qid),
-                        }))
+                        .map(|(name, why)| match why.strip_prefix("watch:") {
+                            Some(blocker) => serde_json::json!({
+                                "name": name,
+                                "watch": blocker,
+                            }),
+                            None => serde_json::json!({
+                                "name": name,
+                                "question_id": json!(why),
+                            }),
+                        })
                         .collect::<Vec<_>>()),
                 );
                 lane.insert(
