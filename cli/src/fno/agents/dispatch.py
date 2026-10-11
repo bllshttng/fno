@@ -7759,9 +7759,12 @@ def dispatch_send(
                     # Stage the body row first; a staging failure means the bus
                     # door is unhealthy, so the inject would confirm into a
                     # dangling id. Skip the live leg and let the durable floor
-                    # below carry the message.
+                    # below carry the message. An mcp-channel-only row has no
+                    # drainable address, so there is nothing to stage and the
+                    # live leg runs as before.
                     try:
-                        stage_before_live(**record)
+                        if record["recipient"]:
+                            stage_before_live(**record)
                     except Exception as exc:  # noqa: BLE001 - demote to durable
                         print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
                         live_miss_reason = "stage-failed"

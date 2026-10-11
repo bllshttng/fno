@@ -2241,12 +2241,10 @@ def _name_lane_send(
             # deadlocks a live session and revives a second writer on an asleep
             # one. Durable is the only honest lane.
             lanes.append("self-send")
-        elif not staged:
-            # No staged row, so no rung may confirm into the id. A token no
-            # store knows still exits 16 (nothing was sent, nothing staged);
-            # every other unstaged shape demotes to the durable floor.
-            if token_reachable is None and not token_lane:
-                raise UnreachableTokenError(token)
+        elif live_reason == "stage-failed":
+            # The bus door refused the staged body row, so no rung may confirm
+            # into the id; demote to the durable floor. A stage that was never
+            # attempted (no resolvable recipient) keeps the base ladder below.
             lanes.append("stage-failed")
         else:
             # Rung 3: inject-as-probe. The socket is its own source of truth --

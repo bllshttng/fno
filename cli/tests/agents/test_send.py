@@ -2612,9 +2612,12 @@ def test_dispatch_send_durable_stamps_live_drain_owner(tmp_path: Path, monkeypat
 
     assert result.delivery == "durable"
     envs = [m for m in iter_messages(warn=False) if m.id == result.msg_id]
-    assert len(envs) == 1
-    assert envs[0].meta.get("owner") == "live-drain"
-    assert envs[0].meta.get("ttl_at")  # derived from the owner class
+    # The write-ahead stage row precedes the durable recovery row.
+    assert len(envs) == 2
+    assert envs[0].delivery is None
+    durable_row = envs[-1]
+    assert durable_row.meta.get("owner") == "live-drain"
+    assert durable_row.meta.get("ttl_at")  # derived from the owner class
 
 
 # ---------------------------------------------------------------------------

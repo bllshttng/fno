@@ -1072,8 +1072,12 @@ print(f"{result.msg_id} delivered ({result.delivery})")
         assert len(result.stdout.splitlines()) == 1
         assert result.stdout.strip().endswith("delivered (hosted)")
         audit_rows = list(iter_messages())
-        assert len(audit_rows) == 1
-        audit = audit_rows[0]
+        # The write-ahead stage row and the hosted receipt share one id.
+        assert len(audit_rows) == 2
+        staged_row, audit = audit_rows
+        assert staged_row.id == audit.id
+        assert staged_row.delivery is None
+        assert "hello" in staged_row.body
         assert audit.delivery == "hosted"
         assert audit.id in result.stdout
         assert "hello" in audit.body
