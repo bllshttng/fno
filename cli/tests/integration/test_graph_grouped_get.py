@@ -4,17 +4,15 @@ bytes); what stays here is the `__updated_at` residue migration."""
 
 from __future__ import annotations
 from tests.fixtures.graph_seed import seed_graph
+from tests.goldens._door import native_backlog
 
 import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
-from fno.cli import app
 
 
-runner = CliRunner()
+
 
 
 @pytest.fixture
@@ -49,11 +47,11 @@ def test_updated_at_migration_is_idempotent_and_preserves_other_fields(tmp_graph
     control = {"id": "x-control", "title": "Control", "details": "untouched"}
     seed_graph(tmp_graph, json.dumps({"entries": [original, control]}) + "\n")
 
-    dry_run = runner.invoke(app, ["backlog", "migrate-updated-at"])
+    dry_run = native_backlog("backlog", "migrate-updated-at")
     assert dry_run.exit_code == 0, dry_run.output
     assert json.loads(dry_run.output)["candidate_count"] == 1
 
-    applied = runner.invoke(app, ["backlog", "migrate-updated-at", "--apply"])
+    applied = native_backlog("backlog", "migrate-updated-at", "--apply")
     assert applied.exit_code == 0, applied.output
     rows = {row["id"]: row for row in _read_entries(tmp_graph)}
     assert "__updated_at" not in rows["ab-6d4a9b79"]
@@ -66,7 +64,7 @@ def test_updated_at_migration_is_idempotent_and_preserves_other_fields(tmp_graph
     # byte-identity check died with the json leg: the file is a frozen
     # export, so the honest idempotence marker is the zero-candidate
     # receipt.)
-    second = runner.invoke(app, ["backlog", "migrate-updated-at", "--apply"])
+    second = native_backlog("backlog", "migrate-updated-at", "--apply")
     assert second.exit_code == 0, second.output
     receipt = json.loads(second.output)
     assert receipt["candidate_count"] == 0

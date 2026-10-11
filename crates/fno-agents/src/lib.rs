@@ -1542,6 +1542,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The keeper's render trigger failed a pass (waves 8-9 store cutover);
     // carries the version and a stderr tail, and the backoff retries it.
     "graph_render_failed",
+    // One archive sweep ran, dry run or apply; carries the moved and
+    // held-back counts.
+    "graph_archive_swept",
     // Pane-to-thread conversion: one per phase of the agent.convert
     // transaction (classified, claims-held, pane-stopped, hand-off,
     // resumed, flipped, rolled-back), carrying the name and strategy.

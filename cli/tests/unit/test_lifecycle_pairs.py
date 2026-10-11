@@ -65,7 +65,6 @@ LIFECYCLE_PAIRS: tuple[Pair, ...] = (
         "correction is reopen, a verb the native binary serves after the "
         "python leg retired",
     ),
-    Pair("backlog", "archive", "unarchive"),
     # An edit path would make the record deniable, which is the property the
     # demand signal exists to prevent. A later correction is a progress note.
     Pair(
@@ -110,19 +109,18 @@ LIFECYCLE_PAIRS: tuple[Pair, ...] = (
 # accept that it lands in the derived non-transition set.
 KNOWN_COMMANDS: dict[str, frozenset[str]] = {
     "backlog": frozenset({
-        "album", "annotate", "archive",
-        "bases", "backfill-deferred-kind", "batch", "board", "capture", "carveout",
+        "annotate",
+        "backfill-deferred-kind", "batch", "capture", "carveout",
         "collisions", "contain", "cost",
         "decompose", "defer",
-        "demand", "discover", "done", "encounter", "epic", "get", "groom",
-        "intake", "lane-fill", "lanes", "maintain", "migrate-difficulty",
-        "migrate-priorities", "migrate-updated-at", "new",
+        "demand", "discover", "done", "encounter", "epic", "get",
+        "intake", "lane-fill", "lanes", "new",
         "next", "note", "pick", "project-root", "provenance", "queue", "queued",
         "ready", "reconcile-findings", "requeue", "retro",
-        "relatedness", "remove", "render-views", "reprioritize", "retract", "roadmap",
+        "relatedness", "remove", "reprioritize", "retract",
         "status", "stuck-epics", "supersede", "task", "triage",
-        "unarchive", "unclaim", "undefer", "undispatched", "unqueue", "unsupersede",
-        "version", "view", "worked",
+        "unclaim", "undefer", "undispatched", "unqueue", "unsupersede",
+        "version", "worked",
     }),
     "carveout": frozenset({"add", "list", "resolve", "update"}),
 }

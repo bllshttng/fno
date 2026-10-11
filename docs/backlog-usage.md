@@ -193,7 +193,7 @@ Priority is bounded to four values, so two agents disagreeing about a node produ
 | Mark complete | `fno backlog done <id>` | closes only on a MERGED PR; sets `completed_at`, unblocks dependents |
 | Reopen it | `fno backlog reopen <id> --reason "..."` | clears `completed_at`; refuses when a referenced PR is MERGED |
 | Remove permanently | `fno backlog remove <id>` | hard delete (use for dupes / dead nodes) |
-| Sweep old terminal nodes | `fno backlog archive --apply` | moves them to `graph-archive.json`, still readable; runs daily via `fno backlog groom` |
+| Sweep old terminal nodes | `fno backlog archive --apply` | stamps `archived_at` in the same store, still readable; runs daily via `fno backlog groom` |
 | Bring one back | `fno backlog unarchive <id>` | returns it to the working graph |
 | Browse what shipped | `fno backlog album` | pages the archive newest-first; `--project`, `--json` |
 | Fix a working/archive id collision | `fno backlog archive-dedupe-ids --apply` | reminds the archived side; old id resolves via `previous_id` |

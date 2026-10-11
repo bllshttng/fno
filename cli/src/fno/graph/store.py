@@ -1243,20 +1243,9 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     for release in outcome.get("closure_releases", []):
         release_node_claim_at_closure(release["id"], rung=release["rung"])
 
-    # The client renders graph.md in process; the board targets render
-    # through the daemon's board_render arm, so a contended render never
-    # holds a caller that only wanted the write (law d-bad5a42f). A scratch
-    # graph renders only its own siblings.
-    from fno import paths as _paths
-
-    try:
-        configured = Path(_paths.graph_json()) == path
-    except Exception:  # noqa: BLE001 - an unresolvable config still owes a render
-        configured = False
-    try:
-        render_view_projections(outcome["entries"], configured, path)
-    except Exception as exc:  # noqa: BLE001 - a render failure never fails the write
-        print(f"Warning: post-publish render failed: {exc}", file=sys.stderr)
+    # The derived views (graph.md, the board targets) are the keeper's
+    # settled render pass, the same for every writer: a write never waits on
+    # a render.
     # Wake the active-backlog drain daemon: best-effort, never
     # wedges the mutation.
     try:
@@ -1266,60 +1255,6 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     except Exception:
         pass
     return outcome["entries"]
-
-
-def render_canonical_views() -> int:
-    """Replay the canonical post-publish views from a fresh read. The store's
-    NATIVE writers (the mux reorder verbs) land graph bytes through the keeper
-    without the Python post-publish pass; this is the pass they replay, so a
-    native write leaves the same derived views (graph.md, the configured board
-    targets) a CLI write would. Every step is best-effort: a render failure
-    never rewrites history. Returns the count of failed views so the caller
-    can refuse a false success."""
-    from fno import paths as _paths
-
-    failures: list[str] = []
-    graph = Path(_paths.graph_json())
-    entries = read_graph_strict(graph)
-    try:
-        entries = apply_readiness_overlay_via_store(entries)
-    except Exception:  # noqa: BLE001 - a render-freshness pass never fails a landed publish
-        pass
-    # Canonical BY CONTRACT: the caller picks the store; the config-resolved graph's targets refresh.
-    render_view_projections(entries, True, graph, failures=failures)
-    return len(failures)
-
-
-def render_view_projections(
-    entries: list[dict], is_canonical: bool, path: Path, *, failures: list[str] | None = None
-) -> list[dict]:
-    """The view projections a landed publish owes; returns the overlay-applied
-    entries. A ``failures`` list collects one entry per failed view; the default keeps the stderr warning."""
-    from fno.graph.render import render_graph_md
-    from fno.graph import _constants as _gc
-    from fno.paths import vault_root
-
-    # recompute (server-side) does not derive `blocked` (a read-time overlay);
-    # re-apply it before rendering, or a newly blocked/unblocked sibling renders stale in graph.md.
-    try:
-        entries = apply_readiness_overlay_via_store(entries)
-    except Exception:  # noqa: BLE001 - a render-freshness pass never fails a landed publish
-        pass
-    def _fail(message: str) -> None:
-        # Collectors get the reason; fire-and-forget keeps stderr.
-        (failures.append(message) if failures is not None
-         else print(f"Warning: {message}", file=sys.stderr))
-
-    md_target = _gc.GRAPH_MD if is_canonical else path.with_name("graph.md")
-    try:
-        _obsidian = vault_root() is not None
-    except Exception:
-        _obsidian = False
-    try:
-        render_graph_md(entries, md_target, obsidian=_obsidian)
-    except OSError as e:
-        _fail(f"graph.md render failed: {e}")
-    return entries
 
 
 def _emit_graph_tx_event(**data: Any) -> None:

@@ -2,11 +2,11 @@
 //! d-bad5a42f), so a daemon tick owns it, never the write path. One tick
 //! compares the store's version counter against the `rendered_version`
 //! stamp for the canonical graph; a moved version runs the pass - `fno
-//! backlog render-views` for graph.md, then `fno backlog view` with
-//! `FNO_NO_OPEN=1` for every configured board target - stamps the marker
-//! on success, and journals `graph_render_failed` with backoff on
-//! failure. The pass and its backoff moved here from graph_keeper.rs,
-//! whose resident-keeper trigger now calls them in this module.
+//! backlog render-views`, which since the native port renders graph.md AND
+//! the configured board targets - stamps the marker on success, and
+//! journals `graph_render_failed` with backoff on failure. The pass and
+//! its backoff moved here from graph_keeper.rs, whose resident-keeper
+//! trigger now calls them in this module.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -177,12 +177,12 @@ fn render_failed(home: &AgentsHome, current: &str, exit: i32, stderr_tail: &str)
     );
 }
 
-/// Run the canonical view pass as two bounded subprocesses: `fno backlog
-/// render-views` (graph.md), then `fno backlog view` with `FNO_NO_OPEN=1`
-/// (every configured board target). The daemon is a Rust worker: the passes
-/// are Python-owned (config.toml targets, vault rendering), so they shell
-/// to the `fno` CLI the same way the mux's retired replay did. `Err`
-/// carries the exit code and the stderr tail for the failure event.
+/// Run the canonical view pass as one bounded subprocess: `fno backlog
+/// render-views`, which since the native port renders graph.md AND the
+/// configured board targets (through `fno board-render`). The daemon is a
+/// Rust worker: the pass is config- and vault-aware, so it shells to the
+/// `fno` CLI the same way the mux's retired replay did. `Err` carries the
+/// exit code and the stderr tail for the failure event.
 pub(crate) fn run_render_pass() -> Result<(), (i32, String)> {
     run_render_pass_within(RENDER_COMMAND_DEADLINE)
 }
@@ -213,75 +213,35 @@ fn run_render_pass_within(deadline: Duration) -> Result<(), (i32, String)> {
             }
         }
     };
-    // graph.md first, then the board targets; the pass fails when either
-    // command fails. FNO_NO_OPEN=1 rides both: `fno backlog view` without
-    // it opens a browser, once per tick.
-    bounded(&bin, &["backlog", "render-views"], deadline)?;
-    bounded(&bin, &["backlog", "view"], deadline)
-}
-
-/// One bounded subprocess: stdout discarded, stderr drained on a helper
-/// thread (a big stderr would otherwise wedge the poll against a blocked
-/// child, the store_client shape), killed and reaped past the deadline.
-fn bounded(bin: &Path, args: &[&str], deadline: Duration) -> Result<(), (i32, String)> {
-    let mut child = std::process::Command::new(bin)
-        .args(args)
-        .env("FNO_NO_OPEN", "1")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| (-1, format!("spawn failed: {e}")))?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| (-1, "cannot open the render stderr".to_string()))?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = std::io::Read::read_to_end(&mut stderr, &mut buf);
-        buf
-    });
-    let expires = Instant::now() + deadline;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if Instant::now() >= expires {
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return Err((-1, format!("wait failed: {e}")));
-            }
+    // One command since the native port: `render-views` renders graph.md
+    // AND the configured board targets (through `fno board-render`), so
+    // the pass fails when that one command fails.
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["backlog", "render-views"])
+        .stdin(std::process::Stdio::null());
+    match crate::bounded_cmd::output_with_timeout(cmd, deadline.as_secs()) {
+        Some(out) if out.status.success() => Ok(()),
+        Some(out) => {
+            let code = out.status.code().unwrap_or(-1);
+            let text = String::from_utf8_lossy(&out.stderr);
+            // Tail only, char-safe: the emitter caps payloads at 500 B, so
+            // the tail must leave room for the envelope fields.
+            let tail: String = {
+                let skip = text.chars().count().saturating_sub(300);
+                text.chars().skip(skip).collect()
+            };
+            Err((code, tail))
         }
-    };
-    let Some(status) = status else {
-        // Deadline fired: kill and reap, or a long-lived daemon accumulates
-        // one zombie per wedged render.
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = reader.join();
-        return Err((
+        // Deadline fired: bounded_cmd killed the process group, so the arm
+        // is never parked behind a wedged render.
+        None => Err((
             -1,
-            format!("{} timed out after {}s", args.join(" "), deadline.as_secs()),
-        ));
-    };
-    if status.success() {
-        return Ok(());
+            format!(
+                "backlog render-views timed out after {}s",
+                deadline.as_secs()
+            ),
+        )),
     }
-    let code = status.code().unwrap_or(-1);
-    let text = String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned();
-    // Tail only, char-safe: the emitter caps payloads at 500 B, so the tail
-    // must leave room for the envelope fields.
-    let tail: String = {
-        let skip = text.chars().count().saturating_sub(300);
-        text.chars().skip(skip).collect()
-    };
-    Err((code, tail))
 }
 
 #[cfg(test)]
@@ -394,15 +354,5 @@ mod tests {
         assert!(log.contains("\"skip_reason\":\"backoff\""), "log: {log}");
         std::env::remove_var("FNO_STATE_DIR");
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The bounded pass kills a wedged command at its deadline and names
-    /// the timeout in the error.
-    #[test]
-    fn a_wedged_render_command_dies_at_its_deadline() {
-        let started = Instant::now();
-        let err = bounded(Path::new("/bin/sleep"), &["5"], Duration::from_secs(1)).unwrap_err();
-        assert!(started.elapsed() < Duration::from_secs(3), "{err:?}");
-        assert!(err.1.contains("timed out"), "{err:?}");
     }
 }

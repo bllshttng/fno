@@ -86,7 +86,7 @@ fn parse_opts(args: &[String]) -> Option<Opts> {
     Some(o)
 }
 
-fn live_claimed_node_ids() -> Result<BTreeSet<String>, String> {
+pub(super) fn live_claimed_node_ids() -> Result<BTreeSet<String>, String> {
     match crate::claims::list(Some("node:"), None, false) {
         Ok(records) => Ok(records
             .iter()

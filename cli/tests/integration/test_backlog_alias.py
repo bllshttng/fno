@@ -259,9 +259,10 @@ def test_ac1_hp_triage_projects_empty_graph(tmp_graph):
 # ---------------------------------------------------------------------------
 
 _ADVERTISED_BACKLOG_VERBS = {
-    # `update` moved with the update port, and `add`/`idea` with the create
-    # port: the native binary advertises them, the python menu does not.
-    "get", "view", "next", "done", "defer",
+    # `update` moved with the update port, `add`/`idea` with the create
+    # port, and `view` with the projections port: the native binary
+    # advertises them, the python menu does not.
+    "get", "next", "done", "defer",
     "triage", "note",
 }
 
@@ -288,7 +289,7 @@ def test_backlog_help_advertises_only_the_menu():
 
 @pytest.mark.parametrize(
     "verb",
-    ["decompose", "intake", "undefer", "maintain", "roadmap", "supersede"],
+    ["decompose", "intake", "undefer", "supersede"],
 )
 def test_hidden_backlog_verbs_stay_invocable(verb):
     """AC2-ERR: a hidden backlog verb still runs its own --help (exit 0)."""
@@ -387,7 +388,7 @@ def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Phase 04 - cmd_update --project / --cwd, validator warn, list_misscoped
+# Phase 04 - cmd_update --project / --cwd, validator warn
 # ---------------------------------------------------------------------------
 
 

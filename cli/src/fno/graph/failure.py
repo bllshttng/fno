@@ -1,11 +1,8 @@
-"""Failure-streak derivation + stranded-dependent surfacing for the
-failed-node cascade redesign (#34).
+"""Failure-streak derivation from the walker's events.
 
-Pure, IO-light helpers shared by ``fno backlog maintain`` (the auto-defer
-apply-leg) and ``fno backlog triage health`` (the stranded-dependent section).
-All policy lives here and in the Python CLI verbs, never in the Rust walker
-(Locked Decision #3); the streak is DERIVED from the walker's existing events
-(Locked Decision #4), not a new walker write or a persistent counter field.
+Pure, IO-light helpers for the Python verbs that still read a streak (the epic
+status view). The streak is DERIVED from the walker's existing events, not a
+new walker write or a persistent counter field.
 
 Event envelope: the walker journals ``{"ts","type","source":"loop",
 "data":{"unit_id",...}}`` (crates/fno-agents/src/loop_runtime.rs); for the
@@ -24,10 +21,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
-
-# Reason-prefix sentinel marking an AUTO defer (vs a human/manual one), so
-# health can always distinguish the two; greppable without schema churn.
-AUTO_FAILURE_SENTINEL = "auto-failure:"
 
 _FAIL_TYPE = "node_failed"
 _CLOSE_TYPE = "node_closed"
@@ -111,9 +104,8 @@ def read_events(
     """Read raw event envelopes across retained rotation, oldest first; the
     ``.1`` generation is read first so order survives rotation. A truncated
     or non-JSON line is skipped; absent files yield []. ``types`` narrows the
-    store-side read to those envelopes; the failure readers pass
-    ``FAILURE_EVENT_TYPES`` because ``_classify`` answers nothing else, and
-    the unfiltered read costs seconds per spawn on a grown store."""
+    store-side read to those envelopes; the unfiltered read costs seconds on
+    a grown store."""
     targets = [path] if path is not None else _default_event_paths()
     histories: list[list[dict]] = []
     for target in targets:
@@ -163,9 +155,8 @@ def _classify(raw: object) -> Optional[_Ev]:
 
 
 def _window_to_reset(node_id: str, events: Iterable[object]) -> list[tuple[object, Optional[_Ev]]]:
-    """The ONE streak window both readers walk: raw events for ``node_id``
-    newest -> oldest to the first reset; advance_failed and unrelated events
-    ride through. The streak and its cause cannot diverge on where it starts."""
+    """The streak window: raw events for ``node_id``
+    newest -> oldest to the first reset; unrelated events ride through."""
     out: list[tuple[object, Optional[_Ev]]] = []
     for raw in reversed(list(events)):
         ev = _classify(raw)
@@ -186,81 +177,3 @@ def consecutive_failures(node_id: str, events: Iterable[object]) -> int:
     return sum(
         1 for _raw, ev in _window_to_reset(node_id, events) if ev is not None and ev.kind == "fail"
     )
-
-
-_ADVANCE_FAILED_TYPE = "advance_failed"
-
-#: Every envelope kind the failure readers classify; the types filter the
-#: store-side reads pass so a spawn never pulls the whole event store.
-FAILURE_EVENT_TYPES: tuple[str, ...] = (
-    _FAIL_TYPE,
-    _UNDEFER_TYPE,
-    _CLOSE_TYPE,
-    _ADVANCE_FAILED_TYPE,
-)
-
-
-def last_advance_failed_error(node_id: str, events: Iterable[object]) -> str:
-    """Most recent ``advance_failed`` error inside the window
-    ``consecutive_failures`` counts, so the cause never outlives the streak
-    it explains. No error in the window yields "" (bare reason kept)."""
-    for raw, ev in _window_to_reset(node_id, events):
-        if ev is not None:
-            continue  # a counted fail carries no advance_failed error
-        if not isinstance(raw, dict) or raw.get("type") != _ADVANCE_FAILED_TYPE:
-            continue
-        data = raw.get("data")
-        data = data if isinstance(data, dict) else raw
-        if (data.get("node_id") or data.get("unit_id")) != node_id:
-            continue
-        error = str(data.get("error") or "").strip()
-        if error:
-            return error
-    return ""
-
-
-# NOTE: the failure-defer CANDIDATE detector lives in maintain.py
-# (``detect_failure_defers``), alongside the other pure maintain detectors it
-# mirrors (``detect_temp_leaks`` / ``detect_rescope_fixes``). This module owns
-# only the streak primitive (``consecutive_failures``) it builds on.
-
-
-def is_auto_failure_deferred(e: object) -> bool:
-    """True iff ``e`` is deferred with the ``auto-failure`` sentinel reason:
-    a hand-deferred node never strand-reports its dependents (Invariants)."""
-    if not isinstance(e, dict) or not e.get("deferred_at"):
-        return False
-    reason = e.get("deferred_reason")
-    return isinstance(reason, str) and reason.startswith(AUTO_FAILURE_SENTINEL)
-
-
-def stranded_dependents(entries: Iterable[dict]) -> dict[str, list[str]]:
-    """Map each auto-failure-deferred node to its dependents (``blocked_by`` it).
-
-    Read-only surfacing (Locked Decision #2): dependents are NEVER mutated. Only
-    nodes deferred with the ``auto-failure`` sentinel are considered. A blocker
-    with no dependents is omitted (an absent entry means "nothing stranded").
-    """
-    ents = [e for e in entries if isinstance(e, dict)]
-    # Collect the auto-failure-deferred blocker ids once, then a SINGLE pass over
-    # entries maps each dependent to its blocker(s) - O(N) instead of a nested
-    # scan per blocker.
-    blocker_ids = {
-        e.get("id")
-        for e in ents
-        if isinstance(e.get("id"), str) and is_auto_failure_deferred(e)
-    }
-    out: dict[str, list[str]] = {}
-    for e in ents:
-        eid = e.get("id")
-        if not isinstance(eid, str):
-            continue
-        # Guard against a malformed non-list blocked_by (a bare string would
-        # otherwise do a substring `in` match).
-        blocked_by = e.get("blocked_by")
-        if not isinstance(blocked_by, list):
-            continue
-        for bid in blocked_by:
-            if bid in blocker_ids:
-                out.setdefault(bid, []).append(eid)
-    return out
