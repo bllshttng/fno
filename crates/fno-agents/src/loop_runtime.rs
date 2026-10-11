@@ -45,8 +45,6 @@ use crate::interrupt_classify::{
 use crate::loopcheck::TerminationReason;
 use chrono::Utc;
 use serde_json::{json, Value};
-use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -57,6 +55,82 @@ const JOURNAL_LOCK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Newtype for the project-authoritative journal path. Writes are FATAL on failure.
 /// Using a distinct type prevents silent positional swap of the two same-type args.
 pub struct ProjectJournalPath(pub PathBuf);
+
+/// One health read of `loop_unit_dispatched`: how many rows carry a fixture
+/// title and how many name a real team scope.
+///
+/// Measured 2026-09-02 across both journals on the reference machine: 757
+/// rows, 756 of them fixture-titled, exactly one real (`lead lead over fno`,
+/// iteration 1). A raw COUNT of this event therefore reads as a busy
+/// subsystem while the loop has never autonomously dispatched anything - any
+/// health check must separate the two through [`is_fixture_dispatch_title`]
+/// and treat only `real` (and, for the acceptance bar,
+/// `real_at_iteration_two_or_later`) as signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DispatchCensus {
+    pub fixture: u64,
+    pub real: u64,
+    /// Real team-scope dispatches at iteration 2 or higher. Iteration 1
+    /// already happened once under a board that could not be read twice, so
+    /// it is not evidence the loop works.
+    pub real_at_iteration_two_or_later: u64,
+}
+
+/// Whether a dispatch title names a test fixture rather than a real team
+/// scope. The discriminator is the TITLE - nothing else in the row separates
+/// a fixture run from a real one. These are the titles the repo's own suites
+/// mint (`crates/fno-agents/tests/loop_target.rs` manifests plus the lead
+/// fixture scope `epic-x`); a new fixture title must be added here, and a
+/// health read built on this predicate reports zero real dispatches - never
+/// 756 - for a journal of only fixture rows.
+pub fn is_fixture_dispatch_title(title: &str) -> bool {
+    let t = title.trim();
+    if t.is_empty() {
+        return true;
+    }
+    const FIXTURE_TITLES: [&str; 6] = [
+        "lead lead over epic-x",
+        "persist history test",
+        "ceiling mission",
+        "real driver test",
+        "happy path mission",
+        "env test",
+    ];
+    FIXTURE_TITLES.contains(&t)
+}
+
+/// Count `loop_unit_dispatched` rows in one journal's text, split by whether
+/// the title names a fixture. Malformed lines are skipped, matching every
+/// other reader of this journal.
+pub fn census_loop_unit_dispatches(journal: &str) -> DispatchCensus {
+    let mut census = DispatchCensus::default();
+    for line in journal.lines() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("loop_unit_dispatched") {
+            continue;
+        }
+        let data = value.get("data");
+        let title = data
+            .and_then(|d| d.get("title"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let iteration = data
+            .and_then(|d| d.get("iteration"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if is_fixture_dispatch_title(title) {
+            census.fixture += 1;
+        } else {
+            census.real += 1;
+            if iteration >= 2 {
+                census.real_at_iteration_two_or_later += 1;
+            }
+        }
+    }
+    census
+}
 
 impl ProjectJournalPath {
     pub fn from_caller_root(cwd: &Path) -> Self {
@@ -111,12 +185,99 @@ pub struct Unit {
     /// For target sessions this is the session identifier written into the
     /// target-state.md manifest; for other drivers it is whatever key the
     /// dispatcher embeds in its events. A driver whose sessions terminate
-    /// under a stable id that ALSO terminates across runs (the king's
+    /// under a stable id that ALSO terminates across runs (the lead's
     /// manifest `fno_id`) must mint this per invocation, or the resume guard
     /// below closes every unit after the first on a prior run's terminal.
     pub session_key: String,
     /// Optional plan path for context (not used by the runtime itself).
     pub plan_path: Option<String>,
+}
+
+/// Why a walk stopped and what the operator can do about a sentinel.
+#[derive(Debug, Clone)]
+pub struct Cancelled {
+    pub cause: &'static str,
+    pub path: Option<PathBuf>,
+    pub age_secs: Option<u64>,
+    pub clear_hint: String,
+    /// Attribution read from the sentinel payload, if it carried one.
+    pub author: Option<String>,
+    pub reason: Option<String>,
+}
+
+impl Cancelled {
+    fn event_data(&self, iterations_used: u64, units_closed: usize) -> Value {
+        let mut data = json!({
+            "reason": "Interrupted",
+            "iterations_used": iterations_used,
+            "units_closed": units_closed,
+            "cancel_cause": self.cause,
+        });
+        if let Some(path) = &self.path {
+            data["cancel_path"] = json!(path.to_string_lossy());
+        }
+        if let Some(age_secs) = self.age_secs {
+            data["cancel_age_seconds"] = json!(age_secs);
+        }
+        if let Some(author) = &self.author {
+            data["cancel_author"] = json!(author);
+        }
+        if let Some(reason) = &self.reason {
+            data["cancel_reason"] = json!(reason);
+        }
+        data
+    }
+
+    fn refusal_message(&self) -> String {
+        let attribution = match (&self.author, &self.reason) {
+            (Some(a), Some(r)) => format!("\n  author: {a}\n  reason: {r}"),
+            (Some(a), None) => format!("\n  author: {a}"),
+            (None, Some(r)) => format!("\n  reason: {r}"),
+            (None, None) => String::new(),
+        };
+        match (&self.path, self.age_secs) {
+            (Some(path), Some(age_secs)) => {
+                let mut message = format!(
+                    "fno-agents loop run: refusing to walk - a cancel signal is set.\n  file:  {}{attribution}\n  age:   {}\n  clear: {}",
+                    path.display(),
+                    format_cancel_age(age_secs),
+                    self.clear_hint
+                );
+                if age_secs >= STALE_CANCEL_SECS {
+                    message.push_str(
+                        "\n  stale: this cancel signal is older than 24h; it may be debris rather than fresh intent.",
+                    );
+                }
+                message
+            }
+            (Some(path), None) => format!(
+                "fno-agents loop run: refusing to walk - a cancel signal is set.\n  file:  {}{attribution}\n  age:   unavailable\n  clear: {}",
+                path.display(),
+                self.clear_hint
+            ),
+            _ => format!(
+                "fno-agents loop run: refusing to walk - interrupted by {}.",
+                self.cause
+            ),
+        }
+    }
+}
+
+const STALE_CANCEL_SECS: u64 = 24 * 60 * 60;
+
+fn format_cancel_age(age_secs: u64) -> String {
+    let days = age_secs / 86_400;
+    let hours = (age_secs % 86_400) / 3_600;
+    let minutes = (age_secs % 3_600) / 60;
+    if days > 0 {
+        format!("{days}d {hours}h")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m {}s", age_secs % 60)
+    } else {
+        format!("{age_secs}s")
+    }
 }
 
 /// Evidence of termination extracted from the project journal.
@@ -137,7 +298,7 @@ pub enum CloseOutcome {
     /// Unit was parked for later (e.g. dependents not yet resolved).
     Parked(String),
     /// Unit built successfully (PR up, reviewed) but its PR is not yet merged
-    /// (x-aba7: graph done = merged). Success-shaped: the claim is RELEASED and
+    /// (: graph done = merged). Success-shaped: the claim is RELEASED and
     /// no failure is recorded; the node stays `in_review` and is closed at the
     /// actual merge by `fno backlog reconcile` / merge-triggered advance.
     AwaitingMerge,
@@ -187,7 +348,7 @@ pub trait Session {
     /// driver redirects claude stdout+stderr into), if available. The walk reads
     /// it to classify a non-termination exit: claude's bg-guard refusal
     /// ("running as a background agent (bg)") must terminate the unit rather than
-    /// be re-dispatched into an infinite respawn loop (x-4504, AC1-ERR). Default
+    /// be re-dispatched into an infinite respawn loop (AC1-ERR). Default
     /// `None` -> a Session that captures no output is treated as an ordinary
     /// crash and re-dispatched exactly as before.
     fn output_tail(&self) -> Option<String> {
@@ -249,6 +410,16 @@ impl LoopBudget {
 
 // ── journal ───────────────────────────────────────────────────────────────────
 
+/// The loop-stream envelope every [`Journal`] write carries.
+fn loop_envelope(event_type: &str, data: Value) -> Value {
+    json!({
+        "ts": Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        "type": event_type,
+        "source": "loop",
+        "data": data,
+    })
+}
+
 /// Append-only event log with a project-authoritative path and a best-effort
 /// global mirror.
 pub struct Journal {
@@ -291,24 +462,40 @@ impl Journal {
     /// does not require these kinds to be registered in KNOWN_EVENT_KINDS.
     /// These are loop-stream events, not daemon-stream events.
     pub fn append(&self, event_type: &str, data: Value) -> Result<(), LoopError> {
-        let ts = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        let env = json!({
-            "ts": ts,
-            "type": event_type,
-            "source": "loop",
-            "data": data,
-        });
+        let env = loop_envelope(event_type, data);
         // Write to project file - FATAL on failure.
         self.append_to_file(&self.project_path, &env, true)?;
 
-        // Mirror to global file - best-effort (warn, never fatal).
+        // Mirror to global file - best-effort and non-fatal, so a failure is
+        // said only on FNO_VERBOSE=1 (a locked store once printed it 14 times
+        // in one second).
         if self.project_path != self.global_path {
             if let Err(e) = self.append_to_file(&self.global_path, &env, false) {
-                eprintln!("loop-runtime: global mirror write failed (non-fatal): {e}");
+                if std::env::var_os("FNO_VERBOSE").is_some_and(|v| v == "1") {
+                    eprintln!("loop-runtime: global mirror write failed (non-fatal): {e}");
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// [`Journal::append`] for a row the arms readout folds from both
+    /// journals. When the mirror is the agents journal's own twin
+    /// (`<root>/agents/events.jsonl` beside `<root>/events.jsonl`), the readout
+    /// reads both, so one write lands instead of two. Any other pair, such as
+    /// a repo journal the readout never reads, keeps its mirror.
+    pub fn append_readout_row(&self, event_type: &str, data: Value) -> Result<(), LoopError> {
+        let twin = self
+            .project_path
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("events.jsonl"));
+        if twin.as_deref() == Some(self.global_path.as_path()) {
+            self.append_to_file(&self.project_path, &loop_envelope(event_type, data), true)
+        } else {
+            self.append(event_type, data)
+        }
     }
 
     /// Append through the same bounded mkdir mutex as canonical Python and Rust claims writers.
@@ -339,7 +526,7 @@ impl Journal {
 
     /// Scan journals for the LAST termination event matching `session_key`.
     ///
-    /// ## Search order (ab-7303e5d7: cross-cwd delivery via global mirror)
+    /// ## Search order (: cross-cwd delivery via global mirror)
     ///
     /// 1. Scan the project journal first (authoritative for single-cwd target walks).
     /// 2. When no match is found AND the global path differs from the project path,
@@ -354,15 +541,14 @@ impl Journal {
     /// Returns `None` if not found in either journal or on read errors (fail
     /// tolerant: unreadable journal = no pre-existing termination).
     ///
-    /// Uses `BufReader` + `.lines()` to stream files rather than loading them
-    /// entirely; the journal rotates at 8 MB but can grow to that before
-    /// rotation, so streaming avoids a large allocation on hot paths.
+    /// Each journal reads through the store-aware `journal_text`: the
+    /// committed rows plus the unseen live lines, in commit order.
     ///
     /// Unknown reason strings are treated as no-match (warn to stderr).
-    /// Unreadable lines (I/O errors from `.lines()`) are skipped silently.
+    /// Unreadable lines are skipped silently.
     pub fn find_termination(&self, session_key: &str) -> Result<Option<Evidence>, LoopError> {
         // Scan project journal first.
-        if let Some(ev) = Self::scan_journal_with_rotation(&self.project_path, session_key) {
+        if let Some(ev) = Self::scan_journal(&self.project_path, session_key) {
             return Ok(Some(ev));
         }
 
@@ -371,7 +557,7 @@ impl Journal {
         // megawalk case where worker termination events land in a different
         // worktree's journal but are mirrored to the global file.
         if self.project_path != self.global_path {
-            if let Some(ev) = Self::scan_journal_with_rotation(&self.global_path, session_key) {
+            if let Some(ev) = Self::scan_journal(&self.global_path, session_key) {
                 return Ok(Some(ev));
             }
         }
@@ -382,9 +568,8 @@ impl Journal {
     /// Strict termination lookup for accounting decisions.
     ///
     /// Unlike `find_termination`, an unreadable existing journal or matching
-    /// corrupt termination is an error, not evidence of absence. Missing files
-    /// remain a clean no-match. The retained `.1` generation is searched after
-    /// the active file so completed sessions survive rotation.
+    /// corrupt termination is an error, not evidence of absence. A journal
+    /// with neither a live file nor a store remains a clean no-match.
     pub fn find_termination_strict(
         &self,
         session_key: &str,
@@ -395,14 +580,19 @@ impl Journal {
             paths.push(self.global_path.clone());
         }
         for path in paths {
-            for candidate in [path.clone(), rotated_journal_path(&path)] {
-                match Self::scan_journal_strict(&candidate, session_key) {
-                    Ok(Some(ev)) => return Ok(Some(ev)),
-                    Ok(None) => {}
-                    Err(err) => {
-                        if first_error.is_none() {
-                            first_error = Some(err);
-                        }
+            let text = crate::event_store::journal_text_checked(
+                &path,
+                &crate::event_store::EventQuery::of_types(&["termination"]),
+            )
+            .map_err(|err| {
+                LoopError::Journal(format!("could not read journal {}: {err}", path.display()))
+            })?;
+            match last_termination(&text, &path, session_key, true) {
+                Ok(Some(ev)) => return Ok(Some(ev)),
+                Ok(None) => {}
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
                     }
                 }
             }
@@ -413,136 +603,81 @@ impl Journal {
         }
     }
 
-    fn scan_journal_with_rotation(path: &Path, session_key: &str) -> Option<Evidence> {
-        Self::scan_journal(path, session_key)
-            .or_else(|| Self::scan_journal(&rotated_journal_path(path), session_key))
-    }
-
-    fn scan_journal_strict(path: &Path, session_key: &str) -> Result<Option<Evidence>, LoopError> {
-        let file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(LoopError::Journal(format!(
-                    "could not read journal {}: {err}",
-                    path.display()
-                )))
-            }
-        };
-        let mut last_match = None;
-        for line_result in BufReader::new(file).lines() {
-            let raw = line_result.map_err(|err| {
-                LoopError::Journal(format!("read journal {}: {err}", path.display()))
-            })?;
-            let line = raw.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let value: Value = match serde_json::from_str(line) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            if value["type"].as_str() != Some("termination")
-                || value["data"]["session_id"].as_str() != Some(session_key)
-            {
-                continue;
-            }
-            let reason_raw = value["data"]["reason"].as_str().ok_or_else(|| {
-                LoopError::Journal(format!(
-                    "termination event for {session_key} in {} has no reason",
-                    path.display()
-                ))
-            })?;
-            let reason = parse_termination_reason(reason_raw).ok_or_else(|| {
-                LoopError::Journal(format!(
-                    "termination event for {session_key} in {} has unknown reason {reason_raw}",
-                    path.display()
-                ))
-            })?;
-            let message = value["data"]["message"].as_str().unwrap_or("").to_string();
-            last_match = Some(Evidence { reason, message });
-        }
-        Ok(last_match)
-    }
-
-    /// Scan a single journal file for the LAST termination event matching
-    /// `session_key`.  Returns `None` on missing file, read errors, or no
-    /// matching event (all fail-tolerant).
+    /// Scan a single journal for the LAST termination event matching
+    /// `session_key`. Returns `None` on no matching event and on read errors
+    /// (fail-tolerant: the reader falls back to the live file).
     fn scan_journal(path: &Path, session_key: &str) -> Option<Evidence> {
-        if !path.exists() {
-            return None;
-        }
-
-        let file = match fs::File::open(path) {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!(
-                    "loop-runtime: could not read journal {}: {e}",
-                    path.display()
-                );
-                return None;
-            }
-        };
-
-        let mut last_match: Option<Evidence> = None;
-
-        for line_result in BufReader::new(file).lines() {
-            // Unreadable line (I/O error mid-file) -> skip silently.
-            let raw = match line_result {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
-            let line = raw.trim();
-            if line.is_empty() {
-                continue;
-            }
-            // Skip unparseable lines silently.
-            let v: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            // Match type == "termination" && data.session_id == session_key.
-            if v["type"].as_str() != Some("termination") {
-                continue;
-            }
-            if v["data"]["session_id"].as_str() != Some(session_key) {
-                continue;
-            }
-
-            let reason_str = match v["data"]["reason"].as_str() {
-                Some(s) => s,
-                None => {
-                    // F1: missing reason field is authoritative-record corruption; warn loudly.
-                    eprintln!(
-                        "loop-runtime: termination event for {session_key} missing 'reason' field, skipping"
-                    );
-                    continue;
-                }
-            };
-            let reason = match parse_termination_reason(reason_str) {
-                Some(r) => r,
-                None => {
-                    // Unknown reason: warn and skip (fail tolerant).
-                    eprintln!(
-                        "loop-runtime: unknown TerminationReason '{reason_str}' in journal, skipping"
-                    );
-                    continue;
-                }
-            };
-            let message = v["data"]["message"].as_str().unwrap_or("").to_string();
-
-            last_match = Some(Evidence { reason, message });
-        }
-
-        last_match
+        let text = crate::event_store::journal_text(path, &["termination"]);
+        last_termination(&text, path, session_key, false).unwrap_or(None)
     }
 }
 
-fn rotated_journal_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".1");
-    PathBuf::from(name)
+/// The last termination for `session_key` in one journal's text. Strict: a
+/// matching row with no reason or an unknown reason is an error naming
+/// `path`; tolerant: warn on stderr and skip it (today's messages).
+fn last_termination(
+    text: &str,
+    path: &Path,
+    session_key: &str,
+    strict: bool,
+) -> Result<Option<Evidence>, LoopError> {
+    let mut last_match: Option<Evidence> = None;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Skip unparseable lines silently.
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        // Match type == "termination" && data.session_id == session_key.
+        if v["type"].as_str() != Some("termination")
+            || v["data"]["session_id"].as_str() != Some(session_key)
+        {
+            continue;
+        }
+
+        let reason_str = match v["data"]["reason"].as_str() {
+            Some(s) => s,
+            None => {
+                if strict {
+                    return Err(LoopError::Journal(format!(
+                        "termination event for {session_key} in {} has no reason",
+                        path.display()
+                    )));
+                }
+                // F1: missing reason field is authoritative-record corruption; warn loudly.
+                eprintln!(
+                    "loop-runtime: termination event for {session_key} missing 'reason' field, skipping"
+                );
+                continue;
+            }
+        };
+        let reason = match parse_termination_reason(reason_str) {
+            Some(r) => r,
+            None => {
+                if strict {
+                    return Err(LoopError::Journal(format!(
+                        "termination event for {session_key} in {} has unknown reason {reason_str}",
+                        path.display()
+                    )));
+                }
+                // Unknown reason: warn and skip (fail tolerant).
+                eprintln!(
+                    "loop-runtime: unknown TerminationReason '{reason_str}' in journal, skipping"
+                );
+                continue;
+            }
+        };
+        let message = v["data"]["message"].as_str().unwrap_or("").to_string();
+
+        last_match = Some(Evidence { reason, message });
+    }
+
+    Ok(last_match)
 }
 
 /// Parse a reason string into TerminationReason. Returns None for unknown values.
@@ -583,7 +718,7 @@ pub struct LoopOutcome {
 /// via `exit_with_message` (exit 1) after printing a message containing this
 /// phrase (e.g. "<sid> is currently running as a background agent (bg)"). The
 /// walk resumes by shelling `claude --resume`, so re-dispatching just re-hits
-/// the guard forever -- the x-4504 respawn loop. Match is case-insensitive.
+/// the guard forever -- the respawn loop. Match is case-insensitive.
 const BG_GUARD_MARKER: &str = "running as a background agent";
 
 /// True iff a non-termination session exit is claude's bg-guard refusal and
@@ -622,7 +757,7 @@ fn is_bg_guard_refusal(exit_code: i32, output_tail: Option<&str>) -> bool {
 ///     run session, wait
 ///     if journal has termination event: close unit, journal node_closed, break
 ///     if exit is claude's bg-guard refusal: close unit (NoProgress) + node_closed,
-///       break -- do NOT re-dispatch (x-4504, AC1-ERR)
+///       break -- do NOT re-dispatch (AC1-ERR)
 ///     else: emit node_failed, continue inner loop (re-dispatch)
 /// ```
 ///
@@ -642,7 +777,7 @@ pub fn run_loop(
     dispatcher: &dyn Dispatcher,
     budget: &LoopBudget,
     journal: &Journal,
-    cancel: &dyn Fn() -> bool,
+    cancel: &dyn Fn() -> Option<Cancelled>,
     per_unit_max_dispatches: Option<u64>,
 ) -> Result<LoopOutcome, LoopError> {
     let mut iterations_used: u64 = 0;
@@ -650,15 +785,12 @@ pub fn run_loop(
 
     loop {
         // ── cancel check (outer loop top) ─────────────────────────────────
-        if cancel() {
+        if let Some(cancelled) = cancel() {
             journal.append(
                 "loop_terminated",
-                json!({
-                    "reason": "Interrupted",
-                    "iterations_used": iterations_used,
-                    "units_closed": units.len(),
-                }),
+                cancelled.event_data(iterations_used, units.len()),
             )?;
+            eprintln!("{}", cancelled.refusal_message());
             return Ok(LoopOutcome {
                 reason: TerminationReason::Interrupted,
                 iterations_used,
@@ -777,15 +909,12 @@ pub fn run_loop(
             }
 
             // Cancel check (inner loop, before dispatch).
-            if cancel() {
+            if let Some(cancelled) = cancel() {
                 journal.append(
                     "loop_terminated",
-                    json!({
-                        "reason": "Interrupted",
-                        "iterations_used": iterations_used,
-                        "units_closed": units.len(),
-                    }),
+                    cancelled.event_data(iterations_used, units.len()),
                 )?;
+                eprintln!("{}", cancelled.refusal_message());
                 return Ok(LoopOutcome {
                     reason: TerminationReason::Interrupted,
                     iterations_used,
@@ -858,7 +987,7 @@ pub fn run_loop(
                 break; // Break inner loop -> continue outer loop (next unit).
             }
 
-            // x-4504 / AC1-ERR: claude's bg-guard refusal is terminal, not a
+            // / AC1-ERR: claude's bg-guard refusal is terminal, not a
             // crash to re-dispatch. When `/target --resume` lands on a session
             // claude still holds as a live background agent, claude refuses with
             // `exit_with_message` ("running as a background agent (bg)"). The

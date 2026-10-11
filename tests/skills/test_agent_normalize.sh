@@ -40,12 +40,48 @@ STUB_GARBAGE="$TMP/stub-garbage.sh"; printf '#!/usr/bin/env bash\necho not-a-pro
 STUB_SLUG="$TMP/stub-slug.sh"; printf '#!/usr/bin/env bash\necho dashless-spawn\n' > "$STUB_SLUG"; chmod +x "$STUB_SLUG"
 export NODE_SLUG_RESOLVER="$STUB_EMPTY"
 
-# A dir with a FAILING `fno` on PATH forces normalize.sh's static command-surface
-# fallback (used when `fno agents dispatch resolve` is unreachable), so surface-dependent
-# assertions are deterministic regardless of the installed fno's freshness (x-de43:
-# a stale installed fno reports opencode=prose, a fresh one opencode=slash).
+# x-8151/d-450caaeb: family membership is answered by the Rust owner through
+# `fno agents target-family`; with the FAILING fno on PATH below, every real ask
+# would refuse the normalize (the loud fail-closed contract). Pin the answer
+# with a stub so the suite exercises normalize's own plumbing. The stub is a
+# FIXTURE table - the grammar itself is cargo-tested in
+# crates/fno-agents/src/merge_posture.rs - and its two load-bearing answers
+# are asserted right here so a drifted fixture cannot read as a green
+# normalize.
+STUB_FAMILY="$TMP/stub-family.sh"
+cat > "$STUB_FAMILY" <<'EOF'
+#!/usr/bin/env bash
+case "${1%%[[:space:]]*}" in
+  /target|/fno:target|\$fno:target) echo family ;;
+  *) echo other ;;
+esac
+EOF
+chmod +x "$STUB_FAMILY"
+export FAMILY_RESOLVER="$STUB_FAMILY"
+[[ "$("$STUB_FAMILY" "/target x-1")" == "family" ]] \
+  && [[ "$("$STUB_FAMILY" '$fno:target x-1')" == "family" ]] \
+  && [[ "$("$STUB_FAMILY" "/think x-1")" == "other" ]] \
+  || { echo "FAIL: family stub fixture drifted from the owner's table" >&2; exit 1; }
+
+# A dir with a stub `fno` on PATH answers `fno agents capabilities` from this
+# fixture table (x-3873: the surface read; the packaged table itself is
+# contract-tested in crates/fno-agents), so surface-dependent assertions are
+# deterministic regardless of the installed fno's freshness (x-de43: a stale
+# installed fno reported opencode=prose, a fresh one opencode=slash). Every
+# other ask exits 1, keeping the no-host-fno fail-closed property for posture.
 FBIN="$TMP/failing-fno"; mkdir -p "$FBIN"
-printf '#!/usr/bin/env bash\nexit 1\n' > "$FBIN/fno"; chmod +x "$FBIN/fno"
+cat > "$FBIN/fno" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1 $2" == "agents capabilities" ]]; then
+  case "${3:-}" in
+    claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
+    codex)               printf '{"command_surface":"codex-skill"}\n'; exit 0 ;;
+    *)                   printf '{"command_surface":"refused"}\n'; exit 0 ;;
+  esac
+fi
+exit 1
+EOF
+chmod +x "$FBIN/fno"
 # Pin it for the WHOLE suite, not per call site: an assertion about a builtin
 # default (no-merge posture, static surface tables) silently inverts on a host
 # whose config sets dispatch.auto_merge=true. Cases that exercise the config read
@@ -77,22 +113,22 @@ else
   fail "AC4-EDGE smart single-quote: $OUT"
 fi
 
-# Node with no --name -> spawn-<full-node-id>-<slug> (verb prefix + full id +
+# Node with no --name -> spawn-<node-hex>-<slug> (verb prefix + bare hex +
 # title-derived slug), node captured, /target message. Slug resolution is stubbed
 # (NODE_SLUG_RESOLVER) for hermeticity, mirroring the provider stub.
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" NODE_SLUG_RESOLVER="$STUB_SLUG" bash "$NORM" --input "ab-deadbeef" --provider claude)"
 if [[ "$(field "$OUT" node)" == "ab-deadbeef" ]] \
-   && [[ "$(field "$OUT" name)" == "spawn-ab-deadbeef-dashless-spawn" ]] \
+   && [[ "$(field "$OUT" name)" == "spawn-deadbeef-dashless-spawn" ]] \
    && [[ "$(field "$OUT" message)" == "/target ab-deadbeef --no-merge" ]]; then
-  pass "AC4-EDGE node id -> node captured + spawn-<full-id>-<slug> name + /target message"
+  pass "AC4-EDGE node id -> node captured + spawn-<hex>-<slug> name + /target message"
 else
   fail "AC4-EDGE node derivation: $OUT"
 fi
 
-# A node with no resolvable slug degrades to spawn-<full-node-id> (no trailing dash).
+# A node with no resolvable slug degrades to spawn-<node-hex> (no trailing dash).
 OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" NODE_SLUG_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbeef" --provider claude)"
-[[ "$(field "$OUT" name)" == "spawn-ab-deadbeef" ]] \
-  && pass "node with no resolvable slug -> spawn-<full-id> (no trailing dash)" \
+[[ "$(field "$OUT" name)" == "spawn-deadbeef" ]] \
+  && pass "node with no resolvable slug -> spawn-<hex> (no trailing dash)" \
   || fail "node no-slug degrade: $OUT"
 
 # --- AC2-ERR: invalid provider -> error, no node/spawn fields, valid list ---
@@ -445,9 +481,21 @@ OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbee
 # Stub `fno` on PATH so the read is hermetic (normalize.sh's only runtime fno
 # call is `fno config get`; provider/slug resolution use their own env stubs).
 STUB_FNO_TRUE_DIR="$TMP/bin-fno-true"; mkdir -p "$STUB_FNO_TRUE_DIR"
-printf '#!/usr/bin/env bash\n[[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo dispatch; exit 0; }\nexit 0\n' > "$STUB_FNO_TRUE_DIR/fno"; chmod +x "$STUB_FNO_TRUE_DIR/fno"
+cat > "$STUB_FNO_TRUE_DIR/fno" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo dispatch; exit 0; }
+[[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
+exit 0
+EOF
+chmod +x "$STUB_FNO_TRUE_DIR/fno"
 STUB_FNO_ERR_DIR="$TMP/bin-fno-err"; mkdir -p "$STUB_FNO_ERR_DIR"
-printf '#!/usr/bin/env bash\n[[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo "unknown config key" >&2; exit 1; }\nexit 0\n' > "$STUB_FNO_ERR_DIR/fno"; chmod +x "$STUB_FNO_ERR_DIR/fno"
+cat > "$STUB_FNO_ERR_DIR/fno" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2 $3" == "config get auto_merge.grant" ]] && { echo "unknown config key" >&2; exit 1; }
+[[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
+exit 0
+EOF
+chmod +x "$STUB_FNO_ERR_DIR/fno"
 
 # AC2-HP: grant=dispatch (no flag) -> allow_merge=1
 OUT="$(PATH="$STUB_FNO_TRUE_DIR:$PATH" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbeef" --provider claude)"
@@ -484,7 +532,7 @@ norm_gen() { DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "$1";
 OUT="$(norm_gen 'x-2aad bg')"
 if [[ "$(field "$OUT" node)" == "x-2aad" ]] \
    && [[ "$(field "$OUT" payload_mode)" == "build" ]] \
-   && [[ "$(field "$OUT" substrate)" == "bg" ]] \
+   && [[ "$(field "$OUT" substrate)" == "thread" ]] \
    && [[ "$(field "$OUT" message)" == "/target x-2aad --no-merge" ]]; then
   pass "configured-prefix id builds via /target"
 else
@@ -550,10 +598,19 @@ if [[ ! -x "$VENV_PY" ]]; then
   CANON="$(cd "$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"
   [[ -n "$CANON" ]] && VENV_PY="$CANON/cli/.venv/bin/python"
 fi
-# A REAL fno on PATH; the suite otherwise pins a failing one suite-wide.
+# A REAL fno on PATH; the suite otherwise pins a failing one suite-wide. The
+# capabilities ask is answered from the fixture table first (x-3873): it is a
+# Rust-leaf read, and the installed binary may predate this branch.
 REAL_FNO_DIR="$TMP/real-fno"; mkdir -p "$REAL_FNO_DIR"
 {
   echo '#!/usr/bin/env bash'
+  echo 'if [[ "$1 $2" == "agents capabilities" ]]; then'
+  echo '  case "${3:-}" in'
+  echo "    claude|agy|opencode) printf '{\"command_surface\":\"slash\"}\\n'; exit 0 ;;"
+  echo "    codex) printf '{\"command_surface\":\"codex-skill\"}\\n'; exit 0 ;;"
+  echo "    *) printf '{\"command_surface\":\"refused\"}\\n'; exit 0 ;;"
+  echo '  esac'
+  echo 'fi'
   echo "exec \"$VENV_PY\" -c 'import sys; sys.path.insert(0, \"$REPO_ROOT/cli/src\"); from fno.cli import app; app()' \"\$@\""
 } > "$REAL_FNO_DIR/fno"
 chmod +x "$REAL_FNO_DIR/fno"
@@ -573,15 +630,15 @@ print(agent_name('spawn', 'ab-deadbeef', slug='path consolidation wave 0 delegat
     && pass "x-3218 shell bridge is byte-identical to direct Python generation" \
     || fail "x-3218 parity: shell=$SHELL_NAME python=$PY_NAME"
   # An exact expectation: "<= 64" would pass on a 20-char name and prove nothing
-  # about the budget (this fixture's name is 48 chars, well clear of the limit).
-  [[ "$SHELL_NAME" == "spawn-ab-deadbeef-path-consolidation-wave-0-dele" ]] \
+  # about the budget (this fixture's name is 43 chars, well clear of the limit).
+  [[ "$SHELL_NAME" == "spawn-deadbeef-path-consolidation-wave-0" ]] \
     && pass "x-3218 bridged name is the exact budgeted string" \
     || fail "x-3218 exact name: got '$SHELL_NAME'"
 
   # Ordinary names are byte-for-byte unchanged by the delegation.
   OUT="$(NODE_SLUG_RESOLVER="$STUB_SLUG" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" \
          PATH="$REAL_FNO_DIR:$PATH" bash "$NORM" --input "ab-deadbeef")"
-  [[ "$(field "$OUT" name)" == "spawn-ab-deadbeef-dashless-spawn" ]] \
+  [[ "$(field "$OUT" name)" == "spawn-deadbeef-dashless-spawn" ]] \
     && pass "x-3218 ordinary node names are unchanged by the bridge" \
     || fail "x-3218 ordinary name drifted: $OUT"
 
@@ -589,19 +646,24 @@ print(agent_name('spawn', 'ab-deadbeef', slug='path consolidation wave 0 delegat
   # That must DEGRADE, never read as "unrepresentable" - misreading it would
   # refuse every node on an out-of-date install.
   STALE_DIR="$TMP/stale-fno"; mkdir -p "$STALE_DIR"
-  printf '#!/usr/bin/env bash\n[[ "${1:-}" == "agents" && "${2:-}" == "name" ]] && { echo "Usage: fno agents" >&2; exit 2; }\nexit 1\n' > "$STALE_DIR/fno"
+  cat > "$STALE_DIR/fno" <<'EOF'
+#!/usr/bin/env bash
+[[ "${1:-}" == "agents" && "${2:-}" == "name" ]] && { echo "Usage: fno agents" >&2; exit 2; }
+[[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
+exit 1
+EOF
   chmod +x "$STALE_DIR/fno"
   OUT="$(NODE_SLUG_RESOLVER="$STUB_SLUG" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" \
          PATH="$STALE_DIR:$PATH" bash "$NORM" --input "ab-deadbeef")"
-  [[ "$(field "$OUT" status)" == "ok" && "$(field "$OUT" name)" == "spawn-ab-deadbeef-dashless-spawn" ]] \
-    && pass "x-3218 a stale fno (exit 2) degrades to the historical name, not a refusal" \
+  [[ "$(field "$OUT" status)" == "ok" && "$(field "$OUT" name)" == "spawn-deadbeef-dashless-spawn" ]] \
+    && pass "x-3218 a stale fno (exit 2) degrades to the hex name, not a refusal" \
     || fail "x-3218 stale-fno degradation: $OUT"
 
-  # No slug -> the id-only degradation, same as before.
+  # No slug -> the hex-only degradation, same as before.
   OUT="$(NODE_SLUG_RESOLVER="$STUB_EMPTY" DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" \
          PATH="$REAL_FNO_DIR:$PATH" bash "$NORM" --input "ab-deadbeef")"
-  [[ "$(field "$OUT" name)" == "spawn-ab-deadbeef" ]] \
-    && pass "x-3218 slugless node still degrades to <verb>-<node>" \
+  [[ "$(field "$OUT" name)" == "spawn-deadbeef" ]] \
+    && pass "x-3218 slugless node still degrades to <verb>-<hex>" \
     || fail "x-3218 slugless: $OUT"
 else
   fail "x-3218 bridge unreachable: no cli venv at $VENV_PY"

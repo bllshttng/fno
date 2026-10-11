@@ -8,7 +8,9 @@ This is a different thing from the environment preflight (`fno do target` Step 3
 
 ### `fno doctor test smoke` - the step registry
 
-One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `cli/src/fno/test_cmd.py` (`_STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `uv run --project cli fno-py doctor test smoke` from each of its two shard jobs, `smoke-pytest` and `smoke-rest`, which a third job named `smoke` aggregates into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `uv sync` / `uv build`, the `fno-agents` debug build) lives in the runner.
+One ordered list of the cli-ci smoke job's test and lint steps is code-owned in `cli/src/fno/test_cmd.py` (`_STRUCTURAL_STEPS`) plus auto-discovered owned shell harnesses. The workflow calls `uv run --project cli fno-py doctor test smoke` from twelve full-gate matrix legs: eight `smoke-pytest` legs and four `smoke-rest` legs. A third job named `smoke` aggregates both matrices into the required check. `fno doctor test smoke` is the same runner locally, so there is no second list to drift. Environment provisioning (checkout, Python/uv setup, the Rust toolchain install, the cargo cache, the system PyYAML install) stays in the workflow yaml. Those are CI-runner concerns, and that divergence is deliberate. Everything a test needs at run time (the `uv sync` / `uv build`, the `fno-agents` debug build) lives in the runner.
+
+Coverage boundary: the `smoke-pytest` and `smoke-rest` matrices are the full-gate shards on main and pull requests. `changed-smoke` has `if: github.event_name == 'pull_request'`, so it is skipped on main and its changed-subset selector never supplies main-branch coverage.
 
 Modes:
 
@@ -17,14 +19,15 @@ Modes:
 | `fno doctor test smoke` | Fail-fast. Exactly the pre-extraction CI semantics. |
 | `fno doctor test smoke --keep-going` | Run every step, print a summary table, record failures, exit non-zero if any failed. |
 | `fno doctor test smoke --only '<globs>'` | Run only steps whose name matches. Takes one glob, or a comma-separated list. The whole value is tried before the split, so a step whose own name has a comma still selects exactly. |
-| `fno doctor test smoke --skip '<globs>'` | The exact complement of `--only`: run every step matching none of the globs. This is how CI shards the suite; the two selections must cover the registry, which `cli/tests/unit/test_smoke_shards.py` reads out of the workflow and asserts. |
+| `fno doctor test smoke --skip '<globs>'` | The exact complement of `--only`: run every step matching none of the globs. This supplies the rest lane's base selection before its shard partition. |
+| `fno doctor test smoke --shard I/N` | Partition the selected registry after `--only` or `--skip`. `Sync + build` runs in every leg; pytest runs in every pytest leg with `FNO_PYTEST_SHARD=I/N`; other steps use registry-index round robin, with the Rust build added where later Rust steps land. |
 | `fno doctor test smoke --retry-failed` | Re-run only the steps recorded by the last `--keep-going` run; full run if the record is missing or corrupt. |
 | `fno doctor test smoke --list [--verbose]` | Print the registry (names; with `--verbose`, working dir + command) and exit. |
 | `fno doctor test smoke --changed [--base REV --head REV]` | Run only the work the changed paths map to. Explicitly partial: see below. |
 
-The four subset modes (`--changed`, `--only`, `--skip`, `--retry-failed`) are mutually exclusive. The runner refuses combinations instead of silently mislabeling evidence.
+`--only` and `--skip` remain mutually exclusive. `--changed` and `--retry-failed` cannot combine with `--shard`. The shard flag is compatible with full-gate `--only` and `--skip` selections. A malformed shard, a shard with no selected steps, or a conflicting partial mode fails non-zero instead of silently mislabeling evidence.
 
-Prerequisites are asserted up front and named on failure with exit 2. They include `uv`, `python3` with `yaml`, and `cargo` for selected steps. The runner never installs system packages. Install PyYAML once by hand for local runs. A subset run (`--only` / `--skip` / `--retry-failed`) labels itself in both the header and the summary, so a partial green cannot look full. Preflight records `mode=FULL verdict=green` only after a full, all-green run. A subset pass cannot mint or satisfy that attestation. A zero-step run exits non-zero instead of reading as green.
+Prerequisites are asserted up front and named on failure with exit 2. They include `uv`, `python3` with `yaml`, and `cargo` for selected steps. The runner never installs system packages. Install PyYAML once by hand for local runs. A subset or sharded run labels itself in both the header and the summary, so a partial green cannot look full. `--shard 1/1` preserves the unsharded selection and `FULL` header. `N > 1` uses `SHARD SUBSET` and includes `shard=I/N`. Preflight records `mode=FULL verdict=green` only after a full, all-green run. A subset pass cannot mint or satisfy that attestation. A zero-step run exits non-zero instead of reading as green.
 
 ### `--changed` - the changed-surface packet
 
@@ -64,8 +67,13 @@ And the exit codes separate evidence quality:
 
 Every executing run (not `--list`, which is a dry run) writes `.fno/changed-last-receipt.json` with the candidate and base identity, the selections and their rules, the unmapped paths, the verdict, and the timings (selection, execution, time to first signal).
 
-Sharding the full suite is out of scope *here*, not ruled out: this node targets first-signal latency, and the merge gate is a separate lever with its own node.
-The workflow guard permits a sharded smoke job, but requires an aggregating job that `needs` it, because each shard reports its own check and branch protection pointed at one of them would pass on a fraction of the suite.
+### Full-gate sharding and the changed-smoke boundary
+
+The full gate uses eight pytest legs and four rest legs. `smoke-pytest` selects `Sync + build` and the pytest registry step in every leg, and exports `FNO_PYTEST_SHARD=I/8` only while that pytest step runs. `smoke-rest` selects the complementary non-pytest registry and partitions it by registry index. The runner repeats `Sync + build` in every leg. It adds `Build fno-agents debug binary (for journey tests)` to legs with later Rust steps, preserving binary-absent ordering before that build.
+
+The `smoke` aggregator is the required check. It positively asserts that every matrix lane result is `success`. A single failed, cancelled, or missing leg therefore keeps the required check non-green. `cli/tests/unit/test_smoke_shards.py` reads the selectors, shard denominator, matrix indices, and registry from the checked-in workflow and fails on a missing leg or uncovered step.
+
+`changed-smoke` remains early, partial feedback for pull requests only. It is skipped on main. No test reached only through its `--changed` selector is counted as main coverage. Widening that selector can widen the existing out-of-tree coverage hole. Main coverage comes from all `smoke-pytest` and `smoke-rest` matrix legs through the `smoke` aggregator.
 
 ### `scripts/ci/preflight.sh` - the hermetic runner
 
@@ -119,7 +127,8 @@ Behavior:
 - The wait is bounded by `--wait-timeout`. The default is 5400s (90m). A value of `0` restores the old immediate fail with exit 3. While waiting, the receipt prints the holder's pid, start time, elapsed time, and tree CPU seconds. When the launcher is gone, it also prints `orphaned=yes`. This makes a starved wait distinct from a healthy queue. To cancel a queued wait, touch `.fno/preflight-cancel` in the invoking checkout. The sentinel is one-shot by atomic rename: one token cancels exactly one waiter, which exits 130 with its ticket removed. A sentinel older than one hour is stale. The next queued run discards it instead of obeying it. Signal traps stay armed as best effort. macOS bash 3.2 does not run INT/TERM traps while waiting on a child. Ctrl-C alone will not stop a wait on that platform. Use the sentinel.
 - Steals from a holder that is alive but not computing. The stall test requires under 1s of tree CPU over a 2m window. It also requires either 20m of age or an orphaned holder. An orphan is reparented to pid 1, so its launcher is gone and no floor is owed. The front waiter steals a condemned holder and reports the exception, naming which condemnation fired (stalled or orphaned). The victim's own tripwire VOIDs its verdict. Neither side reports anything false. An orphan that is genuinely computing keeps the lock: parentage only drops the age floor, never the CPU probe.
 - Do NOT wrap this script in a retry loop. The wait is built in. Concurrent retry loops are the contention the queue exists to remove.
-- Local verification is off by default. A stock config never requires it. On an opted-in project, `FNO_SKIP_PREFLIGHT=1` before `fno do pr create` skips that push and relies on CI.
+- `fno do pr push` skips the local runner by default. Pass `--preflight` to run it and block the push on a red result. `--no-preflight` remains accepted as a no-op for compatibility.
+- Local verification through the `fno do pr create`/`check` policy is off by default. A stock config never requires it. On an opted-in project, `FNO_SKIP_PREFLIGHT=1` before `fno do pr create` skips that policy and relies on CI.
 - Reuses a prior verdict: a FULL, non-VOID, all-legs-green run records a one-line attestation in its own slot beside the lock. The carrier directory holds one file per candidate SHA (`.preflight-attestations.d/`), so active worktrees never erase each other's greens. Slots older than 14 days are reaped at write time. The attestation is bound to `(full SHA, host)`. The next caller on the same SHA + host reads it before taking the lock. It exits 0 in well under a second. A second caller is never blocked behind a run still holding the lock. The receipt prints its own evidence (the matched SHA, the attestation's age, the earning pid, the host). A GREEN printed by a process that ran no tests must be auditable. `--force` discards the attestation and re-runs every suite. A RED run deletes a matching attestation, so a stale green cannot outlive a real failure. A subset pass (fewer legs executed than the required scope) or a VOID mints nothing. The mode comes from coverage, not from the flag. A `--retry-failed` run with no usable failure record executes every leg and earns FULL. The SHA is a complete cache key because the runner hard-resets a dedicated worktree to it and scrubs the environment. The `host=` field closes the one cross-environment hole a SHA key alone leaves.
 - Exits 5 (VOID) if the shared preflight worktree or the lock changed hands
   mid-run, printing which of the two it lost. The run earned no verdict, so it
@@ -137,6 +146,7 @@ Preflight runs before a push only at the policy's request. The single decision p
 On a stock config the pre-push obligation is the focused checks below, each taking seconds. There is deliberately no wrapper script for them. A new mandatory local runner rebuilds the gate this contract removes, one rung smaller.
 
 - `cargo fmt --check` for rust changes.
+- `bash scripts/ci/check-file-budget.sh` for source changes. It is the CI gate itself, so its number cannot disagree with CI. It prints the `cli/src/fno` net lines against the allowance, and a line for each over-budget file you touched. Run it after the commit that grows code, not at ship. A cut is cheap before review and expensive after a red check. It counts commits only, and it names any uncommitted change it did not count.
 - The tests covering the diff's blast radius.
 
 `fno doctor lint style` remains available for voluntary hand runs. For Markdown, run `fno doctor lint style --surface markdown --files <changed .md> --diff-base origin/main`. It is not part of the stock pre-push or CI gate.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# post-merge-ready.sh - target-preflight check (ab-dba85fcc, US1)
+# post-merge-ready.sh - target-preflight check (US1)
 # Contract: stdout first line "post-merge-ready {pass|warn|unknown} {message}"
 # Exit: always 0. NEVER `fail` - post-merge config is post-merge-only state and
 # must not block a /target build (warn/unknown only).
@@ -40,7 +40,7 @@ except Exception:
 case "$STATUS" in
     unconfigured)
         # AC1-HP / AC1-UI: one actionable line naming the key and the consequence.
-        echo "$NAME warn config.post_merge.parking_lot_path is unset - /fno:pr merged prose+triage will be skipped after a merge (set it: fno config setup post-merge)"
+        echo "$NAME warn config.post_merge.parking_lot_path is unset - /fno:ship pr merged prose+triage will be skipped after a merge (set it: fno config setup post-merge)"
         ;;
     ready | opted_out | dormant)
         echo "$NAME pass post-merge config $STATUS"

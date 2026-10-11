@@ -1,6 +1,6 @@
 """Settings loader for provider rotation substrate.
 
-Phase 01 of the provider rotation substrate (ab-256f6b6e).
+Phase 01 of the provider rotation substrate.
 Reads config.providers from .fno/settings.yaml with project-local-over-global
 precedence, mirroring cli/src/fno/cli.py::_load_v2_config_flag.
 """
@@ -244,36 +244,43 @@ def _strip_none(data: Any) -> Any:
 # shape test alone reads one as the other and raises on a valid setting.
 #
 # A literal rather than `set(AgentsBlock.model_fields)` because this loader runs
-# inside the config bootstrap path and must not import fno.config at module scope
-# (the same reason _global_settings_path above is reimplemented here). Drift is
-# caught instead by a test asserting set equality against that schema; the literal
-# without that test would be the drift bug.
+# inside the config bootstrap path and must not import fno.config at module scope.
+# A set-equality test against AgentsBlock catches drift in this bootstrap literal.
 _AGENTS_RESERVED_KEYS = frozenset(
     {
         "a2a",
         "auto_register_sessions",
+        "claude",
         "codex",
         "confirm",
-        "dead_row_grace",
         "defaults",
         "fallback",
+        "first_check_minutes",
         "footprint_sustained_cpu_cores",
         "gemini",
         "happy_routed_panes",
-        "hard_max_load_per_cpu",
-        # Legacy spelling of provider_limits (x-3f84 W5); still parsed by the
+        "hold_escalate_after_s",
+        # Legacy spelling of provider_limits (W5); still parsed by the
         # model's before-validator, so it stays reserved here too.
         "max_lanes",
         "max_live",
+        "max_live_per_territory",
         "max_fleet_cpu_share",
         "max_load_per_cpu",
         "pane_group_max",
         "min_free_gb",
+        "max_swap_pct",
+        "orphan_reap_after_seconds",
         "profiles",
         "provider_limits",
+        "reap",
         "reap_receipts",
+        "retire_grace_s",
+        "retire_interval_s",
         "silence_deadline_seconds",
-        "spawn_permission_mode",
+        "single_flight_join_budget_seconds",
+        "single_flight_ttl_seconds",
+        "state_reap",
         "worker_qos",
     }
 )
@@ -484,6 +491,21 @@ def known_account_ids(repo_root: Path | None = None) -> set[str]:
             if isinstance(record, dict) and isinstance(record.get("id"), str):
                 ids.add(record["id"])
     return ids
+
+
+def record_harness(record_id: str, repo_root: Path | None = None) -> str | None:
+    """The harness ``record_id``'s account record runs on, or None.
+
+    None is "could not answer": no record, no harness field, or an unreadable
+    config. Merging those three is a KNOWN gap - a config typo answers None for
+    every record, so the one-axis guard stops guarding. Splitting them must keep
+    `test_an_unreadable_registry_keeps_probing` green.
+    """
+    try:
+        rec = load_providers(repo_root=repo_root).by_id.get(record_id)
+    except Exception:  # noqa: BLE001 - an unreadable registry answers nothing
+        return None
+    return (getattr(rec, "harness", "") or "").strip() or None
 
 
 def load_combos(repo_root: Path | None = None) -> dict[str, "Combo"]:
@@ -841,7 +863,7 @@ def save_providers(
     # failover, agents, ...). Rebuilding providers_block from only records+active
     # would otherwise silently drop them, so e.g. `fno config accounts use` after
     # an operator set config.accounts.quota.defer_dispatch would turn quota
-    # deferral back off (x-5d3e review). Rebuilt keys win; everything else rides.
+    # deferral back off (review). Rebuilt keys win; everything else rides.
     #
     # Read the pre-rename `providers` block too, and pop it: this write IS the
     # migration. Carrying both keys forward would leave the file readable under
@@ -863,7 +885,7 @@ def save_providers(
 # ---------------------------------------------------------------------------
 # Atomic mutate / atomic read helpers
 #
-# Phase 01 of provider rotation failover (ab-9728b70b). The failover
+# Phase 01 of provider rotation failover. The failover
 # controller swaps the active provider by mutating settings.yaml from
 # multiple sessions concurrently. atomic_mutate_settings holds an exclusive
 # fcntl lock for the entire read+mutate+write cycle so concurrent mutators
@@ -926,7 +948,8 @@ def atomic_mutate_settings(
                     "atomic_mutate_settings: mutator must return a dict, "
                     f"got {type(updated).__name__}"
                 )
-            content = tomli_w.dumps(_strip_none(_flatten_config(updated)))
+            migrated = _strip_none(_flatten_config(updated))
+            content = tomli_w.dumps(migrated) if settings_path.suffix == ".toml" else yaml.safe_dump(migrated, sort_keys=False)
             tmp_path: Path | None = None
             try:
                 with tempfile.NamedTemporaryFile(

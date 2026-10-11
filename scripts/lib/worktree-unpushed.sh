@@ -41,7 +41,15 @@ _WT_REMOTE_REFS_STALE="${_WT_REMOTE_REFS_STALE:-0}"
 wt_refresh_remote_refs() {
     [[ "$_WT_REMOTE_REFS_FRESH" == 1 ]] && return 0
     [[ "$_WT_REMOTE_REFS_STALE" == 1 ]] && return 1
-    if git -C "${1:-.}" fetch --all --prune >/dev/null 2>&1; then
+    # Two transport-scoped bounds, since git has no single connect budget:
+    # http.lowSpeed* aborts an HTTP(S) transfer slower than 1KB/s for 20s,
+    # and ssh ConnectTimeout bounds the SSH TCP connect. Both map onto the
+    # failed-fetch path below. Neither bounds a mid-transfer SSH stall. The
+    # user's own ssh command (env, then core.sshCommand) is preserved and
+    # the timeout appended, so their earlier -o options still win.
+    _wt_ssh="${GIT_SSH_COMMAND:-$(git config --get core.sshCommand 2>/dev/null || echo ssh)}"
+    if GIT_SSH_COMMAND="$_wt_ssh -o ConnectTimeout=15" \
+       git -C "${1:-.}" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch --all --prune >/dev/null 2>&1; then
         _WT_REMOTE_REFS_FRESH=1
         export _WT_REMOTE_REFS_FRESH
         return 0
@@ -49,6 +57,16 @@ wt_refresh_remote_refs() {
     _WT_REMOTE_REFS_STALE=1
     export _WT_REMOTE_REFS_STALE
     return 1
+}
+
+# Automatic merge cleanup has one stricter reachability answer than the
+# report-only sweep: the worktree HEAD must be reachable from the refreshed
+# default branch, not merely from any remote or its own upstream branch.
+wt_head_reachable_from_origin_main() {
+    local path="${1:-}"
+    [[ -n "$path" && -d "$path" ]] || return 1
+    git -C "$path" rev-parse --verify --quiet origin/main >/dev/null 2>&1 || return 1
+    git -C "$path" merge-base --is-ancestor HEAD origin/main >/dev/null 2>&1
 }
 
 wt_unpushed_count() {

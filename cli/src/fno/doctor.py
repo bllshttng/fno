@@ -1,14 +1,14 @@
 """fno doctor: detect skew between the installed fno and its source checkout.
 
 The ``fno`` on a developer's PATH is a snapshot, not a live view of the repo
-(ab-5a1fc285). When a new gate-bearing verb ships (e.g. ``backlog inbox`` in
+. When a new gate-bearing verb ships (e.g. ``backlog inbox`` in
 PR #329), an install that predates it silently fails the documented path. This
 command makes that skew detectable and self-explaining, **network-free**.
 
 Python-side signals, each degrading to ``unknown`` rather than crying wolf:
 
 1. **Revision compare** (when a source checkout is resolvable): compare
-   ``~/.fno/installed-rev`` (written by ``fno doctor update``) against ``git rev-parse
+   ``~/.fno/install/installed-rev`` (written by ``fno doctor update``) against ``git rev-parse
    HEAD`` of the resolved source.
 2. **Capability probe** (always-available fallback): run ``fno backlog capture
    --help`` against the *installed* CLI; a "No such command" failure proves a
@@ -24,15 +24,15 @@ Python-side signals, each degrading to ``unknown`` rather than crying wolf:
 Plus a Rust-side report: which ``fno-agents`` binary ``auto`` mode would use,
 and whether the cargo-installed bins are stale relative to the crates/ subtree
 rev. The installed rev now comes from the binary itself -- ``fno-agents version
---json`` reports the crates/ subtree rev baked in by build.rs (ab-716cd330) --
+--json`` reports the crates/ subtree rev baked in by build.rs --
 not the ``installed-rust-rev`` marker, so a bare ``cargo install`` (no marker)
 is judged correctly. Rust staleness is proven only when full evidence is present
 (cargo binary exists, the binary self-reports a crates/ rev, crates/ subtree rev
 known); any gap degrades to unknown rather than crying wolf.
 
---fix now repairs the Rust side directly (ab-a78c9731): a rust-only stale
-verdict calls ``update._refresh_rust_bins`` without triggering a full Python
-reinstall.
+--fix now runs the native `fno doctor update` once for either stale kind: its
+rust leg refreshes the cargo bins and its uv leg reinstalls the Python
+package, without a second full reinstall path.
 
 Exit code is non-zero only when staleness is **proven**.
 """
@@ -61,7 +61,7 @@ if TYPE_CHECKING:
 # The verb the narrow capability probe checks for: the newest gate-bearing
 # verb. A missing `backlog inbox` (PR #329 gate) was the failure that
 # motivated this command; the probe now targets the renamed `backlog capture`
-# spelling, which also catches installs that predate the rename (ab-bf7cc0d8).
+# spelling, which also catches installs that predate the rename.
 _PROBE_VERB = ("backlog", "capture")
 _PROBE_VERB_LABEL = "backlog capture"
 
@@ -73,8 +73,7 @@ ProbeResult = Literal["present", "missing", "unknown"]
 DoctorStatus = Literal["fresh", "stale", "unknown"]
 
 _DAEMON_DRIFT_WARNING = re.compile(
-    r"^fno agents: .* is an older build than the installed binary; "
-    r"run `fno agents restart` to pick up the new build\.$"
+    r"^fno agents: .* is an older build than the installed binary; .+$"
 )
 
 REVIEW_INVOCATION_LOST_WINDOW_SECONDS = 15 * 60
@@ -91,13 +90,7 @@ def _read_marker() -> Optional[str]:
     A missing marker (install predates the feature) is "rev unknown", NOT a
     false "fresh" - the caller falls back to the capability probe.
     """
-    from fno import update
-
-    try:
-        text = update._INSTALLED_REV_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return text or None
+    return _probes(None).get("installed_rev")
 
 
 def _resolve_source(source: Optional[Path]) -> Optional[Path]:
@@ -106,12 +99,8 @@ def _resolve_source(source: Optional[Path]) -> Optional[Path]:
     Returns None when no source is resolvable (PyPI install, repo absent), so
     the verdict degrades to ``unknown`` rather than hard-failing.
     """
-    from fno import update
-
-    try:
-        return update._discover_source(source)
-    except update.SourceNotFoundError:
-        return None
+    probe = _probes(source).get("source")
+    return Path(probe) if probe else None
 
 
 def _plugin_file_relative_path(active_path: Path) -> Optional[str]:
@@ -249,10 +238,139 @@ def plugin_file_command(
 
 
 def _source_rev(source: Path) -> Optional[str]:
-    """``git rev-parse HEAD`` of the source (reuses update's network-free probe)."""
-    from fno import update
+    """``git rev-parse HEAD`` of the source, from the native readiness probe."""
+    return _probes(None).get("source_rev")
 
-    return update._source_rev(source)
+
+# ---------------------------------------------------------------------------
+# Native-verb transports (the update leg lives in the front door binary)
+# ---------------------------------------------------------------------------
+
+# One memoized `fno doctor update --check` per process: the readiness payload
+# whose `probes` object holds the machine facts the collectors read. The
+# first caller's `source` seeds it; a doctor run passes one source throughout.
+_PROBES: Optional[dict] = None
+
+
+def _front_door() -> Optional[str]:
+    """The native front door (`fno`): PATH first, then the cargo install."""
+    found = shutil.which("fno")
+    if found:
+        return found
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    candidate = cargo_home / "bin" / "fno"
+    return str(candidate) if candidate.is_file() else None
+
+
+def _run_update_verb(door: str, source: Optional[Path]) -> int:
+    """One `fno doctor update` run; its exit code is the --fix exit code."""
+    argv = [door, "doctor", "update"]
+    if source is not None:
+        argv += ["--source", str(source)]
+    return subprocess.run(argv).returncode
+
+
+def _probes(source: Optional[Path]) -> dict:
+    """The `fno doctor update --check` payload, run once and reused. An
+    unanswerable front door degrades to {} - every collector reads that as
+    unknown, never fresh."""
+    global _PROBES
+    if _PROBES is None:
+        _PROBES = _run_probes(source)
+    return _PROBES
+
+
+def _run_probes(source: Optional[Path]) -> dict:
+    door = _front_door()
+    if not door:
+        return {}
+    argv = [door, "doctor", "update", "--check"]
+    if source is not None:
+        argv += ["--source", str(source)]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, check=False, timeout=120
+        )
+        data = json.loads(proc.stdout) if proc.returncode == 0 else {}
+        return data if isinstance(data, dict) else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+
+
+def _source_pin_transport(sub: str, args: list[str]) -> Optional[dict]:
+    """One hidden `fno-agents source-pin` invocation; None = cannot answer."""
+    try:
+        from fno import rust_binary
+
+        binary = rust_binary.resolve_binary()
+    except Exception:  # noqa: BLE001
+        return None
+    if not binary:
+        return None
+    try:
+        proc = subprocess.run(
+            [str(binary), "source-pin", sub, *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _component_verdict_transport(
+    verdict_bin: Path,
+    src: Path,
+    subtree: str,
+    bindir: Path,
+    python_tool: dict,
+) -> Optional[dict]:
+    """One `component-verdict` probe against the deployed verdict binary;
+    None = cannot answer (the caller renders the named gap, never fresh)."""
+    argv = [
+        str(verdict_bin),
+        "component-verdict",
+        "--bindir",
+        str(bindir),
+        "--expected",
+        subtree,
+        "--agents-dir",
+        str(src.parent / "crates" / "fno-agents"),
+        "--include-mux",
+    ]
+    if python_tool.get("rev"):
+        argv += ["--python-rev", python_tool["rev"]]
+    for flag, key in (
+        ("--python-expected", "expected"),
+        ("--python-evidence", "evidence"),
+        ("--python-error", "error"),
+    ):
+        if python_tool.get(key):
+            argv += [flag, python_tool[key]]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, check=False, timeout=90.0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        report = json.loads(proc.stdout)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(report, dict) and isinstance(report.get("components"), list):
+        return report
+    return None
+
 
 
 def _deployed_config_keys() -> Optional[frozenset[str]]:
@@ -354,6 +472,32 @@ def _installed_pkg_dir() -> Optional[Path]:
         return None
 
 
+def _live_tool_env_processes() -> list[str]:
+    """ps argv lines of live processes running from the installed fno tool env
+    (the ancestor of the package dir named ``fno``). The stale verdict's
+    proposed repair replaces that env in place - the 2026-10-02 study clobber
+    (gap audit blockers 1/3) - so the verdict names them first; an unfamiliar
+    layout or unreadable process table reads [] (skip).
+    """
+    pkg = _installed_pkg_dir()
+    if pkg is None:
+        return []
+    try:  # the package dir sits at <tool>/fno/lib/*/site-packages/fno
+        env_root = pkg.parents[[p.name for p in pkg.parents].index("fno")]
+    except ValueError:
+        return []
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,args="], capture_output=True, text=True, check=False, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    root, me = str(env_root), f"{os.getpid()} "
+    return [
+        s
+        for line in out.splitlines()
+        if (s := line.strip()) and root in s and not s.startswith(me) and " awk -" not in s and " ps -" not in s
+    ]
+
+
 def _pkg_py_fingerprint(pkg_dir: Path) -> Optional[dict[str, str]]:
     """Map each ``.py`` under ``pkg_dir`` to its content sha256, keyed by relpath.
 
@@ -432,35 +576,20 @@ def _probe_installed_verb() -> ProbeResult:
     return "unknown"
 
 
-def _read_rust_marker() -> Optional[str]:
-    """Return the installed-rust-rev marker content, or None if missing/empty.
-
-    Thin wrapper around update._read_rust_marker so this collector is
-    monkeypatchable at the doctor module level (mirrors _read_marker's style).
-    """
-    from fno import update
-
-    return update._read_rust_marker()
-
-
 def _rust_source_rev(source: Optional[Path]) -> Optional[str]:
     """Return the last crates/ subtree commit SHA for the given source, or None.
 
-    None when source is None or when the git probe fails. Wrapper around
-    update._rust_subtree_rev so the collector is monkeypatchable.
+    None when source is None or when the git probe fails. Reads the native
+    readiness payload so the collector is monkeypatchable.
     """
     if source is None:
         return None
-    from fno import update
-
-    return update._rust_subtree_rev(source)
+    return _probes(None).get("rust_subtree_rev")
 
 
 def _cargo_bin_present() -> bool:
     """Return True if the cargo-installed fno-agents binary exists."""
-    from fno import update
-
-    return update._cargo_installed_bin() is not None
+    return bool(_probes(None).get("cargo_bin"))
 
 
 def _cargo_bin_path() -> Optional[str]:
@@ -471,10 +600,7 @@ def _cargo_bin_path() -> Optional[str]:
     from it -- not from ``resolve_installed_binary()``, which can return a
     bundled/launcher sibling when one is present (codex PR #491).
     """
-    from fno import update
-
-    cargo_bin = update._cargo_installed_bin()
-    return str(cargo_bin) if cargo_bin else None
+    return _probes(None).get("cargo_bin_path")
 
 
 def _binary_version_json(binary: Optional[str]) -> dict:
@@ -517,7 +643,7 @@ def _clean_rev(rev: object) -> Optional[str]:
 def _binary_self_rev(binary: Optional[str]) -> Optional[str]:
     """The full HEAD rev (``git_rev``) the fno-agents binary self-reports, or None.
 
-    Baked in by build.rs (ab-24a59d50); surfaced informationally as an identity
+    Baked in by build.rs ; surfaced informationally as an identity
     signal. See ``_binary_version_json`` for the failure contract.
     """
     return _clean_rev(_binary_version_json(binary).get("git_rev"))
@@ -527,7 +653,7 @@ def _binary_crates_rev(binary: Optional[str]) -> Optional[str]:
     """The crates/ subtree rev (``crates_rev``) the binary self-reports, or None.
 
     The last commit touching crates/ at the HEAD the binary was built from, baked
-    in by build.rs (ab-716cd330). This is the marker-free staleness signal the
+    in by build.rs. This is the marker-free staleness signal the
     rust verdict keys on: unlike ``installed-rust-rev`` (written only by ``fno
     update``), it is true for ANY install path, including a bare ``cargo
     install``. Its semantics MATCH ``_rust_source_rev`` (both are the crates/
@@ -536,13 +662,25 @@ def _binary_crates_rev(binary: Optional[str]) -> Optional[str]:
     return _clean_rev(_binary_version_json(binary).get("crates_rev"))
 
 
+def _human_age(seconds: int) -> str:
+    """Compact process-age label. Reuses the fleet's formatter (the same
+    cross-module import `mail/receipts.py` makes) rather than a 4th copy."""
+    from fno.agents.session_truth import fmt_age
+
+    return fmt_age(seconds)
+
+
 def _daemon_drift_warning() -> Optional[str]:
     """Return Rust's measured daemon-drift warning, or None on unknown state.
 
-    ``fno-agents status`` owns the executable fingerprint comparison. This
-    adapter only validates its JSON response and relays the canonical stderr
-    warning; it never infers freshness from process presence or Python-side
-    version data.
+    ``fno-agents status`` owns the executable fingerprint comparison. The
+    verdict is read from the structured ``drift`` field of ``status --json``,
+    never regex-parsed from prose. Bare ``status`` prints the human arms
+    table, so the old JSON gate over its stdout could never pass and the
+    relay stayed dead: doctor printed an unqualified fresh verdict while the
+    daemon ran pre-fix code. The canonical stderr sentence is still the
+    relayed text; the daemon's measured process age is appended beside it so
+    a fresh artifact verdict carries the lag in view.
     """
     try:
         from fno import rust_binary
@@ -557,7 +695,7 @@ def _daemon_drift_warning() -> Optional[str]:
         return None
     try:
         result = subprocess.run(
-            [str(binary), "status"],
+            [str(binary), "status", "--json"],
             capture_output=True,
             text=True,
             check=False,
@@ -571,27 +709,40 @@ def _daemon_drift_warning() -> Optional[str]:
         payload = json.loads(result.stdout or "")
     except (TypeError, ValueError):
         return None
-    if not isinstance(payload, dict) or not isinstance(payload.get("daemon"), dict):
+    if not isinstance(payload, dict) or payload.get("drift") != "drifted":
         return None
-    for line in (result.stderr or "").splitlines():
-        line = line.strip()
-        if _DAEMON_DRIFT_WARNING.fullmatch(line):
-            return line
-    return None
+    warning = next(
+        (
+            line.strip()
+            for line in (result.stderr or "").splitlines()
+            if _DAEMON_DRIFT_WARNING.fullmatch(line.strip())
+        ),
+        None,
+    )
+    if warning is None:
+        return None
+    daemon = payload.get("daemon")
+    uptime = daemon.get("uptime_secs") if isinstance(daemon, dict) else None
+    if isinstance(uptime, int) and 0 <= uptime < 10 * 365 * 24 * 3600:
+        # Process age stated as what drift proves: the daemon still runs the
+        # build it started with. "Predates the binary" is only provable for
+        # same-path content drift, not for a path-drifted daemon.
+        return f"{warning} (daemon up {_human_age(uptime)}; running its startup build, not this one)"
+    return warning
 
 
 def _rust_report() -> dict[str, Optional[str]]:
     """Report which fno-agents binary ``auto`` mode resolves.
 
     The ``revision`` key carries the verdict-driving rust rev: the crates/
-    subtree rev of the CARGO-installed binary (ab-716cd330). It is sourced from
+    subtree rev of the CARGO-installed binary. It is sourced from
     the cargo binary -- not ``resolve_installed_binary()`` -- because the rust
     gate (``_cargo_bin_present``) and ``--fix`` both target the cargo binary;
     reading the rev from a bundled sibling would misjudge or misrepair (codex
     PR #491). It replaces the old ``installed-rust-rev`` marker, which only
     tracked ``fno doctor update`` cargo installs and missed a bare ``cargo install``.
     ``binary``/``binary_rev`` describe the binary ``auto`` actually runs (display
-    + HEAD identity, ab-24a59d50). A probe error degrades to None rather than
+    + HEAD identity). A probe error degrades to None rather than
     aborting the verdict.
     """
     binary: Optional[Path] = None
@@ -617,115 +768,92 @@ def _rust_report() -> dict[str, Optional[str]]:
     }
 
 
-def _plugin_registry_path() -> Path:
-    """The claude plugin install registry (module-level so tests can stub it)."""
-    return Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+def _component_convergence(
+    src: Optional[Path],
+    rust: dict[str, Optional[str]],
+    marker: Optional[str],
+    content_drift: Optional[int],
+) -> list[dict[str, Any]]:
+    """Probe every deployed component and classify natively. [] = the machine
+    could not answer, which is no evidence - never fresh. Never raises."""
+    if src is None:
+        return []
+    subtree = _rust_source_rev(src)
+    verdict_bin = rust.get("binary")
+    if not subtree or not verdict_bin or not Path(verdict_bin).is_file():
+        return []
+    cargo_bin = _cargo_bin_path()
+    # Probe the directory the RESOLVED binary lives in: on a wheel install with
+    # no cargo bin, ~/.cargo/bin is the wrong tree and would read all-missing.
+    bindir = Path(cargo_bin).parent if cargo_bin else Path(verdict_bin).parent
+    report = _component_verdict_transport(
+        Path(verdict_bin),
+        src,
+        subtree,
+        bindir,
+        python_tool={
+            "rev": marker,
+            "expected": _source_rev(src),
+            "evidence": (
+                f"{content_drift} .py file(s) on disk differ from source" if content_drift else None
+            ),
+            "error": None if marker else "the installed-rev marker could not be read",
+        },
+    )
+    if report and isinstance(report.get("components"), list):
+        return report["components"]
+    # Could not answer: Unknown rows with the named gap, never fresh.
+    return [
+        {
+            "component": c,
+            "status": "unknown",
+            "line": "component "
+            + c
+            + ": unknown (the deployed fno-agents could not answer the convergence verdict)",
+        }
+        for c in ("python-tool", "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker")
+    ]
+
+
+def _run_stage_check(argv: list[str]) -> tuple[int, str, str]:
+    """One ``plugin-install --check`` probe (module-level so tests stub it).
+    Transport failures come back as exit -1 with the reason, never raise."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+        return proc.returncode, proc.stdout, proc.stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        return -1, "", str(exc)
 
 
 def _plugin_cache_report() -> dict[str, Any]:
-    """Freshness of the deployed CLAUDE plugin cache the hooks run from.
+    """Root freshness, folded natively by the Rust verb; transport only."""
+    def unknown(detail: str) -> dict[str, Any]:
+        return {"status": "unknown", "sha": None, "installed_at": None, "detail": detail, "kind": "stage", "stage": None, "roots": []}
 
-    ``fno doctor`` already owns source-vs-installed staleness for the wheel and
-    the cargo bins, but not for ``~/.claude/plugins/cache/footnote``: the copy
-    ``hooks/helpers/init-target-state.sh`` (resolved via CLAUDE_PLUGIN_ROOT)
-    actually executes in every Claude session. A cache pinned to a pre-feature
-    sha ships hooks that predate provenance writers while every Python-side
-    check reads green - the exact gap that left armed manifests reporting
-    ``auto_merge_source: unknown`` after x-9d11.
-
-    Uses the module's staleness vocabulary: ``fresh`` when the pinned sha IS
-    the source HEAD, ``stale`` when the sha is a proven ancestor of HEAD (and
-    not HEAD), ``unknown`` when the installed-plugins file is missing, the sha
-    is unknown to this clone, or git is unavailable. Never asserts staleness on
-    absent evidence (same rule as the exit-code contract at module top).
-
-    When stale, the report also carries ``deleted_hook_scripts`` iff the
-    pinned..HEAD range deleted a script the pinned revision's hook config
-    referenced - the case that bricks live sessions rather than merely
-    lagging, and the only stale worth interrupting an operator for.
-    """
-    # Any, not Optional[str]: the stale branch adds deleted_hook_scripts,
-    # a list, beside the string fields.
-    report: dict[str, Any] = {
-        "status": "unknown",
-        "sha": None,
-        "installed_at": None,
-        "detail": None,
-    }
-    try:
-        registry = _plugin_registry_path()
-        data = json.loads(registry.read_text(encoding="utf-8"))
-        plugins = data.get("plugins") if isinstance(data, dict) else None
-        entries = (
-            plugins.get("fno@footnote") if isinstance(plugins, dict) else None
-        ) or []
-        entry = entries[0] if isinstance(entries, list) and entries else {}
-    except (OSError, ValueError, IndexError, AttributeError, TypeError, KeyError):
-        # A hand-edited, corrupted, or future-version registry is exactly the
-        # broken install this advisory leg exists to describe: any malformed
-        # shape degrades to unknown, never a traceback through doctor_command's
-        # unwrapped call sites.
-        report["detail"] = "no installed_plugins.json entry for fno@footnote"
-        return report
-    sha = entry.get("gitCommitSha")
-    if not sha:
-        report["detail"] = "installed_plugins.json carries no gitCommitSha"
-        return report
-    report["sha"] = sha
-    report["installed_at"] = entry.get("installedAt")
-
+    binary = _cargo_bin_path()
     src = _resolve_source(None)
-    if src is None:
-        report["detail"] = "no source checkout to compare against"
-        return report
-    try:
-        head = subprocess.run(
-            ["git", "-C", str(src), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=15,
+    if not binary or src is None:
+        return unknown(
+            "no cargo fno-agents binary to run the stage check"
+            if not binary
+            else "no source checkout to compare against"
         )
-        if head.returncode != 0:
-            report["detail"] = "git rev-parse failed in the source checkout"
-            return report
-        if head.stdout.strip() == sha:
-            report["status"] = "fresh"
-            return report
-        ancestor = subprocess.run(
-            ["git", "-C", str(src), "merge-base", "--is-ancestor", sha, "HEAD"],
-            capture_output=True,
-            timeout=15,
-        )
-        if ancestor.returncode == 0:
-            report["status"] = "stale"
-        else:
-            # Not HEAD and not an ancestor: a foreign sha. Unknown, never
-            # stale-on-absent-evidence.
-            report["detail"] = "pinned sha is not known as an ancestor of HEAD"
-    except (OSError, subprocess.SubprocessError):
-        report["detail"] = "git unavailable"
-        return report
-
-    # Stale fires after EVERY merge, so it cannot by itself separate benign
-    # lag from brick risk. The separator: did this range delete a hook script
-    # the pinned revision's config referenced? Only that case takes every
-    # pre-merge session's Bash away. Same never-assert-on-absent-evidence
-    # rule: a git failure adds no key rather than claiming the all-clear.
-    from fno.hook_config import stubless_deletions
-
-    head_sha = head.stdout.strip()
-    deleted = (
-        stubless_deletions(src, sha, head_sha)
-        if report["status"] == "stale"
-        else None
+    code, out, err = _run_stage_check(
+        [binary, "plugin-install", "--check", "--json", "--source", str(src)]
     )
-    if deleted:
-        report["deleted_hook_scripts"] = deleted
-    return report
+    if code not in (0, 3, 4):
+        return unknown(f"plugin-install --check exited {code}: {(err or out).strip()}")
+    try:
+        verdict = json.loads(out)
+    except ValueError:
+        verdict = None
+    if not isinstance(verdict, dict) or not isinstance(verdict.get("roots"), list) or not verdict["roots"]:
+        return unknown("plugin-install --check named no readable plugin root")
+    return verdict
 
 
 # ---------------------------------------------------------------------------
-# Cost cross-check (--cost-check, opt-in - ab-c0f92987)
+# Cost cross-check (--cost-check, opt-in -)
 # ---------------------------------------------------------------------------
 #
 # Compares our session-cost.py math against the community reference cost CLI
@@ -882,28 +1010,26 @@ def _cost_check() -> int:
     typer.echo(
         f"fno doctor: cost-check WARN: session {session_id} "
         f"ours=${ours:.2f} reference=${theirs:.2f} divergence={pct} "
-        f"(> {_COST_DIVERGENCE_THRESHOLD * 100:.0f}% - pricing table or "
-        "dedup drift; see scripts/lib/cost_tracker.py)"
+        f"(> {_COST_DIVERGENCE_THRESHOLD * 100:.0f}% - catalog pricing or "
+        "dedup drift; see crates/fno-agents/src/model_price.rs)"
     )
     return 1
 
 
 # ---------------------------------------------------------------------------
-# Mux front door health (x-c267)
+# Mux front door health
 # ---------------------------------------------------------------------------
 
 
 def _cargo_installed_mux() -> Optional[Path]:
     """Path to the cargo-installed mux front-door binary (`fno`), or None.
 
-    Thin wrapper around ``update._cargo_installed_mux`` (single source of truth,
-    shared with `fno doctor update`'s install path) so this collector stays patchable.
+    Thin wrapper over the native readiness payload (single source of truth,
+    shared with `fno doctor update`'s probes) so this collector stays patchable.
     Probes the default ``$CARGO_HOME/bin``; a custom-``--root`` install is caught
     instead by the ``which("fno")`` + mux-verb probe in ``_mux_front_door_report``.
     """
-    from fno import update
-
-    return update._cargo_installed_mux()
+    return _probes(None).get("cargo_mux_path")
 
 
 def _probe_is_mux(fno_path: str) -> bool:
@@ -960,13 +1086,14 @@ def _mux_front_door_report() -> dict[str, Any]:
 
 
 # Runtime files no code writes anymore (Group 3 GC wave: convo-signals
-# capture, tasks.json/md migration, evals-history, metrics.jsonl analytics).
+# capture, tasks.json/md migration, metrics.jsonl analytics). evals-history
+# left this list at: the eval bank's runner appends it on every
+# scheduled run, and the evals staleness row reads the same file.
 # Purely informational - never changes doctor's status or exit code.
 _ORPHAN_BASENAMES = (
     "convo-signals.jsonl",
     "tasks.json",
     "tasks.md",
-    "evals-history.jsonl",
     "metrics.jsonl",
 )
 
@@ -997,26 +1124,41 @@ def _orphan_report() -> list[str]:
 
 
 def _pr_watch_liveness() -> dict[str, Any]:
-    """Ground-truth liveness verdict for the global PR-watch agent (x-e106).
+    """Ground-truth liveness verdict for the global PR-watch agent.
 
-    Advisory: never changes doctor's status/exit. Degrades to ``unknown``
-    (silent) rather than crying wolf when the check itself can't run.
+    Advisory: never changes doctor's status/exit. The verdict is the Rust
+    verb's (`fno-agents pr-watch status --json`); a check that can't run
+    degrades to ``unknown`` (silent) rather than crying wolf.
     """
-    try:
-        from fno.pr_watch import _install as m
+    import subprocess
 
-        return m.liveness_report_live()
+    try:
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is not None:
+            proc = subprocess.run(
+                [str(binary), "pr-watch", "status", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            report = json.loads(proc.stdout)
+            if isinstance(report, dict) and "verdict" in report:
+                return report
     except Exception:
-        # Same dict shape as liveness_report so a future non-.get() reader
-        # cannot KeyError on the exception path.
-        return {
-            "enabled": False,
-            "verdict": "unknown",
-            "detail": "",
-            "fix": None,
-            "loaded": False,
-            "last_tick": None,
-        }
+        pass
+    # Same dict shape as the report so a future non-.get() reader
+    # cannot KeyError on the exception path.
+    return {
+        "enabled": False,
+        "verdict": "unknown",
+        "detail": "",
+        "fix": None,
+        "loaded": False,
+        "last_tick": None,
+    }
 
 
 _FD_SOFT_FLOOR = 1024
@@ -1100,7 +1242,7 @@ def _groom_health() -> dict[str, Any]:
 
 
 def _archive_id_collisions() -> dict[str, Any]:
-    """Ids present in BOTH the working graph and the archive (x-f69b).
+    """Ids present in BOTH the working graph and the archive.
 
     Each is a real collision, not a duplicate: the id generator only checked
     the working graph, so a freed id gets reminted while the archive still
@@ -1108,12 +1250,16 @@ def _archive_id_collisions() -> dict[str, Any]:
     so this count grows on its own; it changes doctor's exit code rather than
     reporting quietly.
 
-    The archive is read via ``_read_json``, NOT ``read_graph``: the read path
+    The archive is read as a plain file, NOT ``read_graph``: the read path
     swallows corruption to an empty list, which would report 0 collisions and
-    exit green in exactly the state where the ids cannot be checked.
+    exit green in exactly the state where the ids cannot be checked. A plain
+    read also keeps the alarm off the store spawn path - the advisory file
+    must never gain a store, or a spawn failure reads as a clean zero.
     """
     try:
-        from fno.graph.store import GraphCorruptError, _apply_graph_defaults, _read_json
+        import json as _json
+
+        from fno.graph.store import _apply_graph_defaults
         from fno.paths import graph_archive_json
         from fno.tracker.metadata import read_entries
 
@@ -1128,8 +1274,11 @@ def _archive_id_collisions() -> dict[str, Any]:
             if isinstance(e, dict) and isinstance(nid := e.get("id"), str)
         }
         try:
-            archive_entries = _apply_graph_defaults(_read_json(archive_path))
-        except GraphCorruptError:
+            document = _json.loads(archive_path.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                return {"count": 0, "ids": [], "unreadable": True}
+            archive_entries = _apply_graph_defaults(document.get("entries", []))
+        except (ValueError, UnicodeDecodeError, OSError):
             return {"count": 0, "ids": [], "unreadable": True}
         archive_ids = {
             nid for e in archive_entries
@@ -1160,141 +1309,90 @@ def _post_merge_sync_health() -> dict[str, Any]:
         # invisible exactly when it has lasted longest.
         st = sync_staleness(fetch=True)
         return {
-            "state": st.state,
-            "stale": st.state == "stale",
-            "behind": st.behind,
-            "detail": st.detail,
+            "state": st["state"],
+            "stale": st["state"] == "stale",
+            "behind": st["behind"],
+            "detail": st["detail"],
         }
     except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
         return {"state": "unknown", "stale": False, "behind": None, "detail": ""}
 
 
-def _self_attested_coverage_report() -> dict[str, Any]:
-    """Per merged PR in the recent window: did coverage rest on the author's
-    own attestation alone?
+def _source_checkout_sync(source: Optional[Path]) -> dict[str, Any]:
+    """Measure whether the resolved source checkout is behind its remote default.
 
-    The number the operator needs before ever flipping
-    ``config.review.require_corroboration`` to true - each row is one merged PR
-    that policy would have held. Advisory only, never changes status/exit; a
-    probe that cannot run reports unknown rather than zero.
+    This is deliberately network-free. A source checkout can match its
+    installed binary while both predate a merged change; reporting the measured
+    local remote-ref distance prevents that pair from reading as current. The
+    classification lives in the native source-pin authority; a helper that
+    cannot answer degrades to unknown with the failure named, never a
+    fabricated distance.
     """
-    try:
-        # project_events_json, not a hand-joined resolve_repo_root: the domain
-        # helper honors the test sandbox pin (FNO_EVENTS_PATH), and a bare
-        # resolver call here arms the shellout-drift guard's module-level
-        # predicate, which then flags doctor.py's two pre-existing
-        # privately-rooted report shell-outs the guard was never taught about.
-        from fno.paths import project_events_json
+    report: dict[str, Any] = {
+        "status": "unknown",
+        "behind": None,
+        "source_head": None,
+        "remote_head": None,
+        "detail": "",
+    }
+    if source is None:
+        report["detail"] = "source checkout not resolved"
+        return report
 
-        events = project_events_json()
-        newest: dict[int, dict[str, Any]] = {}
-        try:
-            for line in events.read_text(encoding="utf-8").splitlines():
-                try:
-                    val = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if val.get("type") != "review_coverage":
-                    continue
-                data = val.get("data") or {}
-                pr = data.get("pr")
-                if isinstance(pr, int):
-                    newest[pr] = data
-        except OSError:
-            newest = {}
+    data = _source_pin_transport("sync", ["--source", str(source)])
+    if data is None:
+        report["detail"] = "source-pin helper unavailable (missing or pre-source-pin fno-agents)"
+        return report
 
-        merged: list[dict[str, Any]] = []
-        proc = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "merged",
-                "--limit",
-                "10",
-                "--json",
-                "number",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        if proc.returncode == 0:
-            for row in json.loads(proc.stdout or "[]"):
-                number = row.get("number")
-                if not isinstance(number, int):
-                    continue
-                cov = newest.get(number)
-                if cov is None:
-                    continue
-                reviewed = cov.get("reviewed_count")
-                self_attested_n = cov.get("self_attested_count")
-                # The corroboration policy rewrites held rows to
-                # reviewed_count 0 while preserving self_attested_count, so a
-                # count-only filter hides exactly the PRs the policy holds -
-                # the population this report exists to measure.
-                if (
-                    not isinstance(reviewed, int)
-                    or reviewed <= 0
-                ) and not (isinstance(self_attested_n, int) and self_attested_n > 0):
-                    continue
-                # The SAME predicate the merge gate's corroboration policy
-                # applies, so the report and the gate cannot disagree about a
-                # row.
-                from fno.pr._coverage_gate import rests_on_self_attestation_alone
-
-                merged.append(
-                    {
-                        "pr": number,
-                        "reviewed_count": reviewed,
-                        "self_attested_count": cov.get("self_attested_count"),
-                        "self_attested_only": rests_on_self_attestation_alone(cov),
-                    }
-                )
-        return {
-            "prs": merged,
-            "self_attested_only_count": sum(1 for row in merged if row["self_attested_only"]),
-        }
-    except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
-        return {"prs": [], "self_attested_only_count": 0, "error": "probe failed"}
+    report["status"] = data.get("status", "unknown")
+    report["behind"] = data.get("behind")
+    report["source_head"] = data.get("source_head")
+    report["remote_head"] = data.get("remote_head")
+    report["detail"] = data.get("detail", "")
+    return report
 
 
 def _launch_agent_failures() -> dict[str, Any]:
-    """Every ``sh.fno.*`` LaunchAgent whose LAST EXIT was nonzero.
+    """Dead launchd labels, from the Rust fold the loops table runs.
 
-    Generic over the label prefix rather than groom-specific: two unrelated fno
-    agents were dead and silent when this was written, so one loop is both
-    smaller and wider than a bespoke check per agent. Column 2 is the last exit,
-    not current state - a ``-`` in column 1 is normal for a periodic job.
+    One launchctl reader, not two: the Rust ``loops table --json`` payload
+    carries the dead list (any ``sh.fno.*`` or autocorrect label with a
+    nonzero last exit), so doctor reads the same truth the arms table
+    prints, and the labels the old ``sh.fno.`` prefix filter missed
+    (``com.user.autocorrect*``) show up here too. Exit 1 is the table's own
+    red verdict, not an error: the payload still parses.
     """
-    if sys.platform != "darwin" or not shutil.which("launchctl"):
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
         return {"applicable": False, "dead": []}
     try:
         proc = subprocess.run(
-            ["launchctl", "list"], capture_output=True, text=True, timeout=10
+            [str(binary), "loops", "table", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
     except Exception:  # noqa: BLE001 - an unrunnable probe must not fabricate an alarm
         return {"applicable": False, "dead": []}
-    if proc.returncode != 0:
+    if proc.returncode not in (0, 1):
         return {"applicable": False, "dead": []}
-
-    dead: list[dict[str, Any]] = []
-    for line in (proc.stdout or "").splitlines():
-        cols = line.split("\t")
-        if len(cols) < 3 or not cols[2].startswith("sh.fno."):
-            continue
-        try:
-            status = int(cols[1])
-        except ValueError:
-            continue  # "-" or a header; only a numeric exit proves a failure
-        if status != 0:
-            dead.append({"label": cols[2].strip(), "exit": status})
-    return {"applicable": True, "dead": dead}
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return {"applicable": False, "dead": []}
+    section = payload.get("launchd") if isinstance(payload, dict) else None
+    if not isinstance(section, dict):
+        return {"applicable": False, "dead": []}
+    dead = section.get("dead")
+    if not isinstance(dead, list):
+        dead = []
+    return {"applicable": bool(section.get("applicable")), "dead": list(dead)}
 
 
 # --------------------------------------------------------------------------
-# Silent-switch legibility (x-8cd5 Wave 6). Fail-safe defaults compose to
+# Silent-switch legibility (Wave 6). Fail-safe defaults compose to
 # inertness, and inertness is invisible because every component behaves as
 # designed: a disabled drain with missions queued looks identical to a clean
 # queue with nothing to do. The symmetric risk is a default-on/armed switch
@@ -1313,16 +1411,26 @@ def _mission_active_count() -> int:
     ``{"entries": null}`` because the null value iterated outside the try, which
     broke this function's own ``never crashes`` promise."""
     try:
-        from fno.active_backlog import _active_missions
+        from fno import paths as _paths
+        from fno.graph.store import read_graph_strict
+        from fno.tracker import active_backend_name
 
-        return len(_active_missions())
+        if active_backend_name() != "graph":
+            return 0
+
+        entries = read_graph_strict(_paths.graph_json())
+        return sum(
+            1
+            for e in entries
+            if isinstance(e, dict) and e.get("mission_active") is True
+        )
     except Exception:  # noqa: BLE001 - advisory; never crash doctor
         return 0
 
 
 def _auto_merge_armed_manifests() -> dict[str, int]:
     """Worktree manifests whose resolved ``auto_merge_approved`` is true,
-    counted by ``auto_merge_source`` (x-9d11).
+    counted by ``auto_merge_source``.
 
     Each is one run's standing merge authority; the count is the legibility
     point (an armed manifest set against an operator who expects to review),
@@ -1410,6 +1518,7 @@ def _silent_switch_report(
     """
     try:
         from fno.config import load_settings
+        from fno.config.grant import auto_merge_grant
 
         s = load_settings()
     except Exception:  # noqa: BLE001 - a config that won't load is not doctor's alarm
@@ -1422,10 +1531,10 @@ def _silent_switch_report(
     ab = _leaf(getattr(s, "active_backlog", None), "enabled")
     ts = _leaf(getattr(s, "think_spawn", None), "enabled")
     am = _leaf(getattr(s, "auto_merge", None), "enabled")
-    # Actor scope (x-4be1): the grant key replaces the dispatch.auto_merge
+    # Actor scope: the grant key replaces the dispatch.auto_merge
     # bool. Read through getattr so a stub settings object in tests degrades
     # to None (not armed) rather than raising.
-    grant = getattr(getattr(s, "auto_merge", None), "grant", None)
+    grant = "dispatch" if auto_merge_grant(s) else None
 
     findings: list[dict[str, Any]] = []
     missions = _mission_active_count()
@@ -1482,7 +1591,7 @@ def _silent_switch_report(
     )
     if armed and am is True:
         total = sum(armed.values())
-        # Name WHICH layer set each posture (x-9d11): "24 manifests" hides that
+        # Name WHICH layer set each posture: "24 manifests" hides that
         # 12 came from config and 12 from an env grant; the breakdown is the
         # actionable half of the count.
         breakdown = ", ".join(
@@ -1495,7 +1604,7 @@ def _silent_switch_report(
             "count_label": f"manifest(s): {breakdown}",
             "command": "fno config set auto_merge.enabled false",
         }
-        # An ``unknown`` count is answerable, not fated (x-4be1): a proven-stale
+        # An ``unknown`` count is answerable, not fated: a proven-stale
         # deployed plugin cache is a LIKELY cause (a cache pinned before the
         # provenance writer cannot stamp manifests), and ``fno doctor update`` is the
         # fix for that cause. Only speak when the plugin-cache signal PROVES
@@ -1504,7 +1613,11 @@ def _silent_switch_report(
         # fresh cache stays a bare unknown (never guess an origin).
         if armed.get("unknown"):
             cache = plugin_cache if plugin_cache is not None else _plugin_cache_report()
-            if cache.get("status") == "stale":
+            # A stale STAGE is a different artifact with its own fix; this
+            # cause line is about the legacy sha-pinned cache shape only (a
+            # report with roots names each stale root in its own line, and a
+            # byte-stale installPath tree has no sha pin to refresh).
+            if cache.get("status") == "stale" and not cache.get("roots"):
                 sha = str(cache.get("sha") or "")[:12]
                 when = str(cache.get("installed_at") or "")[:10] or "?"
                 finding["cause"] = (
@@ -1519,7 +1632,7 @@ def _silent_switch_report(
 def _auto_merge_review_gap(
     armed_manifests: Optional[dict[str, int]] = None,
 ) -> Optional[dict[str, Any]]:
-    """The x-0888 pair check: auto_merge armed while the merge gate's own lane
+    """The pair check: auto_merge armed while the merge gate's own lane
     predicate requires no review for a code payload.
 
     Doctor already prints the armed half (the silent-switch lines) and stays
@@ -1529,13 +1642,13 @@ def _auto_merge_review_gap(
     about a hypothetical code payload - a doctor-side recount of its lane
     logic would be the same bug one level up, the reason the predicate already
     mirrors loopcheck.rs. The pairing reads the two layers the merge path
-    reads: global ``auto_merge.enabled`` (``_load_auto_merge``) and the
+    reads: repo-resolved ``auto_merge.enabled`` (``_load_auto_merge``) and the
     INVOKING project's repo-resolved review config (the same cwd-to-toplevel
     resolution ``fno do pr status`` uses), never the fno source checkout. A
     config the predicate cannot read fail-closes to True inside it, so a
     broken config never warns here.
 
-    ``unknown`` in the armed breakdown is its own answer (x-9d11), never
+    ``unknown`` in the armed breakdown is its own answer, never
     folded into a default origin. Zero armed manifests still reports: the
     enabled switch alone means the next run can be approved.
     """
@@ -1711,6 +1824,55 @@ def _preamble_budget_line(
     return "preamble: unavailable (check emitted no report)"
 
 
+def _session_start_bytes_line(preamble_line: Optional[str]) -> Optional[str]:
+    """Advisory TOTAL session-start byte count, rest via `fno-agents session-start-bytes`. Best-effort: None on any failure."""
+    match = re.match(r"preamble:\s*(\d+)\s*/", preamble_line or "")
+    if not match:
+        return None
+    try:
+        from fno import rust_binary
+        binary = rust_binary.resolve_binary()
+        if binary is None:
+            return None
+        result = subprocess.run(
+            [str(binary), "session-start-bytes", "--gate-bytes", match.group(1)],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = result.stdout.strip()
+    return line if line.startswith("preamble:") else None
+
+
+def _control_plane_arms_report() -> dict[str, Any]:
+    """Red control-plane arms via the one Rust reader (shells
+    ``fno-agents status --json``): unknown on a failed read, never green.
+    The Rust owner selects the attention rows (unobserved, stale, or
+    failing) into ``arms_attention``; Python prints them and never
+    re-derives a verdict from the legacy booleans. Rows carry the reader's
+    rendered ``line``; rows from an older binary without one fall back to
+    the sentence render.
+    """
+    try:
+        from fno import rust_binary
+        binary = rust_binary.resolve_binary()
+        if binary is None:
+            return {"red": [], "unknown_reason": "fno-agents binary not found"}
+        result = subprocess.run(
+            [str(binary), "status", "--json"],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+        attention = payload.get("arms_attention")
+        if not isinstance(attention, list):
+            return {"red": [],
+                    "unknown_reason": "status payload carries no arms_attention"}
+        return {"red": [a for a in attention if isinstance(a, dict)],
+                "unknown_reason": None}
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        return {"red": [], "unknown_reason": f"read failed: {exc}"}
+
+
 # ---------------------------------------------------------------------------
 # Verdict
 # ---------------------------------------------------------------------------
@@ -1729,16 +1891,17 @@ def _verdict(
     deployed_config_keys: Optional[frozenset[str]] = None,
     source_config_keys: Optional[frozenset[str]] = None,
     content_drift_count: Optional[int] = 0,
+    component_statuses: Optional[list[tuple[str, str]]] = None,
 ) -> dict[str, Any]:
     """Pure verdict function (no I/O) returning the complete JSON-serializable
     result, so the decision matrix is unit-testable and the output contract is
     assembled in exactly one place.
 
     Rust staleness is proven only with full evidence: a cargo binary exists,
-    the installed-rust-rev marker is known, the crates/ subtree rev is known,
-    and they differ. Any missing evidence piece degrades to "not stale" (never
-    cry wolf). Rust evidence gaps never upgrade unknown to fresh and never
-    block fresh.
+    the binary's self-reported crates/ rev is known, the crates/ subtree rev is
+    known, and they differ. Any missing evidence piece degrades to "not stale"
+    (never cry wolf). Rust evidence gaps never upgrade unknown to fresh and
+    never block fresh.
 
     Config-schema drift follows the same full-evidence rule: only when BOTH
     keysets are known and the source defines keys the deployed CLI lacks is the
@@ -1801,12 +1964,19 @@ def _verdict(
     if content_indeterminate and status == "fresh":
         status = "unknown"
 
-    # Rust staleness: requires full evidence. Partial evidence is never stale.
+    # Rust staleness needs full evidence; a component probe proving a stale
+    # sibling beside a fresh client widens the gate (and so the fix path).
     rust_stale = (
         cargo_bin_present
         and rust_installed_rev is not None
         and rust_source_rev is not None
         and rust_installed_rev != rust_source_rev
+    ) or (
+        any(
+            status in ("stale", "missing", "failed")
+            for name, status in component_statuses or []
+            if name.startswith("fno-agents")
+        )
     )
 
     # Fold rust staleness into overall status.
@@ -1827,6 +1997,24 @@ def _verdict(
         "rust_binary": rust_binary,
         "rust_installed_rev": rust_installed_rev,
         "rust_source_rev": rust_source_rev,
+        "component_statuses": component_statuses or [],
+    }
+
+
+DISK_FREE_FLOOR_GB = 20
+
+
+def _disk_free_report() -> dict[str, Any]:
+    """Advisory free-disk reading for the volume holding ~/.fno; a reading under the floor is a blocker (see _blockers)."""
+    try:
+        usage = shutil.disk_usage(Path.home() / ".fno")
+    except OSError:
+        return {"verdict": "unreadable"}
+    free_gb = usage.free / 1e9
+    return {
+        "free_gb": round(free_gb, 1),
+        "floor_gb": DISK_FREE_FLOOR_GB,
+        "verdict": "low" if free_gb < DISK_FREE_FLOOR_GB else "ok",
     }
 
 
@@ -1834,12 +2022,13 @@ def _blockers(result: dict[str, Any]) -> list[str]:
     """The findings that mean the fleet will misbehave, in the order a new
     user should act on them. Pure: reads only the assembled result dict.
 
-    The set is not a taste call. Three of these already flip doctor's exit
-    code (staleness, dead LaunchAgents, archive id collisions). The other
-    three fail silently: a low fd limit starves every spawned worker while
-    the login shell reads healthy, a hook that cannot launch fails open with
-    no signal, and a stale plugin cache runs pre-HEAD hook bytes. Everything
-    else doctor prints is advisory and stays in the advisory stream.
+    The set is not a taste call. Four of these already flip doctor's exit
+    code (staleness, source-checkout lag, dead LaunchAgents, archive id
+    collisions). The other three fail silently: a low fd limit starves every
+    spawned worker while the login shell reads healthy, a hook that cannot
+    launch fails open with no signal, and a stale plugin cache runs pre-HEAD
+    hook bytes. Everything else doctor prints is advisory and stays in the
+    advisory stream.
     """
     blockers: list[str] = []
 
@@ -1849,17 +2038,21 @@ def _blockers(result: dict[str, Any]) -> list[str]:
             "Fix: fno doctor --fix"
         )
 
-    for agent in (result.get("launch_agents") or {}).get("dead") or []:
+    source_sync = result.get("source_checkout_sync") or {}
+    if source_sync.get("status") == "behind":
+        behind = source_sync.get("behind")
+        unit = "commit" if behind == 1 else "commits"
         blockers.append(
-            f"LaunchAgent {agent.get('label')} last exited {agent.get('exit')}."
+            f"resolved source checkout is {behind} {unit} behind origin/main; "
+            "freshness is relative to stale local source. Sync the checkout before "
+            "trusting verification."
         )
 
-    collisions = result.get("archive_id_collisions") or {}
-    if collisions.get("unreadable"):
-        blockers.append("archive is unreadable; id collisions cannot be counted.")
-    elif collisions.get("count"):
+    for agent in (result.get("launch_agents") or {}).get("dead") or []:
+        exit_code = agent.get("exit")
         blockers.append(
-            f"{collisions['count']} node id(s) collide with the archive."
+            f"LaunchAgent {agent.get('label')} last exited "
+            f"{exit_code if exit_code is not None else 'exit unknown'}."
         )
 
     fd_limit = result.get("fd_limit") or {}
@@ -1869,12 +2062,29 @@ def _blockers(result: dict[str, Any]) -> list[str]:
             "reaches spawned workers only, not this shell."
         )
 
+    disk_free = result.get("disk_free") or {}
+    if disk_free.get("verdict") == "low":
+        blockers.append(
+            f"free disk is {disk_free.get('free_gb')} GB, under the {disk_free.get('floor_gb')} GB floor; "
+            "builds, stores and downloads fail near zero. Fix: fno doctor reclaim --apply"
+        )
+
     plugin_hooks = result.get("plugin_hooks") or {}
     if plugin_hooks.get("failed"):
         blockers.append(f"{plugin_hooks['failed']} plugin hook(s) cannot launch.")
 
     plugin_cache = result.get("plugin_cache") or {}
-    if plugin_cache.get("status") == "stale":
+    blockers.extend(r["blocker"] for r in plugin_cache.get("roots") or [] if r.get("blocker"))
+    if plugin_cache.get("roots"):
+        return blockers
+    if plugin_cache.get("kind") == "stage" and plugin_cache.get("status") == "stale":
+        sample = plugin_cache.get("sample") or []
+        drift = plugin_cache.get("differing_count", 0) + plugin_cache.get("missing_count", 0)
+        blockers.append(
+            f"plugin stage {plugin_cache.get('stage')} differs from source HEAD in {drift} "
+            f"file(s) (e.g. {sample[0] if sample else '?'}). Fix: {plugin_cache.get('remedy')}"
+        )
+    elif plugin_cache.get("status") == "stale":
         deleted = plugin_cache.get("deleted_hook_scripts") or []
         if deleted:
             blockers.append(
@@ -1904,15 +2114,40 @@ def _review_invocation_report(
         events_path = project_events_json()
     observed_at = now or datetime.now(timezone.utc)
     cutoff = observed_at - timedelta(seconds=window_seconds)
+    window_start = observed_at - timedelta(seconds=2 * window_seconds)
     sent: dict[str, tuple[datetime, dict[str, Any]]] = {}
     attested: set[str] = set()
+    # Both must be missing: the writers commit through the event store, so a
+    # post-cutover journal can hold rows with no raw file beside it.
+    if not events_path.exists() and not events_path.with_suffix(".db").exists():
+        return [
+            "fno doctor: review invocations: no event journal; "
+            "no sent attempt to lose"
+        ]
     try:
-        with Path(events_path).open(encoding="utf-8") as stream:
-            for raw in stream:
-                try:
-                    event = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
+        from contextlib import nullcontext
+        from fno.events.store_client import query_rows
+        # In-process SQL read: doctor flows must not subprocess (the
+        # raw-cargo tripwire). A torn or unreadable store reads as empty.
+        try:
+            rows = query_rows(
+                events_path, types=["review_invocation", "review_attestation"]
+            )
+        except Exception:
+            rows = []
+        if not rows:
+            try:
+                with open(events_path, encoding="utf-8") as fh:
+                    rows = [
+                        parsed
+                        for line in fh
+                        if line.strip()
+                        for parsed in (json.loads(line),)
+                    ]
+            except (OSError, json.JSONDecodeError):
+                rows = []
+        with nullcontext(rows) as stream:
+            for event in stream:
                 data = event.get("data")
                 if not isinstance(data, dict):
                     continue
@@ -1936,36 +2171,57 @@ def _review_invocation_report(
                     invocation_id = data.get("invocation_id")
                     if isinstance(invocation_id, str) and invocation_id:
                         attested.add(invocation_id)
-    except FileNotFoundError:
-        # No journal is the normal state of a fresh checkout, not an
-        # instrument failure: nothing was ever sent, so nothing is lost.
-        return [
-            "fno doctor: review invocations: no event journal; "
-            "no sent attempt to lose"
-        ]
     except OSError as exc:
         return [f"fno doctor: review invocations: unmeasurable ({exc})"]
 
     lost = [
         (invocation_id, event_time, data)
         for invocation_id, (event_time, data) in sent.items()
-        if event_time <= cutoff and invocation_id not in attested
+        if window_start <= event_time <= cutoff and invocation_id not in attested
     ]
     if not lost:
         return [
             "fno doctor: review invocations: scan complete; "
             f"none lost in the last {window_seconds // 60}m"
         ]
+    # The settle sweep runs HERE, before the report: a lost invocation that
+    # can settle becomes a ledger row, and the report says `settled` beside it
+    # instead of re-reporting a loss the run just repaired. A settle failure
+    # is reported as a refusal, never raised - the scan stays a report.
+    settle_results: dict[str, dict[str, Any]] = {}
+    settle_error = ""
+    try:
+        from fno.review.invocation import invocation_ttl_minutes, settle_lost_invocations
+
+        for row in settle_lost_invocations(
+            ttl_minutes=invocation_ttl_minutes(), now=observed_at
+        ):
+            settle_results[str(row.get("invocation_id"))] = row
+    except Exception as exc:  # noqa: BLE001 - report the refusal, never die
+        settle_error = str(exc)
     lines = [
         "fno doctor: review invocations: "
         f"{len(lost)} sent attempt(s) have no matching attestation "
         f"after {window_seconds // 60}m"
     ]
     for invocation_id, _event_time, data in lost[:5]:
-        lines.append(
-            f"  lost {invocation_id}: transport={data.get('transport', 'unmeasured')} "
+        base = (
+            f"  {invocation_id}: transport={data.get('transport', 'unmeasured')} "
             f"receipt={data.get('receipt', 'unmeasured')}"
         )
+        settled_row = settle_results.get(invocation_id)
+        if settled_row and settled_row.get("settled"):
+            lines.append(
+                f"  settled {base[2:]} "
+                f"(lost attestation at {str(settled_row.get('head', ''))[:9]})"
+            )
+        elif settled_row:
+            lines.append(
+                f"  lost {base[2:]} (settle refused: {settled_row.get('reason')})"
+            )
+        else:
+            suffix = f" (settle sweep failed: {settle_error})" if settle_error else ""
+            lines.append(f"  lost {base[2:]}{suffix}")
     if len(lost) > 5:
         lines.append(f"  ... {len(lost) - 5} more lost invocation(s)")
     return lines
@@ -1982,6 +2238,21 @@ def _emit_human(
     out = (lambda m: typer.echo(m, err=True)) if err else typer.echo
     for line in _review_invocation_report():
         out(line)
+    source_sync = result.get("source_checkout_sync") or {}
+    if source_sync.get("status") == "behind":
+        behind = source_sync.get("behind")
+        unit = "commit" if behind == 1 else "commits"
+        out(
+            f"fno doctor: resolved source checkout is {behind} {unit} behind "
+            "origin/main; freshness is relative to stale local source. "
+            "Sync the checkout before trusting verification."
+        )
+    elif source_sync.get("status") == "unknown" and source_sync.get("source_head"):
+        out(
+            "fno doctor: source checkout sync is unknown "
+            f"({source_sync.get('detail') or 'no detail'}); "
+            "freshness against origin/main is unmeasured."
+        )
     status = result["status"]
     if status == "fresh":
         # Naming WHICH source is load-bearing. The comparison is against
@@ -2047,15 +2318,28 @@ def _emit_human(
                 "Run `fno doctor update` (or `fno doctor --fix`)."
             )
         else:
-            # Rust-only stale. Branch structurally guarantees non-None (rust_stale
-            # requires both rust_installed_rev and rust_source_rev to be set).
+            # Rust-only stale. The client rev pair may be None here: the
+            # per-component verdict can prove a stale sibling beside a fresh
+            # client, whose own rev check has nothing to compare.
             ri = result["rust_installed_rev"]
             rs = result["rust_source_rev"]
-            out(
-                f"fno doctor: rust bins STALE "
-                f"(installed {ri[:12]} != source {rs[:12]}). "
-                "Run fno doctor update (or fno doctor --fix)."
-            )
+            if ri is not None and rs is not None:
+                out(
+                    f"fno doctor: rust bins STALE "
+                    f"(installed {ri[:12]} != source {rs[:12]}). "
+                    "Run fno doctor update (or fno doctor --fix)."
+                )
+            else:
+                out(
+                    "fno doctor: rust bins STALE "
+                    "(a deployed component does not match the source build). "
+                    "Run fno doctor update (or fno doctor --fix); the component "
+                    "lines below name which one."
+                )
+        # The proposed repair replaces the tool env in place; name anything
+        # still running from it (gap audit blocker 3, the study clobber).
+        if live := _live_tool_env_processes():
+            out(f"fno doctor: {len(live)} live process(es) run from the installed tool env, e.g. {live[0][:160]}. The repair above would replace them mid-run; stop them first.")
     elif (
         result.get("content_indeterminate")
         and result.get("installed_rev") is not None
@@ -2117,7 +2401,7 @@ def _emit_human(
             out(f"fno doctor: rust fno-agents binary: {bin_label} rust revision unknown.")
 
     # Build provenance ONLY: the HEAD (git_rev) the binary was built at
-    # (ab-24a59d50). This is a DIFFERENT quantity from the crates/ subtree rev the
+    #. This is a DIFFERENT quantity from the crates/ subtree rev the
     # freshness verdict compares, so it must never be framed as a source mismatch:
     # a python-only commit advancing HEAD past the last crates/ change would
     # otherwise print a bogus "(source crates/ rev ...)" line beside a "rust bins
@@ -2130,11 +2414,34 @@ def _emit_human(
             "(build provenance)."
         )
 
+    # Component convergence: a summary line proves the probes ran; anything
+    # else renders per component with evidence and repair (Unknown included).
+    components = result.get("components") or []
+    non_fresh = [c for c in components if c.get("status") not in ("fresh", "updated")]
+    if components and not non_fresh:
+        names = ", ".join(str(c.get("component")) for c in components)
+        if result.get("daemon_drift"):
+            # An all-fresh on-disk sweep is not a fleet verdict while the
+            # daemon keeps executing pre-fix code. Never print the bare
+            # "N/N fresh" form beside a measured drift; the note below carries
+            # the canonical warning and the restart remedy.
+            out(
+                f"fno doctor: components: {len(components)}/{len(components)} fresh "
+                "on disk; a daemon drift note follows."
+            )
+        else:
+            out(f"fno doctor: components: {len(components)}/{len(components)} fresh ({names}).")
+    else:
+        for row in non_fresh:
+            row_line = row.get("line") if isinstance(row, dict) else None
+            if row_line:
+                out(f"fno doctor: {row_line}")
+
     daemon_drift = result.get("daemon_drift")
     if daemon_drift:
         out(f"fno doctor: note: {daemon_drift}")
 
-    # Mux front-door health (x-c267): does bare `fno` launch the mux? Advisory.
+    # Mux front-door health: does bare `fno` launch the mux? Advisory.
     fd_state = result.get("mux_front_door")
     if fd_state == "active":
         out(f"fno doctor: mux front door: `fno` -> {result.get('mux_binary')} (active).")
@@ -2151,15 +2458,21 @@ def _emit_human(
             "precedes any Python `fno` on PATH."
         )
 
-    # Running-process freshness (x-e6dd): a mux server that predates the installed
-    # binary is still speaking the old proto - it survives an upgrade by design and
-    # silently blocks agent dispatch until restarted. Advisory only.
+    # Wire-floor freshness: the WIRE verdict, not the build one
+    #; build staleness is the census below. Advisory only.
     for sess in result.get("mux_server_stale") or []:
         out(
-            f"fno doctor: mux server '{sess}' is running an older build than the installed "
-            "`fno`; run `fno agents restart` to cut it over (auto-heals pane-less servers; "
+            f"fno doctor: mux server '{sess}' is below the wire compatibility floor; "
+            "run `fno agents restart` to cut it over (auto-heals pane-less servers; "
             "add `--mux` to also end servers with live panes)."
         )
+
+    # Running-process census: one line per stale row.
+    for row in result.get("running_components") or []:
+        if isinstance(row, dict) and row.get("verdict") == "stale":
+            pid = f" pid {row['pid']}" if row.get("pid") else ""
+            out(f"fno doctor: {row.get('component')} '{row.get('name') or 'unnamed'}'{pid} is an older "
+                f"build ({row.get('evidence')}); on restart: {row.get('on_restart')}; keeps {row.get('survives')}.")
 
     # Orphan files from deleted capture/migration paths (Group 3 GC). Advisory.
     orphans = result.get("orphan_files") or []
@@ -2169,7 +2482,7 @@ def _emit_human(
             f"capture paths (safe to delete): {', '.join(orphans)}"
         )
 
-    # PR-watch liveness (x-e106). Advisory: only speak up when the enabled
+    # PR-watch liveness. Advisory: only speak up when the enabled
     # watcher is not actually running, or is freshly installed and pending.
     pw = result.get("pr_watch") or {}
     pw_verdict = pw.get("verdict")
@@ -2179,8 +2492,56 @@ def _emit_human(
             f"fno doctor: pr-watch enabled but not running ({pw.get('detail')}); "
             f"run `{fix}`, then verify with `fno do pr watch status`."
         )
+    elif pw_verdict == "wedged":
+        fix = pw.get("fix") or "fno do pr watch refresh"
+        out(
+            f"fno doctor: pr-watch wedged ({pw.get('detail')}); "
+            f"run `{fix}`, then verify with `fno do pr watch status`."
+        )
     elif pw_verdict == "healthy-pending":
         out(f"fno doctor: pr-watch installed, awaiting first tick ({pw.get('detail')}).")
+
+    # Control-plane arms, advisory: name every red (stale or
+    # failing) arm with the reader's own line; an unreadable readout never
+    # reads as green.
+    cpa = result.get("control_plane_arms") or {}
+    if cpa.get("unknown_reason"):
+        out(f"fno doctor: control-plane arms readout unknown ({cpa['unknown_reason']}); "
+            "staleness is unmeasured.")
+    for arm in cpa.get("red") or []:
+        line = arm.get("line")
+        if line:
+            out(f"fno doctor: control-plane arm {line}")
+        elif arm.get("producer_evidence") == "unobserved":
+            out(f"fno doctor: control-plane arm {arm.get('arm')} is UNOBSERVED "
+                "(no producer receipt in the journals)")
+        else:
+            out(f"fno doctor: control-plane arm {arm.get('arm')} is STALE "
+                f"(last tick {arm.get('age_s')}s ago, interval {arm.get('interval_s')}s, "
+                f"skip: {arm.get('skip_reason') or 'none'})")
+
+    # The durable-grant observer coupling: a standing dispatch grant
+    # (auto_merge.enabled true, grant=dispatch) implies a live watcher -
+    # recorded receipts are only executable while something ticks, so a
+    # grant whose observer is disabled or dead is not a quiet no-op, it is
+    # an UNREAD grant. Report observer_unavailable with the repair; the
+    # merge side stays silent on its own (nothing executes without the
+    # tick), which is exactly why the doctor must be the one to speak.
+    try:
+        from fno.config import load_settings
+
+        _am = load_settings().auto_merge
+        _standing_grant = bool(_am.enabled) and str(_am.grant or "none") == "dispatch"
+    except Exception:  # noqa: BLE001 - an unreadable config reads no grant
+        _standing_grant = False
+    if _standing_grant and pw_verdict in ("disabled", "dead"):
+        _fix = pw.get("fix") or "fno config set pr_watch.enabled true"
+        out(
+            "fno doctor: observer_unavailable - auto_merge.grant=dispatch is "
+            f"standing, but the PR watcher is {pw_verdict} ({pw.get('detail')}); "
+            f"recorded grants will not execute. Run `{_fix}`, then verify with "
+            "`fno do pr watch status`."
+        )
 
     # Open-file soft limit (advisory): name BOTH numbers and which launch
     # context each belongs to, or the warning repeats the trap it diagnoses.
@@ -2252,18 +2613,10 @@ def _emit_human(
         )
 
     surf = result.get("harness_surface") or {}
-    oc = surf.get("opencode")
-    if oc == "stale":
-        out(
-            "fno doctor: opencode footnote plugin is STALE (drifted from the "
-            "shipped source); re-run `fno config setup` to refresh it."
-        )
-    elif oc == "missing":
-        out(
-            "fno doctor: opencode is set up but its footnote plugin is missing; "
-            "re-run `fno config setup` to install it."
-        )
+    for line in surf.get("opencode_doctor_lines") or []:
+        out(f"fno doctor: {line}")
     _emit_codex_context_window(result, out=out)
+
     dupes = surf.get("codex_marketplace_duplicates") or []
     if dupes:
         out(
@@ -2286,13 +2639,13 @@ def _emit_human(
             f"fno doctor: codex plugin: {str(plugin_status).upper()} "
             f"({detail}; enabled={enabled}); run `{plugin.get('remedy')}`."
         )
-    # Agent health (x-1c7b). Grooming freshness is advisory - a fresh install has
+    # Agent health. Grooming freshness is advisory - a fresh install has
     # legitimately never groomed - but a nonzero-exit agent reddens the exit code
     # below, because "installed" has repeatedly not meant "running".
     gr = result.get("groom") or {}
     if gr.get("state") == "never":
         if gr.get("agent_installed"):
-            remedy = " despite an installed agent; check ~/.fno/groom.err.log."
+            remedy = " despite an installed agent; check ~/.fno/logs/groom.err.log."
         elif sys.platform == "darwin":
             remedy = "; run `fno backlog groom --install-agent` to schedule it daily."
         else:
@@ -2303,34 +2656,17 @@ def _emit_human(
         out(
             f"fno doctor: backlog grooming last ran {gr['hours']:.0f}h ago "
             "(the daily pass is not running); check `launchctl list | grep sh.fno.groom` "
-            "and ~/.fno/groom.err.log."
+            "and ~/.fno/logs/groom.err.log."
         )
 
-    ids = result.get("archive_id_collisions") or {}
-    if ids.get("unreadable"):
-        out(
-            "fno doctor: graph-archive.json is corrupt; node id collisions "
-            "could not be checked. Restore it from the .bak read_graph left, "
-            "or rebuild it, then re-run doctor."
-        )
-    if ids.get("count"):
-        shown = ", ".join(ids["ids"][:10])
-        more = f" (+{ids['count'] - 10} more)" if ids["count"] > 10 else ""
-        out(
-            f"fno doctor: {ids['count']} node id(s) collide between the working "
-            f"graph and the archive: {shown}{more}; run "
-            "`fno backlog archive-dedupe-ids --apply` to remint the archived side."
-        )
 
-    # Canonical-sync freshness. Advisory like grooming: the alarm
-    # exists because process-liveness reads green through this exact failure.
     pms = result.get("post_merge_sync") or {}
     if pms.get("stale"):
         out(
             f"fno doctor: post-merge sync STALE - the canonical checkout is not "
             f"synced with recent merges ({pms.get('detail')}); run "
             "`fno do pr sync-canonical --pr-number <n>` and check "
-            "~/.fno/pr-watcher.err.log."
+            "~/.fno/logs/pr-watcher.err.log."
         )
     elif pms.get("state") == "unknown":
         # "Could not tell" must not read as "fine". An unauthenticated gh was
@@ -2341,19 +2677,44 @@ def _emit_human(
             "run `gh auth status`."
         )
 
+    # Evals demand: a red row is an escalation, never a gate; silent when fresh.
+    ev = result.get("evals")
+    if ev is None or ev.get("never_ran") or ev.get("age_days") is None:
+        detail = "no eval history" if ev is None else "no regression-tier run on record"
+        out(f"fno doctor: evals UNKNOWN ({detail}); "
+            "run `fno doctor evals run --tier regression -y`.")
+    elif ev.get("stale"):
+        out(
+            f"fno doctor: evals STALE - the newest regression-tier run is "
+            f"{int(ev['age_days'])}d old; run "
+            "`fno doctor evals run --tier regression -y`."
+        )
+    elif ev.get("regressed"):
+        out(
+            f"fno doctor: evals REGRESSING - {', '.join(ev['regressed'])} dropped "
+            f"against the prior {int(ev.get('window_days') or 7)}d window; run "
+            "`fno doctor evals trend`."
+        )
+
     agents = result.get("launch_agents") or {}
     if not agents.get("applicable"):
         # No launchctl (Linux) or an unrunnable probe. Say so rather than let a
         # silent scan read as a clean bill of health.
         out("fno doctor: LaunchAgent health: not applicable (no launchctl on this host).")
     for entry in agents.get("dead") or []:
+        label = entry.get("label")
+        if label == "sh.fno.pr-watcher":
+            remedy = "run `fno do pr watch refresh`"
+        else:
+            remedy = "re-run `fno doctor update` if the entry point moved"
+        exit_code = entry.get("exit")
         out(
-            f"fno doctor: LaunchAgent {entry['label']} last exited {entry['exit']} "
-            "(it is installed but failing); check its log under ~/.fno/ and re-run "
-            "`fno doctor update` if the entry point moved."
+            f"fno doctor: LaunchAgent {label} last exited "
+            f"{exit_code if exit_code is not None else 'exit unknown'} "
+            f"(it is installed but failing); check its log under ~/.fno/ and {remedy}."
         )
 
-    # Silent-switch legibility (x-8cd5 Wave 6): the applied posture, then both
+    # Silent-switch legibility (Wave 6): the applied posture, then both
     # directions of the rule. Advisory; never changes the exit code.
     ss = result.get("silent_switches") or {}
     stamp = ss.get("posture") or {}
@@ -2382,7 +2743,7 @@ def _emit_human(
         if f.get("cause"):
             out(f"  cause: {f['cause']}")
 
-    # The pair the ARMED lines above never made (x-0888): armed with ZERO
+    # The pair the ARMED lines above never made: armed with ZERO
     # lanes merges a code PR unreviewed. Advisory, never changes the exit code.
     gap = result.get("auto_merge_review_gap")
     if gap:
@@ -2409,10 +2770,21 @@ def _emit_human(
             f"run `{finding['command']}` or let the reaper restore it."
         )
 
-    # Deployed claude plugin cache (x-4be1): the hooks actually executed by
-    # Claude sessions. Advisory, same vocabulary as the wheel/rust legs.
+    # Deployed fno plugin roots: one line per root, rendered by the Rust fold.
     pc = result.get("plugin_cache") or {}
-    if pc.get("status") == "stale":
+    for root in pc.get("roots") or []:
+        role = "live" if root.get("live") else "second copy"
+        out(f"fno doctor: plugin root ({root.get('origin')}, {role}): {root.get('path')}: {root.get('status')}{root.get('note') or ''}")
+    if pc.get("roots"):
+        pass
+    elif pc.get("kind") == "stage" and pc.get("status") == "stale":
+        sample = pc.get("sample") or []
+        out(
+            f"fno doctor: plugin stage STALE ({pc.get('differing_count', 0)} differing, "
+            f"{pc.get('missing_count', 0)} missing; e.g. {sample[0] if sample else '?'}). "
+            f"Fix: {pc.get('remedy')}, then restart sessions to pick up new hook text."
+        )
+    elif pc.get("status") == "stale":
         sha = str(pc.get("sha") or "")[:12]
         when = str(pc.get("installed_at") or "")[:10] or "?"
         # `fno update` cannot refresh this: installed_plugins.json is claude's
@@ -2447,7 +2819,7 @@ def _emit_human(
             "to replace it (the old file is backed up)."
         )
 
-    # Plugin hook launch probe (x-d991): a hook command that cannot start fails
+    # Plugin hook launch probe: a hook command that cannot start fails
     # open in Codex with zero signal; each row is one guard that was absent.
     ph: dict[str, Any] = result.get("plugin_hooks") or {}
     if ph.get("applicable"):
@@ -2472,7 +2844,7 @@ def _emit_human(
     elif ph.get("reason"):
         out(f"fno doctor: plugin hook probe skipped ({ph['reason']}).")
 
-    # Codex hook layer split (x-d991): a foreign hook in ~/.codex/hooks.json is
+    # Codex hook layer split: a foreign hook in ~/.codex/hooks.json is
     # not footnote's to remove, but the split itself is the diagnostic gap.
     foreign = surf.get("codex_hooks_foreign_json") or []
     if foreign:
@@ -2870,11 +3242,10 @@ def _run_codex_bind_canary(cwd: Path) -> dict[str, Any]:
     import time
     import uuid as _uuid
 
+    from fno.agents.codex_pane import _codex_session_ids_loaded, _make_codex_bind_probe
     from fno.agents.mux_spawn import (
         _await_pane_binding,
-        _codex_session_ids_loaded,
         _lookup_child_pid,
-        _make_codex_bind_probe,
         _reap_spawned_pane,
         _run_mux,
         build_pane_argv,
@@ -2894,23 +3265,42 @@ def _run_codex_bind_canary(cwd: Path) -> dict[str, Any]:
     source_auth = source_home / "auth.json"
     if source_auth.is_file():
         (codex_home / "auth.json").symlink_to(source_auth.resolve())
-    prompt = "fno codex bind canary: reply READY and take no other action."
-    argv = build_pane_argv("codex", prompt, cwd, True, None, name=name)
-    argv = ["env", f"CODEX_HOME={codex_home}", *argv]
-    # None (daemon unreachable at this instant) is passed through as-is; the
-    # ordinary production probe refuses to correlate against a fabricated
-    # empty baseline. This home is newly created and uniquely owned by the
-    # canary, so it positively contains no pre-existing daemon sessions: an
-    # absent pre-spawn socket is an empty baseline here, not ambiguity.
-    baseline_ids = _codex_session_ids_loaded(cwd, codex_home=codex_home)
-    if baseline_ids is None:
-        baseline_ids = set()
-    spawn_started_ms = int(time.time() * 1000)
-    proc = _run_mux(
-        ["mux", "pane", "run", "--session", session, "--cwd", str(cwd), "--", *argv],
-        subprocess.run,
-    )
+    # Start the daemon under the private CODEX_HOME; stop it on every exit.
+    from fno.agents.codex_pane import ensure_codex_daemon
+
+    daemon_env = {**os.environ, "CODEX_HOME": str(codex_home)}
+    ensure_codex_daemon(subprocess.run, env=daemon_env)
+
+    def _stop_daemon() -> None:
+        subprocess.run(
+            ["codex", "app-server", "daemon", "stop"],
+            capture_output=True,
+            text=True,
+            env=daemon_env,
+        )
+
+    try:
+        prompt = "fno codex bind canary: reply READY and take no other action."
+        argv = build_pane_argv("codex", prompt, cwd, True, None, name=name)
+        argv = ["env", f"CODEX_HOME={codex_home}", *argv]
+        # None (daemon unreachable at this instant) is passed through as-is; the
+        # ordinary production probe refuses to correlate against a fabricated
+        # empty baseline. This home is newly created and uniquely owned by the
+        # canary, so it positively contains no pre-existing daemon sessions: an
+        # absent pre-spawn socket is an empty baseline here, not ambiguity.
+        baseline_ids = _codex_session_ids_loaded(cwd, codex_home=codex_home)
+        if baseline_ids is None:
+            baseline_ids = set()
+        spawn_started_ms = int(time.time() * 1000)
+        proc = _run_mux(
+            ["mux", "pane", "run", "--server", session, "--cwd", str(cwd), "--", *argv],
+            subprocess.run,
+        )
+    except BaseException:
+        _stop_daemon()
+        raise
     if proc.returncode != 0:
+        _stop_daemon()
         return {
             "bound": False,
             "session_id": None,
@@ -2926,6 +3316,7 @@ def _run_codex_bind_canary(cwd: Path) -> dict[str, Any]:
         # dispatch raises on): the canary pane may exist without a way to
         # name it, so point at the manual cleanup path instead of a silent
         # leak.
+        _stop_daemon()
         return {
             "bound": False,
             "session_id": None,
@@ -2998,6 +3389,7 @@ def _run_codex_bind_canary(cwd: Path) -> dict[str, Any]:
         }
     finally:
         _reap_spawned_pane(session, pane_id, subprocess.run)
+        _stop_daemon()
 
 
 def _emit_codex_bind_report(result: dict[str, Any]) -> None:
@@ -3081,7 +3473,7 @@ def _emit_codex_hooks_report(result: dict[str, Any], *, err: bool) -> None:
 
 
 # --------------------------------------------------------------------------
-# Dead-letter visibility (US7, x-605c): the durable floor is silent quicksand
+# Dead-letter visibility (US7): the durable floor is silent quicksand
 # if a recipient's drain is unwired -- senders see `queued (durable)` + exit 0
 # forever. Two advisory findings, never blocking: (a) a claude env whose
 # `drain-self` SessionStart hook is not wired, (b) unread bus mail past a
@@ -3098,15 +3490,11 @@ def _a2a_handle_re() -> "re.Pattern[str]":
     the flip is undeliverable, so the dead-letter report is the only thing that
     surfaces it. Prefixes come from the complete supported-harness roster
     (KNOWN_HARNESSES), not the narrower capability-backed set, so adding a
-    harness to the roster cannot silently drop it out of the scan - the same
-    anti-drift property _legacy_handle_re in harness_identity carries.
+    harness to the roster cannot silently drop it out of the scan.
     """
     from fno.harness_names import KNOWN_HARNESSES
 
     return re.compile(rf"^(?:(?:{'|'.join(KNOWN_HARNESSES)})-)?[0-9a-fA-F]{{6,}}$")
-
-
-_A2A_HANDLE_RE = _a2a_handle_re()
 
 
 def _plugin_hooks_json() -> Optional[Path]:
@@ -3143,6 +3531,17 @@ def _drain_hook_wired(hooks_json: Optional[Path] = None) -> Optional[bool]:
         for c in (h.get("hooks") or []) if isinstance(h, dict) else []:
             if isinstance(c, dict):
                 cmds.append(str(c.get("command", "")))
+    # Producers moved into hooks/context-hooks.json (the context-run groups);
+    # their argv strings name the same scripts, so scan them beside hooks.json.
+    try:
+        declaration = json.loads(
+            (path.parent / "context-hooks.json").read_text(encoding="utf-8")
+        )
+        for group in (declaration.get("groups") or {}).values():
+            for producer in group.get("producers") or []:
+                cmds.append(" ".join(str(a) for a in producer.get("argv") or []))
+    except (OSError, ValueError, UnicodeDecodeError, AttributeError):
+        pass
     return any("mail-drain" in c or "drain-self" in c for c in cmds)
 
 
@@ -3177,32 +3576,25 @@ def _drained_msg_ids() -> set[str]:
     Read once per sweep so the dead-letter sweep prefers a positive drain marker
     over cursor inference: a message with a marker was drained and never
     escalates, while cursor logic stays as the fallback for legacy mail written
-    before the marker existed. A torn or unreadable log reads as empty, so the
+    before the marker existed. A torn or unreadable store reads as empty, so the
     sweep degrades to cursor-only (its prior behavior) rather than crashing or
     silently clearing its findings.
     """
     from fno.paths import state_dir
 
-    path = state_dir() / "events.jsonl"
     ids: set[str] = set()
     try:
-        # Stream line-by-line: the events log grows unboundedly, so never slurp
-        # it whole just to collect drained ids (mirrors gate_escape.py's reader).
-        with path.open("r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if "agent_mail_drained" not in line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except (ValueError, TypeError):
-                    continue
-                if not isinstance(rec, dict):
-                    continue
-                if rec.get("kind") == "agent_mail_drained":
-                    mid = rec.get("msg_id")
-                    if isinstance(mid, str) and mid:
-                        ids.add(mid)
-    except OSError:
+        # Committed rows, not journal bytes: the store commit is the write
+        # boundary, so a marker the emitter committed is only visible there.
+        from fno.events.store_client import query_rows
+
+        for rec in query_rows(state_dir() / "events.jsonl", types=["agent_mail_drained"]):
+            mid = rec.get("msg_id")
+            if not isinstance(mid, str):
+                mid = (rec.get("data") or {}).get("msg_id")
+            if isinstance(mid, str) and mid:
+                ids.add(mid)
+    except Exception:
         return ids
     return ids
 
@@ -3242,7 +3634,7 @@ def _stale_dead_letters(
             # addressee. The regex stays as the fallback for legacy handle mail
             # that predates the US6 stamp.
             meta = getattr(m, "meta", None) or {}
-            if meta.get("owner") or _A2A_HANDLE_RE.match(to):
+            if meta.get("owner") or _a2a_handle_re().match(to):
                 recips.add(to)
     except Exception:  # noqa: BLE001 — a torn bus contributes no findings
         return []
@@ -3320,7 +3712,7 @@ def _managed_block_report() -> dict:
 
 
 # --------------------------------------------------------------------------
-# Per-harness surface freshness (x-3248 Change 5): `fno doctor update` refreshes only
+# Per-harness surface freshness (Change 5): `fno doctor update` refreshes only
 # the shared CLI/wheel; the codex marketplace plugin and the opencode local
 # plugin are separate surfaces with their own refresh verbs. Report-and-point
 # only (no auto-fix): the refresh action differs per harness and stays manual.
@@ -3352,19 +3744,31 @@ def _harness_surface_report() -> dict[str, Any]:
     registered twice). Never blocks/exits; a missing harness is simply silent."""
     report: dict[str, Any] = {}
     try:
-        from fno.setup.integration import (
-            _opencode_is_installed,
-            _opencode_plugin_dest,
-            _opencode_plugins_dir,
-        )
-
         # Only when opencode is actually set up (its plugins dir exists), so a
-        # non-opencode user is never nagged.
-        if _opencode_plugins_dir().exists():
-            if not _opencode_plugin_dest().exists():
-                report["opencode"] = "missing"
-            elif not _opencode_is_installed():
-                report["opencode"] = "stale"
+        # non-opencode user is never nagged. The opencode leg reads one JSON
+        # receipt from the fno-agents door: what the manifest says is
+        # installed, what the --pure catalogs say is loaded, and the
+        # difference by name.
+        oc_home = Path(
+            os.environ.get("OPENCODE_CONFIG_DIR") or Path.home() / ".config/opencode"
+        )
+        if (oc_home / "plugins").is_dir():
+            from fno.rust_binary import call_binary_json
+
+            err, receipt = call_binary_json(
+                "plugin-install", ["--status", "--json", "opencode"]
+            )
+            if err is None and isinstance(receipt, dict):
+                # The sentences are computed in Rust (status_json's
+                # doctor_lines: one line per install state, including omo
+                # findings and digest drift). Python only carries them.
+                lines = receipt.get("doctor_lines")
+                if isinstance(lines, list):
+                    report["opencode_doctor_lines"] = [
+                        str(line.get("text", ""))
+                        for line in lines
+                        if isinstance(line, dict) and line.get("text")
+                    ]
     except Exception:
         pass
 
@@ -3385,7 +3789,7 @@ def _harness_surface_report() -> dict[str, Any]:
                 "status": "unknown",
                 "issue": "inspection-failed",
                 "detail": str(exc)[-500:],
-                "remedy": "fno config setup codex-plugin --channel release --refresh",
+                "remedy": "fno config plugin install codex --force",
             }
 
     # Surface codex hooks dual-representation in the MAIN run too, not only the
@@ -3397,7 +3801,7 @@ def _harness_surface_report() -> dict[str, Any]:
         # A foreign hook in ~/.codex/hooks.json is informational only - footnote
         # owns config.toml and must not remove another tool's hook - but a layer
         # split is exactly the unanswerable "which hook ran, from where?" this
-        # node exists to close, so surface it rather than stay silent (x-d991).
+        # node exists to close, so surface it rather than stay silent.
         if codex.get("foreign_json_hooks"):
             report["codex_hooks_foreign_json"] = codex["foreign_json_hooks"]
     except Exception:
@@ -3427,7 +3831,7 @@ def _harness_surface_report() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Plugin hook launch probe: the live fail-open detector (x-d991)
+# Plugin hook launch probe: the live fail-open detector
 # ---------------------------------------------------------------------------
 #
 # A hook whose command cannot resolve (PLUGIN_ROOT unset/empty, or a script
@@ -3815,9 +4219,7 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     advisory report. The one place that reads the machine, so `fno doctor`
     and the setup wizard (`report_machine_blockers` in `setup_cli.py`) stay
     two callers of one authority instead of two implementations that drift
-    (x-75dc)."""
-    from fno import update as _update
-
+."""
     src = _resolve_source(source)
     source_rev = _source_rev(src) if src is not None else None
     marker = _read_marker()
@@ -3831,6 +4233,9 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     source_config_keys = _source_config_keys(src)
     content_drift = _python_content_drift(src)
 
+    # Per-component convergence: feeds the rust gate and renders per component.
+    components = _component_convergence(src, rust, marker, content_drift)
+
     result = _verdict(
         source_resolved=src is not None,
         source_rev=source_rev,
@@ -3843,22 +4248,32 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
         deployed_config_keys=deployed_config_keys,
         source_config_keys=source_config_keys,
         content_drift_count=content_drift,
+        component_statuses=[
+            (str(c.get("component")), str(c.get("status"))) for c in components
+        ],
     )
-    # Advisory front-door fields (x-c267); never change status/exit.
+    result["components"] = components
+    # Advisory front-door fields; never change status/exit.
     result.update(_mux_front_door_report())
     result["daemon_drift"] = _daemon_drift_warning()
-    # Advisory process-freshness (x-e6dd): a long-running mux server still on the
+    # Advisory process-freshness: a long-running mux server still on the
     # OLD proto after an upgrade. Binary staleness is above; this is the running
     # PROCESS. Never changes status/exit.
-    result["mux_server_stale"] = _update.stale_mux_servers()
+    result["mux_server_stale"] = _probes(None).get("mux_server_stale") or []
+
+    # Advisory running-process census; never changes status/exit.
+    result["running_components"] = _probes(None).get("running_components") or []
 
     # Advisory orphan-file check (Group 3 GC); never changes status/exit.
     result["orphan_files"] = _orphan_report()
 
-    # Advisory PR-watch liveness (x-e106): enabled-but-dead ran silently for
+    # Advisory PR-watch liveness: enabled-but-dead ran silently for
     # weeks with zero signal; the verdict derives from tick recency (ground
     # truth), never from config alone. Never changes status/exit.
     result["pr_watch"] = _pr_watch_liveness()
+
+    # Advisory control-plane arms readout; never changes status/exit.
+    result["control_plane_arms"] = _control_plane_arms_report()
 
     # Advisory open-file limit visibility: a launchd child starves at 256 while
     # a login shell reads 1048576 and both are correct. Never changes
@@ -3881,11 +4296,11 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     # block older than the current template. Never changes status/exit.
     result["managed_block"] = _managed_block_report()
 
-    # Advisory per-harness surface freshness (x-3248): codex/opencode plugin
+    # Advisory per-harness surface freshness: codex/opencode plugin
     # surfaces `fno doctor update` does not cover. Never changes status/exit.
     result["harness_surface"] = _harness_surface_report()
 
-    # Advisory plugin hook launch probe (x-d991): a hook command that cannot
+    # Advisory plugin hook launch probe: a hook command that cannot
     # resolve fails open in Codex with no signal. This launches every configured
     # hook through the real ``$SHELL -lc`` path and reports any that cannot
     # start. Loud on failure; never changes the staleness exit code.
@@ -3896,21 +4311,23 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     # changes status/exit.
     result["pre_push_hook"] = _pre_push_hook_report(src)
 
-    # Agent health (x-1c7b): grooming freshness is advisory, but a nonzero-exit
-    # LaunchAgent DOES change the exit code - an installed-but-dead agent is
-    # exactly the silence this check exists to break.
     result["groom"] = _groom_health()
     result["archive_id_collisions"] = _archive_id_collisions()
     result["post_merge_sync"] = _post_merge_sync_health()
+    try:
+        from fno.evals.report import evals_health_summary
+        from fno.paths import evals_history
+
+        result["evals"] = evals_health_summary(evals_history())
+    except Exception:  # noqa: BLE001 - an alarm that crashes doctor helps nobody
+        result["evals"] = None
+    result["source_checkout_sync"] = _source_checkout_sync(src)
     result["launch_agents"] = _launch_agent_failures()
 
-    # Advisory self-attestation share (x-7f7b): per merged PR in the recent
-    # window, whether coverage rested on the author's own attestation alone -
-    # the number to read before flipping review.require_corroboration. Never
-    # changes status/exit.
-    result["self_attested_coverage"] = _self_attested_coverage_report()
+    # Advisory free-disk reading; under the floor is a blocker. Never changes status/exit.
+    result["disk_free"] = _disk_free_report()
 
-    # Advisory silent-switch legibility (x-8cd5 Wave 6): default-off switches
+    # Advisory silent-switch legibility (Wave 6): default-off switches
     # silently producing inaction + default-on/armed switches silently merging.
     # Never changes status/exit. The plugin-cache report is computed ONCE and
     # shared with the silent-switch pass (its unknown-manifest cause reads it):
@@ -3919,7 +4336,7 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     plugin_cache = _plugin_cache_report()
     # The armed-manifest scan is likewise computed ONCE and shared: the
     # silent-switch lines and the review-gap pair check must quote the same
-    # count (see _auto_merge_review_gap, x-0888).
+    # count (see _auto_merge_review_gap).
     armed_manifests = _auto_merge_armed_manifests()
     result["silent_switches"] = _silent_switch_report(
         plugin_cache=plugin_cache, armed_manifests=armed_manifests
@@ -3929,7 +4346,7 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
     )
     result["merge_gating_optouts"] = _merge_gating_optout_report()
 
-    # Advisory deployed-plugin-cache freshness (x-4be1): the hooks Claude
+    # Advisory deployed-plugin-cache freshness: the hooks Claude
     # sessions actually run. Never changes status/exit.
     result["plugin_cache"] = plugin_cache
 
@@ -4113,10 +4530,11 @@ def doctor_command(
         # semantics with the staleness verdict.
         raise typer.Exit(_cost_check())
 
-    from fno import update
-
     result = build_report(source)
     blockers = _blockers(result)
+    source_checkout_blocked = (
+        (result.get("source_checkout_sync") or {}).get("status") == "behind"
+    )
 
     if blockers_only:
         _emit_blockers(blockers, err=False)
@@ -4125,7 +4543,7 @@ def doctor_command(
     # _emit_human/--fix below only need `src` and the rust binary path, not
     # the full advisory assembly build_report already did - recompute the
     # cheap pieces rather than thread extra return values through build_report's
-    # `-> dict[str, Any]` contract (the wizard's caller shape, x-75dc).
+    # `-> dict[str, Any]` contract (the wizard's caller shape, x-aaaa).
     src = _resolve_source(source)
     rust = {"binary": result.get("rust_binary")}
     cargo_bin_present = _cargo_bin_present()
@@ -4146,19 +4564,57 @@ def doctor_command(
             preamble_line = _preamble_budget_line(src)
             if preamble_line is not None:
                 typer.echo(preamble_line)
+            if (line := _session_start_bytes_line(preamble_line)) is not None:
+                typer.echo(line)
+
+    # A repair from stale source can reinstall the same pre-merge snapshot and
+    # then exec away before the final blocker check. Refuse every repair path
+    # until the source checkout is synced, so --fix never reports success over
+    # a stale comparison boundary.
+    if fix and source_checkout_blocked:
+        typer.echo(
+            "fno doctor: --fix refused: resolved source checkout is behind "
+            "origin/main; sync the checkout before repairing.",
+            err=True,
+        )
+        raise typer.Exit(1)
 
     # Report BEFORE delegating: `fno doctor update` execs/replaces this process.
     if fix:
-        # Heal a dead pr-watch first: the verdict's own fix is the bounce, and a
-        # python_stale --fix execs `fno doctor update` below and never returns, so act
-        # on it here. Advisory - never changes doctor's exit code (a dead
-        # watcher and a stale binary are distinct concerns).
+        # Heal a dead or wedged pr-watch first: the verdict's own fix is the
+        # bounce, and a python_stale --fix execs `fno doctor update` below and
+        # never returns, so act on it here. Advisory - never changes doctor's
+        # exit code (a dead watcher and a stale binary are distinct concerns).
+        # `wedged` takes the refresh cure, not the bounce: its watermark is
+        # fresh, so the tick already runs and re-bouncing the same plist
+        # re-runs the same failure; the plist must be re-rendered onto the
+        # current binary first.
         pw = result.get("pr_watch") or {}
-        if pw.get("verdict") == "dead" and not json_out:
+        if pw.get("verdict") in ("dead", "wedged") and not json_out:
             from fno.pr_watch._install import _LAUNCH_AGENTS_DIR, heal_watcher
 
-            hmsg, _ = heal_watcher(launch_agents_dir=_LAUNCH_AGENTS_DIR)
-            typer.echo(f"fno doctor: --fix pr-watch heal: {hmsg}", err=True)
+            if pw.get("verdict") == "wedged":
+                # The refresh verb is the native cure; it self-gates on pr_watch.enabled.
+                import subprocess
+                from fno.rust_binary import resolve_binary
+
+                binary = resolve_binary()
+                if binary is None:
+                    said = "skipped; fno-agents binary not found"
+                else:
+                    proc = subprocess.run(
+                        [str(binary), "pr-watch", "refresh", "--force-bounce", "--caller", "doctor-fix"],
+                        capture_output=True, text=True, check=False, timeout=120,
+                    )
+                    said = (proc.stdout or "").strip() or f"rc={proc.returncode}"
+                typer.echo(f"fno doctor: --fix pr-watch refresh: {said}", err=True)
+            else:
+                hmsg, _ = heal_watcher(
+                    launch_agents_dir=_LAUNCH_AGENTS_DIR,
+                    defer_when_ticking=True,
+                    caller="doctor-fix",
+                )
+                typer.echo(f"fno doctor: --fix pr-watch heal: {hmsg}", err=True)
 
         # A stale plugin cache is counted in `blockers`, and nothing on this path
         # clears it: the exec below is `fno update`, which does not own claude's
@@ -4166,7 +4622,7 @@ def doctor_command(
         # in silence. Advisory, like the two around it - the exit code is settled
         # by the blocker list, and the defect this closes is the silence.
         pc = result.get("plugin_cache") or {}
-        if pc.get("status") == "stale" and not json_out:
+        if pc.get("status") == "stale" and not pc.get("roots") and not json_out:
             typer.echo(
                 "fno doctor: --fix cannot refresh the claude plugin cache; that "
                 "registry belongs to claude. Run: `claude plugin update "
@@ -4205,60 +4661,34 @@ def doctor_command(
                 "run `fno doctor --fix` without --json to repair.",
                 err=True,
             )
-        elif result["python_stale"]:
+        elif result["python_stale"] or result["rust_stale"]:
+            # One native update answers both stale kinds: its rust leg
+            # refreshes the cargo bins and its uv leg reinstalls the Python
+            # package. The verb's own IN_PROGRESS guard and source-pin gate
+            # apply; its exit code is the fix's exit code (ruling d-f2bd8d86:
+            # a failed step no longer exits 0).
+            door = _front_door()
+            if not door:
+                typer.echo(
+                    "fno doctor: --fix needs the native front door `fno` on PATH; none found.",
+                    err=True,
+                )
+                raise typer.Exit(1)
             typer.echo("fno doctor: --fix running `fno doctor update`...", err=True)
-            # Delegate to update (its own IN_PROGRESS guard applies). Its new
-            # rust leg refreshes both Python and Rust. On Unix this execs and
-            # never returns; the post-update marker then matches HEAD.
-            update.update_command(source=source, dry_run=False, force=False)
-            return
-        elif result["rust_stale"]:
-            # Rust-only stale: call the refresh helper directly (no needless
-            # Python reinstall). src cannot be None here because rust_stale
-            # requires rust_source_rev, which requires a resolved source.
-            if update._target_in_progress():
-                typer.echo(
-                    "fno doctor: --fix refused: target-state.md shows status: IN_PROGRESS. "
-                    "Refreshing rust bins mid-loop risks binary skew; "
-                    "run `fno doctor update --force` after the loop, or to override now.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            assert src is not None, "rust_stale True but src is None - logic error"
-            outcome = update._refresh_rust_bins(src, force=False, dry_run=False)
-            if outcome == "refreshed":
-                typer.echo("fno doctor: rust bins refreshed successfully.", err=True)
-                raise typer.Exit(0)
-            elif outcome == "fresh":
-                # A concurrent refresh can land between the verdict read and
-                # the repair; the goal state is achieved either way.
-                typer.echo(
-                    "fno doctor: rust bins already fresh (refreshed concurrently);"
-                    " nothing to fix.",
-                    err=True,
-                )
-                raise typer.Exit(0)
-            elif outcome == "refreshed-no-marker":
-                # Bins rebuilt, but no marker landed (ab-703f2ed2): the
-                # stale verdict will not converge - the next doctor run
-                # still reports rust stale. Exit nonzero so loop callers
-                # don't believe the repair worked.
-                typer.echo(
-                    "fno doctor: rust bins refreshed but the marker was not"
-                    " written; the stale verdict will not converge."
-                    " Check ~/.fno permissions and rerun `fno doctor`.",
-                    err=True,
-                )
-                raise typer.Exit(1)
-            else:
-                typer.echo(f"fno doctor: rust refresh outcome: {outcome}.", err=True)
-                raise typer.Exit(1)
+            raise typer.Exit(_run_update_verb(door, source))
         else:
             typer.echo("fno doctor: nothing to fix.", err=True)
 
     dead_agents = bool((result.get("launch_agents") or {}).get("dead"))
-    id_collisions = bool(
-        (result.get("archive_id_collisions") or {}).get("count")
-        or (result.get("archive_id_collisions") or {}).get("unreadable")
+    # A stale stage runs its hooks byte for byte; drift there is a blocker,
+    # not the after-every-merge advisory the git cache kind stays as.
+    pc = result.get("plugin_cache") or {}
+    stage_stale = pc.get("kind") == "stage" and pc.get("status") == "stale"
+    raise typer.Exit(
+        1
+        if result["status"] == "stale"
+        or source_checkout_blocked
+        or dead_agents
+        or stage_stale
+        else 0
     )
-    raise typer.Exit(1 if result["status"] == "stale" or dead_agents or id_collisions else 0)

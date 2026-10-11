@@ -3,11 +3,13 @@
 The dispatch lives in fno.post_merge_route: one warm/cold/defer decision
 (:func:`decide_post_merge_route`), a durable receipt (:func:`emit_receipt`),
 marker + claim dedup, and a verb-first cold path that runs
-``fno do pr ritual <n> --autonomous`` directly (no bg thread, no ``/fno:pr merged``
+``fno do pr ritual <n> --autonomous`` directly (no bg thread, no ``/fno:ship pr merged``
 LL wrapper). The ``run_verb`` and ``warm_inject`` seams are injected so no real
 subprocess or inject fires.
 """
 from __future__ import annotations
+
+import pytest
 
 from fno.graph._reconcile import (
     PrMergeState,
@@ -18,6 +20,25 @@ from fno.post_merge_route import (
     ColdRitualResult,
     dispatch_post_merge_ritual,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fake_flight(monkeypatch, request):
+    """Stub the native flight gate; @pytest.mark.real_flight opts out. The
+    x-616b ritual-claim guard reads a different lease (reconcile:pr-N) through
+    the Python claims writer and stays untouched."""
+    if "real_flight" in request.keywords:
+        return
+    import fno.backlog.single_flight as sf
+
+    seen: list[dict] = []
+
+    def fake_acquire(key, *, scope, name="single-flight", root=None, ttl_ms=sf.FLIGHT_TTL_MS):
+        seen.append({"key": key, "scope": scope, "name": name, "root": root, "ttl_ms": ttl_ms})
+        return sf.Flight(key=key, holder=f"{name}:fake", held=False)
+
+    monkeypatch.setattr(sf, "acquire_flight", fake_acquire)
+    return seen
 
 
 class _RunVerb:
@@ -132,13 +153,13 @@ def test_second_dispatch_same_sha_is_noop(tmp_path):
 
 
 def test_lock_contention_distinguished_from_marker(tmp_path, monkeypatch):
-    """A concurrent holder (ClaimHeldByOther) is in-flight, NOT done."""
-    from fno import claims
+    """A concurrent holder is in-flight, NOT done."""
+    import fno.backlog.single_flight as sf
 
     def _held(*a, **kw):
-        raise claims.ClaimHeldByOther("other", pid=999, host="h", key="k")
+        return sf.Flight(key="post-merge-ritual:test", holder="post-merge-dispatch:7:held", held=True)
 
-    monkeypatch.setattr(claims, "acquire_claim", _held)
+    monkeypatch.setattr(sf, "acquire_flight", _held)
     verb = _RunVerb()
     res = dispatch_post_merge_ritual(
         7, dedup_key="shaLC", auto_run=True, canonical_root=tmp_path, run_verb=verb,
@@ -443,14 +464,13 @@ _RITUAL_TTL_MS = 15 * 60 * 1000
 
 def _arm_ritual_claim(monkeypatch, tmp_path, pr_number, *, pid):
     from fno import claims
-    from fno.claims.io import claims_root_for
 
     global_root = tmp_path / "global"
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(global_root))
     key = f"reconcile:pr-{pr_number}"
     claims.acquire_claim(
         key, f"postmerge:pr-{pr_number}:test", ttl_ms=_RITUAL_TTL_MS,
-        pid=pid, root=claims_root_for(key),
+        pid=pid,
     )
     return global_root
 
@@ -503,13 +523,13 @@ def test_ritual_claim_free_falls_through_to_verb(tmp_path, monkeypatch):
 
 
 def test_ritual_guard_failopen_when_root_resolution_raises(tmp_path, monkeypatch):
-    """claim_status never raises, but claims_root_for can (no HOME). Fail open."""
-    import fno.claims.io as cio
+    """The guard's status read CAN raise (missing fno-agents binary). Fail open."""
+    import fno.claims as claims_pkg
 
     def _boom(_key):
-        raise RuntimeError("no home dir")
+        raise RuntimeError("no claims binary")
 
-    monkeypatch.setattr(cio, "claims_root_for", _boom)
+    monkeypatch.setattr(claims_pkg, "claim_status", _boom)
     verb = _RunVerb()
     res = dispatch_post_merge_ritual(
         404, dedup_key="sha404", auto_run=True, canonical_root=tmp_path, run_verb=verb,
@@ -622,7 +642,7 @@ def _patch_default_verb(monkeypatch, captured):
     """Redirect the cold verb runner to a recorder (no real subprocess)."""
     import fno.post_merge_route as pmr
 
-    def _verb(pr, cwd):
+    def _verb(pr, cwd, **_kw):
         captured.append((pr, cwd))
         return pmr.ColdRitualResult(ok=True, tail="ok")
 
@@ -650,7 +670,7 @@ def test_default_dispatch_ritual_cold_verb_notok_no_marker(tmp_path, monkeypatch
     _arm_auto_run(tmp_path)
     monkeypatch.setattr(
         pmr, "_default_run_ritual_verb",
-        lambda pr, cwd: pmr.ColdRitualResult(ok=False, tail="fail"),
+        lambda pr, cwd, **_kw: pmr.ColdRitualResult(ok=False, tail="fail"),
     )
     res = _default_dispatch_ritual(_Cand(7, tmp_path), _Obs(merge_sha="shaD2"), None)
     assert res.outcome == "failed"
@@ -697,17 +717,17 @@ def test_cross_detector_one_handoff_per_sha(tmp_path, monkeypatch):
 
 def test_no_bg_or_merged_wrapper_in_production_post_merge():
     """AC10-EDGE: production post-merge code contains zero ``--substrate bg``,
-    ``pr-merged-<n>`` worker names, or ``/fno:pr merged`` LLM wrappers, and the
+    ``pr-merged-<n>`` worker names, or ``/fno:ship pr merged`` LLM wrappers, and the
     mechanical verb ``fno do pr ritual`` is the cold path."""
     import inspect
 
     import fno.post_merge_route as pmr
 
     body = inspect.getsource(pmr)
-    assert "--substrate bg" not in body
+    assert "--substrate thread" not in body
     assert "pr-merged-" not in body
     assert "fno do pr ritual" in body  # the verb-first cold + warm command
-    assert "/fno:pr merged" not in body  # no whole-ritual LLM wrapper
+    assert "/fno:ship pr merged" not in body  # no whole-ritual LLM wrapper
 
 
 def test_sole_production_dispatch_entrypoint():
@@ -726,3 +746,27 @@ def test_sole_production_dispatch_entrypoint():
     # Reconcile keeps its node-closure job but must not reach the dispatch seam.
     assert "dispatch_post_merge_ritual" not in inspect.getsource(rec)
     assert "dispatch_post_merge_ritual" not in inspect.getsource(gcli)
+
+
+def test_ritual_verb_passes_its_timeout(monkeypatch):
+    """AC6-EDGE (x-c79d): the cold verb's subprocess timeout comes from the
+    caller's slice, not a hard 300s the phase alarm cannot reach."""
+    from fno.post_merge_route import _default_run_ritual_verb
+
+    captured: dict = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "ritual ok"
+        stderr = ""
+
+    def _fake_run(cmd, **kwargs):
+        captured.update(kwargs)
+        return _Proc()
+
+    monkeypatch.setattr("fno.post_merge_route.subprocess.run", _fake_run)
+
+    res = _default_run_ritual_verb(7, "/tmp", timeout=110)
+
+    assert res.ok is True
+    assert captured["timeout"] == 110

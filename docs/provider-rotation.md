@@ -8,6 +8,12 @@ See [What this substrate does NOT do](#what-this-substrate-does-not-do).
 
 ---
 
+## Is this page for you?
+
+You manage provider records, credential staging, or the dispatch env, or you are untangling the word `provider` across five axes. This page owns `fno config accounts` and the substrate's boundary: records, staging, and env construction, never automated rotation or failover. Misreading it makes you wait for a swap this substrate will never do.
+
+Not for: the full axis vocabulary, effort included. That is [architecture/axis-vocabulary.md](architecture/axis-vocabulary.md).
+
 ## The axes
 
 Several different things used to share the word `provider`. This document covers harness, provider, model, and account: see [docs/architecture/axis-vocabulary.md](architecture/axis-vocabulary.md) for the full set, including effort.
@@ -43,6 +49,8 @@ before `dispatch_env()` returns a usable env dict.
 or `{"HOME": ...}`) that, when merged into a subprocess's env, points the CLI
 at the correct credentials directory.
 
+**Routing row's account axis** - A `[[routing.models]]` row's `account` names one record `id` here, and its `route` names the vendor whose quota a launch spends. The pair makes the ACCESS PATH the priced unit. The same model over a subscription record and over per-token API dollars is two rows with two cost profiles, never one averaged number. Under the strict inventory policy (`routing.enforce_inventory`), capacity is observed per named account, so one locked-out record skips its own lane without walling the harness. The routing audit (`fno-agents route-slot audit`) names the selected record per verified session. See [role-based-model-routing.md](architecture/role-based-model-routing.md).
+
 ---
 
 ## Schema reference
@@ -63,6 +71,8 @@ priority = 100
 account_id = "account-secondary"
 tags = ["secondary", "max"]
 description = "Personal secondary subscription"
+route_provider_id = "anthropic"
+model_name = "claude-opus-4-1"
 ```
 
 ### Field reference
@@ -79,6 +89,8 @@ description = "Personal secondary subscription"
 | `account_id` | string | no | `id` | Account label written to ledger entries for cost attribution. |
 | `tags` | list[string] | no | `[]` | Arbitrary tags (reserved for future routing). |
 | `description` | string | no | - | Free-text note. |
+| `route_provider_id` | string | no | - | Explicit model-vendor route used by unattended provider-outage canaries. Never inferred from the account id, harness, or model name. |
+| `model_name` | string | no | - | Explicit model for unattended provider-outage canaries. A route is eligible only when both model fields are set. |
 
 ### Agent-to-agent switchboard (`config.agents.a2a`)
 
@@ -191,6 +203,12 @@ bounded indeterminate-state receipt before exiting with the interrupt status.
 No in-session credential swap is possible.
 A `claude` process reads `CLAUDE_CONFIG_DIR` once at launch, so every account switch happens at a process boundary, and the only useful moment to choose is just before one starts.
 
+### Probe health is not worker health
+
+Probe authentication and worker authentication are separate facts. A quota probe can fail to read or authenticate its bearer. This proves only that the probe credential was not usable. It says nothing about whether a worker can start on the account.
+
+A spawned Claude worker authenticates from the account's `CLAUDE_CONFIG_DIR` at process launch. Therefore a probe authentication failure is `UNKNOWN` account headroom, not `EXHAUSTED`. Do not use it as evidence that a spawn on that account will fail. Only a fresh usage window or worker failure provides a positive account-health marker.
+
 ### The prerequisite: an account that participates in quota survival needs its own `config_dir`
 
 ```bash
@@ -268,11 +286,11 @@ Two spawns are never picked for, whatever the knob says:
 One read-only verb reporting the store's real condition, exiting non-zero when anything is wrong:
 
 - a record whose stored credential duplicates another's (two ids, one account)
-- a stored credential past its expiry
 - a `config_dir` that is missing or holds no login
 - a tainted slot
 - a shared-slot account with no proven identity bound (why its usage reads `unknown`)
 - a stamp the live slot credential contradicts (an out-of-band `/login`)
+- `account_identity_unknown`: the live slot's account is unproven, so the slot is neither healthy nor a successful switch
 
 `register` refuses a duplicate credential up front, but that guard is register-time only.
 `doctor` is the surface that reports stores predating it, and the verb that confirms a `--config-dir` conversion took.
@@ -306,7 +324,8 @@ The on-disk `~/.claude/.credentials.json` is a third source: the usage probe rea
 Reconciliation resolves both and refuses with `ambiguous-slot` when they name different accounts: that is not a tie to break, because whichever was stamped, some reader would get the other one.
 Every distinct candidate must prove, and they must all name one account.
 No candidate is set aside, whatever the reason it did not prove: a 401 rejects an access token while its refresh token may still be live, so `claude` can refresh that account straight back into the slot it reads first, and an unanswered call says nothing at all.
-The same rule reaches the usage probe, which reports `unknown` for a slot presenting more than one distinct credential however well the bearer it holds proves out, since `claude` reads the scoped Keychain item first while the probe reads the unscoped one.
+
+The same rule reaches the usage probe. A slot proving more than one distinct principal reports `unknown`, however well the bearer it holds proves out. The platform split causes this. `claude` reads the scoped Keychain item first, while the probe reads the unscoped one. The earlier version counted credentials instead. A machine running a claude daemon always writes its own scoped Keychain item. One account presented twice therefore read as ambiguous, and the operator's own usage went dark.
 Capture-before-overwrite reads the same candidates, so the two cannot disagree about which credential belongs to a record; with more than one distinct credential present it captures nothing, since a lost rotated token is recoverable with a login while another account's credential filed under this record is silent.
 The pin check runs before the profile call rather than after it, and the slot is re-read and compared before anything is written, so a writer that replaces the credential during that call and then exits refuses with `slot-changed` instead of getting its credential stamped under the proven account's name.
 A reconciliation against a store that does not exist yet returns `no-managed-store` without creating it: `matched` is the only outcome allowed to touch disk, and that includes the directory.
@@ -353,6 +372,35 @@ A refusal is backed off briefly so an unmatchable slot cannot re-hit the endpoin
 Two boundaries are worth knowing.
 A record with its own `config_dir` is attributable without the shared slot at all, so it never enters reconciliation and taint can never affect it.
 And the active shared-slot occupant correctly keeps `config_dir = None`, because interactive `claude` reads `~/.claude`; that is not a defect to fix by giving it a dir.
+
+### The effective-account binding
+
+One question had four readers: which account will this claude launch bill? `resolve_account_overlay` read the active stamp. `dispatch_env` returned a config directory. The usage probe ranked credential sources. `doctor` compared a stamp against a live principal. A path says where a credential is meant to be. A stamp says who put it there. Neither says who the credential presents as. So the four disagreed, and each one still printed a receipt naming an account.
+
+`fno.adapters.providers.binding.resolve_account_binding` is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
+
+The verdict is `matched`, `mismatch`, `ambiguous` or `unknown`. Only one of them refuses. A `mismatch` is a positive observation, so both launch env paths refuse with `account_identity_mismatch` before they spawn anything. An `unknown` never refuses. An unreachable profile endpoint must not ground the fleet, and an unpinned manual login keeps its permissive posture. What `unknown` forbids is a receipt naming an account as served. `doctor` and `fno config accounts usage` print `account_identity_unknown` with its cause instead.
+
+A reading is bound to the credential generation that produced it. Identity is proven before the usage request, which stops another account's numbers being fetched at all. A sign-in that lands after the request is a separate window, and a reading from it is discarded with `identity_changed`. The marker matters as much as the discard: a missing snapshot alone reads exactly like a probe that never ran.
+
+The accounts list and the Connections modal carry an identity column. The modal renders the cell that `fno config accounts list` prints, so one renderer states every token, and a row states who its credential is proved to serve. A matched row names its own record. A mismatch renders `!serves <record>`. The active stamp names the account that put a credential in the slot. The slot credential presents as the named record. The row shows both instead of papering over the gap. `?<reason>` marks anything unproved, and two credential roots observing one principal flag `!shared-identity`. A row never names an account it did not prove. To keep the account that is signed in, run `fno config accounts reconcile-slot claude`. To move to another account, follow the switch in the section below.
+
+One lane fact, observed on Claude Code 2.1.266. The Keychain item is chosen by whether `CLAUDE_CONFIG_DIR` is set at all, not by which account will read it. An interactive `claude` reads the unscoped `Claude Code-credentials` item. A daemon-hosted background session reads the scoped `Claude Code-credentials-<hash>` item, where the hash is the first 8 hex of the sha256 of `$HOME/.claude`. A login reaches a running session on its next request, with no restart.
+
+### Switching claude accounts is manual, by design
+
+Two claude accounts on one machine are two separate session stores, and that separation is the point. The operator signs in as the other account twice, and never runs `/logout` first. A logout can revoke the refresh token of the account you leave, and every stored copy of that account then stops working. A plain `claude /login` moves interactive sessions. `CLAUDE_CONFIG_DIR=$HOME/.claude claude /login` moves the background fleet. Blocked sessions recover on their next request, so no daemon bounce and no respawn is needed. The second login also makes the two items agree, which clears the ambiguous-slot finding. `fno config accounts use` is not the switch yet, because it writes a stored copy whose refresh token the live session has already spent.
+
+A second account can instead keep its own credential directory (`--config-dir ~/.claude-alt`). Its transcript folders are often symlinks back into canonical. Sharing transcripts never merges credential identity. The binding reads the Keychain item scoped to that directory, plus that directory's own `.credentials.json`. Neither source is a transcript.
+
+footnote never automates this switch. It does not log in, log out, restore a token, rewrite an account record, or touch remote control. It reads the account that is signed in right now and names it. When that account runs low, it prints `manual switch` and the operator decides. Automatic rotation stays where accounts are genuinely independent access paths: api_key records, codex, and combos.
+
+The commands that read it:
+
+```bash
+fno config accounts usage     # windows, the account behind them, and its observation age
+fno config accounts doctor    # identity findings, including account_identity_unknown
+```
 
 ---
 
@@ -450,9 +498,9 @@ The paragraph below is the superseded theory, kept as the historical record of t
 
 `fno agents resume` is two arms, and only one of them relaunches in theory. The theory held that a reachable supervisor gets `claude attach <short_id>`. That opens a session that was still running. So the route already lives in that process, and no attach can lose it. (Superseded 2026-08-23, see the table above.)
 
-A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt, with no live model turn in flight. `claude attach` run non-interactively has no pty, so it prints "Attaching..." and exits having done nothing. When nothing happened at all, that silence reads as "the route was fine". The Python fallback now treats the live arm the same as a relaunch, for routing purposes. It lives in `resume_cli.py`, active under `FNO_AGENTS_RUNTIME=python` or whenever no Rust binary is installed. It restores `route_settings_path` into the attaching subprocess's env, and allocates its own pty via `script -q /dev/null`. A row already Working, Idle, or Done skips both: no wake means no restore, so a stale route file there is not a refusal. It injects an optional message as three bracketed-paste-safe writes. Then it verifies the row's live status actually reached `Working` before reporting success, or exits 16 otherwise. This is strictly more defensive than "nothing to do". When the target process really is alive with its own correct env, restoring the route is a no-op. When it was not, restoring the route is the fix.
+A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
-**The Rust arm now reaches the same fix, by delegation**. `resume` is in `RUST_CLIENT_VERBS`, so it auto-routes to the installed `fno-agents` daemon binary whenever one is present, which is the default. Reading only the Python path once led to the wrong conclusion, that resume can never lose a route. An exited row gets `claude --resume <uuid>` from Rust's own dead-row arm. That arm already restores a recorded route through `--settings` before this fix, unchanged here. The live-attach arm used to exec `claude attach <short_id>` directly with no pty, the same silent no-op the Python fallback closed. It now shells out to `fno agents resume <name>` with `FNO_AGENTS_RUNTIME=python` pinned in the child env, rather than re-deriving the pty and bracketed-paste recipe a second time. Calling `fno-py` directly works by accident today. It shells out through the front door on purpose, so a future default-runtime flip cannot reopen the `RUST_CLIENT_VERBS` re-exec loop. Both binaries now reach the one verified implementation for a live row. See the backlog's Rust-side route-restore investigation for the history behind this split.
+**The Rust arm owns live Claude resume directly.** The `resume` verb routes to the installed `fno-agents` binary because it is in `RUST_CLIENT_VERBS`. Its `claude_live_route` reads the plan-pinned account roster. It delivers wrapped messages over `control.sock`. It no longer delegates to Python or pins `FNO_AGENTS_RUNTIME=python`. Python `resume_cli.py` refuses Claude rows with exit 13. The dead-row `claude --resume <uuid>` arm still restores recorded routes through `--settings`.
 
 Both doors apply the same usability rule, not just an existence check: a recorded
 file that is missing, unparseable, or carries only the auth-scrub floor all
@@ -572,9 +620,9 @@ Two rules follow. Which one applies depends on whether the launch has an argv ca
 
 **Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. It resolves the overlay inside `cmd_spawn` and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover. `_spawn_worker` refuses an `extra_env` carrying any key in `STATE_ROOT_ENV_KEYS`, and names the carrier in the refusal.
 
-**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls `fno.agents.account_env.seal_state_root`. That pins `FNO_AGENTS_HOME` and `FNO_CLAIMS_ROOT` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row and the claim stay findable.
+**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls `fno.agents.account_env.seal_state_root`. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
 
-The seal is partial, and the remainder is worth stating plainly. Only those two roots read an env var. `locks_dir` is deliberately `$HOME`-only, and `state_dir` has no override at all, so both still follow a moved `HOME`. Measured under a sealed env, `agents_home_dir` resolves the real root while `locks_dir` and `graph_json` resolve under the account's home. A worker running `fno backlog done` under a forwarded `HOME` still writes its graph where nothing looks. Closing that needs a `state_dir` env carrier, which does not exist yet. Prefer the argv carrier over the seal wherever a launch has one.
+The remaining limit: a root the seal does not pin still follows the moved `HOME`. That includes the `FNO_HOME`-anchored sidecars (push-stamps, the corrections log, the decision index), whose carrier the seal leaves free. Prefer the argv carrier over the seal wherever a launch has one.
 
 A lane that can carry neither refuses. The codex one-shot path threads no overlay, so a pinned account there raises rather than launching on the ambient account.
 
@@ -647,18 +695,18 @@ This is Spec 1 of 4. Specs 2-4 extend the substrate with automation:
 
 - **Reactive failover (Spec 2, planned):** no automatic switching when a provider
   hits a rate limit or returns an error. You must run `fno config accounts use` manually.
-- **Per-agent sigma-review routing (Spec 3):** sigma-review subagents can be
-  routed to a different coding model (`codex` / `gemini`). The shipped path is
-  `config.review.cross_model` / `config.review.agent_harnesses`, resolved by the
-  same `provider_resolution` code both `fno do review` and `/review sigma`
-  (via `fno do review --print-providers`) dispatch through. The Spec-3 design below
-  named a `config.agents.<name>.provider` key that was never wired - use the
-  `config.review.*` keys instead.
+- **Per-agent sigma-review routing (Spec 3, retired):** the sigma panel that
+  Spec 3 routed is gone, and per-agent review routing retired with it. The
+  live cross-model surfaces are `/fno:review peer`, the `config.review.peers`
+  gate, and the review-posture ladder (`config.review.posture`); the panel-era
+  `config.review.*` routing keys no longer drive anything. The Spec-3 design
+  below named a `config.agents.<name>.provider` key that was never wired.
 - **Per-phase pinning + proactive round-robin (Spec 4, planned):** no automatic
   rotation across providers between phases. All phases in a session use the same
   active provider.
 - **Error detection:** the substrate does not monitor for 429s, auth failures, or
   quota exhaustion. Detection lives in Spec 2.
+- **Automatic claude account switching:** never, in any spec. Two claude accounts are two session stores, and the swap is a deliberate manual act. footnote reads the signed-in identity. When the account runs low, it names the manual switch.
 - **Mid-session swap:** `dispatch_env()` reads from disk at call time; swapping the
   active provider mid-session (between phases) has no effect on already-dispatched
   processes.
@@ -669,9 +717,7 @@ This is Spec 1 of 4. Specs 2-4 extend the substrate with automation:
 
 **`fno`: command not found**
 
-`fno` is installed as a script by the `footnote` package. Run via
-`uv run fno ...` from the `cli/` directory, or install the package into your
-virtualenv with `uv pip install -e cli/`.
+To install `fno`, follow [Verify it worked](getting-started.md#verify-it-worked). In a dev checkout, run `uv run fno ...` from the `cli/` directory, or install the package into your virtualenv with `uv pip install -e cli/`.
 
 **OAuth refresh failing through the symlink**
 
@@ -871,12 +917,13 @@ The sidecar feeds:
 
 ## Per-agent routing (Spec 3)
 
-> **Shipped path:** the wired cross-model routing for `/review sigma` and
-> `fno do review` uses `config.review.cross_model` / `config.review.agent_harnesses`
-> (see `skills/review/references/sigma.md` -> "Cross-Model Review Routing"), resolved by
-> `cli/src/fno/review/provider_resolution.py`. The `config.agents.<name>.provider`
-> schema described in the rest of this section is the original Spec-3 design and
-> was never wired; prefer the `config.review.*` keys.
+> **Retired with the panel:** the sigma panel this section routed no longer
+> exists, and the `config.review.*` routing keys below no longer drive
+> anything. The live cross-model surfaces are `/fno:review peer`, the
+> `config.review.peers` gate, and the review-posture ladder. The section is
+> kept as the design record. The `config.agents.<name>.provider` schema
+> described in the rest of this section is the original Spec-3 design and
+> was never wired.
 
 Spec 3 lets each sigma-review subagent run on a
 different provider, so model blind-spots cancel across reviews. The routing config
@@ -996,7 +1043,7 @@ Plan A introduces a NEW state file at `.fno/provider-runtime-state.json` for per
 | File | Owns | Lifetime | Lock |
 |---|---|---|---|
 | `failover-state.json` | phase storm-cap, no-swap-back | per-phase (resets on phase boundary) | `<path>.lock` |
-| `provider-runtime-state.json` | per-provider backoff_level + rate_limited_until | survives target spawns within a megawalk campaign; 1h TTL | `<path>.update.lock` |
+| `provider-runtime-state.json` | per-provider backoff_level + rate_limited_until | survives target spawns within a multi-node campaign; 1h TTL | `<path>.update.lock` |
 
 The two files use different sidecar lock paths so the runtime-state writer cannot self-deadlock on `atomic_write`'s internal lock. The `failover-state.json` schema (phase_id, swaps_this_phase, last_swap_from, last_swap_at_iso) is unchanged.
 
@@ -1098,7 +1145,7 @@ The headline scenario (`test_ac3_1_opus_locked_sonnet_free`) pins the user-visib
 
 ## Combos and round-robin (Plan B)
 
-Combos are named ordered provider lists with a rotation strategy. They sit on top of the Plan A substrate (`ProviderHealth`, `is_in_cooldown`, `classify_error`, `update_provider_health`) and add per-combo cursor state in the same `provider-runtime-state.json` so parallel target spawns within a megawalk campaign share rotation.
+Combos are named ordered provider lists with a rotation strategy. They sit on top of the Plan A substrate (`ProviderHealth`, `is_in_cooldown`, `classify_error`, `update_provider_health`). Per-combo cursor state lives in the same `provider-runtime-state.json`, so parallel target spawns within a multi-node campaign share rotation.
 
 ### Schema
 
@@ -1156,6 +1203,18 @@ Per-agent pins win over combos when both are configured for the same agent: comb
 
 Unknown combo (in env or settings) logs a WARNING and falls through to the next rule. `ComboNotFoundError` is reserved for `dispatch_with_combo` itself (the silent-bypass-blocker that callers can catch and fall through cleanly).
 
+### What chooses the account a spawn bills
+
+`accounts.active` is rung four of `agents.dispatch_target.resolve_dispatch_target`. Failover and outage-handoff routes read it. It is a rotation pointer, not a spawn default. For a spawn, the spawn compose (`spawn_compose.rs` via `compose_spawn_argv`) checks the lane, then `agents.profiles.<verb>.account`, then `agents.defaults.account`. An explicit `--account` is the CLI pin.
+
+| Reading | Where it shows | What it means |
+|---|---|---|
+| `accounts.active` | `fno config get accounts.active` | the rotation pointer for failover. A project file overrides the global one. It is one key across harnesses. |
+| the list star | `fno config accounts list`, `*` | which managed record put the credential in the harness slot (the slot stamp) |
+| the identity cell | the same list, `identity=` | which account the slot credential serves, when proved |
+
+Pinning a default is `agents.defaults.account`, and it is the operator's call because it moves billing.
+
 ### Cursor state
 
 Per-combo cursors live in `provider-runtime-state.json` under `combo_cursors.<name>`:
@@ -1203,10 +1262,10 @@ Single-provider combos short-circuit (cursor never advances past `idx=0`).
 
 | Surface | How combo is supplied |
 |---------|-----------------------|
-| `/target` skill | `/target combo my-stack "feature"` (positional 2-token modifier) |
-| `/megawalk` skill | `/megawalk combo my-stack` |
+| `/target` skill | `/fno:target combo my-stack "feature"` (positional 2-token modifier) |
 | `run-target-loop.sh` | `TARGET_COMBO=my-stack bash scripts/run-target-loop.sh <plan>` (env; the `fno loop` verb is removed) |
-| `fno megawalk` | `fno megawalk --combo my-stack` |
+
+(The `/megawalk` skill and `fno megawalk` combo rows are gone with the retired megawalk surface.)
 
 All paths terminate in setting `TARGET_COMBO=<name>` in the environment of spawned subprocesses (`spawn_with_provider_snapshot` already propagates env to target children).
 
@@ -1562,7 +1621,7 @@ horizon makes both predicates true for one `LOW` reset. Defer wins that overlap:
 a near reset is waited out rather than churning harnesses, which is the policy
 the horizon exists to express.
 
-Shell dispatchers reach the same decision through `fno agents dispatch resolve
+Shell dispatchers reach the same decision through the spawn door (`fno agents spawn --node`
 --autonomous`, which folds the route into the resolved tuple and adds
 `route_action` / `route_account` / `route_source` / `route_retry_at`. Only the
 destination's record id crosses that boundary; `fno agents spawn
@@ -1654,6 +1713,8 @@ separate post-hoc layer).
 | size `M` | `diverse_preferred` |
 | size `S` / unknown | `portable` |
 
+The effective kinds start from the session's ambient harness (`resolve_harness_identity`), and an implementer with no ledger row yet is that same harness. A codex session with cross-model off reads `[codex]` and can never satisfy high assurance on its own. That is the honest reading under law d-d4b4293e. Review runs in the session that did the work. The only way to hand that session a different family was a spawned review session.
+
 `assess_assurance(policy, ...)` turns the *effective reviewer kinds* (what the
 panel will genuinely dispatch to) into a verdict with a single load-bearing
 asymmetry:
@@ -1667,7 +1728,4 @@ asymmetry:
   `effective: unresolved` when the implementer family is unknown or no
   different-family capacity exists - the review cannot silently pass.
 
-`fno do review --assess-assurance --policy-size <S|M|L> [--risk-surface ...]` prints
-the verdict JSON and exits `3` when unsatisfied, so a direct CLI caller is
-blocked the same way the `/pr check` skill is (no skill-only guard). See
-`skills/pr/references/check.md` Step 0c.
+`fno do review --assess-assurance --policy-size <S|M|L> [--risk-surface ...]` prints the verdict JSON and exits `3` when unsatisfied. A direct CLI caller is blocked the same way the `/fno:ship pr check` skill is (no skill-only guard). See `skills/ship/references/check.md` Step 0c.

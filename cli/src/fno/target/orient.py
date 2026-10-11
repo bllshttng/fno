@@ -1,4 +1,4 @@
-"""``fno do target status`` -- resolved orientation report (x-a7be, change A).
+"""``fno do target status`` -- resolved orientation report (change A).
 
 A cold or compacted agent reconstructs its situation -- node lifecycle,
 attended state, worktree path, repo test command, plan delta, done-condition --
@@ -119,7 +119,7 @@ def _node_line(
     return f"fresh ({status or 'ready'})"
 
 
-# --- live-manifest predicate (x-4af4) ---------------------------------------
+# --- live-manifest predicate ---------------------------------------
 #
 # ONE liveness truth, two consumers: `_attended_line` (so a DEAD manifest reads
 # attended, restoring /think's question flow) and the session-start GC hook
@@ -159,12 +159,11 @@ def _claim_state(claim_key: str) -> Optional[str]:
     -- the caller must NOT treat it as confirmed-dead."""
     try:
         from fno.claims.core import claim_status
-        from fno.claims.io import claims_root_for
 
-        # node:/dispatch:/... keys live at the GLOBAL claims root, not the
-        # per-repo default; route there (the same helper `fno agents claim status` uses)
-        # or a node claim always reads `free` from a worktree checkout.
-        state = claim_status(claim_key, root=claims_root_for(claim_key)).get("state")
+        # node:/dispatch:/... keys live at the GLOBAL claims root, and the
+        # native leg routes them there, so a bare read answers from the store
+        # the claim was written to, not a per-repo default.
+        state = claim_status(claim_key).get("state")
         return str(state or "") or None
     except Exception:  # noqa: BLE001 - unreadable claim -> None (not confirmed dead)
         return None
@@ -173,7 +172,7 @@ def _claim_state(claim_key: str) -> Optional[str]:
 def _manifest_liveness(manifest_raw: Optional[Dict[str, Any]]) -> tuple[str, str]:
     """``(state, reason)`` where state is ``live`` | ``dead`` | ``none``.
 
-    The node claim is the ONLY durable liveness signal (x-ba4b: session-pid
+    The node claim is the ONLY durable liveness signal (: session-pid
     anchored + TTL-protected). ``owner_pid`` is the TRANSIENT ``fno do target init``
     wrapper pid (init-target-state.sh:525) that dies seconds after init, so it can
     only ever PROVE life (a live pid), never death. DEAD is asserted solely from a
@@ -222,7 +221,7 @@ def _authority_granted(raw: Optional[Dict[str, Any]]) -> bool:
 
     ``_manifest_liveness``'s bias toward live is right for ``attended`` (worst
     case you get asked) and wrong here, where a stale grant silently un-prompts
-    every session that reads it (x-4af4: a defunct manifest once auto-locked an
+    every session that reads it (: a defunct manifest once auto-locked an
     attended /think for ten days). So: no claim, no authority - which is also
     why a free-text run cannot hold one.
     """
@@ -234,7 +233,7 @@ def _authority_granted(raw: Optional[Dict[str, Any]]) -> bool:
 
 def _attended_line(manifest_raw: Optional[Dict[str, Any]]) -> str:
     state, reason = _manifest_liveness(manifest_raw)
-    # A DEAD manifest (x-4af4) means the owning session is gone -- resolve to
+    # A DEAD manifest means the owning session is gone -- resolve to
     # ATTENDED regardless of the stale stamped value, and NAME it so the posture
     # is not silently changed (the original bug was a silent autonomous switch).
     # This branch also denies a dead manifest's authority grant.
@@ -476,7 +475,7 @@ def _local_review_gates(review: Any) -> List[str]:
     ONE composite `peer` requirement. No GitHub reviewer ever posts either -- a
     head-pinned `review_attestation` is the only evidence -- so a session that
     is not told they exist ships, promises, and then blocks on an attestation
-    nothing in its plan produced (x-0322). Naming the producer alongside the
+    nothing in its plan produced. Naming the producer alongside the
     gate is the point: the gate alone is a puzzle.
 
     Deliberately config-only, with no `detect_session()` call: the one case
@@ -495,11 +494,11 @@ def _local_review_gates(review: Any) -> List[str]:
     from fno.review.provider_resolution import DISPATCHABLE_PROVIDERS
 
     known = resolvable_reviewers(review.reviewer_registry)
-    # Built-ins carry their own emit (sigma/declare auto-emit on a clean pass;
-    # code-review bakes the helper into its invocation string). A project-
-    # registered reviewer does not, so its printed producer must append the emit
-    # or a session that follows it verbatim reviews and still leaves the gate
-    # unmet -- the exact failure this line exists to prevent.
+    # Built-ins carry their own emit (the lane's emit step runs on a clean
+    # pass for the built-ins). A project-registered reviewer does not, so its
+    # printed producer must append the emit or a session that follows it
+    # verbatim reviews and still leaves the gate unmet -- the exact failure
+    # this line exists to prevent.
     builtin = resolvable_reviewers()
     gates: List[str] = []
     for name in review.reviewers or []:
@@ -569,15 +568,11 @@ def _local_review_gates(review: Any) -> List[str]:
 
 
 def _self_review_clause(project_root: Optional[Path] = None) -> str:
-    """The self-review verb + fallback clause, or "".
+    """The inline self-review verb and refusal remedy, or "".
 
-    Names this harness's self-review verb and the ``--to-self --raw`` fallback so
-    a session can satisfy the code-payload review gate itself rather than ask an
-    epic leader. The level is sized from the branch's actual diff when one
-    exists; pre-diff the invocation keeps its `<level>` placeholder instead of
-    baking in one concrete level. The fallback is a prompt-line injection, so it
-    is omitted on a headless substrate (no prompt line exists there). Never
-    raises."""
+    Names this harness's inline review verb, sized from the branch diff when
+    available. A refusal stays visible; it never routes a review command through
+    the mail bus. Never raises."""
     try:
         from fno.review_capability import (
             detect_session,
@@ -593,10 +588,9 @@ def _self_review_clause(project_root: Optional[Path] = None) -> str:
     clause = (
         f"self-review required for code ({harness}): run `{verb}` (the lane "
         "emits its own attestation; `bash skills/review/scripts/"
-        "emit-attestation.sh code-review` is the recovery path when it could not)"
+        "emit-attestation.sh code-review` is the recovery path when emission fails)"
     )
-    if s.substrate != "headless":
-        clause += f"; refused? fno agents mail send '{verb}' --to-self --raw"
+    clause += "; on refusal, report the literal refusal and stop"
     return clause
 
 
@@ -674,7 +668,7 @@ def _done_when_line(manifest_raw: Optional[Dict[str, Any]], project_root: Path) 
 def _bound_plan_path(
     plan_path: Optional[str], project_root: Path, node_id: Optional[str]
 ) -> Optional[str]:
-    """The plan the node is actually bound to (x-d401 / x-3ae1).
+    """The plan the node is actually bound to (/).
 
     An empty manifest field is a CARRIER miss, not an unbound node: when a
     node is bound, its graph entry's plan_path is the truth. Shared by every
@@ -735,7 +729,7 @@ def _render_boundary(verdicts: list) -> str:
 def _boundary_line(
     node_id: Optional[str], plan_path: Optional[str], project_root: Path
 ) -> str:
-    """Boundary-reconcile verdict for the report (x-d0ad). Advisory: the /target
+    """Boundary-reconcile verdict for the report. Advisory: the /target
     spine's Step 0 is what mandates acting on STALE. Never raises."""
     if not node_id:
         return "fresh (no node bound)"
@@ -826,14 +820,13 @@ def load_orientation(
 # `key: value` lines, NOT YAML frontmatter), so load_agent_context (frontmatter
 # only) never sees them. The shared reader in target.manifest owns this set and
 # the merge; orient keeps a thin wrapper so existing callers are unchanged.
-_BODY_KEYS = ("graph_node_id", "target_claim_key", "target_claim_holder")
 
 
 def _read_manifest(project_root: Path) -> Optional[Dict[str, Any]]:
     """Merged session manifest via the shared :mod:`fno.target.manifest` reader.
 
     Thin wrapper kept so existing orient callers are unchanged; the body-key set
-    and the frontmatter+body merge live in one place now (x-2ccd), so the
+    and the frontmatter+body merge live in one place now, so the
     resume-bind primitive and the orienter share one contract.
     """
     from fno.target.manifest import read_target_manifest

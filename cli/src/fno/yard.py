@@ -14,7 +14,7 @@ Two rules from the yard design that this module must never break:
   per process, which would reassign a citizen's species on every render.
 - Rarity is a rank, shown as outcome only. The original proposal named a
   four-axis tuple (harness, provider, model, account); the registry has
-  carried only ``harness`` since schema v10 (x-880e removed ``provider``;
+  carried only ``harness`` since schema v10 (removed ``provider``;
   model and account are not row fields), so v1 ranks the one axis that is
   recorded - ``put out the codex bowl and a different cat shows up`` is
   still the whole mechanic. Widen the tuple when the registry grows axes
@@ -117,7 +117,7 @@ def fold(rows: list, archive_entries: Iterable) -> list[dict[str, object]]:
                 "harness": harness,
                 "species": sp,
                 "rarity": tiers[harness] if isinstance(harness, str) else RARITY_TIERS[0],
-                "crown_level": getattr(r, "crown_level", None) or 0,
+                "role_level": getattr(r, "role_level", None) or 0,
                 "first_sighting": sp not in seen,
             }
         )

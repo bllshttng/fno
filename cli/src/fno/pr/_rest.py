@@ -28,6 +28,7 @@ import stat
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Tuple
 
+from fno.pr import _quota
 from fno.pr._proc import run
 from fno.pr._ritual import _parse_origin_slug
 
@@ -38,9 +39,6 @@ from fno.pr._ritual import _parse_origin_slug
 # rate-limit refusal (measured on `fno do pr info`), so they drop out before
 # classification and before any line is quoted.
 _WRAPPER_NOISE = re.compile(r"^(fno config|gh proxy):", re.IGNORECASE)
-# The run id embedded in an Actions job details_url, the join key to the
-# head_sha workflow-run listing that supplies each row's workflow name.
-_ACTIONS_RUN_RE = re.compile(r"/actions/runs/(\d+)")
 # A 403 rate-limit refusal is classified against the LIVE exempt bucket,
 # never against GitHub's wording. The measured 2026-08-24 secondary refusal
 # said only "API rate limit exceeded ..." - no "secondary" anywhere - so the
@@ -78,6 +76,14 @@ class RestReason(str):
         return self
 
 
+#: The bucket read here only DECORATES an error the caller already has. At the
+#: 30s default it dwarfed it: a 3s `read_pr_state` spent 3s failing then 30s
+#: explaining, `_bucket_remaining`'s default beating the runner's. This number
+#: exceeds `PR_READ_FLOOR_S`, so the BRANCH is what bounds the overshoot: only
+#: a rate-limit error reaches the probe, and it returns fast.
+_REASON_DIAGNOSTIC_TIMEOUT_S = 5.0
+
+
 def _bucket_remaining(
     bucket: str,
     runner: Optional[Callable],
@@ -110,7 +116,7 @@ def _bucket_remaining(
     return remaining, reset_epoch
 
 
-# x-4eac: the 2026-08-19 incident died as `Post .../graphql: unexpected EOF`
+# the 2026-08-19 incident died as `Post .../graphql: unexpected EOF`
 # and read downstream as three fresh merge blockers on the PR. A transport or
 # auth failure is a fact about the READ, not about the PR, and the reason must
 # say so before a worker polls harder or edits content that was never read.
@@ -138,7 +144,7 @@ def _redact_userinfo(text: str) -> str:
 
     A remote URL reaches an operator-facing sentence, and that sentence is
     published: it rides the coverage note into the `fno/review-coverage`
-    commit status on GitHub, and into `.fno/events.jsonl`. A CI-shaped clone
+    commit status on GitHub, and into the project event journal. A CI-shaped clone
     carries its token in the userinfo (`https://x-access-token:ghs_...@host/
     owner/repo.git`), and such a remote reaches the non-GitHub arm precisely
     BECAUSE its host is not github.com - so the credential is exactly what
@@ -203,7 +209,7 @@ def _repo_slug_reason(
     "repo slug unreadable" - correct in form, wrong in subject whenever the
     SLUG is the thing that is perfectly readable and the CWD is what does not
     exist. That sentence sent a reader through three slug spellings before
-    they looked at the parameter (x-51f7).
+    they looked at the parameter.
 
     The first argument is a filesystem PATH, never a repo slug, and the two
     are both bare `str` so a wrong argument is invisible to a type checker.
@@ -293,7 +299,9 @@ def _rest_reason(res, *, runner: Optional[Callable] = None, cwd: Optional[str] =
 
     if "rate limit" in text.lower():
         base = matched(lambda ln: "rate limit" in ln.lower())
-        remaining, _reset = _bucket_remaining("core", runner, cwd)
+        remaining, _reset = _bucket_remaining(
+            "core", runner, cwd, _REASON_DIAGNOSTIC_TIMEOUT_S
+        )
         if remaining == 0:
             return RestReason(
                 base + " | this is the CORE REST quota (the live exempt bucket"
@@ -308,6 +316,9 @@ def _rest_reason(res, *, runner: Optional[Callable] = None, cwd: Optional[str] =
             " bucket could not be checked and this backs off rather than trust"
             " the wording"
         )
+        # This arm classifies GitHub's own refusal, so it is the one place a
+        # fleet backoff may open. The core arm records nothing.
+        _quota.record_refusal(text)
         return RestReason(
             base + " | this is the SECONDARY rate limit (request rate, not"
             f" budget: {budget}). Back off - retrying on a fixed interval"
@@ -406,18 +417,37 @@ def fetch_pr_info_rest(
     author = user.get("login") if isinstance(user, dict) else None
     if author is not None and not isinstance(author, str):
         return None, "gh api pulls/<n> carried malformed author login"
+    # Whether GitHub's auto-merge queue already owns this PR. It rides THIS
+    # payload rather than a second `gh pr view --json autoMergeRequest` probe:
+    # the armed flag and the head it was read against must come from one fetch,
+    # or a caller can stand down for a queue entry that describes another head.
+    auto_merge = pr_data.get("auto_merge")
+    if auto_merge is not None and not isinstance(auto_merge, dict):
+        return None, "gh api pulls/<n> carried a malformed auto_merge object"
+    merge_state = pr_data.get("mergeable_state")
+    if merge_state is not None and not isinstance(merge_state, str):
+        return None, "gh api pulls/<n> carried malformed mergeable_state"
     return (
         {
             "pr": int(pr),
             "url": url,
+            # The body rides THIS payload so the node-binding gate reads the
+            # same PR state the armed flag and the head came from; a second
+            # fetch could answer about a different body.
+            "body": pr_data.get("body") or "",
             "state": _map_pr_state(pr_data),
             "head_sha": sha,
             "head_ref": head_ref,
             "base_ref": base_ref,
             "mergeable": _map_mergeable(pr_data.get("mergeable")),
+            # The REST spelling of GraphQL mergeStateStatus: same states,
+            # lowercase values ("behind", not "BEHIND"). The Rust stop gate
+            # reads either spelling on one pr view read, case-insensitively.
+            "merge_state_status": merge_state,
             "merged_at": merged_at,
             "merge_sha": merge_sha,
             "author": author,
+            "auto_merge": auto_merge,
         },
         "",
     )
@@ -502,164 +532,10 @@ def resolve_current_pr_number_rest(
     return number, ""
 
 
-def fetch_pr_rest(
-    pr: str,
-    cwd: Optional[str] = None,
-    runner: Callable = run,
-) -> "tuple[Optional[dict], str]":
-    """Same contract as the old GraphQL `_fetch`: `(pr_json, reason)`.
-
-    `pr_json` carries `state`, `statusCheckRollup`, `headRefOid`, `headRefName`,
-    `mergeable` - the keys `run_status` reads. `reason` is empty on success and names the
-    failure class otherwise; `(None, reason)` must reach the caller as a loud
-    `verdict: error`, never as an absent answer.
-    """
-    slug, slug_reason = _slug_or_reason(cwd, runner)
-    if not slug:
-        return None, slug_reason
-    info, reason = fetch_pr_info_rest(pr, cwd=cwd, runner=runner, repo=slug)
-    if info is None:
-        return None, reason
-    sha = info["head_sha"]
-
-    rollup: list[dict[str, Any]] = []
-    # Paginate past the first 100: a commit with more check runs than one page
-    # would silently drop the tail, and a failing check on page 2 then reads
-    # as green. total_count (the endpoint's own count) bounds the loop; a
-    # runner that omits it (fakes, older payloads) stops after page 1.
-    page = 1
-    check_runs: list[dict[str, Any]] = []
-    while True:
-        checks = runner(
-            ["gh", "api", f"repos/{slug}/commits/{sha}/check-runs?per_page=100&page={page}"],
-            cwd=cwd,
-        )
-        if not checks.ok:
-            return None, _rest_reason(checks, runner=runner, cwd=cwd)
-        try:
-            payload = json.loads(checks.stdout)
-            if not isinstance(payload, dict):
-                return None, "gh api check-runs returned a JSON value that is not an object"
-            page_runs = payload.get("check_runs")
-            if not isinstance(page_runs, list) or not all(
-                isinstance(row, dict) for row in page_runs
-            ):
-                return None, "gh api check-runs carried malformed check_runs"
-            check_runs.extend(page_runs)
-            total = payload.get("total_count")
-        except json.JSONDecodeError:
-            return None, "gh api check-runs returned output that is not JSON"
-        if not isinstance(total, int) or len(check_runs) >= total or not page < 10:
-            break
-        page += 1
-    # The workflow name is the generated selector's dedup dimension for
-    # same-named jobs (several workflows here define `self-test`), but the
-    # REST check-run object carries no workflow field. One head_sha-scoped
-    # workflow-run listing supplies it: an Actions row's details_url embeds
-    # the run id, and a run entry's `name` is its workflow's name. A check
-    # run whose URL matches no run (an external app) keeps "", which keys
-    # exactly like the pre-workflow selector did; the GraphQL rollup blob
-    # (pr_json.statusCheckRollup) has no selectable workflow field either,
-    # so its rows degrade the same way. Failure is loud: a name the read
-    # could not fetch cannot prove the slot collapse it would hide.
-    runs = runner(
-        ["gh", "api", f"repos/{slug}/actions/runs?head_sha={sha}&per_page=100"],
-        cwd=cwd,
-    )
-    if not runs.ok:
-        return None, _rest_reason(runs, runner=runner, cwd=cwd)
-    try:
-        runs_payload = json.loads(runs.stdout)
-        if not isinstance(runs_payload, dict):
-            return None, "gh api actions runs returned a JSON value that is not an object"
-        run_rows = runs_payload.get("workflow_runs")
-        if not isinstance(run_rows, list) or not all(
-            isinstance(row, dict) for row in run_rows
-        ):
-            return None, "gh api actions runs carried malformed workflow_runs"
-    except json.JSONDecodeError:
-        return None, "gh api actions runs returned output that is not JSON"
-    run_names: dict[str, str] = {}
-    for run_row in run_rows:
-        run_id = run_row.get("id")
-        name = run_row.get("name")
-        if isinstance(run_id, int) and isinstance(name, str):
-            run_names[str(run_id)] = name
-    for cr in check_runs:
-        # The generated selector and `_classify` normalize enum case and use
-        # the alternate timestamp chain, so the lowercase REST enum values and
-        # the started_at mapping need no case work here.
-        run_id = _ACTIONS_RUN_RE.search(str(cr.get("details_url") or ""))
-        rollup.append(
-            {
-                "name": cr.get("name"),
-                "status": cr.get("status") or "",
-                "conclusion": cr.get("conclusion") or "",
-                "startedAt": cr.get("started_at") or "",
-                # The Actions job URL (`.../actions/runs/<run>/job/<job>`),
-                # under the GraphQL-shape key `fno.pr._logs._job_ref` parses,
-                # so a failing row carries its own log ref through the rollup.
-                "detailsUrl": cr.get("details_url") or "",
-                # Per-run workflow name from the listing above; "" when the
-                # details_url names no run the listing knows.
-                "workflow": run_names.get(run_id.group(1), "") if run_id else "",
-            }
-        )
-
-    # Legacy StatusContexts ride the combined-status endpoint. This read is a
-    # separate check class, so failure is always loud: green CheckRuns do not
-    # prove an unread required legacy context is green.
-    statuses = runner(["gh", "api", f"repos/{slug}/commits/{sha}/status"], cwd=cwd)
-    if not statuses.ok:
-        return None, _rest_reason(statuses, runner=runner, cwd=cwd)
-    if statuses.ok:
-        try:
-            status_payload = json.loads(statuses.stdout)
-            if not isinstance(status_payload, dict):
-                return None, "gh api status returned a JSON value that is not an object"
-            status_rows = status_payload.get("statuses")
-            if not isinstance(status_rows, list) or not all(
-                isinstance(row, dict) for row in status_rows
-            ):
-                return None, "gh api status carried malformed statuses"
-            for sc in status_rows:
-                rollup.append(
-                    {
-                        "context": sc.get("context"),
-                        "state": (sc.get("state") or "").upper(),
-                        "createdAt": sc.get("created_at") or "",
-                        # The external CI's own link: the one affordance a
-                        # StatusContext carries, and `fno do pr logs` prints
-                        # it for a non-Actions red instead of pretending a
-                        # job log exists.
-                        "targetUrl": sc.get("target_url") or "",
-                    }
-                )
-        except json.JSONDecodeError:
-            return None, "gh api status returned output that is not JSON"
-
-    return (
-        {
-            "state": info["state"],
-            "statusCheckRollup": rollup,
-            "headRefOid": sha,
-            # The BRANCH, not just the sha: the in-flight-review guard keys its
-            # hold on the branch (registration happens in a PreToolUse hook that
-            # cannot afford a `gh` call to map one to a PR), so the merge side
-            # is where the mapping is paid. Already fetched - `fetch_pr_info_rest`
-            # validates head.ref on the same request.
-            "headRefName": info["head_ref"],
-            "mergeable": info["mergeable"],
-        },
-        "",
-    )
-
-
 def list_prs_rest(
     slug: str,
     *,
     state: str = "open",
-    requested_numbers: Optional[set[int]] = None,
     runner: Callable = run,
     cwd: Optional[str] = None,
     per_page: int = 100,
@@ -673,15 +549,12 @@ def list_prs_rest(
     open-PR question completely and left core untouched, which is why the
     pr-watch bulk sweep routes here instead of `gh pr list` (GraphQL bills
     by point cost; one oversized sweep drained the shared per-user budget).
-    Paginates on `page=` until a short page, all ``requested_numbers`` are
-    found, or the `max_pages` ceiling; rows are reduced to
-    ``{"number", "state"}`` with ``_map_pr_state``, so the caller sees the
-    OPEN/CLOSED/MERGED shape the GraphQL path produced. The optional requested
-    set is an early-stop bound for terminal lookups and does not filter rows.
-    `(None, reason)` on any failure, matching `fetch_pr_rest`'s loud contract.
+    Paginates on `page=` until a short page or the `max_pages` ceiling; rows
+    are reduced to ``{"number", "state"}`` with ``_map_pr_state``, so the
+    caller sees the OPEN/CLOSED/MERGED shape the GraphQL path produced.
+    `(None, reason)` on any failure: a loud refusal, never an absent answer.
     """
     rows: list[dict[str, Any]] = []
-    found_numbers: set[int] = set()
     for page in range(1, max_pages + 1):
         res = runner(
             ["gh", "api", f"repos/{slug}/pulls?state={state}&per_page={per_page}&page={page}"],
@@ -716,12 +589,12 @@ def list_prs_rest(
                         "title": row["title"],
                         "headRefName": head["ref"],
                         "url": row["html_url"],
+                        "mergedAt": row.get("merged_at"),
+                        "body": row.get("body") or "",
+                        "isCrossRepository": ((row["head"].get("repo") or {}).get("full_name") != ((row.get("base") or {}).get("repo") or {}).get("full_name")),
                     }
                 )
             rows.append(summary)
-            found_numbers.add(number)
-        if requested_numbers and requested_numbers.issubset(found_numbers):
-            break
         if len(payload) < per_page:
             break
     else:
@@ -729,7 +602,7 @@ def list_prs_rest(
         # rows. Loud on purpose: the old gh pr list path logged "possibly
         # truncated" for the same condition, and a silent ceiling is a sweep
         # that reads complete while missing its tail.
-        log.warning(
+        (log.warning if max_pages > 1 else log.debug)(
             "gh api pulls list for %s hit the max_pages=%d ceiling with a full last page:"
             " listing is possibly truncated after %d rows",
             slug,

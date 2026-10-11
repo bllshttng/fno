@@ -81,10 +81,14 @@ expect_silent() {
 }
 
 skill_call() {
-  # $1 = skill name, $2 = cwd (default $WORK)
-  jq -nc --arg cwd "${2:-$WORK}" --arg s "$1" \
+  # $1 = skill name, $2 = cwd (default $WORK), $3 = args (the Skill tool's own
+  # field). The tool sends {skill:"code-review", args:"high --comment"}; every
+  # fixture here used to bake the args into `skill`, a shape the tool never
+  # sends, so the suite proved a parse that could not happen in production.
+  jq -nc --arg cwd "${2:-$WORK}" --arg s "$1" --arg a "${3:-}" \
     '{hook_event_name:"PreToolUse", tool_name:"Skill", cwd:$cwd,
-      session_id:"sess-1", tool_input:{skill:$s}}'
+      session_id:"sess-1",
+      tool_input:({skill:$s} + (if $a == "" then {} else {args:$a} end))}'
 }
 
 echo "-- the review verbs register a hold --"
@@ -98,14 +102,22 @@ run_hook acquire "$(skill_call "fno:review")"
 expect_registered "skill=fno:review"
 run_hook acquire "$(skill_call "/code-review")"
 expect_registered "skill=/code-review"
+run_hook acquire "$(skill_call "/code-review" "" "<level> --comment")"
+expect_registered "skill=/code-review with args in the args field"
 run_hook acquire "$(skill_call "/code-review <level> --comment")"
-expect_registered "skill=/code-review with args"
+expect_registered "skill=/code-review with args in the name (typed slash form)"
+# A colon in the ARGS must not reach the namespace trim. It used to: `##*:` ran
+# over the whole joined string, so a PR URL left `//github.com/...` as the skill
+# name and the review took no hold at all.
+run_hook acquire "$(skill_call "/code-review" "" "high --comment https://github.com/o/r/pull/7")"
+expect_registered "skill=/code-review with a colon in the args"
 
 echo "-- a review start records a positive invocation marker and joins the hold --"
 review_level="medium"
 run_hook acquire "$(jq -nc --arg cwd "$WORK" --arg level "$review_level" \
   '{hook_event_name:"PreToolUse", tool_name:"Skill", cwd:$cwd,
-    session_id:"sess-started", tool_input:{skill:("/code-review " + $level + " --comment")}}')"
+    session_id:"sess-started",
+    tool_input:{skill:"/code-review", args:($level + " --comment")}}')"
 expect_registered "review start telemetry: hold"
 if grep -q 'review_invocation' "$EVENTS"; then
   pass "review start telemetry: invocation event"
@@ -138,7 +150,8 @@ printf '{"invocation_id":"%s","target_session_id":"sess-join"}' "$SEEDED_ID" \
 join_level="medium"
 printf '%s' "$(jq -nc --arg cwd "$WORK" --arg level "$join_level" \
   '{hook_event_name:"PreToolUse", tool_name:"Skill", cwd:$cwd,
-    session_id:"sess-join", tool_input:{skill:("/code-review " + $level + " --comment")}}')" \
+    session_id:"sess-join",
+    tool_input:{skill:"/code-review", args:($level + " --comment")}}')" \
   | FNO="$BIN/fno-stub" FNO_RECORD="$RECORDED" FNO_EVENTS="$EVENTS" \
     FNO_HOME="$JOIN_HOME" bash "$HOOK" acquire >/dev/null 2>&1
 if grep -q "$SEEDED_ID" "$EVENTS" && grep -q "$SEEDED_ID" "$RECORDED"; then
@@ -195,6 +208,55 @@ if grep -q -- "--head $head_sha" "$RECORDED" 2>/dev/null; then
   pass "acquire: recorded the head"
 else
   fail "acquire: head not recorded ($(cat "$RECORDED"))"
+fi
+
+echo "-- x-b5f6: a PR-number target keys the PR, never the cwd branch --"
+run_hook acquire "$(skill_call "fno:review" "" "high --comment 1713")"
+if grep -q -- "review-hold acquire 1713" "$RECORDED" \
+  && grep -q -- "--holder review-session:sess-1" "$RECORDED"; then
+  pass "PR target: acquire named the PR"
+else
+  fail "PR target: wrong acquire ($(cat "$RECORDED"))"
+fi
+if grep -q -- "--branch" "$RECORDED"; then
+  fail "PR target: a --branch was guessed ($(cat "$RECORDED"))"
+else
+  pass "PR target: no --branch to guess from"
+fi
+if grep -q 'review_invocation' "$EVENTS" && ! grep -q 'head_sha' "$EVENTS" \
+  && ! grep -q '"branch"' "$EVENTS"; then
+  pass "PR target: started row omits the unresolved head and branch"
+else
+  fail "PR target: started row carried cwd fields ($(cat "$EVENTS"))"
+fi
+
+echo "-- a PR target from the protected branch still holds its PR --"
+git -C "$WORK" checkout -q main 2>/dev/null || git -C "$WORK" checkout -q master
+run_hook acquire "$(skill_call "fno:review" "" "high --comment 1713")"
+if grep -q -- "review-hold acquire 1713" "$RECORDED"; then
+  pass "PR target from main: still acquires"
+else
+  fail "PR target from main: no acquire ($(cat "$RECORDED"))"
+fi
+git -C "$WORK" checkout -q feature/x-a089
+
+echo "-- a branch target keys the named branch at that ref's sha --"
+git -C "$WORK" branch -q feature/other feature/x-a089 2>/dev/null
+run_hook acquire "$(skill_call "fno:review" "" "high feature/other")"
+other_sha="$(git -C "$WORK" rev-parse feature/other)"
+if grep -q -- "--branch feature/other" "$RECORDED" \
+  && grep -q -- "--head $other_sha" "$RECORDED"; then
+  pass "branch target: keyed feature/other at its sha"
+else
+  fail "branch target: wrong key ($(cat "$RECORDED"))"
+fi
+
+echo "-- no target keeps today's cwd shape --"
+run_hook acquire "$(skill_call "code-review")"
+if grep -q -- "--branch feature/x-a089" "$RECORDED"; then
+  pass "no target: keys the cwd branch as before"
+else
+  fail "no target: cwd branch not keyed ($(cat "$RECORDED"))"
 fi
 
 echo "-- an unknown action does nothing --"

@@ -2,9 +2,9 @@
 
 A mesh-spawned worker has no clean way to learn its OWN registered name —
 the derived-name peers use to address it via ``fno agents mail send <name>``. The
-spawn path injects ``FNO_AGENT_SELF`` / ``FNO_AGENT_HARNESS`` (and, on
-follow-up paths, ``FNO_AGENT_SESSION``) into every spawned agent's env
-(see :mod:`fno.agents.context`), but nothing surfaces that identity back.
+spawn path injects ``FNO_AGENT_SESSION`` / ``FNO_AGENT_HARNESS`` into every
+spawned agent's env (see :mod:`fno.agents.context`), but nothing surfaces
+that identity back. Identity is the session id; the name renders from the row.
 
 This module is the pure-logic half of ``fno agents whoami`` (the plural
 mesh namespace, NOT the retired singular ``fno agent``). The CLI wrapper
@@ -52,10 +52,10 @@ class WhoamiResult:
     status: Optional[str] = None
     live_status: Optional[str] = None
     node: Optional[str] = None
-    # Crown (US9): a rendered "level N, scope=X (by <grantor>)" when this
-    # session's row carries an orchestrator crown, so a compacted king recovers
-    # its own authority. None for an uncrowned worker.
-    crown: Optional[str] = None
+    # Role (US9): a rendered "level N, scope=X (by <grantor>)" when this
+    # session's row carries an orchestrator role, so a compacted lead recovers
+    # its own authority. None for an unpromoted worker.
+    role: Optional[str] = None
     resolved_via: Optional[str] = None  # "env" | "session-fallback" | None
     warnings: list[str] = field(default_factory=list)
     exit_code: int = 0
@@ -64,8 +64,8 @@ class WhoamiResult:
 def _nonempty(value: Optional[str]) -> Optional[str]:
     """Trim and coerce empty-string env values to None.
 
-    A spawn path that exports ``FNO_AGENT_SELF=""`` (or a stray whitespace
-    value) must read as "unset", not as a zero-length name (Boundaries).
+    A spawn path that exports ``FNO_AGENT_SESSION=""`` (or a stray
+    whitespace value) must read as "unset", not as a zero-length id.
     """
     if value is None:
         return None
@@ -73,15 +73,8 @@ def _nonempty(value: Optional[str]) -> Optional[str]:
     return trimmed or None
 
 
-def _find_by_name(registry: list[AgentEntry], name: str) -> Optional[AgentEntry]:
-    for entry in registry:
-        if entry.name == name or name in (getattr(entry, "aliases", None) or []):
-            return entry
-    return None
-
-
 def _row_harness(entry: AgentEntry) -> str:
-    """This row's harness for matching (x-880e: harness is the sole identity axis;
+    """This row's harness for matching (: harness is the sole identity axis;
     a legacy row's provider is back-filled into harness at load)."""
     return (getattr(entry, "harness", None) or "").lower()
 
@@ -94,7 +87,7 @@ def _find_by_session(
     """Match a registry row whose recorded session id equals ``session_uuid``.
 
     Session ids are provider-local: the SAME id may be registered under different
-    harnesses, so when ``harness`` is known (x-ec59) matching is SCOPED to rows of
+    harnesses, so when ``harness`` is known matching is SCOPED to rows of
     that harness and to that harness's own id fields. This prevents a codex/gemini
     id from matching a same-id claude row, and stops a non-claude id from falling
     through to the claude short-id prefix (a 32-bit jobId prefix that could collide).
@@ -136,7 +129,7 @@ def _find_by_session(
                 # ponytail: the prefix match is 32 bits of jobId. A same-harness
                 # row whose jobId prefix collides with this session's uuid would
                 # match the wrong row - in succession (is_caller_row) that vacates
-                # a crown that is not the abdicating king's. ~1/2^32 per pair, and
+                # a role that is not the stepping_down lead's. ~1/2^32 per pair, and
                 # harness scoping above already cut it to same-harness rows. The
                 # upgrade is storing the FULL session id on spawn rows, not
                 # tightening the matcher here: that re-diverges auth and succession.
@@ -167,19 +160,19 @@ def _find_by_session(
 def is_caller_row(
     row, session_uuid: Optional[str], harness: Optional[str] = None
 ) -> bool:
-    """Is ``row`` the session that issued the current spawn - the king whose
-    crown a succession would transfer?
+    """Is ``row`` the session that issued the current spawn - the lead whose
+    role a succession would transfer?
 
     Delegates to :func:`_find_by_session` so the succession check can NEVER
     diverge from the authorization check (:func:`calling_agent_row` runs the same
     ``_find_by_session`` over the full registry). The matching is harness-scoped
-    (a codex session id cannot match a claude row and vacate an unrelated crown),
+    (a codex session id cannot match a claude row and vacate an unrelated role),
     and for claude spans ``harness_session_id``, ``cc_session_id``, and the
     ``short_id`` prefix - the complete matcher. Re-implementing any of it here is
     the bug: a partial copy diverged from the auth check and either declined a
-    legitimate abdication (a field missed) or transferred the wrong crown (no
-    harness scoping). One matcher, two callers; if the auth check found the king,
-    this finds the same king.
+    legitimate departure (a field missed) or transferred the wrong role (no
+    harness scoping). One matcher, two callers; if the auth check found the lead,
+    this finds the same lead.
     """
     if not session_uuid:
         return False
@@ -199,10 +192,11 @@ def resolve_self(
 
     Tiers (deterministic):
 
-    1. ``env`` — ``FNO_AGENT_SELF`` set -> name is that value. Never depends
-       on the registry, so a corrupt registry still yields the name.
-    2. ``session-fallback`` — ``FNO_AGENT_SELF`` unset but a registry row
-       matches ``session_uuid`` (``CLAUDE_CODE_SESSION_ID``).
+    1. ``env`` — ``FNO_AGENT_SESSION`` set -> the row matching that session
+       id. The fleet name is display only; it renders from the row.
+    2. ``session-fallback`` — no ``FNO_AGENT_SESSION`` (or it matches no row)
+       but a registry row matches ``session_uuid``
+       (``CLAUDE_CODE_SESSION_ID``).
     3. none — neither -> not a registered mesh agent (exit 3).
 
     ``registry_error`` (a stringified ``RegistryVersionError``) means the
@@ -216,7 +210,6 @@ def resolve_self(
         warnings.append(f"registry unreadable, enrichment skipped: {registry_error}")
         registry = []
 
-    self_name = _nonempty(env.get("FNO_AGENT_SELF"))
     env_provider = _nonempty(harness_from_env(env))
     env_session = _nonempty(env.get("FNO_AGENT_SESSION"))
 
@@ -224,15 +217,16 @@ def resolve_self(
     name: Optional[str] = None
     resolved_via: Optional[str] = None
 
-    if self_name:
-        name = self_name
-        resolved_via = "env"
-        row = _find_by_name(registry, self_name)
-    elif session_uuid:
-        row = _find_by_session(registry, session_uuid, harness)
+    # Identity tiers on session ids only: a stale FNO_AGENT_SESSION that
+    # matches no row never blocks the CLAUDE uuid tier.
+    for via, token in (("env", env_session), ("session-fallback", session_uuid)):
+        if not token:
+            continue
+        row = _find_by_session(registry, token, harness)
         if row is not None:
             name = row.name
-            resolved_via = "session-fallback"
+            resolved_via = via
+            break
 
     if name is None:
         return WhoamiResult(
@@ -262,10 +256,10 @@ def resolve_self(
         except Exception:  # noqa: BLE001 — best-effort, silent
             node = None
 
-    from fno.agents.crown import crown_reading
+    from fno.agents.role import role_reading
 
-    reading = crown_reading(row)
-    crown: Optional[str] = reading["text"] if reading is not None else None
+    reading = role_reading(row)
+    role: Optional[str] = reading["text"] if reading is not None else None
 
     return WhoamiResult(
         registered=True,
@@ -276,7 +270,7 @@ def resolve_self(
         status=status,
         live_status=live_status,
         node=node,
-        crown=crown,
+        role=role,
         resolved_via=resolved_via,
         warnings=warnings,
         exit_code=0,
@@ -363,8 +357,8 @@ def render_human(result: WhoamiResult) -> str:
         lines.append(f"live_status: {result.live_status}")
     if result.node:
         lines.append(f"node:        {result.node}")
-    if result.crown:
-        lines.append(f"crown:       {result.crown}")
+    if result.role:
+        lines.append(f"role:       {result.role}")
     return "\n".join(lines)
 
 
@@ -384,7 +378,7 @@ def render_json(result: WhoamiResult) -> str:
             "status": result.status,
             "live_status": result.live_status,
             "node": result.node,
-            "crown": result.crown,
+            "role": result.role,
             "resolved_via": result.resolved_via,
         },
         indent=2,

@@ -1,38 +1,9 @@
 """``fno agents peek <handle>`` — the read-only twin of ``fno agents mail send``.
 
-**peek output is NOT a liveness signal.** A transcript is a file, and a dead
-session's file still reads fine, so recent-looking content here proves only that
-bytes were written at some point -- never that anyone is home now. This was
-misread as proof of life for a session that had been dead 43 minutes, alongside
-two other surfaces saying the same wrong thing. For a reachability verdict use
-``fno agents truth <handle>`` (or the ``reachability`` field on
-``fno agents list``), which is the one derivation with a declared basis and the
-falsifiers applied; see :mod:`fno.agents.reachability`.
-
-Reply is agent-native (``mail send`` resolves ``<handle>`` across every live
-source). Observe was tribal knowledge (``agents logs`` is registry-only; a live
-codex thread or unrostered ``claude --bg`` session had no single observe verb).
-``peek`` closes the asymmetry: the same union resolver as send for
-transcript-backed peers, plus a mux-pane arm for pane-substrate workers (the
-default substrate), whose content is a PTY rather than a transcript (x-680d).
-
-Two data paths, tried in order (design x-05da):
-
-1. **Status stream (fast-path, opportunistic).** The normalized
-   ``task_started`` / ``task_done`` / ``blocked`` / ``run_summary`` events a
-   worker emits to ``events.jsonl``. Cheap, cross-harness. Not shipped by every
-   worker yet, so absent → fall through with no error.
-2. **Transcript tail (fallback, ships now).** Resolve the handle to its
-   harness's on-disk transcript and tail the last N records. Works for every
-   worker today.
-
-The per-harness on-disk shape differs (claude/codex = one JSONL; opencode = a
-per-message dir joined against a per-message parts dir), so the extensible seam
-is ``recent_records`` dispatching on ``agent``.
-
-Read-only invariant: peek opens files for read and polls stat for ``--follow``.
-It never writes ``events.jsonl``, the peer transcript, the registry, or a
-mailbox — observing must not perturb the observed.
+Peek output is NOT a liveness signal: for a reachability verdict use
+``fno agents truth`` (or the ``reachability`` field on ``agents list``).
+Design, the two data paths, and the read-only invariant:
+docs/architecture/agents-peek.md.
 """
 from __future__ import annotations
 
@@ -107,11 +78,13 @@ def _parse_claude_record(rec: dict) -> Optional[Record]:
     text = _extract_text(msg.get("content"))
     if not text:
         return None
-    from fno.mail.envelope import contains_fno_mail_tag
-
     raw_role = str(msg.get("role") or rec.get("type"))
-    role = "peer" if raw_role == "user" and contains_fno_mail_tag(text) else raw_role
-    return Record(role=role, text=text)
+    timestamp = rec.get("timestamp")
+    return Record(
+        role=raw_role,
+        text=text,
+        timestamp=timestamp if isinstance(timestamp, str) else None,
+    )
 
 
 def _parse_codex_record(rec: dict) -> Optional[Record]:
@@ -124,26 +97,26 @@ def _parse_codex_record(rec: dict) -> Optional[Record]:
     text = _extract_text(payload.get("content"))
     if not text:
         return None
-    from fno.mail.envelope import contains_fno_mail_tag
-
     raw_role = str(payload.get("role") or "?")
-    role = "peer" if raw_role == "user" and contains_fno_mail_tag(text) else raw_role
     timestamp = rec.get("timestamp")
     return Record(
-        role=role,
+        role=raw_role,
         text=text,
         timestamp=timestamp if isinstance(timestamp, str) else None,
     )
 
+_TAIL_BYTES = 4 << 20  # 4 MiB holds the last 40 records of every live lead transcript
+
 
 def _records_from_jsonl(
-    path: Path, n: Optional[int], parse: Callable[[dict], Optional[Record]]
+    path: Path, n: Optional[int], parse: Callable[[dict], Optional[Record]], tail: bool = True
 ) -> list[Record]:
     """Parse the last ``n`` renderable records from a JSONL transcript.
 
     Streams line-by-line into a bounded deque so memory stays O(n). A torn or
     non-JSON line (mid-write tail, AC2-EDGE) is skipped, never raised. ``n`` of
     0 or negative returns ``[]``; ``None`` returns every record.
+    Seeks to the last ``_TAIL_BYTES``, reading the whole file when the tail is short.
     """
     import collections
 
@@ -151,7 +124,9 @@ def _records_from_jsonl(
         return []
     dq: "collections.deque[Record]" = collections.deque(maxlen=n)
     try:
-        with path.open("r", encoding="utf-8") as fh:
+        with path.open("rb") as fh:
+            start = max(0, fh.seek(0, 2) - _TAIL_BYTES) if tail and n else 0
+            fh.seek(start)  # a partial first line fails the parse below and is skipped
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -167,6 +142,8 @@ def _records_from_jsonl(
                     dq.append(record)
     except OSError:
         return []
+    if start and n is not None and len(dq) < n:
+        return _records_from_jsonl(path, n, parse, tail=False)
     return list(dq)
 
 
@@ -286,12 +263,9 @@ def _parse_opencode_record(msg: dict, part_root: Path) -> Optional[Record]:
     text = _opencode_part_text(part_root / mid)
     if not text:
         return None
-    from fno.mail.envelope import contains_fno_mail_tag
-
     raw_role = msg.get("role")
     role_str = raw_role if isinstance(raw_role, str) and raw_role else "?"
-    role = "peer" if role_str == "user" and contains_fno_mail_tag(text) else role_str
-    return Record(role=role, text=text)
+    return Record(role=role_str, text=text)
 
 
 def _opencode_records_db(
@@ -307,7 +281,6 @@ def _opencode_records_db(
     import sqlite3
 
     from fno.agents.discover import default_opencode_db_path, opencode_connect
-    from fno.mail.envelope import contains_fno_mail_tag
 
     if n is not None and n <= 0:
         return []
@@ -352,9 +325,8 @@ def _opencode_records_db(
                 continue
             raw_role = msg.get("role")
             role_str = raw_role if isinstance(raw_role, str) and raw_role else "?"
-            role = "peer" if role_str == "user" and contains_fno_mail_tag(text) else role_str
             records.append(
-                Record(role=role, text=text)
+                Record(role=role_str, text=text)
             )
             if n is not None and len(records) >= n:
                 break
@@ -424,6 +396,20 @@ def _opencode_records(
     return records
 
 
+def _resolve_peer_roles(records: list[Record]) -> list[Record]:
+    """Flip ``user`` roles whose text IS a delivered mail turn to ``peer``."""
+    from fno.mail.envelope import mail_shape
+
+    user_records = [r for r in records if r.role == "user"]
+    if not user_records:
+        return records
+    shapes = mail_shape([r.text for r in user_records])
+    for rec, shape in zip(user_records, shapes):
+        if shape["framing"] != "bare":
+            rec.role = "peer"
+    return records
+
+
 def recent_records(
     agent: str,
     session_id: str,
@@ -435,34 +421,29 @@ def recent_records(
     opencode_storage_dir: Optional[Path] = None,
     transcript_path: Optional[Path] = None,
 ) -> list[Record]:
-    """The per-harness reader seam (Locked Decision 3).
-
-    Dispatches on ``agent`` and returns a uniform ``Record`` list so the command
-    body never special-cases a harness. An empty list means "resolved, nothing
-    to show yet". An unregistered harness raises ``ObserveUnsupported`` (the
-    command turns that into a legible exit-1, distinct from the exit-13 miss).
-    """
+    """The per-harness reader seam: a uniform ``Record`` list or empty; an
+    unregistered harness raises ``ObserveUnsupported``."""
+    records: list[Record] = []
     if agent == "claude":
         if transcript_path is not None:
-            return _records_from_jsonl(
+            records = _records_from_jsonl(
                 transcript_path, n, _parse_claude_record
             )
-        from fno.provenance.resolver import resolve_transcript
+        else:
+            from fno.provenance.resolver import resolve_transcript
 
-        rt = resolve_transcript(
-            "claude", session_id, cwd, projects_root=projects_root
-        )
-        if not rt.resolved or not rt.transcript_path:
-            return []
-        return _records_from_jsonl(
-            Path(rt.transcript_path), n, _parse_claude_record
-        )
-    if agent == "codex":
+            rt = resolve_transcript(
+                "claude", session_id, cwd, projects_root=projects_root
+            )
+            if rt.resolved and rt.transcript_path:
+                records = _records_from_jsonl(
+                    Path(rt.transcript_path), n, _parse_claude_record
+                )
+    elif agent == "codex":
         path = transcript_path or _codex_rollout_path(session_id, codex_sessions_dir)
-        if path is None:
-            return []
-        return _records_from_jsonl(path, n, _parse_codex_record)
-    if agent == "opencode":
+        if path is not None:
+            records = _records_from_jsonl(path, n, _parse_codex_record)
+    elif agent == "opencode":
         from fno.agents.discover import default_opencode_db_path
 
         # Branch on the database EXISTING, never on it yielding no records: an
@@ -470,9 +451,12 @@ def recent_records(
         # falling back on those would serve a stale legacy transcript as if it
         # were the session's current one.
         if default_opencode_db_path(opencode_storage_dir).exists():
-            return _opencode_records_db(session_id, opencode_storage_dir, n)
-        return _opencode_records(session_id, opencode_storage_dir, n)
-    raise ObserveUnsupported(agent)
+            records = _opencode_records_db(session_id, opencode_storage_dir, n)
+        else:
+            records = _opencode_records(session_id, opencode_storage_dir, n)
+    else:
+        raise ObserveUnsupported(agent)
+    return _resolve_peer_roles(records)
 
 
 # --------------------------------------------------------------------------
@@ -483,7 +467,7 @@ def recent_records(
 def _status_event_line(rec: dict) -> Optional[tuple[str, str]]:
     """Parse one events.jsonl record into ``(kind, id)`` if it is a status event.
 
-    Accepts BOTH envelope shapes (x-2901 split-brain, a permanent superset):
+    Accepts BOTH envelope shapes (split-brain, a permanent superset):
     Python ``{type, data:{...}}`` and Rust ``{kind, ...flat}``. Returns None for
     a record that is neither — the caller skips it and falls through.
     """
@@ -695,7 +679,7 @@ def _lookup_mux_pane(
     ``session_id`` stays null until reconcile backfills it. A pane worker is
     still a fully-registered row, so the registry resolves it directly. This
     closes the asymmetry that made the default substrate unobservable through
-    the documented observe verb (x-680d).
+    the documented observe verb.
 
     Returns ``(mux_session, pane_id, name)`` for a row carrying a ``mux`` ref,
     else None. A read/parse failure or a non-mux row is None, never raised.
@@ -728,28 +712,32 @@ def _lookup_registry_row_exact(handle: str):
     """Return the registry row whose stored name or session id matches ``handle``.
 
     This diagnostic runs only after transcript and mux resolution both miss.
-    It deliberately does not resolve aliases or prefixes: the message must name
-    the exact requested row, and an unreadable registry contributes no
-    diagnosis. The session id is matched alongside the name because that is the
-    string ``fno agents adopt`` and ``fno agents peek``'s own miss text hand the
-    caller, and a row addressable by one spelling and not the other is the same
-    dead end by a shorter route.
+    It deliberately does not resolve name aliases: the message must name the
+    exact requested row, and an unreadable registry contributes no diagnosis.
+    The session id is matched alongside the name through the same handle tiers
+    every other reader uses (full uuid, canonical first-eight, legacy
+    last-eight): a row addressable by one spelling and not the other is the
+    same dead end by a shorter route, and is exactly that dead end - a
+    short-id handle against a row that stores the full uuid. Two rows matching
+    one short handle is a guess this refuses to make, so it returns None and
+    the not-found path below speaks.
     """
     from fno.agents.registry import load_registry
+    from fno.harness_identity import session_handle_tier
 
     try:
         entries = load_registry()
     except Exception:  # noqa: BLE001 - the existing not-found path owns read failures
         return None
-    return next(
-        (
-            entry
-            for entry in entries
-            if getattr(entry, "name", None) == handle
-            or getattr(entry, "harness_session_id", None) == handle
-        ),
-        None,
-    )
+    matches = []
+    for entry in entries:
+        if getattr(entry, "name", None) == handle:
+            matches.append(entry)
+            continue
+        sid = getattr(entry, "harness_session_id", None)
+        if isinstance(sid, str) and session_handle_tier(handle, sid) is not None:
+            matches.append(entry)
+    return matches[0] if len(matches) == 1 else None
 
 
 class _RegistrySession:
@@ -905,7 +893,7 @@ def _read_mux_pane(
     try:
         proc = _run_mux(
             [
-                "mux", "pane", "read", "--session", str(session),
+                "mux", "pane", "read", "--server", str(session),
                 str(pane_id), "--lines", str(n),
             ],
             run,
@@ -928,10 +916,11 @@ def _try_mux_pane(
     """Observe a pane-substrate worker, or None when the handle is not one.
 
     Called when the live-session resolver misses. If the registry holds a
-    ``mux`` row for ``handle``, read the pane scrollback and render it; on any
-    read failure emit a refusal that names the working surface (``fno mux pane
-    read <id>``) rather than listing unrelated peers - the misdirecting refusal
-    that manufactured false-liveness verdicts on 2026-08-04 (x-680d).
+    ``mux`` row for ``handle``, read the pane scrollback and render it; a
+    failed read the falsifier classifies as pane-gone falls through to the
+    registry-row read with the resume command; the refusal naming
+    ``fno mux pane read <id>`` fires only when the mux cannot say the pane
+    is gone.
 
     Returns an exit code when it handled the handle (read or named refusal),
     None to let the caller fall through to ``peer not found``.
@@ -945,6 +934,14 @@ def _try_mux_pane(
     reader = mux_reader or _read_mux_pane
     rc, text = reader(session, pane_id, n)
     if rc != 0 or not text.strip():
+        from fno.agents.reachability import pane_falsifier
+
+        if pane_falsifier({"session": session, "pane_id": pane_id}) == "pane-gone":
+            err.write(
+                f"{handle}: pane {pane_id} is gone; the worker exited. "
+                f"Resume: fno agents resume {handle}\n"
+            )
+            return None
         err.write(
             f"{handle} is a pane worker (mux pane {pane_id}, session {session}); "
             f"the mux did not answer. Read it directly: fno mux pane read {pane_id}\n"
@@ -968,12 +965,80 @@ def _try_mux_pane(
     return EXIT_OK
 
 
+def _peek_all(
+    *,
+    lines: int,
+    grep: Optional[str],
+    json_out: bool,
+    out,
+    err,
+    projects_root: Optional[Path],
+    codex_sessions_dir: Optional[Path],
+    opencode_storage_dir: Optional[Path],
+) -> int:
+    """``--all``: the tail (and ``--grep``) over every registry session with a
+    transcript. The stderr summary names sessions READ, so zero matches across
+    a searched corpus never reads as an unsearched one."""
+    from fno.agents.registry import load_registry
+
+    try:
+        rows = load_registry(None)
+    except Exception:  # noqa: BLE001 - a torn registry is an answer, not a crash
+        err.write("registry unreadable; --all has no sessions to enumerate\n")
+        return EXIT_UNSUPPORTED
+    seen: set[tuple[str, str]] = set()
+    sessions_read = matched_total = 0
+    for row in rows:
+        sid, agent = getattr(row, "harness_session_id", None), getattr(row, "harness", None)
+        if not sid or not agent or (agent, sid) in seen:
+            continue
+        seen.add((agent, sid))
+        try:
+            records = recent_records(
+                agent, sid, getattr(row, "cwd", "") or "", lines,
+                projects_root=projects_root,
+                codex_sessions_dir=codex_sessions_dir,
+                opencode_storage_dir=opencode_storage_dir,
+            )
+        except ObserveUnsupported:
+            continue
+        sessions_read += 1
+        hits = (
+            [r for r in records if grep in r.text or grep in r.role]
+            if grep is not None
+            else list(records)
+        )
+        matched_total += len(hits)
+        if grep is not None and not hits:
+            continue
+        if not json_out:
+            out.write(f"# {agent} {sid}\n")
+        for r in hits:
+            if json_out:
+                out.write(
+                    json.dumps({"session_id": sid, "agent": agent, "role": r.role, "text": r.text})
+                    + "\n"
+                )
+            else:
+                out.write(_render(r) + "\n")
+    if grep is not None:
+        err.write(
+            f"grep {grep!r}: {matched_total} matching record(s) across "
+            f"{sessions_read} session(s)\n"
+        )
+    else:
+        err.write(f"{sessions_read} session(s) read\n")
+    return EXIT_OK
+
+
 def peek(
     handle: str,
     *,
     lines: int = 15,
     follow: bool = False,
     json_out: bool = False,
+    grep: Optional[str] = None,
+    all_sessions: bool = False,
     stdout=None,
     stderr=None,
     resolve: Optional[Callable[[str], tuple]] = None,
@@ -996,6 +1061,18 @@ def peek(
     err = stderr if stderr is not None else sys.stderr
     resolver = resolve if resolve is not None else _default_resolve
 
+    if all_sessions:
+        return _peek_all(
+            lines=lines,
+            grep=grep,
+            json_out=json_out,
+            out=out,
+            err=err,
+            projects_root=projects_root,
+            codex_sessions_dir=codex_sessions_dir,
+            opencode_storage_dir=opencode_storage_dir,
+        )
+
     session, suggestions = resolver(handle)
     # True when `session` was rebuilt from a registry row rather than found by
     # the live-session resolver. Such a session is dead by construction, which
@@ -1004,7 +1081,7 @@ def peek(
     if session is None:
         # The default substrate (a mux pane) is invisible to the live-session
         # resolver: its content is a PTY, not a transcript. Try the registry's
-        # mux ref before declaring the peer missing (x-680d).
+        # mux ref before declaring the peer missing.
         mux_rc = _try_mux_pane(
             handle, lines, out, err,
             json_out=json_out, mux_lookup=mux_lookup, mux_reader=mux_reader,
@@ -1039,7 +1116,7 @@ def peek(
         # Name the instrument. Both reads above (the live-session resolver and
         # the mux-pane fallback) are registry-shaped, and the registry is not
         # the transcript: a reaped row leaves 4.9M of conversation on disk
-        # while this line used to answer a bare "peer not found". A king read
+        # while this line used to answer a bare "peer not found". A lead read
         # that as destroyed and nearly spawned fresh over a green PR.
         err.write(f"peer not found in the registry: {handle}\n")
         adoptable = _adoptable_sessions(
@@ -1068,7 +1145,7 @@ def peek(
     agent = getattr(session, "agent", "claude")
     session_id = getattr(session, "session_id", "")
     short_id = getattr(session, "short_id", "")
-    cwd = getattr(session, "cwd", "")
+    cwd = getattr(session, "cwd", "") or ""
 
     if not json_out:
         out.write(
@@ -1104,6 +1181,19 @@ def peek(
     except ObserveUnsupported as exc:
         err.write(f"observe not yet supported for {exc.agent}\n")
         return EXIT_UNSUPPORTED
+
+    if grep is not None:
+        # A search reports its count: a zero with exit 0 is a measured
+        # absence, never a silent one.
+        records = [r for r in records if grep in r.text or grep in r.role]
+        err.write(
+            f"grep {grep!r}: {len(records)} matching record(s) in {agent} {session_id}\n"
+        )
+        for rec in records:
+            _emit_record(out, rec, json_out)
+        if not records:
+            _emit_no_activity(out, json_out)
+        return EXIT_OK
 
     if not records and row_derived and lines > 0:
         # An empty record list has at least four causes: the transcript did not
@@ -1151,9 +1241,9 @@ def peek(
         # dead; liveness verdicts belong to `fno agents truth`. Refusing to
         # tail is still right, because nothing here can observe the writer.
         err.write(
-            f"--follow: {handle} resolved from its registry row, not from a live "
-            "session, so there is no writer to tail; showed the tail only. "
-            "For a liveness verdict: fno agents truth\n"
+            f"--follow: {handle} resolved from durable state (a registry row or "
+            "transcript store), not from a live session, so there is no writer "
+            "to tail; showed the tail only. For a liveness verdict: fno agents truth\n"
         )
         return EXIT_OK
 

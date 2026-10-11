@@ -117,7 +117,12 @@ fn prune_reaps_orphans_keeps_named_and_unageable() {
     );
 
     let after = s.store();
-    assert!(!after.contains("orphan"), "orphan removed: {after}");
+    let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+    let squads = parsed["squads"].as_array().unwrap();
+    assert!(
+        !squads.iter().any(|s| s["key"].as_str() == Some("orphan")),
+        "orphan removed: {after}"
+    );
     assert!(
         after.contains("\"name\": \"work\""),
         "named squad kept: {after}"
@@ -183,23 +188,21 @@ fn retired_squad_spelling_is_removed() {
 }
 
 /// A bare family verb and an unknown verb are both usage (exit 2), and the
-/// message names the one verb that exists. The two take DIFFERENT paths and the
-/// assertions say which: a bare `mux workspace` fails main.rs's arity guard and
-/// lands on the global usage banner, while an unknown verb reaches the family
-/// parser. Asserting only "names prune" cannot tell them apart, because the
-/// global banner also contains the word.
+/// message names the operation set or the bad verb: the typed tree refuses a
+/// bare `mux workspace` with the required-subcommand line and an unknown verb
+/// with a named unrecognized-subcommand refusal, both qualified by the path.
 #[test]
 fn workspace_family_usage_names_prune() {
     for (args, label, want) in [
         (
             vec!["mux", "workspace"],
             "bare",
-            "fno mux workspace prune [",
+            "A bare `mux workspace` refuses",
         ),
         (
             vec!["mux", "workspace", "bogus"],
             "unknown verb",
-            "fno mux workspace: unknown verb",
+            "fno mux workspace: unrecognized subcommand 'bogus'",
         ),
     ] {
         let out = fno().args(&args).output().unwrap();
@@ -220,7 +223,7 @@ fn retired_squad_spelling_is_not_advertised() {
     let out = fno().args(["mux", "workspace"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("fno mux workspace prune"),
+        stderr.contains("mux workspace prune|restore"),
         "usage advertises the canonical spelling: {stderr}"
     );
     assert!(
@@ -308,7 +311,16 @@ fn prune_include_named_removes_a_named_orphan() {
         stdout.contains("pruned stale"),
         "named orphan removed: {stdout}"
     );
-    assert!(!s.store().contains("stale"), "named orphan gone from store");
+    let after = s.store();
+    let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert!(
+        !parsed["squads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["name"].as_str() == Some("stale")),
+        "named orphan gone from store: {after}"
+    );
 }
 
 #[test]
@@ -437,8 +449,8 @@ fn doctor_reports_orphaned_squads_with_the_prune_remedy() {
         "doctor exited non-zero (a warn stays 0): {stderr}\n{stdout}"
     );
     assert!(
-        stdout.contains("squad store"),
-        "doctor runs the squad-store check: {stdout}"
+        stdout.contains("workspace store"),
+        "doctor runs the workspace-store check: {stdout}"
     );
     assert!(
         stdout.contains("orphaned"),

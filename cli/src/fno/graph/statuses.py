@@ -7,9 +7,14 @@ Public API:
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from fno.graph._constants import LOCK_TTL_HOURS, PRIORITY_MIGRATION
+if TYPE_CHECKING:
+    from fno.claims.roster import RosterReading
+
+from fno.graph._constants import LOCK_TTL_HOURS
 
 
 # Canonical set of derived ``status`` values. Anything else is a typo or
@@ -22,19 +27,26 @@ VALID_STATUSES: frozenset[str] = frozenset(
      "design", "ready"}
 )
 
-# Legacy `status` values -> current vocabulary. Applied on BOTH the read path
-# (`_apply_graph_defaults`, so a not-yet-remutated row reads correctly) and here
-# on the write path, mirroring PRIORITY_MIGRATION. `claimed` was renamed to
-# `in_progress` so the graph vocabulary matches the lifecycle ladder the rest of
-# the system speaks (idea -> design -> ready -> in_progress -> in_review -> done).
+# Legacy `status` values -> current vocabulary. The ported store applies it on
+# the read AND write paths now (graph_store.rs STATUS_MIGRATION); this table
+# stays as the Python-side vocabulary declaration the vocabulary test pins.
+# `claimed` was renamed to `in_progress` so the graph vocabulary matches the
+# lifecycle ladder the rest of the system speaks (idea -> design -> ready ->
+# in_progress -> in_review -> done).
 STATUS_MIGRATION: dict[str, str] = {"claimed": "in_progress"}
 
 # The rungs past which a node can never again be dispatched. `done` (work
 # shipped) and `superseded` (replaced) are terminal; every other rung is a
 # state a node can return from. One spelling shared by the store's
 # closure-release hook, the tracker backends' closed set, and the reaper's
-# node settlement, so they cannot drift (x-94f8).
+# node settlement, so they cannot drift.
 TERMINAL_RUNGS: frozenset[str] = frozenset({"done", "superseded"})
+
+CLOSING_DEFER_KINDS: frozenset[str] = frozenset({"wont_do", "retracted"})
+
+# The label prefix every unmeasured admit carries. Readers split live from
+# unmeasured admits on this literal, so the wording is a contract, not prose.
+UNMEASURABLE_LABEL_MARK = "(unmeasurable:"
 
 # Sentinel prefix used by the pre-feature workaround that overloaded
 # ``completed_at`` to encode deferral. Detected once in ``recompute_statuses``
@@ -45,7 +57,7 @@ _LEGACY_DEFER_PREFIX = "deferred:"
 
 
 def is_terminal_entry(entry: object) -> bool:
-    """Is this entry closed for good (done/superseded), from its own fields?
+    """Is this entry closed for good (done, superseded, or a won't-do or retracted deferral), from its own fields?
 
     The derived status string plus the two closure signals it keys on, minus
     the legacy ``deferred:`` sentinel: a pre-migration row carries deferral
@@ -58,8 +70,25 @@ def is_terminal_entry(entry: object) -> bool:
         return False
     if entry.get("status") in TERMINAL_RUNGS or entry.get("superseded_by"):
         return True
+    if (
+        entry.get("status") == "deferred"
+        and entry.get("deferred_kind") in CLOSING_DEFER_KINDS
+    ):
+        return True
     completed = entry.get("completed_at")
     return bool(completed) and not str(completed).startswith(_LEGACY_DEFER_PREFIX)
+
+
+def node_is_done(entry: object) -> bool:
+    """The one WORK-done read: the node's stored ruling, nothing else.
+
+    Every Python reader that asks "is this node's work done" calls this
+; ``completed_at`` spellings are retired from that question
+    (measured 0 divergence in graph and archive). Superseded is deliberately
+    absent - a superseded node's WORK is not done, it was replaced, and only
+    rebindability reads it that way.
+    """
+    return isinstance(entry, dict) and entry.get("status") == "done"
 
 
 def derived_status(entry: object, missing: str = "unknown") -> str:
@@ -130,83 +159,36 @@ def _rung_to_graph_status() -> dict:
     }
 
 
-def compute_readiness(entry: dict, id_to_entry: dict[str, dict]) -> tuple[str, str | None]:
-    """Read-time dependency readiness for one entry: never a boolean.
-
-    Returns ("ready", None), ("blocked-by", blocker_id) for a real, open
-    blocker, or ("unknown-dep", blocker_id) for a blocked_by id absent from
-    the graph. An unknown id always resolves unknown-dep, never ready - fail
-    closed on an ambiguous or missing id rather than treat an absence as
-    satisfied.
-
-    Call fresh on every read (``_apply_graph_defaults`` is the shared seam
-    every reader routes through). Never persisted: ``recompute_statuses``
-    does not derive ``status`` from ``blocked_by`` at write time, so this is
-    the only place the dependency-satisfaction question gets answered.
-    """
-    for blocker_id in entry.get("blocked_by") or []:
-        blocker = id_to_entry.get(blocker_id)
-        if blocker is None:
-            return ("unknown-dep", blocker_id)
-        if blocker.get("completed_at") is None:
-            return ("blocked-by", blocker_id)
-    return ("ready", None)
-
-
-# Lifecycle facts about THIS entry that outrank the blocked overlay: a done,
-# shelved, or in-review node is not a dependency question. Kept beside
-# compute_readiness so the precedence and the derivation live together.
-_OVERLAY_TERMINAL_STATUSES = frozenset({"done", "superseded", "deferred", "in_review"})
-
-
-def readiness_status(entry: dict, id_to_entry: dict[str, dict]) -> tuple[str | None, str | None]:
-    """The one overlay wrapper every status consumer shares.
-
-    Returns ``(status, blocked_reason)`` under the same precedence
-    ``_apply_graph_defaults`` applies at read time: terminal statuses pass
-    through untouched; everything else overlays ``compute_readiness`` so an
-    open blocker reads ``blocked`` with its reason and a ready entry keeps
-    its cascade status. The status slot is ``str | None`` because the
-    passthrough branches return the row's stored field verbatim, and a
-    hand-mangled row may carry no status (or a non-str one) - the wrapper
-    derives, it never fabricates a value the row did not have. Both the
-    graph read seam (``store._apply_readiness_overlay``) and the parent
-    children summaries (``store._compute_children``) call this, so a
-    parent's snapshot can never speak a stored ``ready`` that a live read
-    derives into ``blocked`` - a second caller-side implementation of the
-    precedence is the defect this function exists to make impossible.
-    """
-    status = entry.get("status")
-    # isinstance-first: a hand-mangled unhashable status value ({"nope": 1})
-    # must fall through to the non-terminal branch, not raise on the set
-    # membership hash. Tuple-`in` tolerated this; a frozenset does not.
-    if isinstance(status, str) and status in _OVERLAY_TERMINAL_STATUSES:
-        return status, None
-    pending_reason = pending_supersession_reason(entry)
-    if pending_reason:
-        return "blocked", pending_reason
-    kind, blocker_id = compute_readiness(entry, id_to_entry)
-    if kind == "ready":
-        return status, None
-    return "blocked", f"{kind}:{blocker_id}"
-
-
-def is_stale_lock(task: dict) -> bool:
-    """Check if a feature's claim has expired (>TTL hours)."""
-    lock_time_str = task.get("claimed_at")
+def lock_timestamp_quality(task: dict) -> str:
+    """Classify the graph lock timestamp without deciding owner death."""
+    lock_time_str = task.get("locked_at")
+    if lock_time_str is None:
+        # Direct callers may still hand us a legacy row before the graph read
+        # seam has applied its one-write migration.
+        lock_time_str = task.get("claimed_at")
     # locked_by-first; tolerate a raw legacy (session_id-only) task not yet
     # normalized (read-only staleness check, so no resurrection risk).
     if not (task.get("locked_by") or task.get("session_id")):
-        return False
+        return "fresh"
     if not lock_time_str:
-        return False
+        return "unreadable"
     try:
         lock_time = datetime.fromisoformat(lock_time_str.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         hours_elapsed = (now - lock_time).total_seconds() / 3600
-        return hours_elapsed > LOCK_TTL_HOURS
+        return "old" if hours_elapsed > LOCK_TTL_HOURS else "fresh"
     except (ValueError, TypeError):
-        return True  # Unparseable timestamp = treat as stale
+        return "unreadable"
+
+
+def is_stale_lock(task: dict) -> bool:
+    """Compatibility bool for callers that only need an old/bad timestamp."""
+    quality = lock_timestamp_quality(task)
+    # Preserve the historical malformed-value result for this compatibility
+    # helper. Missing data remains false here; recompute_statuses uses the
+    # diagnostic quality directly so both unreadable shapes preserve owners.
+    legacy_or_canonical = task.get("locked_at") or task.get("claimed_at")
+    return quality == "old" or (quality == "unreadable" and bool(legacy_or_canonical))
 
 
 def is_open_phase_row(row: object, phase: str) -> bool:
@@ -215,7 +197,7 @@ def is_open_phase_row(row: object, phase: str) -> bool:
     Same shape as :func:`is_open_do_row` for any lifecycle phase: identified
     (harness + session_id), bounded (started_at), and not yet closed. The do
     flavor additionally drives status derivation; other phases (a spawn-opened
-    review row, x-4342) open and close without wedging node status.
+    review row) open and close without wedging node status.
     """
     if not isinstance(row, dict):
         return False
@@ -227,249 +209,63 @@ def is_open_phase_row(row: object, phase: str) -> bool:
         and bool(row["session_id"].strip())
         and isinstance(row.get("started_at"), str)
         and bool(row["started_at"].strip())
-        and "ended_at" not in row
+        and row.get("ended_at") is None  # absent OR null counts open
     )
 
 
 def is_open_do_row(row: object) -> bool:
     """Return whether a session row is a valid, unfinished ``do`` window."""
-    return is_open_phase_row(row, "do")
+    return is_open_phase_row(row, "execute")
+
+
+def completed_at_status_divergence(entries: list[dict]) -> list[str]:
+    """Ids where ``completed_at`` and the terminal ``status`` disagree.
+
+    Checked in BOTH directions: the epic close guard now reads the two fields
+    together (``children_all_closed`` in ``graph/_reconcile.py``), and a pin
+    tested one way reads green while its invariant breaks the other. Forward:
+    ``completed_at`` set while ``status`` is not terminal (measured zero on
+    the live graph, 2026-09-05). Reverse: ``status`` ``done`` with no
+    ``completed_at``. Superseded rows carry no ``completed_at`` BY DESIGN -
+    supersede stamps only ``superseded_by`` - so the reverse direction must
+    never name them (measured 147 of 147 without it, 2026-09-12).
+    """
+    return [
+        e["id"]
+        for e in entries
+        if isinstance(e, dict)
+        and isinstance(e.get("id"), str)
+        and (
+            (e.get("completed_at") and e.get("status") not in TERMINAL_RUNGS)
+            or (e.get("status") == "done" and not e.get("completed_at"))
+        )
+    ]
 
 
 def recompute_statuses(entries: list[dict]) -> list[dict]:
     """Recompute status for all entries based on graph state.
 
-    Called inside locked_mutate_graph() after every mutation.
+    The derivation is the ported store's (``graph_store.rs
+    recompute_statuses``), answered through the store keeper; this shim keeps
+    the in-place, return-the-list contract for the callers that hold entries.
     Derives leaf status from: completed_at, superseded_by, deferred_at,
-    pr_number, locked_by, and open ``do`` session rows. Container status is
-    then rolled up from real ``parent`` edges, independent of the ``type``
-    label. Does NOT derive from blocked_by:
-    dependency-satisfaction is a cross-node join that can go stale the instant
-    a sibling changes after this write, so it is answered fresh on every read
-    instead (see compute_readiness, wired into _apply_graph_defaults in
-    store.py) rather than snapshotted here.
+    pr_number, locked_by, and open ``do`` session rows, then rolls container
+    status up from real ``parent`` edges. Does NOT derive from ``blocked_by``:
+    dependency-satisfaction is answered fresh on every read instead.
     """
-    # Reconcile the locked_by/session_id mirror first so derivation keys on the
-    # canonical field even when called directly on legacy (session_id-only)
-    # entries. Lazy import: store imports this module function-locally too.
-    from fno.graph.ladder import plan_rung
-    from fno.graph.store import _normalize_lock_fields
-    rung_to_status = _rung_to_graph_status()
-    _normalize_lock_fields(entries)
-    valid_ids = {
-        e.get("id")
-        for e in entries
-        if isinstance(e, dict) and isinstance(e.get("id"), str)
-    }
-    children_by_parent: dict[str, list[dict]] = {}
-    for entry in entries:
-        parent = entry.get("parent") if isinstance(entry, dict) else None
-        if (
-            isinstance(parent, str)
-            and parent in valid_ids
-            and isinstance(entry.get("id"), str)
-            and entry.get("id") != parent
-        ):
-            children_by_parent.setdefault(parent, []).append(entry)
-    # One-shot priority vocabulary backfill: migrate any legacy
-    # high/medium/low values to the new p0/p1/p2/p3 vocabulary the first
-    # time each row is touched after the migration ships. Idempotent and
-    # self-healing: rows already on the new vocabulary are unaffected.
-    for e in entries:
-        old_priority = e.get("priority")
-        if old_priority in PRIORITY_MIGRATION:
-            e["priority"] = PRIORITY_MIGRATION[old_priority]
-        old_status = e.get("status")
-        if old_status in STATUS_MIGRATION:
-            e["status"] = STATUS_MIGRATION[old_status]
+    from fno.graph.store import recompute_statuses_via_store
 
-    # One-shot defer-vocabulary backfill: pre-feature rows used
-    # ``completed_at: "deferred:<ts>"`` to fake deferral. Detect that shape
-    # and migrate to the dedicated ``deferred_at`` field so the rest of the
-    # cascade and the renderer can rely on a single representation. The
-    # prefix never re-appears once migrated, so this is idempotent.
-    for e in entries:
-        completed = e.get("completed_at")
-        if isinstance(completed, str) and completed.startswith(_LEGACY_DEFER_PREFIX):
-            e["deferred_at"] = completed[len(_LEGACY_DEFER_PREFIX):]
-            e["completed_at"] = None
-            e.setdefault("deferred_reason", "")
-
-    for e in entries:
-        if not isinstance(e.get("id"), str):
-            continue
-
-        # Never persist a stale readiness detail: `_apply_graph_defaults`
-        # (store.py) runs this same dict through its read-time blocked
-        # overlay before the mutator sees it (locked_mutate_graph reads via
-        # _apply_graph_defaults first), which can leave a transient
-        # `blocked_reason` on the entry. Reset it unconditionally here so the
-        # write path never round-trips that value to disk; the next read
-        # recomputes it fresh regardless.
-        e["blocked_reason"] = None
-        # This marker is recomputed from the row's current lifecycle shape on
-        # every write. Clear first so an owner replacement, explicit release,
-        # or terminal transition cannot retain an obsolete diagnosis.
-        e.pop("ownership_defect", None)
-
-        if e.get("completed_at"):
-            e["status"] = "done"
-            continue
-
-        pending_reason = pending_supersession_reason(e)
-        if pending_reason:
-            e["status"] = "blocked"
-            e["blocked_reason"] = pending_reason
-            continue
-
-        # Superseded sits between done and deferred: a node whose work has
-        # been fully replaced by another plan should not look ready or
-        # deferred. We surface it in its own bucket so the kanban renderer
-        # and triage health can show "this is shelved, here is the
-        # replacement". Reactivation requires explicit unsupersede (not
-        # just undefer) because the user must consciously revive a plan
-        # that another plan has already supplanted.
-        if e.get("superseded_by"):
-            e["status"] = "superseded"
-            continue
-
-        # Deferred wins over blocked/claimed/idea/ready. An explicit
-        # "do not work on this" signal should not surface as either a
-        # ready candidate or a blocked-by graph hint - the LLM and the
-        # user both want it in its own bucket.
-        if e.get("deferred_at"):
-            e["status"] = "deferred"
-            continue
-
-        # Reap a stale lock BEFORE the in_review branch: a PR-bearing node with
-        # an expired claim (the stampede case) must still shed the dead owner,
-        # else `_normalize_lock_fields` later mirrors the stale `locked_by` back
-        # into `session_id` at canonicalize/done time and overwrites the
-        # merge-time provenance. A persisted in-progress state is different:
-        # claimed_at age alone cannot prove the owner died, so preserve that
-        # pointer until an explicit repair replaces or clears it.
-        if e.get("locked_by") and is_stale_lock(e):
-            if e.get("status") == "in_progress":
-                e["ownership_defect"] = {
-                    "kind": "stale-active-owner-unverified",
-                    "node_id": e["id"],
-                    "holder": e["locked_by"],
-                    "liveness": "unverified",
-                }
-            else:
-                e["locked_by"] = None
-                e["session_id"] = None  # keep the one-release mirror in sync
-                e["claimed_at"] = None
-
-        # A node carrying a PR that has not closed (merge sets completed_at, so
-        # `done` wins above) is IN REVIEW: hold it out of the dispatch pool
-        # durably, independent of the builder session's ephemeral PID claim.
-        # This promotes the selection-time `_has_unmerged_open_pr` predicate
-        # into a persisted status, so the hold is visible to every consumer -
-        # explicit named-node dispatch, kanban, triage, `backlog get` - not
-        # just the `next`/`ready` candidate filter. Wins over blocked/claimed/
-        # idea/ready; defer/supersede/done still win above.
-        if e.get("pr_number"):
-            e["status"] = "in_review"
-            continue
-
-        # Precedence: done > superseded > deferred > in_review > blocked >
-        # in_progress > idea > design > ready.
-        # Lifecycle states (claim/completion/deferral) win over plan-existence
-        # so a plan-less node that gets claimed shows `in_progress`, and a
-        # deferred node never re-surfaces. `blocked` is NOT decided here - it
-        # is a read-time overlay (compute_readiness, store._apply_graph_defaults)
-        # layered on top of whatever this function writes, so a node with an
-        # open blocker persists as `in_progress`/idea/design/ready here and
-        # reads as `blocked` fresh on every read instead.
-        open_do = any(is_open_do_row(row) for row in (e.get("sessions") or []))
-        if e.get("locked_by") or open_do:
-            e["status"] = "in_progress"
-        else:
-            # One rung read answers the rest. Persisted so every reader sees it
-            # (boards, `backlog get`, the Rust mux).
-            #
-            # Selection re-probes this value live, but ONLY IN THE DEMOTE
-            # DIRECTION: `selection_guards` runs on candidates already filtered
-            # to persisted `ready` (graph/cli.py `allowed`), so a row whose doc
-            # has since dropped a rung is caught, while a row persisted
-            # `design`/`idea` whose doc has since been PROMOTED is filtered out
-            # before any live read.
-            #
-            # Such a row re-arms only when something calls `locked_mutate_graph`
-            # - i.e. any unrelated `fno backlog update`. NOT `reconcile`, which
-            # reads via `read_graph` and mutates only nodes whose PR has merged,
-            # so it never touches a stale rung. Until then the node is invisible
-            # to `backlog next`.
-            #
-            # Spelled out because the previous wording here ("Selection does NOT
-            # trust this value - it re-probes the file live") claimed a symmetry
-            # that does not exist, and a comment that overstates a guard is the
-            # same defect this module was written to remove.
-            e["status"] = rung_to_status[plan_rung(e)]
-
-    def _depth(node_id: str, visiting: set[str] | None = None) -> int:
-        visiting = visiting or set()
-        if node_id in visiting:
-            return 0
-        node = next((e for e in entries if e.get("id") == node_id), None)
-        parent = node.get("parent") if node else None
-        if not isinstance(parent, str) or parent not in children_by_parent:
-            return 0
-        return 1 + _depth(parent, visiting | {node_id})
-
-    # Children are already leaf-derived. Process nested containers deepest
-    # first so a parent sees the final status of any container child.
-    for parent_id in sorted(children_by_parent, key=_depth, reverse=True):
-        parent = next(e for e in entries if e.get("id") == parent_id)
-        if parent.get("completed_at"):
-            parent["status"] = "done"
-            continue
-        pending_reason = pending_supersession_reason(parent)
-        if pending_reason:
-            parent["status"] = "blocked"
-            parent["blocked_reason"] = pending_reason
-            continue
-        if parent.get("superseded_by"):
-            parent["status"] = "superseded"
-            continue
-        if parent.get("deferred_at"):
-            parent["status"] = "deferred"
-            continue
-        child_statuses = [child.get("status") for child in children_by_parent[parent_id]]
-        # The parent's own leaf status was derived above from its own row. A
-        # container carrying live work of its own - an open PR, a claim, an open
-        # `do` row - is NOT done just because its children are, and rolling
-        # `done` over that would drop the row off the board while its PR is
-        # still open while every open-ness predicate (node_is_open, _is_live)
-        # still reads it open off the absent completed_at. A container is in
-        # progress when a child is in progress; finished work is not work in
-        # progress.
-        own_work_live = parent.get("status") in {"in_review", "in_progress"}
-        if child_statuses and all(status == "done" for status in child_statuses):
-            if not own_work_live:
-                parent["status"] = "done"
-        elif any(status in {"in_review", "in_progress"} for status in child_statuses):
-            parent["status"] = "in_progress"
-
+    recomputed = recompute_statuses_via_store(entries)
+    # Write back IN PLACE: callers hold row dicts, so the list keeps those
+    # dicts and each one takes the derived values.
+    for i, (old, new) in enumerate(zip(entries, recomputed)):
+        if isinstance(old, dict) and isinstance(new, dict):
+            old.clear()
+            old.update(new)
+            recomputed[i] = old
+    entries[:] = recomputed
     return entries
 
-
-def pending_supersession_reason(entry: dict) -> str | None:
-    """Describe a proposed supersession that lacks merged-PR proof."""
-    record = entry.get("supersession")
-    if not entry.get("superseded_by") or not isinstance(record, dict):
-        return None
-    if record.get("verified_at"):
-        return None
-    successor = record.get("successor") or entry.get("superseded_by")
-    cause = str(record.get("cause") or "missing cause")
-    surfaces = record.get("surfaces") or []
-    surface_text = ", ".join(str(s) for s in surfaces) or "missing surfaces"
-    return (
-        f"pending supersession: successor={successor}; cause={cause}; "
-        f"surfaces={surface_text}"
-    )
 
 
 def live_claimed_node_ids(*, strict: bool = False) -> set[str]:
@@ -495,3 +291,120 @@ def live_claimed_node_ids(*, strict: bool = False) -> set[str]:
         if strict:
             raise
         return set()
+
+
+def settle_released_node(node_id: str):
+    """The retired claim mirror stamped a released node back to its queue
+    state; this mutator keeps the transition a write. The commit pipeline
+    re-derives the final word (done, in_review, deferred, the ladder's
+    ready/idea), so it only has to move the stuck row."""
+    def _settle(entries):
+        for entry in entries:
+            if entry.get("id") == node_id and entry.get("status") == "in_progress":
+                entry["status"] = "ready"
+                break
+        return entries
+
+    return _settle
+
+
+def closed_worker_session_ids(entry: dict) -> set[str]:
+    """Session ids whose own phase row closed and none is open (the
+    receipt): finished with THIS node ahead of the predicate."""
+    closed: set[str] = set()
+    open_ids: set[str] = set()
+    for row in entry.get("sessions") or []:
+        if not (isinstance(row, dict) and isinstance(row.get("session_id"), str)
+                and isinstance(row.get("phase"), str)):
+            continue
+        # A ship row is a link event, never occupancy.
+        if row["phase"] == "ship":
+            continue
+        (open_ids if is_open_phase_row(row, row["phase"]) else closed).add(row["session_id"])
+    return closed - open_ids
+
+
+def live_worked_node_ids(
+    *, strict: bool = False, entries: list[dict] | None = None,
+    reading: RosterReading | None = None,
+) -> dict[str, list[str]]:
+    """Return open-phase nodes whose roster workers are live.
+    The fleet read and transcript liveness stay here; the join is the Rust
+    `fno-agents worked-nodes` verb. ``reading`` must be an already-paid read.
+    """
+    try:
+        from fno.claims.roster import read_roster
+        from fno.graph.store import read_graph_strict
+        from fno.paths import graph_json
+
+        if entries is None:
+            entries = read_graph_strict(graph_json())
+        if not any(isinstance(entry, dict) and entry.get("status") not in TERMINAL_RUNGS
+                   for entry in entries):
+            return {}
+        if reading is None:
+            reading = read_roster(require_live_probe=False)
+        if not reading.consulted:
+            raise RuntimeError(f"read_roster: {reading.reason or 'roster not consulted'}")
+        return _worked_nodes_reply(_live_rows(reading))
+    except Exception as exc:  # noqa: BLE001 - display callers degrade loudly
+        if strict:
+            raise
+        print(f"worked overlay degraded: {exc}", file=sys.stderr)
+        return {}
+
+
+def _live_rows(reading: RosterReading) -> list[dict[str, object]]:
+    """One reachability pass over the rows; attributed rows first."""
+    from fno.agents.reachability import REACHABLE, UNKNOWN
+    from fno.claims.roster import _worker_reachability
+    from fno.provenance.resolver import transcript_listing
+
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+
+    def collect(row: object, node: str | None) -> None:
+        if not isinstance(row, dict):
+            return
+        key = str(row.get("row_id") or "") or f"name:{row.get('name')}"
+        if key in seen:
+            return
+        seen.add(key)
+        verdict = _worker_reachability(row).verdict
+        if verdict not in (REACHABLE, UNKNOWN):
+            return
+        name = str(row.get("name") or "")
+        rows.append({
+            "name": name,
+            "label": name if verdict == REACHABLE else
+            f"{name} {UNMEASURABLE_LABEL_MARK} no positive liveness evidence)",
+            "session": str(row.get("row_id") or ""), "node": node,
+        })
+
+    with transcript_listing():
+        for node, extras in (reading.workers_by_node or {}).items():
+            for extra in extras:
+                collect(extra, node)
+        for row in (reading.rows_by_session or {}).values():
+            collect(row, None)
+        for node, names in (reading.unmeasurable_by_node or {}).items():
+            rows.extend({
+                "name": str(extra_name),
+                "label": f"{extra_name} {UNMEASURABLE_LABEL_MARK} no harness session id)",
+                "session": "", "node": node,
+            } for extra_name in names)
+    return rows
+
+
+def _worked_nodes_reply(rows: list[dict[str, object]]) -> dict[str, list[str]]:
+    import json
+
+    from fno.rust_binary import call_binary_json
+
+    error, reply = call_binary_json(
+        "worked-nodes", ("--rows-file", "-"), input_text=json.dumps({"rows": rows}),
+    )
+    worked = reply.get("worked") if error is None and isinstance(reply, dict) else None
+    if not isinstance(worked, dict):
+        raise RuntimeError(f"worked-nodes: {error or 'no worked map'}")
+    return worked

@@ -32,7 +32,7 @@ runner = CliRunner()
 @pytest.fixture
 def claims_tmp(tmp_path: Path, monkeypatch):
     """Root BOTH node:<id> (global root) and dispatch:<id> (cwd/env root) claims
-    under one tmp dir, and force the Python agents dispatch so the verb never
+    under one tmp dir and pin the Python runtime so the spawn never
     execs the Rust binary."""
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path))
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -102,14 +102,12 @@ def test_live_claim_already_running_no_reservation(claims_tmp):
 
 
 def test_corrupted_claim_verdict_no_reservation(claims_tmp):
-    # Write a garbage lock file at the node:<id> path so the probe classifies it
-    # corrupted (claim_status returns state=corrupted, never raises).
-    from fno.claims.core import claim_path
-    from fno.claims.io import global_claims_root
+    # An unreadable row at node:<id> classifies corrupted (claim_status
+    # returns state=corrupted, never raises).
+    from tests._table_seed import update_claim
 
-    path = claim_path("node:x-dddd", root=global_claims_root())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{ this is not valid claim yaml :::", encoding="utf-8")
+    acquire_claim("node:x-dddd", "h0")
+    update_claim("node:x-dddd", schema_version=999)
 
     res = _invoke("x-dddd", "--holder", "h", "--json")
     assert res.exit_code == 0  # corrupted is a clean verdict
@@ -270,7 +268,7 @@ def test_direct_node_spawn_crosses_shared_guard_before_spawn(
 
     res = runner.invoke(
         agents_app,
-        ["spawn", "--name", "dead-worker", "--node", "x-dead", "--here", "work"],
+        ["spawn", "--name", "dead-worker", "--node", "x-dead", "--here", "/fix work"],
     )
 
     assert res.exit_code == 2
@@ -308,7 +306,7 @@ def test_direct_node_spawn_failure_releases_shared_reservation(
     )
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **_k: (_ for _ in ()).throw(DispatchAskError("mux failed", exit_code=7)),
     )
     released: list[tuple[str, str]] = []
@@ -319,7 +317,7 @@ def test_direct_node_spawn_failure_releases_shared_reservation(
 
     res = runner.invoke(
         agents_app,
-        ["spawn", "--name", "failed-worker", "--node", "x-fail", "--here", "work"],
+        ["spawn", "--name", "failed-worker", "--node", "x-fail", "--here", "/fix work", "--substrate", "pane"],
     )
 
     assert res.exit_code == 7
@@ -377,7 +375,7 @@ def test_spawn_guard_hidden_but_reachable(claims_tmp):
 # --- x-4652: orphaned dispatch reservation reaps (already-correct path) -------
 
 
-def test_expired_dead_dispatch_reservation_reaped(claims_tmp, monkeypatch):
+def test_expired_dead_dispatch_reservation_reaped(claims_tmp):
     """Regression (x-4652): a dispatch:<id> reservation whose TTL has expired AND
     whose recorded pid is dead is STALE, so spawn-guard reaps it and dispatches,
     taking a fresh reservation. This locks the already-correct reap path (the
@@ -389,8 +387,8 @@ def test_expired_dead_dispatch_reservation_reaped(claims_tmp, monkeypatch):
     SUSPECT-arm behavior is asserted by
     test_suspect_claim_already_running_no_reservation above."""
     import psutil
-    from fno.claims import staleness
 
+    from tests._table_seed import update_claim
     dead_pid = 999_999
     while psutil.pid_exists(dead_pid):
         dead_pid += 1
@@ -400,8 +398,7 @@ def test_expired_dead_dispatch_reservation_reaped(claims_tmp, monkeypatch):
     acquire_claim(
         "dispatch:x-7777", "dispatch-node:orphan", pid=dead_pid, ttl_ms=60_000
     )
-    future = staleness.now_ms() + 120_000
-    monkeypatch.setattr(staleness, "now_ms", lambda: future)
+    update_claim("dispatch:x-7777", expires_at=1)
     assert claim_status("dispatch:x-7777")["state"] == "stale"
 
     res = _invoke("x-7777", "--holder", "dispatch-node:fresh", "--json")
@@ -446,7 +443,7 @@ def test_a_held_claim_with_no_target_init_reads_unproven(claims_tmp):
 
     `fno backlog next --claim <holder> --external` and a bare `fno agents claim
     acquire` both write this key with nobody launched. Calling that a live
-    worker tells a king the opposite of the truth at the moment it decides
+    worker tells a lead the opposite of the truth at the moment it decides
     whether to staff the node.
     """
     import os
@@ -547,3 +544,149 @@ def test_a_stale_manifest_does_not_manufacture_a_worker(claims_tmp):
     obj = json.loads(res.output)
     assert obj["reason"] == "unproven-claim"
     assert obj["init_reached"] is False
+
+
+def test_a_worked_authority_outage_names_itself_not_a_running_worker(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """When the worked overlay refuses, a FREE claim must not render as
+    `already-running`: the guard could not check, and that is not occupancy
+    (three free nodes were refused as already-running while their leads fell
+    back to a costlier lane). The verdict says unknown and the detail carries
+    the reader failure verbatim."""
+    def _raise(**_kw):
+        raise RuntimeError("roster timeout")
+
+    monkeypatch.setattr("fno.graph.statuses.live_worked_node_ids", _raise)
+    res = _invoke("x-9999", "--holder", "probe:1", "--no-reserve", "--json")
+    assert res.exit_code == 0
+    obj = json.loads(res.output)
+    assert obj["verdict"] == "unknown"
+    assert obj["reason"] == "worked-authority-unavailable"
+    assert "roster timeout" in obj["detail"]
+
+
+def test_a_worker_row_block_with_no_claim_names_the_row(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """No claim holder, the worked overlay names a worker. The row is the
+    occupant, so the reason is its own token, `worker` rides the payload, and
+    no claim holder is named - `unproven-claim` asserted a claim that does not
+    exist and dropped the only actionable field."""
+    monkeypatch.setattr(
+        "fno.graph.statuses.live_worked_node_ids",
+        lambda **_kw: {"x-8888": ["lead-a792-control"]},
+    )
+    res = _invoke("x-8888", "--holder", "probe:1", "--no-reserve", "--json")
+    assert res.exit_code == 0
+    obj = json.loads(res.output)
+    assert obj["verdict"] == "already-running"
+    assert obj["reason"] == "worker-row"
+    assert obj["worker"] == "lead-a792-control"
+    assert "holder" not in obj
+    assert obj["remedy"] == (
+        "fno agents peek lead-a792-control; if its run is finished, "
+        "fno agents stop lead-a792-control"
+    )
+
+
+# --- x-c08a: the refusal names the worker ROW, never the claim ----------------
+
+
+def test_a_stale_claim_with_a_worker_row_names_the_row_not_the_claim(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """AC3-HP, the x-6f98 specimen: the claim read stale with a dead
+    predecessor while a worker row sat on the node. The old receipt said
+    `unproven-claim` and named the claim's prior holder, and the operator
+    followed it to a claim `fno agents claim status` read as UNCLAIMED."""
+    import psutil
+
+    from fno.claims.io import global_claims_root as _global_claims_root
+    from tests._table_seed import update_claim
+
+    dead_pid = 999_999
+    while psutil.pid_exists(dead_pid):
+        dead_pid += 1
+    acquire_claim(
+        "node:x-6f98", "spawn-handover:bp-6f98-locked-decision",
+        pid=dead_pid, ttl_ms=60_000,
+    )
+    update_claim("node:x-6f98", expires_at=1)
+    assert claim_status("node:x-6f98", root=_global_claims_root())["state"] == "stale"
+
+    monkeypatch.setattr(
+        "fno.graph.statuses.live_worked_node_ids",
+        lambda **_kw: {"x-6f98": ["bp-6f98-locked-decision"]},
+    )
+    res = _invoke("x-6f98", "--holder", "probe:1", "--no-reserve", "--json")
+    assert res.exit_code == 0
+    obj = json.loads(res.stdout)
+    assert obj["verdict"] == "already-running"
+    assert obj["reason"] == "worker-row"
+    assert obj["worker"] == "bp-6f98-locked-decision"
+    assert "fno agents peek bp-6f98-locked-decision" in obj["remedy"]
+    # The claim's prior holder is NOT the occupant, so it is not on the receipt.
+    assert "holder" not in obj
+    assert "bp-6f98-locked-decision" not in json.dumps(obj.get("prior_holder", ""))
+
+
+def test_the_contested_dispatch_warning_leads_with_the_worker_row(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """AC4-HP: the same block on the reserving path, where the warning fires
+    (a --no-reserve probe emits nothing). The line pointed at a stale claim
+    while the row was the occupant."""
+    import psutil
+
+    from tests._table_seed import update_claim
+
+    dead_pid = 999_999
+    while psutil.pid_exists(dead_pid):
+        dead_pid += 1
+    acquire_claim(
+        "node:x-6f99", "spawn-handover:bp-6f99-planner", pid=dead_pid, ttl_ms=60_000
+    )
+    update_claim("node:x-6f99", expires_at=1)
+    monkeypatch.setattr(
+        "fno.graph.statuses.live_worked_node_ids",
+        lambda **_kw: {"x-6f99": ["bp-6f99-planner"]},
+    )
+    res = _invoke("x-6f99", "--holder", "dispatch-node:444", "--json")
+    assert res.exit_code == 0
+    assert json.loads(res.stdout)["reason"] == "worker-row"
+    assert "worker row bp-6f99-planner is on the node" in res.stderr
+    # No reservation was taken: the row still occupies the node.
+    assert claim_status("dispatch:x-6f99")["state"] == "free"
+
+
+def test_a_live_claim_with_a_worker_row_still_reads_live_claim(
+    claims_tmp, monkeypatch: pytest.MonkeyPatch
+):
+    """AC3-CTRL: the discriminator discriminates. When the CLAIM itself holds
+    the node, the claim is the occupant and its reason stands, worked overlay
+    or not."""
+    import os
+
+    acquire_claim("node:x-c0c0", "target-session:owner", pid=os.getpid())
+    monkeypatch.setattr(
+        "fno.graph.statuses.live_worked_node_ids",
+        lambda **_kw: {"x-c0c0": ["t-c0c0-worker"]},
+    )
+    res = _invoke("x-c0c0", "--holder", "dispatch-node:222", "--no-reserve", "--json")
+    assert res.exit_code == 0
+    obj = json.loads(res.stdout)
+    assert obj["reason"] == "live-claim"
+    assert obj["holder"] == "target-session:owner"
+
+
+def test_the_worker_token_survives_an_unmeasurable_label(claims_tmp):
+    r"""AC4-HP, the machine token: both shell consumers read `worker=` with
+    `sed -n 's/.* worker=\([^ ;]*\).*/\1/p;q'`, which stops at the first
+    space. The overlay's own ` (unmeasurable: ...)` label would truncate a name
+    mid-token, and two names would lose all but the first."""
+    from fno.agents.cli import _worker_token
+
+    assert _worker_token("w1 (unmeasurable: no harness session id)") == "w1"
+    assert _worker_token("w1, w2") == "w1,w2"
+    assert _worker_token("w1 (unmeasurable: x), w2") == "w1,w2"

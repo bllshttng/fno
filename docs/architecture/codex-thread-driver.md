@@ -35,13 +35,11 @@ agy --conversation <uuid> --input-format stream-json --output-format stream-json
 
 That is the boot-once, drive-many property `codex exec resume` lacks, and it is the same shape as `provider.rs`'s `claude_stream_json_resume_argv`. So agy's lane can reuse machinery fno already ships for claude. Its `agent_response` steps also carry `text_delta` and a per-step `duration_seconds`, so a driver can attribute latency, which `codex exec resume` does not permit.
 
-**opencode's `true` is the one bit not earned to this page's standard.** `harness_map.py`'s `substrate_default` returns `thread` for any harness whose bit is true. So opencode is the only harness routed onto a thread lane by default. Every harness with a false bit defaults to `headless`, a one-shot.
+**opencode's `true` now has an honest steering path.** `harness_map.py`'s `substrate_default` returns `thread` for any harness whose spawn claim is native, so opencode is routed onto the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, attach-writer steering, readback, and session liveness; server-kill survival, review, and viewport selection remain unproven.
 
-Meanwhile that lane has four gaps. It has no e2e spawn test through the real mux socket. It has no CI-installed binary behind its flag checks. It has no steering surface. Its liveness signal is the detached writer pid. That pid exits at the end of the first turn, while the session keeps working.
+The serve lane does not use opencode's general store-lookup identity path. `POST /session` returns the full session id, and every later turn binds that id to the shared serve. The detached writer's pid is capture metadata only; liveness comes from `GET /session/<id>`, so a completed writer does not make the session read dead.
 
-That last gap carries a reap hazard behind an opt-in setting rather than a live outage. It is a risk to close, not a fire.
-
-The wider point is the one to take from this page. A single flag is covering two different claims. "Has a durable session lane" and "has a driver fno can steer" are not the same assertion. One flag standing for both is the shape AGENTS.md warns about under *never infer the axis from a value*.
+The wider point remains: a durable session and a driver fno can steer are separate claims. The opencode spawn claim is native because this lane proves both, while the other opencode shapes remain explicitly refused or unmeasured.
 
 ## Three lanes, and which one you actually need
 
@@ -57,7 +55,7 @@ Before reading the protocol below, rule it out. Codex has three re-entry lanes a
 
 Two flags on that lane close the modals recorded as blocking unattended restore. `--cd <DIR>` sets the working root. Codex then never renders its "use session directory or current directory" prompt. That prompt defaults to the canonical checkout, and the correct answer is the worktree. `--dangerously-bypass-hook-trust` runs enabled hooks without persisted trust, which clears the hooks-trust gate. Neither needs a protocol and both were answered by hand three times on 2026-08-25.
 
-**What fno's own resume lane applies is `--cd` alone.** Read the paragraph above as codex's capability, not as footnote's behavior. The gap was deliberate. A registry row recorded no sandbox posture. The lane had no way to tell a bounded worker from a yolo one, and a forced bypass resumed every bounded worker with approvals off. That much is fixed (registry v19): the codex thread lane stamps `sandbox_posture` at spawn and the daemon's `thread/resume` applies it. A `--yolo` worker keeps `danger-full-access` across a daemon restart. A pre-v19 row resumes with the safe `workspace-write` default. Hook trust still needs that same operator choice, plus the installed-version gate the spawn lane already applies. So an unattended `fno agents resume` of a codex row with untrusted hooks still stalls on that prompt. Clearing it waits on an opt-in verb.
+**What fno's own resume lane applies is `--cd` and hook trust, never the approvals bypass.** Hook trust is posture-free. It skips only hook review, so it rides every resume as a global right after the binary, gated on an installed codex that ships the flag (0.148.0 or newer, pinned by `FNO_CODEX_VERSION`). The approvals bypass is the deliberate gap. A registry row recorded no sandbox posture. The lane had no way to tell a bounded worker from a yolo one, and a forced bypass resumed every bounded worker with approvals off. That much is fixed (registry v19): the codex thread lane stamps `sandbox_posture` at spawn and the daemon's `thread/resume` applies it. A `--yolo` worker keeps `danger-full-access` across a daemon restart. A pre-v19 row resumes with the safe `workspace-write` default.
 
 **What rules `codex resume` out is not capability, it is the terminal.** With stdin redirected it exits 1 in under a tenth of a second:
 
@@ -74,13 +72,23 @@ What the protocol adds over `codex exec resume` is narrower than a feature list 
 
 Pick by the question being asked. A human coming back to a session wants `codex resume`. A worker taking one more turn wants `codex exec resume`. A worker that must be steered and reviewed unattended wants the protocol.
 
-## The bit is true, and what it now promises
+## The seat is native, and what it now promises
 
-`harness_capabilities.toml` holds `thread = true` for codex. The bit is evidence of a working driver, never an aspiration, and `harness_map.py`'s rule is that it is never inherited.
+Codex's features row claims `spawn = native`: fno's own launch arm for the thread lane is wired and journey-proven. The claim is evidence of a working driver, never an aspiration, and the seat derives from it rather than from a stored boolean.
 
-The claim it carries was measured wrong in both directions before the shared-daemon move. The bit was flipped to make a codex thread survive mux death, and a private app-server did survive that. It was a child of `fno-agents-daemon`, so it did not obviously survive THAT daemon's death, and the durability was narrower than advertised. Against the shared daemon the thread survives both, because neither process owns it.
+The claim was measured wrong in both directions before the shared-daemon move. The seat was granted to make a codex thread survive mux death, and a private app-server did survive that. It was a child of `fno-agents-daemon`, so it did not obviously survive THAT daemon's death, and the durability was narrower than advertised. Against the shared daemon the thread survives both, because neither process owns it.
 
 That is now a promise the implementation keeps rather than one it overstates.
+
+## Failed turns and quiet workers
+
+A failed `turn/completed` retains its error, keeps the worker Working, and emits `codex_turn_error`. The actor preserves waiters and starts a continuation after exponential backoff, from five seconds to five minutes. Interrupt and shutdown cancel recovery. A start without confirmed acceptance never triggers another blind start.
+
+Worker spawn and resume set OpenAI stream retries to 20 and the stream idle timeout to 600,000 ms. Explicit per-thread overrides take precedence. These settings travel through thread config and do not change the shared app-server configuration.
+
+The settle arm also checks unfinished workers once a minute. A live claim and no new transcript item for 15 minutes trigger a nudge. An error-bearing turn triggers the first nudge immediately. The 30-minute nudge includes the recorded harness resume command. At 45 minutes, the daemon sends stuck help to the lead. Recipient transcript markers confirm nudge reads. An unread nudge triggers recovery on the next sweep. An unread recovery escalates instead of repeating. Active watch leases and foreign claims hold recovery.
+
+Dead unfinished pane workers use `fno mux workspace restore --member-session <full-session-id>` in their recorded worktree. Thread workers use the native thread resume lane. Refused recovery preserves changes on a recovery branch using an isolated index, then sends branch evidence to the lead. The original branch, index, and worktree stay intact. Finished nodes and merged work are excluded from nudging.
 
 ## The two durable halves already exist
 
@@ -200,6 +208,18 @@ The grant is sent on every turn rather than only the first. The protocol makes a
 
 The grant is per THREAD, never per daemon. One shared app-server owns every thread on the machine. A grant applied at daemon scope widens every other worker at once.
 
+## Posture, grant, and the two failure lanes
+
+`workspace-write` grants the worker's checkout but does not grant the repository's `.git` metadata. A plain checkout has `.git` as a directory. A linked worktree has `.git` as a file pointing into the repository's common Git directory. The common directory is the one path that covers the linked-worktree gitdir, shared objects, refs, and index without widening the worker to full access.
+
+The registry row records two separate facts. `sandbox_posture` says which sandbox mode the worker launched with. `git_grant` is the resolved absolute Git common-directory path that the policy carried, so a reader can identify the repository covered by the grant. `None` means the grant did not resolve. It is not an empty-string success and it is distinct from a row written before the field existed.
+
+The spawn seam runs after defaults resolve and before either the Python dispatch or Rust client can mint a worker. When three conditions hold, the grant resolution runs. The harness is Codex, the payload is a bounded code workflow (`/target`, `/execute`, `/tdd`, `/fix`, or `/pr`), and the launch is not full-access. The seam then resolves `git rev-parse --path-format=absolute --git-common-dir` for the launch cwd. An empty result exits 2 with the cwd and query named, and no registry row is created. A resolved path launches normally. Full-access launches do not need this bounded-grant assertion. The predicate is the effective grant, not a required posture flag.
+
+The watchdog consumes the distress that target initialization already writes. The trigger is a last message naming a path under `.git` with `Operation not permitted`. When the node claim reads free and `origin/main..HEAD` holds zero commits, the verdict is `sandbox-blocked`. Its action is `reap`, which frees the parked worker slot. An unreadable claim or branch, a held claim, or any branch commit holds the row. The report names that guard instead of reaping on a stray string.
+
+The measured failure had fourteen workers with logs carrying one `.git` lock signature and the correct distress explanation. Nobody read the distress. The row's posture alone cannot distinguish a usable sandbox from the one that failed. The grant path and watchdog verdict make both facts durable and machine-readable.
+
 A live probe is the only instrument that can answer this. `codex_fake_daemon.rs` models no sandbox field at all. A green run against it measures the double and not the target. The fake records the frames it received instead, which pins the other half: fno's three hops put the roots on the wire.
 
 ## `thread/list` is a roster with the right cwd
@@ -222,7 +242,7 @@ A driver-hosted thread closes this by construction. It appears in `thread/loaded
 
 ## What the fno side holds now
 
-`crates/fno-agents/src/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens them at startup from the registry's durable `harness_session_id`.
+`crates/fno-agents/src/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens them at startup from the registry's durable `harness_session_id`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
 
 One actor task per thread owns its connection exclusively. That reasoning is about handle types, so it survived the transport change untouched. `drive_turn` used to hold a mutex guard for a whole turn, so every follow-up ask queued behind it and the steer RPC was unreachable. Consumers now send commands and never touch the driver.
 
@@ -261,3 +281,15 @@ The journey shape `opencode_serve.rs` established, kept here as the standing bar
 `attach_id` is never a binding key. A codex UUIDv7 head-8 is a roughly 65.5-second clock bucket. Siblings spawned in one minute collide. A join on it binds the wrong session for exactly the burst-spawned workers most likely to be present. Every RPC above names the full `threadId`. None accepts a short id.
 
 A missing registry row is never evidence of death. Read the claim lockfile pid and probe that pid.
+
+## The upgrade transaction
+
+A stale daemon (live version older than the installed CLI) upgrades only through one transaction in `crates/fno-agents/src/codex_daemon_upgrade.rs`. It is the ONLY caller of the vendor `codex app-server daemon restart`. Nobody signals the daemon pid by hand.
+
+The order is fixed. Acquire the provider-daemon lock. Re-read readiness under it, so a concurrent upgrade reads reused-current instead of double-swapping. Snapshot every loaded thread: full id, cwd, runtime status, and its fno registry row. When a thread reads active or systemError, or any status is unreadable, refuse before ANY mutation.
+
+Then, and only then, run the vendor restart with the resolved `CODEX_HOME`. Verify after. The recorded incarnation must have changed. Initialize must answer. Both version readers must agree the daemon now equals the installed CLI. Every snapshot id must re-read with the same cwd. The config bytes must be unchanged. Every check passing makes the receipt `upgraded`. Any failure makes it `failed` with the missing ids named. Never a success-shaped line on failure. Never a blind retry.
+
+`fno agents restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the verb, because nothing was mutated. A post-restart verification failure DOES fail the verb.
+
+Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor verbs in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.

@@ -67,9 +67,47 @@ pub struct Behavior {
     pub stray_completion_after: Option<Duration>,
     /// Answer `initialize` with an `error` frame on the matching id: the
     /// protocol/version skew shape a refusing real daemon produces
-    /// (codex offered 0.149.1 to 0.150.1 on the machine x-296f was measured
+    /// (codex offered 0.149.1 to 0.150.1 on the machine was measured
     /// on). A client that treats the id match as success reads HEALTHY here.
     pub refuse_initialize: bool,
+    /// The canned `project/list` page. One page, no cursor: the resolver's
+    /// three branches (root list, name match, create) all fit in it, and the
+    /// fake models no project store on purpose - whether the REAL app-server
+    /// persists a create is a question for the live daemon, not the double.
+    pub projects: Vec<Value>,
+    /// The cwd the fake's `thread/read` answers with, and the posture its
+    /// `thread/resume` reply carries. `None` models a reply with no sandbox
+    /// key at all, so the driver must send the turn policy-less. The default
+    /// models today's daemon: a loaded thread with a cwd and no posture key.
+    pub thread_cwd: String,
+    pub thread_sandbox: Option<Value>,
+    /// Answer `thread/resume` with an error frame: the refused probe.
+    pub fail_thread_resume: bool,
+    /// Cold threads reject turns until resumed; history exceeds the frame cap.
+    pub cold_thread: bool,
+    pub resume_history_bytes: usize,
+    /// The version `initialize` reports in `serverInfo` and
+    /// `thread/loaded/list` implies exists. Models the LIVE daemon's version;
+    /// a fake `codex` CLI on PATH reporting a NEWER `--version` makes the
+    /// readiness verdict read stale.
+    pub server_version: String,
+    /// The ids `thread/loaded/list` answers with. Empty models an app-server
+    /// hosting nothing.
+    pub loaded_ids: Vec<String>,
+    /// The `status.type` every `thread/read` answer carries. `idle` is the
+    /// safe-to-upgrade shape; `active` and `systemError` are the refusal
+    /// shapes the upgrade transaction must hold on.
+    pub thread_status: String,
+    /// When set, the fake reports the upgraded version in `serverInfo` once
+    /// `<fake home>/<marker filename>` exists - the file a fake
+    /// `codex app-server daemon restart` writes to model a new daemon
+    /// incarnation serving the new build. The fake models the protocol side
+    /// of the swap; the state file is the script's to rewrite.
+    pub upgrade_marker: Option<(String, String)>,
+    /// Close the connection on `turn/start` without answering: the ack-loss
+    /// shape the seed lane must read as in-flight, never as a failed delivery.
+    pub unacked_turn_start: bool,
+    pub failed_turns: u32,
     /// Every request frame this fake received, in arrival order.
     ///
     /// The fake models no sandbox and deliberately never will: whether the
@@ -91,6 +129,18 @@ impl Default for Behavior {
             event_frames: 0,
             stray_completion_after: None,
             refuse_initialize: false,
+            projects: Vec::new(),
+            thread_cwd: "/tmp/fake-daemon-cwd".to_string(),
+            thread_sandbox: None,
+            fail_thread_resume: false,
+            cold_thread: false,
+            resume_history_bytes: 0,
+            server_version: "0.149.1-fake".to_string(),
+            loaded_ids: vec!["thread-t".to_string()],
+            thread_status: "idle".to_string(),
+            upgrade_marker: None,
+            unacked_turn_start: false,
+            failed_turns: 0,
             received: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -146,6 +196,52 @@ impl Behavior {
 
     pub fn with_refused_initialize(mut self) -> Self {
         self.refuse_initialize = true;
+        self
+    }
+
+    pub fn with_projects(mut self, projects: Vec<Value>) -> Self {
+        self.projects = projects;
+        self
+    }
+
+    pub fn with_thread_cwd(mut self, cwd: &str) -> Self {
+        self.thread_cwd = cwd.to_string();
+        self
+    }
+
+    pub fn with_thread_sandbox(mut self, sandbox: Value) -> Self {
+        self.thread_sandbox = Some(sandbox);
+        self
+    }
+
+    pub fn with_failing_thread_resume(mut self) -> Self {
+        self.fail_thread_resume = true;
+        self
+    }
+
+    pub fn with_server_version(mut self, version: &str) -> Self {
+        self.server_version = version.to_string();
+        self
+    }
+
+    pub fn with_loaded_ids(mut self, ids: &[&str]) -> Self {
+        self.loaded_ids = ids.iter().map(|id| id.to_string()).collect();
+        self
+    }
+
+    pub fn with_thread_status(mut self, status: &str) -> Self {
+        self.thread_status = status.to_string();
+        self
+    }
+
+    pub fn with_upgrade_marker(mut self, marker: &str, version: &str) -> Self {
+        self.upgrade_marker = Some((marker.to_string(), version.to_string()));
+        self
+    }
+
+    /// Close the connection on `turn/start` without answering.
+    pub fn with_unacked_turn_start(mut self) -> Self {
+        self.unacked_turn_start = true;
         self
     }
 }
@@ -204,13 +300,14 @@ impl FakeDaemon {
         let saved_home = std::env::var_os("CODEX_HOME");
         std::env::set_var("CODEX_HOME", &home);
         let received = Arc::clone(&behavior.received);
+        let server_home = home.clone();
         let server = tokio::spawn(async move {
             while let Ok((conn, _)) = listener.accept().await {
-                tokio::spawn(serve(conn, behavior.clone()));
+                tokio::spawn(serve(conn, server_home.clone(), behavior.clone()));
             }
         });
         Self {
-            home,
+            home: home.clone(),
             saved_home,
             server,
             received,
@@ -264,7 +361,7 @@ impl Drop for FakeDaemon {
 /// sleeps inside its turn branch leaves the interrupt unread, which is not
 /// how the real app-server behaves and is why the old Python fakes each
 /// carried a reader thread.
-async fn serve(conn: UnixStream, behavior: Behavior) {
+async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
     let Ok(ws) = tokio_tungstenite::accept_async(conn).await else {
         return;
     };
@@ -273,6 +370,7 @@ async fn serve(conn: UnixStream, behavior: Behavior) {
     let mut pending: Option<(String, tokio::time::Instant)> = None;
     let mut stray: Option<tokio::time::Instant> = None;
     let mut steered = false;
+    let mut loaded = !behavior.cold_thread;
     loop {
         let due = match (pending.as_ref(), stray) {
             (Some((_, turn_at)), Some(stray_at)) => Some(stray_at.min(*turn_at)),
@@ -300,7 +398,12 @@ async fn serve(conn: UnixStream, behavior: Behavior) {
                 }
                 let Some((turn_id, _)) = pending.take() else { continue };
                 let text = format!("REPLY-{turn_n}");
-                if send(&mut sink, completed(&turn_id, "completed", &text)).await.is_err() {
+                let mut frame = completed(&turn_id, "completed", &text);
+                if turn_n <= behavior.failed_turns {
+                    frame["params"]["turn"]["status"] = json!("failed");
+                    frame["params"]["turn"]["error"] = json!({"message": "workspace routing discovery timed out"});
+                }
+                if send(&mut sink, frame).await.is_err() {
                     return;
                 }
                 continue;
@@ -323,12 +426,63 @@ async fn serve(conn: UnixStream, behavior: Behavior) {
             Some("initialize") if behavior.refuse_initialize => json!({"id": id, "error": {
                 "message": "initialize refused: client protocol newer than daemon"
             }}),
-            Some("initialize") => json!({"id": id, "result": {}}),
+            Some("initialize") => {
+                let version = match &behavior.upgrade_marker {
+                    Some((marker_name, upgraded_version)) if home.join(marker_name).exists() => {
+                        upgraded_version.clone()
+                    }
+                    _ => behavior.server_version.clone(),
+                };
+                json!({"id": id, "result": {"serverInfo": {
+                    "name": "codex", "version": version
+                }}})
+            }
             Some("initialized") => continue,
-            Some("thread/start") | Some("thread/resume") => json!({"id": id, "result": {
-                "thread": {"id": behavior.thread_id, "path": "/tmp/fake-daemon-rollout.jsonl"}
+            Some("thread/loaded/list") => json!({"id": id, "result": {
+                "data": behavior.loaded_ids, "nextCursor": null
             }}),
+            Some("thread/read") => json!({"id": id, "result": {"thread": {
+                "id": behavior.thread_id, "cwd": behavior.thread_cwd,
+                "status": {"type": behavior.thread_status}
+            }}}),
+            Some("thread/start") | Some("thread/resume") => {
+                if behavior.fail_thread_resume
+                    && msg.get("method").and_then(Value::as_str) == Some("thread/resume")
+                {
+                    json!({"id": id, "error": {"message": "thread/resume refused"}})
+                } else {
+                    loaded = true;
+                    let mut result = json!({
+                        "thread": {"id": behavior.thread_id, "path": "/tmp/fake-daemon-rollout.jsonl"}
+                    });
+                    if behavior.resume_history_bytes > 0
+                        && msg.pointer("/params/excludeTurns") != Some(&json!(true))
+                    {
+                        result["thread"]["turns"] =
+                            json!([{"text": "x".repeat(behavior.resume_history_bytes)}]);
+                    }
+                    if let Some(sandbox) = &behavior.thread_sandbox {
+                        result["sandbox"] = sandbox.clone();
+                    }
+                    json!({"id": id, "result": result})
+                }
+            }
             Some("turn/start") => {
+                if !loaded {
+                    if send(
+                        &mut sink,
+                        json!({"id": id, "error": {"message": "thread not found"}}),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                if behavior.unacked_turn_start {
+                    return;
+                }
                 turn_n += 1;
                 steered = false;
                 let turn_id = format!("turn-{turn_n}");
@@ -397,6 +551,30 @@ async fn serve(conn: UnixStream, behavior: Behavior) {
                     "message": format!("turn-{turn_n} is not active")
                 }}),
             },
+            Some("project/list") => json!({
+                "id": id, "result": {"data": behavior.projects, "nextCursor": null}
+            }),
+            Some("project/read") => {
+                // Model the store: echo the canned project this id names, else
+                // a bare project with no roots.
+                let pid = msg
+                    .pointer("/params/projectId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let project = behavior
+                    .projects
+                    .iter()
+                    .find(|p| p.get("id").and_then(Value::as_str) == Some(pid))
+                    .cloned()
+                    .unwrap_or(json!({"id": pid, "roots": []}));
+                json!({"id": id, "result": {"project": project}})
+            }
+            Some("project/create") => {
+                json!({"id": id, "result": {"project": {"id": "proj-created-fno"}}})
+            }
+            Some("project/update") => json!({"id": id, "result": {"project": {
+                "id": msg.pointer("/params/projectId").cloned().unwrap_or(Value::Null)
+            }}}),
             _ => continue,
         };
         if send(&mut sink, reply).await.is_err() {

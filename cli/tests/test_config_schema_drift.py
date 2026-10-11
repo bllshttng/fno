@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from fno.config import AutoMergeBlock
+from fno.config import AutoMergeBlock, RecoveryBlock
 from fno.config import registry as _registry
 from fno.config import schema_gen
 
@@ -44,15 +44,40 @@ def test_registry_is_complete_and_exact() -> None:
     assert not extra, f"registry entries with no model leaf: {sorted(extra)}"
 
 
-def test_registry_wizard_tiers_are_valid() -> None:
-    for path, meta in _registry.FIELD_META.items():
-        assert meta.wizard in ("always", "advanced", "never"), (
-            f"{path}: invalid wizard tier {meta.wizard!r}"
-        )
+def test_provider_outage_config_defaults_and_minima_are_fail_closed() -> None:
+    defaults = RecoveryBlock()
+    assert defaults.watchdog.enabled is False
+    assert defaults.watchdog.mode == "report"
+    # The DEFAULT stays 2; the FLOOR is 1 - quorum=1 is an operator's positive
+    # decision that a lone worker's outage is authority enough.
+    assert defaults.provider_outage_quorum == 2
+    assert RecoveryBlock(provider_outage_quorum=1).provider_outage_quorum == 1
+    assert defaults.provider_outage_fup_window_seconds == 300
+    assert defaults.provider_outage_529_count == 3
+    assert defaults.provider_outage_529_span_seconds == 120
+    assert defaults.provider_outage_529_cross_session_window_seconds == 600
+    assert defaults.provider_outage_pane_freshness_seconds == 120
+    assert defaults.provider_outage_evidence_freshness_seconds == 600
+    assert defaults.provider_outage_reset_grace_seconds == 120
+    assert defaults.provider_health_marker_ttl_seconds == 120
+    # The flat spelling every config written before the split carries.
+    legacy = RecoveryBlock(watchdog="handoff")
+    assert (legacy.watchdog.enabled, legacy.watchdog.mode) == (True, "handoff")
+    assert RecoveryBlock(watchdog="off").watchdog.enabled is False
 
-
-def test_markdown_generation_is_deterministic() -> None:
-    assert schema_gen.render_markdown() == schema_gen.render_markdown()
+    for field, value in {
+        "provider_outage_quorum": 0,
+        "provider_outage_fup_window_seconds": 299,
+        "provider_outage_529_count": 2,
+        "provider_outage_529_span_seconds": 119,
+        "provider_outage_529_cross_session_window_seconds": 599,
+        "provider_outage_pane_freshness_seconds": 119,
+        "provider_outage_evidence_freshness_seconds": 599,
+        "provider_outage_reset_grace_seconds": 119,
+        "provider_health_marker_ttl_seconds": 119,
+    }.items():
+        with pytest.raises(ValueError, match=field):
+            RecoveryBlock.model_validate({field: value})
 
 
 def test_markdown_table_rows_never_split_on_doc_pipes() -> None:
@@ -218,27 +243,46 @@ def test_rust_merge_strategy_allowlist_matches_model() -> None:
     )
 
 
-def test_rust_auto_merge_grant_reads_both_spellings() -> None:
-    """`auto_merge_grant` is the Rust reader of the actor-scope key (x-4be1).
+def test_auto_merge_grant_rust_leg_matches_the_inventory() -> None:
+    """The grant decision has one Rust reader and one caller.
 
-    It must read the canonical `auto_merge.grant` spelling AND keep the legacy
-    `dispatch.auto_merge` arm for one release, mirroring the Python alias; a
-    rename honored on one of N reachable paths is exactly the pitfalls-corpus
-    trap this file exists to pin. Source-to-source, same shape as the
-    strategy guard above; the behavior cases live in the Rust unit tests.
+    The Rust reader was deleted once because it had zero callers, and this
+    guard pinned that deletion. x-7aaf regrew it with a real caller: the
+    Rust durable-grant verdict reads the live grant leaf. The guard now pins
+    the inventory instead - `agents_config.rs` is the reader,
+    `merge_grant.rs` its one caller, `pr_status_facts.rs` reads the
+    grant's dispatch list to key the status cache, and `seams.rs` reads the
+    same dispatches for the merge-authority receipt axes - so a leg with no
+    caller of its own still cannot regrow silently.
     """
-    rs = _repo_root() / "crates" / "fno-agents" / "src" / "agents_config.rs"
-    src = rs.read_text(encoding="utf-8")
-    m = re.search(r"pub fn auto_merge_grant.*?\n\}", src, re.DOTALL)
-    assert m, f"auto_merge_grant not found in {rs.name} (guard inert?)"
-    body = m.group(0)
-    assert 'get("auto_merge")' in body and 'get("grant")' in body, (
-        "Rust reader lost the canonical auto_merge.grant spelling"
+    root = _repo_root()
+    rust_hits = [
+        p
+        for p in (root / "crates").rglob("*.rs")
+        # Skip cargo build/package dirs: a `cargo package` run drops full
+        # source copies under target/package/, which would read as a regrown
+        # leg that no source carries.
+        if "target" not in p.relative_to(root).parts
+        and "auto_merge_grant" in p.read_text(encoding="utf-8")
+    ]
+    expected = {"agents_config.rs", "merge_grant.rs", "pr_status_facts.rs", "seams.rs"}
+    found = {p.name for p in rust_hits}
+    assert found == expected, (
+        f"Rust auto_merge_grant legs drifted from the inventory: expected "
+        f"{sorted(expected)} (reader, grant caller, cache-key dispatch "
+        f"reader), found {sorted(found)}"
     )
-    assert 'get("dispatch")' in body and "auto_merge" in body, (
-        "Rust reader lost the legacy dispatch.auto_merge arm"
+    py_hits = []
+    for path in (root / "cli" / "src" / "fno").rglob("*.py"):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        if re.search(r"^def auto_merge_grant\(", source, re.MULTILINE):
+            py_hits.append(path)
+    assert len(py_hits) == 1, (
+        f"expected exactly one Python auto_merge_grant definition, found {py_hits}"
     )
-    assert '"dispatch"' in body, "Rust reader does not compare against the grant literal"
 
 
 def test_rust_auto_merge_enabled_matches_model_default() -> None:
@@ -251,5 +295,12 @@ def test_rust_auto_merge_enabled_matches_model_default() -> None:
     assert 'get("auto_merge")' in body and 'get("enabled")' in body, (
         "Rust reader lost the canonical auto_merge.enabled spelling"
     )
-    assert "unwrap_or(false)" in body, "Rust reader no longer fails closed"
+    # Fail-closed, pinned to the mechanism rather than to one spelling of it.
+    # The coercion moved into `affirmative` when this reader stopped being the
+    # native arm's alone and started deciding `fno do pr merge` too, so the
+    # guard reads the arm that decides an unrecognised value.
+    assert "affirmative(enabled)" in body, "Rust reader lost its value coercion"
+    coercer = re.search(r"fn affirmative\(.*?\n\}", src, re.DOTALL)
+    assert coercer, "affirmative() not found (guard inert?)"
+    assert "_ => false" in coercer.group(0), "Rust reader no longer fails closed"
     assert AutoMergeBlock.model_fields["enabled"].default is False

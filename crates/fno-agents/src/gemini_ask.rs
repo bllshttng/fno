@@ -1,4 +1,4 @@
-//! Client-side `gemini -p` ask path (ab-73da4ac2).
+//! Client-side `gemini -p` ask path.
 //!
 //! `gemini` is a one-shot `gemini --skip-trust -p ... --output-format json`
 //! subprocess (NOT a PTY agent): it emits a SINGLE JSON object to stdout at
@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 
 use crate::claude_ask::{emit_event, validate_inputs};
 use crate::paths::AgentsHome;
-use crate::state::{load_registry, update_registry, RegistryEntry};
+use crate::state::{find_keyed_mut, load_registry, update_registry, RegistryEntry};
 use crate::AgentStatus;
 
 /// Lock-acquisition ceiling (mirror of codex/claude `LOCK_ACQUIRE_TIMEOUT`).
@@ -195,7 +195,7 @@ fn build_argv_create_with_sandbox(
         "--output-format".to_string(),
         "json".to_string(),
     ];
-    // x-c772: an explicit --model is forwarded to `gemini --model <m>`
+    // an explicit --model is forwarded to `gemini --model <m>`
     // (empty/None = gemini default). Exact passthrough, no fuzzy resolution.
     if let Some(m) = model.filter(|m| !m.is_empty()) {
         argv.push("--model".to_string());
@@ -433,7 +433,7 @@ fn run_gemini(
     // (exit 12) rather than a panic.
     let tee_fh = open_tee(output_path)?;
 
-    // QoS (x-c5cc): exec-wrap at background priority (identity when
+    // QoS: exec-wrap at background priority (identity when
     // worker_qos=off).
     let argv =
         crate::spawn_gate::qos_wrap(popen_cwd.unwrap_or_else(|| Path::new(".")), argv.to_vec());
@@ -669,7 +669,7 @@ pub fn gemini_create(
     model: Option<&str>,
 ) -> Result<GeminiResult, GeminiAskError> {
     let full_prompt = inject_from_name(prompt, from_name);
-    // ab-994222ee: the create/exec path is the autonomous headless lane. Default
+    // the create/exec path is the autonomous headless lane. Default
     // to no-prompt (--yolo) so a headless gemini cannot wedge on the first
     // approval prompt; config.agents.gemini.headless_yolo=false opts back in.
     let eff = crate::agents_config::effective_yolo(
@@ -705,7 +705,7 @@ pub fn gemini_resume(
     agent_self: Option<&str>,
 ) -> Result<GeminiResult, GeminiAskError> {
     let full_prompt = inject_from_name(prompt, from_name);
-    // ab-994222ee: a resumed autonomous worker is the same headless risk class.
+    // a resumed autonomous worker is the same headless risk class.
     let eff = crate::agents_config::effective_yolo(
         yolo,
         crate::agents_config::headless_yolo_enabled("gemini", cwd),
@@ -1062,9 +1062,9 @@ fn dispatch_create(
         .filter(|s| !s.is_empty())
         .expect("gemini_create guarantees a non-empty session_id on success (expect_session=true)");
 
-    // The spawning session's ambient identity (x-132c): gemini_create runs in
+    // The spawning session's ambient identity: gemini_create runs in
     // the CLIENT process that inherited the spawning session's env.
-    let (parent_session, parent_harness, parent_cwd) = crate::claims::ambient_parent_edge();
+    let spawned_by = crate::spawn_lineage::ambient_lineage();
     let new_entry = RegistryEntry {
         node: None,
         // The one-shot gemini -p lane: non-interactive by construction.
@@ -1072,22 +1072,26 @@ fn dispatch_create(
         name: name.to_string(),
         short_id: String::new(),
         legacy_provider: String::new(),
-        // x-d285: non-claude harness; the account axis does not apply.
+        // non-claude harness; the account axis does not apply.
         launch_account: None,
         related_session_id: None,
         provider: None,
         model: None,
         model_basis: None,
         effort: None,
-        // v23 (x-2019): the request beside the effect; the observed axes stay
+        // v23: the request beside the effect; the observed axes stay
         // unset, the request rides through verbatim.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
         requested_provider: None,
         requested_effort: None,
         harness: Some("gemini".to_string()),
-        harness_session_id: Some(session_id.clone()),
         predecessor_session_ids: Vec::new(),
         forked_from_session_id: None,
+        // v25: the route axes this lane actually used - the gemini CLI talks
+        // to Google with its own ambient auth, so "default".
+        route_provider_id: Some("google".to_string()),
+        model_name: model.filter(|m| !m.is_empty()).map(str::to_string),
+        account_record_id: Some("default".to_string()),
         cwd: cwd.to_string_lossy().to_string(),
         project_root: String::new(),
         session_id: None,
@@ -1096,9 +1100,6 @@ fn dispatch_create(
         // later reader has to guess at.
         origin: Some("spawn".to_string()),
         spawn_trigger: None,
-        spawned_by_session: parent_session,
-        spawned_by_harness: parent_harness,
-        spawned_by_cwd: parent_cwd,
         legacy_claude_short_id: None,
         claude_session_uuid: None,
         messaging_socket_path: None,
@@ -1120,13 +1121,14 @@ fn dispatch_create(
         exited_at: None,
         mux: None,
         screen_state: None,
-        crown_level: None,
-        crown_scope: None,
-        crown_grantor: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
         route_settings_path: None,
-        fno_id: None,
         delivery_policy: None,
         sandbox_posture: None,
+        git_grant: None,
+        ..RegistryEntry::new(Some(session_id.clone()), spawned_by)
     };
 
     match update_registry(registry_path, |reg| {
@@ -1308,9 +1310,12 @@ fn dispatch_resume(
         }
     };
 
-    // Stamp status=live + last_message_at on success.
+    // Stamp status=live + last_message_at on success, keyed on the row's
+    // identity captured before the write, so a same-name
+    // replacement between resolve and write cannot receive this stamp.
+    let key = ("gemini".to_string(), Some(session_id.clone()));
     if let Err(e) = update_registry(registry_path, |reg| {
-        if let Some(en) = reg.find_mut(name) {
+        if let Some(en) = find_keyed_mut(reg, &key, name) {
             en.status = AgentStatus::Live;
             en.last_message_at = Some(now_iso());
         }

@@ -21,7 +21,7 @@ So "declutter the human `--help`" only touches the handful of *Python-registered
 
 | Subcommand | Routed by `/agent`? | What it does |
 |------|:---:|--------------|
-| `spawn` | yes (default) | Launch a worker (substrate `pane`/`bg`/`headless`). |
+| `spawn` | yes (default) | Launch a worker (substrate `pane`/`thread`/`headless`; the retired `bg` spelling refuses). |
 | `ask` | yes (`ask`) | Sync message to an EXISTING worker (`ln` short-command): deliver, wait, print the reply on stdout. |
 | `stop` | yes | Terminate a worker (confirm). |
 | `watch` / `list` / `logs` | yes | Observe. |
@@ -42,7 +42,7 @@ Out of scope for the `/agent` router by design - naming one is not a gap. Rust-o
 | `kill-check` | kill-criteria evaluation. |
 | `verify-evidence` / `digest` / `report` / `wait` / `trace` / `ping` | evidence audit, catch-up fold, progress report, blocking wait, tracing, liveness. |
 | `spawn-guard` **(typer, hidden)** | atomic node-claim probe used by the spawn path. |
-| `drive-authority` **(typer, hidden)** | reports whether an operator holds a drive window. |
+| `drive-authority` **(typer, hidden)** | reports whether a user holds a drive window. |
 | `gate` **(typer, hidden)** | retired at G4; kept for back-compat, hidden from help. |
 
 The three **(typer, hidden)** subcommands are the only machine subcommands that used to show in `fno agents --help`; they carry `hidden=True` now. The rest are Rust-only and were never listed.
@@ -59,16 +59,16 @@ Cutting requires proving no shell call site **and** no internal dispatch **and**
 The three channel wrappers were cut on the first two, with the forward intent judged already served by the sidecar path.
 The `channel.*` daemon RPCs (`protocol.rs`, `daemon.rs`) are untouched, so rewiring a CLI front is a re-add, not a rebuild.
 
-## The a2a reply contract (x-605c)
+## The a2a reply contract
 
 Agent-to-agent mail is a protocol, not a transport the caller reasons about. It has exactly two halves:
 
-- **Inbound is self-addressed.** A message lands as `<fno_mail from="H" harness="..." model="...">body`. `H` is the sender's canonical handle (the bare `<short8>`; harness and model ride as their own attributes), the ONE string its `mail drain-self` cursor also reads.
-- **Reply by handle.** Run `fno agents mail send H "..."`. Never inspect `harness`/`model` to pick a transport; the CLI resolves `H`. The outbound envelope auto-stamps the *invoking* session's own handle + real model (from its transcript store), so the reply is itself self-addressed.
+- **Inbound is self-addressed.** A message lands as `<fno_mail from="H" id="X">body`. `H` is the sender's full session id or, for an unregistered sender, its canonical handle. `X` is the message id, the ONE string its `mail drain-self` cursor also reads.
+- **Reply by id.** Run `fno agents mail reply --to X "..."`. The CLI resolves the sender off the bus. The outbound envelope auto-stamps the *invoking* session's own handle and real model from its transcript store. The reply is itself self-addressed.
 
 **Resolution ladder** (`discover.resolve_or_suggest`, one scan serving match + suggestions):
 
-1. **fno-agents registry** - a named worker (`x-d899-us8-build`) also answers to its bare `<short8>` handle.
+1. **fno-agents registry** - a named worker (`-us8-build`) also answers to its bare `<short8>` handle.
 2. **claude daemon roster** (`~/.claude/daemon/roster.json`) - a `claude --bg` worker leaves no pid-sidecar, so the roster is the only source that surfaces it. Presence is enough; the `mail-inject` connect is the authoritative liveness gate.
 3. **disk sessions** - live `~/.claude/sessions/<pid>.json` sidecars, else the transcript store.
 4. **codex rollouts** - hand-started codex sessions from `~/.codex/sessions`.

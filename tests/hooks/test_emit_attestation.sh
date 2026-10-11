@@ -25,8 +25,7 @@ TMP="$(mktemp -d -t emit-attestation-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Stub the event sink and CAPTURE ITS ARGV: the assertion must read what was
-# actually handed to `doctor event emit`, not what the receipt claims (same rule as
-# tests/hooks/test_attest_model.sh).
+# actually handed to `doctor event emit`, not what the receipt claims.
 # Discriminates on the verb, like tests/hooks/test_code_review_attest.sh's stub:
 # the emitter shells `fno` for more than the event sink now (it clears the
 # review hold once a verdict exists for the head), and a stub that captured
@@ -66,6 +65,34 @@ stored() { # echoes one field of the last emitted payload: stored <jq-path>
   tail -1 "$TMP/last-emit.txt" | jq -r "$1 // \"<missing>\""
 }
 
+# 0. The sender sidecar is keyed by the harness session, not the target run.
+# The two manifest fields are deliberately different so the old lookup cannot
+# pass by reading the target-run name.
+mkdir -p "$REPO/.fno" "$TMP/fno-home/review-invocations"
+cat > "$REPO/.fno/target-state.md" <<'STATE'
+session_id: target-run
+harness_session_id: harness-run
+harness: claude
+STATE
+printf '%s\n' '{"invocation_id":"ri-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","target_session_id":"harness-run"}' \
+  > "$TMP/fno-home/review-invocations/harness-run.json"
+rm -f "$TMP/last-emit.txt"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" FNO_HOME="$TMP/fno-home" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+got="$(stored '.invocation_id')"
+[[ "$got" == "ri-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]] \
+  && pass "emitter adopts sidecar by harness_session_id" \
+  || fail "sidecar key: want sender id, got '$got'"
+
+# A missing bridge is a visible state, not a locally minted id.
+rm -f "$TMP/fno-home/review-invocations/harness-run.json" "$TMP/last-emit.txt"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" FNO_HOME="$TMP/fno-home" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+got="$(stored '.invocation_id')"
+[[ "$got" == "UNJOINED" ]] \
+  && pass "missing sidecar emits UNJOINED" \
+  || fail "missing sidecar marker: want UNJOINED, got '$got'"
+
 # 1. On a branch: the payload records the branch, and the receipt names it.
 rm -f "$TMP/last-emit.txt"
 RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
@@ -78,6 +105,16 @@ case "$RECEIPT" in
   *"branch=feature/x-e601"*) pass "receipt names the branch" ;;
   *) fail "receipt lacks branch=feature/x-e601: $RECEIPT" ;;
 esac
+case "$RECEIPT" in
+  *"run=target-run run_harness=claude attester="*) pass "receipt names run identity and attester" ;;
+  *) fail "receipt lacks run identity and attester: $RECEIPT" ;;
+esac
+if grep -q '[[:space:]]harness=' <<<"$RECEIPT"; then
+  fail "receipt carries a bare harness= token: $RECEIPT"
+else
+  pass "receipt has no bare harness= token"
+fi
+rm -f "$REPO/.fno/target-state.md"
 
 # 2. Detached HEAD: the literal "HEAD" names no branch, and an empty branch
 #    field is byte-identical to the pre-branch-field backlog - a live emit
@@ -459,15 +496,40 @@ if [[ "$1" == "doctor" && "$2" == "event" && "$3" == "emit" ]]; then
   exit 0
 fi
 if [[ "$1" == "do" && "$2" == "review" && "$3" == "classify" ]]; then
-  f=""; shift 3
+  f=""; attest=""; ctx="unknown"; xctx="inline"; contract="json_block"; shift 3
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --findings-file) f="$2"; shift 2 ;;
+      --attest) attest="$2"; shift 2 ;;
+      --reviewer-context) ctx="$2"; shift 2 ;;
+      --execution-context) xctx="$2"; shift 2 ;;
+      --output-contract) contract="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
-  bash "$stub_dir/classify-real.sh" "$f"
-  exit $?
+  record="$(bash "$stub_dir/classify-real.sh" "$f")" || exit $?
+  if [[ -n "$attest" ]]; then
+    # The verb's contract, stubbed against the fixture repo (cwd): measure
+    # the verdict from the classified record (prose_unparseable always fails),
+    # measure the diff, merge, and write the ONE emit the shell delegates to.
+    # FNO_ATTEST_BRANCH, when the producer set it, overrides the row's branch
+    # field ONLY - the verb's own contract under test, mirrored here.
+    if [[ "$contract" == "prose_unparseable" ]]; then
+      verdict="fail"
+    else
+      verdict="$(jq -r 'if (.findings_blocking // 1) == 0 then "pass" else "fail" end' <<<"$record")"
+    fi
+    merged="$(jq -cn --argjson rec "$record" --arg reviewer "$attest" --arg verdict "$verdict" \
+      --arg head "$(git rev-parse HEAD)" \
+      --arg branch "${FNO_ATTEST_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}" \
+      --arg base "$(git merge-base HEAD origin/main)" \
+      --arg ctx "$ctx" --arg xctx "$xctx" --arg contract "$contract" \
+      '$rec + {reviewer:$reviewer,head_sha:$head,verdict:$verdict,session_id:"",branch:$branch,reviewed_base_sha:$base,reviewed_head_sha:$head,reviewer_context:$ctx,execution_context:$xctx,output_contract:$contract,invocation_id:"UNJOINED"}')"
+    printf '%s\n' "doctor" "event" "emit" "-t" "review_attestation" "-s" "target" "-d" "$merged" \
+      > "$stub_dir/last-emit.txt"
+  fi
+  echo "$record"
+  exit 0
 fi
 exit 0
 FSTUB
@@ -542,6 +604,67 @@ for key in findings_blocking findings_nonblocking findings review_round disposit
   [[ "$got" == "<missing>" ]] && pass "no-file payload omits $key" \
     || fail "no-file payload carries $key='$got'"
 done
+
+echo "== default-branch shapes + delegated-path branch parity (x-a8a1) =="
+git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
+git -C "$REPO" update-ref refs/remotes/origin/feature/x-e601 "$HEAD_SHA"
+
+# 15. The canonical checkout sitting ON the default branch AT the base: the
+#     empty-diff refusal fires, and because branch == base there, it names the
+#     default-branch shape - lost for the real PR, in scope for any PR whose
+#     headRefName is the base - and points at the PR's worktree. The refused
+#     terminal row still journals (reason=empty_diff): an attempt that read
+#     nothing is recorded, not hidden.
+git -C "$REPO" checkout -q -B main "$BASE_SHA"
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "default-branch checkout at the base refuses" \
+  || fail "default-branch at-base emitted anyway (exit $RECEIPT_RC)"
+stored '.reason' 2>/dev/null | grep -qx "empty_diff" \
+  && pass "refusal journals the empty-diff terminal" \
+  || fail "terminal reason: want empty_diff, got '$(stored '.reason')'"
+if grep -q "repo default branch" <<<"$RECEIPT" && grep -q "Run" <<<"$RECEIPT" \
+    && grep -q "from the PR's worktree" <<<"$RECEIPT"; then
+  pass "refusal names the default-branch shape and the worktree remedy"
+else
+  fail "refusal lacks the default-branch phrasing: $RECEIPT"
+fi
+
+# 15b. Work committed directly ON the default branch attests honestly: the
+#      actor producer (hooks, review lanes in in-place sessions) runs on
+#      main-based repos, and the row's branch=main is then the TRUE scope.
+#      The refusal stays out of this shape.
+echo mainline >> "$REPO/a.txt"
+git -C "$REPO" add a.txt
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m "main work"
+rm -f "$TMP/last-emit.txt"
+emit_rc=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || emit_rc=$?
+[[ $emit_rc -eq 0 ]] && pass "work directly on the default branch attests" \
+  || fail "main-based work refused (exit $emit_rc); the actor producer path closed"
+got="$(stored '.branch')"
+[[ "$got" == "main" ]] && pass "main-based work records branch=main (its true scope)" \
+  || fail "main-based branch: want main, got '$got'"
+
+# 16. The delegated path (--findings-file) records the SAME branch the typed
+#     path resolves: the script passes its post-rewrite branch through
+#     --branch, so a reviewer worktree's LOCAL checkout name never reaches
+#     the row. Same worktree, same head, one flag apart used to produce two
+#     different branches (x-a8a1, node note 2).
+git -C "$REPO" checkout -q -B wt/r-4 origin/feature/x-e601
+git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-4 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit_ff "--findings-file $F14"
+[[ -f "$TMP/last-emit.txt" ]] && pass "delegated emit from a reviewer-worktree branch lands" \
+  || fail "delegated emit wrote nothing"
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "delegated path records the rewritten PR branch, not the local name" \
+  || fail "delegated branch: want feature/x-e601, got '$got'"
 
 echo ""
 echo "emit-attestation: $PASS passed, $FAIL failed"

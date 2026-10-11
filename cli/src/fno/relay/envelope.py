@@ -1,4 +1,4 @@
-"""Group 3 of the cross-session agent relay (x-908b / x-a2c9): the relay
+"""Group 3 of the cross-session agent relay (/): the relay
 ENVELOPE -- a thin view over the existing bus :class:`fno.bus.log.Envelope`,
 plus the provenance WIRE FORMAT injected on every PTY hop.
 
@@ -10,34 +10,28 @@ bus fields:
 - ``msg_id``      -> bus ``id``           (idempotent dedup key).
 - ``from``/``to`` -> bus ``from_``/``to`` (addresses; ``from_session`` is the id).
 - ``hop_count`` + ``ttl`` -> bus ``meta`` (cycle termination; relay-private).
-- ``provenance``  -> derived from ``from_session`` / ``provider_from`` /
-  ``from_model`` and serialized to the ``<fno_mail ...>`` wire tag below.
+- ``provenance``  -> derived from ``from_session`` / ``from_harness`` /
+  ``from_model`` and rendered into the delivered-header wire line below.
 
-Provenance wire format (node x-1f23: the relay is the SINGLE-LINE transport
-variant of the unified ``<fno_mail>`` a2a envelope, :mod:`fno.mail.envelope`)::
+Provenance wire format: the relay rides the ONE delivered shape, the
+delivered-mail header (:func:`fno.mail.envelope.wrap_fno_mail`) collapsed to a
+single physical line with the transcript newline glyph::
 
-    <fno_mail from="<short-sid>" harness="<harness>" model="<model>"> <message>
+    `@<sender> · <fmail-id> · <subject>` ⏎ <message>
 
-A single-line attribute tag prefixing the (single-lined) body, NO closing tag:
-the PTY Enter submits on newline so the turn boundary is the delimiter, so this
-hop cannot carry the paired multiline ``<fno_mail>...</fno_mail>`` form the
-control.sock inject uses. It shares the tag NAME and attribute vocabulary
-(``harness`` maps the provider via :func:`fno.mail.envelope.harness_for_provider`)
-so ``grep <fno_mail>`` across transcripts reconstructs relay hops too. The sender
-self-stamps -- the framed line is self-describing with no registry dependency.
+The PTY Enter submits on newline so the turn boundary is the delimiter; the
+glyph keeps the header framing on one line, and the Rust door reads it as the
+header framing. The renderer refuses a body carrying its own tag or a
+header-shaped line, and the sender self-stamps (an unknown session renders as
+its own address, no registry dependency).
 """
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from fno.bus.log import Envelope
-from fno.mail.envelope import (
-    ForgedEnvelopeError,
-    _refuse_unsafe_attr,
-    contains_fno_mail_tag,
-    harness_for_provider,
-)
+from fno.inbox.store import generate_msg_id
+from fno.mail.envelope import ForgedEnvelopeError, harness_for_provider, wrap_fno_mail
 
 # Relay-private meta keys on the bus envelope.
 META_HOP = "hop_count"
@@ -49,57 +43,43 @@ DEFAULT_TTL = 8
 
 RELAY_KIND = "relay"
 
-# Parse the wire tag. ``model`` is optional (a peer may not always know it).
-# DOTALL is deliberately NOT set: the tag and body are one physical line.
-_TAG_RE = re.compile(
-    r'^<fno_mail\s+from="(?P<from_session>[^"]*)"\s+harness="(?P<harness>[^"]*)"'
-    r'(?:\s+model="(?P<model>[^"]*)")?\s*>\s?(?P<body>.*)$'
-)
+# The transcript one-line body separator (the Rust door's NEWLINE_GLYPH).
+NEWLINE_GLYPH = " ⏎ "
 
 
-def frame(from_session: str, harness: str, model: Optional[str], body: str) -> str:
-    """Serialize one peer message to the single-line ``<fno_mail ...>`` wire line.
-
-    The body is collapsed to a single line (Enter submits the TUI turn, so an
-    embedded newline would submit early -- the constraint that keeps this hop on
-    the single-line, no-close variant of the ``<fno_mail>`` envelope).
-
-    Raises :class:`fno.mail.envelope.ForgedEnvelopeError` if ``body`` contains
-    an ``<fno_mail`` or ``</fno_mail>`` tag, or if an attribute value itself
-    could forge a second tag once interpolated -- ``from_session`` rides bus
-    provenance a peer can influence, not a value this function controls. This
-    is the single producer every delivery vehicle's framed line derives from --
-    the daemon-owned ``worker.submit`` RPC and the claude ``mail-inject``
-    binary each take an already-framed string built here, so neither
-    downstream check alone can cover a peer-controlled body or attribute
-    smuggling a second open tag."""
-    if contains_fno_mail_tag(body):
-        raise ForgedEnvelopeError(
-            "relay body contains an <fno_mail> tag. The single-line envelope "
-            "frames peer mail; a body cannot contain one."
-        )
-    for name, value in (("from", from_session), ("harness", harness), ("model", model)):
-        if value:
-            _refuse_unsafe_attr(name, value)
+def frame(from_session: str, body: str, harness: Optional[str] = None) -> str:
+    """Serialize one peer message to the single-line delivered-header wire
+    line (header, glyph, body). The body is collapsed to one line (Enter
+    submits the TUI turn, so an embedded newline would submit early). Raises
+    ForgedEnvelopeError on a body holding a tag or a header-shaped line (the
+    Rust renderer refuses both), or a from_session that could forge the sender
+    field. The daemon RPC and the mail-inject binary each take an
+    already-framed string from this single producer."""
+    for name, value in (("from_session", from_session), ("harness", harness)):
+        if value is None:
+            continue
+        if '"' in value or ">" in value or "`" in value:
+            raise ForgedEnvelopeError(
+                f"relay {name} cannot hold a quote, angle bracket or backtick"
+            )
     one_line = " ".join(body.split())
-    model_attr = f' model="{model}"' if model else ""
-    return f'<fno_mail from="{from_session}" harness="{harness}"{model_attr}> {one_line}'
+    rendered = wrap_fno_mail(
+        one_line,
+        from_=from_session,
+        harness=None if harness is None else harness_for_provider(harness),
+        id=generate_msg_id(),
+    )
+    return rendered.replace("\n", NEWLINE_GLYPH)
 
 
 def parse(line: str) -> Optional[dict]:
-    """Parse a wire line into ``{from_session, harness, model, body}``.
+    """Parse a legacy ``<fno_mail ...>`` wire line into ``{from_session,
+    body}``; ``None`` when unframed or when the line rides the header form
+    (the Rust door classifies that one directly)."""
+    from fno.mail.envelope import mail_shape
 
-    Returns ``None`` if the line is not framed -- the caller uses that to refuse
-    an unframed cross-provider injection (AC5-FR)."""
-    m = _TAG_RE.match(line.strip())
-    if not m:
-        return None
-    return {
-        "from_session": m.group("from_session"),
-        "harness": m.group("harness"),
-        "model": m.group("model"),
-        "body": m.group("body"),
-    }
+    parsed = mail_shape([line])[0]["relay_parse"]
+    return dict(parsed) if parsed else None
 
 
 def is_framed(line: str) -> bool:
@@ -109,21 +89,16 @@ def is_framed(line: str) -> bool:
 
 def frame_envelope(env: Envelope) -> Optional[str]:
     """Frame a relay bus envelope for injection, or ``None`` if it cannot be
-    framed (missing provenance -- no ``from_session`` or no ``provider_from`` --
+    framed (missing provenance -- no ``from_session`` or no ``from_harness`` --
     or a forged body that :func:`frame` refused).
 
     A ``None`` return is the structural signal that the message is unframeable;
     the daemon refuses to deliver it through any vehicle rather than inject an
     unframed or forged body (AC5-FR)."""
-    if not env.from_session or not env.provider_from:
+    if not env.from_session or not env.from_harness:
         return None
     try:
-        return frame(
-            env.from_session,
-            harness_for_provider(env.provider_from),
-            env.from_model,
-            env.body,
-        )
+        return frame(env.from_session, env.body, harness=env.from_harness)
     except ForgedEnvelopeError:
         return None
 
@@ -151,7 +126,7 @@ def make_relay_envelope(
     from_session: str,
     to: str,
     body: str,
-    provider_from: str,
+    from_harness: str,
     from_model: Optional[str] = None,
     hop_count: int = 0,
     ttl: int = DEFAULT_TTL,
@@ -168,7 +143,7 @@ def make_relay_envelope(
         to=to,
         kind=RELAY_KIND,
         body=body,
-        provider_from=provider_from,
+        from_harness=from_harness,
         from_session=from_session,
         from_model=from_model,
         to_kind=to_kind,

@@ -387,6 +387,23 @@ def test_model_accepts_both_reversal_shapes():
     assert ConsolidationBlock.model_validate(many).reversal
 
 
+def test_consolidation_entry_accepts_legacy_dashless_literal():
+    """A bare "<prefix><4hex>" legacy id references like its dashed kin.
+
+    A config prefix with no separator once minted such literals; a candidate
+    the graph holds must be recordable here, or the gate cannot say what it
+    considered. The binding check is the graph's own predicate, so any shape
+    the graph mints (dashed or legacy bare) passes; only a non-id shape is
+    refused. Prose extraction keeps its own stricter grammar.
+    """
+    from fno.plan.schema import ConsolidationEntry
+
+    assert ConsolidationEntry(id="x4d12", reason="parent epic, not a fold")
+    assert ConsolidationEntry(id="a3f9c1d2", reason="legacy bare id references too")
+    with pytest.raises(Exception):
+        ConsolidationEntry(id="9abc", reason="not an id shape at all")
+
+
 def test_blueprint_owns_the_consolidation_frontmatter_key():
     # The validator requires the block, so the ownership model must permit the
     # write that satisfies it, or blueprint raises OwnershipViolation instead.
@@ -430,3 +447,52 @@ def test_pydantic_model_rejects_malformed_block():
     bad = dict(base, consolidation={"outcome": "absorb", "absorbed": []})
     with pytest.raises(ValidationError):
         PlanFrontmatter.model_validate(bad)
+
+
+# -- the `rejected` key (x-6f98): a plan ruling against a foreign node --
+
+
+def test_rejected_entries_pass_the_gate_beside_any_outcome(tmp_path):
+    plan = tmp_path / "rejected.md"
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: x-bbbb\n"
+        "      reason: opposite direction, nothing reads its fields\n"
+    ))
+    result = _run(plan)
+    assert result.returncode == 0, result.stdout
+    assert "consolidation outcome is proceed_alone" in result.stdout
+
+
+def test_rejected_entry_with_empty_reason_errors_naming_the_section(tmp_path):
+    plan = tmp_path / "rejected-empty.md"
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: x-bbbb\n"
+        "      reason: \"\"\n"
+    ))
+    result = _run(plan)
+    assert result.returncode == 1, result.stdout
+    assert "(rejected)" in result.stdout
+
+
+def test_rejected_entry_with_a_non_node_id_errors_naming_the_section(tmp_path):
+    plan = tmp_path / "rejected-bad-id.md"
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\ncreated: 2026-08-18\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: bbbb\n"
+        "      reason: missing the prefix\n"
+    ))
+    result = _run(plan)
+    assert result.returncode == 1, result.stdout
+    assert "is not a node id" in result.stdout
+    assert "(rejected)" in result.stdout

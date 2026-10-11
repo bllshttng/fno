@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from fno import test_cmd
 
 
@@ -31,14 +33,104 @@ def test_run_propagates_failure(tmp_path, monkeypatch):
     assert test_cmd._run([str(f)]) == 1
 
 
-def test_run_missing_interpreter_is_127(monkeypatch):
+def test_run_missing_interpreter_is_127(monkeypatch, no_native_owner):
     # A missing interpreter raises FileNotFoundError (an OSError) -> 127.
     monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: "/nonexistent/python")
     assert test_cmd._run(["-q"]) == 127
 
 
+def _run_captured_to(tmp_path, monkeypatch, body: str):
+    """Run one captured pytest over `body`; return (rc, log text)."""
+    f = _write(tmp_path / "test_case.py", body)
+    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
+    log = tmp_path / "custom.log"
+    rc = test_cmd._run([str(f)], log_override=log)
+    return rc, log.read_text(encoding="utf-8")
+
+
+def test_captured_log_ends_with_exit_zero(tmp_path, monkeypatch):
+    rc, log = _run_captured_to(tmp_path, monkeypatch, "def test_ok():\n    assert True\n")
+    assert rc == 0
+    assert log.rstrip().endswith("EXIT=0")
+
+
+def test_captured_log_ends_with_real_exit_code(tmp_path, monkeypatch):
+    rc, log = _run_captured_to(tmp_path, monkeypatch, "def test_bad():\n    assert False\n")
+    assert rc == 1
+    assert log.rstrip().endswith("EXIT=1")
+
+
+def test_missing_interpreter_writes_exit_127(tmp_path, monkeypatch, no_native_owner):
+    # The 127 OSError return must leave the marker too: a log that just ends
+    # mid-run reads as "still going", not "the interpreter never started".
+    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: "/nonexistent/python")
+    log = tmp_path / "custom.log"
+    rc = test_cmd._run(["-q"], log_override=log)
+    assert rc == 127
+    assert log.read_text(encoding="utf-8").rstrip().endswith("EXIT=127")
+
+
+def test_log_override_bypasses_last_test_log(tmp_path, monkeypatch):
+    f = _write(tmp_path / "test_ok2.py", "def test_ok():\n    assert True\n")
+    monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
+    chdir = tmp_path / "root"
+    chdir.mkdir()
+    log = tmp_path / "elsewhere.log"
+    monkeypatch.setattr(test_cmd, "_repo_root", lambda cwd: chdir)
+    monkeypatch.chdir(tmp_path)
+    rc = test_cmd._run([str(f)], log_override=log)
+    assert rc == 0
+    assert log.exists()
+    assert not (chdir / ".fno" / "last-test.log").exists()
+
+
+def test_stream_with_log_refuses(tmp_path, capsys):
+    # Direct callback call: the verb is a bare click Command, and the runner
+    # surface differs across click versions in this environment.
+    with pytest.raises(SystemExit) as exc:
+        test_cmd.test_command.callback(
+            stream=True, log_override=tmp_path / "x.log", runner_args=()
+        )
+    assert exc.value.code == 2
+    assert "--log" in capsys.readouterr().err
+
+
+def test_log_with_census_deferred_refuses(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        test_cmd.test_command.callback(
+            stream=False,
+            log_override=tmp_path / "x.log",
+            runner_args=("--census-deferred",),
+        )
+    assert exc.value.code == 2
+    assert "--log" in capsys.readouterr().err
+
+
+def _popen_fake(recorder, returncode: int = 0):
+    """A subprocess.Popen stand-in for the group-spawning runner.
+
+    The suite runner now spawns via Popen in its own process group, so cmd
+    capture must intercept Popen and answer wait(timeout) like a real exit.
+    """
+    calls = []
+
+    class _FakePopen:
+        def __init__(self, cmd, env=None, **kw):
+            self.pid = 4242
+            calls.append({"cmd": cmd, "env": env, "kw": kw})
+            recorder(cmd, env=env, kw=kw)
+
+        def wait(self, timeout=None):
+            return returncode
+
+        def kill(self):
+            pass
+
+    return _FakePopen
+
+
 def _fake_run_capture(monkeypatch, tmp_path):
-    """Set up a tmp checkout + a fake subprocess.run that captures the cmd."""
+    """Set up a tmp checkout + a fake runner that captures the cmd."""
     captured = {}
 
     class _Proc:
@@ -50,6 +142,11 @@ def _fake_run_capture(monkeypatch, tmp_path):
 
     monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
     monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        test_cmd.subprocess,
+        "Popen",
+        _popen_fake(lambda cmd, env=None, kw=None: captured.update(cmd=cmd)),
+    )
     monkeypatch.chdir(tmp_path)
     (tmp_path / "cli" / "src" / "fno").mkdir(parents=True)
     (tmp_path / "cli" / "src" / "fno" / "__init__.py").write_text("", encoding="utf-8")
@@ -142,7 +239,7 @@ def test_quiet_contract_failure_tails_log(tmp_path, monkeypatch, capsys):
     assert len(out.splitlines()) <= test_cmd._TAIL_LINES + 3
 
 
-def test_quiet_contract_success_is_terse(tmp_path, monkeypatch, capsys):
+def test_quiet_contract_success_is_terse(tmp_path, monkeypatch, capsys, no_native_owner):
     f = _write(tmp_path / "test_pass.py", "def test_ok():\n    assert True\n")
     monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
     monkeypatch.chdir(tmp_path)
@@ -161,13 +258,11 @@ def test_stream_mode_inherits_stdio(tmp_path, monkeypatch):
     """--stream keeps the old inherited-stdio behavior: no capture kwargs."""
     captured = _fake_run_capture(monkeypatch, tmp_path)
     captured_kw = {}
-    real_fake = test_cmd.subprocess.run
 
-    def fake_run(cmd, env=None, **kw):
+    def record(cmd, env=None, kw=None):
         captured_kw.update(kw)
-        return real_fake(cmd, env=env, **kw)
 
-    monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
     assert test_cmd._run(["-q"], stream=True) == 0
     assert "stdout" not in captured_kw
 
@@ -186,20 +281,21 @@ def test_rust_mode_runs_each_crate_quietly(tmp_path, monkeypatch, capsys):
     """`fno doctor test rust` runs cargo test -q per crates/*/Cargo.toml (no nextest)."""
     cmds = []
 
-    class _Proc:
-        returncode = 0
-
-    def fake_run(cmd, env=None, **kw):
+    def record(cmd, env=None, kw=None):
         cmds.append(cmd)
-        assert env["RTK_DISABLED"] == "1"
-        return _Proc()
+        if cmd[0] == "cargo":  # sensor calls (lanes reading) pass no env
+            assert env["RTK_DISABLED"] == "1"
 
     _fake_checkout_with_crates(tmp_path, monkeypatch)
-    monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
     monkeypatch.setattr(test_cmd.shutil, "which", lambda name: None)
     assert test_cmd._run_rust([]) == 0
-    assert len(cmds) == 2
-    for cmd in cmds:
+    # The lanes reading is real here (unpatched), so its sensor subprocess
+    # calls (macmon, memory_pressure) ride in the capture; the contract under
+    # test is the per-crate sweep, so count the cargo runs.
+    cargo_cmds = [cmd for cmd in cmds if cmd[0] == "cargo"]
+    assert len(cargo_cmds) == 2
+    for cmd in cargo_cmds:
         assert cmd[:3] == ["cargo", "test", "-q"]
         assert "--manifest-path" in cmd
 
@@ -207,55 +303,50 @@ def test_rust_mode_runs_each_crate_quietly(tmp_path, monkeypatch, capsys):
 def test_rust_mode_prefers_nextest(tmp_path, monkeypatch):
     cmds = []
 
-    class _Proc:
-        returncode = 0
-
-    def fake_run(cmd, env=None, **kw):
+    def record(cmd, env=None, kw=None):
         cmds.append(cmd)
-        return _Proc()
 
     _fake_checkout_with_crates(tmp_path, monkeypatch, n=1)
-    monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
     monkeypatch.setattr(
         test_cmd.shutil, "which", lambda name: "/x/cargo-nextest" if name == "cargo-nextest" else None
     )
     assert test_cmd._run_rust([]) == 0
-    assert cmds[0][:3] == ["cargo", "nextest", "run"]
+    # The lanes reading is real here (unpatched): on a cold per-process cache
+    # its registry/roster reads shell out before the cargo command, so assert
+    # the cargo command, not the first captured call.
+    cargo_cmds = [cmd for cmd in cmds if cmd[0] == "cargo"]
+    assert len(cargo_cmds) == 1
+    assert cargo_cmds[0][:3] == ["cargo", "nextest", "run"]
 
 
 def test_rust_mode_explicit_manifest_single_run(tmp_path, monkeypatch):
     cmds = []
 
-    class _Proc:
-        returncode = 3
-
-    def fake_run(cmd, env=None, **kw):
+    def record(cmd, env=None, kw=None):
         cmds.append(cmd)
-        return _Proc()
 
     _fake_checkout_with_crates(tmp_path, monkeypatch)
-    monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record, returncode=3))
     monkeypatch.setattr(test_cmd.shutil, "which", lambda name: None)
     rc = test_cmd._run_rust(["--manifest-path", "crates/alpha/Cargo.toml"])
     assert rc == 3  # real cargo exit code propagated
-    assert len(cmds) == 1  # user's manifest respected, no crate sweep
+    # Cargo only: the real lanes reading may shell out (env=None) first.
+    cargo_cmds = [cmd for cmd in cmds if cmd[0] == "cargo"]
+    assert len(cargo_cmds) == 1  # user's manifest respected, no crate sweep
 
 
-def test_pythonpath_pins_worktree_src(tmp_path, monkeypatch):
+def test_pythonpath_pins_worktree_src(tmp_path, monkeypatch, no_native_owner):
     """_run must prepend <root>/cli/src to PYTHONPATH so a worktree tests its
-    own source. We capture the child env via a fake subprocess.run."""
+    own source. We capture the child env through the Popen fake."""
     captured = {}
 
-    class _Proc:
-        returncode = 0
-
-    def fake_run(cmd, env=None, **kw):
+    def record(cmd, env=None, kw=None):
         captured["env"] = env
         captured["cmd"] = cmd
-        return _Proc()
 
     monkeypatch.setattr(test_cmd, "_resolve_interpreter", lambda root: sys.executable)
-    monkeypatch.setattr(test_cmd.subprocess, "run", fake_run)
+    monkeypatch.setattr(test_cmd.subprocess, "Popen", _popen_fake(record))
     monkeypatch.chdir(tmp_path)
     (tmp_path / "cli" / "src" / "fno").mkdir(parents=True)
     (tmp_path / "cli" / "src" / "fno" / "__init__.py").write_text("", encoding="utf-8")

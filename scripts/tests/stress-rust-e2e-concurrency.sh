@@ -5,6 +5,7 @@
 set -uo pipefail
 
 trials="${STRESS_TRIALS:-${FNO_STRESS_TRIALS:-20}}"
+skip_slow="${STRESS_SKIP_SLOW:-0}"
 while (($# > 0)); do
     case "$1" in
         --trials)
@@ -30,6 +31,10 @@ done
 
 if ((trials < 1 || trials > 20)); then
     echo "--trials must be between 1 and 20" >&2
+    exit 2
+fi
+if [[ "$skip_slow" != 0 && "$skip_slow" != 1 ]]; then
+    echo "STRESS_SKIP_SLOW must be 0 or 1" >&2
     exit 2
 fi
 
@@ -120,8 +125,16 @@ build_test_binary workspace_persistence_e2e crates/fno/Cargo.toml workspace_pers
 # resolved and its existence is REQUIRED: a missing binary refuses the run
 # rather than reporting a clean zero.
 # daemon_bin is the compiled TEST binary, which cargo puts in deps/; the
-# daemon it spawns sits one level up beside it.
+# daemon it spawns sits one level up beside it. Under build.build-dir the
+# compiled test binary is an INTERMEDIATE in the shared build base, while
+# fno-agents-daemon is a FINAL binary that still lands in the checkout's
+# crates/fno-agents/target/<profile> - the path the e2e itself resolves and
+# spawns under that layout.
 daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agents-daemon"
+if [[ ! -x "$daemon_bin_path" ]]; then
+    profile="$(basename "$(dirname "$(dirname "$daemon_bin")")")"
+    daemon_bin_path="$repo_root/crates/fno-agents/target/${profile}/fno-agents-daemon"
+fi
 if [[ ! -x "$daemon_bin_path" ]]; then
     echo "stress_setup=unavailable reason=daemon-binary-not-found path=$daemon_bin_path" >&2
     echo "stress_setup_note=the leak counter cannot report a trustworthy zero without it" >&2
@@ -139,7 +152,7 @@ daemon_baseline="$(count_daemons)"
 # markers come from probe tests that do not exist there - every trial reads
 # `fail` for a binary whose own output says `test result: ok`. Read the trial
 # tails, not the verdicts, when comparing across revisions.
-echo "stress_setup=ready sha=$head_sha parallel_binaries=3 per_binary_threads=1 trials=$trials daemon_baseline=$daemon_baseline logs=$log_root"
+echo "stress_setup=ready sha=$head_sha parallel_binaries=3 per_binary_threads=1 trials=$trials skip_slow=$skip_slow daemon_baseline=$daemon_baseline logs=$log_root"
 failures=0
 for ((trial = 1; trial <= trials; trial++)); do
     if [[ "$(git rev-parse HEAD)" != "$head_sha" ]]; then
@@ -157,12 +170,22 @@ for ((trial = 1; trial <= trials; trial++)); do
     run_binary() {
         local key="$1"
         local bin
+        local -a runner_args=(--nocapture --test-threads=1)
         case "$key" in
             daemon_e2e) bin="$daemon_bin" ;;
             persistence) bin="$persistence_bin" ;;
             workspace_persistence_e2e) bin="$workspace_bin" ;;
         esac
-        "$bin" --nocapture --test-threads=1 >"$trial_dir/$key.log" 2>&1
+        # These two deterministic lifecycle waits are covered once by the
+        # normal cargo integration jobs. Skipping them saves 10 seconds per
+        # trial while the remaining race-sensitive cases stay repeated.
+        if [[ "$key" == daemon_e2e && "$skip_slow" == 1 ]]; then
+            runner_args+=(
+                --skip daemon_on_sandbox_home_starts_no_active_backlog_supervisor
+                --skip daemon_stays_resident_while_a_worker_socket_is_live
+            )
+        fi
+        "$bin" "${runner_args[@]}" >"$trial_dir/$key.log" 2>&1
         printf '%s\n' "$?" >"$trial_dir/$key.rc"
     }
 

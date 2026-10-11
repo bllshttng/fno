@@ -54,24 +54,16 @@ def pinned(tmp_path: Path, monkeypatch) -> dict[str, Path]:
     # and the autouse conftest clear already ran before this fixture.
     import fno.paths as paths_mod
 
-    paths_mod.resolve_repo_root.cache_clear()
 
     scratch = tmp_path / "scratch" / "events.jsonl"
     monkeypatch.setenv("FNO_EVENTS_PATH", str(scratch))
-    return {"checkout": checkout_journal, "scratch": scratch}
+    return {"checkout": checkout_journal, "scratch": scratch, "root": checkout}
 
 
 def _rows(journal: Path, event_type: str) -> list[dict]:
-    if not journal.exists():
-        return []
-    out = []
-    for line in journal.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if row.get("type") == event_type:
-            out.append(row)
-    return out
+    from tests._event_rows import event_rows
+
+    return [row for row in event_rows(journal) if row.get("type") == event_type]
 
 
 def test_escalation_lands_in_the_scratch_journal_not_the_checkout(pinned, runner) -> None:
@@ -106,7 +98,9 @@ def test_escalation_lands_in_the_scratch_journal_not_the_checkout(pinned, runner
     assert pinned["checkout"].read_bytes() == before
 
 
-def test_ask_writes_under_its_own_root_never_the_shared_pin(pinned, runner) -> None:
+def test_ask_writes_under_its_own_root_never_the_shared_pin(
+    pinned, runner, _door_binary_from_this_checkout
+) -> None:
     """`fno outstanding ask` is the other writer that reaches an operator
     surface, and it matters more than the mail escalation: `mail_escalation` is
     windowed by the fold's 24h `since` bound, so a fixture row ages out on its
@@ -116,25 +110,28 @@ def test_ask_writes_under_its_own_root_never_the_shared_pin(pinned, runner) -> N
     It is contained differently, and less completely. `ask` resolves a root and
     passes an explicit `events_path=`, so it never reaches the unpathed default
     the pin covers. That is the property asserted here, in both directions: the
-    row lands under the resolved root, and the shared sandbox journal stays
+    row lands under the resolved root's space journal (the accessor migrated
+    the checkout copy on first resolve), and the shared sandbox journal stays
     untouched. Drop the explicit path and the row moves to the pin, which this
     test fails on. In production, where no pin is set, that same drop silently
-    moves every operator question from the canonical checkout to a worktree.
+    moves every operator question off the repo's one space journal.
 
     The residual this does NOT close: `ask` resolves its root through
     `resolve_carveout_root`, which honors `FNO_REPO_ROOT`, and `neutralise`
     leaves that var unset on purpose. So a future test calling `ask` with no
     root fixture writes an `operator_question` into the developer's real
-    checkout. Every current `ask` test pins the root, so nothing leaks today.
+    space. Every current `ask` test pins the root, so nothing leaks today.
     Pin `FNO_REPO_ROOT` in any new one, and note that this kind is exempt from
     the fold's 24h window, so such a row never ages out on its own.
     """
     from fno.outstanding.cli import outstanding_app
+    from fno.paths import project_log
 
-    result = runner.invoke(outstanding_app, ["ask", "which auth?"])
+    result = runner.invoke(outstanding_app, ["ask", "which auth?", "--ask", "finish the lane"])
     assert result.exit_code == 0, result.output
 
-    questions = _rows(pinned["checkout"], "operator_question")
+    space_journal = project_log("events.jsonl", project_root=pinned["root"])
+    questions = _rows(space_journal, "operator_question")
     assert len(questions) == 1, f"expected one question, got {questions}"
     assert questions[0]["data"]["question"] == "which auth?"
 

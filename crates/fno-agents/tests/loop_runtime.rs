@@ -17,8 +17,8 @@
 ///   8. journal_write_failure_is_fatal
 ///   9. envelope_shape
 use fno_agents::loop_runtime::{
-    run_loop, CloseOutcome, DispatchCtx, Dispatcher, Evidence, Journal, LoopBudget, LoopError,
-    Queue, Session, Unit,
+    run_loop, Cancelled, CloseOutcome, DispatchCtx, Dispatcher, Evidence, Journal, LoopBudget,
+    LoopError, Queue, Session, Unit,
 };
 // Note: tests use Journal::new_raw (cfg(test) convenience constructor) to avoid
 // importing the newtype wrappers in every test.
@@ -67,10 +67,10 @@ fn seed_termination_event(journal_path: &Path, session_key: &str, reason: &str) 
 
 /// Read all lines from a JSONL file and parse them as JSON values.
 fn read_jsonl(path: &Path) -> Vec<serde_json::Value> {
-    if !path.exists() {
+    if !path.exists() && !fno_agents::event_store::store_path(path).exists() {
         return vec![];
     }
-    let content = fs::read_to_string(path).expect("read jsonl");
+    let content = fno_agents::event_store::journal_text(path, &[]);
     content
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -84,6 +84,19 @@ fn count_events(path: &Path, event_type: &str) -> usize {
         .into_iter()
         .filter(|v| v["type"].as_str() == Some(event_type))
         .count()
+}
+
+fn hold_store_write_lock(journal: &Path) -> rusqlite::Connection {
+    fno_agents::event_store::append_envelope(
+        journal,
+        r#"{"ts":"2026-06-06T00:00:00Z","type":"lock_seed","source":"test","data":{}}"#,
+        Some("evt:lock-seed"),
+    )
+    .unwrap();
+    let store = fno_agents::event_store::store_path(journal);
+    let conn = rusqlite::Connection::open(&store).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    conn
 }
 
 // ── mock impls ────────────────────────────────────────────────────────────────
@@ -373,7 +386,7 @@ fn empty_queue_terminates_nowork_without_dispatch() {
     let budget = LoopBudget::new(10).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     assert_eq!(outcome.reason, TerminationReason::NoWork);
     assert_eq!(outcome.iterations_used, 0);
@@ -415,7 +428,7 @@ fn unit_closes_on_termination_event() {
     let budget = LoopBudget::new(10).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     // Walk reason: queue empty after ab-001 -> NoWork (walk level).
     assert_eq!(outcome.reason, TerminationReason::NoWork);
@@ -463,7 +476,7 @@ fn no_event_exit_emits_node_failed_then_redispatches() {
     let budget = LoopBudget::new(10).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     assert_eq!(outcome.reason, TerminationReason::NoWork);
     assert_eq!(outcome.iterations_used, 2);
@@ -518,7 +531,7 @@ fn kill_mid_tool_call_prepends_unknown_outcome_and_journals_event() {
     let budget = LoopBudget::new(3).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     match previous_projects {
         Some(value) => std::env::set_var("FNO_CLAUDE_PROJECTS_DIR", value),
@@ -586,7 +599,7 @@ fn iteration_ceiling_terminates_budget() {
     let budget = LoopBudget::new(3).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     assert_eq!(outcome.reason, TerminationReason::Budget);
     assert_eq!(
@@ -635,7 +648,7 @@ fn preexisting_termination_skips_dispatch() {
     let budget = LoopBudget::new(5).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     // Walk closes ab-004 without dispatching; the close pass still spends
     // one iteration (a budget counts passes, not dispatches).
@@ -684,7 +697,20 @@ fn repeating_queue_under_resume_guard_terminates_on_budget() {
     // assertion below instead of wedging CI in the hot loop.
     let cancel_calls = Arc::new(AtomicU64::new(0));
     let calls = cancel_calls.clone();
-    let cancel = move || calls.fetch_add(1, Ordering::SeqCst) >= 50;
+    let cancel = move || {
+        if calls.fetch_add(1, Ordering::SeqCst) >= 50 {
+            Some(Cancelled {
+                cause: "sigint",
+                path: None,
+                age_secs: None,
+                clear_hint: String::new(),
+                author: None,
+                reason: None,
+            })
+        } else {
+            None
+        }
+    };
 
     let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &cancel, None).unwrap();
 
@@ -728,7 +754,7 @@ fn exhausted_budget_then_empty_queue_reports_nowork() {
     let budget = LoopBudget::new(1).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     assert_eq!(outcome.reason, TerminationReason::NoWork);
     assert_eq!(outcome.iterations_used, 1);
@@ -756,7 +782,7 @@ fn unaffordable_unit_is_not_dequeued_no_claim_stranded() {
     let budget = LoopBudget::new(1).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     assert_eq!(outcome.reason, TerminationReason::Budget);
     assert_eq!(outcome.iterations_used, 1);
@@ -793,7 +819,16 @@ fn cancel_returns_interrupted() {
         &dispatcher,
         &budget,
         &journal,
-        &move || flag.load(Ordering::SeqCst),
+        &move || {
+            flag.load(Ordering::SeqCst).then_some(Cancelled {
+                cause: "sigint",
+                path: None,
+                age_secs: None,
+                clear_hint: String::new(),
+                author: None,
+                reason: None,
+            })
+        },
         None,
     )
     .unwrap();
@@ -840,7 +875,7 @@ fn journal_write_failure_is_fatal() {
     let budget = LoopBudget::new(5).unwrap();
     let journal = Journal::new_raw(project_events, global_events);
 
-    let result = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None);
+    let result = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None);
     assert!(
         result.is_err(),
         "journal write failure to project path must be fatal (Err)"
@@ -852,8 +887,7 @@ fn journal_waits_for_shared_dir_mutex() {
     let dir = TempDir::new().unwrap();
     let project_events = dir.path().join("events.jsonl");
     let global_events = dir.path().join("global-events.jsonl");
-    let lock_dir = dir.path().join("events.jsonl.lock.d");
-    fs::create_dir(&lock_dir).unwrap();
+    let store_lock = hold_store_write_lock(&project_events);
 
     let barrier = Arc::new(Barrier::new(2));
     let thread_barrier = Arc::clone(&barrier);
@@ -870,15 +904,13 @@ fn journal_waits_for_shared_dir_mutex() {
     barrier.wait();
     std::thread::sleep(Duration::from_millis(200));
     assert!(
-        !project_events.exists(),
-        "Journal appended while the cross-language events mutex was held"
+        !handle.is_finished(),
+        "Journal appended while the event-store write transaction was held"
     );
 
-    fs::remove_dir_all(lock_dir).unwrap();
+    drop(store_lock);
     handle.join().unwrap().unwrap();
-    let lines = read_jsonl(&project_events);
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["type"], "mutex_probe");
+    assert_eq!(count_events(&project_events, "mutex_probe"), 1);
 }
 
 #[test]
@@ -886,10 +918,7 @@ fn journal_waits_through_expected_maintenance_contention() {
     let dir = TempDir::new().unwrap();
     let project_events = dir.path().join("events.jsonl");
     let global_events = dir.path().join("global-events.jsonl");
-    let lock_dir = dir.path().join("events.jsonl.lock.d");
-    let maintenance_dir = dir.path().join("events.jsonl.gc.d");
-    fs::create_dir(&lock_dir).unwrap();
-    fs::create_dir(&maintenance_dir).unwrap();
+    let store_lock = hold_store_write_lock(&project_events);
 
     let handle = std::thread::spawn(move || {
         Journal::new_raw(project_events, global_events)
@@ -897,13 +926,12 @@ fn journal_waits_through_expected_maintenance_contention() {
     });
 
     std::thread::sleep(Duration::from_millis(2_300));
-    assert!(
-        !handle.is_finished(),
-        "expected maintenance contention aborted the active loop"
-    );
+    if handle.is_finished() {
+        let early = handle.join().unwrap();
+        panic!("expected store contention aborted the active loop: {early:?}");
+    }
 
-    fs::remove_dir_all(lock_dir).unwrap();
-    fs::remove_dir_all(maintenance_dir).unwrap();
+    drop(store_lock);
     handle.join().unwrap().unwrap();
     assert_eq!(
         count_events(&dir.path().join("events.jsonl"), "maintenance_probe"),
@@ -916,10 +944,7 @@ fn journal_retries_when_maintenance_marker_disappears_near_timeout() {
     let dir = TempDir::new().unwrap();
     let project_events = dir.path().join("events.jsonl");
     let global_events = dir.path().join("global-events.jsonl");
-    let lock_dir = dir.path().join("events.jsonl.lock.d");
-    let maintenance_dir = dir.path().join("events.jsonl.gc.d");
-    fs::create_dir(&lock_dir).unwrap();
-    fs::create_dir(&maintenance_dir).unwrap();
+    let store_lock = hold_store_write_lock(&project_events);
 
     let handle = std::thread::spawn(move || {
         Journal::new_raw(project_events, global_events)
@@ -927,9 +952,8 @@ fn journal_retries_when_maintenance_marker_disappears_near_timeout() {
     });
 
     std::thread::sleep(Duration::from_millis(1_900));
-    fs::remove_dir_all(maintenance_dir).unwrap();
     std::thread::sleep(Duration::from_millis(200));
-    fs::remove_dir_all(lock_dir).unwrap();
+    drop(store_lock);
 
     handle.join().unwrap().unwrap();
     assert_eq!(
@@ -949,8 +973,7 @@ fn symlinked_journal_waits_for_target_mutex() {
     let worktree_events = dir.path().join("worktree-events.jsonl");
     std::os::unix::fs::symlink(&canonical_events, &worktree_events).unwrap();
     let global_events = dir.path().join("global-events.jsonl");
-    let lock_dir = dir.path().join("canonical-events.jsonl.lock.d");
-    fs::create_dir(&lock_dir).unwrap();
+    let store_lock = hold_store_write_lock(&canonical_events);
 
     let barrier = Arc::new(Barrier::new(2));
     let thread_barrier = Arc::clone(&barrier);
@@ -962,9 +985,9 @@ fn symlinked_journal_waits_for_target_mutex() {
 
     barrier.wait();
     std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(fs::metadata(&canonical_events).unwrap().len(), 0);
+    assert!(!handle.is_finished());
 
-    fs::remove_dir_all(lock_dir).unwrap();
+    drop(store_lock);
     handle.join().unwrap().unwrap();
     assert_eq!(count_events(&canonical_events, "symlink_mutex_probe"), 1);
 }
@@ -974,13 +997,13 @@ fn journal_project_lock_timeout_is_fatal() {
     let dir = TempDir::new().unwrap();
     let project_events = dir.path().join("events.jsonl");
     let global_events = dir.path().join("global-events.jsonl");
-    fs::create_dir(dir.path().join("events.jsonl.lock.d")).unwrap();
+    let _store_lock = hold_store_write_lock(&project_events);
     let journal = Journal::new_raw(project_events, global_events);
 
     let result = journal.append("timeout_probe", serde_json::json!({}));
     assert!(
-        matches!(result, Err(LoopError::Journal(ref message)) if message.contains("lock timeout")),
-        "project journal lock timeout must stop the walk loudly: {result:?}"
+        matches!(result, Err(LoopError::Journal(ref message)) if message.contains("database is locked")),
+        "project store lock timeout must stop the walk loudly: {result:?}"
     );
 }
 
@@ -989,14 +1012,15 @@ fn journal_global_lock_timeout_is_best_effort() {
     let dir = TempDir::new().unwrap();
     let project_events = dir.path().join("events.jsonl");
     let global_events = dir.path().join("global-events.jsonl");
-    fs::create_dir(dir.path().join("global-events.jsonl.lock.d")).unwrap();
+    let global_lock = hold_store_write_lock(&global_events);
     let journal = Journal::new_raw(project_events.clone(), global_events.clone());
 
     journal
         .append("timeout_probe", serde_json::json!({}))
         .expect("a blocked global mirror must not fail the project journal");
+    drop(global_lock);
     assert_eq!(count_events(&project_events, "timeout_probe"), 1);
-    assert!(!global_events.exists());
+    assert_eq!(count_events(&global_events, "timeout_probe"), 0);
 }
 
 // ── test 9: envelope shape ────────────────────────────────────────────────────
@@ -1028,15 +1052,11 @@ fn envelope_shape() {
     let budget = LoopBudget::new(5).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events.clone());
 
-    run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     // Read all lines from project events (skip the pre-seeded garbage).
-    let content = fs::read_to_string(&project_events).unwrap();
-    let runtime_lines: Vec<serde_json::Value> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        // Skip lines that aren't valid JSON or are our pre-seeded non-runtime lines.
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+    let runtime_lines: Vec<serde_json::Value> = read_jsonl(&project_events)
+        .into_iter()
         // Filter to lines written by the runtime (source == "loop").
         .filter(|v| v["source"].as_str() == Some("loop"))
         .collect();
@@ -1068,11 +1088,8 @@ fn envelope_shape() {
     }
 
     // Verify global mirror also has loop-source events.
-    let global_content = fs::read_to_string(&global_events).unwrap_or_default();
-    let global_runtime_lines: Vec<serde_json::Value> = global_content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str(l).ok())
+    let global_runtime_lines: Vec<serde_json::Value> = read_jsonl(&global_events)
+        .into_iter()
         .filter(|v: &serde_json::Value| v["source"].as_str() == Some("loop"))
         .collect();
     assert!(
@@ -1117,7 +1134,7 @@ fn termination_event_missing_reason_skips_no_panic() {
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
     // Must not panic; budget terminates the walk.
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
     assert_eq!(
         outcome.reason,
         fno_agents::loopcheck::TerminationReason::Budget,
@@ -1268,7 +1285,7 @@ fn bg_guard_refusal_parks_without_redispatch() {
     let budget = LoopBudget::new(100).unwrap();
     let journal = Journal::new_raw(project_events.clone(), global_events);
 
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| false, None).unwrap();
+    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
 
     // The unit is parked (NoProgress) after exactly one dispatch; the walk then
     // drains the queue and finishes NoWork.
@@ -1332,7 +1349,7 @@ fn bare_crash_exit_still_redispatches() {
         &dispatcher,
         &budget,
         &journal,
-        &|| false,
+        &|| None,
         Some(2),
     )
     .unwrap();
@@ -1358,5 +1375,80 @@ fn bare_crash_exit_still_redispatches() {
             .to_lowercase()
             .contains("bg-guard"),
         "markerless crash must not be classified as a bg-guard park"
+    );
+}
+
+// ── store-committed terminations ──────────────────────────────────────────────
+
+fn seed_store_termination(journal_path: &Path, session_key: &str, reason: &str, message: &str) {
+    let line = format!(
+        "{{\"ts\":\"2026-06-06T00:01:00Z\",\"type\":\"termination\",\"source\":\"hook\",\
+         \"data\":{{\"session_id\":\"{session_key}\",\"reason\":\"{reason}\",\"message\":\"{message}\"}}}}"
+    );
+    fno_agents::event_store::append_envelope(journal_path, &line, None)
+        .expect("commit termination to the store");
+}
+
+#[test]
+fn a_termination_committed_only_to_the_store_is_found() {
+    // AC2-HP: no raw bytes exist; both readers still see the row.
+    let dir = TempDir::new().unwrap();
+    let project_events = dir.path().join("events.jsonl");
+    let global_events = dir.path().join("global-events.jsonl");
+    seed_store_termination(&project_events, "sess-store", "DonePRGreen", "committed");
+
+    let journal = Journal::new_raw(project_events.clone(), global_events.clone());
+    let found = journal
+        .find_termination("sess-store")
+        .expect("find_termination must not error");
+    assert_eq!(found.unwrap().reason, TerminationReason::DonePRGreen);
+    let strict = journal
+        .find_termination_strict("sess-store")
+        .expect("strict must not error");
+    assert_eq!(strict.unwrap().reason, TerminationReason::DonePRGreen);
+}
+
+#[test]
+fn strict_termination_reader_errs_on_a_broken_store() {
+    // AC2-ERR: a project store holding non-SQLite bytes is an error, never
+    // a silent Ok(None); the tolerant reader does not panic.
+    let dir = TempDir::new().unwrap();
+    let project_events = dir.path().join("events.jsonl");
+    let global_events = dir.path().join("global-events.jsonl");
+    fs::write(dir.path().join("events.db"), b"not a database").unwrap();
+
+    let journal = Journal::new_raw(project_events, global_events);
+    let err = journal
+        .find_termination_strict("sess-broken")
+        .err()
+        .expect("strict must report the unreadable store");
+    assert!(
+        format!("{err}").contains("events.db"),
+        "error names the store path: {err}"
+    );
+    assert!(
+        journal.find_termination("sess-broken").is_ok(),
+        "tolerant reader must not panic"
+    );
+}
+
+#[test]
+fn a_store_committed_termination_supersedes_an_imported_raw_one() {
+    // AC2-EDGE: raw NoProgress imported, later DonePRGreen store-only.
+    let dir = TempDir::new().unwrap();
+    let project_events = dir.path().join("events.jsonl");
+    let global_events = dir.path().join("global-events.jsonl");
+    seed_termination_event(&project_events, "sess-edge", "NoProgress");
+    fno_agents::event_store::sync(&project_events).unwrap();
+    seed_store_termination(&project_events, "sess-edge", "DonePRGreen", "newest");
+
+    let journal = Journal::new_raw(project_events, global_events);
+    let found = journal
+        .find_termination("sess-edge")
+        .expect("find_termination must not error");
+    assert_eq!(
+        found.unwrap().reason,
+        TerminationReason::DonePRGreen,
+        "the newest committed row wins, not the frozen live file"
     );
 }

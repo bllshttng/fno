@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 import fno.graph.epics as epics_module
 from fno.graph.cli import cli
 from fno.graph.epics import holds_epic_open, stuck_epics
-from fno.graph.store import locked_mutate_graph
+from fno.graph.store import commit_rows_via_store
 
 runner = CliRunner()
 
@@ -111,11 +111,17 @@ def test_wont_do_holds_but_superseded_does_not():
         assert holds_epic_open({"id": "a", "status": "deferred", "deferred_kind": kind})
 
 
+def test_retracted_deferral_never_holds_an_epic_open():
+    # a retraction is a decision, not a delay: same rule as wont_do
+    assert not holds_epic_open({"id": "a", "status": "deferred", "deferred_kind": "retracted"})
+    assert holds_epic_open({"id": "a", "status": "deferred", "deferred_kind": "later"})
+
+
 def test_stuck_epics_verb_reports_and_never_mutates(tmp_path, monkeypatch):
     from fno.graph import cli as graph_cli
 
     g = tmp_path / "graph.json"
-    locked_mutate_graph(
+    commit_rows_via_store(
         g,
         lambda entries: entries
         + [

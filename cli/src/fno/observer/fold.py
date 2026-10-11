@@ -1,4 +1,4 @@
-"""Pure fold: corpus construction + scoring for the observer harness (x-57a5).
+"""Pure fold: corpus construction + scoring for the observer harness.
 
 Read-only over already-captured signals (ledger, graph, events, postmortems) -
 corpus construction is a read-time fold, never a new write-path for historical
@@ -14,13 +14,17 @@ touching disk or the network, mirroring ``scoreboard/fold.py``'s style.
 from __future__ import annotations
 
 import re
+import subprocess
+import tempfile
 from collections import Counter
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
-import yaml
-
 from fno.cost._register import LEDGER_SESSION_UNRESOLVED
+from fno.plan._doc import FrontmatterError, ParseError, load_plan_text
+from fno.plan.brief import BriefParseError, parse_execution_strategy
+from fno.rust_binary import find_dev_binary, resolve_binary
 from fno.scoreboard.fold import (
     _WEDGE_REASONS,
     _ci_reds_from_fires,
@@ -32,7 +36,9 @@ from fno.scoreboard.fold import (
     _parse_ts,
     _pct,
     _row_session_ids,
+    _row_shipped,
     _transcript_counts,
+    classify_deliveries,
 )
 
 # Mirrors _CALIBRATION_MIN_VERDICTS (scoreboard/fold.py): below this, a ranking
@@ -81,6 +87,7 @@ def build_corpus(
     now: datetime,
     read_transcript=None,
     resolve_skill_version=None,
+    deliveries: dict | None = None,
 ) -> dict:
     """Read-only fold: ledger rows attributed to *skill* -> corpus items.
 
@@ -102,6 +109,8 @@ def build_corpus(
     windowed = [r for r in rows if _in_window(r.get("completed"))]
     read_transcript = read_transcript or _default_read_transcript
     resolve_skill_version = resolve_skill_version or _default_skill_version
+    # Shipped is the one classifier's answer, like every scoreboard view.
+    deliveries = deliveries if deliveries is not None else classify_deliveries(graph_nodes, rows)["by_node"]
 
     by_id = {n.get("id"): n for n in graph_nodes if n.get("id")}
     fixes: dict[str, list[dict]] = {}
@@ -130,7 +139,7 @@ def build_corpus(
 
         nid = r.get("graph_node_id")
         session_id = _first_session_id(r)
-        shipped = _is_shipped_reason(r.get("termination_reason"))
+        shipped = _row_shipped(r, deliveries)
         judgeable = bool(shipped and nid and w4_available and nid in by_id)
         outcome = (
             _node_outcome(nid, _parse_ts(r.get("completed")), by_id, fixes)
@@ -158,51 +167,49 @@ def build_corpus(
     return {"items": items, "total_rows": len(windowed), "attributed": len(items)}
 
 
-# -- Structural checks (blueprint dimension), reused-in-spirit from
-# skills/blueprint/mutate_doc.py's hard-refuse check and
-# skills/execute/orchestrator.py's detect_hidden_output_conflicts. Reimplemented
-# in pure Python rather than imported: cli/src/fno doctor lint (shellout-drift)
-# forbids a packaged verb shelling to a repo-root script, and those two
-# checks live in skill scripts outside the installable package.
+BLUEPRINT_DIMENSIONS = ("collision_free", "shipped_outcome")
+# The judge's dimension list lives in one place:
+# JUDGE_DIMENSIONS in crates/fno-agents/src/blueprint_judge.rs; the event
+# schema's dimension enum names the same nine.
 
-_FAILURE_MODES_RE = re.compile(r"^## Failure Modes\s*$", re.MULTILINE)
-_EXEC_STRATEGY_FENCE_RE = re.compile(
-    r"## Execution Strategy\s*\n```ya?ml\n(.*?)\n```", re.DOTALL
-)
+# The retired heading check and the diverged collision copy were deleted;
+# collision_free imports the validator's own parallel-surface check.
 
-
-def has_failure_modes_heading(plan_text: str) -> bool:
-    """The literal check /blueprint hard-refuses without (mutate_doc.py)."""
-    return bool(_FAILURE_MODES_RE.search(plan_text))
-
-
-def find_file_ownership_collisions(plan_text: str) -> list[str]:
-    """Files claimed by more than one task's ``surface`` list in the plan's
-    Execution Strategy block. Missing/unparseable block -> no collisions
-    detectable, not an error (the plan is simply not judgeable on this
-    dimension by this best-effort check)."""
-    m = _EXEC_STRATEGY_FENCE_RE.search(plan_text)
-    if not m:
-        return []
+def _surface_collisions(plan_text: str) -> Optional[list[str]]:
+    """Files claimed by more than one parallel-wave task, per the validator.
+    ``None`` for unparseable text (a PR diff): a coverage gap, never a fail."""
     try:
-        strategy = yaml.safe_load(m.group(1))
-    except yaml.YAMLError:
-        return []
-    if not isinstance(strategy, dict):
-        return []
-    tasks = strategy.get("tasks")
-    if not isinstance(tasks, list):
-        return []
-    owners: dict[str, int] = Counter()
-    for t in tasks:
-        if not isinstance(t, dict):
-            continue
-        surface = t.get("surface")
-        if isinstance(surface, list):
-            for f in surface:
-                if isinstance(f, str):
-                    owners[f] += 1
-    return sorted(f for f, n in owners.items() if n > 1)
+        doc = load_plan_text(plan_text)
+        if not doc.frontmatter:
+            return None
+        strategy = parse_execution_strategy(doc.get_section("Execution Strategy") or "")
+    except (BriefParseError, FrontmatterError, ParseError, TypeError, ValueError):
+        return None
+    waves = strategy.get("waves", [])
+    if not waves:
+        tasks = strategy.get("tasks", [])
+        return None if not isinstance(tasks, list) or len(tasks) > 1 else []
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        return None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", encoding="utf-8") as plan_file:
+            plan_file.write(plan_text)
+            plan_file.flush()
+            result = subprocess.run(
+                [str(binary), "wave", "check", plan_file.name],
+                capture_output=True, text=True, timeout=15,
+                cwd=Path(__file__).resolve().parents[3],
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode or any(line[:2] in ("U\t", "W\t") for line in result.stdout.splitlines()):
+        return None
+    return [
+        line.split("\t", 1)[1]
+        for line in result.stdout.splitlines()
+        if line.startswith(("E\tparallel tasks share surface", "X\tparallel tasks share surface"))
+    ]
 
 
 def score_blueprint_item(item: dict, *, plan_text: Optional[str]) -> dict[str, Optional[str]]:
@@ -218,12 +225,10 @@ def score_blueprint_item(item: dict, *, plan_text: Optional[str]) -> dict[str, O
     result: dict[str, Optional[str]] = {}
 
     if plan_text is None:
-        result["structural_validity"] = None
         result["collision_free"] = None
     else:
-        result["structural_validity"] = "pass" if has_failure_modes_heading(plan_text) else "fail"
-        collisions = find_file_ownership_collisions(plan_text)
-        result["collision_free"] = "pass" if not collisions else "fail"
+        collisions = _surface_collisions(plan_text)
+        result["collision_free"] = "pass" if collisions == [] else ("fail" if collisions else None)
 
     if item.get("include_shipped_outcome", True):
         outcome = item.get("outcome")
@@ -240,32 +245,8 @@ def score_blueprint_item(item: dict, *, plan_text: Optional[str]) -> dict[str, O
     return result
 
 
-def score_review_item(
-    *, addressed_ids: set[str], skipped_ids: set[str], all_finding_ids: set[str]
-) -> dict[str, Optional[str]]:
-    """Score one review corpus item on finding_precision (Locked Decision 9).
-
-    pass: every raised finding was either fixed or explicitly logged as
-    skipped (a documented disposition). fail: at least one finding was
-    neither addressed nor logged - declined and never contradicted. degraded:
-    a mix. No findings at all is not scorable (a review with nothing to
-    say has no precision to measure) -> None, a coverage gap.
-    """
-    if not all_finding_ids:
-        return {"finding_precision": None}
-    dispositioned = addressed_ids | skipped_ids
-    unresolved = all_finding_ids - dispositioned
-    if not unresolved:
-        verdict = "pass"
-    elif len(unresolved) < len(all_finding_ids):
-        verdict = "degraded"
-    else:
-        verdict = "fail"
-    return {"finding_precision": verdict}
-
-
 # --------------------------------------------------------------------------- #
-# target: PR-anchored corpus (x-6ff0)
+# target: PR-anchored corpus
 #
 # The denominator is real merged+closed PRs, walked BACK to node -> sessions,
 # never the ledger (which drops ~52% of merged PRs and so is a *process* record,
@@ -506,7 +487,7 @@ def build_target_corpus(
             continue
         node_rows = rows_by_node.get(nid, [])
         session_ids: set[str] = set()
-        for s in node.get("sessions") or []:  # x-b6e4 phase stamps: dicts, or legacy bare strings
+        for s in node.get("sessions") or []:  # phase stamps: dicts, or legacy bare strings
             if isinstance(s, dict) and isinstance(s.get("session_id"), str) and s["session_id"]:
                 session_ids.add(s["session_id"])
             elif isinstance(s, str) and s:  # older graph rows stored sessions as [str]
@@ -704,10 +685,10 @@ if __name__ == "__main__":
             "termination_reason": "DonePRGreen",
             "graph_node_id": "x-2",
             "sessions": ["s2"],
-            "phases_completed": ["do"],  # different skill -> not attributed
+            "phases_completed": ["execute"],  # different skill -> not attributed
         },
     ]
-    graph_nodes = [{"id": "x-1", "reverted": False}, {"id": "x-2", "reverted": False}]
+    graph_nodes = [{"id": "x-1", "merge_status": "merged", "reverted": False}, {"id": "x-2", "reverted": False}]
     corpus = build_corpus(rows, graph_nodes, [], skill="blueprint", since_days=28, now=now)
     assert corpus["total_rows"] == 2, corpus
     assert corpus["attributed"] == 1, corpus
@@ -716,14 +697,14 @@ if __name__ == "__main__":
     # insufficient guard
     summary = build_run_summary(
         run_id="obs-x", skill_id="fno:blueprint", skill_version="unknown",
-        findings=[("structural_validity", "pass")], corpus_size=3, scored_count=3,
+        findings=[("surface_fit", "pass")], corpus_size=3, scored_count=3,
     )
     assert summary == {"state": "insufficient", "need": 10, "n": 3}, summary
 
     # ok state: ranking + coverage
     findings = [
-        ("structural_validity", "pass"),
-        ("structural_validity", "fail"),
+        ("surface_fit", "pass"),
+        ("surface_fit", "fail"),
         ("collision_free", "fail"),
         ("shipped_outcome", "degraded"),
     ]
@@ -736,44 +717,30 @@ if __name__ == "__main__":
     assert summary["coverage_pct"] == 83, summary  # round(100*10/12)
     assert summary["failure_ranking"][0]["fail_count"] == 1, summary  # both dims tied at 1
 
-    # structural checks
-    text_missing = "# Plan\n\n## Overview\nno failure modes here\n"
-    assert has_failure_modes_heading(text_missing) is False
-    text_ok = "# Plan\n\n## Failure Modes\n\nstuff\n"
-    assert has_failure_modes_heading(text_ok) is True
-
-    strategy_text = (
-        "## Execution Strategy\n\n```yaml\n"
-        "tasks:\n- id: '1.1'\n  surface: ['a.py', 'b.py']\n"
-        "- id: '1.2'\n  surface: ['b.py', 'c.py']\n"
+    # collision_free rides the validator's parallel-surface check
+    assert _surface_collisions("# Plan\n\n## Overview\nno frontmatter, not a plan\n") is None
+    colliding = (
+        "---\ntitle: t\n---\n\n## Execution Strategy\n\n```yaml\n"
+        "execution_mode: parallel\n"
+        "waves:\n- wave: 1\n  mode: parallel\n  tasks: ['1.1', '1.2']\n"
+        "tasks:\n- id: '1.1'\n  title: t\n  surface: ['a.py', 'b.py']\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
+        "- id: '1.2'\n  title: t\n  surface: ['b.py']\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
         "```\n"
     )
-    assert find_file_ownership_collisions(strategy_text) == ["b.py"], find_file_ownership_collisions(strategy_text)
+    assert _surface_collisions(colliding), "shared surface in one parallel wave must collide"
 
     # score_blueprint_item: bounced + plan-attributable -> fail; execution -> degraded
     item = {"judgeable": True, "outcome": "bounced", "attribution_class": "plan-attributable"}
-    assert score_blueprint_item(item, plan_text=text_ok)["shipped_outcome"] == "fail"
+    assert score_blueprint_item(item, plan_text=colliding)["shipped_outcome"] == "fail"
     item2 = {"judgeable": True, "outcome": "bounced", "attribution_class": "execution-attributable"}
-    assert score_blueprint_item(item2, plan_text=text_ok)["shipped_outcome"] == "degraded"
+    assert score_blueprint_item(item2, plan_text=colliding)["shipped_outcome"] == "degraded"
     item3 = {"judgeable": False, "outcome": None}
     assert score_blueprint_item(item3, plan_text=None)["shipped_outcome"] is None
-    assert score_blueprint_item(item3, plan_text=None)["structural_validity"] is None
+    assert score_blueprint_item(item3, plan_text=None)["collision_free"] is None
 
-    # score_review_item
-    assert score_review_item(addressed_ids=set(), skipped_ids=set(), all_finding_ids=set()) == {
-        "finding_precision": None
-    }
-    assert score_review_item(
-        addressed_ids={"c1"}, skipped_ids={"c2"}, all_finding_ids={"c1", "c2"}
-    ) == {"finding_precision": "pass"}
-    assert score_review_item(
-        addressed_ids=set(), skipped_ids=set(), all_finding_ids={"c1", "c2"}
-    ) == {"finding_precision": "fail"}
-    assert score_review_item(
-        addressed_ids={"c1"}, skipped_ids=set(), all_finding_ids={"c1", "c2"}
-    ) == {"finding_precision": "degraded"}
-
-    # -- target: PR-anchored corpus (x-6ff0) --------------------------------- #
+    # -- target: PR-anchored corpus --------------------------------- #
     t_now = datetime(2026, 7, 18, 12, 0, 0)
     t_nodes: list[dict] = [
         {"id": "x-a", "pr_number": 10, "pr_url": "https://github.com/o/r/pull/10", "reverted": False,
@@ -799,7 +766,7 @@ if __name__ == "__main__":
     }
     t_rows = [
         # a churny build attempt in-window with NO PR -> no_pr class
-        {"completed": "2026-07-14T10:00:00", "termination_reason": "NoProgress", "phases_completed": ["do"], "sessions": ["snope"]},
+        {"completed": "2026-07-14T10:00:00", "termination_reason": "NoProgress", "phases_completed": ["execute"], "sessions": ["snope"]},
         # a plan-only thread -> NOT a no_pr attempt
         {"completed": "2026-07-14T11:00:00", "termination_reason": "DoneAdvisory", "phases_completed": ["think"], "sessions": ["splan"]},
     ]

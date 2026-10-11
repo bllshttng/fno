@@ -1,7 +1,7 @@
 """`--only` / `--skip` selector contract for `fno doctor test smoke`.
 
 The two flags are exact complements over the same glob list, which is what
-lets CI run the suite as two shards that cover the registry by construction
+lets CI run each lane as four shards that cover the registry by construction
 rather than by a hand-maintained list of step names.
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ def test_a_step_name_containing_a_comma_still_selects_exactly() -> None:
     into two globs matching nothing, so the documented way to reproduce one CI
     step locally exited 1 for those three. The whole value is tried first.
     """
-    commad = "Cross-impl claims compat matrix (merge gate; fails loudly, never skips here)"
+    commad = "Verb-surface ratchet (real count, both binaries)"
     assert _name_matches(commad, commad)
     assert not _name_matches("Sync + build", commad)
     # The list form still works beside it.

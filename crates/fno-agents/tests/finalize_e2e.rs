@@ -39,6 +39,7 @@ struct Env {
     fno_calls: PathBuf,
     outstanding_store: PathBuf,
     pr_info: PathBuf,
+    spaces: PathBuf,
 }
 
 /// Build a hermetic env. `register_fails` makes the register-task stub exit 1.
@@ -46,11 +47,11 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().to_path_buf();
     let cwd = root.join("proj");
-    // PYTHONPATH root for the in-package stubs: finalize now runs the cost +
-    // stamp helpers as `python3 -m fno.cost._session_cost`,
-    // `fno.cost._register`, and `fno.plan._stamp`, so we shadow the real
-    // package with fake `fno/cost/*` + `fno/plan/_stamp.py` modules resolved
-    // off this dir (set in run_finalize's env).
+    // PYTHONPATH root for the in-package stubs: finalize runs the cost helpers
+    // as `python3 -m fno.cost._session_cost` and `fno.cost._register`, so we
+    // shadow the real package with fake `fno/cost/*` modules resolved off this
+    // dir (set in run_finalize's env). The plan stamp is in-process Rust, so
+    // no plan-module stub exists.
     let pypath = root.join("pypath");
     let handoffs = root.join("handoffs");
     let postmortems = root.join("postmortems");
@@ -66,7 +67,14 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
     let gh = bin_dir.join("gh");
     fs::write(
         &gh,
-        "#!/bin/sh\nprintf 'gh %s\\n' \"$*\" >> \"$GH_CALLS_LOG\"\nexit 1\n",
+        "#!/bin/sh\n\
+         printf 'gh %s\\n' \"$*\" >> \"$GH_CALLS_LOG\"\n\
+         for a in \"$@\"; do case \"$a\" in\n\
+         \x20 repos/o/r/pulls/358)\n\
+         \x20    echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'\n\
+         \x20    exit 0 ;;\n\
+         esac; done\n\
+         exit 1\n",
     )
     .unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
@@ -108,6 +116,11 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
          \x20       sys.stdout.write(open(p).read())\n\
          \x20       sys.exit(0)\n\
          \x20   sys.exit(1)\n\
+         if args[:3] == ['agents', 'claim', 'release']:\n\
+         \x20   sys.exit(1 if os.environ.get('FNO_STUB_CLAIM_RELEASE_FAIL') else 0)\n\
+         if args[:2] == ['backlog', 'decisions'] and '--json' in args:\n\
+         \x20   sys.stdout.write(json.dumps({'decisions': []}))\n\
+         \x20   sys.exit(0)\n\
          sys.exit(1)\n",
     )
     .unwrap();
@@ -119,7 +132,8 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
     let pr_info = cwd.join("pr-info.json");
     fs::write(
         &pr_info,
-        "{\"pr\": 358, \"url\": \"https://github.com/o/r/pull/358\", \"state\": \"OPEN\"}",
+        "{\"pr\": 358, \"url\": \"https://github.com/o/r/pull/358\", \"state\": \"OPEN\", \
+         \"head_sha\": \"abc\"}",
     )
     .unwrap();
 
@@ -175,16 +189,6 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
          open('calls.log','a').write('register-task reason=%s costjson=%s\\n' % (tr, cj))\n"
     };
     fs::write(pypath.join("fno/cost/_register.py"), reg).unwrap();
-    // fno.plan._stamp stub: records the subcommand (stamp|graduate) to
-    // calls.log, mirroring the prior stub's `stamp-plan %s` line so the
-    // call-shape assertions stay equivalent.
-    fs::write(
-        pypath.join("fno/plan/_stamp.py"),
-        "import sys\n\
-         sub = sys.argv[1] if len(sys.argv) > 1 else '?'\n\
-         open('calls.log','a').write('stamp-plan %s\\n' % sub)\n",
-    )
-    .unwrap();
     // fno.verify_advise stub (W6): record the full argv so the ship tests can
     // assert the flag shape finalize passes (a rename on either side of the
     // Rust->Python boundary fails here, not silently in production).
@@ -224,16 +228,25 @@ fn setup(session_id: &str, register_fails: bool) -> Env {
         fno_calls: root.join("fno-calls.log"),
         outstanding_store: root.join("outstanding-store.json"),
         pr_info,
+        spaces: root.join("spaces"),
     }
 }
 
 fn run_finalize(env: &Env, reason: &str) -> std::process::Output {
+    run_finalize_in(env, &env.cwd, reason)
+}
+
+/// Same env as `run_finalize`, but finalize's cwd is named by the caller
+/// (x-a150: the WIP-rescue tests target a linked worktree, not the fixture
+/// root).
+fn run_finalize_in(env: &Env, cwd: &Path, reason: &str) -> std::process::Output {
     Command::new(BIN)
+        .envs(fno_agents::test_run::self_owner_env())
         .arg("finalize")
         .arg("--state")
         .arg(&env.state)
         .arg("--cwd")
-        .arg(&env.cwd)
+        .arg(cwd)
         .arg("--reason")
         .arg(reason)
         .arg("--events")
@@ -245,10 +258,11 @@ fn run_finalize(env: &Env, reason: &str) -> std::process::Output {
         .arg("--postmortems-dir")
         .arg(&env.postmortems)
         // Shadow the real `fno` package with the PYTHONPATH stub so finalize's
-        // `python3 -m fno.cost._session_cost`, `fno.cost._register`, and
-        // `fno.plan._stamp` children resolve the test stubs. Set to the bare
+        // `python3 -m fno.cost._session_cost` and `fno.cost._register` children
+        // resolve the test stubs. Set to the bare
         // pypath (PYTHONPATH entries prepend to sys.path) so the stubs win over
         // any site-packages/editable install of the real package.
+        .env("FNO_SPACES_DIR", &env.spaces)
         .env("PYTHONPATH", &env.pypath)
         .env(
             "PATH",
@@ -259,7 +273,7 @@ fn run_finalize(env: &Env, reason: &str) -> std::process::Output {
             ),
         )
         .env("GH_CALLS_LOG", &env.gh_calls)
-        .current_dir(&env.cwd)
+        .current_dir(cwd)
         .output()
         .expect("run finalize")
 }
@@ -274,6 +288,7 @@ fn run_finalize_with_transcript(
     transcript: &Path,
 ) -> std::process::Output {
     Command::new(BIN)
+        .envs(fno_agents::test_run::self_owner_env())
         .arg("finalize")
         .arg("--state")
         .arg(&env.state)
@@ -291,6 +306,7 @@ fn run_finalize_with_transcript(
         .arg(&env.handoffs)
         .arg("--postmortems-dir")
         .arg(&env.postmortems)
+        .env("FNO_SPACES_DIR", &env.spaces)
         .env("PYTHONPATH", &env.pypath)
         .env(
             "PATH",
@@ -310,17 +326,8 @@ fn run_finalize_with_transcript(
 }
 
 fn prepare_real_plan_stamp(env: &Env, expected_url_count: Option<u32>) {
-    fs::remove_file(env.pypath.join("fno/plan/_stamp.py")).unwrap();
-    fs::write(
-        env.pypath.join("fno/__init__.py"),
-        "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n",
-    )
-    .unwrap();
-    fs::write(
-        env.pypath.join("fno/plan/__init__.py"),
-        "from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n",
-    )
-    .unwrap();
+    // The stamp is in-process Rust now; "real stamp" only enriches the fixture
+    // doc the way the old real-module path needed it.
     let expected = expected_url_count
         .map(|count| format!("expected_url_count: {count}\n"))
         .unwrap_or_default();
@@ -334,45 +341,8 @@ fn prepare_real_plan_stamp(env: &Env, expected_url_count: Option<u32>) {
 }
 
 fn run_finalize_real_stamp(env: &Env, reason: &str) -> std::process::Output {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
-    let pythonpath = format!(
-        "{}:{}",
-        env.pypath.display(),
-        repo.join("cli/src").display()
-    );
-    Command::new(BIN)
-        .arg("finalize")
-        .arg("--state")
-        .arg(&env.state)
-        .arg("--cwd")
-        .arg(&env.cwd)
-        .arg("--reason")
-        .arg(reason)
-        .arg("--events")
-        .arg(&env.events)
-        .arg("--global-events")
-        .arg(&env.global_events)
-        .arg("--handoffs-dir")
-        .arg(&env.handoffs)
-        .arg("--postmortems-dir")
-        .arg(&env.postmortems)
-        .env("PYTHONPATH", pythonpath)
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                env.bin_dir.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .env("GH_CALLS_LOG", &env.gh_calls)
-        .current_dir(&env.cwd)
-        .output()
-        .expect("run finalize with real plan stamp")
+    // Same execution path as every other fire: the stamp is in-process.
+    run_finalize(env, reason)
 }
 
 fn write_delivery_verdict(env: &Env, session_id: &str, complete: bool) {
@@ -423,17 +393,34 @@ fn calls(env: &Env) -> String {
 fn events_text(p: &Path) -> String {
     fs::read_to_string(p).unwrap_or_default()
 }
+/// The committed rows as one text blob: events the binary writes land only in
+/// the store, so content assertions on them read here, never the journal.
+fn store_text(p: &Path) -> String {
+    let _ = fno_agents::event_store::import_all(p);
+    fno_agents::event_store::query_events(p, &fno_agents::event_store::EventQuery::default())
+        .unwrap_or_default()
+        .iter()
+        .map(|r| r.line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn count_event(p: &Path, kind: &str, session_id: &str) -> usize {
-    events_text(p)
-        .lines()
-        .filter(|l| {
-            serde_json::from_str::<serde_json::Value>(l)
+    // Committed rows, not journal bytes: the cutover stopped journal appends,
+    // so a session_finalized written by the binary lives only in the store.
+    let _ = fno_agents::event_store::import_all(p);
+    let rows = fno_agents::event_store::query_events(
+        p,
+        &fno_agents::event_store::EventQuery {
+            types: vec![kind.to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    rows.iter()
+        .filter(|r| {
+            serde_json::from_str::<serde_json::Value>(&r.line)
                 .ok()
-                .map(|v| {
-                    v.get("type").and_then(|t| t.as_str()) == Some(kind)
-                        && v.pointer("/data/session_id").and_then(|s| s.as_str())
-                            == Some(session_id)
-                })
+                .map(|v| v.pointer("/data/session_id").and_then(|s| s.as_str()) == Some(session_id))
                 .unwrap_or(false)
         })
         .count()
@@ -443,10 +430,37 @@ fn handoff_files(env: &Env) -> Vec<PathBuf> {
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
         .unwrap_or_default()
 }
+
+/// Count run_summary rows for one run in an events log (envelope-level `run`,
+/// the join `count_run_tasks` and `run_summary_already_emitted` use).
+fn count_run_summary(p: &Path, run: &str) -> usize {
+    let _ = fno_agents::event_store::import_all(p);
+    fno_agents::event_store::query_events(
+        p,
+        &fno_agents::event_store::EventQuery {
+            types: vec!["run_summary".to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default()
+    .iter()
+    .filter(|r| {
+        serde_json::from_str::<serde_json::Value>(&r.line)
+            .ok()
+            .map(|v| v.get("run").and_then(|r| r.as_str()) == Some(run))
+            .unwrap_or(false)
+    })
+    .count()
+}
 fn postmortem_files(env: &Env) -> Vec<PathBuf> {
     fs::read_dir(&env.postmortems)
         .map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).collect())
         .unwrap_or_default()
+}
+
+/// The fixture plan doc after finalize ran: the stamp's durable evidence.
+fn plan_body(env: &Env) -> String {
+    fs::read_to_string(env.cwd.join("plan.md")).unwrap()
 }
 
 /// Every terminal reason writes the ledger record; a NON-ship reason runs
@@ -461,9 +475,10 @@ fn finalize_ledger_every_exit() {
         c.contains("register-task reason=Budget"),
         "ledger record must fire: {c}"
     );
-    assert!(
-        !c.contains("stamp-plan"),
-        "non-ship reason must NOT stamp: {c}"
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-budget"),
+        0,
+        "non-ship reason must NOT stamp"
     );
     assert!(
         !c.contains("verify-advise"),
@@ -510,6 +525,14 @@ fn finalize_binary_closes_the_shadow_run_after_success() {
 
     let out = run_finalize(&env, "DonePRGreen");
     assert!(out.status.success(), "finalize must succeed: {:?}", out);
+    // The first resolve migrates the seeded legacy log into the worktree
+    // slice of the space; fold the log where the binary now keeps it. The
+    // binary ran with FNO_SPACES_DIR pinned to env.spaces and hashes the
+    // raw --cwd (proj is not a git checkout), so mirror exactly that here.
+    let run_log = env
+        .spaces
+        .join(fno_agents::paths::space_slug(&env.cwd))
+        .join("run-log.jsonl");
     assert_eq!(
         fno_agents::run_state::fold_run_state(&run_log, run).unwrap(),
         fno_agents::run_state::RunState::Closed
@@ -536,7 +559,7 @@ fn finalize_binary_repairs_a_prior_ship_before_returning() {
     fs::write(
         &env.events,
         format!(
-            "{{\"type\":\"session_finalized\",\"data\":{{\"session_id\":\"{run}\",\"ship\":true}}}}\n"
+            "{{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{{\"session_id\":\"{run}\",\"ship\":true}}}}\n"
         ),
     )
     .unwrap();
@@ -547,6 +570,13 @@ fn finalize_binary_repairs_a_prior_ship_before_returning() {
         "repair finalize must succeed: {:?}",
         out
     );
+    // The seeded legacy log migrates into the space slice on the binary's
+    // first resolve; fold where the FNO_SPACES_DIR-pinned binary kept it,
+    // hashing the same raw --cwd the binary hashed.
+    let run_log = env
+        .spaces
+        .join(fno_agents::paths::space_slug(&env.cwd))
+        .join("run-log.jsonl");
     assert_eq!(
         fno_agents::run_state::fold_run_state(&run_log, run).unwrap(),
         fno_agents::run_state::RunState::Closed
@@ -631,14 +661,20 @@ fn finalize_ship_gated() {
         c.contains("register-task reason=DonePRGreen"),
         "ledger: {c}"
     );
-    assert!(c.contains("stamp-plan stamp"), "stamp must fire: {c}");
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-ship"),
+        1,
+        "stamp must fire: {}",
+        calls(&env)
+    );
     assert!(
         c.contains("plan-validate"),
         "canonical do plan validation must run after stamp: {c}"
     );
     assert!(
-        !c.contains("stamp-plan graduate"),
-        "graduate must NOT fire at ship (done = merged): {c}"
+        !plan_body(&env).contains("status: done"),
+        "graduate must NOT fire at ship (done = merged): {}",
+        plan_body(&env)
     );
     // W6 verifier advisory rides the ship branch with the manifest's fields;
     // this line is the Rust->Python flag-shape contract (a flag rename on
@@ -679,10 +715,15 @@ fn finalize_advisory_ship_graduates() {
     let out = run_finalize(&env, "DoneAdvisory");
     assert!(out.status.success());
     let c = calls(&env);
-    assert!(c.contains("stamp-plan stamp"), "advisory ship stamps: {c}");
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-adv"),
+        1,
+        "advisory ship stamps: {c}"
+    );
     assert!(
-        c.contains("stamp-plan graduate"),
-        "advisory ship graduates to done (no merge event to flip it): {c}"
+        plan_body(&env).contains("status: done"),
+        "advisory ship graduates to done (no merge event to flip it): {}",
+        plan_body(&env)
     );
 }
 
@@ -729,8 +770,16 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
     assert!(out.status.success());
     let c = calls(&env);
     assert!(c.contains("register-task reason=DoneDelivery"));
-    assert!(c.contains("stamp-plan stamp"));
-    assert!(c.contains("stamp-plan graduate"));
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-delivery"),
+        1,
+        "delivery ship stamps: {c}"
+    );
+    assert!(
+        plan_body(&env).contains("status: done"),
+        "delivery ship graduates: {}",
+        plan_body(&env)
+    );
     assert!(!c.contains("verify-advise"));
     let handoff = fs::read_to_string(&handoff_files(&env)[0]).unwrap();
     assert!(handoff.contains("fno-delivery://ab-testnode/attempt-1/sha256:abc"));
@@ -739,7 +788,7 @@ fn generic_completion_finalize_consumes_selected_verdict_without_pr_paths() {
         .unwrap_or_default()
         .is_empty());
     assert_eq!(count_event(&env.events, "termination", "S-delivery"), 1);
-    assert!(events_text(&env.events).contains("DoneDelivery"));
+    assert!(store_text(&env.events).contains("DoneDelivery"));
 }
 
 #[test]
@@ -774,9 +823,13 @@ fn generic_completion_finalize_rejects_incomplete_selected_verdict() {
     let out = run_finalize(&env, "DoneDelivery");
 
     assert!(!out.status.success());
-    assert!(!calls(&env).contains("stamp-plan"));
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-delivery-incomplete"),
+        0,
+        "incomplete verdict must not stamp"
+    );
     assert!(handoff_files(&env).is_empty());
-    assert!(events_text(&env.events).contains("delivery_receipt"));
+    assert!(store_text(&env.events).contains("delivery_receipt"));
     assert_eq!(
         count_event(&env.events, "termination", "S-delivery-incomplete"),
         0
@@ -799,9 +852,13 @@ fn generic_completion_finalize_does_not_revive_an_older_passing_verdict() {
     let out = run_finalize(&env, "DoneDelivery");
 
     assert!(!out.status.success());
-    assert!(!calls(&env).contains("stamp-plan"));
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-delivery-newest"),
+        0,
+        "stale-verdict refire must not stamp"
+    );
     assert!(handoff_files(&env).is_empty());
-    assert!(events_text(&env.events).contains("delivery_receipt"));
+    assert!(store_text(&env.events).contains("delivery_receipt"));
     assert_eq!(
         count_event(&env.events, "termination", "S-delivery-newest"),
         0
@@ -824,7 +881,11 @@ fn generic_completion_finalize_rejects_a_newest_unbound_verdict() {
     let out = run_finalize(&env, "DoneDelivery");
 
     assert!(!out.status.success());
-    assert!(!calls(&env).contains("stamp-plan"));
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-delivery-unbound"),
+        0,
+        "unbound verdict must not stamp"
+    );
     assert!(handoff_files(&env).is_empty());
     assert_eq!(
         count_event(&env.events, "termination", "S-delivery-unbound"),
@@ -890,13 +951,17 @@ fn generic_completion_finalize_missing_selected_event_fails_closed() {
     let out = run_finalize(&env, "DoneDelivery");
 
     assert!(!out.status.success());
-    assert!(!calls(&env).contains("stamp-plan"));
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-delivery-missing"),
+        0,
+        "missing selected event must not stamp"
+    );
     assert!(handoff_files(&env).is_empty());
     assert_eq!(
         count_event(&env.events, "session_finalize_failed", "S-delivery-missing"),
         1
     );
-    assert!(events_text(&env.events).contains("delivery_receipt"));
+    assert!(store_text(&env.events).contains("delivery_receipt"));
     assert_eq!(
         count_event(&env.events, "termination", "S-delivery-missing"),
         0
@@ -919,9 +984,9 @@ fn finalize_idempotent_across_refires() {
         "exactly one ledger call: {c}"
     );
     assert_eq!(
-        c.matches("stamp-plan stamp").count(),
+        count_event(&env.events, "plan_stamped", "S-idem"),
         1,
-        "exactly one stamp: {c}"
+        "exactly one stamp across refires: {c}"
     );
     assert_eq!(handoff_files(&env).len(), 1, "exactly one handoff");
     assert_eq!(count_event(&env.events, "session_finalized", "S-idem"), 1);
@@ -944,8 +1009,9 @@ fn finalize_nonfatal_partial_failure() {
         c.contains("register-task FAIL"),
         "ledger was attempted: {c}"
     );
-    assert!(
-        c.contains("stamp-plan stamp"),
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-fail"),
+        1,
         "stamp still runs after ledger failure: {c}"
     );
     assert_eq!(
@@ -959,7 +1025,7 @@ fn finalize_nonfatal_partial_failure() {
         "session_finalized NOT emitted on partial failure (so a re-fire retries)"
     );
     // The failure event names the failing step.
-    let txt = events_text(&env.events);
+    let txt = store_text(&env.events);
     assert!(
         txt.contains("\"ledger\""),
         "failed_steps names ledger: {txt}"
@@ -979,7 +1045,7 @@ fn finalize_missing_manifest_is_noop() {
         "no scripts run"
     );
     assert!(
-        events_text(&env.events).is_empty(),
+        store_text(&env.events).is_empty(),
         "no events on missing manifest"
     );
 }
@@ -1028,9 +1094,17 @@ fn finalize_three_sessions_one_node() {
         );
         // Only the shipped session runs the completion side-effects.
         if reason == "DonePRGreen" {
-            assert!(c.contains("stamp-plan stamp"), "shipped session stamps");
+            assert_eq!(
+                count_event(&env.events, "plan_stamped", sid),
+                1,
+                "shipped session stamps"
+            );
         } else {
-            assert!(!c.contains("stamp-plan"), "{sid} ({reason}) must not stamp");
+            assert_eq!(
+                count_event(&env.events, "plan_stamped", sid),
+                0,
+                "{sid} ({reason}) must not stamp"
+            );
         }
     }
 }
@@ -1048,9 +1122,10 @@ fn finalize_delegated_is_ledger_only() {
         c.contains("register-task reason=delegated"),
         "ledger row: {c}"
     );
-    assert!(
-        !c.contains("stamp-plan"),
-        "delegated must not stamp/graduate: {c}"
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-deleg"),
+        0,
+        "delegated must not stamp/graduate"
     );
     assert!(
         handoff_files(&env).is_empty(),
@@ -1085,13 +1160,15 @@ fn finalize_nonship_then_ship_runs_ship_sideeffects() {
         c.contains("register-task reason=DonePRGreen"),
         "delivered terminal: {c}"
     );
-    assert!(
-        c.contains("stamp-plan stamp"),
-        "ship fire must stamp after a non-ship terminal: {c}"
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-recover"),
+        1,
+        "ship fire must stamp after a non-ship terminal"
     );
     assert!(
-        !c.contains("stamp-plan graduate"),
-        "ship fire stamps only; done = merged, no graduate (x-f34f): {c}"
+        !plan_body(&env).contains("status: done"),
+        "ship fire stamps only; done = merged, no graduate: {}",
+        plan_body(&env)
     );
     assert_eq!(handoff_files(&env).len(), 1, "ship fire writes the handoff");
     assert_eq!(
@@ -1102,7 +1179,7 @@ fn finalize_nonship_then_ship_runs_ship_sideeffects() {
     // Fire 3: now the ship is recorded -> early-return, no extra stamp.
     assert!(run_finalize(&env, "DonePRGreen").status.success());
     assert_eq!(
-        calls(&env).matches("stamp-plan stamp").count(),
+        count_event(&env.events, "plan_stamped", "S-recover"),
         1,
         "stamp ran exactly once across all fires"
     );
@@ -1152,9 +1229,10 @@ fn finalize_doneadvisory_ships() {
         c.contains("register-task reason=DoneAdvisory"),
         "ledger: {c}"
     );
-    assert!(
-        c.contains("stamp-plan stamp"),
-        "DoneAdvisory is a ship reason: {c}"
+    assert_eq!(
+        count_event(&env.events, "plan_stamped", "S-adv"),
+        1,
+        "DoneAdvisory is a ship reason"
     );
     assert_eq!(handoff_files(&env).len(), 1);
 }
@@ -1223,6 +1301,8 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
          \x20\x20 'do pr info'*)\n\
          \x20\x20   if [ -f \"$FNO_STUB_PR_INFO\" ]; then cat \"$FNO_STUB_PR_INFO\"; exit 0; fi\n\
          \x20\x20   exit 1 ;;\n\
+         \x20\x20 'backlog decisions'*)\n\
+         \x20\x20   echo '{\"decisions\": []}'; exit 0 ;;\n\
          esac\n",
     );
     let path = format!(
@@ -1231,6 +1311,7 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
         std::env::var("PATH").unwrap_or_default()
     );
     Command::new(BIN)
+        .envs(fno_agents::test_run::self_owner_env())
         .arg("finalize")
         .arg("--state")
         .arg(&env.state)
@@ -1246,6 +1327,7 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
         .arg(&env.handoffs)
         .arg("--postmortems-dir")
         .arg(&env.postmortems)
+        .env("FNO_SPACES_DIR", &env.spaces)
         .env("PYTHONPATH", &env.pypath)
         .env("PATH", path)
         .env("FNO_CLAIMS_ROOT", env._tmp.path().join("claims-root"))
@@ -1295,6 +1377,58 @@ fn finalize_skips_stamp_when_no_pr() {
     );
 }
 
+/// Run-summary dedup: a session parked at DoneAwaitingMerge re-runs finalize
+/// on every stop; only the first fire for a (run, reason) pair emits and
+/// pushes. A changed reason (Budget then DoneAwaitingMerge) pushes again.
+#[test]
+fn run_summary_push_runs_once_across_repeat_fires() {
+    let env = setup("S-dedup", false);
+    for _ in 0..3 {
+        let out = run_finalize_shimmed(&env, "DoneAwaitingMerge", GH_PR_358);
+        assert!(out.status.success());
+    }
+    let c = calls(&env);
+    assert_eq!(
+        c.matches("push-parent --type run_summary").count(),
+        1,
+        "exactly one run_summary push across three fires: {c}"
+    );
+    assert_eq!(
+        count_run_summary(&env.events, "S-dedup"),
+        1,
+        "exactly one run_summary row across three fires"
+    );
+}
+
+#[test]
+fn run_summary_pushes_again_when_reason_changes() {
+    let env = setup("S-bdg", false);
+    let budget = run_finalize_shimmed(&env, "Budget", GH_PR_358);
+    assert!(budget.status.success());
+    let dam = run_finalize_shimmed(&env, "DoneAwaitingMerge", GH_PR_358);
+    assert!(dam.status.success());
+    let c = calls(&env);
+    let push_lines: Vec<&str> = c
+        .lines()
+        .filter(|l| l.contains("push-parent --type run_summary"))
+        .collect();
+    assert_eq!(
+        push_lines.len(),
+        2,
+        "Budget then DoneAwaitingMerge pushes twice: {}",
+        calls(&env)
+    );
+    assert!(push_lines.iter().any(|l| l.contains("--reason Budget")));
+    assert!(push_lines
+        .iter()
+        .any(|l| l.contains("--reason DoneAwaitingMerge")));
+    assert_eq!(
+        count_run_summary(&env.events, "S-bdg"),
+        2,
+        "both rows are in the log; the emit is deduped with the push"
+    );
+}
+
 /// AC2-FR: a raw-prose session (graph_node_id null) -> stamp skipped entirely,
 /// even though gh would return a PR.
 #[test]
@@ -1322,10 +1456,13 @@ fn finalize_skips_stamp_when_no_node() {
 /// Like GH_PR_358 but records every argv, so a `pr merge` call is observable.
 const GH_PR_358_LOGGING: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$2\" in view) echo '{\"number\": 358, \"url\": \"https://github.com/o/r/pull/358\"}' ;; esac\n";
 
 const GH_OPTIONAL_REVIEWED: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"abc123def456abc123def456abc123def456abc1\"}}],\"comments\":[]}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1333,6 +1470,7 @@ const GH_OPTIONAL_REVIEWED: &str = "#!/bin/sh\n\
 
 const GH_OPTIONAL_OUTSTANDING: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[]}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1340,6 +1478,7 @@ const GH_OPTIONAL_OUTSTANDING: &str = "#!/bin/sh\n\
 
 const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1347,6 +1486,7 @@ const GH_OPTIONAL_USAGE_LIMITED: &str = "#!/bin/sh\n\
 
 const GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"abc123def456abc123def456abc123def456abc1\"}}],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"body\":\"You have reached your Codex usage limits for code reviews\"}]}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1354,6 +1494,7 @@ const GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT: &str = "#!/bin/sh\n\
 
 const GH_OPTIONAL_READ_FAILS: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo 'review API unavailable' >&2; exit 1 ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1361,6 +1502,7 @@ const GH_OPTIONAL_READ_FAILS: &str = "#!/bin/sh\n\
 
 const GH_OPTIONAL_MALFORMED: &str = "#!/bin/sh\n\
      echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
      case \"$*\" in\n\
        *reviews,comments*) echo '{}' ;;\n\
        *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1399,6 +1541,7 @@ fn finalize_arms_auto_merge_on_approved_green_terminal() {
     let env = setup("S-arm", false);
     set_posture(&env, "S-arm", true);
     write_auto_merge_config(&env, "[auto_merge]\nenabled = true\n");
+    write_covered_event(&env);
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
     assert!(
         out.status.success(),
@@ -1413,6 +1556,19 @@ fn finalize_arms_auto_merge_on_approved_green_terminal() {
         !c.contains("reviews,comments"),
         "empty optional_apps must add no evidence read: {c}"
     );
+}
+
+/// The covered `review_coverage` event the arm pins itself to. Without one the
+/// authorized-merge owner refuses rather than arming GitHub's queue on whatever
+/// head lands next, so every arming case writes it.
+fn write_covered_event(env: &Env) {
+    fs::write(
+        &env.events,
+        "{\"ts\":\"2026-08-05T12:00:00Z\",\"type\":\"review_coverage\",\
+\"source\":\"hook\",\"data\":{\"pr\":358,\"coverage\":\"covered\",\
+\"reviewed_count\":1,\"head_sha\":\"abc\"}}\n",
+    )
+    .unwrap();
 }
 
 /// Write a `config.auto_merge` block into the temp project. `run_finalize_shimmed`
@@ -1441,6 +1597,7 @@ fn write_live_optout_claim(env: &Env, key: &str) {
         expires_at: Some(now + 300_000),
         reason: Some("merge-gating opt-out".into()),
         harness: None,
+        session_id: None,
         pid_provenance: None,
         machine_id: None,
         metadata: serde_json::Map::new(),
@@ -1461,14 +1618,19 @@ fn configure_optional_codex(env: &Env) {
 }
 
 fn finalized_event(env: &Env, session_id: &str) -> serde_json::Value {
-    events_text(&env.events)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find(|event| {
-            event.get("type").and_then(|v| v.as_str()) == Some("session_finalized")
-                && event.pointer("/data/session_id").and_then(|v| v.as_str()) == Some(session_id)
-        })
-        .expect("session_finalized event")
+    let _ = fno_agents::event_store::import_all(&env.events);
+    fno_agents::event_store::query_events(
+        &env.events,
+        &fno_agents::event_store::EventQuery {
+            types: vec!["session_finalized".to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|r| serde_json::from_str::<serde_json::Value>(&r.line).ok())
+    .find(|event| event.pointer("/data/session_id").and_then(|v| v.as_str()) == Some(session_id))
+    .expect("session_finalized event")
 }
 
 #[test]
@@ -1476,6 +1638,7 @@ fn finalize_arms_when_configured_optional_app_reviewed() {
     let env = setup("S-optional-reviewed", false);
     set_posture(&env, "S-optional-reviewed", true);
     configure_optional_codex(&env);
+    write_covered_event(&env);
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_REVIEWED);
     assert!(out.status.success());
     let c = calls(&env);
@@ -1574,6 +1737,7 @@ fn finalize_completed_review_wins_over_stale_usage_limit_comment() {
     let env = setup("S-optional-recovered", false);
     set_posture(&env, "S-optional-recovered", true);
     configure_optional_codex(&env);
+    write_covered_event(&env);
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_OPTIONAL_REVIEWED_AFTER_USAGE_LIMIT);
     assert!(out.status.success());
     assert!(calls(&env).contains("gh pr merge 358 --auto --merge"));
@@ -1587,6 +1751,7 @@ fn finalize_live_auto_merge_switch_vetoes_an_approved_run() {
     let env = setup("S-live-switch-off", false);
     set_posture(&env, "S-live-switch-off", true);
     write_auto_merge_config(&env, "[auto_merge]\nenabled = false\n");
+    write_covered_event(&env);
 
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
     assert!(out.status.success());
@@ -1642,6 +1807,7 @@ fn finalize_env_grant_arms_despite_live_switch_off() {
     let env = setup("S-env-grant", false);
     set_posture_source(&env, "S-env-grant", true, "env-target-auto-merge");
     write_auto_merge_config(&env, "[auto_merge]\nenabled = false\n");
+    write_covered_event(&env);
 
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
     assert!(
@@ -1694,6 +1860,7 @@ fn finalize_withholds_arm_when_optional_review_is_stale() {
     configure_optional_codex(&env);
     let gh = "#!/bin/sh\n\
          echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
          case \"$*\" in\n\
            *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"state\":\"COMMENTED\",\"commit\":{\"oid\":\"9999999999999999999999999999999999999999\"}}],\"comments\":[]}' ;;\n\
            *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1720,8 +1887,10 @@ fn finalize_arms_when_optional_clean_pass_comment_pins_the_head() {
     let env = setup("S-optional-clean-pass", false);
     set_posture(&env, "S-optional-clean-pass", true);
     configure_optional_codex(&env);
+    write_covered_event(&env);
     let gh = "#!/bin/sh\n\
          echo \"gh $*\" >> calls.log\n\
+     for a in \"$@\"; do case \"$a\" in *'pulls/358'*) echo '{\"head\":{\"repo\":{\"full_name\":\"o/r\"}},\"base\":{\"repo\":{\"full_name\":\"o/r\"}},\"author_association\":\"OWNER\",\"user\":{\"login\":\"o\"}}'; exit 0 ;; esac; done\n\
          case \"$*\" in\n\
            *reviews,comments*) echo '{\"headRefOid\":\"abc123def456abc123def456abc123def456abc1\",\"baseRefName\":\"main\",\"reviews\":[],\"comments\":[{\"author\":{\"login\":\"chatgpt-codex-connector[bot]\"},\"createdAt\":\"2026-08-17T00:00:00Z\",\"body\":\"Codex Review: Didn’t find any major issues. Bravo. Reviewed commit: abc123def456abc123def456abc123def456abc1\"}]}' ;;\n\
            *'pr view'*) echo '{\"number\":358,\"url\":\"https://github.com/o/r/pull/358\"}' ;;\n\
@@ -1751,6 +1920,7 @@ fn finalize_arms_with_the_configured_merge_strategy() {
             &env,
             &format!("[auto_merge]\nenabled = true\nmerge_strategy = \"{strategy}\"\n"),
         );
+        write_covered_event(&env);
         let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
         assert!(out.status.success());
         let c = calls(&env);
@@ -1775,6 +1945,7 @@ fn finalize_arms_with_merge_on_an_invalid_strategy() {
         &env,
         "[auto_merge]\nenabled = true\nmerge_strategy = \"octopus\"\n",
     );
+    write_covered_event(&env);
     let out = run_finalize_shimmed(&env, "DonePRGreen", GH_PR_358_LOGGING);
     assert!(out.status.success());
     let c = calls(&env);
@@ -1866,6 +2037,9 @@ fn finalize_never_arms_auto_merge_on_a_non_green_terminal() {
 /// after `finalize` runs, not merely that some function returned a sha.
 #[test]
 fn finalize_wip_commits_a_dirty_worktree_at_any_terminal() {
+    // Runs in a LINKED worktree on a feature branch (x-a150): a bare `git
+    // init` dir is its own canonical checkout on the default branch, where a
+    // rescue must never move the branch (its own test below).
     let env = setup("S-wip", false);
     let git = |args: &[&str]| {
         Command::new("git")
@@ -1890,17 +2064,19 @@ fn finalize_wip_commits_a_dirty_worktree_at_any_terminal() {
     fs::write(env.cwd.join("committed.txt"), "base").unwrap();
     git(&["add", "-A"]);
     git(&["commit", "-q", "-m", "base"]);
-    // Dirty the tree exactly like a killed worker would: a modification plus
-    // a brand-new untracked file.
-    fs::write(env.cwd.join("committed.txt"), "changed mid-flight").unwrap();
-    fs::write(env.cwd.join("in_flight.txt"), "950 insertions worth").unwrap();
+    let wt = env.cwd.join("wt");
+    git(&["worktree", "add", "-q", "-b", "feature/x", "wt"]);
+    // Dirty the worktree exactly like a killed worker would: a modification
+    // plus a brand-new untracked file.
+    fs::write(wt.join("committed.txt"), "changed mid-flight").unwrap();
+    fs::write(wt.join("in_flight.txt"), "950 insertions worth").unwrap();
 
-    let out = run_finalize(&env, "NoProgress");
+    let out = run_finalize_in(&env, &wt, "NoProgress");
     assert!(out.status.success(), "{out:?}");
 
     let status = Command::new("git")
         .args(["status", "--porcelain"])
-        .current_dir(&env.cwd)
+        .current_dir(&wt)
         .output()
         .unwrap();
     assert!(
@@ -1910,13 +2086,94 @@ fn finalize_wip_commits_a_dirty_worktree_at_any_terminal() {
     );
     let log = Command::new("git")
         .args(["log", "-1", "--format=%s"])
-        .current_dir(&env.cwd)
+        .current_dir(&wt)
         .output()
         .unwrap();
     let subject = String::from_utf8_lossy(&log.stdout);
     assert!(
         subject.contains("WIP") && subject.contains("NoProgress"),
         "{subject}"
+    );
+}
+
+#[test]
+fn finalize_rescues_a_canonical_default_branch_to_a_wip_branch() {
+    // x-a150: a session terminating at the canonical checkout (any plain
+    // `git init` dir is its own canonical) must not move the default branch;
+    // the work goes to a `wip/` branch and the tree stays untouched.
+    let env = setup("S-wipcanon", false);
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&env.cwd)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap()
+    };
+    git(&["init", "-q", "."]);
+    git(&["config", "user.email", "t@t"]);
+    git(&["config", "user.name", "t"]);
+    fs::write(
+        env.cwd.join(".gitignore"),
+        ".fno/\ncalls.log\ngh-calls.log\n",
+    )
+    .unwrap();
+    fs::write(env.cwd.join("committed.txt"), "base").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let before = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&env.cwd)
+        .output()
+        .unwrap();
+    let before = String::from_utf8_lossy(&before.stdout).trim().to_string();
+    fs::write(env.cwd.join("committed.txt"), "changed mid-flight").unwrap();
+    fs::write(env.cwd.join("in_flight.txt"), "950 insertions worth").unwrap();
+
+    let out = run_finalize(&env, "NoProgress");
+    assert!(out.status.success(), "{out:?}");
+
+    let head = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&env.cwd)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        before,
+        "the default branch must not move"
+    );
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&env.cwd)
+        .output()
+        .unwrap();
+    let status = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status.contains("in_flight.txt"),
+        "the working tree stays untouched: {status}"
+    );
+    let branches = Command::new("git")
+        .args(["branch", "--list", "wip/*"])
+        .current_dir(&env.cwd)
+        .output()
+        .unwrap();
+    let branches = String::from_utf8_lossy(&branches.stdout);
+    assert!(branches.contains("wip/"), "a wip branch exists: {branches}");
+    let name = branches
+        .lines()
+        .next()
+        .unwrap()
+        .trim()
+        .trim_start_matches("* ");
+    let stat = Command::new("git")
+        .args(["show", "--stat", name])
+        .current_dir(&env.cwd)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&stat.stdout).contains("in_flight.txt"),
+        "the wip branch holds the rescued work"
     );
 }
 
@@ -1960,6 +2217,10 @@ fn finalize_files_outstanding_question_on_stuck_terminal() {
 
     let c = fno_calls(&env);
     assert!(c.contains("outstanding ask"), "{c}");
+    // The rescued question records as a pin: the ask argv carries --ask,
+    // which the ask port requires now that it refuses context-free asks.
+    assert!(c.contains("--ask"), "{c}");
+    assert!(c.contains("the asker went quiet on this question"), "{c}");
     assert!(
         env.outstanding_store.exists(),
         "the stub must have recorded the filed question"
@@ -2027,5 +2288,118 @@ fn finalize_files_nothing_on_a_ship_terminal_regardless_of_transcript() {
     assert!(
         !fno_calls(&env).contains("outstanding ask"),
         "a clean ship must never be treated as a stuck-with-a-question terminal"
+    );
+}
+
+/// Same as `run_finalize`, plus the `fno` stub's env vars so the test can
+/// assert (and fail) the `fno agents claim release` invocation itself.
+fn run_finalize_with_stub(
+    env: &Env,
+    reason: &str,
+    extra_env: &[(&str, &str)],
+) -> std::process::Output {
+    let mut cmd = Command::new(BIN);
+    cmd.envs(fno_agents::test_run::self_owner_env());
+    cmd.arg("finalize")
+        .arg("--state")
+        .arg(&env.state)
+        .arg("--cwd")
+        .arg(&env.cwd)
+        .arg("--reason")
+        .arg(reason)
+        .arg("--events")
+        .arg(&env.events)
+        .arg("--global-events")
+        .arg(&env.global_events)
+        .arg("--handoffs-dir")
+        .arg(&env.handoffs)
+        .arg("--postmortems-dir")
+        .arg(&env.postmortems)
+        .env("FNO_SPACES_DIR", &env.spaces)
+        .env("PYTHONPATH", &env.pypath)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                env.bin_dir.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        .env("GH_CALLS_LOG", &env.gh_calls)
+        .env("FNO_STUB_CALLS_LOG", &env.fno_calls)
+        .env("FNO_STUB_OUTSTANDING_STORE", &env.outstanding_store);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.current_dir(&env.cwd).output().expect("run finalize")
+}
+
+/// Append the `target_claim_*` lines to the manifest body, as init does when
+/// it claims the run's node.
+fn manifest_with_claim(env: &Env, key: &str, holder: &str) {
+    let mut m = fs::read_to_string(&env.state).unwrap();
+    m.push_str(&format!(
+        "target_claim_key: \"{key}\"\ntarget_claim_holder: \"{holder}\"\n"
+    ));
+    fs::write(&env.state, m).unwrap();
+}
+
+// ── the cancel terminal settles its own claim ───────────────────────────────
+
+/// AC1-HP: a cancelled run releases the claim its manifest names, and the
+/// release carries `--stamp-do` (which fills `ended_at` on the do row the
+/// session's acquire opened). The argv is the contract.
+#[test]
+fn finalize_cancel_releases_claim_with_stamp_do() {
+    let env = setup("S-cancrel", false);
+    manifest_with_claim(&env, "node:ab-testnode", "session:e4138ef9");
+    let out = run_finalize_with_stub(&env, "Interrupted", &[]);
+    assert!(out.status.success());
+    let c = fno_calls(&env);
+    assert!(
+        c.contains(
+            "fno agents claim release node:ab-testnode --holder session:e4138ef9 --stamp-do"
+        ),
+        "cancel must release the claim with --stamp-do: {c}"
+    );
+}
+
+/// AC1-EDGE: a manifest naming no claim key is a named no-op - nothing
+/// released, exit code the same as any Interrupted finalize.
+#[test]
+fn finalize_cancel_without_claim_key_is_a_named_noop() {
+    let env = setup("S-cancnokey", false);
+    let out = run_finalize_with_stub(&env, "Interrupted", &[]);
+    assert!(out.status.success());
+    assert!(
+        !fno_calls(&env).contains("agents claim release"),
+        "no key named, nothing to release"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no target_claim_key"),
+        "the no-op must be named on stderr: {err}"
+    );
+}
+
+/// AC2-HP: a failed release is one named stderr line and the exit code the
+/// run would have exited with anyway.
+#[test]
+fn finalize_cancel_release_failure_keeps_exit_code() {
+    let env = setup("S-cancfail", false);
+    manifest_with_claim(&env, "node:ab-testnode", "session:e4138ef9");
+    let out = run_finalize_with_stub(&env, "Interrupted", &[("FNO_STUB_CLAIM_RELEASE_FAIL", "1")]);
+    assert!(
+        out.status.success(),
+        "a failed release must not fail finalize"
+    );
+    assert!(
+        fno_calls(&env).contains("agents claim release node:ab-testnode"),
+        "the release was attempted; a silent skip would read as success"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("cancel claim release failed"),
+        "name the failure: {err}"
     );
 }

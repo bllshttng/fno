@@ -13,6 +13,7 @@ Two claims, tested two ways:
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -37,6 +38,12 @@ def _run(args: list[str], env_extra: dict[str, str], tmp_path: Path):
         "PYTHONPATH": str(REPO_CLI / "src"),
         **env_extra,
     }
+    # The style gate rides the fno-agents binary; a sandboxed subprocess keeps
+    # the caller's pin so CI's smoke-provided binary stays resolvable.
+    for key in ("FNO_AGENTS_FRONT", "FNO_AGENTS_BIN"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     return subprocess.run(
         [sys.executable, "-m", "fno.cli", "mail", "send", *args],
         capture_output=True,
@@ -70,12 +77,36 @@ def test_every_body_cap_call_is_paired_with_a_style_check():
         )
 
 
+OVER_CAP = " ".join(["w"] * 81)
+UNDER_CAP_WITH_SEMICOLONS = " ".join(["w"] * 77) + " a; b; c"
+
+
 def test_violating_body_is_refused_before_delivery(tmp_path):
-    proc = _run(["worker", "you should fix this; it breaks."], {}, tmp_path)
+    proc = _run(["worker", OVER_CAP], {}, tmp_path)
     assert proc.returncode == 1, proc.stderr
     assert STYLE_REFUSED in proc.stderr, proc.stderr
-    # The refusal names the rule it broke, not just the gate.
-    assert "rule 3" in proc.stderr and "rule 2" in proc.stderr, proc.stderr
+    # The refusal prints both word counts, so the sender can act on it.
+    assert "81 words" in proc.stderr and "80 words" in proc.stderr, proc.stderr
+
+
+def test_body_at_the_cap_with_semicolons_is_refused(tmp_path):
+    # Mail runs the full rule set, so a semicolon refuses under the cap.
+    proc = _run(["worker", UNDER_CAP_WITH_SEMICOLONS], {}, tmp_path)
+    assert proc.returncode == 1, proc.stderr
+    assert STYLE_REFUSED in proc.stderr, proc.stderr
+    assert "rule 2" in proc.stderr, proc.stderr
+
+
+def test_control_lane_bypasses_the_style_gate(tmp_path):
+    # AC7. A stop, a resume, or a scope change must land whatever the prose
+    # rules say; the control lane is what keeps the bus unwedgeable. The body
+    # carries a semicolon and "thanks" to prove the bypass is real, not an
+    # absence.
+    proc = _run(["worker", "control: stop work; report where you are. thanks."], {}, tmp_path)
+    # The handle 'worker' does not resolve in the sandbox and the send dies
+    # after the gate, so the marker is the refusal's absence on a body that
+    # carries both a semicolon and "thanks".
+    assert STYLE_REFUSED not in proc.stderr, proc.stderr
 
 
 def test_clean_body_passes_the_style_gate(tmp_path):
@@ -85,7 +116,7 @@ def test_clean_body_passes_the_style_gate(tmp_path):
 
 def test_style_exception_flag_bypasses_the_gate(tmp_path):
     proc = _run(
-        ["worker", "you should fix this; it breaks.", "--style-exception", "legacy one-off"],
+        ["worker", OVER_CAP, "--style-exception", "legacy one-off"],
         {},
         tmp_path,
     )
@@ -94,7 +125,7 @@ def test_style_exception_flag_bypasses_the_gate(tmp_path):
 
 def test_kill_switch_disables_the_gate(tmp_path):
     proc = _run(
-        ["worker", "you should fix this; it breaks."],
+        ["worker", OVER_CAP],
         {"FNO_STYLE_ENFORCE": "0"},
         tmp_path,
     )

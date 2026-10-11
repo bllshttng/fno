@@ -1,6 +1,6 @@
 # State Schema Reference (Immutable Manifest)
 
-> **Updated 2026-06-05 (ab-d0337fbc):** `target-state.md` is now a write-once session manifest. Fields like `status`, `current_phase`, `iteration`, `blocked_reason`, `provenance_nonce`, and all `completion_gates` booleans no longer exist. See docs/architecture/control-plane-loop.md for the full post-wedge architecture.
+> **Updated 2026-06-05 :** `target-state.md` is now a write-once session manifest. Fields like `status`, `current_phase`, `iteration`, `blocked_reason`, `provenance_nonce`, and all `completion_gates` booleans no longer exist. See docs/architecture/control-plane-loop.md for the full post-wedge architecture.
 
 ## Write-once rule
 
@@ -10,7 +10,7 @@
 fno do state set --field plan_path --value "<path>"
 ```
 
-Any other field write exits with code 5 and logs a `state_write_refused` event referencing ab-d0337fbc.
+Any other field write exits with code 5 and logs a `state_write_refused` event referencing.
 
 **Detection:** a manifest is "immutable" when its frontmatter has no `status:` key (new init style). Old-style manifests (pre-wedge, with `status: IN_PROGRESS`) remain mutable so existing workflows on old state files are unaffected.
 
@@ -68,7 +68,7 @@ cross_project: false     # true for cross-project pipeline runs
 scratchpad_path: ""      # path to worktree scratchpad directory (if set)
 ```
 
-`attended` resolves from the substrate the spawner stamped in `FNO_AGENT_SUBSTRATE`. `fno do target init` folds it, and the manifest writer ORs that with `config.unattended.enabled`. A pane is attended. A thread and a headless one-shot are not. An operator's own shell carries no stamp and is attended. A spawned worker whose launcher stamps nothing reads unattended. That is the older answer, kept as the fallback because it skips a blocking prompt rather than hanging on one. An explicit `TARGET_UNATTENDED=1` wins over all of it. The rule has one home, `harness_identity.env_marks_unattended`.
+`attended` resolves from the substrate the spawner stamped in `FNO_AGENT_SUBSTRATE`. `fno do target init` folds it, and the manifest writer ORs that with `config.unattended.enabled`. A pane is attended. A thread and a headless one-shot are not. A user's own shell carries no stamp and is attended. A spawned worker whose launcher stamps nothing reads unattended. That is the older answer, kept as the fallback because it skips a blocking prompt rather than hanging on one. An explicit `TARGET_UNATTENDED=1` wins over all of it. The rule has one home, `harness_identity.env_marks_unattended`.
 
 ### Authority grant (omitted unless granted)
 
@@ -144,7 +144,7 @@ assigned, otherwise nonblank `CODEX_THREAD_ID` for Codex, otherwise the manifest
 `session_id`. This keeps Codex ownership legible across subprocesses while the
 per-target `session_id` stays unique for loop/finalize event deduplication.
 
-## What was removed (ab-d0337fbc)
+## What was removed
 
 The following fields existed in pre-wedge manifests and are no longer written:
 

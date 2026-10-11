@@ -1,25 +1,27 @@
 ---
 name: autocorrect
-description: Self-improvement loop for the toolkit. Captures corrections passively (git post-commit, pre-commit verifiers, /insights tags) into ~/.fno/corrections.log, then runs a monthly review via a fresh Claude API call against the current rule text and surfaces patches the user triages in 20 minutes. Use when the user asks to review corrections, run an autocorrect review, triage proposed patches, install the autocorrect schedule, ingest /insights, check autocorrect status, or audit recurring mistake classes in the toolkit.
+description: Review corrections, triage proposed patches, and audit the agent self-improvement loop.
 ---
 
 # Autocorrect
 
-The meta-improvement layer. Replaces the deprecated feels system with a smaller, sharper mechanism: passive capture, fresh-API review, human triage in 20 minutes per month.
+The meta-improvement layer: passive capture, fresh-API review, human triage in 20 minutes per month.
+
+**Harness boundary:** the capture wiring is Claude-specific. The git post-commit hook, verifier wrapper paths, and watermarks live under `~/.claude/`, and the cron registers launchd jobs on this machine. On another harness only the manual `/autocorrect review` verb runs. The passive writers are absent, and the skill says so rather than pretending the loop is armed.
 
 ## Three writers, one log, one consumer
 
-Capture surfaces (write to `~/.fno/corrections.log`, never invoked by the agent):
+Capture surfaces (write to `~/.fno/logs/corrections.log`, never invoked by the agent):
 
 1. **git post-commit hook on `~/.claude/`** records every edit to rule/skill/CLAUDE.md files. Severity S1 by default; S0 if the commit subject starts with `urgent:` or `revert:`.
 2. **pre-commit verifier wrapper** (`scripts/corrections-verifier-log.sh`) any verifier in any repo calls when it blocks a commit. Verifier decides the severity (S0 for secret-scanner, S1 for style/lint, S2 for drift).
-3. **`/insights` tag ingester** (`scripts/corrections-insights-tag.sh`) ports `#agent-correction`-tagged `/insights` entries as S2 events.
+3. **`/fno:intel` correction ingester** (`scripts/corrections-insights-tag.sh`) ports `#agent-correction`-tagged `/fno:intel` report lines as S2 events.
 
 Consumer surface (this skill):
 
 - **Monthly review** (1st of each month, 09:00 local) sends the last 30 days of S1+S2 events plus the current full text of every implicated rule file to a fresh Claude API call. Output is a numbered patch list.
 - **S0 watcher** (every 15 minutes) catches any unprocessed S0 events and fires an immediate review.
-- **Triage** walks the patch list interactively; accept/reject/defer/skip/quit per item.
+- **Triage** walks the patch list interactively with accept/reject/defer/skip/quit per item. An accepted diff to a shipped skill (`skills/<name>/SKILL.md` in this repo) is never applied locally. Triage files a backlog node, and a worker ships it through the normal PR path. The shipping commit carries the trailer `Autocorrect-Ref: <review_id>#<N>`, so the post-commit hook's row links back to the proposal.
 
 ## Commands
 
@@ -29,15 +31,15 @@ Consumer surface (this skill):
 | `/autocorrect triage [--review-id <id>]` | Walk the latest (or specified) patch list interactively. |
 | `/autocorrect status` | Show scheduled jobs, latest review, pending patches, watermark state. |
 | `/autocorrect install` | Register the monthly cron and the S0 watcher (idempotent). |
-| `/autocorrect ingest-insights` | Manually run the `/insights` ingestion path. |
+| `/autocorrect ingest-insights` | Manually run the `/fno:intel` report ingestion path (`--insights-file <intel report>`). |
 
 All commands are thin wrappers over scripts in this plugin's `scripts/` directory.
 
 ## Invariants (read before extending)
 
 1. **The agent is never the capture surface.** All three writers are passive (git hooks, verifier wrappers, scheduled ingester). If you find yourself proposing an agent-direct write, you're holding the wrong end of the loop.
-2. **Single artifact.** Everything funnels through `~/.fno/corrections.log`. Three writers, one consumer. Resist the urge to add ad-hoc per-source logs.
-3. **Severity tiers, not frequency thresholds.** S0 fires immediately on a single event; S1 aggregates monthly; S2 rolls up quarterly. The writer decides severity.
+2. **Single artifact.** Everything funnels through `~/.fno/logs/corrections.log`. Three writers, one consumer. Resist the urge to add ad-hoc per-source logs.
+3. **Severity tiers, not frequency thresholds.** S0 fires immediately on a single event. S1 and S2 both roll up in the monthly review. The registered cron passes `--severity S1,S2` on the 1st, and that scheduler is the one cadence owner. The writer decides severity.
 4. **Reviewer sees current full rule text, not just diffs.** Decisions are made against the rule as it stands today, not its history.
 5. **L1 -> L2 migration discipline.** Rules are a holding pen; verifiers are the destination. CONVERT-TO-VERIFIER patches MUST delete the rule text in the same commit they add the verifier. `autocorrect-triage.sh` surfaces this invariant.
 6. **The loop's success metric is patch volume decreasing.** Patch volume dropping is the goal, not a failure signal. The loop retires successfully when verifiers absorb every recurring correction class.
@@ -46,11 +48,11 @@ All commands are thin wrappers over scripts in this plugin's `scripts/` director
 
 | File | Purpose |
 |---|---|
-| `~/.fno/corrections.log` | The canonical capture artifact. Mode 0600. |
+| `~/.fno/logs/corrections.log` | The canonical capture artifact. Mode 0600. |
 | `~/.claude/.corrections-watermark` | Last monthly review window end. |
 | `~/.claude/.s0-watcher-watermark` | Last S0 watcher tick. |
 | `~/.claude/.s0-processed.log` | Per-event hashes of S0 events already dispatched. |
-| `~/.claude/.insights-watermark` | Per-event hashes ingested from /insights. |
+| `~/.fno/logs/corrections.log.wm` | Per-event hashes ingested from the intel report. |
 | `~/.fno/corrections-rejected.log` | Items the user rejected during triage. |
 | `~/.claude/corrections-malformed.log` | Items where the patch did not apply cleanly. |
 | `~/.claude/proposed-patches/{review_id}.md` | The reviewer's patch list per review. |
@@ -74,7 +76,7 @@ bash $CLAUDE_PLUGIN_ROOT/scripts/install-autocorrect-cron.sh
 bash $CLAUDE_PLUGIN_ROOT/scripts/install-autocorrect-cron.sh --status
 
 # Tail the log
-tail -f ~/.fno/corrections.log
+tail -f ~/.fno/logs/corrections.log
 ```
 
 After setup, the loop runs unattended. The user only interacts during triage (~20 min/month) or to acknowledge an S0 review.

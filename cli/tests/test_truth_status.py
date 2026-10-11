@@ -187,13 +187,11 @@ def test_no_node_id_is_unknown():  # AC7-FR (unresolvable join)
     assert r["state"] == "unknown"
 
 
-def test_default_root_routes_through_global_claim_root(monkeypatch):
-    # codex P2 regression guard: node:<id> claims are GLOBAL. With claims_root
-    # omitted the resolver must probe the global root (claims_root_for), NOT
-    # claim_status's canonical-repo default (root=None), or `fno agents list`
-    # reads `free` for every live worker and the fill never appears.
-    from fno.claims.io import claims_root_for
-
+def test_default_root_defers_to_the_native_leg(monkeypatch):
+    # codex P2 regression guard: with claims_root omitted the resolver must NOT
+    # probe a per-repo default itself; it passes no root and the native leg
+    # routes node:<id> to the global store (the routing golden lives in
+    # crates/fno-agents/tests/claims_root_parity.rs).
     captured: dict = {}
 
     def fake_claim_status(key, root=None):
@@ -205,8 +203,7 @@ def test_default_root_routes_through_global_claim_root(monkeypatch):
     r = ts.resolve_truth_status("x-4a48", loop_check_ages={SID: 60})
 
     assert captured["key"] == "node:x-4a48"
-    assert captured["root"] == claims_root_for("node:x-4a48")  # global root
-    assert captured["root"] is not None  # NOT the buggy canonical-repo default
+    assert captured["root"] is None  # routing is the native leg's job
     assert r["state"] == "working"
 
 
@@ -309,3 +306,33 @@ def test_missing_signals_degrade_to_unknown(tmp_path):  # AC5-ERR
     )
     assert r["state"] == "unknown"
     assert ts.render_truth_status(r) is None
+
+
+# ---------------------------------------------------------------------------
+# x-84b2: the canonical dispatch-name family resolves; legacy rows keep reading
+# ---------------------------------------------------------------------------
+
+
+def test_parse_node_id_resolves_canonical_names():
+    assert ts.parse_node_id("t-x-84b2-name") == "x-84b2"
+    assert ts.parse_node_id("ab-bp-x-84b2-cargo") == "x-84b2"
+    assert ts.parse_node_id("rd-t-ab-4040eee8-cargo") == "ab-4040eee8"
+    # Typed identities are not nodes.
+    assert ts.parse_node_id("gr-th-backlog-20260910") is None
+
+
+def test_parse_worker_mission_maps_verb_codes_to_kinds():
+    # t/f are target-class; bp/r/th are the plan-artifact branch.
+    assert ts.parse_worker_mission("t-x-1-build") == ("x-1", "target")
+    assert ts.parse_worker_mission("f-x-1-mend") == ("x-1", "target")
+    assert ts.parse_worker_mission("bp-x-1-design") == ("x-1", "think")
+    assert ts.parse_worker_mission("th-th-x-1-slug") == ("x-1", "think")
+    assert ts.parse_worker_mission("ac-bp-x-1-design") == ("x-1", "think")
+    assert ts.parse_worker_mission("rd-t-x-1-destub") == ("x-1", "target")
+
+
+def test_parse_worker_mission_legacy_fixtures_still_resolve():
+    assert ts.parse_worker_mission("target-x-3218-spawn") == ("x-3218", "target")
+    assert ts.parse_worker_mission("think-x-3218-retro") == ("x-3218", "think")
+    # Pre-cutover freeform names stay unrecognized (fail closed).
+    assert ts.parse_worker_mission("tgt-x-4175-liveness") is None

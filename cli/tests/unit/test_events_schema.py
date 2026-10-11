@@ -72,6 +72,45 @@ def test_validate_rejects_missing_required_field() -> None:
     with pytest.raises(ValidationError, match="decision"):
         validate(event)
 
+    # decision_span: span_kind and trace are the required pair; span_kind,
+    # route and class are enum-checked at validate (the same chokepoint the
+    # termination reason uses) so a typo'd hop cannot land as an
+    # unrecognized bucket the eval grouping cannot read.
+    def _span(**data) -> dict:
+        base = {
+            "ts": "2026-10-02T19:00:00Z",
+            "type": "decision_span",
+            "source": "target",
+            "data": {
+                "span_kind": "ask",
+                "trace": {
+                    "trace_id": "x-98cf",
+                    "span_id": "s-1a2b3c4d",
+                    "actor_kind": "worker",
+                    "comms": "mail",
+                },
+            },
+        }
+        base["data"].update(data)
+        return base
+
+    validate(_span())  # the required pair plus a legal span_kind passes
+    with pytest.raises(ValidationError, match="missing required data field: span_kind"):
+        validate(
+            {
+                "ts": "2026-10-02T19:00:00Z",
+                "type": "decision_span",
+                "source": "target",
+                "data": {
+                    "trace": {"trace_id": "x-98cf", "span_id": "s-1a2b3c4d", "actor_kind": "worker", "comms": "mail"},
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="span_kind"):
+        validate(_span(span_kind="vibe"))
+    with pytest.raises(ValidationError, match="data.class"):
+        validate(_span(span_kind="route", route="escalate", **{"class": "cheap"}))
+
 
 def test_decision_retracted_is_registered_and_carries_target() -> None:
     _require_schema_loaded()
@@ -162,3 +201,38 @@ class TestReviewAttestationFindingRecord:
 
     def test_pre_existing_event_without_record_validates(self) -> None:
         validate(self._event())
+
+
+# ---------------------------------------------------------------------------
+# The machine-scoped skip vocabulary
+# ---------------------------------------------------------------------------
+
+
+def _advance_skipped(reason: str, **extra) -> dict:
+    from fno.events import _build
+
+    return _build("advance_skipped", "backlog", {"reason": reason, **extra})
+
+
+def test_advance_skipped_accepts_machine_scoped_reasons() -> None:
+    _require_schema_loaded()
+    validate(_advance_skipped("capacity-refused", exit_code=79, detail="spawn-gate: load"))
+    validate(_advance_skipped("gate-unavailable", exit_code=81, detail="spawn-gate: registry"))
+    validate(_advance_skipped("sandbox-unreachable", exit_code=82, detail="sandbox-probe: gh is unreachable"))
+    # Historic emission, declared late: the enum admits rows already in journals.
+    validate(_advance_skipped("slot-queue-deferred", retry_at=1234.0))
+
+
+def test_advance_skipped_declares_the_machine_scoped_vocabulary() -> None:
+    """The validator walks this type structurally only (required fields), so
+    the contract under test is the declaration itself: the new reasons are in
+    the enum and the two properties exist."""
+    _require_schema_loaded()
+    props = EVENT_TYPES["advance_skipped"]["data"]["properties"]
+    assert set(props["reason"]["enum"]) >= {
+        "capacity-refused",
+        "gate-unavailable",
+        "sandbox-unreachable",
+        "slot-queue-deferred",
+    }
+    assert "exit_code" in props and "attempted" in props

@@ -20,8 +20,30 @@ FAIL=0
 # field <output> <key> -> prints the value for key=... (first match)
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
 
-# run <input> [extra argv...] -> echoes normalize.sh stdout
-run() { bash "$NORM" --input "$1" "${@:2}"; }
+# run <input> [extra argv...] -> echoes normalize.sh stdout.
+# PATH-pinned to a capabilities fixture that delegates everything else to the
+# HOST fno (resolved before the pin, x-3873): the surface read is a Rust-leaf
+# ask (`fno agents capabilities`), and a stale installed binary would refuse
+# it and error every classify regardless of the script under test.
+_HOST_FNO="$(command -v fno || true)"
+_run_stub="$(mktemp -d)"
+[[ -n "$_run_stub" && -d "$_run_stub" ]] || { echo "mktemp -d failed" >&2; exit 1; }
+# The host path is baked in at generation (never re-resolved at call time:
+# with the stub dir first on PATH, `command -v fno` would find the stub).
+cat > "$_run_stub/fno" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1 \$2" == "agents capabilities" ]]; then
+  case "\${3:-}" in
+    claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
+    codex)               printf '{"command_surface":"codex-skill"}\n'; exit 0 ;;
+    *)                   printf '{"command_surface":"refused"}\n'; exit 0 ;;
+  esac
+fi
+exec "${_HOST_FNO:-/nonexistent-fno}" "\$@"
+EOF
+chmod +x "$_run_stub/fno"
+trap 'rm -rf "$_run_stub"' EXIT
+run() { PATH="$_run_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 
 # run_nofno shadows `fno` with an exit-1 stub so assertions about BUILTIN
 # defaults (no-merge posture, static fallback tables) hold regardless of the
@@ -30,9 +52,45 @@ run() { bash "$NORM" --input "$1" "${@:2}"; }
 _de43_stub="$(mktemp -d)"
 # Guard the mktemp: an empty _de43_stub would write the stub to /fno.
 [[ -n "$_de43_stub" && -d "$_de43_stub" ]] || { echo "mktemp -d failed" >&2; exit 1; }
-printf '#!/usr/bin/env bash\nexit 1\n' > "$_de43_stub/fno"; chmod +x "$_de43_stub/fno"
-trap 'rm -rf "$_de43_stub"' EXIT
+# The capabilities ask is answered from a fixture table (x-3873): it is the
+# surface read every classify needs, and the packaged table itself is
+# contract-tested in crates/fno-agents. Every other ask exits 1, so the
+# fail-closed posture property still holds suite-wide.
+cat > "$_de43_stub/fno" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$1 $2" == "agents capabilities" ]]; then
+  case "${3:-}" in
+    claude|agy|opencode) printf '{"command_surface":"slash"}\n'; exit 0 ;;
+    codex)               printf '{"command_surface":"codex-skill"}\n'; exit 0 ;;
+    *)                   printf '{"command_surface":"refused"}\n'; exit 0 ;;
+  esac
+fi
+exit 1
+EOF
+chmod +x "$_de43_stub/fno"
 run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
+
+# x-8151: family membership is an ASK now (fno agents target-family), fail-closed
+# when the ask fails - the exit-1 stub above would refuse every run_nofno
+# classify. FAMILY_RESOLVER is the documented test injection (normalize.sh
+# consults it before fno), so the "no host fno" property holds: the stub
+# answers the same minimal vocabulary, and no host fno is ever invoked.
+_FAMILY_STUB="$(mktemp -d)"
+[[ -n "$_FAMILY_STUB" && -d "$_FAMILY_STUB" ]] || { echo "mktemp -d failed" >&2; exit 1; }
+cat > "$_FAMILY_STUB/family" <<'EOF'
+#!/usr/bin/env bash
+case "${1%%[[:space:]]*}" in
+  /target|/fno:target|\$fno:target) echo family ;;
+  *) echo other ;;
+esac
+EOF
+chmod +x "$_FAMILY_STUB/family"
+export FAMILY_RESOLVER="$_FAMILY_STUB/family"
+trap 'rm -rf "$_de43_stub" "$_FAMILY_STUB"' EXIT
+[[ "$("$FAMILY_RESOLVER" "/target x-1")" == "family" ]] \
+  && [[ "$("$FAMILY_RESOLVER" '$fno:target x-1')" == "family" ]] \
+  && [[ "$("$FAMILY_RESOLVER" "/think x-1")" == "other" ]] \
+  || { echo "FATAL: family stub self-check failed" >&2; exit 1; }
 
 # run_guarded caps a run at 5s when a timeout binary exists (coreutils `timeout`,
 # or `gtimeout` on macOS), so a regressed $#-guard that spins is caught, not hung.
@@ -40,8 +98,10 @@ run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 # still prove correctness, and CI (Linux, has `timeout`) enforces the no-hang.
 TIMEOUT_BIN="$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || true)"
 run_guarded() {
-  if [[ -n "$TIMEOUT_BIN" ]]; then "$TIMEOUT_BIN" 5 bash "$NORM" --input "$1" "${@:2}"
-  else bash "$NORM" --input "$1" "${@:2}"; fi
+  # The same PATH pin `run` applies (capabilities fixture, x-3873), under a
+  # timeout so a regressed $#-guard that spins is caught, not hung.
+  if [[ -n "$TIMEOUT_BIN" ]]; then PATH="$_run_stub:$PATH" "$TIMEOUT_BIN" 20 bash "$NORM" --input "$1" "${@:2}" < /dev/null
+  else run "$@"; fi
 }
 
 check_eq() {
@@ -96,10 +156,10 @@ out="$(run_nofno 'spawn the node that will merge two branches')"
 check_eq   'AC1-EDGE merge not consumed' "$(field "$out" allow_merge)" '0'
 check_contains 'AC1-EDGE merge stays in message' "$(field "$out" message)" 'merge two branches'
 
-# --- x-2c27: bg / headless substrate posture words ----------------------------
+# --- x-61df: thread / pane substrate grammar ---------------------------------
 out="$(run 'build the thing bg')"
-check_eq   'x-2c27 bg substrate'       "$(field "$out" substrate)" 'bg'
-check_contains 'x-2c27 bg task trimmed' "$(field "$out" message)"  'build the thing'
+check_eq   'retired bg word builds on thread' "$(field "$out" substrate)" 'thread'
+check_eq   'retired bg keeps the task text' "$(field "$out" message)" 'build the thing'
 out="$(run 'fix it headless codex')"
 check_eq   'x-2c27 headless substrate' "$(field "$out" substrate)" 'headless'
 check_eq   'x-2c27 headless+codex provider' "$(field "$out" provider)" 'codex'
@@ -110,6 +170,36 @@ out="$(run 'make the bg job run faster')"
 check_eq   'x-2c27 mid-task bg not consumed' "$(field "$out" substrate)" ''
 check_contains 'x-2c27 mid-task bg stays in message' "$(field "$out" message)" 'bg job run faster'
 
+out="$(run_nofno 'fix the thing substrate thread')"
+check_eq   'x-61df substrate thread' "$(field "$out" substrate)" 'thread'
+check_eq   'x-61df substrate thread task' "$(field "$out" message)" 'fix the thing'
+out="$(run_nofno 'fix the thing substrate pane')"
+check_eq   'x-61df substrate pane' "$(field "$out" substrate)" 'pane'
+check_eq   'x-61df substrate pane task' "$(field "$out" message)" 'fix the thing'
+out="$(run_nofno 'fix the thing substrate bg')"
+check_eq       'retired substrate bg refuses' "$(field "$out" status)" 'error'
+check_contains 'retired substrate bg names the replacement' "$(field "$out" error)" "substrate 'bg' was retired; use 'thread'"
+out="$(run_nofno 'fix the deadlock in the worker thread')"
+check_eq       'x-61df trailing thread stays task' "$(field "$out" substrate)" ''
+check_contains 'x-61df trailing thread message' "$(field "$out" message)" 'worker thread'
+out="$(run_nofno 'fix the layout in the pane')"
+check_eq       'x-61df trailing pane stays task' "$(field "$out" substrate)" ''
+check_contains 'x-61df trailing pane message' "$(field "$out" message)" 'in the pane'
+out="$(run_nofno 'thread the needle carefully')"
+check_eq       'x-61df thread prose stays task' "$(field "$out" substrate)" ''
+check_eq       'x-61df thread prose unchanged' "$(field "$out" message)" 'thread the needle carefully'
+out="$(run_nofno 'substrate thread /goal x-1234')"
+check_eq       'x-61df leading substrate pair refuses' "$(field "$out" status)" 'error'
+check_contains 'x-61df leading substrate pair hint' "$(field "$out" error)" '/goal x-1234 substrate thread'
+check_eq       'x-61df leading substrate pair no message' "$(field "$out" message)" ''
+out="$(run_nofno 'substrate /goal x-1234')"
+check_eq       'x-61df missing substrate value refuses' "$(field "$out" status)" 'error'
+check_contains 'x-61df missing substrate value keeps command visible' "$(field "$out" error)" '/goal x-1234'
+check_eq       'x-61df missing substrate value no message' "$(field "$out" message)" ''
+out="$(run_nofno 'fix the thing substrate nonsense')"
+check_eq       'x-61df bad substrate refuses' "$(field "$out" status)" 'error'
+check_contains 'x-61df bad substrate names values' "$(field "$out" error)" 'pane, thread, headless'
+
 # --- x-ffc3: a LEADING posture word + /command is refused, not buried in a seed -
 # Posture words (bg|headless) are TRAILING only. A leading one whose remainder is
 # a /command passthrough (the documented repro `bg /goal ...`) means the user
@@ -119,7 +209,7 @@ check_contains 'x-2c27 mid-task bg stays in message' "$(field "$out" message)" '
 # prose beginning with the word still seeds (codex PR #106 P2).
 out="$(run 'bg /goal x-ead3 residual')"
 check_eq       'x-ffc3 leading bg+/ -> error'     "$(field "$out" status)"  'error'
-check_contains 'x-ffc3 leading bg cites trailing form' "$(field "$out" error)" '/goal x-ead3 residual bg'
+check_contains 'x-ffc3 leading bg cites trailing form' "$(field "$out" error)" '/goal x-ead3 residual thread'
 # Refusal emits no message= line at all, so nothing is /target-wrapped or launched.
 check_eq       'x-ffc3 leading bg emits no message wrap' "$(field "$out" message)" ''
 out="$(run 'headless /target billing migration')"
@@ -127,7 +217,7 @@ check_eq       'x-ffc3 leading headless+/ -> error' "$(field "$out" status)" 'er
 # Case-insensitive, matching the trailing parser's tr-lowercasing (mobile caps).
 out="$(run 'BG /goal x-ead3 residual')"
 check_eq       'x-ffc3 leading BG (caps) -> error' "$(field "$out" status)" 'error'
-check_contains 'x-ffc3 leading BG hint uses lowercase bg' "$(field "$out" error)" 'residual bg'
+check_contains 'x-ffc3 leading BG hint teaches thread' "$(field "$out" error)" 'residual thread'
 # codex PR #106 P2: a leading posture word in genuine FEATURE prose (no /command
 # remainder) is NOT refused - it builds, as it did before the guard.
 out="$(run 'headless browser screenshots')"
@@ -137,7 +227,7 @@ out="$(run 'bg worker cleanup')"
 check_eq       'x-ffc3 bg feature prose seeds'    "$(field "$out" status)" 'ok'
 # AC1-EDGE: a trailing posture word is unchanged (the guard fires on LEADING only)
 out="$(run '/goal x-ead3 residual bg')"
-check_eq       'x-ffc3 trailing bg substrate'      "$(field "$out" substrate)" 'bg'
+check_eq       'x-ffc3 trailing bg substrate'      "$(field "$out" substrate)" 'thread'
 check_contains 'x-ffc3 trailing bg message intact' "$(field "$out" message)" '/goal x-ead3 residual'
 check_eq       'x-ffc3 trailing bg status ok'      "$(field "$out" status)" 'ok'
 # AC1-ERR: exact-token match -> a feature whose first word merely CONTAINS the
@@ -335,7 +425,7 @@ check_eq   'mid-task effort leaves effort empty' "$(field "$out" effort)" ''
 
 # --- x-d235: --yolo on claude maps to --permission-mode bypassPermissions -----
 # claude has no --yolo flag; its full-auto/no-gates equivalent is
-# bypassPermissions. Map it (don't drop it) so a yolo'd claude bg worker runs
+# bypassPermissions. Map it (don't drop it) so a yolo'd claude thread worker runs
 # gate-free. An explicit --permission-mode wins; codex/gemini yolo is unchanged.
 out="$(run 'ab-99999999' --provider claude --yolo)"
 check_eq 'claude yolo -> permission_mode=bypassPermissions' "$(field "$out" permission_mode)" 'bypassPermissions'
@@ -508,7 +598,7 @@ out="$(run 'continue the quarterly outreach work')"
 check_eq 'continue-shaped -> seed'   "$(field "$out" payload_mode)" 'seed'
 
 # --- a slash COMMAND is a passthrough, not a seed -----------------------------
-out="$(run '/pr check 42')"
+out="$(run '/fno:ship pr check 42')"
 check_eq 'slash command is passthrough' "$(field "$out" payload_mode)" 'passthrough'
 
 # --- a resolved node-id is a build (the ONE surviving implicit /target) -------
@@ -526,6 +616,20 @@ check_contains     'handoff seed continues' "$(msg_block "$out")"          'Cont
 check_contains     'handoff seed guardrail' "$(msg_block "$out")"          'GUARDRAIL'
 check_not_contains 'handoff no /target'     "$(msg_block "$out")"          '/target'
 check_not_contains 'handoff no no-merge tok' "$(msg_block "$out")"         'no-merge'
+
+out="$(run_nofno 'docs/plan.md substrate thread' --handoff)"
+check_eq       'handoff thread substrate' "$(field "$out" substrate)" 'thread'
+check_eq       'handoff thread payload mode' "$(field "$out" payload_mode)" 'handoff'
+check_contains 'handoff thread path preserved' "$(msg_block "$out")" 'docs/plan.md'
+out="$(run_nofno 'docs/plan.md Substrate thread' --handoff)"
+check_eq       'handoff case-insensitive substrate' "$(field "$out" substrate)" 'thread'
+check_contains 'handoff case-insensitive path preserved' "$(msg_block "$out")" 'docs/plan.md'
+out="$(run_nofno 'thread' --handoff)"
+check_eq       'handoff one-word thread path' "$(field "$out" substrate)" ''
+check_contains 'handoff one-word thread preserved' "$(msg_block "$out")" 'thread'
+out="$(run_nofno 'docs/plan.md substrate thread extra' --handoff)"
+check_eq       'handoff four-token input not peeled' "$(field "$out" substrate)" ''
+check_contains 'handoff four-token path preserved' "$(msg_block "$out")" 'docs/plan.md substrate thread extra'
 
 # --- handoff path with leading / is NOT passthrough --------------------------
 out="$(run '/abs/path/doc.md' --handoff)"
@@ -721,7 +825,7 @@ rm -f "$_proj_res"
 out="$(run_nofno 'x-2aad bg')"
 check_eq 'configured-prefix node classifies'      "$(field "$out" node)" 'x-2aad'
 check_eq 'configured-prefix build mode'           "$(field "$out" payload_mode)" 'build'
-check_eq 'configured-prefix substrate survives'   "$(field "$out" substrate)" 'bg'
+check_eq 'configured-prefix substrate survives'   "$(field "$out" substrate)" 'thread'
 check_eq 'configured-prefix message'              "$(field "$out" message)" '/target x-2aad --no-merge'
 
 out="$(run_nofno 'ab-4040eee8')"

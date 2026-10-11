@@ -5,11 +5,11 @@
 # Covers:
 #   (a) TARGET_SESSION_ID=preset-key-123 wins over CODEX_THREAD_ID and the
 #       Codex thread is recorded additively in the manifest
-#   (b) No TARGET_SESSION_ID or CODEX_THREAD_ID => generated session_id matches
-#       the pattern
-#       [0-9]{8}T[0-9]{6}Z-[0-9]+-...
+#   (b) No TARGET_SESSION_ID or CODEX_THREAD_ID => generated session_id is a
+#       random v4 UUID from the one mint
 #   (d) No TARGET_SESSION_ID + CODEX_THREAD_ID => per-target session id is
 #       unique while the thread id remains owner metadata
+#   (e) The mint door answers nothing => init refuses naming fno doctor update
 #
 # Exit codes:
 #   0  all scenarios passed
@@ -61,6 +61,10 @@ make_repo() {
   printf '# isolated\n' > "${_dir}/.fno/config.toml"
   mkdir -p "${_dir}/home/.fno"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
+  # State-path stub: pins init's manifest location to the scenario space dir.
+  mkdir -p "${_dir}/bin" "${_dir}/space"
+  cp "${SCRIPT_DIR}/../../tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod 755 "${_dir}/bin/fno-agents"
 }
 
 # ── (a) TARGET_SESSION_ID preset is written verbatim ─────────────────
@@ -71,6 +75,8 @@ _ALL_TMPS+=("$TMP_A")
 
 (cd "$TMP_A" && \
   HOME="${TMP_A}/home" \
+  PATH="${TMP_A}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_A}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-session-id-preset" \
   TARGET_SESSION_ID="preset-key-123" \
@@ -79,7 +85,7 @@ _ALL_TMPS+=("$TMP_A")
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(a): init exited non-zero"
 
-STATE_A="${TMP_A}/.fno/target-state.md"
+STATE_A="${TMP_A}/space/target-state.md"
 [[ -f "$STATE_A" ]] || fail "(a): target-state.md was not created"
 
 # Read the session_id field
@@ -109,17 +115,16 @@ print(f'YAML: session_id={sid!r}')
 " || fail "(a): YAML parse/assertion failed"
 pass "(a): YAML parses and session_id matches"
 
-# ── (b) No TARGET_SESSION_ID => generated id matches expected pattern ─
-# Segment 2 carries an optional 2-char provider provenance infix
-# glued to the pid ({ts}-cl{pid}-{hex} for a claude self-mint). The id MUST
-# still split to exactly 3 dash-segments so split('-')[0] consumers are safe.
-log "(b): no TARGET_SESSION_ID => generated id matches [0-9]{8}T[0-9]{6}Z-<infix><pid>-..."
+# ── (b) No TARGET_SESSION_ID => the run id is a random UUID from the mint ─
+log "(b): no TARGET_SESSION_ID => generated id is a v4 UUID from the one mint"
 
 make_repo TMP_B
 _ALL_TMPS+=("$TMP_B")
 
 (cd "$TMP_B" && \
   HOME="${TMP_B}/home" \
+  PATH="${TMP_B}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_B}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-session-id-generated" \
   CODEX_THREAD_ID= \
@@ -128,35 +133,17 @@ _ALL_TMPS+=("$TMP_B")
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(b): init exited non-zero"
 
-STATE_B="${TMP_B}/.fno/target-state.md"
+STATE_B="${TMP_B}/space/target-state.md"
 [[ -f "$STATE_B" ]] || fail "(b): target-state.md was not created"
 
 SESSION_ID_B=$(grep '^session_id:' "$STATE_B" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
 [[ -n "$SESSION_ID_B" ]] || fail "(b): session_id is empty"
 
-# Must match: YYYYMMDDTHHMMSSZ-<optional 2-char infix><digits>-<chars>
-# Pattern: 8 digits, T, 6 digits, Z, -, optional 2 lowercase infix, one or more
-# digits (pid), -, one or more chars (entropy).
-if ! echo "$SESSION_ID_B" | grep -qE '^[0-9]{8}T[0-9]{6}Z-[a-z]{0,2}[0-9]+-'; then
-  fail "(b): generated session_id '${SESSION_ID_B}' does not match expected pattern [0-9]{8}T[0-9]{6}Z-<infix><pid>-..."
+# The mint answers a random v4 UUID in 8-4-4-4-12 form.
+if ! echo "$SESSION_ID_B" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'; then
+  fail "(b): generated session_id '${SESSION_ID_B}' is not a v4 UUID"
 fi
-pass "(b): generated session_id '${SESSION_ID_B}' matches expected pattern"
-
-# Invariant: exactly 3 dash-segments regardless of infix (split('-')[0]
-# consumers like dispatch.py read segment 0 = timestamp and must stay safe).
-SEG_COUNT_B=$(echo "$SESSION_ID_B" | awk -F- '{print NF}')
-[[ "$SEG_COUNT_B" -eq 3 ]] \
-  || fail "(b): session_id '${SESSION_ID_B}' has ${SEG_COUNT_B} dash-segments, expected exactly 3"
-pass "(b): session_id keeps exactly 3 dash-segments (infix lives inside segment 2)"
-
-# AC2-HP: this harness detects provider=claude, so segment 2 must carry
-# the 'cl' provider infix immediately before the pid.
-SEG2_B=$(echo "$SESSION_ID_B" | cut -d- -f2)
-if echo "$SEG2_B" | grep -qE '^cl[0-9]+$'; then
-  pass "(b): claude self-mint carries the 'cl' provenance infix ('${SEG2_B}')"
-else
-  log "(b): segment 2 '${SEG2_B}' has no 'cl' infix (non-claude provider in this harness) - infix is optional, skipping"
-fi
+pass "(b): generated session_id '${SESSION_ID_B}' is a v4 UUID"
 
 # ── (c) manifest heredoc must not run command substitution ───────────
 # Regression: the manifest heredoc is unquoted (`<< EOF`) so it can expand
@@ -175,6 +162,8 @@ _ALL_TMPS+=("$TMP_C")
 STDERR_C="${TMP_C}/init-stderr.txt"
 (cd "$TMP_C" && \
   HOME="${TMP_C}/home" \
+  PATH="${TMP_C}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_C}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-heredoc-no-subst" \
   CODEX_THREAD_ID= \
@@ -183,7 +172,7 @@ STDERR_C="${TMP_C}/init-stderr.txt"
   bash "$INIT" >/dev/null 2>"$STDERR_C") \
   || fail "(c): init exited non-zero"
 
-STATE_C="${TMP_C}/.fno/target-state.md"
+STATE_C="${TMP_C}/space/target-state.md"
 [[ -f "$STATE_C" ]] || fail "(c): target-state.md was not created"
 
 # The literal comment (backticks intact) must be present verbatim.
@@ -215,6 +204,8 @@ _orphan_init() {  # $1 = failure label, $2 = TARGET_INPUT
     cd "$TMP_D" || exit 99
     {
       HOME="${TMP_D}/home" \
+  PATH="${TMP_D}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_D}/space" \
         TARGET_START=1 \
         TARGET_INPUT="$_input" \
         CODEX_THREAD_ID="019f48e4-codex-thread" \
@@ -238,7 +229,7 @@ _ALL_TMPS+=("$TMP_D")
 
 _orphan_init "(d)" "test-codex-thread-id"
 
-STATE_D="${TMP_D}/.fno/target-state.md"
+STATE_D="${TMP_D}/space/target-state.md"
 [[ -f "$STATE_D" ]] || fail "(d): target-state.md was not created"
 
 SESSION_ID_D=$(grep '^session_id:' "$STATE_D" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
@@ -253,8 +244,8 @@ HARNESS_D=$(grep '^harness:' "$STATE_D" | sed 's/^harness:[[:space:]]*//' | tr -
 [[ "$HARNESS_D" == "codex" ]] \
   || fail "(d): orphaned init resolved harness='${HARNESS_D}' (expected codex) - an ambient harness ancestor was visible despite reparenting to PID 1. On Linux a subreaper can adopt the orphan instead of PID 1; if this fires on ubuntu, suspect process reparenting first, not codex resolution."
 CODEX_THREAD_ID_D=$(grep '^codex_thread_id:' "$STATE_D" | sed 's/^codex_thread_id:[[:space:]]*//' | tr -d '\r')
-echo "$SESSION_ID_D" | grep -qE '^[0-9]{8}T[0-9]{6}Z-cx[0-9]+-[0-9a-f]{6}$' \
-  || fail "(d): expected unique cx-tagged target session_id, got '${SESSION_ID_D}'"
+echo "$SESSION_ID_D" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' \
+  || fail "(d): expected a v4 UUID run id, got '${SESSION_ID_D}'"
 [[ "$SESSION_ID_D" != "019f48e4-codex-thread" ]] \
   || fail "(d): stable Codex thread was reused as the target session_id"
 [[ "$CODEX_THREAD_ID_D" == "019f48e4-codex-thread" ]] \
@@ -263,28 +254,53 @@ pass "(d): Codex thread remains owner metadata while target session id is unique
 
 # A successful finalize event is the explicit run boundary for claimless
 # free-text targets. Re-enter the SAME worktree/thread to prove the prior
-# manifest rotates before the next run id is minted.
-mkdir -p "${TMP_D}/.fno"
+# manifest rotates before the next run id is minted. The finalize probe reads
+# the event log from the resolved space dir (SPACE_DIR under the stub).
 printf '%s\n' \
   "{\"type\":\"session_finalized\",\"data\":{\"session_id\":\"${SESSION_ID_D}\",\"termination_reason\":\"NoWork\",\"ship\":false}}" \
-  > "${TMP_D}/.fno/events.jsonl"
+  > "${TMP_D}/space/events.jsonl"
 _orphan_init "(d)" "test-codex-thread-id-second-run"
-SESSION_ID_E=$(grep '^session_id:' "${TMP_D}/.fno/target-state.md" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
+SESSION_ID_E=$(grep '^session_id:' "${TMP_D}/space/target-state.md" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
 [[ "$SESSION_ID_E" != "$SESSION_ID_D" ]] \
   || fail "(d): two completed targets in one worktree/thread reused session_id '${SESSION_ID_D}'"
-compgen -G "${TMP_D}/.fno/target-state.terminal.*.md" >/dev/null \
+compgen -G "${TMP_D}/space/target-state.terminal.*.md" >/dev/null \
   || fail "(d): completed claimless target manifest was not archived"
 pass "(d): completed targets in one worktree/thread receive distinct session ids"
 
 # A shipped terminal is also a run boundary (the normal delivery path).
 printf '%s\n' \
   "{\"type\":\"session_finalized\",\"data\":{\"session_id\":\"${SESSION_ID_E}\",\"termination_reason\":\"DonePRGreen\",\"ship\":true}}" \
-  >> "${TMP_D}/.fno/events.jsonl"
+  >> "${TMP_D}/space/events.jsonl"
 _orphan_init "(d)" "test-codex-thread-id-third-run"
-SESSION_ID_F=$(grep '^session_id:' "${TMP_D}/.fno/target-state.md" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
+SESSION_ID_F=$(grep '^session_id:' "${TMP_D}/space/target-state.md" | sed 's/^session_id:[[:space:]]*//' | tr -d '\r')
 [[ "$SESSION_ID_F" != "$SESSION_ID_E" ]] \
   || fail "(d): shipped target reused session_id '${SESSION_ID_E}'"
 pass "(d): NoWork and shipped terminal boundaries both rotate claimless runs"
+
+# ── (e) The mint door answers nothing => init refuses, writes no manifest ──
+log "(e): FNO_TEST_MINT_FAIL=1 => init exits nonzero naming fno doctor update"
+
+make_repo TMP_E
+_ALL_TMPS+=("$TMP_E")
+
+(cd "$TMP_E" && \
+  HOME="${TMP_E}/home" \
+  PATH="${TMP_E}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_E}/space" \
+  FNO_TEST_MINT_FAIL=1 \
+  TARGET_START=1 \
+  TARGET_INPUT="test-mint-refusal" \
+  CODEX_THREAD_ID= \
+  TARGET_SESSION_ID= \
+  TARGET_LOCATION_OK="main-acknowledged" \
+  bash "$INIT" >"$TMP_E/init-stderr.txt" 2>&1
+) && fail "(e): init exited zero despite a failed mint"
+
+[[ ! -f "${TMP_E}/space/target-state.md" ]] \
+  || fail "(e): target-state.md was written despite a failed mint"
+grep -q "fno doctor update" "${TMP_E}/init-stderr.txt" \
+  || fail "(e): refusal stderr does not name fno doctor update"
+pass "(e): a mint failure refuses init and names the remedy"
 
 # AC1-HP (claude wins over an inherited foreign codex id) and AC3-ERR (the id a
 # live row owns is refused) are proven at the verb level in Python

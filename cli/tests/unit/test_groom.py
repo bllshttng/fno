@@ -5,7 +5,7 @@ the skill brief's lever contract.
 """
 from __future__ import annotations
 
-import os
+import subprocess as _subprocess
 import time
 from datetime import date
 from pathlib import Path
@@ -13,6 +13,9 @@ from pathlib import Path
 import pytest
 
 from fno.backlog import groom as G
+
+# The mint is a real pre-spawn subprocess (x-84b2); fakes route it here.
+_REAL_SUBPROCESS_RUN = _subprocess.run
 
 SKILL = Path(__file__).resolve().parents[3] / "skills" / "groom" / "SKILL.md"
 
@@ -55,14 +58,6 @@ DAY = date(2026, 7, 19)
 
 def test_day_key_is_utc_date_scoped():
     assert G.groom_day_key(DAY) == "groom:2026-07-19"
-
-
-def test_groom_key_routes_to_the_global_claims_root():
-    # Grooming operates on the GLOBAL graph, so its daily marker must dedup
-    # across repos - a repo-local root would let two checkouts both groom today.
-    from fno.claims.io import claims_root_for
-
-    assert claims_root_for(G.groom_day_key(DAY)) is not None
 
 
 def test_first_run_dispatches(claims_root, spawns):
@@ -120,9 +115,7 @@ def test_groom_enabled_defaults_true_matching_prior_ungated_behavior(
 ) -> None:
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", "/dev/null")
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "nonexistent.yaml"))
-    from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     assert G.groom_enabled() is True
 
 
@@ -177,6 +170,10 @@ def test_spawn_is_headless_sonnet(monkeypatch, claims_root):
         stderr = ""
 
     def _fake_run(cmd, **kwargs):
+        # The mint is a real pre-spawn subprocess (x-84b2): serve it with the
+        # real binary; the fake stands in for the spawn only.
+        if {"name-mint", "name-codes", "name-parse"} & {str(p) for p in cmd}:
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
         captured["cmd"] = cmd
         return _Proc()
 
@@ -193,6 +190,30 @@ def test_spawn_is_headless_sonnet(monkeypatch, claims_root):
     # spawn wrapper and leave the `claude -p` grandchild mutating the graph.
     assert cmd[cmd.index("--timeout") + 1] == str(G._WORKER_TIMEOUT_S)
     assert G._SPAWN_TIMEOUT_S > G._WORKER_TIMEOUT_S, "inner bound must fire first"
+
+
+def test_spawn_failure_reports_the_verdict_not_a_head_window(monkeypatch):
+    """AC2-HP (x-d769): gate notes run long, so the 200-char head window cut
+    the verdict line off the report. The reader keys on the last spawn-gate:
+    line instead."""
+    verdict = "spawn-gate: refused on ram_floor (ram_floor, exit 77): available_gb=1.2"
+
+    class _Proc:
+        returncode = 77
+        stdout = ""
+        stderr = f"spawn-gate note: {'n' * 300}\n{verdict}"
+
+    def _fake_run(cmd, **kwargs):
+        # The mint is a real pre-spawn subprocess (x-84b2): serve it with the
+        # real binary; the fake stands in for the spawn only.
+        if {"name-mint", "name-codes", "name-parse"} & {str(p) for p in cmd}:
+            return _REAL_SUBPROCESS_RUN(cmd, **kwargs)
+        return _Proc()
+
+    monkeypatch.setattr(G.subprocess, "run", _fake_run)
+    with pytest.raises(RuntimeError) as ei:
+        G._spawn_groom_worker("brief", "/repo", G.GROOM_MODEL_DEFAULT, DAY.isoformat())
+    assert verdict in str(ei.value)
 
 
 # ── the skill brief contract ────────────────────────────────────────────────
@@ -213,7 +234,10 @@ LEVERS = [
     ("defer", ("--reason",)),
     ("undefer", ()),
     ("update", ("--priority",)),
-    ("rank", ("--top",)),
+    # rank left this table when it became the operator's pin: the verb refuses
+    # a groom worker, so teaching it here would teach a refusal. The vote it
+    # was replaced by is the lever below.
+    ("encounter", ("--evidence",)),
     ("idea", ()),
     ("intake", ()),
     ("update", ("--blocked-by",)),
@@ -243,7 +267,16 @@ def test_brief_levers_exist_on_the_real_cli(command, flags):
 
     root = typer.main.get_command(graph_cli)
     sub = root.get_command(click.Context(root), command)
-    assert sub is not None, f"`fno backlog {command}` does not exist"
+    if sub is None:
+        # Retired python leaves answer natively; bind the lever to the
+        # binary's own help surface instead.
+        from tests._native_door import run_native
+
+        code, out, err = run_native("backlog", command, "--help")
+        assert code == 0, f"`fno backlog {command}` does not exist natively"
+        missing = {f for f in flags if f not in out + err}
+        assert not missing, f"`fno backlog {command}` has no {sorted(missing)}"
+        return
 
     available: set[str] = set()
     for param in sub.params:
@@ -272,7 +305,7 @@ def test_skill_routes_questions_to_the_deferred_pile_not_idea():
 
 def test_skill_forbids_direct_state_edits():
     text = SKILL.read_text()
-    assert "graph.json" in text and "Never" in text
+    assert "graph.db" in text and "Never" in text
     for forbidden in ("jq -i", "sed -i"):
         assert forbidden in text, "the brief must name the direct-edit paths it forbids"
 
@@ -322,11 +355,13 @@ def test_relatedness_builds_last_over_the_post_groom_graph():
 def test_quiet_night_legs_are_ok(monkeypatch):
     # The quiet paths all exit 0: reconcile prints "Backlog is in sync." and
     # returns, archive/maintain report nothing to do and return. The archive
-    # leg's own outcome carries a count (x-a023), everything else stays "ok".
+    # leg's own outcome carries a count (x-a023) and so does the reconcile
+    # leg's strand heal (x-a31a); everything else stays "ok".
     monkeypatch.setattr(G.subprocess, "run", lambda cmd, **k: _Proc(returncode=0))
     results = REAL_MECHANICAL(14)
     assert results["archive"] == "ok (archived 0, held back 0)"
-    assert results["reconcile"] == results["maintain"] == results["relatedness"] == "ok"
+    assert results["reconcile"] == "ok (re-parented 0)"
+    assert results["maintain"] == results["relatedness"] == "ok"
 
 
 def test_archive_leg_names_moved_and_held_counts(monkeypatch):
@@ -468,6 +503,10 @@ def test_install_renders_a_daily_plist_at_the_requested_hour():
     # RunAtLoad false: installing at 4pm must not fire a pass immediately.
     assert "<key>RunAtLoad</key>\n  <false/>" in xml
     assert "backlog" in xml and "groom" in xml
+    # ProcessType Standard (x-c79d): the positive read is the control for the
+    # negative one below.
+    assert "<key>ProcessType</key>\n  <string>Standard</string>" in xml
+    assert "<string>Background</string>" not in xml
 
 
 def test_install_escapes_a_binary_path_that_would_break_the_xml():
@@ -570,6 +609,13 @@ def test_every_mechanical_leg_exists_on_the_real_cli():
     ctx = click.Context(root)
 
     for name, args in G._mechanical_legs(14):
+        if name == "reconcile":
+            # Retired python leaf: the native door serves the leg's argv.
+            from tests._native_door import run_native
+
+            code, out, err = run_native("backlog", args[0], "--help")
+            assert code == 0, f"`fno backlog {args[0]}` does not exist natively ({name} leg)"
+            continue
         cmd = root.get_command(ctx, args[0])
         assert cmd is not None, f"`fno backlog {args[0]}` does not exist ({name} leg)"
 
@@ -716,6 +762,64 @@ def test_refresh_survives_a_corrupt_plist(tmp_path, monkeypatch):
     assert r["hour"] == G.GROOM_HOUR_DEFAULT
 
 
+# ── unchanged refresh must not re-register ─────────────────────────────────
+# macOS posts a background-activity notice on every launchd re-registration,
+# so a refresh whose rendered bytes match the installed plist must skip the
+# bootstrap entirely.
+
+
+def test_refresh_with_unchanged_bytes_skips_rebootstrapping(tmp_path, monkeypatch):
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "platform", "darwin")
+    monkeypatch.setattr("fno.paths.resolve_repo_root", lambda: Path("/repo/footnote"))
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fno")
+    bounces: list = []
+    monkeypatch.setattr(
+        "fno.pr_watch._install.bounce", lambda **kw: bounces.append(kw) or ("ok", 0)
+    )
+
+    first = G.install_groom_agent(launch_agents_dir=tmp_path, fno_binary="/bin/fno")
+    second = G.refresh_groom_agent(launch_agents_dir=tmp_path)
+
+    assert first["status"] == "installed"
+    assert second["status"] == "unchanged"
+    assert len(bounces) == 1, "the refresh must not re-register an unchanged agent"
+
+
+def test_refresh_still_reregisters_when_the_binary_changes(tmp_path, monkeypatch):
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "platform", "darwin")
+    monkeypatch.setattr("fno.paths.resolve_repo_root", lambda: Path("/repo/footnote"))
+    monkeypatch.setattr("fno.pr_watch._install.bounce", lambda **kw: ("ok", 0))
+
+    G.install_groom_agent(launch_agents_dir=tmp_path, fno_binary="/old/fno")
+    monkeypatch.setattr("shutil.which", lambda _: "/new/fno")
+    r = G.refresh_groom_agent(launch_agents_dir=tmp_path)
+
+    assert r["status"] == "installed"
+    assert "/new/fno" in (tmp_path / f"{G.GROOM_LABEL}.plist").read_text()
+
+
+def test_default_groom_path_is_caller_independent(tmp_path, monkeypatch):
+    """No install_path -> fixed default, never the caller's environment."""
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "platform", "darwin")
+    monkeypatch.setattr("fno.paths.resolve_repo_root", lambda: Path("/repo/footnote"))
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fno")
+    monkeypatch.setattr("fno.pr_watch._install.bounce", lambda **kw: ("ok", 0))
+    monkeypatch.setenv(
+        "PATH", "/var/run/com.apple.security.cryptexd/codex.system/usr/bin"
+    )
+
+    G.install_groom_agent(launch_agents_dir=tmp_path, fno_binary="/bin/fno")
+    xml = (tmp_path / f"{G.GROOM_LABEL}.plist").read_text()
+
+    assert "cryptexd" not in xml
+
+
 # ── freshness predicate (x-1c7b) ────────────────────────────────────────────
 #
 # The alarm and the SessionStart fallback both read this, so its three states
@@ -723,77 +827,44 @@ def test_refresh_survives_a_corrupt_plist(tmp_path, monkeypatch):
 # could not be read at all.
 
 
-def _write_marker(directory: Path, day: str, age_hours: float) -> Path:
-    from fno.claims.io import encode_key
+def _mark(day: str) -> None:
+    from fno.claims import acquire_claim
 
-    directory.mkdir(parents=True, exist_ok=True)
-    marker = directory / f"{encode_key(f'groom:{day}')}.lock"
-    marker.write_text("holder: test\n")
-    stamp = time.time() - age_hours * 3600.0
-    os.utime(marker, (stamp, stamp))
-    return marker
+    acquire_claim(f"groom:{day}", "groom:test", ttl_ms=G._GROOM_TTL_MS)
 
 
-def test_staleness_reads_a_live_marker(claims_root):
-    _write_marker(claims_root / ".fno" / "claims", "2026-07-19", 6.0)
+def test_staleness_reads_the_newest_marker_row(claims_root):
+    from fno.claims import acquire_claim
 
-    state, hours = G.groom_staleness()
+    _mark("2026-07-18")
+    _mark("2026-07-19")
+    acquire_claim("node:x-1c7b", "other")
+
+    state, hours = G.groom_staleness(now=time.time() + 6 * 3600)
     assert state == "ran"
     assert 5.9 < hours < 6.1
-
-
-def test_staleness_reads_a_marker_archived_to_expired(claims_root):
-    """A recovered marker moves to .expired/; the pass still ran."""
-    _write_marker(claims_root / ".fno" / "claims" / ".expired", "2026-07-18", 30.0)
-
-    state, hours = G.groom_staleness()
-    assert state == "ran", "an archived marker is still proof the pass ran"
-    assert 29.0 < hours < 31.0
-
-
-def test_staleness_takes_the_newest_across_both_dirs(claims_root):
-    claims = claims_root / ".fno" / "claims"
-    _write_marker(claims / ".expired", "2026-07-15", 96.0)
-    _write_marker(claims, "2026-07-19", 3.0)
-
-    state, hours = G.groom_staleness()
-    assert state == "ran"
-    assert hours < 4.0
-
-
-def test_staleness_ignores_unrelated_claim_keys(claims_root):
-    from fno.claims.io import encode_key
-
-    claims = claims_root / ".fno" / "claims"
-    claims.mkdir(parents=True)
-    (claims / f"{encode_key('node:x-1c7b')}.lock").write_text("holder: other\n")
-
-    assert G.groom_staleness() == ("never", None)
 
 
 def test_staleness_is_never_when_nothing_ever_ran(claims_root):
     assert G.groom_staleness() == ("never", None)
 
 
-def test_staleness_is_unknown_when_the_root_cannot_be_read(claims_root, monkeypatch):
+def test_staleness_is_unknown_when_the_table_cannot_be_read(claims_root, monkeypatch):
     """Distinct from "never": collapsing the two would fire on every session."""
-    claims = claims_root / ".fno" / "claims"
-    claims.mkdir(parents=True)
+    import fno.claims.core as core
 
-    def _boom(path):
-        raise PermissionError(13, "Permission denied")
+    def _boom(**_kwargs):
+        raise core.ClaimVerdictError("claims table unreadable")
 
-    monkeypatch.setattr(os, "listdir", _boom)
+    monkeypatch.setattr(core, "list_claims", _boom)
     assert G.groom_staleness() == ("unknown", None)
 
 
 def test_staleness_clamps_a_future_marker_to_zero(claims_root):
     """Clock skew must read as fresh, never as a negative age."""
-    _write_marker(claims_root / ".fno" / "claims", "2026-07-19", -5.0)
+    _mark("2026-07-19")
 
-    state, hours = G.groom_staleness()
-    assert state == "ran"
-    assert hours == 0.0
+    assert G.groom_staleness(now=time.time() - 5 * 3600) == ("ran", 0.0)
 
 
 @pytest.mark.parametrize(
@@ -808,3 +879,4 @@ def test_staleness_clamps_a_future_marker_to_zero(claims_root):
 )
 def test_due_fires_only_past_the_threshold(freshness, due):
     assert G.groom_is_due(freshness) is due
+

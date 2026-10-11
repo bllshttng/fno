@@ -13,9 +13,10 @@
 # The gate IS sharded now. Sharding was deferred until measurement said final
 # merge latency was the bottleneck, and it did: one job ran 2095s, half of it
 # a single pytest step and half a tail serial behind it. So `smoke` no longer
-# runs the suite itself; it aggregates the shard jobs that do. The protection
-# that mattered is unchanged and is asserted below: no shard may stand in for
-# the whole gate, and the aggregator must require EVERY shard to pass.
+# runs the suite itself; it aggregates the eight matrix legs that do. The
+# protection that mattered is unchanged and is asserted below: no shard may
+# stand in for the whole gate, and the aggregator must require EVERY shard to
+# pass.
 #
 # What this guard cannot see is whether the shard selectors still COVER the
 # registry. cli/tests/unit/test_smoke_shards.py owns that, reading the same
@@ -58,10 +59,39 @@ if fails:
     sys.exit(1)
 
 changed, smoke = jobs["changed-smoke"], jobs["smoke"]
+affected = jobs.get("pr-affected")
+check(affected is not None,
+      "the PR affected-job selector exists",
+      "no pr-affected selector gates the full lanes")
+if affected is not None:
+    selector_needs = affected.get("needs")
+    selector_needs = [selector_needs] if isinstance(selector_needs, str) else list(selector_needs or [])
+    check(selector_needs == [],
+          "the selector waits on no job",
+          f"pr-affected needs {selector_needs!r}; a PR's full lanes wait on nothing")
+    check(re.sub(r"[${}\s]", "", str(affected.get("if", ""))) == "!cancelled()",
+          "the selector runs on every event",
+          f"pr-affected has if: {affected.get('if')!r}; push and schedule would skip")
+    selector_run = "\n".join(step.get("run", "") for step in affected.get("steps", []))
+    check("crates/fno-agents/src/bin/pr-affected.rs" in selector_run,
+          "the selector decision logic lives in the Rust crate",
+          "pr-affected does not compile the crate-owned selector")
+    check("GITHUB_OUTPUT" in selector_run,
+          "the selector publishes its lane outputs to GitHub Actions",
+          "pr-affected does not export its lane outputs")
 
-# --- AC8: started together, no dependency edge either way -------------------
-check("needs" not in changed, "changed-smoke has no needs (starts immediately)",
-      f"changed-smoke waits on {changed.get('needs')!r} - that delays first feedback")
+# Changed-subset feedback remains PR-only; main and schedule use the full
+# selector output asserted below.
+check(changed.get("if") == "github.event_name == 'pull_request'",
+      "changed-smoke is PR-only",
+      f"changed-smoke event guard is {changed.get('if')!r}, not pull_request")
+
+# --- AC8: the packet never gates the merge gate, and its one edge is the ---
+# --- sizer, which runs no tests ---------------------------------------------
+# The needs edge used to be forbidden outright, when the cap was fixed and no
+# job had anything a dependency could give the packet. The cap is sized from
+# the packet now, so changed-smoke needs the sizer - and only the sizer: any
+# other edge means some other job's work sits in front of first feedback.
 def _needs(job):
     n = job.get("needs")
     return [n] if isinstance(n, str) else list(n or [])
@@ -83,8 +113,79 @@ check(not _reaches("smoke", "changed-smoke"),
       "changed packet never gates the merge gate",
       "smoke depends on changed-smoke - partial feedback now delays the merge gate")
 
+SIZER = "changed-packet-size"
+check(_needs(changed) == [SIZER],
+      f"changed-smoke's only dependency is the {SIZER} sizer",
+      f"changed-smoke needs {_needs(changed)} - only {SIZER} may sit in front of it")
+if fails:
+    sys.exit(1)
+sizer = jobs[SIZER]
+sizer_run = "\n".join(s.get("run", "") for s in sizer["steps"])
 changed_run = "\n".join(s.get("run", "") for s in changed["steps"])
 smoke_run = "\n".join(s.get("run", "") for s in smoke["steps"])
+
+# The sizer is a measurement, never a runner: selection only, so no suite can
+# hide behind it and its cost stays seconds.
+check("--list" in sizer_run, "the sizer runs selection only (--list)",
+      "the sizer runs more than the --list selection")
+check(sizer.get("if") == "github.event_name == 'pull_request'",
+      "the sizer is PR-only like the job it sizes",
+      f"the sizer event guard is {sizer.get('if')!r}, not pull_request")
+check(sizer.get("steps", [{}])[0].get("with", {}).get("fetch-depth") == 0,
+      "the sizer fetches full history (its diff must resolve)",
+      "the sizer uses a shallow checkout - its estimate would be UNEVALUATED")
+
+# The shard plan has two consumers (the matrix array, the per-leg k/N spec).
+# Two spellings of one number drift independently, and a desync is silent:
+# legs k/1..M against a count N > M never run slice M+1..N, so a fraction of
+# the packet drops out of CI with every check green. Both outputs must read
+# the same $shards source, and the run step must carry both spellings.
+check('echo "shard_count=$shards"' in sizer_run
+      and 'echo "shard_array=$shard_array"' in sizer_run
+      and "range(1, $shards + 1)" in sizer_run,
+      "the shard plan derives one N: array and count share the $shards source",
+      "shard_count and shard_array do not share one source variable - a desync "
+      "drops a slice of the packet from CI with every check green")
+matrix_shard = (changed.get("strategy", {}).get("matrix", {}).get("shard") or "")
+check("fromJSON(needs.changed-packet-size.outputs.shard_array)" in str(matrix_shard),
+      "the changed-smoke matrix is the sizer's shard array",
+      f"the matrix shard is {matrix_shard!r} - legs must come from the sizer")
+check("--shard" in changed_run and "matrix.shard" in changed_run
+      and "shard_count" in changed_run,
+      "each leg runs its k/N slice from the same sizer outputs",
+      "the packet run does not pass --shard k/N from the matrix and sizer count")
+
+# The ceiling must come from the sizer, spelled the same way in both places it
+# is consumed: the job's own timeout and the env the steps read. Two spellings
+# of one number drift independently.
+check(changed.get("timeout-minutes")
+      == "${{ fromJSON(needs.changed-packet-size.outputs.timeout_minutes) }}",
+      "the changed-smoke timeout is the sizer's ceiling",
+      f"changed-smoke timeout-minutes is {changed.get('timeout-minutes')!r} - it must be "
+      "the sizer's timeout_minutes")
+env = changed.get("env") or {}
+check(env.get("CAP_MINUTES") == "${{ needs.changed-packet-size.outputs.timeout_minutes }}",
+      "CAP_MINUTES is the same sizer output the timeout consumes",
+      f"CAP_MINUTES is {env.get('CAP_MINUTES')!r} - the cap now lives in two spellings")
+
+# The fit gate: a packet that cannot fit its ceiling must not run - the cap
+# kill would report a bare `cancelled`, and a partial packet earns no verdict.
+# The oversized branch takes the rc-20 exit: it prints the comparison and
+# defers to the full smoke job, which gates every PR. Whole-repo PRs (a
+# tree-wide cleanup, a mass rename) map most of the tree, and splitting the
+# PR changes nothing - each half still maps the same packet - so the old
+# fail-the-PR shape had no exit for work the repo needs.
+fit = [ln for ln in changed_run.splitlines()
+       if "ESTIMATE_MINUTES" in ln and "CAP_MINUTES" in ln]
+check(bool(fit),
+      "a named fit comparison cites estimate and cap before the packet runs",
+      "no fit comparison compares ESTIMATE_MINUTES against CAP_MINUTES - "
+      "an oversized packet would die at the cap, reported as cancelled")
+deferred = [ln for ln in changed_run.splitlines() if "DEFERRED" in ln]
+check(bool(deferred),
+      "an oversized packet defers to the full smoke gate by name",
+      "the fit branch neither runs the packet nor names the full-gate deferral - "
+      "an oversized packet's outcome is unattributable")
 
 # --- the changed job runs the packet, with explicit revisions ---------------
 check("--changed" in changed_run, "changed-smoke invokes the --changed packet",
@@ -95,6 +196,33 @@ check("--base" in changed_run and "--head" in changed_run,
 check(changed.get("steps", [{}])[0].get("with", {}).get("fetch-depth") == 0,
       "changed-smoke fetches full history (the base must resolve)",
       "changed-smoke uses a shallow checkout - the base cannot resolve")
+
+# Full test lanes follow the crate-owned affected selector. The existing
+# integration job is already sharded; this change only routes its eligibility.
+# Each if also carries !cancelled(): the sizer above is PR-only, so on a push
+# it skips and GitHub's implicit success() would skip every transitive
+# dependent with it - main would run no tests.
+for name in ("smoke-pytest", "smoke-rest"):
+    job_if = str(jobs[name].get("if", ""))
+    check("needs.pr-affected.outputs.python_full" in job_if
+          and "!cancelled()" in job_if,
+          f"{name} follows the Python full-suite selector over the implicit success gate",
+          f"{name} has if: {jobs[name].get('if')!r}")
+for name in ("hook-latency", "test-agents", "test-agents-integration", "test-mux"):
+    job = jobs[name]
+    needs = job.get("needs")
+    needs = [needs] if isinstance(needs, str) else list(needs or [])
+    job_if = str(job.get("if", ""))
+    check("needs.pr-affected.outputs.cargo" in job_if
+          and "!cancelled()" in job_if
+          and "pr-affected" in needs,
+          f"{name} follows the Cargo affected selector over the implicit success gate",
+          f"{name} has if: {job.get('if')!r} and needs {needs!r}")
+needs_agents = jobs["test-agents"].get("needs")
+needs_agents = [needs_agents] if isinstance(needs_agents, str) else list(needs_agents or [])
+check("smoke-pytest" not in needs_agents,
+      "test-agents starts independently of pytest",
+      "test-agents still waits behind smoke-pytest")
 
 # --- the changed job may not produce FULL evidence --------------------------
 for forbidden, why in (
@@ -113,17 +241,19 @@ bare_full = any(
 check(not bare_full, "changed-smoke never runs an unlabelled full smoke",
       "changed-smoke runs a full smoke under the partial job's name")
 
-# --- the merge gate still covers the whole suite ----------------------------
-# `smoke` is the required check. It either runs the suite itself, or it
-# aggregates the jobs that do. Resolve which, then assert against THOSE jobs -
-# the old checks read smoke's own run block, and once the work moved to the
-# shards they kept printing ok while asserting nothing about what CI ran.
-gate_shards = _needs(smoke)
-if gate_shards:
-    runner_jobs = {n: jobs[n] for n in gate_shards if n in jobs}
-    check(len(runner_jobs) == len(gate_shards),
+# --- the selected full lane still covers the whole suite --------------------
+# `smoke` is the required check. When the selector requires full coverage, it
+# either runs the suite itself or aggregates the jobs that do. Resolve which,
+# then assert against THOSE jobs; the old checks read smoke's own run block,
+# and once the work moved to shards they asserted nothing about CI's coverage.
+gate_dependencies = _needs(smoke)
+gate_shards = [name for name in gate_dependencies if name != "pr-affected"]
+if gate_dependencies:
+    all_gate_jobs = {n: jobs[n] for n in gate_dependencies if n in jobs}
+    check(len(all_gate_jobs) == len(gate_dependencies),
           "every job the gate needs exists",
-          f"smoke needs {sorted(set(gate_shards) - set(runner_jobs))}, which do not exist")
+          f"smoke needs {sorted(set(gate_dependencies) - set(all_gate_jobs))}, which do not exist")
+    runner_jobs = {n: jobs[n] for n in gate_shards if n in jobs}
 else:
     runner_jobs = {"smoke": smoke}
 
@@ -152,6 +282,10 @@ for name, job in sorted(runner_jobs.items()):
 # that checks all three.
 if gate_shards:
     gate_run = "\n".join(st.get("run", "") for st in smoke.get("steps", []))
+    check("needs.pr-affected.outputs.python_full" in gate_run
+          and "pull_request" in gate_run and "skipped" in gate_run,
+          "smoke accepts skipped shards only for selector-skipped PR lanes",
+          "smoke does not tie a skipped result to the PR selector")
     for name in sorted(gate_shards):
         marker = "needs." + name + ".result"
         # Both on the SAME line. The gate echoes every shard result for the
@@ -174,6 +308,18 @@ if gate_shards:
           f"smoke has if: {smoke.get('if')!r} - it must be !cancelled(): omitted, "
           "GitHub skips it when a shard fails and a skipped required check does "
           "not block; always(), it publishes a red check for a cancelled run")
+
+test_job = jobs.get("test") or {}
+test_run = "\n".join(step.get("run", "") for step in test_job.get("steps", []))
+check("needs.pr-affected.outputs.cargo" in test_run
+      and "pull_request" in test_run and "skipped" in test_run,
+      "the Cargo aggregator accepts selector-skipped PR jobs only",
+      "the Cargo aggregator does not bind skipped results to a PR selector")
+
+events = wf.get("on", wf.get(True, {})) or {}
+check("schedule" in events,
+      "cli-ci has a nightly full-suite trigger",
+      "cli-ci has no scheduled full-suite trigger")
 
 sys.exit(1 if fails else 0)
 PY

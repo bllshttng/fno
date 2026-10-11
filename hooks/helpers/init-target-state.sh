@@ -9,7 +9,7 @@
 # (done via `fno do state set --field plan_path` after blueprint resolves it).
 # No gate booleans, status, phase, iteration, or mutable tracking lists are
 # written here. All control-plane decisions live in fno-agents loop-check.
-# See: ab-d0337fbc (control-plane collapse wedge).
+# See: (control-plane collapse wedge).
 #
 # TRIGGER GUARDS
 # --------------
@@ -22,20 +22,58 @@
 
 set -euo pipefail
 
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-STATE_FILE="$REPO_ROOT/.fno/target-state.md"
+
+# HOME-as-repo guard (law d-8ddaba56): a session whose cwd is $HOME outside
+# git has no checkout to bind, and the degraded fallbacks below would write
+# at the top level of the state root. Skip: no manifest is owed when the
+# "checkout" is the machine itself.
+_git_toplevel=$(git rev-parse --show-toplevel 2>/dev/null || true)
+_state_dir_phys=$(cd "${FNO_HOME:-$HOME/.fno}" 2>/dev/null && pwd -P || true)
+_repo_fno_phys=$(cd "$REPO_ROOT/.fno" 2>/dev/null && pwd -P || true)
+if [[ -z "$_git_toplevel" ]] \
+    || [[ -n "$_state_dir_phys" && "$_repo_fno_phys" == "$_state_dir_phys" ]]; then
+  exit 0
+fi
+
+# Project state files resolve through the owning verb (the repo's space under
+# ~/.fno/spaces/, keyed on the canonical root). Degraded fallback for an fno
+# predating the verb: the legacy checkout path, spelled with its real filename.
+_space_state_path() {
+  local p
+  p=$(fno-agents state path "$1" 2>/dev/null || true)
+  if [[ -z "$p" ]]; then
+    case "$1" in
+      target-state) p="$REPO_ROOT/.fno/target-state.md" ;;
+      events)       p="$REPO_ROOT/.fno/events.jsonl" ;;
+      scratchpad)   p="$REPO_ROOT/.fno/scratchpad" ;;
+      *)            p="$REPO_ROOT/.fno/$1" ;;
+    esac
+  fi
+  printf '%s\n' "$p"
+}
+
+STATE_FILE=$(_space_state_path target-state)
 STATE_DIR="$(dirname "$STATE_FILE")"
 
-# Guard: only run when the target skill explicitly asked for init.
-if [[ "${TARGET_START:-}" != "1" ]] && [[ ! -f "$STATE_DIR/.target-starting" ]]; then
+# Guard: only run when the target skill explicitly asked for init. The legacy
+# sentinel sat beside the old checkout path; check both during the fallback
+# window so an old skill body still triggers.
+if [[ "${TARGET_START:-}" != "1" ]] \
+   && [[ ! -f "$STATE_DIR/.target-starting" ]] \
+   && [[ ! -f "$REPO_ROOT/.fno/.target-starting" ]]; then
   exit 0
 fi
 
 # Consume both triggers so a single trigger fires at most once.
 unset TARGET_START
-rm -f "$STATE_DIR/.target-starting"
+rm -f "$STATE_DIR/.target-starting" "$REPO_ROOT/.fno/.target-starting" 2>/dev/null || true
 
-# ── Review-capability gate on the unwrapped path (x-4a60) ────────────
+# ── Review-capability gate on the unwrapped path ────────────
 # `fno do target init` runs both review refusals in-process and says so with
 # FNO_TARGET_INIT_GATED; the direct path SKILL.md documents never ran them, so
 # a typo'd config.review.github_apps login started a full run and surfaced only
@@ -71,7 +109,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
       echo "[init-target-state] REFUSED: dispatch hold gate unavailable (rc=$_DH_RC); refusing to assume unheld. Run \`fno doctor --fix\` and retry." >&2
       exit 2
     fi
-    # Containment gate (x-e957), same seam and same rc idiom. A node carrying
+    # Containment gate, same seam and same rc idiom. A node carrying
     # `contained_in` ships inside another node's PR, and this script acquires
     # the claim and writes the manifest - so bootstrapping one here opens the
     # second PR for one plan that the invariant exists to prevent. Its own verb
@@ -96,9 +134,15 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # shapes that cannot (spaced free text, a single word) proceed. A 4-8
     # char all-hex word (cafe, dead) collides with bare-hex and refuses too -
     # the fail-closed direction this branch exists for.
+    # Legacy rows can also compact the project prefix and hex suffix.
     _HOLD_CHECK_REQUIRED=0
     [[ -n "${TARGET_PLAN_PATH:-}" ]] && _HOLD_CHECK_REQUIRED=1
-    [[ "${TARGET_INPUT:-}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*-[0-9a-fA-F]{4,8}$ ]] \
+    # The dash is optional (prefix "x" minted dash-less literals before the
+    # mint normalized); a shape that might name a node refuses when the hold
+    # gate cannot check it - fail-closed, like the bare-hex word below.
+    [[ "${TARGET_INPUT:-}" =~ ^[a-zA-Z][a-zA-Z0-9_-]*-?[0-9a-fA-F]{4,8}$ ]] \
+      && _HOLD_CHECK_REQUIRED=1
+    [[ "${TARGET_INPUT:-}" =~ ^[a-zA-Z][a-zA-Z0-9]{0,7}[0-9a-fA-F]{4,8}$ ]] \
       && _HOLD_CHECK_REQUIRED=1
     [[ "${TARGET_INPUT:-}" =~ ^[0-9a-fA-F]{4,8}$ ]] \
       && _HOLD_CHECK_REQUIRED=1
@@ -175,7 +219,7 @@ Pick ONE:
   3) Genuinely intend to target on $_TARGET_DESC (rare; hotfix-on-trunk):
        TARGET_LOCATION_OK=main-acknowledged <re-run your target command>
 
-Refusing to write state file. See backlog ab-efcde945 for context.
+Refusing to write state file. See backlog for context.
 EOF
       exit 1
     fi
@@ -203,6 +247,8 @@ detect_provider() {
     echo "codex"
   elif [[ "${GEMINI_SESSION_ID:-}" == *[![:space:]]* ]]; then
     echo "gemini"
+  elif [[ "${OPENCODE_SESSION_ID:-}" == *[![:space:]]* ]]; then
+    echo "opencode"
   elif [[ -n "${CODEX_PLUGIN_ROOT:-}" ]]; then
     echo "codex"
   elif [[ -n "${GEMINI_PROJECT_DIR:-}" ]]; then
@@ -214,7 +260,7 @@ detect_provider() {
 
 # ── has_ui inference (predictive, from plan) ─────────────────────────
 # Delegates to canonical scripts/lib/infer-has-ui.sh so plan-time inference
-# shares the same locked globs as executor routing (ab-15c470cf).
+# shares the same locked globs as executor routing.
 _derive_has_ui_from_plan() {
   local plan_path="${1:-}"
   [[ -z "$plan_path" ]] && { printf 'false'; return 0; }
@@ -282,7 +328,7 @@ esac
 no_external=$( [[ -n "${TARGET_NO_EXTERNAL:-}" ]] && _bool "$TARGET_NO_EXTERNAL" || printf '%s' "$no_external_default" )
 no_docs=$(     [[ -n "${TARGET_NO_DOCS:-}"     ]] && _bool "$TARGET_NO_DOCS"     || printf '%s' "$no_docs_default" )
 no_ship=$(     [[ -n "${TARGET_NO_SHIP:-}"     ]] && _bool "$TARGET_NO_SHIP"     || printf '%s' "$no_ship_default" )
-# batch-lane Wave 2/3 (x-6cdf): a batched member commits to a shared batch branch
+# batch-lane Wave 2/3: a batched member commits to a shared batch branch
 # and ships via the batch PR, not its own. loop-check reads this flag to
 # terminate as DoneBatched (not a hang) on the member's promise. Set by the
 # active-backlog daemon's batched dispatch (TARGET_BATCHED=1); default false.
@@ -311,9 +357,10 @@ fi
 # GLOBAL fno home ($HOME/.fno) - a name collision with this
 # script's project-local STATE_DIR. Re-derive ours or every sentinel/manifest
 # path below silently retargets the global dir (caught by
-# tests/hooks/test_pending_plan_wipe.sh, ab-d0337fbc).
-STATE_FILE="$REPO_ROOT/.fno/target-state.md"
+# tests/hooks/test_pending_plan_wipe.sh).
+STATE_FILE=$(_space_state_path target-state)
 STATE_DIR="$(dirname "$STATE_FILE")"
+SPACE_DIR="$(dirname "$(_space_state_path events)")"
 
 _attended="true"
 if [[ "${TARGET_UNATTENDED:-}" == "1" ]]; then
@@ -358,7 +405,7 @@ fi
 # ── Auto-merge inputs (read-only at init; no mutable tracking lists) ──
 AUTO_MERGE_ENABLED="false"
 AUTO_MERGE_APPROVED="false"
-# Which input set the posture (x-9d11): closed enum
+# Which input set the posture: closed enum
 # config|flag-no-merge|env-target-auto-merge|default-off. Absent on
 # pre-provenance manifests; consumers must render that as `unknown`, never a
 # guessed origin.
@@ -369,10 +416,10 @@ if declare -F get_auto_merge_enabled >/dev/null 2>&1; then
     AUTO_MERGE_ENABLED="false"
   }
 fi
-# The env grant is the OPERATOR's lever (x-3855, codex P1 on PR 1131):
+# The env grant is the OPERATOR's lever (codex P1 on PR 1131):
 # TARGET_AUTO_MERGE reaches a child only by inheritance, and a mesh-spawned
 # worker can export it before init to mint merge authority no config
-# granted. The bar here is the crown's own (cli/src/fno/agents/crown.py:
+# granted. The bar here is the team's own (cli/src/fno/agents/team.py:
 # no FNO_AGENT_SELF = an attended human) plus the unattended derivation,
 # so spawned and unattended runs cannot stamp the grant. The autonomous
 # grant is auto_merge.grant = dispatch, never this variable. Residual,
@@ -380,7 +427,7 @@ fi
 # carries no mesh identity either, and sits inside the operator's trust
 # boundary - the documented carrier of this grant, with the stamp
 # (auto_merge_source) keeping every use auditable. Provenance an env test
-# cannot establish is the x-f3d0 class.
+# cannot establish is the class.
 _AUTO_MERGE_ENV_GRANT="false"
 if [[ "${TARGET_AUTO_MERGE:-}" == "1" ]]; then
   if [[ -z "${FNO_AGENT_SELF:-}" && "$_attended" == "true" ]]; then
@@ -396,14 +443,14 @@ elif [[ "$_AUTO_MERGE_ENV_GRANT" == "true" ]]; then
   AUTO_MERGE_APPROVED="true"
   AUTO_MERGE_SOURCE="env-target-auto-merge"
 elif _is_true "$AUTO_MERGE_ENABLED"; then
-  # The who-may-merge gate (allowed_invokers) was removed (x-04ab): auto-merge
+  # The who-may-merge gate (allowed_invokers) was removed: auto-merge
   # is approved whenever it is `enabled`, gated further by the merge command's
   # own CI-green / external-review / stub-manifest guards.
   AUTO_MERGE_APPROVED="true"
   AUTO_MERGE_SOURCE="config"
 fi
-# Posture is flag/env/config only (x-9d11): free text in INITIAL_INPUT is NOT a
-# control input. Grants were hardened against prose by x-51a3; refusals match
+# Posture is flag/env/config only: free text in INITIAL_INPUT is NOT a
+# control input. Grants were hardened against prose by; refusals match
 # here. A brief that says no-merge must reach --no-merge on `fno do target
 # start/init` to take effect - attributable, not parsed out of prose.
 # An EXPLICIT config refusal is still `config`, not `default-off`: the operator
@@ -415,9 +462,11 @@ if [[ "$AUTO_MERGE_SOURCE" == "default-off" ]] && declare -F get_config >/dev/nu
   [[ -n "$_am_set" ]] && AUTO_MERGE_SOURCE="config"
 fi
 # The legacy interactive spelling gets a LOUD no-op, never a quiet one: prose
-# still manufactures nothing (that is x-9d11's whole point), but an operator
-# typing the pre-x-9d11 bare token deserves to learn their refusal did not
-# land rather than discover it from a merged PR. Warn-only by design.
+# still manufactures nothing (that is whole point), but an operator
+# typing the pre-change bare token deserves to learn their refusal did not
+# land rather than discover it from a merged PR. Warn-only by design; the
+# carrier vocabulary's owner is harness_map (_TARGET_FAMILY and the flag
+# spelling), not this script.
 if [[ " ${INITIAL_INPUT:-} " == *" no-merge "* ]]; then
   echo "[init-target-state] note: input contains a bare 'no-merge' token, which is no longer a control input - it set nothing. Pass --no-merge to 'fno do target start/init' for the refusal posture." >&2
 fi
@@ -516,10 +565,10 @@ if ! _init_acquire_lock; then
 fi
 trap _init_release_lock EXIT
 
-# ── Contested-liveness activity probe (x-ba4b) ───────────────────────
+# ── Contested-liveness activity probe ───────────────────────
 # The steal guard for the stale-session archive below. A free/stale node claim
 # is NOT sufficient to archive a prior manifest and reclaim: the observed bug
-# (x-e780) was a live session working under a dead supervisor pid whose claim
+# was a live session working under a dead supervisor pid whose claim
 # read non-live, then got archived+stolen. This probe asks the second question:
 # does the worktree show FRESH activity? Newest mtime among git-tracked-modified
 # files + the .fno/scratchpad tree (a live /target writes there continuously).
@@ -532,7 +581,7 @@ trap _init_release_lock EXIT
 # cwd'd in the worktree, so it would false-positive on every run and strand
 # genuinely-dead nodes. mtime measures actual work, not mere presence.
 # Validate the env override is a bare integer (seconds); a non-numeric value
-# like "15m" or "abc" must NOT reach the `(( now - newest < window ))` arithmetic
+# like "15m" or "abc" must NOT reach the `((now - newest < window ))` arithmetic
 # (it would abort under set -u). Fall through to config, then the 900s default.
 _ACTIVITY_WINDOW="${TARGET_CLAIM_ACTIVITY_WINDOW:-}"
 if ! [[ "$_ACTIVITY_WINDOW" =~ ^[0-9]+$ ]]; then
@@ -545,7 +594,7 @@ _ACTIVITY_EVIDENCE=""
 _stat_mtime() {  # portable epoch-seconds mtime; 0 if absent/unreadable
   # GNU first: GNU stat reads -f as --file-system, so a BSD-first spelling
   # SUCCEEDS there printing prose instead of a number, which then aborts the
-  # (( mt > newest )) arithmetic under set -u. BSD stat rejects -c and falls
+  # ((mt > newest )) arithmetic under set -u. BSD stat rejects -c and falls
   # through. The numeric guard keeps the "unreadable reads as 0" contract.
   local m
   m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
@@ -562,13 +611,18 @@ _worktree_has_fresh_activity() {
     mt="$(_stat_mtime "$root/$f")"
     if (( mt > newest )); then newest="$mt"; _ACTIVITY_EVIDENCE="modified $f"; fi
   done < <(git -C "$root" diff --name-only HEAD 2>/dev/null || true)
-  # scratchpad tree - a live /target session writes here continuously.
-  if [[ -d "$root/.fno/scratchpad" ]]; then
+  # scratchpad tree - a live /target session writes here continuously. It
+  # lives in the worktree slice of the repo's space; fall back to the legacy
+  # checkout path for an fno predating the verb.
+  local spad
+  spad="$(cd "$root" 2>/dev/null && fno-agents state path scratchpad 2>/dev/null || true)"
+  [[ -z "$spad" ]] && spad="$root/.fno/scratchpad"
+  if [[ -d "$spad" ]]; then
     while IFS= read -r f; do
       [[ -z "$f" ]] && continue
       mt="$(_stat_mtime "$f")"
       if (( mt > newest )); then newest="$mt"; _ACTIVITY_EVIDENCE="scratchpad ${f##*/}"; fi
-    done < <(find "$root/.fno/scratchpad" -type f 2>/dev/null || true)
+    done < <(find "$spad" -type f 2>/dev/null || true)
   fi
   # AC1-EDGE: borderline mtimes err toward "fresh" (skip is cheap, steal is not)
   # via strict `<` against the window, and clock skew that makes a file appear in
@@ -616,9 +670,9 @@ if [[ -f "$STATE_FILE" ]]; then
   # manifest session with a completed reason. Budget/stuck finalizations remain
   # resumable, and malformed or unreadable logs preserve the manifest.
   if [[ -z "$_STALE_REASON" && -z "$_STALE_CLAIM_KEY" \
-        && -n "$_STALE_SESSION_ID" && -f "$STATE_DIR/events.jsonl" \
+        && -n "$_STALE_SESSION_ID" && -f "$SPACE_DIR/events.jsonl" \
         && -x "$(command -v python3 2>/dev/null || true)" ]]; then
-    if python3 - "$STATE_DIR/events.jsonl" "$_STALE_SESSION_ID" "$STATE_DIR/.target-cancelled" <<'PYEOF'
+    if python3 - "$SPACE_DIR/events.jsonl" "$_STALE_SESSION_ID" "$REPO_ROOT/.fno/.target-cancelled" <<'PYEOF'
 import json
 import sys
 from pathlib import Path
@@ -665,8 +719,8 @@ PYEOF
   fi
   if [[ -z "$_STALE_REASON" && -n "$_STALE_CLAIM_KEY" ]]; then
     # `fno agents claim status --json` is single-line; parse `state`. The reap decision
-    # is now two-factor (x-ba4b), because a not-live claim ALONE is not proof the
-    # slot is abandoned - the bug (x-e780) was a live session under a dead pid:
+    # is now two-factor, because a not-live claim ALONE is not proof the
+    # slot is abandoned - the bug was a live session under a dead pid:
     #   live | suspect -> preserve. The claim is protected (suspect = TTL-
     #     unexpired dead pid, a respawned worker); never archive+steal.
     #   "" (error/unparseable) -> preserve (degrade-safe; do NOT reap on a bad
@@ -707,6 +761,88 @@ PYEOF
     echo "target: prior session ($_STALE_REASON); archived to $(basename "$_ARCHIVE_PATH"); writing fresh state" >&2
   fi
   unset _STALE_STATUS _STALE_CLAIM_KEY _STALE_SESSION_ID _STALE_REASON _CLAIM_STATE _ARCHIVE_PATH
+fi
+
+# ── Foreign-manifest refusal ────────────────────────────────
+# A manifest that survived the preserves above may still belong to a stranger.
+# The manifest-exists branch below serves resume, but resume and stranger both
+# look like "the file is there": a stranger used to be told "leaving unchanged"
+# and left without a node claim, so the board read the node free while another
+# worker built on it - the dup-PR trap. The manifest names its run (fno_id),
+# so init can tell the two apart before anything mutates: the manifest's
+# fno_id must be this run's (TARGET_SESSION_ID, what drivers and successors
+# thread), or the harness session that wrote it must be this one (a plain
+# same-session re-init has no run id yet but the same transcript identity).
+# An unreadable fno_id refuses by its own reason: absence is never a match.
+# The repair names the recovery primitive that already exists and is proven on
+# this exact case - archive the foreign manifest, re-init, and the node claim
+# is taken fresh.
+# Scoped to a VALID manifest: only a parseable one names its run, so it is the
+# only file that can prove or refuse ownership. A corrupt file proves nothing
+# about ownership and keeps today's self-healing (the corrupt-archive below).
+if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
+  _FM_FNO_ID="$(sed -n '/^fno_id:[[:space:]]*/{s/^fno_id:[[:space:]]*//p;q;}' "$STATE_FILE" | tr -d '"' | xargs 2>/dev/null || true)"
+  _FM_CREATED_AT="$(sed -n '/^created_at:[[:space:]]*/{s/^created_at:[[:space:]]*//p;q;}' "$STATE_FILE" | tr -d '"' | xargs 2>/dev/null || true)"
+  _FM_HSID="$(sed -n '/^harness_session_id:[[:space:]]*/{s/^harness_session_id:[[:space:]]*//p;q;}' "$STATE_FILE" | tr -d '"' | xargs 2>/dev/null || true)"
+  _FM_CUR_ID="${TARGET_SESSION_ID:-}"
+  _FM_OURS=""
+  if [[ -n "$_FM_FNO_ID" && -n "$_FM_CUR_ID" && "$_FM_FNO_ID" == "$_FM_CUR_ID" ]]; then
+    _FM_OURS=1
+  fi
+  # Same-harness-session rescue: a re-invocation from the session that wrote
+  # the manifest keeps today's resume path. Both sides must be non-empty, so a
+  # manifest recorded as `null` never matches an unset env (absence is not a
+  # match here either).
+  if [[ -z "$_FM_OURS" ]]; then
+    for _fm_pair in \
+      "claude_session_id:${TARGET_TRANSCRIPT_ID:-${CLAUDE_CODE_SESSION_ID:-}}" \
+      "codex_thread_id:${CODEX_THREAD_ID:-}" \
+      "harness_session_id:${GEMINI_SESSION_ID:-}" \
+      "harness_session_id:${OPENCODE_SESSION_ID:-}"; do
+      _fm_field="${_fm_pair%%:*}"
+      _fm_env="${_fm_pair#*:}"
+      if [[ -n "$_fm_env" ]]; then
+        _fm_val="$(sed -n "/^${_fm_field}:[[:space:]]*/{s/^${_fm_field}:[[:space:]]*//p;q;}" "$STATE_FILE" | tr -d '"' | xargs 2>/dev/null || true)"
+        if [[ -n "$_fm_val" && "$_fm_val" == "$_fm_env" ]]; then
+          _FM_OURS=1
+          break
+        fi
+      fi
+    done
+    unset _fm_pair _fm_field _fm_env _fm_val
+  fi
+  if [[ -z "$_FM_OURS" && -z "$_FM_FNO_ID" && -z "${_FM_HSID#null}" ]]; then
+    # A manifest that names NO id (no readable fno_id, no harness session)
+    # cannot be adjudicated: nothing proves it foreign, and the degrade rule
+    # this file already follows preserves what it cannot read. Hand-seeded
+    # resumes and pre-fno_id manifests keep today's path. Any manifest that
+    # NAMES an id no caller matched still refuses below - an unreadable id is
+    # never treated as a match.
+    _FM_OURS=1
+  fi
+  if [[ -z "$_FM_OURS" ]]; then
+    _FM_CUR_HARNESS="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-<none proven>}}}}"
+    {
+      echo "[init-target-state] REFUSED: foreign session manifest at $STATE_FILE."
+      if [[ -n "$_FM_FNO_ID" ]]; then
+        echo "  manifest fno_id: ${_FM_FNO_ID}${_FM_CREATED_AT:+ (created_at ${_FM_CREATED_AT})}"
+        echo "  manifest harness_session_id: ${_FM_HSID:-<null>}"
+      else
+        echo "  manifest fno_id: <unreadable or absent> - an unreadable id is never treated as a match"
+      fi
+      echo "  this run: ${_FM_CUR_ID:-<no run id minted yet>}, harness session ${_FM_CUR_HARNESS}"
+      echo ""
+      echo "The manifest belongs to another target run. Refusing to skip its node"
+      echo "claim silently: a skipped claim leaves the node reading free and invites"
+      echo "a second worker onto the same branch."
+      echo ""
+      echo "If this manifest is stale, archive it and re-run init; the claim is"
+      echo "taken fresh:"
+      echo "  fno do state archive --path \"$STATE_FILE\""
+    } >&2
+    exit 1
+  fi
+  unset _FM_FNO_ID _FM_CREATED_AT _FM_HSID _FM_CUR_ID _FM_CUR_HARNESS _FM_OURS
 fi
 
 # ── Scratchpad scaffolding ────────────────────────────────────────────
@@ -788,7 +924,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     fi
   fi
 
-  # ── in_review dispatch guard (x-2dc5) ─────────────────────────────
+  # ── in_review dispatch guard ─────────────────────────────
   # A FRESH named-node dispatch (/target <id>, fno do target start <id>, direct
   # init) must not re-launch a node that already carries an open, unmerged PR
   # (derives status == in_review) - it would redo shipped work and race a
@@ -797,11 +933,9 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # existing-state are exempt. Runs BEFORE the manifest write so a refusal
   # leaves no stub for the stop hook to archive. The live-double-dispatch case
   # is already caught by the claim acquire below; this closes the dead-prior-
-  # session, PR-still-open gap the free claim does not. Fail-open: refuse only
-  # on an exact in_review read - any error/empty/other-status proceeds
-  # unchanged. _GRAPH_FILE is hoisted here (was defined in the claim block).
-  # GRAPH_JSON_PATH (config.sh's shell-stub) honors config.paths.graph_json; fall back to the default (as scripts/lib/graph-resolve.sh does).
-  _GRAPH_FILE="${GRAPH_JSON_PATH:-${HOME}/.fno/graph.json}"
+  # session, PR-still-open gap the free claim does not. This block only
+  # resolves the node; the binding verdict below is native. Graph reads run
+  # through the shipped verbs; no resolver here opens the store file.
   _GUARD_NODE=""
   _GUARD_MATCHES=""   # space-joined distinct id-shaped tokens that ARE graph nodes
   _GUARD_AMBIGUOUS=0
@@ -838,12 +972,15 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # exempt; the one-liner would abort init on every host without fno.
   if command -v fno >/dev/null 2>&1; then
   for _tok in $INITIAL_INPUT; do
-    [[ "$_tok" =~ ^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$ ]] || continue
+    # Any id shape the graph confirms counts: canonical, compact dash-less
+    # (the pre-2026-09-27 minter shape), bare hex, or a dashed alias of a
+    # compact id. The strict lookup below proves the token names a node.
+    [[ "$_tok" =~ ^[a-z][a-z0-9]{0,7}(-?[0-9a-f]{4,8})$ ]] || continue
     case " $_GUARD_MATCHES " in
-      *" $_tok "*) continue ;;  # already counted this distinct id
+      *" $_tok "*|*" ${_tok%-*} "*) continue ;;  # already counted this id
     esac
     # `&& rc=0 || rc=$?` keeps this set -e safe: a bare failing assignment aborts.
-    _tok_probe="$(fno backlog get --strict "$_tok" --field _archived 2>/dev/null | tr -d '[:space:]')" \
+    _tok_probe="$(fno backlog get "$_tok" --strict --field _archived 2>/dev/null | tr -d '[:space:]')" \
       && _probe_rc=0 || _probe_rc=$?
     if [[ "$_probe_rc" -ne 0 ]]; then
       # 1 is the only "read cleanly, node absent" code; anything else means the
@@ -854,7 +991,10 @@ if [[ ! -f "$STATE_FILE" ]]; then
     # Archived is not live work: the node is gone from the working graph, so the
     # claim and the graph_node_id stamp below would both point at nothing.
     [[ "$_tok_probe" == "True" ]] && continue
-    _GUARD_MATCHES="${_GUARD_MATCHES:+$_GUARD_MATCHES }$_tok"
+    # Canonicalize: the manifest's graph_node_id and the claim key must be the
+    # STORED id, not the spelling the caller typed (xbbbb -> x-bbbb).
+    _tok_canon="$(fno backlog get "$_tok" --strict --field id 2>/dev/null | tr -d '[:space:]')"
+    _GUARD_MATCHES="${_GUARD_MATCHES:+$_GUARD_MATCHES }${_tok_canon:-$_tok}"
   done
   fi
   set +f
@@ -863,29 +1003,37 @@ if [[ ! -f "$STATE_FILE" ]]; then
   elif [[ "$_GUARD_MATCHES" == *" "* ]]; then
     _GUARD_AMBIGUOUS=1
   fi
-  if [[ -n "$_GUARD_NODE" && "${TARGET_ALLOW_IN_REVIEW:-}" != "1" ]]; then
-    _GUARD_STATUS="$(fno backlog get --strict "$_GUARD_NODE" --field status 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$_GUARD_STATUS" == "in_review" ]]; then
-      _GUARD_PR="$(fno backlog get --strict "$_GUARD_NODE" --field pr_number 2>/dev/null | tr -d '[:space:]' || true)"
-      # `--field` prints a literal "null" for an unset field, which ${x:+ #$x}
-      # reads as present and renders as "open PR #null".
-      [[ "$_GUARD_PR" == "null" ]] && _GUARD_PR=""
-      cat >&2 <<EOF
-[init-target-state] REFUSED: node $_GUARD_NODE is in_review (open PR${_GUARD_PR:+ #$_GUARD_PR}).
-
-A fresh /target would redo shipped work and race a second PR against the open one.
-
-Pick ONE:
-  1) Address review on the existing PR:   /pr check
-  2) The PR is stale/abandoned and you really want a fresh run:
-       TARGET_ALLOW_IN_REVIEW=1 <re-run your target command>
-
-Refusing to write state file.
-EOF
-      exit 1
-    fi
+  # Which node this run may bind is decided natively (`fno backlog
+  # target-binding`): continue, adopt the open PR this worktree heads, fork
+  # follow-up scope into a child node, or refuse. `fno do target init` already
+  # asked and passes the verdict down; a direct run asks here. A refusal or a
+  # fork exits before the manifest write, so nothing is claimed.
+  TARGET_ADOPTED_PR="${TARGET_ADOPTED_PR:-}"
+  _BIND_VERDICT="${FNO_TARGET_BINDING:-}"
+  [[ "$_BIND_VERDICT" == "adopt" ]] || TARGET_ADOPTED_PR=""
+  if [[ -n "$_GUARD_NODE" && -z "$_BIND_VERDICT" ]] && command -v fno >/dev/null 2>&1; then
+    _BIND_ALLOW=""
+    [[ "${TARGET_ALLOW_IN_REVIEW:-}" == "1" ]] && _BIND_ALLOW="--allow-in-review"
+    _BIND_OUT="$(fno backlog target-binding --env --phase init --node "$_GUARD_NODE" \
+      --input "$INITIAL_INPUT" $_BIND_ALLOW)" && _bind_rc=0 || _bind_rc=$?
+    _BIND_VERDICT="$(printf '%s\n' "$_BIND_OUT" | sed -n 's/^verdict=//p')"
+    case "$_bind_rc:$_BIND_VERDICT" in
+      0:adopt) TARGET_ADOPTED_PR="$(printf '%s\n' "$_BIND_OUT" | sed -n 's/^pr=//p')" ;;
+      0:continue) ;;
+      1:refused) echo "Refusing to write state file." >&2; exit 1 ;;
+      3:forked) echo "Refusing to write state file in this tree: start the child named above." >&2; exit 3 ;;
+      *)
+        # No verdict (an fno-agents older than this hook): a node that has a
+        # PR still refuses, so a lagging binary never opens the guard.
+        _BIND_PR="$(fno backlog get --strict "$_GUARD_NODE" --field pr_number 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "$_BIND_PR" =~ ^[0-9]+$ ]]; then
+          echo "[init-target-state] REFUSED: node $_GUARD_NODE has PR #$_BIND_PR and fno backlog target-binding gave no verdict (exit $_bind_rc). Run: fno doctor update" >&2
+          exit 1
+        fi
+        echo "target: WARNING: fno backlog target-binding answered exit $_bind_rc (verdict '${_BIND_VERDICT:-none}'); the in_review binding guard is not running for $_GUARD_NODE" >&2 ;;
+    esac
   fi
-  unset TARGET_ALLOW_IN_REVIEW
+  unset TARGET_ALLOW_IN_REVIEW FNO_TARGET_BINDING
 
   # ── Provider + cross-project ──────────────────────────────────────
   CROSS_PROJECT="${TARGET_CROSS_PROJECT:-false}"
@@ -1002,43 +1150,19 @@ EOF
   _HARNESS_MODEL="${TARGET_HARNESS_MODEL:-${CLAUDE_MODEL:-${ANTHROPIC_MODEL:-}}}"
   _HARNESS_EFFORT="${TARGET_HARNESS_EFFORT:-}"
 
-  # session_id: {UTC-timestamp}-{infix}{PPID}-{6 hex chars of /dev/urandom}
-  # ab-7303e5d7: TARGET_SESSION_ID is the absolute override (megawalk walkers
-  # pre-assign it). Otherwise mint one id per target run. CODEX_THREAD_ID is a
-  # durable conversation/claim-owner identity, but reusing it as session_id
-  # would collide with prior loop termination and finalize events when the same
-  # Codex conversation runs a second target.
-  #
-  # Provenance infix lives glued to the pid INSIDE segment 2 (never a 4th
-  # dash-segment - 3 segments is load-bearing for split('-')[0] consumers). Driver
-  # precedence: a driver-assigned TARGET_SESSION_ID already carries its tag (mw/mt)
-  # and is used verbatim; the self-mint path below glues the 2-char PROVIDER code so
-  # a direct/bg claude session reads {ts}-cl{pid}-{6hex}. Unknown/empty provider ->
-  # no infix (preserves the legacy {ts}-{pid}-{6hex} shape; never a hard error).
-  # Infix tracks the OWNED harness (PROVIDER), not a raw marker that may be
-  # inherited: a claude session carrying a foreign CODEX_THREAD_ID resolved to
-  # PROVIDER=claude above, so its session_id reads `cl`, never `cx`. A real
-  # codex session resolves PROVIDER=codex and reads `cx` all the same.
-  case "$PROVIDER" in
-    claude)   _prov_infix="cl" ;;
-    codex)    _prov_infix="cx" ;;
-    gemini)   _prov_infix="gm" ;;
-    agy)      _prov_infix="ag" ;;
-    hermes)   _prov_infix="hm" ;;
-    opencode) _prov_infix="oc" ;;
-    *)        _prov_infix="" ;;
-  esac
+  # session_id (fno_id): the run id is a random UUID minted by the one
+  # footnote mint (`fno-agents state mint-id`), never a harness session id.
+  # TARGET_SESSION_ID overrides it verbatim (megawalk walkers pre-assign it).
+  # It is minted per run: a thread-stable id would collide with prior loop
+  # termination and finalize events when the same Codex conversation runs a
+  # second target.
   if [[ -n "${TARGET_SESSION_ID:-}" ]]; then
     local_session_id="$TARGET_SESSION_ID"
   else
-    local_sid_entropy="$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || echo "")"
-    if [[ -n "$local_sid_entropy" ]]; then
-      local_session_id="$(date -u +%Y%m%dT%H%M%SZ)-${_prov_infix}${local_owner_pid}-${local_sid_entropy}"
-    else
-      local_sid_random_a="${RANDOM:-0}"
-      local_sid_random_b="${RANDOM:-0}"
-      local_sid_entropy="$(printf '%06x' "$(( ((local_sid_random_a << 15) | local_sid_random_b) % 16777216 ))")"
-      local_session_id="$(date -u +%Y%m%dT%H%M%SZ)-${_prov_infix}${local_owner_pid}-${local_sid_entropy}"
+    local_session_id="$(fno-agents state mint-id 2>/dev/null || true)"
+    if [[ -z "$local_session_id" ]]; then
+      echo "init-target-state: fno-agents state mint-id answered nothing, so no run id was minted. The installed fno-agents is missing or predates this verb. Run: fno doctor update" >&2
+      exit 1
     fi
   fi
   if [[ -n "${TARGET_SESSION_ID:-}" ]]; then
@@ -1096,7 +1220,7 @@ EOF
   # Authority grant (`/target yolo`): omitted unless granted, so absence is the default.
   _authority_line=""
   [[ "${TARGET_BEASTMODE:-}" == "1" ]] && _authority_line="authority: full"$'\n' || true
-  # Scope denominator (x-cbab): a declared deliverable count for a plan-less
+  # Scope denominator: a declared deliverable count for a plan-less
   # code run. Omitted unless --deliverables was passed, so absence (not 0) is
   # the unmeasurable state the denominator gate and the deliverables-1 ratio
   # measurement key on - a stamped 0 would invert the gate, so the Python side
@@ -1138,7 +1262,7 @@ owner_started_at: $local_owner_started_at
 owner_cwd: "$local_owner_cwd"
 claude_session_id: $claude_transcript_id
 codex_thread_id: $codex_thread_id
-scratchpad_path: $REPO_ROOT/.fno/scratchpad
+scratchpad_path: $STATE_DIR/scratchpad
 target_size: ${TARGET_SIZE:-}
 # Dispatch pins - a model/provider chosen at \`fno do target start\`/\`init\`, carried
 # to this session's dispatched workers. Empty = unpinned (spawn-time defaults).
@@ -1179,22 +1303,38 @@ EOF
 
   mv "$local_temp" "$STATE_FILE"
 
-  # ── Graph + node claim (gate-provenance phase 02b; ab-fcf9cec5) ───
+  # ── Graph + node claim (gate-provenance phase 02b;) ───
   # _GRAPH_FILE + node-id resolution hoisted to the in_review guard above (same
   # fresh-init branch): _GUARD_NODE already holds the resolved id-input, so reuse
   # it instead of re-running the identical regex + graph grep.
   _NODE_ID=""
   if [[ -n "$_GUARD_NODE" ]]; then
     _NODE_ID="$_GUARD_NODE"
-  elif [[ -f "$_GRAPH_FILE" && -n "$INITIAL_PLAN_PATH" ]]; then
+  elif [[ -n "$INITIAL_PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
+    # The typed import needs the CLI's own dependencies (pydantic et al), which
+    # a host python3 may lack. uv is how the plugin installs `fno`, so prefer
+    # the managed runtime of THIS plugin's own checkout (derived from the
+    # script location: the ambient REPO_ROOT is the caller's project, not the
+    # plugin); the bare python3 fallback keeps the same degrade-to-unclaimed
+    # shape on a host without uv.
+    _PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    _RUNNER=(python3)
+    if command -v uv >/dev/null 2>&1; then
+      _RUNNER=(uv run --quiet --project "$_PLUGIN_ROOT/cli" python)
+    fi
     # `2>&1 >` is NOT a typo and the order matters: it points the resolver's
     # stderr at THIS shell's stderr before stdout is captured, so a traceback
     # still stays quiet-ish but the deliberate ambiguity note reaches the
     # operator. Plain `2>/dev/null` discarded that note, which made the previous
     # fix decorative - the run still proceeded unclaimed in silence.
-    _NODE_ID=$(python3 - "$_GRAPH_FILE" "$INITIAL_PLAN_PATH" "$REPO_ROOT" <<'PYEOF' || true
-import json, os, sys
-graph_path, raw_target, repo_root = sys.argv[1], sys.argv[2], sys.argv[3]
+    _NODE_ID=$(PLUGIN_ROOT="$_PLUGIN_ROOT" "${_RUNNER[@]}" - "$INITIAL_PLAN_PATH" "$REPO_ROOT" <<'PYEOF' || true
+import os, sys
+
+raw_target, repo_root = sys.argv[1], sys.argv[2]
+# The plugin repo's own checkout backs the import; a bare python3 without it
+# must degrade to "no node resolved", never a traceback that unclaims the run.
+plugin_root = os.environ.get("PLUGIN_ROOT") or repo_root
+sys.path.insert(0, os.path.join(plugin_root, "cli", "src"))
 if not os.path.isabs(raw_target):
     raw_target = os.path.join(repo_root, raw_target)
 try:
@@ -1202,11 +1342,17 @@ try:
 except OSError:
     sys.exit(0)
 try:
-    data = json.load(open(graph_path))
+    from fno.graph.api import wire_rows
+    from fno.graph.store import shutdown_keeper
+    from fno.paths import graph_json
+
+    # The total fold: a minimal row the typed model would drop can still be
+    # the plan's delivery unit.
+    path = graph_json()
+    entries = wire_rows(path=path)
 except Exception:
     sys.exit(0)
-entries = data.get("entries", []) if isinstance(data, dict) else data
-# Collect ALL holders, then prefer the delivery unit (x-e957). First-match-wins
+# Collect ALL holders, then prefer the delivery unit. First-match-wins
 # picked whichever came first in entry order, and adopted children precede the
 # group child that was minted for them - so `--plan-path <shared plan>` resolved
 # to a CONTAINED node, the post-claim containment check refused, and the plan
@@ -1214,22 +1360,30 @@ entries = data.get("entries", []) if isinstance(data, dict) else data
 # Same rule as `_resolve_dispatch_node` in target_cli.py, deliberately: two
 # resolvers for one question that disagree is worse than either answer.
 matches = []
-for entry in entries:
-    plan_path = entry.get("plan_path")
+for node in entries:
+    if not isinstance(node, dict):
+        continue
+    plan_path = node.get("plan_path")
     if not plan_path:
         continue
     abs_plan = plan_path if os.path.isabs(plan_path) else os.path.join(repo_root, plan_path)
     try:
         if os.path.realpath(abs_plan) == target:
-            matches.append(entry)
+            matches.append(node)
     except OSError:
         pass
 if len(matches) > 1:
     units = [e for e in matches if not e.get("contained_in")]
     if len(units) == 1:
         matches = units
+# A bootstrap lookup leaves nothing running: the session reaper counts a
+# keeper rooted in a sandbox tmp tree as a leak.
+try:
+    shutdown_keeper(path)
+except Exception:
+    pass
 if len(matches) == 1:
-    print(matches[0].get("id", ""))
+    print(matches[0].get("id") or "")
 elif len(matches) > 1:
     # Ambiguous and un-narrowable: two or more UNCONTAINED holders (a shape the
     # write-site refusal now prevents creating). Print nothing rather than pick
@@ -1280,7 +1434,7 @@ PYEOF
 
   # A two-node payload used to take ZERO claims. That is the worst of the three
   # options available: the work is real, two nodes are being built, and the store
-  # recorded neither, so both read free to every king that checked (x-cd1e).
+  # recorded neither, so both read free to every lead that checked.
   #
   # The ambiguity refusal was written for `graph_node_id` and the in_review
   # guard, which genuinely need ONE node. A claim does not: a session building
@@ -1361,7 +1515,7 @@ PYEOF
       fi
     done
     # All or nothing. Half a session's work recorded is a worse lie than none:
-    # a king reading the claimed half would conclude the unclaimed half is free
+    # a lead reading the claimed half would conclude the unclaimed half is free
     # and staff it, which is the duplicate this whole change exists to stop.
     if [[ "$_MULTI_OK" -ne 1 ]]; then
       _MULTI_KEPT=""
@@ -1415,10 +1569,8 @@ PYEOF
   fi
 
   if [[ -n "$_NODE_ID" && -n "$claim_owner_id" ]]; then
-    # Does THIS session own the node? Set by `fno agents claim` below, the sole liveness
-    # authority (x-4af4). The TTL claim runs FIRST and the graph lock is stamped
-    # only on its success, so a legitimate STALE steal never leaves a dead prior
-    # owner on the node (the stale-locked-by-leak this reorder fixes).
+    # Does THIS session own the node? Set by `fno agents claim`, the sole
+    # liveness authority.
     _NODE_OWNED=0
 
     # fno agents claim acquire (global TTL lock; authoritative mutex)
@@ -1426,7 +1578,7 @@ PYEOF
       _CLAIM_KEY="node:${_NODE_ID}"
       _CLAIM_HOLDER="target-session:${claim_owner_id}"
       _CLAIM_TTL="${TARGET_CLAIM_TTL:-2h}"
-      # Durable session pid for the hybrid liveness pid-arm (ab-cc5553f2): the
+      # Durable session pid for the hybrid liveness pid-arm: the
       # nearest `claude` ancestor outlives the transient init subprocess, so an
       # alive-but-suspended session keeps its node claim past the TTL. Empty =>
       # pass the explicit PID-unavailable marker so the TTL is the liveness
@@ -1448,8 +1600,36 @@ PYEOF
       # requires. Unset (every hand-started or non-spawn run) => zero args and
       # an ordinary acquire, byte-for-byte as before.
       _HANDOVER_FLAGS=""
-      [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]] && \
+      if [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]]; then
         _HANDOVER_FLAGS="--handover-from ${FNO_NODE_CLAIM_HOLDER}"
+      else
+        # The env var is how the spawner proves the handover, but a spawned
+        # worker can reach init without it. The spawner's claim then reads as
+        # a foreign 15-minute lease and the ordinary acquire refuses its own
+        # beneficiary (measured live 2026-09-09). The disk holder supplies the
+        # value, but a published holder is not proof of successorship: the
+        # claim store answers "who holds" to any reader, so the match is
+        # bound to THIS worker's provenance. The launch-window holder names
+        # its beneficiary, and the identity resolver proves a name is this
+        # session's own; only an exact match adopts the handover, so a
+        # bystander's init cannot take a live claim it was never minted for.
+        _DISK_HOLDER="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null \
+          | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
+        case "${_DISK_HOLDER:-}" in
+          spawn-handover:*)
+            # The same two rungs the identity resolver trusts: the spawn-time
+            # name export first, then the registry binding whoami exposes.
+            _SELF_NAME="${FNO_WORKER_NAME:-}"
+            if [[ -z "$_SELF_NAME" ]]; then
+              _SELF_NAME="$(fno whoami --json 2>/dev/null \
+                | sed -n 's/.*"worker_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            fi
+            if [[ -n "${_SELF_NAME:-}" && "${_DISK_HOLDER}" == "spawn-handover:${_SELF_NAME}" ]]; then
+              _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
+            fi
+            ;;
+        esac
+      fi
       # Unquoted on purpose: empty => zero args (bash 3.2 set -u safe, unlike an
       # empty "${array[@]}"); the regex guarantees $_SESSION_PID is digits only.
       if FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "$_CLAIM_KEY" \
@@ -1457,7 +1637,7 @@ PYEOF
             $_HANDOVER_FLAGS \
             $_CLAIM_HARNESS_FLAG --metadata "$_CLAIM_METADATA" \
             --reason "target dispatch" >/dev/null 2>"$STATE_DIR/.claim-err"; then
-        # Acquire-then-validate (codex P1, x-e957), BEFORE the manifest lines
+        # Acquire-then-validate (codex P1), BEFORE the manifest lines
         # below so a refusal leaves no claim fields behind. Every containment
         # gate above runs before this claim, so adoption committing in that
         # window left a worker holding the claim on a node that no longer
@@ -1616,42 +1796,27 @@ PYEOF
               echo "UNBLOCKS_AFTER: parent generation releases node:${_NODE_ID} or stale-claim recovery reclaims it" >&1
             fi
           else
-            touch "$STATE_DIR/.target-cancelled"
+            printf 'author: init\nreason: claim_held_by_other\n' > "$STATE_DIR/.target-cancelled"
+            _EVENT_DATA="$(python3 -c 'import json,sys; print(json.dumps({"lane":"target","path":sys.argv[1],"reason":"claim_held_by_other"}))' "$STATE_DIR/.target-cancelled" 2>/dev/null || true)"
+            if [[ -n "$_EVENT_DATA" ]]; then
+              fno doctor event emit -t cancel_signal_set -s hook -d "$_EVENT_DATA" >/dev/null 2>&1 || \
+                echo "target: WARNING: cancel signal set but its event was not emitted ($STATE_DIR/.target-cancelled)" >&2
+            else
+              echo "target: WARNING: cancel signal set but its event payload could not be built ($STATE_DIR/.target-cancelled)" >&2
+            fi
             echo "target_claim_blocked_reason: claim_held_by_other" >> "$STATE_FILE"
           fi
+        elif grep -q 'store.remote_url) is unreachable' "$STATE_DIR/.claim-err" 2>/dev/null; then
+          # A shared primary that cannot be reached decides nothing. A peer
+          # machine may hold this node, so this session must not build it.
+          printf 'author: init\nreason: store_unreachable\n' > "$STATE_DIR/.target-cancelled"
+          echo "target_claim_blocked_reason: store_unreachable" >> "$STATE_FILE"
         else
           echo "target_claim_blocked_reason: acquire_error_rc_${_acq_rc}" >> "$STATE_FILE"
         fi
       fi
     fi
 
-    # Graph lock stamp on claim success: unconditional (overwriting a stale prior
-    # owner is the point), retried once. Non-fatal - the TTL claim is
-    # authoritative and the graph field is display/routing metadata, so a
-    # lock-contended graph.json must not abort init (AC9-FR).
-    if [[ "$_NODE_OWNED" -eq 1 && -f "$_GRAPH_FILE" ]]; then
-      _STAMP_LOG="$STATE_DIR/.init-claim.log"
-      # Harness stamp (US6): the holder's provider + harness-session UUID (the
-      # _HARNESS_SESSION computed once above), so an operator/peek can jump from a
-      # node straight to `claude -r <uuid>`.
-      # Unquoted expansion below (same pattern as $_PID_FLAGS): provider + UUID
-      # are single tokens, so word-splitting yields exactly the intended args. An
-      # empty provider omits the flag rather than passing a blank value.
-      _HARNESS_FLAGS=""
-      [[ -n "${PROVIDER:-}" ]] && _HARNESS_FLAGS="--locked-by-harness $PROVIDER"
-      [[ -n "$_HARNESS_SESSION" ]] && _HARNESS_FLAGS="$_HARNESS_FLAGS --locked-by-harness-session $_HARNESS_SESSION"
-      # Unconditional `fno` is safe: every _NODE_OWNED=1 path ran inside command -v fno.
-      if fno backlog update "$_NODE_ID" --locked-by "$claim_owner_id" $_HARNESS_FLAGS 2>"$_STAMP_LOG" >/dev/null \
-         || fno backlog update "$_NODE_ID" --locked-by "$claim_owner_id" $_HARNESS_FLAGS 2>"$_STAMP_LOG" >/dev/null; then
-        rm -f "$_STAMP_LOG"
-        echo "target: graph node $_NODE_ID lock stamped for $claim_owner_id" >&2
-      elif fno backlog update "$_NODE_ID" --locked-by "$claim_owner_id" 2>>"$_STAMP_LOG" >/dev/null; then
-        # Degraded but loud: a partial stamp must never pass for a clean one.
-        echo "target: WARNING: graph node $_NODE_ID stamped WITHOUT harness metadata (installed fno may predate the harness flags; try 'fno doctor --fix'; see $_STAMP_LOG)" >&2
-      else
-        echo "target: WARNING: graph locked_by stamp failed (non-fatal; TTL claim authoritative; see $_STAMP_LOG)" >&2
-      fi
-    fi
     # graph_node_id written exactly once: the node id when a claim layer won and
     # the node actually exists in the graph, else null (the modern claim is just
     # a lock and does not prove the backlog row exists).
@@ -1666,22 +1831,76 @@ PYEOF
     # null arm that used to sit here could never run.
     echo "graph_node_id: $_NODE_ID" >> "$STATE_FILE"
 
-    # ── Mechanical orchestration: fire join or park ──────────────────────
-    # `orchestration: mechanical` in the plan frontmatter hands the plan's
-    # remaining waves to `fno backlog join` here, at init: this session is
-    # the holder (one worker) and join spawns the remainder into this
-    # worktree. The key is opt-in - absent or `king` is the
-    # operator-reviewed path and does nothing, so plans written before the
-    # key keep their behavior. Both facts come from the canonical probes in
-    # fno.backlog.join_trigger: bash re-implementing the auto-continue
+    # Premise and plan freshness against current main, from the native
+    # freshness verb. One advisory read: verdict lines print, nothing
+    # blocks, and an older fno-agents without the verb stays silent. The
+    # notes `predates` line survives, printed from the plan leg's notes
+    # field when the notes are newer than the plan.
+    if [[ "$_NODE_OWNED" -eq 1 ]]; then
+      _fresh_json=""
+      if [[ -n "${INITIAL_PLAN_PATH:-}" && -f "${INITIAL_PLAN_PATH%%#*}" ]]; then
+        _fresh_json="$(fno backlog freshness "$_NODE_ID" --plan "${INITIAL_PLAN_PATH%%#*}" --json 2>/dev/null)" || _fresh_json=""
+      else
+        _fresh_json="$(fno backlog freshness "$_NODE_ID" --json 2>/dev/null)" || _fresh_json=""
+      fi
+      if [[ -n "$_fresh_json" ]]; then
+        _fresh_pv="$(printf '%s' "$_fresh_json" | sed -n 's/.*"premise":{"verdict":"\([^"]*\)".*/\1/p')"
+        _fresh_pe="$(printf '%s' "$_fresh_json" | sed -n 's/.*"premise":{"verdict":"[^"]*","evidence":"\([^"]*\)".*/\1/p')"
+        if [[ -n "$_fresh_pv" ]]; then
+          echo "target: premise: ${_fresh_pv} - ${_fresh_pe}" >&2
+        fi
+        _fresh_plv="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"\([^"]*\)".*/\1/p')"
+        if [[ -n "$_fresh_plv" ]]; then
+          _fresh_pls="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"[^"]*","since":"\([^"]*\)".*/\1/p')"
+          _fresh_ple="$(printf '%s' "$_fresh_json" | sed -n 's/.*"plan":{"verdict":"[^"]*","since":"[^"]*","evidence":"\([^"]*\)".*/\1/p')"
+          echo "target: plan: ${_fresh_plv} since ${_fresh_pls:-unknown} - ${_fresh_ple}" >&2
+        fi
+        if [[ "$_fresh_json" == *'"stale":true'* ]]; then
+          _stale_n="$(printf '%s' "$_fresh_json" | sed -n 's/.*"newer_notes":\([0-9]*\).*/\1/p')"
+          _stale_ts="$(printf '%s' "$_fresh_json" | sed -n 's/.*"newest_note_at":"\([^"]*\)".*/\1/p')"
+          _stale_basis="$(printf '%s' "$_fresh_json" | sed -n 's/.*"basis":"\([^"]*\)".*/\1/p')"
+          echo "target: plan ${INITIAL_PLAN_PATH%%#*} predates ${_stale_n} notes on $_NODE_ID (newest ${_stale_ts}, basis ${_stale_basis}); read them before trusting the plan" >&2
+        fi
+      fi
+    fi
+
+    # ── join: auto - fire join or park ───────────────────────────────────
+    # `join: auto` in the plan frontmatter hands the plan's remaining waves
+    # to `fno backlog join` here, at init: this session is the holder (one
+    # worker) and join spawns the remainder into this worktree. The key is
+    # opt-in - absent or `manual` waits for a person or a lead
+    # session to run the verb and does nothing here, so plans written before
+    # the key keep their behavior. Both facts come from the canonical probes
+    # in fno.backlog.join_trigger: bash re-implementing the auto-continue
     # precedence chain (autonomy master, env, config, default) is how the
     # two drift. Every failure mode is non-fatal and named: an unmeasured
     # width never fires join, and a parked trigger names the measured width
     # so a narrow plan stays distinguishable from a switched-off feature.
     if [[ "$_NODE_OWNED" -eq 1 && -n "${INITIAL_PLAN_PATH:-}" && -f "${INITIAL_PLAN_PATH%%#*}" ]]; then
       _jt_plan="${INITIAL_PLAN_PATH%%#*}"
-      _jt_fm="$(sed -n 's/^orchestration:[[:space:]]*//p' "$_jt_plan" 2>/dev/null | head -1 | tr -d '"' | tr -d "'" | xargs)"
-      if [[ "${_jt_fm:-king}" == "mechanical" ]]; then
+      # FRONTMATTER ONLY. A whole-file scan reads a `join: auto` line quoted at
+      # column 0 inside a fenced block as the key itself, and this very
+      # feature's own docs print that shape - so the documentation would arm
+      # the trigger it documents. awk stops at the closing `---`.
+      # Frontmatter only, and the VALUE only: strip a trailing `# comment`
+      # before comparing. The key is documented in SKILL.md as
+      # `join: <manual|auto>   # who hands out the remaining waves`, so without
+      # this the documented shape yields "auto # who hands out..." and never
+      # matches - the doc would describe a trigger it disables. PlanFrontmatter
+      # parses the same file as YAML and reads a bare `auto`, so the two
+      # readers of one key have to agree.
+      _jt_fm="$(awk '/^---[[:space:]]*$/{c++; if(c==2) exit; next} c==1' "$_jt_plan" 2>/dev/null | sed -n 's/^join:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"' | tr -d "'" | xargs)"
+      # The retired spelling is NOT an alias - reviving it would keep a key
+      # nothing else reads alive forever. But a plan carrying it would
+      # otherwise stop auto-joining in silence, and a silent behavior change is
+      # worse than either outcome, so say so once and let the author choose.
+      if [[ -z "$_jt_fm" ]]; then
+        _jt_old="$(awk '/^---[[:space:]]*$/{c++; if(c==2) exit; next} c==1' "$_jt_plan" 2>/dev/null | sed -n 's/^orchestration:[[:space:]]*//p' | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"' | tr -d "'" | xargs)"
+        if [[ -n "$_jt_old" ]]; then
+          echo "target: plan carries the retired key 'orchestration: $_jt_old'; it is now 'join: manual|auto' (mechanical -> auto, lead -> manual) and join did NOT fire. Update the plan's frontmatter." >&2
+        fi
+      fi
+      if [[ "${_jt_fm:-manual}" == "auto" ]]; then
         _jt_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
         if [[ -z "${FNO_PYTHON:-}" && -f "$_jt_root/scripts/lib/fno-python.sh" ]]; then
           # shellcheck source=/dev/null
@@ -1698,24 +1917,32 @@ PYEOF
           *) _jt_armed="" ;;
         esac
         if [[ -z "$_jt_width" ]] || [[ ! "$_jt_width" =~ ^[1-9][0-9]*$ ]]; then
-          echo "target: orchestration mechanical: plan width unreadable; join not fired" >&2
+          echo "target: join auto: plan width unreadable; join not fired" >&2
         elif [[ -z "$_jt_armed" ]]; then
-          echo "target: orchestration mechanical: PARKED, auto_continue off (width $_jt_width)" >&2
+          echo "target: join auto: PARKED, auto_continue off (width $_jt_width)" >&2
         elif [[ "$_jt_width" -lt 2 ]]; then
-          echo "target: orchestration mechanical: nothing to join (width $_jt_width)" >&2
+          echo "target: join auto: nothing to join (width $_jt_width)" >&2
         else
-          echo "target: orchestration mechanical: firing join for the remainder (width $_jt_width)" >&2
+          echo "target: join auto: firing join for the remainder (width $_jt_width)" >&2
           _jt_log="$STATE_DIR/.init-join.log"
           if fno backlog join "$_NODE_ID" >"$_jt_log" 2>&1; then
-            echo "target: orchestration mechanical: join dispatched (receipt in $_jt_log)" >&2
+            echo "target: join auto: join dispatched (receipt in $_jt_log)" >&2
           else
-            echo "target: orchestration mechanical: join refused, non-fatal (see $_jt_log)" >&2
+            echo "target: join auto: join refused, non-fatal (see $_jt_log)" >&2
           fi
         fi
       fi
     fi
   else
     echo "graph_node_id: null" >> "$STATE_FILE"
+  fi
+
+  # Adopt receipt: record which open PR this session was re-bound to, so a
+  # later reader can tell an adopted session from a fresh dispatch that
+  # raced a second PR onto the same node. Lands beside graph_node_id in
+  # whichever arm ran - the re-bind fact does not depend on the claim layer.
+  if [[ -n "${TARGET_ADOPTED_PR:-}" ]]; then
+    echo "target_adopted_pr: $TARGET_ADOPTED_PR" >> "$STATE_FILE"
   fi
 
   echo "target: session manifest written: $STATE_FILE"

@@ -1,22 +1,17 @@
 #!/usr/bin/env bash
 # guard-mark.sh - sourced by PreToolUse guards; provides _guard_mark, the
 # positive liveness signal that a guard actually ran and what it decided
-# (x-04bc). One guard_decision event row per guard invocation, appended to
+#. One guard_decision event row per guard invocation, appended to
 # the project events log: without it, a guard that cannot prove it ran is
 # indistinguishable from one that never launched, and under
 # permissions.defaultMode = dontAsk the guards are the entire safety layer.
-# Best-effort by contract: every failure is swallowed and can never change
-# a decision.
+# Best-effort by contract: a failed append reports on stderr and can never
+# change a decision.
 
 _GUARD_MARK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# Resolve the events file without forking git when the cwd is already the
-# project root (the common hook case): two stats instead of a rev-parse.
-# events.sh honors a pre-set EVENTS_FILE and skips its own resolution,
-# including the git fork. An explicit pin still wins.
-if [[ -z "${EVENTS_FILE:-}" && -z "${FNO_EVENTS_PATH:-}" ]] \
-    && { [[ -d .git ]] || [[ -d .fno ]]; }; then
-    EVENTS_FILE="$PWD/.fno/events.jsonl"
-fi
+# No EVENTS_FILE pin here: events.sh resolves the journal through
+# `fno-agents state path events` (the space the store reads), and a $PWD
+# guess is how guard rows landed in the checkout journal the store ignores.
 # Reuse the events transport (path resolution + GC-safe append) when the
 # caller has not sourced it already.
 # shellcheck source=../../scripts/lib/events.sh
@@ -41,5 +36,5 @@ _guard_mark() {
     printf -v row \
         '{"ts":"%s","type":"guard_decision","data":{"guard":"%s","decision":"%s","tool":"%s"},"source":"hook"}' \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "${tool:-unknown}"
-    _append_bounded_event "guard_mark" "$row" "${EVENTS_FILE:-.fno/events.jsonl}" 2>/dev/null || true
+    _append_bounded_event "guard_mark" "$row" "${EVENTS_FILE:-.fno/events.jsonl}" || true
 }

@@ -1,13 +1,13 @@
 """In-package port of verify-pr-merged.sh + verify-review-replies.sh.
 
-ab-d4c98550, US2. Two external-outcome audits for the auto-merge / external-
+, US2. Two external-outcome audits for the auto-merge / external-
 review gates, ported from bash to gh-api subprocess + native JSON parsing.
 
 verify --kind merged  (verify-pr-merged.sh):
     GitHub merge-state audit. Records the merge into the state-file frontmatter
     when MERGED; blocks with a specific reason when the merge cannot happen;
     runs ONE bounded remediation (single merge attempt + single 30s poll,
-    anti-thrash; x-9d11: no --auto and no --delete-branch - checks enforced
+    anti-thrash; no --auto and no --delete-branch - checks enforced
     in-process, cleanup split from the merge) when OPEN + all-clean: attempt.
     Exit 0 merged/degrade-open, 1 blocked-with-reason, 2 substrate failure.
 
@@ -36,8 +36,8 @@ from typing import Any, List, Optional, Sequence
 from fno.mutex import acquire_dir_mutex, release_dir_mutex
 from fno.pr._proc import ToolMissing, run
 
-# Check classification lives in fno.pr._status (_classify + _latest_per_name),
-# shared with the merge verb so the two surfaces never disagree (round 12).
+# Check classification is the Rust reader's (pr_status verdict + supersession
+# rows), shared with the merge verb so the two surfaces never disagree.
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ def _emit_audit(
     repo_root: str, state_file: str, pr_number: str, reason: str, extra: Optional[dict] = None
 ) -> None:
     """Append a transcript_audit_failed event (best-effort; never fatal)."""
-    events_file = os.path.join(repo_root, ".fno", "events.jsonl")
+    events_file = _events_file(repo_root, reason)
     nonce = _read_field(state_file, "provenance_nonce")
     sid = _read_field(state_file, "session_id")
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -138,38 +138,39 @@ def _emit_audit(
     _append_event_lenient(events_file, event, reason)
 
 
-def _append_event_lenient(events_file: str, event: dict, reason: str) -> None:
-    """Validate-with-warning, then append under the events mkdir-mutex.
+def _events_file(repo_root: str, reason: str) -> Optional[str]:
+    """Resolve the events journal, or None with a warning when the space cannot be.
 
-    Mirrors the bash: a schema-validation failure logs a warning but the event
-    is appended anyway (missing audit evidence is worse than a relaxed shape).
+    Every audit write is best-effort: a repo root the space resolver refuses
+    (a detached checkout, a missing canonical) must not turn a verdict into a
+    traceback, so the failure is one stderr line and the event is dropped.
     """
     try:
-        from fno.events import validate
+        from fno.paths import project_log
 
-        validate(event)
-    except Exception:
-        sys.stderr.write(
-            f"pr-verify: schema validation failed for transcript_audit_failed "
-            f"(reason={reason}); appending anyway\n"
-        )
-    requested_path = Path(events_file)
-    while True:
-        path = requested_path.resolve()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lock_dir = path.with_name(path.name + ".lock.d")
-        token = acquire_dir_mutex(lock_dir, 30, steal=True, poll_s=1)
-        if token is None:
-            sys.stderr.write(f"pr-verify: events.jsonl lock timeout (reason={reason})\n")
-            return
-        if requested_path.resolve() == path:
-            break
-        release_dir_mutex(lock_dir, token)
+        return str(project_log("events.jsonl", project_root=Path(repo_root)))
+    except Exception as exc:
+        sys.stderr.write(f"pr-verify: events journal unresolved (reason={reason}): {exc}\n")
+        return None
+
+
+def _append_event_lenient(events_file: Optional[str], event: dict, reason: str) -> None:
+    """Commit through the native event store; the store judges at commit.
+
+    Mirrors the bash: a schema-judge refusal logs a warning but the caller
+    already decided to commit (missing audit evidence is worse than a
+    relaxed shape). An unresolved journal (None) was already warned about
+    by ``_events_file``. Like the writer it replaces, this stays
+    best-effort: a store failure is one stderr line, never a failed verdict.
+    """
+    if events_file is None:
+        return
     try:
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(event, separators=(",", ":")) + "\n")
-    finally:
-        release_dir_mutex(lock_dir, token)
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(event, Path(events_file))
+    except Exception as exc:  # noqa: BLE001 - audit stays best-effort
+        sys.stderr.write(f"pr-verify: event store commit failed (reason={reason}): {exc}\n")
 
 
 def _record_merge(state_file: str, pr: str, merged_at: str) -> bool:
@@ -247,10 +248,12 @@ def _record_merge(state_file: str, pr: str, merged_at: str) -> bool:
         lock.release()
 
 
-def _auto_merge():
-    from fno.config import load_settings
+def _auto_merge(repo: str):
+    # Seeded at the repo this verify run decides for - the ambient lens can
+    # answer a pinned FNO_CONFIG or a foreign cwd (see _merge._load_auto_merge).
+    from fno.config import load_settings_for_repo
 
-    return load_settings().auto_merge
+    return load_settings_for_repo(Path(repo)).auto_merge
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +300,7 @@ def run_verify_merged(
         return 0
 
     repo_root = _repo_root(repo)
-    remediation = _auto_merge().remediation
+    remediation = _auto_merge(repo).remediation
 
     pr_json = _fetch_pr_state(pr_number, repo)
     if pr_json is None:
@@ -367,12 +370,10 @@ def run_verify_merged(
     # still-running check flows into _bounded_remediation, which reports
     # not-green without the misleading "failing" label. Judging pending here
     # would make verify refuse what `fno do pr merge` merges.
-    if _auto_merge().require_checks_pass:
-        from fno.pr._status import without_coverage_statuses
-
-        failing = _failing_required(
-            without_coverage_statuses(pr_json.get("statusCheckRollup") or [])
-        )
+    if _auto_merge(repo).require_checks_pass:
+        failing = _failing_required(int(pr_number), repo)
+        if failing is None:
+            return 1
         if failing:
             failing_csv = ",".join(failing)
             _emit_audit(
@@ -390,7 +391,7 @@ def run_verify_merged(
     # reads COVERED inside the gate itself.
     from fno.pr import _coverage_gate
 
-    gate_state, gate_refusal, _gate_head, gate_note = _coverage_gate.coverage_verdict(
+    gate_state, gate_refusal, gate_head, gate_note = _coverage_gate.coverage_verdict(
         int(pr_number), repo, recompute=True
     )
     if gate_state != _coverage_gate.COVERED:
@@ -420,32 +421,31 @@ def run_verify_merged(
         )
         return 1
 
-    return _bounded_remediation(pr_number, state_file, repo, repo_root, sleep_fn)
+    return _bounded_remediation(
+        pr_number, state_file, repo, repo_root, sleep_fn, gate_head
+    )
 
 
-def _failing_required(rollup: Sequence[dict]) -> List[str]:
-    """Failing checks, classified by the SAME truth table the merge verb uses -
-    a second hand-built state table is how verify ends up refusing what
-    `fno do pr merge` merges (round 12). Callers pass the rollup through
-    `without_coverage_statuses`, so the coverage projections the merge verb's
-    covered path ignores are ignored here too; a stale coverage FAILURE beside
-    a flipped-covered row must not read as required_checks_failing.
-    _latest_per_name drops superseded runs; _classify reads pass/fail/pending
-    with the shared semantics (a REQUESTED or empty-conclusion check is
-    pending, not failing). No isRequired filter - `gh pr view` never emits
-    that key (see _merge._checks_verdict), so with require_checks_pass every
-    check counts."""
-    from fno.pr._status import _classify, _latest_per_name
+def _failing_required(pr_number: int, cwd: str) -> List[str] | None:
+    """Failing checks from the Rust owner's status-ci op (coverage rows
+    dropped): the SAME truth table the merge verb uses, never a second one.
+    None = unreadable read; the caller refuses rather than pass blind."""
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    failing: List[str] = []
-    for c in _latest_per_name(rollup):
-        if _classify(c) == "fail":
-            failing.append(str(_alt(c.get("name"), c.get("context"), "unnamed")))
-    return failing
+    try:
+        rows = verb_call(
+            "authorized-merge",
+            {"op": "status-ci", "cwd": cwd, "pr": int(pr_number), "drop_coverage": True},
+            timeout=120,
+        )
+    except VerbUnavailable:
+        sys.stderr.write("verify-pr-merged: required checks unreadable\n")
+        return None
+    return [str(r.get("name") or "unnamed") for r in rows if r.get("bucket") == "fail"]
 
 
 def _remote_delete_cleanup(pr_number: str, cwd: str, auto_merge) -> None:
-    """Post-merge remote-branch delete (x-9d11), warn-only: reuses the merge
+    """Post-merge remote-branch delete, warn-only: reuses the merge
     verb's helper so both executors treat cleanup identically and neither can
     fail its merge with a cleanup result."""
     if not getattr(auto_merge, "delete_branch_on_merge", False):
@@ -460,126 +460,57 @@ def _remote_delete_cleanup(pr_number: str, cwd: str, auto_merge) -> None:
 
 
 def _bounded_remediation(
-    pr_number: str, state_file: str, cwd: str, repo_root: str, sleep_fn
+    pr_number: str,
+    state_file: str,
+    cwd: str,
+    repo_root: str,
+    sleep_fn,
+    gate_head: str = "",
 ) -> int:
-    """Single gh pr merge attempt + single 30s poll (anti-thrash; x-9d11: the
+    """Single gh pr merge attempt + single 30s poll (anti-thrash; the
     verb executes - no --auto, no --delete-branch)."""
-    # Stacked-base guard: this arm reaches `gh pr merge` without passing through
-    # `fno do pr merge`, so it needs its own call - a guard on one of N reachable
-    # merge paths is decorative. An unevaluated probe proceeds with a
-    # breadcrumb; only a confirmed stale base refuses, because it needs a
-    # retarget rather than a retry.
-    from fno.pr import _base_lineage
-
-    lineage, why = _base_lineage.lineage_verdict(pr_number, cwd)
-    if lineage == "stale" and not _base_lineage.bypassed():
-        _emit_audit(repo_root, state_file, pr_number, "merge_refused_stacked_base", {"reason": why})
-        sys.stdout.write(f"merge_refused_stacked_base: PR #{pr_number} {why}\n")
-        return 1
-    if lineage == "stale":
-        _base_lineage.emit_bypass_escape(pr_number, cwd, why)
-        sys.stderr.write(
-            f"verify-pr-merged: stacked-base guard bypassed ({_base_lineage.BYPASS_ENV}); {why}\n"
-        )
-    elif lineage == "unknown":
-        sys.stderr.write(
-            f"verify-pr-merged: stacked-base probe unavailable ({why}); "
-            "remediating without the lineage guard\n"
-        )
-
-    auto_merge = _auto_merge()
+    auto_merge = _auto_merge(repo_root)
     strategy = auto_merge.merge_strategy
-    cmd = ["gh", "pr", "merge", pr_number, f"--{strategy}"]
-    # x-9d11: no --auto (one arming path - finalize owns the queue; an executor
-    # reads the checks and merges green itself) and no --delete-branch (gh's
-    # local delete is the worktree false-failure shape). require_checks_pass is
-    # enforced here with the shared verdict helper, head-pinned like _do_merge.
-    # x-9d11 AC5-CON: same one-arming-path rule as _do_merge - if finalize
-    # already armed GitHub's queue, stand down instead of racing it.
-    from fno.pr import _merge as _merge_mod
+    # One authorized merge operation (crates/fno-agents/src/authorized_merge.rs).
+    # This arm used to carry its own stacked-base probe, arming stand-down,
+    # checks verdict, head pin and gh argv, so a merge `fno do pr merge` refused
+    # could still land from here. It asks the same owner now, and the answers
+    # below are rendering: the audit vocabulary this verb's callers read.
+    from fno.pr._merge import _authorized_merge, covered_pin
 
-    try:
-        armed = _merge_mod._already_armed(int(pr_number), cwd)
-    except ToolMissing:
-        # _already_armed calls _gh, which can raise ToolMissing same as the
-        # sibling _checks_verdict call below - it owes the same handler its
-        # sibling call sites have (review round 12).
-        sys.stderr.write("verify-pr-merged: gh CLI not installed\n")
-        return 127
-    if armed:
-        _emit_audit(
-            repo_root, state_file, pr_number, "merge_attempt_did_not_complete",
-            {"reason": "already armed in GitHub auto-merge queue"},
-        )
-        sys.stdout.write(
-            f"merge_attempt_did_not_complete: PR #{pr_number} already armed "
-            "in GitHub's auto-merge queue (fno-agents finalize); the queue "
-            "merges it when checks pass\n"
-        )
-        return 1
+    receipt = _authorized_merge(
+        int(pr_number),
+        cwd,
+        effect="merge",
+        # No manifest posture to hand down: this remediation runs for whatever
+        # session owns the PR, so the live config and the floor decide.
+        approved=None,
+        source="verify-remediation",
+        require_checks=auto_merge.require_checks_pass,
+        # The head THIS verb's gate covered, never whatever the local
+        # checkout points at. Without it the owner falls back to the
+        # journal, which filters on the checkout's own HEAD, so a run
+        # from any other directory reported unknown for a PR whose
+        # coverage it had just verified.
+        covered_head=covered_pin(int(pr_number), cwd, gate_head),
+    )
+    outcome = str(receipt.get("outcome") or "unknown")
+    detail = str(receipt.get("detail") or "no detail")
 
-    if auto_merge.require_checks_pass:
-        try:
-            from fno.pr import _reviews as _reviews_mod
-
-            # The SECOND merge path (a guard on one of N reachable paths is
-            # decorative): the do-merge path ignores the coverage projections
-            # it published itself, and the remediation merge must agree, or a
-            # pending diagnostic holds a covered PR here while bef2c16's fix
-            # lets the same PR through there. The ruleset still enforces the
-            # required context server-side.
-            verdict, _counts, head_read = _merge_mod._checks_verdict(
-                int(pr_number),
-                cwd,
-                ignore_contexts=tuple(_reviews_mod.COVERAGE_STATUS_CONTEXTS),
-            )
-        except ToolMissing:
-            # _checks_verdict deliberately propagates it (the module contract
-            # reserves 127 for a missing gh); this third call site owes the
-            # same handler its siblings have (review round 7).
-            sys.stderr.write("verify-pr-merged: gh CLI not installed\n")
-            return 127
-        if verdict != "green":
-            _emit_audit(
-                repo_root,
-                state_file,
-                pr_number,
-                "merge_attempt_did_not_complete",
-                {"checks": verdict},
-            )
-            sys.stdout.write(
-                f"merge_attempt_did_not_complete: PR #{pr_number} checks are "
-                f"{verdict}; require_checks_pass forbids merging without green "
-                f"(retry when green)\n"
-            )
-            return 1
-        if not head_read:
-            # Same fail-closed rule as _do_merge: green but unpinnable is not
-            # mergeable - an unpinned merge could land a head the verdict never
-            # described.
-            _emit_audit(
-                repo_root, state_file, pr_number, "merge_attempt_did_not_complete",
-                {"checks": "green, head unreadable"},
-            )
-            sys.stdout.write(
-                f"merge_attempt_did_not_complete: PR #{pr_number} checks read "
-                "green but the head SHA was unreadable; refusing to merge a "
-                "head the verdict cannot be pinned to\n"
-            )
-            return 1
-        cmd += ["--match-head-commit", head_read]
-    res = run(cmd, cwd=cwd)
-    gh_stderr = res.stderr or ""
-    if res.ok:
-        # Re-fetch once; if still OPEN do ONE bounded 30s poll.
+    if outcome == "merged":
+        # This verb's name is its contract, so the owner's receipt is not the
+        # last word: re-read the PR, and give a lagging read ONE bounded poll
+        # before reporting. Never a retry loop - a second merge attempt is the
+        # thrash this bound exists to prevent.
         for attempt in range(2):
             pr_json = _fetch_pr_state(pr_number, cwd)
-            state = (pr_json or {}).get("state") or ""
-            if state == "MERGED":
+            if (pr_json or {}).get("state") == "MERGED":
                 merged_at = (pr_json or {}).get("mergedAt") or ""
                 _record_merge(state_file, pr_number, merged_at)
                 _remote_delete_cleanup(pr_number, cwd, auto_merge)
-                sys.stdout.write(f"verify-pr-merged: PR #{pr_number} MERGED at {merged_at}\n")
+                sys.stdout.write(
+                    f"verify-pr-merged: PR #{pr_number} MERGED at {merged_at}\n"
+                )
                 return 0
             if attempt == 0:
                 sleep_fn(30)
@@ -588,70 +519,67 @@ def _bounded_remediation(
             state_file,
             pr_number,
             "merge_attempt_did_not_complete",
-            {"final_state": (pr_json or {}).get("state") or ""},
+            {"final_state": (pr_json or {}).get("state") or "", "detail": detail},
         )
         sys.stdout.write(
             f"merge_attempt_did_not_complete: PR #{pr_number} still "
-            f"{(pr_json or {}).get('state') or ''} after merge attempt + 30s poll\n"
+            f"{(pr_json or {}).get('state') or ''} after the merge + 30s poll\n"
         )
         return 1
 
-    # gh pr merge exited non-zero. ALWAYS re-read the PR state before reporting
-    # failure: gh exits non-zero whenever a POST-merge step fails (local branch
-    # delete, base-branch checkout, remote delete) after a successful server-side
-    # merge, and the error phrasing varies across git versions and failure points
-    # (the checkout-refused and delete phrasings differ; older git says "checked
-    # out at"). Matching phrasings ages badly; the durable signal is the PR's
-    # state. If it MERGED, record it and return 0 - otherwise the /target gate
-    # that calls verify sees a failure, leaves the merge unrecorded in
-    # target-state.md, and re-verifies forever.
-    pr_json = _fetch_pr_state(pr_number, cwd)
-    if (pr_json or {}).get("state") == "MERGED":
-        merged_at = (pr_json or {}).get("mergedAt") or ""
-        _record_merge(state_file, pr_number, merged_at)
-        _remote_delete_cleanup(pr_number, cwd, auto_merge)
-        sys.stdout.write(f"verify-pr-merged: PR #{pr_number} MERGED at {merged_at}\n")
-        return 0
-    # The re-read itself failed (`_fetch_pr_state` returns None on a gh error or
-    # unparseable output), so the merge state is UNKNOWN, not "not merged". The
-    # `(pr_json or {})` idiom above flattens those two apart-cases together;
-    # reporting merge_attempt_failed on an unreadable state asserts a failure we
-    # cannot see, and the /target gate then treats a possibly-landed merge as
-    # broken. Report the substrate failure (exit 2) so the caller retries the
-    # read instead of acting on a guess. Mirrors the same guard in _merge.py.
-    if pr_json is None:
+    if outcome == "unknown":
+        # The merge state is UNKNOWN, not "not merged". Reporting a failure here
+        # asserts something we cannot see, and the /target gate then treats a
+        # possibly-landed merge as broken. Exit 2 so the caller retries the read.
         _emit_audit(
-            repo_root,
-            state_file,
-            pr_number,
-            "merge_state_unreadable",
-            {"stderr": gh_stderr.splitlines()[0] if gh_stderr.strip() else ""},
+            repo_root, state_file, pr_number, "merge_state_unreadable", {"detail": detail}
         )
-        sys.stdout.write(
-            f"merge_state_unreadable: could not read PR #{pr_number} state after "
-            "gh pr merge exited non-zero; cannot confirm whether the merge landed\n"
-        )
+        sys.stdout.write(f"merge_state_unreadable: PR #{pr_number} {detail}\n")
         return 2
-    lowered = gh_stderr.lower()
-    if any(
-        tok in lowered
-        for tok in ("freshness", "stale state", "state file", "state-file mtime", "git-protection")
-    ):
-        _emit_audit(
-            repo_root,
-            state_file,
-            pr_number,
-            "merge_blocked_by_freshness_cap",
-            {"stderr_token": "freshness_cap"},
-        )
-        sys.stdout.write(
-            f"merge_blocked_by_freshness_cap: git-protection.py blocked the merge "
-            f"(state-file mtime > 1h). Run '! gh pr merge {pr_number} --{strategy}' via shell to bypass.\n"
-        )
+
+    if outcome == "failed":
+        # The freshness read only ever described a gh command that RAN and was
+        # blocked, so it lives inside this arm. Outside it, a hold whose reason
+        # happens to name a state file was reported as a git-protection block,
+        # with a bypass instruction that addressed nothing.
+        lowered = detail.lower()
+        if any(
+            tok in lowered
+            for tok in (
+                "freshness",
+                "stale state",
+                "state file",
+                "state-file mtime",
+                "git-protection",
+            )
+        ):
+            _emit_audit(
+                repo_root,
+                state_file,
+                pr_number,
+                "merge_blocked_by_freshness_cap",
+                {"stderr_token": "freshness_cap"},
+            )
+            sys.stdout.write(
+                f"merge_blocked_by_freshness_cap: git-protection.py blocked the merge "
+                f"(state-file mtime > 1h). Bypass it from a shell with "
+                f"gh pr merge {pr_number} --{strategy}.\n"
+            )
+            return 1
+        _emit_audit(repo_root, state_file, pr_number, "merge_attempt_failed", {"detail": detail})
+        sys.stdout.write(f"merge_attempt_failed: {detail}\n")
         return 1
-    first = gh_stderr.splitlines()[0] if gh_stderr.strip() else ""
-    _emit_audit(repo_root, state_file, pr_number, "merge_attempt_failed", {"stderr": first})
-    sys.stdout.write(f"merge_attempt_failed: gh pr merge exited non-zero. stderr: {first}\n")
+
+    _emit_audit(
+        repo_root,
+        state_file,
+        pr_number,
+        "merge_attempt_did_not_complete",
+        {"outcome": outcome, "detail": detail},
+    )
+    sys.stdout.write(
+        f"merge_attempt_did_not_complete: PR #{pr_number} {outcome}: {detail}\n"
+    )
     return 1
 
 
@@ -801,7 +729,7 @@ def run_verify_reviews(pr_number: str, state_file: str, cwd: Optional[str] = Non
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     nonce = _read_field(state_file, "provenance_nonce")
     sid = _read_field(state_file, "session_id")
-    events_file = os.path.join(repo_root, ".fno", "events.jsonl")
+    events_file = _events_file(repo_root, "missing_reply")
     for reviewer in missing:
         last_at = reviewer_map.get(reviewer) or ""
         event = {

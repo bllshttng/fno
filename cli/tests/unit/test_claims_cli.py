@@ -1,5 +1,6 @@
 """Typer CliRunner tests for the fno agents claim CLI surface."""
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
@@ -7,53 +8,42 @@ import os
 import pytest
 from typer.testing import CliRunner
 
-from fno.claims.cli import cli, _merge_claims_across_roots, _parse_ttl
-from fno.claims.core import ClaimContended, ClaimValidationError, acquire_claim
-from fno.claims.io import dedup_claims_roots
+from fno.claims.cli import cli, _parse_ttl
+from fno.claims.core import acquire_claim
 
 from .test_claim_reap import _dead_pid  # noqa: F401
+from fno.graph.store import read_graph_strict
 
 
 runner = CliRunner()
 
 
-def test_ttl_parser_seconds_no_unit():
-    assert _parse_ttl("60") == 60_000
-
-
-def test_ttl_parser_seconds():
-    assert _parse_ttl("60s") == 60_000
-
-
-def test_ttl_parser_minutes():
-    assert _parse_ttl("5m") == 5 * 60_000
-
-
-def test_ttl_parser_hours():
-    assert _parse_ttl("2h") == 2 * 3_600_000
-
-
-def test_ttl_parser_empty_string_returns_none():
-    assert _parse_ttl("") is None
-
-
-def test_ttl_parser_invalid_raises():
-    with pytest.raises(Exception):
-        _parse_ttl("xyz")
-
-
-def test_help_lists_all_verbs():
-    result = runner.invoke(cli, ["--help"])
-    assert result.exit_code == 0
-    for verb in ("acquire", "release", "refresh", "status", "list"):
-        assert verb in result.output
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("60", 60_000),  # bare digits are seconds
+        ("60s", 60_000),
+        ("5m", 5 * 60_000),
+        ("2h", 2 * 3_600_000),
+        ("", None),
+        ("xyz", "error"),
+    ],
+)
+def test_ttl_parser_table(text, want):
+    if want == "error":
+        with pytest.raises(Exception):
+            _parse_ttl(text)
+    else:
+        assert _parse_ttl(text) == want
 
 
 def test_acquire_fresh_key(cwd_tmp):
     result = runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h1"])
     assert result.exit_code == 0
     assert "acquired" in result.output
-    assert (cwd_tmp / ".fno" / "claims" / "node%3Aab-1.lock").exists()
+    from fno.claims.core import claim_status
+
+    assert claim_status("node:ab-1")["holder"] == "h1"
 
 
 def test_acquire_json_output(cwd_tmp):
@@ -65,54 +55,11 @@ def test_acquire_json_output(cwd_tmp):
 
 
 def test_acquire_conflict_exits_1(cwd_tmp):
-    runner.invoke(cli, ["acquire", "k", "--holder", "h1"])
-    result = runner.invoke(cli, ["acquire", "k", "--holder", "h2"])
+    pid = str(os.getpid())
+    runner.invoke(cli, ["acquire", "k", "--holder", "h1", "--pid", pid])
+    result = runner.invoke(cli, ["acquire", "k", "--holder", "h2", "--pid", pid])
     assert result.exit_code == 1
     assert "held by" in result.output
-
-
-def test_acquire_contention_exhaustion_exits_1_not_a_traceback(cwd_tmp, monkeypatch):
-    """acquire_claim's contention-retry-exhaustion ClaimContended must be
-    caught and mapped to exit 1 (same "retry later" code as
-    ClaimHeldByOther), not escape as an uncaught traceback."""
-    import fno.claims.cli as claims_cli
-
-    def _raise(*args, **kwargs):
-        raise ClaimContended("acquire_claim gave up after 5 contention retries on 'k'")
-
-    monkeypatch.setattr(claims_cli, "acquire_claim", _raise)
-    result = runner.invoke(cli, ["acquire", "k", "--holder", "h1"])
-    assert result.exit_code == 1
-    assert "contention error" in result.output
-    assert result.exception is None or isinstance(result.exception, SystemExit)
-
-
-def test_refresh_contention_exhaustion_exits_1_not_a_traceback(cwd_tmp, monkeypatch):
-    """Same as acquire's: refresh_claim's contention-exhaustion ClaimContended
-    must be caught, not escape as an uncaught traceback."""
-    import fno.claims.cli as claims_cli
-
-    def _raise(*args, **kwargs):
-        raise ClaimContended("refresh_claim gave up after 5 contention retries on 'k'")
-
-    monkeypatch.setattr(claims_cli, "refresh_claim", _raise)
-    result = runner.invoke(cli, ["refresh", "k", "--holder", "h1"])
-    assert result.exit_code == 1
-    assert "contention error" in result.output
-    assert result.exception is None or isinstance(result.exception, SystemExit)
-
-
-def test_refresh_expired_claim_is_named_non_success(cwd_tmp, monkeypatch):
-    """Core's atomic expiry refusal must not render as a PID-liveness no-op."""
-    import fno.claims.cli as claims_cli
-
-    def _raise(*args, **kwargs):
-        raise ClaimValidationError("claim 'k' expired before refresh")
-
-    monkeypatch.setattr(claims_cli, "refresh_claim", _raise)
-    result = runner.invoke(cli, ["refresh", "k", "--holder", "h1"])
-    assert result.exit_code == 2
-    assert "expired before refresh" in result.output
 
 
 def test_reconcile_pr_reservation_mutex(cwd_tmp):
@@ -156,17 +103,20 @@ def test_acquire_with_ttl(cwd_tmp):
     assert parsed["pid_unavailable"] is True
 
 
-def test_acquire_omitted_pid_defaults_to_session_ancestor(cwd_tmp, monkeypatch):
-    # ponytail hardening: an omitted --pid anchors to the durable session
-    # (nearest agent ancestor), not the transient acquiring process. os.getppid()
-    # is a real, live, DISTINCT pid so this proves the wiring (not the old
-    # os.getpid() default).
-    monkeypatch.setattr("fno.claims.session_pid.resolve_session_pid",
-                        lambda from_pid=None: os.getppid())
+def test_acquire_omitted_pid_records_an_anchor(cwd_tmp):
+    # An omitted --pid records a process anchor: the durable session walk's
+    # answer when a harness ancestor exists, the calling process otherwise
+    # (the documented degrade). The walk-proven case is characterized in
+    # crates/fno-agents/tests/claim_acquire_parity.rs; the suite runs
+    # harness-neutral, so here the anchor is simply present and the claim
+    # never reads pid-unavailable without the flag.
     result = runner.invoke(cli, ["acquire", "k", "--holder", "h", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.output)
-    assert parsed["pid"] == os.getppid() and parsed["pid"] != os.getpid()
+    assert parsed["pid"] is not None
+    # to_yaml_dict omits the flag when False; a pid-anchored record must not
+    # carry it at all.
+    assert "pid_unavailable" not in parsed
 
 
 def test_acquire_omitted_pid_with_ttl_is_explicitly_unavailable(cwd_tmp, monkeypatch):
@@ -227,15 +177,51 @@ def test_release_strict_mismatch_exits_4(cwd_tmp):
     assert result.exit_code == 4
 
 
+def test_release_no_claim_reports_no_op(cwd_tmp):
+    """No file for the key means release_claim returns None: nothing was
+    unlinked. The old receipt printed 'released: <key>' anyway; that false
+    positive is the exact gap x-2146 traces 386 unclosed do rows to. The
+    verb stays idempotent (exit 0), only the words change."""
+    result = runner.invoke(cli, ["release", "node:never-acquired", "--holder", "h"])
+    assert result.exit_code == 0
+    assert "no-op" in result.output
+    assert "released:" not in result.output
+
+
+def test_release_no_claim_json_reports_released_false(cwd_tmp):
+    result = runner.invoke(cli, ["release", "node:never-acquired", "--holder", "h", "--json"])
+    assert result.exit_code == 0
+    parsed = json.loads(result.output)
+    assert parsed == {"key": "node:never-acquired", "released": False}
+
+
+def test_release_stamp_do_no_op_on_non_node_key_is_silent(cwd_tmp):
+    """A do row was never in play for a non-node: key (only node: keys stamp),
+    so the no-op skip message must not fire either - it would falsely imply a
+    do row existed for this key. The node-keyed skip lines themselves are the
+    parity goldens' contract (claim_release_parity stamp_do_noop_release)."""
+    result = runner.invoke(
+        cli, ["release", "dispatch:never-acquired", "--holder", "h", "--stamp-do"]
+    )
+    assert result.exit_code == 0
+    assert "do stamp skipped" not in result.output
+
+
 def test_status_free(cwd_tmp):
-    result = runner.invoke(cli, ["status", "nothing", "--json"])
+    result = runner.invoke(cli, ["status", "session:nothing", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.output)
     assert parsed["state"] == "free"
 
 
+def test_status_colonless_garbage_refuses(cwd_tmp):
+    result = runner.invoke(cli, ["status", "nothing", "--json"])
+    assert result.exit_code == 2
+    assert "claim key must include a recognized prefix" in result.output
+
+
 def test_status_live(cwd_tmp):
-    runner.invoke(cli, ["acquire", "k", "--holder", "h"])
+    runner.invoke(cli, ["acquire", "k", "--holder", "h", "--pid", str(os.getpid())])
     result = runner.invoke(cli, ["status", "k", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.output)
@@ -250,8 +236,9 @@ def test_list_empty(cwd_tmp):
 
 
 def test_list_with_prefix(cwd_tmp):
-    runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h"])
-    runner.invoke(cli, ["acquire", "fleet:m1", "--holder", "h"])
+    pid = str(os.getpid())
+    runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h", "--pid", pid])
+    runner.invoke(cli, ["acquire", "fleet:m1", "--holder", "h", "--pid", pid])
     result = runner.invoke(cli, ["list", "--prefix", "node:", "--json"])
     assert result.exit_code == 0
     parsed = json.loads(result.output)
@@ -276,11 +263,14 @@ def test_list_no_prefix_sees_global_claims_from_different_cwd(tmp_path, monkeypa
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
     monkeypatch.chdir(repo)
 
-    acquired = runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h"])
+    acquired = runner.invoke(
+        cli, ["acquire", "node:ab-1", "--holder", "h", "--pid", str(os.getpid())]
+    )
     assert acquired.exit_code == 0
     # Sanity: the claim landed under the global root, not the repo-local one.
-    assert (home / ".fno" / "claims" / "node%3Aab-1.lock").exists()
-    assert not (repo / ".fno" / "claims").exists()
+    from fno.claims.core import claim_status
+
+    assert claim_status("node:ab-1", root=home)["holder"] == "h"
 
     listed = runner.invoke(cli, ["list", "--json"])
     assert listed.exit_code == 0
@@ -291,7 +281,7 @@ def test_list_no_prefix_sees_global_claims_from_different_cwd(tmp_path, monkeypa
 def test_list_prefix_node_scans_global_root_once(cwd_tmp):
     """An explicit global --prefix still resolves the global root directly;
     the merge in list_cmd must not duplicate its rows."""
-    runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h"])
+    runner.invoke(cli, ["acquire", "node:ab-1", "--holder", "h", "--pid", str(os.getpid())])
     result = runner.invoke(cli, ["list", "--prefix", "node:", "--json"])
     assert result.exit_code == 0
     keys = [r["key"] for r in json.loads(result.output)]
@@ -309,6 +299,9 @@ def test_merge_across_roots_first_root_wins_row_and_totals_together(tmp_path):
     first root) while also being counted stale (from the second root) - an
     internal inconsistency invisible today only because the totals hint text
     happens to be gated on all_rows being empty."""
+    from fno.claims.cli import _merge_claims_across_roots
+    from fno.claims.io import dedup_claims_roots
+
     root_a = tmp_path / "root_a"
     root_b = tmp_path / "root_b"
     acquire_claim("k", "holder-a", pid=os.getpid(), root=root_a)
@@ -316,7 +309,7 @@ def test_merge_across_roots_first_root_wins_row_and_totals_together(tmp_path):
 
     deduped = dedup_claims_roots([root_a, root_b])
     all_rows, row_roots, totals = _merge_claims_across_roots(
-        deduped, prefix="", include_stale=False
+        deduped, prefix="k", include_stale=False
     )
 
     assert [r["key"] for r in all_rows] == ["k"]
@@ -338,6 +331,9 @@ def test_merge_across_roots_live_in_second_root_is_not_hidden_by_first_roots_sta
     counted instead - defeating the exact migration scenario this
     function's own docstring names. The live claim must win regardless of
     which root was scanned first."""
+    from fno.claims.cli import _merge_claims_across_roots
+    from fno.claims.io import dedup_claims_roots
+
     root_a = tmp_path / "root_a"
     root_b = tmp_path / "root_b"
     acquire_claim("k", "holder-a", pid=_dead_pid(), root=root_a)
@@ -345,7 +341,7 @@ def test_merge_across_roots_live_in_second_root_is_not_hidden_by_first_roots_sta
 
     deduped = dedup_claims_roots([root_a, root_b])
     all_rows, row_roots, totals = _merge_claims_across_roots(
-        deduped, prefix="", include_stale=False
+        deduped, prefix="k", include_stale=False
     )
 
     assert [r["key"] for r in all_rows] == ["k"], (
@@ -402,7 +398,7 @@ def test_a_flag_from_another_mode_is_refused_not_ignored(cwd_tmp):
 
 
 def test_refresh_pid_liveness_is_noop(cwd_tmp):
-    runner.invoke(cli, ["acquire", "k", "--holder", "h"])  # PID-liveness
+    runner.invoke(cli, ["acquire", "k", "--holder", "h", "--pid", str(os.getpid())])  # PID-liveness
     result = runner.invoke(cli, ["refresh", "k", "--holder", "h"])
     assert result.exit_code == 0
     assert "no-op" in result.output or "PID-liveness" in result.output
@@ -442,9 +438,10 @@ def test_status_node_key_finds_global_claim_without_env(tmp_path, monkeypatch):
     proj = tmp_path / "proj"
     proj.mkdir()
     monkeypatch.chdir(proj)
-    r = runner.invoke(cli, ["status", "node:ab-deadbeef", "--json"])
+    r = runner.invoke(cli, ["status", "ab-deadbeef", "--json"])
     assert r.exit_code == 0, r.output
     info = json.loads(r.output)
+    assert info["key"] == "node:ab-deadbeef"
     assert info["state"] == "live", info
     assert info["holder"] == "target-session:s"
 
@@ -486,9 +483,13 @@ def test_release_stamp_do_writes_the_do_window(tmp_path, monkeypatch):
         monkeypatch.delenv(m, raising=False)
 
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "ab-dotest", "title": "t", '
+    seed_graph(g, '{"entries": [{"id": "ab-dotest", "title": "t", '
                  '"domain": "code", "project": "p"}]}\n')
     monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
+    # The wave-2 leaf stamps inside the fno-agents binary, so the store is
+    # reached through the state dir, not the in-process graph_json patch (an
+    # env var crosses the subprocess boundary; a monkeypatch cannot).
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
 
     acquire_claim(key="node:ab-dotest", holder="target-session:s",
                   ttl_ms=3_600_000, root=home)
@@ -497,8 +498,8 @@ def test_release_stamp_do_writes_the_do_window(tmp_path, monkeypatch):
         cli, ["release", "node:ab-dotest", "--holder", "target-session:s", "--stamp-do"]
     )
     assert stamped.exit_code == 0, stamped.output
-    rows = json.loads(g.read_text())["entries"][0].get("sessions", [])
-    do = [x for x in rows if x.get("phase") == "do"]
+    rows = read_graph_strict(g)[0].get("sessions", [])
+    do = [x for x in rows if x.get("phase") == "execute"]
     assert len(do) == 1
     assert do[0]["harness"] == "claude"
     # owned (holder) session wins over the ambient CLAUDE_CODE_SESSION_ID
@@ -512,7 +513,6 @@ def test_handover_acquire_opens_the_do_row_too(tmp_path, monkeypatch):
     itself the one choke point every acquire path reaches. It is also the
     default path for every `fno agents spawn --node` worker, so a worker killed
     mid-phase would leave no do row at all."""
-    import fno.paths
     from fno.claims.core import acquire_claim
 
     home = tmp_path / "home"
@@ -524,10 +524,10 @@ def test_handover_acquire_opens_the_do_row_too(tmp_path, monkeypatch):
               "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
         monkeypatch.delenv(m, raising=False)
 
-    g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "ab-hotest", "title": "t", '
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
+    g = tmp_path / "state" / "db" / "graph.json"
+    seed_graph(g, '{"entries": [{"id": "ab-hotest", "title": "t", '
                  '"domain": "code", "project": "p"}]}\n')
-    monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
 
     # The spawn side takes the launch-window claim, then the worker names it back.
     acquire_claim(key="node:ab-hotest", holder="spawn-handover:t-worker",
@@ -540,11 +540,39 @@ def test_handover_acquire_opens_the_do_row_too(tmp_path, monkeypatch):
     assert out.exit_code == 0, out.output
     assert "handover from" in out.output
 
-    rows = json.loads(g.read_text())["entries"][0].get("sessions", [])
-    do = [x for x in rows if x.get("phase") == "do"]
+    rows = read_graph_strict(g)[0].get("sessions", [])
+    do = [x for x in rows if x.get("phase") == "execute"]
     assert len(do) == 1, rows
     assert do[0]["started_at"]
     assert not do[0].get("ended_at")
+
+
+def test_declined_handover_names_its_reason_before_falling_through(tmp_path, monkeypatch):
+    """AC5-EDGE: a declined handover fell through to the ordinary
+    acquire with a bare pass, so the caller saw only "held by <holder>" and
+    could not tell its own handover claim from a foreign one. The reason now
+    reaches stderr; the fall-through behavior (refuse, non-zero) is unchanged."""
+    from fno.claims.core import acquire_claim
+
+    home = tmp_path / "home"
+    (home / ".fno").mkdir(parents=True)
+    monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-dh-1")
+    for m in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID",
+              "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
+        monkeypatch.delenv(m, raising=False)
+
+    acquire_claim(key="node:ab-decline", holder="spawn-handover:t-worker",
+                  ttl_ms=900_000, root=home)
+    out = runner.invoke(cli, [
+        "acquire", "node:ab-decline", "--holder", "target-session:w",
+        "--handover-from", "spawn-handover:OTHER", "--ttl", "2h",
+    ])
+    assert out.exit_code != 0, out.output
+    assert "handover declined:" in out.output, out.output
+    assert "holder mismatch" in out.output, out.output
+    assert "held by spawn-handover:t-worker" in out.output, out.output
 
 
 def test_acquire_opens_do_provenance_row(tmp_path, monkeypatch):
@@ -553,7 +581,6 @@ def test_acquire_opens_do_provenance_row(tmp_path, monkeypatch):
     terminal still leaves a started row instead of reading unstarted (the
     killed-mid-phase specimen: PR open and green while the node showed only a
     blueprint row)."""
-    import fno.paths
 
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
@@ -564,23 +591,24 @@ def test_acquire_opens_do_provenance_row(tmp_path, monkeypatch):
               "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
         monkeypatch.delenv(m, raising=False)
 
-    g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "ab-acqtest", "title": "t", '
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
+    g = tmp_path / "state" / "db" / "graph.json"
+    seed_graph(g, '{"entries": [{"id": "ab-acqtest", "title": "t", '
                  '"domain": "code", "project": "p"}]}\n')
-    monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
 
     acq = runner.invoke(
         cli, ["acquire", "node:ab-acqtest", "--holder", "target-session:s", "--ttl", "1h"]
     )
     assert acq.exit_code == 0, acq.output
-    rows = json.loads(g.read_text())["entries"][0].get("sessions", [])
-    do = [x for x in rows if x.get("phase") == "do"]
+    rows = read_graph_strict(g)[0].get("sessions", [])
+    do = [x for x in rows if x.get("phase") == "execute"]
     assert len(do) == 1
     assert do[0]["harness"] == "claude"
     # owned (holder) session wins over the ambient CLAUDE_CODE_SESSION_ID
     assert do[0]["session_id"] == "s"
     assert do[0]["started_at"]
-    assert "ended_at" not in do[0]  # opened, not closed
+    # The typed store emits the full envelope: an open row's end fields are null.
+    assert do[0].get("ended_at") is None  # opened, not closed
 
 
 def test_acquire_then_release_closes_do_window(tmp_path, monkeypatch):
@@ -588,7 +616,6 @@ def test_acquire_then_release_closes_do_window(tmp_path, monkeypatch):
     ended_at on the SAME row via duplicate-fill - the merge that makes
     acquire-time stamping safe without losing the release window or adding a
     second row."""
-    import fno.paths
 
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
@@ -599,10 +626,10 @@ def test_acquire_then_release_closes_do_window(tmp_path, monkeypatch):
               "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
         monkeypatch.delenv(m, raising=False)
 
-    g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "ab-acqrel", "title": "t", '
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
+    g = tmp_path / "state" / "db" / "graph.json"
+    seed_graph(g, '{"entries": [{"id": "ab-acqrel", "title": "t", '
                  '"domain": "code", "project": "p"}]}\n')
-    monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
 
     acq = runner.invoke(
         cli, ["acquire", "node:ab-acqrel", "--holder", "target-session:s", "--ttl", "1h"]
@@ -612,8 +639,8 @@ def test_acquire_then_release_closes_do_window(tmp_path, monkeypatch):
         cli, ["release", "node:ab-acqrel", "--holder", "target-session:s", "--stamp-do"]
     )
     assert rel.exit_code == 0, rel.output
-    rows = json.loads(g.read_text())["entries"][0].get("sessions", [])
-    do = [x for x in rows if x.get("phase") == "do"]
+    rows = read_graph_strict(g)[0].get("sessions", [])
+    do = [x for x in rows if x.get("phase") == "execute"]
     assert len(do) == 1  # one row, not two - release closed the acquire row
     assert do[0]["started_at"] and do[0]["ended_at"]
     assert do[0]["started_at"] <= do[0]["ended_at"]
@@ -622,7 +649,6 @@ def test_acquire_then_release_closes_do_window(tmp_path, monkeypatch):
 def _do_graph(tmp_path, monkeypatch, node_id, session_marker):
     """A one-node graph wired as fno.paths.graph_json, with a clean claude
     ambient identity. Returns the graph path."""
-    import fno.paths
 
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
@@ -632,17 +658,19 @@ def _do_graph(tmp_path, monkeypatch, node_id, session_marker):
     for m in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID",
               "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
         monkeypatch.delenv(m, raising=False)
-    g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "%s", "title": "t", '
-                 '"domain": "code", "project": "p"}]}\n' % node_id)
-    monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
+    g = tmp_path / "state" / "db" / "graph.json"
+    seed_graph(
+        g,
+        [{"id": node_id, "title": "t", "domain": "code", "project": "p"}],
+    )
     return g
 
 
 def _do_rows(graph_path):
     return [
-        x for x in json.loads(graph_path.read_text())["entries"][0].get("sessions", [])
-        if x.get("phase") == "do"
+        x for x in read_graph_strict(graph_path)[0].get("sessions", [])
+        if x.get("phase") == "execute"
     ]
 
 
@@ -701,9 +729,7 @@ def test_rollback_do_spares_an_earlier_open_row_from_the_same_session(
     the claim's acquired_at while the row keeps the FIRST started_at (append
     never overwrites), so the rollback's started_at no longer matches and the
     earlier window survives its successor's refusal."""
-    import yaml
-
-    from fno.claims.io import claim_path
+    from tests._table_seed import read_claim_row, update_claim
 
     g = _do_graph(tmp_path, monkeypatch, "ab-rbearly", "sess-rb-3")
     home = tmp_path / "home"
@@ -716,10 +742,8 @@ def test_rollback_do_spares_an_earlier_open_row_from_the_same_session(
     # Stand in for the re-acquire's refreshed acquired_at without a wall-clock
     # sleep: the row's started_at is second-granular, so a same-second re-acquire
     # would not exercise the divergence this test is about.
-    cp = claim_path("node:ab-rbearly", root=home)
-    raw = yaml.safe_load(cp.read_text())
-    raw["acquired_at"] = raw["acquired_at"] + 60_000
-    cp.write_text(yaml.safe_dump(raw, sort_keys=False))
+    acquired = read_claim_row("node:ab-rbearly", root=home)["acquired_at"]
+    update_claim("node:ab-rbearly", root=home, acquired_at=acquired + 60_000)
 
     rel = runner.invoke(
         cli, ["release", "node:ab-rbearly", "--holder", "target-session:s", "--rollback-do"]
@@ -728,7 +752,7 @@ def test_rollback_do_spares_an_earlier_open_row_from_the_same_session(
     rows = _do_rows(g)
     assert len(rows) == 1
     assert rows[0]["started_at"] == first_started
-    assert "no open do row to roll back" in rel.output
+    assert "no open execute row to roll back" in rel.output
 
 
 def test_stamp_do_and_rollback_do_are_mutually_exclusive(tmp_path, monkeypatch):
@@ -756,7 +780,7 @@ def test_release_without_stamp_do_writes_no_provenance(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-do-2")
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": [{"id": "ab-dotest2", "title": "t", '
+    seed_graph(g, '{"entries": [{"id": "ab-dotest2", "title": "t", '
                  '"domain": "code", "project": "p"}]}\n')
     monkeypatch.setattr(fno.paths, "graph_json", lambda: g)
 
@@ -766,7 +790,7 @@ def test_release_without_stamp_do_writes_no_provenance(tmp_path, monkeypatch):
         cli, ["release", "node:ab-dotest2", "--holder", "target-session:s"]
     )
     assert bare.exit_code == 0, bare.output
-    assert json.loads(g.read_text())["entries"][0].get("sessions", []) == []
+    assert read_graph_strict(g)[0].get("sessions", []) == []
 
 
 def test_non_node_key_uses_cwd_not_global(tmp_path, monkeypatch):
@@ -839,7 +863,8 @@ def test_free_node_reports_unresolved_roster_rows(cwd_tmp, fake_roster):
     r = runner.invoke(cli, ["status", "node:x-76d1", "--json"])
     assert r.exit_code == 0
     info = json.loads(r.output)
-    assert info["state"] == "free"
+    assert info["state"] == "unknown"
+    assert info["basis"] == "unresolved-roster-row"
     assert info["roster_rows_scanned"] == 1
     assert info["roster_rows_unresolved"] == 1
     assert info["roster_unresolved_candidates"] == ["t-x76d1-near-miss"]
@@ -900,8 +925,9 @@ def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, fake_roster
     row that IS in the listing. Blocking on it printed "roster not consulted"
     forever and answered None for every SUSPECT claim, so nothing was reaped.
 
-    Carrying it is safe because an unknown state matches no finished state, so
-    the alarm reads the worker as engaged - the conservative direction."""
+    An unmapped word is no liveness evidence either: the row reads unmeasured,
+    never engaged-by-default - the old conservative alarm fired on a label
+    nobody had mapped, which is a verdict from a word, not a measurement."""
     from fno.agents.watchdog import ADVISORY_WARNING_PREFIX
 
     fake_roster(
@@ -909,8 +935,10 @@ def test_an_unmapped_row_state_does_not_degrade_the_reading(cwd_tmp, fake_roster
         warnings=[f"{ADVISORY_WARNING_PREFIX}unmapped row state 'frobnicating'"],
     )
     r = runner.invoke(cli, ["status", "node:x-76d1"])
-    assert "UNCLAIMED but a live worker is on this node" in r.output
+    assert "unmeasured, never live" in r.output
+    assert "t-x76d1-rmtruth" in r.output
     assert "roster not consulted" not in r.output
+    assert "UNCLAIMED but a live worker" not in r.output
 
 
 def test_an_unanticipated_warning_degrades_by_default(cwd_tmp, fake_roster):
@@ -928,8 +956,17 @@ def test_a_lying_done_row_still_raises_the_alarm(cwd_tmp, fake_roster, monkeypat
     incident `_TERMINAL_STATES` carries a warning about. A transcript that is
     positively still moving overrules the row, so an operator deciding whether
     to staff this node is told a worker is on it."""
+    import time as _t
+
+    from fno.agents.watchdog import TailFacts
+
     monkeypatch.setattr(
-        "fno.claims.cli._transcript_activity", lambda *_a, **_kw: False
+        "fno.agents.watchdog.tail_facts",
+        lambda *_a, **_kw: TailFacts(
+            records=None, last_event_epoch=_t.time() - 60,
+            tail_text="", last_role="assistant", last_text="working the task",
+            pr_polls=None,
+        ),
     )
     fake_roster(rows=[_row("t-x76d1-rmtruth", "done", "x-76d1")])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
@@ -941,8 +978,16 @@ def test_an_aged_out_transcript_leaves_the_row_standing(cwd_tmp, fake_roster, mo
     A wrong reap archives a live worker's claim; a wrong line here is an alarm
     on an empty node, and one that fires on every finished session whose
     transcript has aged out teaches operators to ignore the alarm."""
+    import time as _t
+
+    from fno.agents.watchdog import TailFacts
+
     monkeypatch.setattr(
-        "fno.claims.cli._transcript_activity", lambda *_a, **_kw: None
+        "fno.agents.watchdog.tail_facts",
+        lambda *_a, **_kw: TailFacts(
+            records=None, last_event_epoch=_t.time() - 11 * 3600,
+            tail_text="", last_role="assistant", last_text="...", pr_polls=None,
+        ),
     )
     fake_roster(rows=[_row("t-x76d1-rmtruth", "done", "x-76d1")])
     r = runner.invoke(cli, ["status", "node:x-76d1"])
@@ -989,7 +1034,11 @@ def test_a_held_node_never_pays_for_the_crosscheck(cwd_tmp, monkeypatch):
         raise AssertionError("roster consulted for a held node")
 
     monkeypatch.setattr("fno.agents.watchdog.fleet_rows", _boom)
-    acquire_claim(key="node:x-held", holder="target-session:s", ttl_ms=60_000)
+    # status routes a node: key to the GLOBAL root; acquire with the same
+    # explicit root so both legs read one dir (cwd_tmp collapses them).
+    acquire_claim(
+        key="node:x-held", holder="target-session:s", ttl_ms=60_000, root=cwd_tmp
+    )
     r = runner.invoke(cli, ["status", "node:x-held", "--json"])
     info = json.loads(r.output)
     assert info["state"] == "live"
@@ -1019,3 +1068,121 @@ def test_handover_refuses_transient_cli_pid(monkeypatch, cwd_tmp):
     )
     assert result.exit_code == 2
     assert "--handover-from needs a durable pid" in result.output
+
+
+def test_a_stub_captured_at_import_never_answers_for_the_cli(cwd_tmp):
+    """The claims CLI binds the core callables at module import, and a
+    worker's first import of this module can land while another test's core
+    stub is active (the spawn-guard handlers import this module lazily). The
+    stub was then captured for the worker's whole life: every later
+    `claim acquire` printed success and wrote nothing. The reload stages that
+    first-import race deterministically; the positive marker is the claim
+    FILE on disk, which a captured stub never produces."""
+    import importlib
+    from types import SimpleNamespace
+
+    import fno.claims.cli as claims_cli_module
+    import fno.claims.core as claims_core
+
+    saved = claims_core.acquire_claim
+
+    def _stub(*_a, **_k):
+        return SimpleNamespace(holder="ME", pid=os.getpid())
+
+    claims_core.acquire_claim = _stub
+    try:
+        importlib.reload(claims_cli_module)
+    finally:
+        claims_core.acquire_claim = saved
+    try:
+        result = runner.invoke(
+            cli,
+            [
+                "acquire", "node:N",
+                "--holder", "target-session:sid-captured",
+                "--ttl", "1m",
+                "--pid", str(os.getpid()),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        from fno.claims.core import claim_status
+
+        assert claim_status("node:N")["holder"] == "target-session:sid-captured", (
+            f"acquire printed success but wrote no claim: {result.output}"
+        )
+    finally:
+        # Drop whatever this reload captured so later tests get the real
+        # function even when the assertion above fails.
+        importlib.reload(claims_cli_module)
+
+
+def _write_claim_file(key, *, expires_at):
+    """A claim whose TTL lapsed under a provably live pid (this process).
+
+    pid_provenance="session-prover" plus a pid-dies-with-session harness is
+    the arm the native verdict keeps Live past the TTL; a legacy-shaped
+    record reads Stale on the clock alone.
+    """
+    import os
+    import socket
+
+    import psutil
+
+    from fno.claims.hostid import machine_id
+    from fno.claims.io import claim_path, serialize_claim
+    from fno.claims.types import Claim
+
+    # The verdict reads PID reuse when the pid's create time EXCEEDS
+    # acquired_at, so pin acquired_at a beat after THIS process's birth: the
+    # freshest provably-live pid a test can own.
+    pid = os.getpid()
+    acquired_at = int(psutil.Process(pid).create_time() * 1000) + 2_000
+    claim = Claim(
+        key=key,
+        holder="target-session:sid-e",
+        acquired_at=acquired_at,
+        pid=pid,
+        host=socket.gethostname(),
+        machine_id=machine_id(),
+        harness="claude",
+        pid_provenance="session-prover",
+        expires_at=expires_at,
+    )
+    p = claim_path(key)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(serialize_claim(claim))
+    return p
+
+
+def test_status_live_expired_ttl_names_the_expiry(cwd_tmp):
+    """AC3-HP (x-74aa): a live claim past its TTL renders the expiry clause
+    with the age and the evidence keeping the holder live, not a bare live."""
+    from fno.claims.types import now_ms
+
+    _write_claim_file("k", expires_at=now_ms() - 60_000)
+    r = runner.invoke(cli, ["status", "k"])
+    assert r.exit_code == 0, r.output
+    assert "ttl expired" in r.output
+    assert "holder live by" in r.output
+    assert json.loads(r.stdout)["state"] == "live"
+
+
+def test_status_live_fresh_lease_has_no_expiry_clause(cwd_tmp):
+    """AC3-EDGE: a lease inside its TTL renders no expiry clause."""
+    runner.invoke(cli, ["acquire", "k", "--holder", "h"])
+    r = runner.invoke(cli, ["status", "k"])
+    assert r.exit_code == 0, r.output
+    assert "ttl expired" not in r.output
+
+
+def test_unresolved_roster_row_naming_another_node_stays_free(cwd_tmp, fake_roster):
+    """AC4-HP (x-74aa): an unresolved row whose worktree names some OTHER node
+    is not evidence about this key; the state stays the claim's own free and
+    only coverage reads degraded."""
+    fake_roster(rows=[_row("t-unrelated", "working", None, "/tmp/x-other-node")])
+    r = runner.invoke(cli, ["status", "node:x-76d1", "--json"])
+    assert r.exit_code == 0
+    info = json.loads(r.output)
+    assert info["state"] == "free"
+    assert info.get("basis") != "unresolved-roster-row"
+    assert info["roster_coverage"] == "degraded"

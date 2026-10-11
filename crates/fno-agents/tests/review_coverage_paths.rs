@@ -19,6 +19,23 @@ use tempfile::TempDir;
 
 const HEAD: &str = "deadbeefdeadbeefdeadbeefdeadbeef00000001";
 
+/// The loopcheck module's production source: the root file plus its child
+/// modules, which hold the code split out of it. Test children are skipped.
+fn loopcheck_source(manifest_dir: &Path) -> String {
+    let mut text = fs::read_to_string(manifest_dir.join("src/loopcheck.rs")).unwrap();
+    let mut children: Vec<PathBuf> = fs::read_dir(manifest_dir.join("src/loopcheck"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    children.sort();
+    for child in children {
+        text.push('\n');
+        text.push_str(&fs::read_to_string(child).unwrap());
+    }
+    text
+}
+
 /// One row of the reachability table (mirrors the table in
 /// docs/architecture/review-lanes.md).
 enum ProducerReach {
@@ -29,6 +46,11 @@ enum ProducerReach {
     /// The path deliberately does NOT get a producer, for the stated reason.
     SafeDirection(&'static str),
 }
+
+#[path = "space_paths.rs"]
+mod space_paths;
+
+use space_paths::project_events;
 
 fn path_table() -> Vec<(&'static str, &'static str, ProducerReach)> {
     vec![
@@ -102,10 +124,10 @@ fn writer_return_table() -> Vec<(&'static str, &'static str)> {
 #[test]
 fn every_coverage_status_return_has_a_positive_marker() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source = fs::read_to_string(manifest_dir.join("src/loopcheck.rs")).unwrap();
+    let source = loopcheck_source(manifest_dir);
     let start = source.find("fn publish_coverage_status(").unwrap();
     let end = source[start..]
-        .find("/// The give-up line")
+        .find("\n}\n")
         .map(|offset| start + offset)
         .unwrap();
     let publisher = &source[start..end];
@@ -129,19 +151,15 @@ fn every_coverage_status_return_has_a_positive_marker() {
 }
 
 fn coverage_exists(path: &Path) -> bool {
-    fs::read_to_string(path)
-        .map(|t| {
-            t.lines()
-                .filter(|l| l.contains("review_coverage"))
-                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-                .any(|ev| ev.get("type").and_then(|t| t.as_str()) == Some("review_coverage"))
-        })
-        .unwrap_or(false)
+    fno_agents::event_store::journal_text(path, &[])
+        .lines()
+        .filter(|l| l.contains("review_coverage"))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .any(|ev| ev.get("type").and_then(|t| t.as_str()) == Some("review_coverage"))
 }
 
 fn coverage_review_state(path: &Path) -> Option<String> {
-    fs::read_to_string(path)
-        .ok()?
+    fno_agents::event_store::journal_text(path, &[])
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|event| {
@@ -190,7 +208,7 @@ exit 1"#
 esac"#
         ),
     );
-    let project = cwd.join(".fno/events.jsonl");
+    let project = project_events(&cwd);
     let global = parent.join(format!("{name}-global-events.jsonl"));
     (cwd, project, global, gh, git)
 }
@@ -384,7 +402,9 @@ fn new_reader_sites_must_join_the_table() {
                 *n == "fno do pr coverage-check <n> without --recompute (and the git-protection hook through it)"
             }),
             "_merge.py" => table_names.iter().any(|n| *n == "fno do pr merge <n>"),
-            "_status.py" => table_names.iter().any(|n| *n == "fno do pr status <n>"),
+            // _status.py was deleted by the pr-status port; its status read
+            // is the Rust composer's now (pr_status/reviews.rs), which this
+            // scan does not sweep.
             _ => false,
         };
         assert!(
@@ -394,20 +414,16 @@ fn new_reader_sites_must_join_the_table() {
     }
     assert!(
         reader_files.contains(&"_merge.py".to_string())
-            && reader_files.contains(&"_status.py".to_string())
             && reader_files.contains(&"_coverage_gate.py".to_string()),
         "a gate row stopped reading coverage"
     );
 
     // And the gates route through the recompute: both files name the shared
-    // helper, which is the only path to the verb. The status row passes
-    // `recompute=review_lane` (not a bare True): the producer spawn is gated
-    // on the same no-lane boundary merge reads, while the read itself still
-    // goes through this helper.
-    for (file, needle) in [
-        ("_merge.py", "review_coverage_for_gate"),
-        ("_status.py", "recompute=review_lane"),
-    ] {
+    // helper, which is the only path to the verb. The status row passed
+    // `recompute=review_lane` (not a bare True); that reader is the Rust
+    // composer's now (pr_status/reviews.rs), so only merge's Python row is
+    // pinned here.
+    for (file, needle) in [("_merge.py", "review_coverage_for_gate")] {
         let text = fs::read_to_string(pr_dir.join(file)).unwrap();
         assert!(
             text.contains(needle),
@@ -433,7 +449,9 @@ fn new_reader_sites_must_join_the_table() {
         finalize.contains("fno-gh-coverage") && finalize.contains("bot_verdict"),
         "finalize fallback stopped consuming the shared normalized evidence and predicate"
     );
-    for consumer in ["_status.py", "_merge.py"] {
+    // _status.py was deleted by the pr-status port; its reviewer-refused
+    // consumption is the Rust composer's now.
+    for consumer in ["_merge.py"] {
         let source = fs::read_to_string(pr_dir.join(consumer)).unwrap();
         assert!(
             source.contains("reviewer_refused"),
@@ -461,10 +479,10 @@ fn every_table_row_names_a_path_that_exists() {
         .nth(2)
         .expect("crate sits at <repo>/crates/fno-agents");
     let cli = fs::read_to_string(repo_root.join("cli/src/fno/pr/cli.py")).unwrap();
-    let rust_srcs: Vec<String> = ["src/loopcheck.rs", "src/finalize.rs"]
-        .iter()
-        .map(|s| fs::read_to_string(manifest_dir.join(s)).unwrap())
-        .collect();
+    let rust_srcs: Vec<String> = vec![
+        loopcheck_source(manifest_dir),
+        fs::read_to_string(manifest_dir.join("src/finalize.rs")).unwrap(),
+    ];
 
     for (path_name, _, _) in path_table() {
         if let Some(rest) = path_name.strip_prefix("fno do pr ") {
@@ -527,7 +545,7 @@ fn operator_waiver_law_surface_is_pinned_across_both_gates() {
         .ancestors()
         .nth(2)
         .expect("crate sits at <repo>/crates/fno-agents");
-    let rust = fs::read_to_string(manifest_dir.join("src/loopcheck.rs")).unwrap();
+    let rust = loopcheck_source(manifest_dir);
     let python = fs::read_to_string(repo_root.join("cli/src/fno/pr/_coverage_gate.py")).unwrap();
     // One standing subject, spelled identically on both sides.
     assert!(
@@ -543,10 +561,6 @@ fn operator_waiver_law_surface_is_pinned_across_both_gates() {
     assert!(rust.contains("\"backlog\"") && rust.contains("\"decisions\""));
     assert!(rust.contains("\"--lane\"") && rust.contains("\"law\""));
     assert!(rust.contains("\"--state\"") && rust.contains("\"live\""));
-    assert!(
-        rust.contains("/current_law/status"),
-        "the Rust reader must decide on current_law.status only"
-    );
     // One affirmative decision value on both sides: a single row counts only
     // when its decision equals it, so a denial recorded at a waiver subject
     // reads as no waiver on BOTH gates.
@@ -555,7 +569,7 @@ fn operator_waiver_law_surface_is_pinned_across_both_gates() {
         "the Rust affirmative waiver value moved"
     );
     assert!(
-        rust.contains("/decisions/0/decision"),
+        rust.contains("== WAIVER_DECISION => LawStatus::Single"),
         "the Rust reader stopped checking the row's decision value"
     );
     assert!(
@@ -563,7 +577,26 @@ fn operator_waiver_law_surface_is_pinned_across_both_gates() {
         "the Python affirmative waiver value moved"
     );
     assert!(
-        python.contains("list_decisions(subject, lane=\"law\", state=\"live\")"),
+        python.contains("\"mode\": \"decisions\"")
+            && python.contains("\"--lane\", \"law\"")
+            && python.contains("\"--state\", \"live\""),
         "the Python gate grew a second law reader"
+    );
+    // Only operator authority counts as waiver evidence: a chat_attested row
+    // cannot carry the person-at-a-terminal fact a waiver asserts, and the
+    // law door is open to any harness-descended process. Both gates filter
+    // rows to operator BEFORE the count - Rust derives from the CLI's row
+    // list rather than trusting current_law.status, which counts
+    // chat_attested rows too and would read a forged row beside a real
+    // operator waiver as a conflict. The write path refuses non-operator rows
+    // at these subjects outright (WaiverAuthorityRefusedError), so this pin
+    // is the reader half.
+    assert!(
+        rust.contains("r.get(\"authority_source\").and_then(|a| a.as_str()) == Some(\"operator\")"),
+        "the Rust reader stopped filtering waiver rows to operator authority"
+    );
+    assert!(
+        python.contains("row.get(\"authority_source\") or \"\") == \"operator\""),
+        "the Python gate stopped filtering waiver rows to operator authority"
     );
 }

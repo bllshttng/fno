@@ -26,30 +26,28 @@ def _state_dir() -> Path:
 
 
 def _graph_json() -> Path:
-    """Route through paths.graph_json() to honour config.paths.graph_json override."""
     try:
         from fno import paths as _paths
         return _paths.graph_json()
     except Exception:
-        return _state_dir() / "graph.json"
+        root = _state_dir()
+        if (root / "db" / "graph.db").exists():
+            return root / "db" / "graph.json"
+        if (root / "graph.db").exists():
+            return root / "graph.json"
+        return root / "db" / "graph.json"
 
 
 def _graph_md() -> Path:
-    return _state_dir() / "graph.md"
+    return _state_dir() / "pages" / "graph.md"
 
 
 def _graph_html() -> Path:
-    return _state_dir() / "graph.html"
+    return _state_dir() / "pages" / "graph.html"
 
 
 def _graph_archive_json() -> Path:
-    """Route through paths.graph_archive_json() so the archive tracks any
-    config.paths.graph_json override (it is a sibling of the working graph)."""
-    try:
-        from fno import paths as _paths
-        return _paths.graph_archive_json()
-    except Exception:
-        return _state_dir() / "graph-archive.json"
+    return _graph_json().parent / "graph-archive.json"
 
 
 def _ledger_json() -> Path:
@@ -75,6 +73,13 @@ def _briefs_dir() -> Path:
 # still work but are evaluated on first access, not at module import.
 # We define them as regular names for backward-compat; they resolve state_dir()
 # lazily by calling the helpers above.
+#
+# TEST TRAP: these names are NOT real module attributes. Patch them with
+# ``monkeypatch.setitem(vars(module), NAME, value)``, never ``setattr``: a
+# setattr's undo restores via setattr, which BAKES the resolved path into the
+# module as a concrete attribute and defeats the lazy resolution for every
+# later test in the process. Load-bearing consumers (the store's canonicality
+# check) therefore read the resolver, ``paths.graph_json()``, not this facade.
 
 def __getattr__(name: str) -> Path:
     _lazy = {
@@ -112,13 +117,16 @@ LEGACY_HEX = 8
 ID_PREFIX = LEGACY_PREFIX
 
 # Liberal, bounded, config-FREE grammar for a well-formed node id: a lowercase
-# prefix (1-8 chars, letter-led) + '-' + 4-8 hex. Accepts the legacy
-# ``ab-{8hex}`` and any configured ``<prefix>-<4..8hex>``. Config-free on purpose
+# prefix (1-8 chars, letter-led) + an optional '-' + 4-8 hex. Accepts the legacy
+# ``ab-{8hex}``, any configured ``<prefix>-<4..8hex>``, and the dash-less
+# ``<prefix><4..8hex>`` ids the minter briefly minted before 2026-09-27
+# that remain first-class graph residents. Config-free on purpose
 # so pydantic validators (which run without a settings context) can use it. It is
 # deliberately liberal: it also matches sibling families like ``cv-12345678``, so
 # callers that EXTRACT ids from free text MUST filter the candidates against real
-# graph keys (never trust the grammar alone).
-NODE_ID_BODY = r"[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}"
+# graph keys (never trust the grammar alone) - the graph, not the shape, is the
+# identity check (resolution is format-agnostic).
+NODE_ID_BODY = r"[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}"
 _WELLFORMED_NODE_ID_RE = re.compile(NODE_ID_BODY)
 _NODE_ID_EXTRACT_RE = re.compile(r"\b" + NODE_ID_BODY + r"\b")
 
@@ -126,6 +134,35 @@ _NODE_ID_EXTRACT_RE = re.compile(r"\b" + NODE_ID_BODY + r"\b")
 # collision near ~300 nodes, so the retry loop is load-bearing; this cap bounds
 # it so a near-exhausted ID space raises rather than spinning forever.
 _MINT_MAX_ATTEMPTS = 10_000
+
+# Where a node came from, shared by every writer of ``source_kind``. The four
+# original values map to their push channel: organic is the unset default,
+# from_inbox is mail, from_observation is an agent noticing, from_supervisor is
+# a role filing. operator_request marks a node the OPERATOR asked for - no
+# pre-existing value meant that, so an operator ask landed as organic and read
+# the same as a worker filing its own idea.
+SOURCE_KINDS = frozenset(
+    {"organic", "from_inbox", "from_observation", "from_supervisor", "operator_request"}
+)
+SOURCE_KIND_DEFAULT = "organic"
+
+# Request-origin buckets; the decision lives in node_origin.rs.
+REQUEST_ORIGINS = frozenset({"operator_request", "agent_discovery", "automated_followup", "unknown"})
+REQUEST_ORIGIN_DEFAULT = "unknown"
+
+
+def validate_source_kind(value: str) -> str:
+    """Return ``value`` when it is in the vocabulary; raise ``ValueError`` else.
+
+    One validator for every writer (``new``, ``idea``, ``capture promote``),
+    so the legal set and the error text cannot drift apart.
+    """
+    if value not in SOURCE_KINDS:
+        raise ValueError(
+            f"invalid --source-kind {value!r}. "
+            f"Must be one of: {', '.join(sorted(SOURCE_KINDS))}"
+        )
+    return value
 
 
 def is_wellformed_node_id(s: object) -> bool:
@@ -178,7 +215,7 @@ def has_node_id_prefix(s: object) -> bool:
 def node_id_suffix(node_id: str) -> str:
     """Return the part of ``node_id`` after its first ``-`` (the hex tail).
 
-    ``ab-a3f9c1d2`` -> ``a3f9c1d2``; ``xy-a3f9`` -> ``a3f9``. Used to derive a
+    ```` -> ``a3f9c1d2``; ``xy-a3f9`` -> ``a3f9``. Used to derive a
     prefix-independent handle (e.g. a ``tgt-`` agent name) by stripping the
     configured prefix at the ``-`` boundary rather than a hardcoded ``[3:]``.
     """
@@ -227,7 +264,7 @@ def _archived_id_pool() -> set[str]:
     can observe it. Tests get distinct tmp paths, so the path half of the key
     separates fixtures.
 
-    A raw parse, not `read_graph` (x-f69b regression): `read_graph`'s
+    A raw parse, not `read_graph` (regression): `read_graph`'s
     corrupt-JSON path prints a stderr warning AND copies a `.bak` backup as a
     side effect before raising - fine for a deliberate `fno doctor`/`archive`
     invocation, but this call is an invisible side channel inside a hot path,
@@ -237,9 +274,7 @@ def _archived_id_pool() -> set[str]:
     try:
         import json as _json
 
-        from fno.paths import graph_archive_json
-
-        archive_path = graph_archive_json()
+        archive_path = _graph_archive_json()
         if not archive_path.exists():
             _ARCHIVE_ID_MEMO["key"] = None
             return set()
@@ -267,7 +302,7 @@ def mint_node_id(existing_ids) -> str:
     raises RuntimeError when the ID space is near exhaustion rather than
     looping forever (AC2-EDGE).
 
-    The archive read is best-effort (x-f69b): a sweep frees a working-graph id
+    The archive read is best-effort : a sweep frees a working-graph id
     for reuse, so minting against the working graph alone reissues an id that
     still names a different node in graph-archive.json. A bad archive read
     degrades to the working-graph-only pool rather than blocking every mint.
@@ -300,7 +335,8 @@ DEFAULT_PRIORITY: str = "p2"
 P0_REFUSAL = (
     "p0 blocks everything else, usually a bug. "
     "Use --blocks-everything only when a broken service or fleet-wide resource "
-    "leak blocks all downstream work. Run this next: fno backlog rank <id> --top"
+    "leak blocks all downstream work. If it does, say so with "
+    "--blocks-everything; otherwise file it p1."
 )
 
 
@@ -329,6 +365,7 @@ DEFERRED_KINDS: tuple[str, ...] = (
     "expired",  # aged out by machinery, no human judgment (maintain drain, stale-quarantine)
     "blocked",  # waiting on a named thing
     "wont_do",  # an operator/author ruled against it
+    "retracted",  # filed on a false premise; stamped only by `fno backlog retract`, halt signal for the blueprint consolidation gate
     "superseded",  # the work moved elsewhere (also its own status; kind only on deferred rows)
     "later",  # real intent, not now
     "contingent",  # fires only if a named condition fires
@@ -404,7 +441,7 @@ def write_canonical_difficulty(
 ) -> None:
     """Write the canonical band, drain the retired spelling, attribute.
 
-    The ONE canonical-write shape (x-baef): the drain must ride the write,
+    The ONE canonical-write shape : the drain must ride the write,
     because leaving ``model_tier`` behind manufactures a both-spellings row
     the migration refuses batch-wide, with no verb left that can remove the
     key (its flag is a tombstone). ``history_on``: ``"change"`` (update - a
@@ -422,11 +459,11 @@ def write_canonical_difficulty(
     if history_on == "always" or band != prior:
         append_difficulty_history(row, band, source, ts)
 
-# Tags (x-6c2b wave 1): lowercase-kebab only, so they mirror cleanly into
+# Tags (wave 1): lowercase-kebab only, so they mirror cleanly into
 # Obsidian frontmatter `tags:` and stay legible as Base/tag-search filters.
 TAG_CHARSET_RE = re.compile(r"^[a-z0-9-]+$")
 
-# Epic nesting cap (x-6c2b wave 3): mission -> epic -> leaf. Two epic levels
+# Epic nesting cap (wave 3): mission -> epic -> leaf. Two epic levels
 # keep rollup O(children) and the mental model flat; deeper nesting refuses.
 EPIC_NEST_MAX_DEPTH: int = 2
 

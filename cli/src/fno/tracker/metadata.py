@@ -50,23 +50,29 @@ def _graph_store_path() -> Path:
 
         return paths.graph_json()
     except Exception:  # noqa: BLE001 - mirror _constants' fail-open default
-        from fno.graph._constants import _state_dir
+        from fno.graph._constants import _graph_json
 
-        return _state_dir() / "graph.json"
+        return _graph_json()
 
 
 def read_entries(reader: str, *, strict: bool = False) -> list[dict]:
-    """Raw default-backend entries, for the guarded metadata reader class.
+    """Raw default-backend entries; ``reader`` names the calling module.
 
-    ``reader`` names the calling module (diagnostics read better than a bare
-    traceback). Raises :class:`ExternalMetadataUnavailable` before any store
-    read when an external backend is selected.
+    Raises :class:`ExternalMetadataUnavailable` before any store read under an
+    external backend. Non-strict keeps the soft contract: corrupt degrades to
+    an empty answer, unreachable still raises.
     """
     from . import active_backend_name
 
     if active_backend_name() != "graph":
         raise ExternalMetadataUnavailable(reader)
-    from fno.graph.store import read_graph, read_graph_strict
+    from fno.graph.api import wire_rows
+    from fno.graph.store import GraphCorruptError, read_graph_strict
 
     path = _graph_store_path()
-    return read_graph_strict(path) if strict else read_graph(path)
+    if strict:
+        return read_graph_strict(path)
+    try:
+        return wire_rows(path=path)
+    except GraphCorruptError:
+        return []

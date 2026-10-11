@@ -8,12 +8,6 @@ Verbs:
     reconcile-status  - normalize drifted plan frontmatter status in place
     folder-audit      - count folder plans owned by a non-terminal graph node
     path              - print the save path for a NEW plan/design doc (config.plans_filename)
-
-stamp and graduate forward all unknown args + propagate exit codes from the
-in-package ``fno.plan._stamp`` module. brief is implemented in fno.plan.brief.
-
-Why a CLI verb at all? It's the polished surface skills can call instead of
-spawning ``python3 -m fno.plan._stamp`` directly.
 """
 from __future__ import annotations
 
@@ -39,21 +33,16 @@ plan_app = typer.Typer(
 
 
 def _forward(verb: str, extra_args: List[str]) -> int:
-    """Subprocess into the in-package stamp module with verb + extra_args.
+    """Send verb + extra_args to the keeper-served plan-doc writer; return its exit code."""
+    from fno.plan._project import plan_docs
 
-    Runs ``python3 -m fno.plan._stamp`` under the current interpreter so the
-    module is always importable in-package (no repo-root resolution, no
-    script-missing degrade). Returns the module's exit code so callers chain.
-    """
-    cmd = [sys.executable, "-m", "fno.plan._stamp", verb] + extra_args
-    result = subprocess.run(cmd, check=False)
-    return result.returncode
+    return (plan_docs("argv", verb=verb, args=extra_args) or {"exit": 1})["exit"]
 
 
 @plan_app.command(
     "stamp",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    help="Stamp plan frontmatter with ship metadata. Forwards all args to fno.plan._stamp stamp.",
+    help="Stamp plan frontmatter with ship metadata. Forwards all args to the plan-doc writer.",
 )
 def stamp(ctx: typer.Context) -> None:
     rc = _forward("stamp", list(ctx.args))
@@ -63,7 +52,7 @@ def stamp(ctx: typer.Context) -> None:
 @plan_app.command(
     "graduate",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-    help="Graduate a stamped plan (shipped -> done). Forwards all args to fno.plan._stamp graduate.",
+    help="Graduate a stamped plan (in_review -> done). Forwards all args to the plan-doc writer.",
 )
 def graduate(ctx: typer.Context) -> None:
     rc = _forward("graduate", list(ctx.args))
@@ -75,7 +64,7 @@ def graduate(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
         "Authoritatively set a plan's expected_url_count (count-only). Forwards "
-        "all args to fno.plan._stamp set-expected. Used to record the "
+        "all args to the plan-doc writer. Used to record the "
         "group count on a shared epic-decomposition doc."
     ),
 )
@@ -89,8 +78,9 @@ def set_expected(ctx: typer.Context) -> None:
     help=(
         "Print the save path for a NEW plan/design doc: the resolved plans dir "
         "(plansDirectory -> config.plans_dir) joined with the config.plans_filename "
-        "template (strftime + {slug}/{node}). /think and /blueprint shell this "
-        "instead of hardcoding a filename convention."
+        "template (strftime + {slug}/{node}). Resolution is the Rust chain; this "
+        "verb forwards to it through the pydoor. /think and /blueprint shell "
+        "this instead of hardcoding a filename convention."
     ),
 )
 def path(
@@ -100,9 +90,22 @@ def path(
         False, "--name-only", help="Print just the rendered filename, no directory."
     ),
 ) -> None:
-    from fno.paths import plan_doc_filename, plan_doc_path
+    from fno.rust_binary import resolve_binary
 
-    print(plan_doc_filename(slug, node) if name_only else plan_doc_path(slug, node))
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("fno do plan path: the fno-agents binary was not found", err=True)
+        raise typer.Exit(code=1)
+    args = ["state", "plan-path", "--slug", slug, "--node", node]
+    if name_only:
+        args.append("--name-only")
+    proc = subprocess.run([str(binary), *args], capture_output=True, text=True)
+    if proc.stdout:
+        print(proc.stdout, end="")
+    if proc.returncode != 0:
+        if proc.stderr:
+            typer.echo(proc.stderr.rstrip(), err=True)
+        raise typer.Exit(code=proc.returncode or 1)
 
 
 # Update the module docstring's verb list when adding verbs above.
@@ -244,7 +247,7 @@ def fidelity(
         180, "--since-days", help="Ledger lookback window in days."
     ),
 ) -> None:
-    """The plan-fidelity gate decision for one plan (x-cbab)."""
+    """The plan-fidelity gate decision for one plan."""
     from fno.plan.fidelity import compute_plan_fidelity
 
     decision = compute_plan_fidelity(plan_path=plan_path, since_days=since_days)
@@ -257,7 +260,7 @@ def fidelity(
 
 
 def _render_fidelity(decision: dict) -> None:
-    out = sys.stdout.write
+    out = (sys.stderr if decision.get("refused") else sys.stdout).write
     if decision.get("refused"):
         out(f"REFUSED: {decision.get('reason', 'uncovered shortfall')}\n")
     else:
@@ -330,7 +333,7 @@ def validate(
     if execution:
         from fno.plan.execution_validation import validate_execution
 
-        # The creation-time half of the difficulty gate (x-baef round-5):
+        # The creation-time half of the difficulty gate (round-5):
         # validate-plan.sh runs --execution, which used to reach neither this
         # branch's body checks nor PlanFrontmatter below, so a post-gate plan
         # with no difficulty sailed through authoring and only died later at
@@ -362,6 +365,13 @@ def validate(
             raise typer.Exit(code=1)
 
         result = validate_execution(doc)
+        # `warnings` was hardcoded empty in all three branches below, so a
+        # warning the validator emitted reached nobody and existed only under
+        # unit test. A channel nothing prints is not a channel.
+        warnings = [
+            {"field": warning.field, "message": warning.message}
+            for warning in result.warnings
+        ]
         if result.violations:
             violations = [
                 {"field": violation.field, "message": violation.message}
@@ -373,7 +383,7 @@ def validate(
                     "path": str(resolved),
                     "scope": "execution",
                     "violations": violations,
-                    "warnings": [],
+                    "warnings": warnings,
                 }))
             else:
                 typer.echo(
@@ -385,6 +395,11 @@ def validate(
                         f"  {violation['field']}: {violation['message']}",
                         err=True,
                     )
+                for warning in warnings:
+                    typer.echo(
+                        f"  warning: {warning['field']}: {warning['message']}",
+                        err=True,
+                    )
             raise typer.Exit(code=1)
 
         if json_out:
@@ -393,9 +408,16 @@ def validate(
                 "path": str(resolved),
                 "scope": "execution",
                 "violations": [],
-                "warnings": [],
+                "warnings": warnings,
             }))
         else:
+            # A warning never changes the verdict, so the plan still reads
+            # valid; it prints on stderr so the author sees it beside the pass.
+            for warning in warnings:
+                typer.echo(
+                    f"  warning: {warning['field']}: {warning['message']}",
+                    err=True,
+                )
             typer.echo(f"valid execution: {resolved}")
         return
 
@@ -438,19 +460,20 @@ def folder_audit(
         None, "--plans-dir", help="Plans dir to scan (default: resolved plans-content dir)."
     ),
 ) -> None:
-    from fno.graph._constants import GRAPH_JSON
     from fno.graph.statuses import recompute_statuses
-    from fno.graph.store import GraphCorruptError, _apply_graph_defaults, _read_json
-    from fno.paths import plans_content_dir
+    from fno.graph.store import GraphCorruptError, GraphUnreadableError, read_graph_strict
+    from fno.paths import graph_json, plans_content_dir
     from fno.plan._folder_audit import scan
 
     plans_root = Path(plans_dir_opt) if plans_dir_opt else plans_content_dir()
 
     try:
-        entries = recompute_statuses(_apply_graph_defaults(_read_json(GRAPH_JSON)))
-    except (GraphCorruptError, OSError) as exc:
+        # Strict through the configured path: healed bytes must not read as
+        # "no folder owners" - an unreadable graph refuses toward defer.
+        entries = recompute_statuses(read_graph_strict(graph_json()))
+    except (GraphCorruptError, GraphUnreadableError, OSError) as exc:
         typer.echo(
-            f"fno do plan folder-audit: graph.json unreadable ({exc}) - failing toward defer",
+            f"fno do plan folder-audit: graph unreadable ({exc}) - failing toward defer",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -538,19 +561,38 @@ def reconcile_status(
     ),
 ) -> None:
     """Sweep the plans dir, normalizing off-vocabulary/blank statuses."""
+    from fno import paths
+    from fno.graph import store
     from fno.paths import plans_content_dir
-    from fno.plan.reconcile_status import sweep
 
     target = Path(plans_dir) if plans_dir else plans_content_dir()
-    res = sweep(target, apply=apply)
+    params = {
+        "op": "reconcile_status",
+        "plans_dir": str(target),
+        "apply": apply,
+        "cwd": str(Path.cwd()),
+        "archive_path": str(paths.graph_archive_json()),
+    }
+    try:
+        result = store._client_for(store.GRAPH_JSON).request("plan_docs", params)
+    except store.StoreUnavailable as exc:
+        typer.echo(f"  ! plan-doc writer unreachable ({exc}); run `fno doctor`", err=True)
+        raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        # A stale keeper predates the op (the plan-doc stamp clients'
+        # stale-keeper pattern): a skipped sweep must not read as a clean run.
+        if "unknown store method" not in str(exc) and "unknown plan_docs op" not in str(exc):
+            raise
+        typer.echo(f"  ! {exc} - run `fno doctor update`", err=True)
+        raise typer.Exit(code=1) from exc
 
-    for path, old, new in res.changes:
+    for path, old, new in result.get("changes") or []:
         arrow = "->" if apply else "would ->"
         typer.echo(f"  {Path(path).name}: {old} {arrow} {new}")
-    for warn in res.warnings:
+    for warn in result.get("warnings") or []:
         typer.echo(f"  ! {warn}", err=True)
     prefix = "" if apply else "[dry-run] "
-    typer.echo(f"{prefix}{res.summary()}")
+    typer.echo(f"{prefix}{result['summary']}")
 
 
 @plan_app.command(
@@ -591,10 +633,11 @@ def migrate_keys(
 
 def _plan_sync_watermark() -> Path:
     """Watermark gating the sweep, a sibling of graph.json (the global graph the
-    sweep is driven by), so all sessions share one gate keyed to the one graph."""
+    sweep is driven by), so all sessions share one gate keyed to the one
+    graph. The v2 name keeps an old mtime float from reading as synced."""
     from fno.paths import graph_json
 
-    return graph_json().parent / ".plan-sync-watermark"
+    return graph_json().parent / ".plan-sync-watermark-v2"
 
 
 def _read_watermark(path: Path) -> Optional[float]:
@@ -609,8 +652,9 @@ def _read_watermark(path: Path) -> Optional[float]:
     help=(
         "Converge every plan doc's graph->doc mirror fields (priority/type/"
         "blocked_by/project/size/parent). Graph-driven: walks every node with a "
-        "plan_path. The bare form short-circuits on an unchanged graph (one stat "
-        "vs .plan-sync-watermark); --all forces a full walk to backfill new keys."
+        "plan_path. The bare form short-circuits on an unchanged graph (one "
+        "version probe vs .plan-sync-watermark); --all forces a full walk to "
+        "backfill new keys."
     ),
 )
 def sync(
@@ -618,27 +662,28 @@ def sync(
         False,
         "--all",
         "-A",
-        help="Force a full walk, bypassing the graph-mtime short-circuit.",
+        help="Force a full walk, bypassing the store-version short-circuit.",
     ),
 ) -> None:
-    """Idempotent whole-vault mirror-field sweep (x-5d84)."""
-    from fno.paths import graph_json
+    """Idempotent whole-vault mirror-field sweep."""
+    from fno.graph import api as graph_api
     from fno.plan._project import project_graph_nodes
     from fno.tracker.metadata import ExternalMetadataUnavailable, read_entries
 
-    gpath = graph_json()
     watermark = _plan_sync_watermark()
     try:
-        graph_mtime: Optional[float] = gpath.stat().st_mtime
-    except OSError:
-        graph_mtime = None
+        store_version: Optional[float] = float(graph_api.version())
+    except Exception:  # noqa: BLE001 - an absent store must not block the sweep
+        store_version = None
 
-    # Locked Decision 3: gate on graph.json mtime, NEVER a doc mtime (a graph
-    # mutation never touches a doc's mtime, so a doc gate skips exactly the doc
-    # needing repaint). One stat + one small read, zero doc reads on a no-op.
-    if not all_ and graph_mtime is not None:
+    # Locked Decision 3: gate on the store's mutation counter, NEVER a doc
+    # mtime (a graph mutation never touches a doc's mtime, so a doc gate skips
+    # exactly the doc needing repaint). One version probe, zero doc reads on a
+    # no-op. The counter still moves after the SQLite flip, where a file mtime
+    # would freeze.
+    if not all_ and store_version is not None:
         prev = _read_watermark(watermark)
-        if prev is not None and graph_mtime <= prev:
+        if prev is not None and store_version <= prev:
             typer.echo("plan sync: graph unchanged since last sync; skipped")
             return
 
@@ -648,7 +693,7 @@ def sync(
         entries = read_entries("plan.sync")
     except ExternalMetadataUnavailable:
         # The vault mirror is default-backend machinery (its watermark is the
-        # local store's mtime); an external selection must not repaint docs
+        # local store's version); an external selection must not repaint docs
         # from stale local rows.
         typer.echo("plan sync: external tracker backend selected; 0 docs repainted", err=True)
         return
@@ -659,10 +704,10 @@ def sync(
     # Claim the sweep window before the per-doc walk (Concurrency): a burst of
     # parallel sessions advances the watermark before walking, so redundant
     # walks are at worst benign (identical graph-derived content, atomic write).
-    if graph_mtime is not None:
+    if store_version is not None:
         try:
             watermark.parent.mkdir(parents=True, exist_ok=True)
-            watermark.write_text(f"{graph_mtime}\n", encoding="utf-8")
+            watermark.write_text(f"{store_version}\n", encoding="utf-8")
         except OSError:
             pass
 

@@ -3,7 +3,7 @@
 # remedies, and a destructive-only remedy states the loss first.
 #
 # A refusal is self-teaching runtime text; an agent obeys it literally (a
-# king passed --force to five rows because the error string named it; another
+# lead passed --force to five rows because the error string named it; another
 # withdrew four unclaimed mails because the nag named only withdraw). These
 # checks pin the remedy text so a rewrite cannot reintroduce the shape.
 #
@@ -16,7 +16,8 @@
 #      inside the command flow with env side effects)
 #   4. rm-naming refusals in dispatch.py and the Rust ask twins
 #      (claude_ask/codex_ask/gemini_ask) + their teardown warnings
-#   5. the stop/rm livelock exits in daemon.rs (no_op dead ends named)
+#   5. the rm-gate texts that name the claude stop rm runs itself, and the
+#      stop_claude dead end in daemon.rs
 #
 # Every REMEDY claim is pinned by a positive marker: a string that must be
 # present. The two absence checks (--force, branch -D) are backstops paired
@@ -58,6 +59,7 @@ require_before() { # require_before <haystack-file> <first> <second> <label>
 HOOK="$REPO_ROOT/scripts/setup/worktree-create-hook.sh"
 PRE="$REPO_ROOT/scripts/ci/preflight.sh"
 CV="$REPO_ROOT/crates/fno-agents/src/client_verbs.rs"
+RG="$REPO_ROOT/crates/fno-agents/src/resume_gate.rs"
 
 # --- 1. worktree-create-hook.sh -------------------------------------------
 # Reuse rung named.
@@ -104,19 +106,19 @@ require "$PRE" "rm -rf '\$LOCKDIR'" "preflight: rm -rf remains the last rung"
 require "$CV" "the row is the resume handle" "resume(rust): messages name the handle cost"
 require "$CV" "fno agents adopt" "resume(rust): rm-then-adopt rebind pair named"
 require "$CV" "gone for good" "resume(rust): rm framed as the gone-for-good case"
-require "$CV" "recoverable first" "resume(rust): path-recovery check precedes the remedy"
-require "$CV" "nothing resumable" "resume(rust): idless row told the truth, no id claim"
+# The two resume-cwd refusal messages moved to the resume gate module.
+require "$RG" "recoverable first" "resume(rust): path-recovery check precedes the remedy"
+require "$RG" "nothing resumable" "resume(rust): idless row told the truth, no id claim"
 
-# --- 4. rm-naming refusals: dispatch.py + the Rust ask twins -------------------
-# The ask twins are the guard-on-one-of-N-paths trap: dispatch.py was rewritten
-# while claude_ask/codex_ask/gemini_ask kept the rm-first text.
+# --- 4. rm-naming refusals: the Rust ask twins ---------------------------------
+# The Python rm-fallback refusals retired with the rm twin (the Python side of
+# rm was deleted): their remedy text now lives only in the Rust twins, and these
+# checks are the live contract. The override-in-help needle greps the Rust
+# refusal builder, where the rm refusals live since the file-budget move.
+RRD="$REPO_ROOT/crates/fno-agents/src/daemon/rm_refusal_detail.rs"
+require "$RRD" "fno agents rm --help\`, not here." \
+    "rm-fallback(rust): override lives in --help, never in the refusal"
 DIS="$REPO_ROOT/cli/src/fno/agents/dispatch.py"
-require "$DIS" "from the harness if it can still name" "rm-fallback(py): names the recovery remedy"
-require "$DIS" "Recover the short id from the harness" "rm-fallback(py): short-id variant named too"
-require "$DIS" "drops the row and its route" "rm-fallback(py): names what rm drops"
-# The needle matches the single literal line that closes both refusals.
-require "$DIS" "fno agents rm --help\`, not here." \
-    "rm-fallback(py): override lives in --help, never in the refusal"
 require "$DIS" "the exchange finished" "teardown(py): states the exchange finished first"
 
 for pair in "claude:crates/fno-agents/src/claude_ask.rs" "codex:crates/fno-agents/src/codex_ask.rs" "gemini:crates/fno-agents/src/gemini_ask.rs"; do
@@ -128,11 +130,17 @@ done
 require "$REPO_ROOT/crates/fno-agents/src/codex_ask.rs" "the exchange finished" "teardown(codex): states the exchange finished first"
 require "$REPO_ROOT/crates/fno-agents/src/gemini_ask.rs" "the exchange finished" "teardown(gemini): states the exchange finished first"
 
-# --- 5. stop/rm livelock exits -------------------------------------------------
-DM="$REPO_ROOT/crates/fno-agents/src/daemon.rs"
-require "$DM" "If stop answers no_op" "rm(live): names the stop no_op dead end"
-require "$DM" "If stop refuses or no-ops" "rm(idless): names the stop dead end"
-require "$DM" "stop-then-rm has no exit here" "stop_claude(idless): no false rm-clears claim"
+# --- 5. the claude stop rm runs itself, and stop_claude's dead end ------------
+# The two rm refusal texts live in the builder module the file-budget gate
+# moved them into; the stop_claude claim moved beside them into the claude
+# stop submodule (same file-budget motion). rm stopped telling the caller to
+# stop (law: remove needs no prior stop) - it runs the claude stop itself and
+# reports the roster evidence.
+RR="$REPO_ROOT/crates/fno-agents/src/daemon/rm_refusal_detail.rs"
+CS="$REPO_ROOT/crates/fno-agents/src/daemon/claude_stop.rs"
+require "$RR" "rm ran \`claude stop\`" "rm(live): names the stop rm ran itself"
+require "$RR" "rm could not run its claude stop" "rm(idless): says rm could not run its claude stop"
+require "$CS" "stopping has no exit here" "stop_claude(idless): no false rm-clears claim"
 
 if [[ "$FAILURES" -gt 0 ]]; then
     echo "$FAILURES check(s) failed"

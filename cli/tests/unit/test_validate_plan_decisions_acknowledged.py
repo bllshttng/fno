@@ -2,16 +2,17 @@
 
 Change 3 of x-953b. `check_consolidation_file` cross-checks the plan's
 `decisions_acknowledged` list against the node's LIVE decision-index rulings
-(read directly, not through the shape model - `ConsolidationBlock` has no
-access to the index). Each fixture points a fresh subprocess at hermetic
-decision and graph stores via `$FNO_CONFIG` (the only candidate when set, per
-`fno.config._candidate_paths`) naming `config.state_dir` and
-`config.paths.graph_json` overrides, then seeds `decisions.jsonl` directly
-under it, in the envelope
-`fno.events.operator_decision` writes - so no graph or carveout root needs to
-exist for the node named in `claims:`.
+(read through the native decisions door, not through the shape model -
+`ConsolidationBlock` has no access to the index). Each fixture points a fresh
+subprocess at a hermetic decision store the way the door reads one:
+`$FNO_HOME` carries `decisions.jsonl` and `$FNO_CONFIG` names a config.toml
+whose top-level `state_dir` pins the graph read (the Rust reader parses TOML
+only, and warns on a yaml candidate), then seeds `decisions.jsonl` directly,
+in the envelope the native decide door writes - so no graph or carveout root
+needs to exist for the node named in `claims:`.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
@@ -26,13 +27,12 @@ _EXPIRY_REF_UNSET = object()
 
 
 def _run(plan: Path, state_dir: Path) -> subprocess.CompletedProcess[str]:
-    settings = state_dir.parent / "settings.yaml"
-    settings.write_text(
-        f"config:\n  state_dir: {state_dir}\n"
-        f"  paths:\n    graph_json: {state_dir / 'graph.json'}\n"
+    (state_dir.parent / "config.toml").write_text(
+        f'state_dir = "{state_dir}"\n'
     )
     env = dict(os.environ)
-    env["FNO_CONFIG"] = str(settings)
+    env["FNO_CONFIG"] = str(state_dir.parent / "config.toml")
+    env["FNO_HOME"] = str(state_dir)
     return subprocess.run(
         ["bash", str(VALIDATOR), str(plan)],
         capture_output=True,
@@ -60,13 +60,14 @@ def _seed_decision(
     supersedes: str | None = None,
     expiry_ref: object = _EXPIRY_REF_UNSET,
     authority_source: str = "beastmode",
+    lifecycle: str | None = None,
 ) -> None:
     """Append one decision-index row directly, bypassing record_decision.
 
     `record_decision` also writes a durable events journal and projects onto
     a graph node - both real side effects this fixture does not want. The
-    index is the only store `list_decisions` reads, so writing it directly is
-    the smaller, correct fixture.
+    index is the only store the decisions door needs here, so writing it
+    directly is the smaller, correct fixture.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     index = state_dir / "decisions.jsonl"
@@ -80,6 +81,8 @@ def _seed_decision(
         data["supersedes"] = supersedes
     if expiry_ref is not _EXPIRY_REF_UNSET:
         data["expiry_ref"] = expiry_ref
+    if lifecycle is not None:
+        data["lifecycle"] = lifecycle
     row = {"ts": "2026-08-01T00:00:00.000000Z", "type": "operator_decision", "source": "target", "data": data}
     with index.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(row) + "\n")
@@ -319,6 +322,73 @@ def test_unreadable_decision_index_fails_closed(tmp_path):
     assert "decisions_acknowledged could not be checked" in result.stdout
 
 
+def test_unreadable_graph_fails_closed_before_coord_lifecycle(tmp_path):
+    state_dir = tmp_path / "fno-home"
+    _seed_decision(
+        state_dir,
+        decision_id="d-c0ffee12",
+        subject="x-c0ffee12",
+        expiry_ref={"kind": "node", "node_id": "x-c0ffee12"},
+        authority_source="agent",
+    )
+    # The graph read resolves through the layout ladder; the empty legacy
+    # twin makes the root spelling the one it reads, then the corrupt anchor
+    # is what the validator trips on.
+    import sqlite3
+
+    sqlite3.connect(state_dir / "graph.db").close()
+    (state_dir / "graph.json").write_text("{not valid json\n", encoding="utf-8")
+
+    plan = tmp_path / "unreadable-graph.md"
+    plan.write_text(_plan(
+        "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  proceed_alone_against: []\n"
+    ))
+    result = _run(plan, state_dir)
+    assert result.returncode == 1, result.stdout
+    assert "decisions_acknowledged could not be checked (the graph could not be read" in result.stdout
+    assert "no positive closure evidence" not in result.stdout
+
+
+def test_validator_recomputes_unknown_lifecycle_from_readable_graph(tmp_path):
+    state_dir = tmp_path / "fno-home"
+    _seed_decision(
+        state_dir,
+        decision_id="d-c0ffee12",
+        subject="x-c0ffee12",
+        expiry_ref={"kind": "node", "node_id": "x-c0ffee12"},
+        authority_source="agent",
+        lifecycle="unknown",
+    )
+    seed_graph(state_dir / "graph.json", json.dumps(
+            {
+                "entries": [
+                    {
+                        "id": "x-c0ffee12",
+                        "status": "done",
+                        "completed_at": "2026-09-20T00:00:00Z",
+                    }
+                ]
+            }
+        ))
+
+    plan = tmp_path / "readable-graph.md"
+    plan.write_text(
+        _plan(
+            "title: T\nstatus: ready\nkind: quick-plan\nclaims: x-c0ffee12\ncreated: 2026-08-23\n"
+            "consolidation:\n"
+            "  outcome: proceed_alone\n"
+            "  proceed_alone_against: []\n"
+        )
+    )
+    result = _run(plan, state_dir)
+
+    assert result.returncode == 0, result.stdout
+    assert "no positive closure evidence" not in result.stdout
+
+
 def test_damaged_index_rows_fail_closed_not_reported_as_clean(tmp_path):
     """codex finding: a damaged row's decision might be the closing verdict;
     reading the surviving rows as complete would silently pass a plan whose
@@ -341,5 +411,12 @@ def test_damaged_index_rows_fail_closed_not_reported_as_clean(tmp_path):
     ))
     result = _run(plan, state_dir)
     assert result.returncode == 1, result.stdout
-    assert "decisions_acknowledged could not be checked" in result.stdout
+    if "damaged row" not in result.stdout:
+        from fno.events.store_client import native_rows
+
+        raise AssertionError(
+            f"stdout={result.stdout!r} stderr={result.stderr!r}"
+            f" index_lines={index.read_text(encoding='utf-8')!r}"
+            f" native={native_rows(index)!r}"
+        )
     assert "damaged row" in result.stdout

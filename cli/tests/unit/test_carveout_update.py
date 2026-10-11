@@ -113,7 +113,7 @@ def test_truncation_clears_when_the_new_text_is_short(ledger_root):
 
 
 def test_an_absent_id_is_refused_not_created(ledger_root):
-    """Create-on-miss would resurrect a row /pr merged already consumed."""
+    """Create-on-miss would resurrect a row /fno:ship pr merged already consumed."""
     _seed(ledger_root)
     with pytest.raises(CarveoutNotFound):
         update_carveout(ledger_root, "cv-deadbeef", description="new")
@@ -135,7 +135,8 @@ def test_an_invalid_kind_is_refused_before_any_write(ledger_root):
 def test_a_malformed_neighbour_line_is_preserved(ledger_root):
     """One bad row must not cost the others, matching consume_carveouts."""
     cid = _seed(ledger_root)
-    path = ledger_root / ".fno" / "carveouts.jsonl"
+    from fno.paths import project_log
+    path = project_log("carveouts.jsonl", project_root=ledger_root)
     path.write_text(path.read_text() + "{not json at all\n")
     update_carveout(ledger_root, cid, description="new text")
     assert "{not json at all" in path.read_text()
@@ -172,7 +173,8 @@ def test_a_torn_write_leaves_the_whole_ledger_intact(ledger_root, monkeypatch):
 
     first = _seed(ledger_root, description="row one")
     second = _seed(ledger_root, description="row two")
-    path = ledger_root / ".fno" / "carveouts.jsonl"
+    from fno.paths import project_log
+    path = project_log("carveouts.jsonl", project_root=ledger_root)
     before = path.read_text()
 
     def _boom(*a, **k):
@@ -200,7 +202,10 @@ def test_no_temp_files_survive_a_failed_write(ledger_root, monkeypatch):
     with pytest.raises(CarveoutError):
         update_carveout(ledger_root, cid, description="corrected")
 
-    leftovers = list((ledger_root / ".fno").glob("carveouts.jsonl.*.tmp"))
+    from fno.paths import project_log
+
+    ledger = project_log("carveouts.jsonl", project_root=ledger_root)
+    leftovers = list(ledger.parent.glob("carveouts.jsonl.*.tmp"))
     assert leftovers == []
 
 
@@ -247,7 +252,7 @@ def test_crossing_the_backfill_boundary_warns_and_still_applies(ledger_root):
     cid = _seed(ledger_root, kind="deferred")
     res = runner.invoke(app, ["carveout", "update", cid, "-k", "backfill"])
     assert res.exit_code == 0, res.output
-    assert "/fno:pr merged" in res.output
+    assert "/fno:ship pr merged" in res.output
     assert _rows(ledger_root)[0]["kind"] == "backfill"
 
 

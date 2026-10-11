@@ -16,7 +16,7 @@ from typing import Any, Callable
 Run = Callable[..., subprocess.CompletedProcess[str]]
 _UNSET = object()
 _DB_ENV_KEYS = re.compile(r"^\s*(DATABASE_URL|SUPABASE_DB_URL|POSTGRES_URL|DIRECT_URL)\s*=", re.MULTILINE)
-# x-38d3 (a done node) carries six live rulings; a cap keeps the receipt small
+# (a done node) carries six live rulings; a cap keeps the receipt small
 # without silently dropping an old one off the end unannounced (decisions_truncated).
 _DECISIONS_CAP = 20
 _DECISIONS_TEXT_WIDTH = 200
@@ -96,6 +96,8 @@ def _node_summary(entry: dict[str, Any], *, archived: bool = False) -> dict[str,
             "slug",
             "title",
             "status",
+            "superseded_by",
+            "deferred_kind",
             "domain",
             "project",
             "parent",
@@ -137,18 +139,21 @@ def _decisions_section(node_id: str | None) -> dict[str, Any]:
     """
     if not node_id:
         return _no_decisions()
-    from fno.decide import list_decisions
-    from fno.tracker.metadata import ExternalMetadataUnavailable
+    from fno.rust_binary import call_front_json
 
     try:
-        _label, rows, _damaged = list_decisions(node_id, limit=None, state="live")
-    except (OSError, ValueError, ExternalMetadataUnavailable) as exc:
+        answer = call_front_json(
+            {"mode": "decisions", "argv": [node_id, "--state", "live", "--json"]}
+        )
+        rows = answer.get("decisions") or []
+    except (OSError, ValueError, RuntimeError) as exc:
         return {
             "decisions": [],
             "decisions_status": "error",
             "decisions_truncated": False,
             "decisions_detail": f"decision index unreadable: {exc}",
         }
+    unknown = [row for row in rows if row.get("lifecycle") == "unknown"]
     live = [row for row in rows if not row.get("superseded_by")]
     capped = live[:_DECISIONS_CAP]
     out = []
@@ -163,14 +168,38 @@ def _decisions_section(node_id: str | None) -> dict[str, Any]:
                 "lane": row.get("lane"),
                 "subject": row.get("subject"),
                 "text": text,
+                "lifecycle": row.get("lifecycle"),
             }
         )
     return {
         "decisions": out,
-        "decisions_status": "ok",
+        "decisions_status": "error" if unknown else "ok",
         "decisions_truncated": len(live) > len(capped),
-        "decisions_detail": None,
+        "decisions_detail": (
+            f"{unknown[0].get('lifecycle_reason')}; "
+            f"{len(unknown)} coord ruling(s) listed with an unknown lifecycle" if unknown else None
+        ),
     }
+
+
+def _plan_rulings_section(node_id: str | None, plans_dir: Path | None) -> dict[str, Any]:
+    """Sibling plans' ``consolidation.rejected`` rows naming this node.
+
+    A scan that could not run shows in status/detail, never folded into a
+    clean "no ruling".
+    """
+    if not node_id or plans_dir is None:
+        return {"plan_rulings": [], "plan_rulings_status": "ok", "plan_rulings_detail": None}
+    from fno.plan.rulings import plan_rulings
+
+    result = plan_rulings(node_id, plans_dir)
+    if result["status"] == "unavailable":
+        return {
+            "plan_rulings": [],
+            "plan_rulings_status": "error",
+            "plan_rulings_detail": f"plans dir unreadable: {result['dir']}: {result['detail']}",
+        }
+    return {"plan_rulings": result["rulings"], "plan_rulings_status": "ok", "plan_rulings_detail": None}
 
 
 def _graph_section(
@@ -179,6 +208,8 @@ def _graph_section(
     archive: list[dict[str, Any]],
     error: str | None,
     archive_error: str | None,
+    *,
+    graph_path: Path | None = None,
 ) -> dict[str, Any]:
     if entries is None:
         return {
@@ -192,8 +223,15 @@ def _graph_section(
             "detail": error or "graph unavailable",
         } | _no_decisions()
 
+    from fno.graph import discovery
     from fno.graph.fuzzy import resolve_node
-    from fno.graph.relatedness import _MIN_SCORE, epic_candidates, similar_nodes
+    from fno.graph.relatedness import (
+        _DOMAIN_BONUS,
+        _MIN_SCORE,
+        _tokens,
+        epic_candidates,
+        lineage_ids,
+    )
 
     active_by_id = {
         row["id"]: row for row in entries if isinstance(row, dict) and isinstance(row.get("id"), str)
@@ -215,18 +253,68 @@ def _graph_section(
     # floor=_MIN_SCORE: blueprint's consolidation gate reads this list, and the
     # real lock family behind that gate sits at 0.26-0.27 under a 0.30 dedup
     # floor. Ranked recall is the point; a full-context reader makes the call.
-    scored = similar_nodes(probe, combined, k=5, floor=_MIN_SCORE)
+    # A free-text seed has no domain to share, so it can never earn
+    # _DOMAIN_BONUS the way a resolved node row can; lower the floor by
+    # exactly that bonus. This matches the node lane only for a candidate
+    # that would itself have shared domain: a cross-domain candidate now
+    # clears the seed lane's floor on token overlap alone (raw jac >= 0.05)
+    # where the node lane would have required jac >= 0.15 with no bonus to
+    # earn. Accepted: recall over precision is the point of this fix, and a
+    # domain-less probe cannot tell which candidates it would have matched.
+    # The wider floor also widens how many candidates clear it, so a small k
+    # lets higher-Jaccard rows evict the fts-only family the lane exists to
+    # recover (a filed idea's own fold-offer top id ranked past k=15 on the
+    # live graph). The floor is the one threshold; the seed lane takes no cap.
+    # The node lane keeps k=5: a resolved node's dedup verdict is a bounded
+    # question.
+    floor = _MIN_SCORE if resolved else _MIN_SCORE - _DOMAIN_BONUS
+    k = 5 if resolved else None
+    # One scorer with the idea fold offer: discovery.candidates unions the fts
+    # lane with the same relatedness lane, so the Consolidation Gate cannot
+    # see a different family than intake folds on. Probe tokens are
+    # title+details, matching what the fold offer scores.
+    probe_title = str(resolved.get("title") or "") if resolved else seed
+    probe_details = str(resolved.get("details") or "") if resolved else seed
+    probe_domain = str(resolved.get("domain") or "") if resolved else ""
+    # Lineage leaves the pool before the cap, not after it: the scorer's
+    # incoming row has no parent, so a post-cap filter would let an ancestor
+    # consume a node-lane slot and evict a legitimate duplicate.
+    lineage = lineage_ids(resolved, {**archive_by_id, **active_by_id}) if resolved else set()
+    pool = [row for row in combined if row.get("id") not in lineage] if lineage else combined
+    ranked = discovery.candidates(
+        probe_title,
+        probe_details,
+        entries=pool,
+        graph_path=graph_path,
+        exclude_id=str(resolved.get("id")) if resolved else None,
+        limit=k,
+        floor=floor,
+        domain=probe_domain,
+        fts_enabled=graph_path is not None,
+    )
     duplicates = []
-    for node_id, score, reason in scored:
+    for candidate in ranked:
+        node_id = candidate.node_id
         row = active_by_id.get(node_id) or archive_by_id.get(node_id)
         if row is None:
             continue
+        # Lean rows: the seed lane is floor-bounded, not capped, and a full
+        # node summary per row would make the receipt carry hundreds of
+        # fields the gate never reads. The gate reads id, score, reason,
+        # superseded_by; title/status/lanes let it judge liveness.
+        summary = {
+            key: row[key]
+            for key in ("id", "slug", "title", "status", "superseded_by", "deferred_kind", "domain")
+            if row.get(key) is not None
+        }
+        if node_id in archive_by_id and node_id not in active_by_id:
+            summary["archived"] = True
         duplicates.append(
-            _node_summary(row, archived=node_id in archive_by_id and node_id not in active_by_id)
-            | {"score": score, "reason": reason}
+            summary
+            | {"score": candidate.score, "reason": candidate.reason, "lanes": sorted(candidate.lanes)}
         )
     rollups = []
-    for node_id, score, reason in epic_candidates(probe, combined, k=3):
+    for node_id, score, reason in epic_candidates(probe, combined, k=3, floor=floor):
         row = active_by_id.get(node_id) or archive_by_id.get(node_id)
         if row is None:
             continue
@@ -242,16 +330,16 @@ def _graph_section(
                 parent_row,
                 archived=resolved["parent"] in archive_by_id and resolved["parent"] not in active_by_id,
             )
-    # Graph re-read of the resolved node's closure, not classify_closure: that
-    # helper probes a named behavior against current main and needs inputs a
-    # blueprint does not have. A done/superseded row here is a halt signal for
-    # the consolidation gate, so the fields are read verbatim from the row.
+    # Graph re-read of the resolved node's closure: a done/superseded row here
+    # is a halt signal for the consolidation gate, so the fields are read
+    # verbatim from the row.
     closure = None
     if resolved:
         closure = {
             "status": resolved.get("status"),
             "pr_number": resolved.get("pr_number"),
             "superseded_by": resolved.get("superseded_by"),
+            "deferred_kind": resolved.get("deferred_kind"),
         }
     return {
         "status": "partial" if archive_error else "ok",
@@ -272,6 +360,13 @@ def _graph_section(
         "epic_candidates": rollups,
         "archive_status": "error" if archive_error else "ok",
         "detail": f"archive unreadable: {archive_error}" if archive_error else None,
+        "recall": {
+            "lane": "node" if resolved else "seed",
+            "seed_tokens": len(_tokens(probe)),
+            "floor": floor,
+            "fts": "degraded" if ranked.degraded else "ok",
+            "fts_warning": ranked.warning if ranked.degraded else None,
+        },
     } | _decisions_section(resolved.get("id") if resolved else None)
 
 
@@ -331,7 +426,8 @@ def _database(repo: Path) -> dict[str, Any]:
         if _DB_ENV_KEYS.search(text):
             signal_paths.append(path)
     signals = sorted(dict.fromkeys(signals))
-    artifact = repo / ".fno" / "codemap.md"
+    from fno.paths import worktree_space_dir
+    artifact = worktree_space_dir(repo) / "codemap.md"
     grounded = False
     try:
         grounded = "## Database Schema" in artifact.read_text(encoding="utf-8")
@@ -358,7 +454,7 @@ def _database(repo: Path) -> dict[str, Any]:
     return {
         "detected": bool(signals) or grounded,
         "signals": signals,
-        "schema_artifact": ".fno/codemap.md" if artifact.exists() else None,
+        "schema_artifact": "codemap.md" if artifact.exists() else None,
         "schema_status": status,
     }
 
@@ -387,7 +483,7 @@ def _pitfalls(repo: Path, plans_path: Path, home: Path) -> dict[str, Any]:
     retros = []
     if plans_path.is_dir():
         retros = [str(path) for path in sorted(plans_path.glob("*retro-synthesis*.md"), reverse=True)[:5]]
-    candidates = home / ".fno" / "lesson-candidates.jsonl"
+    candidates = home / ".fno" / "history" / "lesson-candidates.jsonl"
     try:
         count = sum(1 for line in candidates.read_text(encoding="utf-8").splitlines() if line.strip())
     except (FileNotFoundError, OSError, UnicodeDecodeError):
@@ -413,24 +509,19 @@ def build_receipt(
 ) -> dict[str, Any]:
     """Collect a deterministic, read-only design-discovery receipt."""
     from fno.config import load_settings_for_repo
-    from fno.paths import resolve_configured_path
+    from fno.paths import place_anchor, resolve_configured_path
 
     repo = Path(repo).resolve()
     settings = load_settings_for_repo(repo)
-    graph_override = settings.paths.graph_json
-    graph_path = (
-        resolve_configured_path(graph_override, project_root=repo, settings=settings)
-        if graph_override is not None
-        else resolve_configured_path(settings.state_dir, project_root=repo, settings=settings)
-        / "graph.json"
-    )
+    graph_path = place_anchor(resolve_configured_path(settings.state_dir, project_root=repo, settings=settings))
     archive_path = graph_path.parent / "graph-archive.json"
     configured_plans_path = resolve_configured_path(
         settings.plans_dir,
         project_root=repo,
         settings=settings,
     )
-    if graph_entries is _UNSET:
+    graph_from_file = graph_entries is _UNSET
+    if graph_from_file:
         graph_entries, graph_error = _load_graph(graph_path)
     archive_error = None
     if archive_entries is _UNSET:
@@ -445,6 +536,15 @@ def build_receipt(
         archive,
         graph_error,
         archive_error,
+        # injected entries own their pool; the fts lane indexes the graph file,
+        # so it runs only when the pool actually came from that file
+        graph_path=graph_path if graph_from_file else None,
+    )
+    from fno.paths import plans_content_dir
+
+    graph |= _plan_rulings_section(
+        (graph.get("resolved") or {}).get("id"),
+        plans_path or plans_content_dir(repo),
     )
     repository = _repository(repo, run)
     resolved = graph.get("resolved") or {}
@@ -463,6 +563,17 @@ def build_receipt(
         warnings.append("database schema evidence is missing")
     if database["schema_status"] == "stale":
         warnings.append("database schema evidence is stale")
+    if graph.get("recall", {}).get("lane") == "seed" and not graph["duplicates"]:
+        warnings.append(
+            "seed lane returned no candidates; this is not a measured absence. "
+            "Widen the seed to the design body, or run: fno backlog find '<2-3 salient terms>'"
+        )
+    recall = graph.get("recall") or {}
+    if recall.get("fts") == "degraded":
+        warnings.append(
+            "duplicate recall ran without the fts lane: "
+            f"{recall.get('fts_warning') or 'the lane did not run'}"
+        )
     return {
         "version": 1,
         "seed": seed,
@@ -491,7 +602,7 @@ def render_receipt(receipt: dict[str, Any]) -> str:
         # floor, so a seed with no true duplicate still returns a full top-K.
         # A bare `duplicates=5` reads as five duplicates found, which is the
         # one thing this list cannot tell you.
-        f"graph: {graph['status']} resolved={resolved.get('id', '-')} candidates={len(graph['duplicates'])} (ranked, judge before trusting) epics={len(graph['epic_candidates'])}",
+        f"graph: {graph['status']} lane={graph.get('recall', {}).get('lane', '-')} tokens={graph.get('recall', {}).get('seed_tokens', '-')} resolved={resolved.get('id', '-')} candidates={len(graph['duplicates'])} (ranked, judge before trusting) epics={len(graph['epic_candidates'])}",
         f"pull requests: {prs['status']} matches={len(prs['matches'])}",
         f"database: detected={str(database['detected']).lower()} schema={database['schema_status']}",
         f"pitfalls: source={pitfalls['source']} entries={len(pitfalls['entries'])} syntheses={len(pitfalls['retro_syntheses'])} candidates={pitfalls['lesson_candidates']}",

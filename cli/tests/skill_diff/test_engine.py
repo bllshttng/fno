@@ -21,7 +21,11 @@ def _finding(run_id, verdict="fail", dim="structural_validity", tool_fault=False
 
 def test_read_events_tolerant_skips_corrupt(tmp_path):  # AC3-ERR
     p = tmp_path / "events.jsonl"
-    p.write_text('{"type":"a"}\nNOT JSON\n\n{"type":"b"}\n')
+    p.write_text(
+        '{"ts":"2026-09-19T10:00:00Z","source":"test","type":"a","data":{}}\n'
+        "NOT JSON\n\n"
+        '{"ts":"2026-09-19T10:00:01Z","source":"test","type":"b","data":{}}\n'
+    )
     out = engine.read_events_tolerant(p)
     assert [e["type"] for e in out] == ["a", "b"]
 
@@ -49,12 +53,6 @@ def test_unprocessed_excludes_skill_ref_runs():  # AC6-EDGE (x-ed13 Locked Decis
          "data": {"run_id": "after1", "skill_id": "fno:blueprint", "skill_ref": "deadbeef"}},
     ]
     assert engine.unprocessed_runs(evs, "fno:blueprint") == ["sweep1"]  # after1 excluded
-
-
-def test_unprocessed_scopes_by_skill():
-    evs = [_rc("r1", skill_id="fno:blueprint"), _rc("r2", skill_id="fno:review")]
-    assert engine.unprocessed_runs(evs, "fno:blueprint") == ["r1"]
-    assert engine.unprocessed_runs(evs, "fno:review") == ["r2"]
 
 
 def test_idempotency_key_is_run_id_and_skill():

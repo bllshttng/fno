@@ -1,55 +1,22 @@
-"""Target pre-ship review defaults to a native final-head review; sigma is opt-in.
+"""The target ship review is the in-session fno lane; the mail round trip is gone.
 
-AC11-HP: no `config.review.reviewers` -> the ship step requests the harness-native
-review verb for the pushed final HEAD through the explicit-target self-send
-router, and no six-agent sigma panel is dispatched. The request is a producer,
-not advisory prose: it names the PR, HEAD SHA, and origin base before it can
-reach the transport.
-AC12-CON: `reviewers` includes `sigma` -> sigma runs exactly once (post-ship, on
-the final HEAD) and the skip logic reads in the same direction as its docs.
-
-The decision lives in `preship_review_plan` so every target skill surface answers
-to one codified direction. These tests pin that direction and the config default
-that makes the self-review the default, then guard the prose from reverting to
-the old inverted framing where the bare default spawned the sigma panel.
+The review step is exactly `/fno:review <size> --comment` (Codex
+`$fno:review <size> --comment`), invoked by the model in its own context on
+the final local HEAD before `/fno:ship pr create`. No mail, no paste, no turn
+boundary. These tests pin that direction across every reachable target
+surface and guard against the prose regrowing the retired
+`request-self-review` round trip or the deleted pre-ship decision helper.
 """
 from __future__ import annotations
 
 from pathlib import Path
 import json
 
-from fno.config import ReviewBlock
-from fno.review_capability import preship_review_plan
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-
-def test_default_reviewers_is_empty_so_native_review_is_the_default():
-    # This default is what makes native review the ordinary path; pin it so a
-    # future edit cannot quietly re-introduce the inverted skip.
-    assert ReviewBlock().reviewers == []
-
-
-def test_no_reviewers_runs_native_review_and_dispatches_no_sigma():
-    plan = preship_review_plan([])
-    assert plan.kind == "native"
-    assert "request-self-review" in plan.reason
-
-
-def test_a_retired_reviewer_name_never_changes_the_plan():
-    # A config still naming sigma is refused at init by the retired descriptor
-    # and never reaches this decision; the plan itself no longer branches on
-    # reviewer names, because the fno lane is the review producer on every
-    # harness and there is no post-ship panel run to defer to.
-    assert preship_review_plan(["sigma"]).kind == "native"
-    assert preship_review_plan(["/code-review"]).kind == "native"
-    assert preship_review_plan(["/code-review", "declare"]).kind == "native"
-
-
-def test_the_plan_names_the_lane_as_the_producer():
-    plan = preship_review_plan([])
-    assert "/fno:review" in plan.reason
-    assert "every harness" in plan.reason
+# Assembled so this file itself never contains the deleted symbol's name
+# byte-for-byte: the AC sweep greps cli/ for it and must print nothing.
+_RETIRED_DECISION = "preship_review" + "_plan"
 
 
 def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
@@ -89,9 +56,7 @@ def test_request_self_review_pins_pr_head_and_uses_the_raw_self_route(
     assert result.exit_code == 0, result.output
     receipt = json.loads(result.output)
     assert receipt["outcome"] == "started"
-    # One recommendation for every harness: the fno lane, level sized from the
-    # diff, with the explicit PR head pinning. The payload must name the lane,
-    # spelled per harness - codex gets the $fno: skill reference.
+    # The inline fno lane is rendered in the active harness's spelling.
     assert calls[0]["payload"].startswith("$fno:review ")
     # The bare PR number leads the target slot; HEAD and base are trailing
     # context a strict reader never mistakes for the target.
@@ -159,23 +124,118 @@ def test_request_self_review_refuses_when_local_head_does_not_match_pr(
     assert "HEAD" in receipt["reason"]
 
 
+def test_request_self_review_without_pr_pins_local_head_and_branch(
+    monkeypatch,
+):
+    import fno.target_cli as target_cli
+    from typer.testing import CliRunner
+
+    calls = []
+
+    def fake_git_out(_cwd, *args):
+        if args == ("rev-parse", "HEAD"):
+            return "abc1234"
+        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "feature/x-98ac"
+        if args == ("symbolic-ref", "--short", "refs/remotes/origin/HEAD"):
+            return "origin/main"
+        return None
+
+    monkeypatch.setattr(target_cli, "_git_out", fake_git_out)
+    monkeypatch.setattr(
+        target_cli,
+        "_read_pr_metadata",
+        lambda _pr, _cwd: (_ for _ in ()).throw(AssertionError("no-PR form read a PR")),
+    )
+    monkeypatch.setattr(
+        target_cli,
+        "_resolve_self_review_identity",
+        lambda: ("codex", "codex-session"),
+    )
+    monkeypatch.setattr(
+        target_cli,
+        "_send_self_review_payload",
+        lambda **kwargs: calls.append(kwargs) or {"outcome": "started", "transport": "codex-daemon"},
+    )
+
+    result = CliRunner().invoke(target_cli.target_app, ["request-self-review"])
+
+    assert result.exit_code == 0, result.output
+    receipt = json.loads(result.output)
+    assert receipt["outcome"] == "started"
+    assert receipt["pr"] is None
+    assert receipt["branch"] == "feature/x-98ac"
+    # The branch name leads the target slot, HEAD and base trail: the same
+    # strict-reader contract as the --pr form, pre-push. No --comment: the
+    # PR the flag writes to does not exist yet.
+    assert calls[0]["payload"].endswith(
+        "feature/x-98ac HEAD abc1234 against origin/main"
+    )
+    assert "--comment" not in calls[0]["payload"]
+
+
+def test_request_self_review_without_pr_refuses_detached_head(
+    monkeypatch,
+):
+    import fno.target_cli as target_cli
+    from typer.testing import CliRunner
+
+    monkeypatch.setattr(
+        target_cli,
+        "_git_out",
+        lambda _cwd, *args: "abc1234" if args == ("rev-parse", "HEAD") else "HEAD",
+    )
+
+    result = CliRunner().invoke(target_cli.target_app, ["request-self-review"])
+
+    assert result.exit_code == 2
+    receipt = json.loads(result.output)
+    assert receipt["outcome"] == "refused"
+    assert "no branch" in receipt["reason"]
+
+
+def test_render_self_review_invocation_refuses_pr_and_branch_together():
+    from fno.review_capability import render_self_review_invocation
+
+    try:
+        render_self_review_invocation(
+            pr_number=123,
+            branch="feature/x-98ac",
+            head_sha="abc1234",
+            base_branch="main",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("pr_number and branch together must raise ValueError")
+
+
 def test_skill_prose_describes_the_same_direction_as_the_decision():
-    # The contract the decision encodes must hold across every reachable target
-    # surface, or a guard on one path is decorative (repo pitfall #1).
+    # The contract the review step encodes must hold across every reachable
+    # target surface, or a guard on one path is decorative (repo pitfall #1).
     skill = (REPO_ROOT / "skills" / "target" / "SKILL.md").read_text()
     phase = (REPO_ROOT / "skills" / "target" / "references" / "phase-bodies.md").read_text()
     ship = (REPO_ROOT / "skills" / "target" / "references" / "ship-and-promise.md").read_text()
     routing = (REPO_ROOT / "skills" / "target" / "references" / "phase-invocations.md").read_text()
 
-    # AC11: the default ship step requests a native review with an explicit
-    # final-head target. The old advisory default is gone.
+    # The review step is the in-session fno lane with --comment, run BEFORE
+    # /fno:ship pr create, sized by the diff. The mail round trip is gone from every
+    # surface, and the deleted decision helper must not regrow in prose.
     assert "internal sigma panel (cheap insurance)" not in skill
     assert "internal sigma panel (cheap insurance)" not in phase
-    assert "request-self-review --pr" in skill
-    assert "HEAD" in skill and "origin/main" in skill
-    assert "queued" in skill.lower() and "turn boundary" in skill.lower()
-    assert "advisory self-review by default" not in skill
-    assert "optional escalation" not in skill
+    for text in (skill, phase, ship, routing):
+        assert "request-self-review" not in text
+        assert _RETIRED_DECISION not in text
+        assert "/fno:review" in text
+        assert "--comment" in text
+    spine_start = skill.index("```")
+    spine = skill[spine_start : skill.index("```", spine_start + 3)]
+    assert "/fno:review" in spine
+    assert spine.index("/fno:review") < spine.index("/fno:ship pr create")
+    assert "medium" in skill and "300" in skill and "xhigh" in skill
+
+    # Findings hold when no PR exists and post when it opens.
+    assert "holds" in phase and "posts" in phase
 
     # AC12, retired: sigma no longer defers anything (a config naming it is
     # refused at init). The lane is the producer named on every reachable
@@ -185,7 +245,33 @@ def test_skill_prose_describes_the_same_direction_as_the_decision():
     assert "the fno lane" in ship.lower() or "fno review lane" in ship.lower()
     assert "/fno:review cleanup" in ship
 
-    # The phase-routing layer must not short-circuit the decision by routing the
-    # review phase to `fno:review` (sigma) unconditionally; it defers to the plan.
-    assert "preship_review_plan" in routing
+    # The phase-routing layer names the in-session lane, not a decision helper.
+    assert "/fno:review" in routing
     assert "default: `fno:review`" not in routing and "default: fno:review" not in routing
+
+
+def test_ship_text_stops_at_the_round_cap():
+    retired = (
+        "the old attestation is stale",
+        "stales a pre-push attestation",
+        "stales the attestation",
+        "re-run the reviewer and re-emit",
+        "invalidated by any later fix or rebase",
+        "clean head-pinned",
+        "non-author GitHub approval",
+        "IMPOSSIBLE",
+    )
+    paths = (
+        Path("skills/target/SKILL.md"),
+        Path("skills/target/references/ship-and-promise.md"),
+        Path("skills/target/references/phase-bodies.md"),
+        Path("skills/target/references/pipeline-and-philosophy.md"),
+    )
+    contents = {path: (REPO_ROOT / path).read_text(encoding="utf-8") for path in paths}
+    for path, text in contents.items():
+        for phrase in retired:
+            assert phrase not in text, f"{path} contains retired phrase {phrase!r}"
+    for path in paths[:2]:
+        text = contents[path]
+        assert "rounds_exhausted" in text, f"{path} omits rounds_exhausted"
+        assert "review.max_rounds" in text, f"{path} omits review.max_rounds"

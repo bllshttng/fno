@@ -7,8 +7,16 @@ idempotence (not TTL-dependent), and cascade-close deactivation.
 Claim + graph isolation mirrors test_advance: claims route under a tmp
 FNO_CLAIMS_ROOT/FNO_REPO_ROOT, the graph is a tmp graph.json with fno.paths.graph_json
 patched to it, and _spawn_worker / _ready_leaf_children are patched at the module.
+
+BLIND SPOT, known and accepted here: patching _ready_leaf_children bypasses
+the real `fno backlog ready` projection, and the injected dicts below are
+richer than that surface ever was - which is exactly how the dispatch_verb
+loss (x-0961) stayed invisible to this suite. The projection is now covered
+end-to-end by test_dispatch_verb_projection.py, which runs the real
+selection subprocess; keep dispatch-projection regressions THERE.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -28,14 +36,22 @@ def iso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _events(p: Path) -> list[dict]:
-    if not p.exists():
-        return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(Path(p))
 
 
 def _write_graph(tmp_path: Path, entries: list[dict], monkeypatch) -> Path:
+    """Seed the graph the way the store writes it: every row carries the
+    fields the typed api requires (the store stamps them on every write)."""
+    complete = []
+    for e in entries:
+        row = {"type": "feature", "priority": "p2", "status": "idea", **e}
+        row.setdefault("title", e.get("id", "node"))
+        row.setdefault("slug", e.get("id", "node"))
+        complete.append(row)
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": entries}) + "\n")
+    seed_graph(g, json.dumps({"entries": complete}) + "\n")
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     return g
 
@@ -63,8 +79,11 @@ def _patch_map(monkeypatch, mapping: dict[str, str]):
 
 
 def _patch_headroom(monkeypatch, n: int):
-    """Width seam: the epic advance reads spawn-gate headroom, not config."""
-    monkeypatch.setattr(adv, "_spawn_headroom", lambda provider=None: n)
+    """Width seam: the epic advance reads the per-pass spawn budget (x-fa3a),
+    whose fleet bound is n and whose children carry no lane of their own."""
+    budget = adv._LaneBudget(fleet=n)
+    monkeypatch.setattr(adv, "_spawn_budget_or_degraded", lambda provider=None: budget)
+    monkeypatch.setattr(adv, "_child_lane_vendor", lambda child, **k: None)
 
 
 def _read_epic(epic_id="x-EPIC"):
@@ -91,8 +110,7 @@ def _patch_spawn(monkeypatch, *, claim_node=True, fail_on=None):
             raise adv.SpawnError("spawn boom")
         calls.append({"node": node_id, "root": root, "slug": slug})
         if claim_node:
-            acquire_claim(f"node:{node_id}", f"worker:{node_id}", ttl_ms=60_000,
-                          root=adv._claims_root_for(f"node:{node_id}"))
+            acquire_claim(f"node:{node_id}", f"worker:{node_id}", ttl_ms=60_000)
         return "short-" + node_id[-4:]
 
     monkeypatch.setattr(adv, "_spawn_worker", fake)
@@ -139,22 +157,100 @@ def test_disabled_dispatches_nothing(iso, tmp_path, monkeypatch):
     assert skips[0]["data"]["mission"] == "x-EPIC"
 
 
-def test_walker_live_gate_emits_skip(iso, tmp_path, monkeypatch):
+def test_walker_in_epic_repo_skips_its_children_but_not_the_pass(iso, tmp_path, monkeypatch):
+    """x-7f1f task 2.1: a live walker blocks only the children of ITS OWN repo.
+
+    The deleted whole-pass `walker:` guard resolved THIS process's canonical
+    root, so one live walker in the epic repo refused the entire pass,
+    including children in other repositories. `_converge_one` probes
+    `_walker_live_at` per child against that child's own root.
+    """
     _epic_graph(tmp_path, monkeypatch)
-    _hold_walker = adv._walker_key()
-    acquire_claim(_hold_walker, "test-walker", ttl_ms=60_000,
-                  root=adv._claims_root_for(_hold_walker))
-    monkeypatch.setattr(adv, "_ready_leaf_children",
-                        lambda e: pytest.fail("must not enumerate"))
+    web_root = tmp_path / "web"
+    etl_root = tmp_path / "etl"
+    for d in (web_root, etl_root):
+        d.mkdir(parents=True)
+    _patch_map(monkeypatch, {"web": str(web_root), "etl": str(etl_root)})
+    _patch_headroom(monkeypatch, 4)
+    calls = _patch_spawn(monkeypatch)
+    monkeypatch.setattr(
+        adv, "_ready_leaf_children", lambda e: _ready(("x-web", "web"), ("x-etl", "etl"))
+    )
+    # A live walker claim in the web repo only, held where _walker_live_at reads it.
+    hold = f"walker:{web_root}"
+    acquire_claim(hold, "test-walker", ttl_ms=60_000, root=web_root)
+
     res = adv.advance_epic("x-EPIC", events_path=iso)
-    assert res.error == "walker-live"
+
+    assert res.error is None, "a foreign-repo walker must not refuse the whole pass"
+    assert [c["node"] for c in calls] == ["x-etl"], "the other repo's child still dispatches"
     skips = [e for e in _events(iso) if e["type"] == "advance_skipped"]
-    assert skips and skips[0]["data"]["reason"] == "walker-live"
+    assert [s["data"]["reason"] for s in skips] == ["walker-live"]
+    assert skips[0]["data"]["node_id"] == "x-web"
+
+
+def test_walker_in_own_repo_skips_the_child_with_null_receipt_error(iso, tmp_path, monkeypatch):
+    """x-7f1f task 2.1: the epic's own repo's walker still suppresses its
+    children, per child, and the receipt's `error` stays null."""
+    _epic_graph(tmp_path, monkeypatch)
+    web_root = tmp_path / "web"
+    etl_root = tmp_path / "etl"
+    for d in (web_root, etl_root):
+        d.mkdir(parents=True)
+    _patch_map(monkeypatch, {"web": str(web_root), "etl": str(etl_root)})
+    _patch_headroom(monkeypatch, 4)
+    _patch_spawn(monkeypatch)
+    monkeypatch.setattr(
+        adv, "_ready_leaf_children", lambda e: _ready(("x-web", "web"), ("x-etl", "etl"))
+    )
+    for root in (web_root, etl_root):
+        hold = f"walker:{root}"
+        acquire_claim(hold, "test-walker", ttl_ms=60_000, root=root)
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert res.error is None
+    skips = [e for e in _events(iso) if e["type"] == "advance_skipped"]
+    assert [s["data"]["reason"] for s in skips] == ["walker-live", "walker-live"]
 
 
 # ---------------------------------------------------------------------------
 # Happy path (AC1-HP)
 # ---------------------------------------------------------------------------
+
+
+def test_a_child_dispatches_on_its_own_lane_while_a_full_lane_holds_its_own(
+    iso, tmp_path, monkeypatch
+):
+    """x-fa3a AC1+AC2 through the real fan-out: with zai (the only configured
+    cap) full, a blueprint child settles on anthropic and dispatches; a
+    zai-routed sibling drops lane-cap naming zai, and the pass continues."""
+    _epic_graph(tmp_path, monkeypatch)
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web"), "etl": str(tmp_path / "etl")})
+    budget = adv._LaneBudget(
+        fleet=8, vendor_remaining={"zai": 0}, binding="zai", binding_remaining=0
+    )
+    monkeypatch.setattr(adv, "_spawn_budget_or_degraded", lambda provider=None: budget)
+    monkeypatch.setattr(
+        adv, "_child_lane_vendor",
+        lambda child, **k: "anthropic" if child["id"] == "x-web" else "zai",
+    )
+    calls = _patch_spawn(monkeypatch)
+    monkeypatch.setattr(
+        adv, "_ready_leaf_children",
+        lambda e: _ready(("x-web", "web"), ("x-etl", "etl")),
+    )
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert set(res.dispatched) == {"x-web"}
+    assert {c["node"] for c in calls} == {"x-web"}
+    caps = [
+        e for e in _events(iso)
+        if e["type"] == "advance_skipped" and e["data"].get("reason") == "lane-cap"
+    ]
+    assert [e["data"]["node_id"] for e in caps] == ["x-etl"]
+    assert "lane=zai" in caps[0]["data"]["detail"]
 
 
 def test_fans_out_one_per_mapped_project(iso, tmp_path, monkeypatch):
@@ -199,6 +295,85 @@ def test_mission_active_field_set(iso, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # Per-child isolation (AC1-ERR / AC2-ERR)
 # ---------------------------------------------------------------------------
+
+
+def test_gate_refusal_stops_the_pass_and_names_untried_children(iso, tmp_path, monkeypatch):
+    """AC4-EDGE: a machine-scoped gate refusal is true for every child
+    equally, so the pass attempts exactly one spawn; the untried children
+    record capacity-refused with attempted:false, never a failed verdict."""
+    _epic_graph(tmp_path, monkeypatch)
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web"), "etl": str(tmp_path / "etl")})
+    _patch_headroom(monkeypatch, 8)
+    monkeypatch.setattr(
+        adv,
+        "_ready_leaf_children",
+        lambda e: _ready(
+            ("x-a", "web"), ("x-b", "web"), ("x-c", "web"), ("x-d", "etl"), ("x-e", "etl")
+        ),
+    )
+    calls = []
+
+    def converge(child, root, ev_path, verbose, **kw):
+        calls.append(child["id"])
+        return adv.AdvanceResult(
+            "skipped", adv.EVENT_SKIPPED, reason="capacity-refused",
+            node_id=child["id"], exit_code=79,
+        )
+
+    monkeypatch.setattr(adv, "_converge_one", converge)
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert calls == ["x-a"]
+    skipped = [r for r in res.child_results if r.decision == "skipped"]
+    assert [r.node_id for r in skipped] == ["x-a", "x-b", "x-c", "x-d", "x-e"]
+    assert all(r.reason == "capacity-refused" for r in skipped)
+    untried = [
+        e
+        for e in _events(iso)
+        if e["type"] == "advance_skipped" and e["data"].get("attempted") is False
+    ]
+    assert sorted(e["data"]["node_id"] for e in untried) == ["x-b", "x-c", "x-d", "x-e"]
+    assert not [e for e in _events(iso) if e["type"] == "advance_failed"]
+
+
+def test_provider_scoped_refusal_keeps_trying_other_children(iso, tmp_path, monkeypatch):
+    """P2: exit 78 names the attempted child's route provider, not the
+    machine. Siblings routed elsewhere may still be dispatchable, so the pass
+    continues after a provider-scoped refusal and only a global one stops it."""
+    _epic_graph(tmp_path, monkeypatch)
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web"), "etl": str(tmp_path / "etl")})
+    _patch_headroom(monkeypatch, 8)
+    monkeypatch.setattr(
+        adv,
+        "_ready_leaf_children",
+        lambda e: _ready(("x-a", "web"), ("x-b", "web"), ("x-c", "etl")),
+    )
+    calls = []
+
+    def converge(child, root, ev_path, verbose, **kw):
+        calls.append(child["id"])
+        if child["id"] == "x-a":
+            return adv.AdvanceResult(
+                "skipped", adv.EVENT_SKIPPED, reason="capacity-refused",
+                node_id=child["id"], exit_code=78,
+            )
+        return adv.AdvanceResult(
+            "dispatched", adv.EVENT_DISPATCHED, node_id=child["id"], short_id="sid"
+        )
+
+    monkeypatch.setattr(adv, "_converge_one", converge)
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert calls == ["x-a", "x-b", "x-c"]
+    assert res.dispatched == ("x-b", "x-c")
+    untried = [
+        e
+        for e in _events(iso)
+        if e["type"] == "advance_skipped" and e["data"].get("attempted") is False
+    ]
+    assert untried == []
 
 
 def test_unmapped_project_loud_skip_others_dispatch(iso, tmp_path, monkeypatch):
@@ -257,10 +432,8 @@ def test_spawn_failure_isolated_reservation_released(iso, tmp_path, monkeypatch)
     failed = [r for r in res.child_results if r.decision == "failed"]
     assert [r.node_id for r in failed] == ["x-web"]
     # no stale node:<id> for the failed child, and its dispatch reservation released
-    assert claim_status("node:x-web",
-                        root=adv._claims_root_for("node:x-web")).get("state") != "live"
-    assert claim_status("dispatch:x-web",
-                        root=adv._claims_root_for("dispatch:x-web")).get("state") != "live"
+    assert claim_status("node:x-web").get("state") != "live"
+    assert claim_status("dispatch:x-web").get("state") != "live"
     evs = _events(iso)
     fe = [e for e in evs if e["type"] == "advance_failed"]
     assert len(fe) == 1 and fe[0]["data"]["mission"] == "x-EPIC"
@@ -311,8 +484,7 @@ def test_idempotence_not_ttl_dependent(iso, tmp_path, monkeypatch):
 
     # etl's failed reservation must have been released (no live dispatch:<id>) so
     # the second pass can re-dispatch it WITHOUT waiting on a TTL.
-    assert claim_status("dispatch:x-etl",
-                        root=adv._claims_root_for("dispatch:x-etl")).get("state") != "live"
+    assert claim_status("dispatch:x-etl").get("state") != "live"
 
     _patch_spawn(monkeypatch)  # etl now succeeds on retry
     second = adv.advance_epic("x-EPIC", events_path=iso)
@@ -339,6 +511,60 @@ def test_all_done_epic_noop_deactivates(iso, tmp_path, monkeypatch):
     assert res.dispatched == ()
     dm = [e for e in _events(iso) if e["type"] == "mission_deactivated"]
     assert len(dm) == 1 and dm[0]["data"]["reason"] == "complete"
+
+
+def test_epic_whose_only_other_child_was_replaced_elsewhere_completes(iso, tmp_path, monkeypatch):
+    """Supersede stamps no completed_at: the mission still completes, and the
+    done-elsewhere shape does not re-arm an epic the close paths just closed."""
+    _write_graph(
+        tmp_path,
+        [
+            {"id": "x-EPIC", "title": "mission", "type": "epic", "project": "fno"},
+            {"id": "x-web", "title": "web child", "parent": "x-EPIC", "project": "web",
+             "slug": "web-child", "status": "ready",
+             "completed_at": "2026-07-18T00:00:00Z"},
+            {"id": "x-etl", "title": "etl child", "parent": "x-EPIC", "project": "etl",
+             "slug": "etl-child", "status": "superseded", "superseded_by": "x-other"},
+        ],
+        monkeypatch,
+    )
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web"), "etl": str(tmp_path / "etl")})
+    monkeypatch.setattr(adv, "_ready_leaf_children",
+                        lambda e: pytest.fail("must not enumerate a complete epic"))
+    monkeypatch.setattr(adv, "_spawn_worker",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert res.deactivated is True and res.all_done is True
+    dm = [e for e in _events(iso) if e["type"] == "mission_deactivated"]
+    assert len(dm) == 1 and dm[0]["data"]["reason"] == "complete"
+    assert _read_epic().get("mission_active") is None
+
+
+def test_a_closed_epic_never_re_arms_even_with_an_open_child(iso, tmp_path, monkeypatch):
+    """The epic's own completed_at is the close paths' ruling: advance must
+    deactivate, not re-activate a mission on a closed epic."""
+    _write_graph(
+        tmp_path,
+        [
+            {"id": "x-EPIC", "title": "mission", "type": "epic", "project": "fno",
+             "completed_at": "2026-07-18T00:00:00Z"},
+            {"id": "x-web", "title": "web child", "parent": "x-EPIC", "project": "web",
+             "slug": "web-child", "status": "ready"},
+        ],
+        monkeypatch,
+    )
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web")})
+    monkeypatch.setattr(adv, "_ready_leaf_children",
+                        lambda e: pytest.fail("must not enumerate a closed epic"))
+    monkeypatch.setattr(adv, "_spawn_worker",
+                        lambda *a, **k: pytest.fail("must not spawn"))
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert res.deactivated is True and res.all_done is True
+    assert _read_epic().get("mission_active") is None
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +634,11 @@ def test_headroom_bounds_dispatches_this_pass(iso, tmp_path, monkeypatch):
     lane_caps = [e for e in _events(iso)
                  if e["type"] == "advance_skipped" and e["data"]["reason"] == "lane-cap"]
     assert len(lane_caps) == 1
-    assert "headroom=1" in lane_caps[0]["data"]["detail"]
+    # x-fa3a: the detail names the cap that fired - the fleet bound, since the
+    # lane-less world stub prices nothing - at the headroom LEFT after the
+    # first dispatch consumed the pass's one free lane.
+    assert "lane=fleet" in lane_caps[0]["data"]["detail"]
+    assert "headroom=0" in lane_caps[0]["data"]["detail"]
 
 
 def test_boot_window_reservation_no_longer_caps_a_sibling(iso, tmp_path, monkeypatch):
@@ -427,8 +657,7 @@ def test_boot_window_reservation_no_longer_caps_a_sibling(iso, tmp_path, monkeyp
     _patch_map(monkeypatch, {"web": str(tmp_path / "web")})
     _patch_headroom(monkeypatch, 2)
     # x-a is mid boot-window: it holds ONLY a dispatch:<id> reservation, no node claim.
-    acquire_claim("dispatch:x-a", "advance:999", ttl_ms=60_000,
-                  root=adv._claims_root_for("dispatch:x-a"))
+    acquire_claim("dispatch:x-a", "advance:999", ttl_ms=60_000)
     _patch_spawn(monkeypatch)
     # only x-b is offered as ready (x-a is filtered out by the real ready surface)
     monkeypatch.setattr(adv, "_ready_leaf_children", lambda e: _ready(("x-b", "web")))
@@ -567,6 +796,68 @@ def test_cli_stop_requires_epic(iso, tmp_path, monkeypatch):
     r = CliRunner().invoke(app, ["backlog", "advance", "--stop"])
     assert r.exit_code == 2
     assert "require --epic" in _cli_output(r)
+
+
+# ---------------------------------------------------------------------------
+# Ordered child selection: the drain takes children in shared-selection order
+# ---------------------------------------------------------------------------
+
+
+def test_capped_pass_takes_the_top_ranked_child_first(iso, tmp_path, monkeypatch):
+    """AC2-HP: an epic advance nudge dispatches the top-ranked unblocked child.
+
+    The ready surface orders the ranked child (rank 1.0) ahead of its unranked
+    sibling; a width-1 pass must dispatch THAT child, proving the epic advance
+    consumes the shared parent-scoped selection order rather than graph order.
+    """
+    entries = [
+        {"id": "x-EPIC", "title": "mission", "type": "epic", "project": "fno"},
+        {"id": "x-ranked", "parent": "x-EPIC", "project": "web", "slug": "ranked",
+         "status": "ready", "rank": 1.0, "created_at": "2026-09-02T00:00:00Z"},
+        {"id": "x-plain", "parent": "x-EPIC", "project": "web", "slug": "plain",
+         "status": "ready", "created_at": "2026-09-01T00:00:00Z"},
+    ]
+    _write_graph(tmp_path, entries, monkeypatch)
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web")})
+    _patch_headroom(monkeypatch, 1)
+    calls = _patch_spawn(monkeypatch)
+    # The REAL selection key decides the order the drain sees (the shared
+    # surface _ready_leaf_children shells is sorted by this key).
+    from fno.graph._intake import make_selection_sort_key
+
+    ordered = sorted(
+        [e for e in entries if e.get("parent") == "x-EPIC"],
+        key=make_selection_sort_key(entries),
+    )
+    assert [e["id"] for e in ordered] == ["x-ranked", "x-plain"]
+    monkeypatch.setattr(
+        adv, "_ready_leaf_children", lambda e: _ready(*[(x["id"], "web") for x in ordered])
+    )
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert res.dispatched == ("x-ranked",)
+    assert [c["node"] for c in calls] == ["x-ranked"]
+    disp = [e for e in _events(iso) if e["type"] == "advance_dispatched"]
+    assert len(disp) == 1 and disp[0]["data"]["node_id"] == "x-ranked"
+
+
+def test_held_advance_spawns_nothing_and_names_reason(iso, tmp_path, monkeypatch):
+    """AC2-EDGE: zero spawn-gate headroom holds with a lane-cap receipt per
+    ready child; the plan and children stay intact for a later tick."""
+    _epic_graph(tmp_path, monkeypatch)
+    _patch_map(monkeypatch, {"web": str(tmp_path / "web"), "etl": str(tmp_path / "etl")})
+    _patch_headroom(monkeypatch, 0)
+    calls = _patch_spawn(monkeypatch)
+    monkeypatch.setattr(adv, "_ready_leaf_children",
+                        lambda e: _ready(("x-web", "web"), ("x-etl", "etl")))
+
+    res = adv.advance_epic("x-EPIC", events_path=iso)
+
+    assert res.dispatched == () and calls == []
+    skips = [e for e in _events(iso)
+             if e["type"] == "advance_skipped" and e["data"]["reason"] == "lane-cap"]
+    assert len(skips) == 2
 
 
 # ---------------------------------------------------------------------------

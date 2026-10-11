@@ -8,12 +8,7 @@ Rows marked `OPEN` below are intentionally not deleted when the repository still
 
 ## Census 1: post-merge ritual
 
-The dispatch lives in one leaf module: `cli/src/fno/post_merge_route.py`
-(`decide_post_merge_route` + `dispatch_post_merge_ritual` + the receipt). pr-watch
-is the sole detector; the cold path runs the mechanical `fno do pr ritual <pr>
---autonomous` verb directly (no bg thread, no `/fno:pr merged` LLM wrapper), and
-the warm route injects that SAME verb. The receipt is attribution only, never a
-dedup input (the marker + TTL claim remain the idempotency layer).
+The dispatch lives in one leaf module: `cli/src/fno/post_merge_route.py` (`decide_post_merge_route` + `dispatch_post_merge_ritual` + the receipt). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` verb directly (no bg thread, no `/fno:ship pr merged` LLM wrapper), and the warm route injects that SAME verb. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
@@ -101,7 +96,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 | 5b | Shell resolver legacy grep fallback | `scripts/lib/graph-resolve.sh` `_resolve_arg_legacy` | KEEP; the no-`fno` escape hatch, reachable only when the package will not import | — |
 | 6a | `init-target-state.sh` grep presence checks | `init-target-state.sh:672,1118` | CLOSED; `fno backlog get --strict`, and the second check deleted as redundant | this PR |
 | 6b | `autocorrect-pack.sh` blocked-state read | `autocorrect-pack.sh:183` | CLOSED; read `.entries`, not `.nodes` | this PR |
-| 6c | plan_path -> node lookup heredocs | `autolaunch-on-ready.sh:108`, `init-target-state.sh:921` | OPEN, deliberately parked | OPEN |
+| 6c | plan_path -> node lookup heredocs | `init-target-state.sh:921` (the `autolaunch-on-ready.sh:108` half was deleted with the script) | OPEN, deliberately parked | OPEN |
 
 Row 4 deviates from the original disposition.
 A version stamp needs a writer change plus an integer someone must remember to bump, and the only sane failure action for a display surface is to keep rendering, which it already does.
@@ -123,8 +118,8 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 | 1 | `fno agents workspace worktree ensure` / `fno do target start` | `worktree_cli/cli.py:282`, `target_cli.py:900` | KEEP, canonical autonomous path | - |
 | 2 | Raw `git worktree add` + linker | `scripts/setup/setup-worktree.sh` | KEEP, manual path converges | — |
 | 3 | Conductor UI recipe | `conductor.json:3`, `worktree-create-hook.sh` | KEEP, converge on linker | — |
-| 4 | Claude WorktreeCreate hook | `hooks/worktree-setup.sh` | RETIRE duplicate setup | OPEN |
-| 5 | `/speculate` private setup | `skills/speculate/scripts/worktree-setup.sh` | RETIRE duplicate setup | OPEN |
+| 4 | Claude WorktreeCreate hook | `hooks/worktree-setup.sh` | DONE: relocates, then links and reads config through `scripts/lib/worktree-config.sh` | — |
+| 5 | `/speculate` private setup | `scripts/lib/worktree-manager.sh setup` | DONE: private copy deleted; setup links through `scripts/lib/worktree-config.sh` | — |
 | 6 | Harness EnterWorktree | harness tool | KEEP, enters only | — |
 
 ## Census 9: test running

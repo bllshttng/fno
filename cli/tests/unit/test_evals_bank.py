@@ -6,8 +6,10 @@ rejected naming the id and file, and an all-trivial grade warns.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from fno.evals import bank
 
@@ -131,7 +133,7 @@ def test_seed_bank_loads() -> None:
 
 
 def test_seed_bank_new_eval_tasks_load() -> None:
-    """The king-reign-hygiene and growth-launch-bundle tasks load at capability
+    """The lead-term-hygiene and growth-launch-bundle tasks load at capability
     tier. A malformed YAML in either surfaces here, not at run time; this is also
     the load proof for the growth-launch assertions moved out of the deleted
     skill-local evals directory."""
@@ -140,11 +142,75 @@ def test_seed_bank_new_eval_tasks_load() -> None:
     if not seed.is_dir():
         pytest.skip("seed bank not present in this checkout")
     by_id = {t.id: t for t in bank.discover_bank(seed)}
-    king = by_id.get("capability-king-reign-hygiene")
-    assert king is not None, "king-reign-hygiene task missing from bank"
-    assert king.tier == "capability"
-    assert king.prompt is None  # grade-only; no live worker spawn
+    lead = by_id.get("capability-lead-term-hygiene")
+    assert lead is not None, "lead-term-hygiene task missing from bank"
+    assert lead.tier == "capability"
+    assert lead.prompt is None  # grade-only; no live worker spawn
     growth = by_id.get("capability-growth-launch-bundle")
     assert growth is not None, "growth-launch-bundle task missing from bank"
     assert growth.tier == "capability"
     assert growth.prompt  # prompt-bearing; the seven requirements live in it
+
+
+def test_seed_bank_failure_fixtures_wall_clock_bound_never_cost() -> None:
+    """AC4-EDGE: every bank fixture declares timeout_minutes and no
+    fixture's grade block reads a cost field. Wall clock is the budget an
+    operator actually feels; exceeding it is the failure."""
+    repo_root = Path(__file__).resolve().parents[3]
+    seed = repo_root / "evals" / "bank"
+    if not seed.is_dir():
+        pytest.skip("seed bank not present in this checkout")
+    for path in sorted(seed.glob("*.yaml")):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert "timeout_minutes" in raw, f"{path.name}: missing timeout_minutes"
+        assert "cost" not in raw, f"{path.name}: declares a cost field"
+        for check in raw.get("grade", []):
+            assert "cost" not in check, f"{path.name}: grade check reads cost"
+    by_id = {t.id: t for t in bank.discover_bank(seed)}
+    for fid in (
+        "failure-plan-thrash",
+        "failure-review-poll-stall",
+        "failure-init-phase-stall",
+    ):
+        assert fid in by_id, f"{fid} missing from bank"
+
+
+# --------------------------------------------------------------------------- #
+# lane resolution (x-fd52 AC1-HP/AC1-ERR): join a NAME against the existing
+# config.routing.models inventory - never a second model/effort enum.
+# --------------------------------------------------------------------------- #
+
+def _settings(*rows: dict) -> SimpleNamespace:
+    return SimpleNamespace(routing=SimpleNamespace(
+        models=[SimpleNamespace(**{"name": "", "harness": "", "model": "",
+                                    "effort": "", "route": "", "account": "", **r})
+                for r in rows]
+    ))
+
+
+def test_resolve_lane_reads_matching_routing_models_row(monkeypatch) -> None:
+    """resolve_lane rides resolve_inventory: the same fold the slot lanes
+    join against, never a second model/effort enum."""
+    from fno import route_resolve as rr
+
+    row = rr.InventoryRow(name="astra-high", harness="codex",
+                          model="gpt-6-astra", effort="high")
+    inv = rr.Inventory(rows={"astra-high": row}, declared=True)
+    monkeypatch.setattr(rr, "resolve_inventory", lambda: inv)
+    coord = bank.resolve_lane("astra-high")
+    assert coord.name == "astra-high"
+    assert coord.harness == "codex"
+    assert coord.model == "gpt-6-astra"
+    assert coord.effort == "high"
+
+
+def test_resolve_lane_unknown_name_raises_naming_known_lanes(monkeypatch) -> None:
+    from fno import route_resolve as rr
+
+    rows = {n: rr.InventoryRow(name=n, harness="", model="")
+            for n in ("astra-high", "sol-low")}
+    monkeypatch.setattr(rr, "resolve_inventory", lambda: rr.Inventory(rows=rows, declared=True))
+    with pytest.raises(bank.LaneError, match=r"astra-high.*sol-low|sol-low.*astra-high"):
+        bank.resolve_lane("no-such-lane")
+
+

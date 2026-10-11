@@ -59,6 +59,7 @@ fn two_worktrees() -> (tempfile::TempDir, PathBuf, PathBuf) {
 
 fn run(cwd: &Path, session_id: &str) -> Output {
     Command::new(BINARY)
+        .envs(fno_agents::test_run::self_owner_env())
         .current_dir(cwd)
         .args(["manifest-for-session", "--harness-session-id", session_id])
         .output()
@@ -79,6 +80,50 @@ fn ac3_hp_resolves_the_matching_manifest_from_another_worktree() {
         expected.canonicalize().unwrap().to_string_lossy()
     );
     assert!(output.stderr.is_empty());
+}
+
+fn run_with_spaces(cwd: &Path, spaces: &Path, args: &[&str]) -> Output {
+    Command::new(BINARY)
+        .envs(fno_agents::test_run::self_owner_env())
+        .env("FNO_SPACES_DIR", spaces)
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("fno-agents runs")
+}
+
+#[test]
+fn resolves_a_manifest_that_lives_only_in_the_worktree_space_slice() {
+    let (temp, repo, other) = two_worktrees();
+    let spaces = temp.path().join("spaces");
+    let slice = run_with_spaces(&other, &spaces, &["state", "path", "target-state"]);
+    assert_eq!(slice.status.code(), Some(0));
+    let slice = PathBuf::from(String::from_utf8_lossy(&slice.stdout).trim());
+    assert!(
+        !slice.starts_with(&other),
+        "slice must live outside the checkout"
+    );
+    fs::create_dir_all(slice.parent().unwrap()).unwrap();
+    fs::write(
+        &slice,
+        format!(
+            "---\nfno_id: run-s\nharness: claude\nharness_session_id: session-s\nowner_cwd: \"{}\"\n---\n",
+            other.display()
+        ),
+    )
+    .unwrap();
+
+    let output = run_with_spaces(
+        &repo,
+        &spaces,
+        &["manifest-for-session", "--harness-session-id", "session-s"],
+    );
+
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        slice.canonicalize().unwrap().to_string_lossy()
+    );
 }
 
 #[test]

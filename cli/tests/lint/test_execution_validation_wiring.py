@@ -55,25 +55,6 @@ def test_all_plan_validators_use_the_canonical_source_first_root() -> None:
         assert "-m fno.cli plan" not in validator
 
 
-def test_python_self_shellouts_do_not_depend_on_expiring_roots() -> None:
-    expected = {
-        "cli/src/fno/pr/_ritual.py": (
-            '["do", "plan", "reconcile-status", "--apply"]',
-            '["do", "pr", "sync-canonical"',
-        ),
-        "cli/src/fno/retro/keep_going.py": (
-            '"do", "think", "dispatch", node_id, "--json"',
-        ),
-        "cli/src/fno/post_merge_route.py": (
-            '"do", "pr", "ritual", str(pr_number), "--autonomous"',
-        ),
-    }
-    for relative, markers in expected.items():
-        source = _read(relative)
-        for marker in markers:
-            assert marker in source
-
-
 def test_every_python_fno_argv_avoids_expiring_roots() -> None:
     moved = {
         "delivery", "loops", "phase", "plan", "pr", "pr-watch", "research",
@@ -103,12 +84,6 @@ def test_python_module_argv_shape_reaches_the_expiring_root_guard() -> None:
     assert _fno_argv_root(argv) == "pr"
 
 
-def test_literal_binary_argv_shape_reaches_the_expiring_root_guard() -> None:
-    parsed = ast.parse('subprocess.run(["fno-py", "pr", "hold-check"])')
-    argv = next(node for node in ast.walk(parsed) if isinstance(node, ast.List))
-    assert _fno_argv_root(argv) == "pr"
-
-
 def test_blueprint_enriches_and_validates_before_intake() -> None:
     blueprint = _read("skills/blueprint/SKILL.md")
 
@@ -125,3 +100,14 @@ def test_raw_prose_and_node_seeded_inputs_keep_discovery() -> None:
     blueprint = _read("skills/blueprint/SKILL.md")
 
     assert "raw prose or a node-seeded path" in blueprint
+
+
+def test_blueprint_collision_gate_adopts_when_nobody_can_answer() -> None:
+    gates = _read("skills/blueprint/references/blueprint-gates.md")
+    section = gates[
+        gates.index("## Collision check"):gates.index("## Cross-project peer heads-up")
+    ]
+
+    assert "no AskUserQuestion tool" in section
+    assert "--acknowledge-collisions" in section
+    assert "fno backlog note" in section

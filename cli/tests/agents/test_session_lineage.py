@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from fno.paths_testing import use_tmpdir
+from fno.registry_door import read_registry_document
 
 BIRTH = "e6f78b98-e594-47ed-ad81-84f8a78b8bb7"
 REMINT = "08054b1d-a907-47ab-a3d2-4a1e7a87eb4e"
@@ -71,9 +72,11 @@ def _observe(name: str, session_id: str, *, predecessor_reachable=None, **kwargs
 def _transition_events(tmp_path: Path) -> list[dict]:
     """The daemon lifecycle log, where births, deaths, and transitions join."""
     path = tmp_path / ".fno" / "agents" / "events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    # No exists() gate: the store holds the rows even when the raw journal
+    # was never written.
+    from tests._event_rows import event_rows
+
+    return event_rows(path)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +159,10 @@ def test_observation_branch_mints_a_second_row_and_leaves_a_untouched(
     branch = next(row for row in rows if row.harness_session_id == REMINT)
     assert live_a.predecessor_session_ids == [], "A's row is never overwritten"
     assert branch.forked_from_session_id == BIRTH
-    assert branch.fno_id == REMINT, "a branch row carries a distinct stable id"
+    # A branch row mints its own id at the write; it never copies a session id.
+    assert branch.fno_id
+    assert branch.fno_id != REMINT
+    assert branch.fno_id != BIRTH
     assert branch.name != live_a.name
     assert entry.name == branch.name
 
@@ -186,6 +192,52 @@ def test_branch_mint_clears_the_related_slot(tmp_path: Path, monkeypatch) -> Non
     branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
     assert branch.forked_from_session_id == BIRTH
     assert not branch.related_session_id, "the branch inherits no parked id"
+
+
+def test_claude_branch_row_is_born_bg_routable(tmp_path: Path, monkeypatch) -> None:
+    """x-a457: a claude branch carries the 8-hex jobId the rv socket farm keys
+    on, derived from the new session id the way the bg spawn path mints it.
+    Left "" the live branch had no identity route and footprint read every
+    such row as an unattributed cost, fail-closing the spawn gate."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _isolate_daemon_log(monkeypatch, tmp_path)
+    from fno.agents.registry import load_registry
+
+    _spawned_row()
+    entry, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=True)
+    assert outcome == "branch"
+    branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
+    assert branch.short_id == REMINT.split("-", 1)[0]
+
+
+def test_codex_branch_row_keeps_no_transport_short_id(tmp_path: Path, monkeypatch) -> None:
+    """First-8 of a codex id is not a transport key (time-prefixed ids collide
+    across same-window sessions), so a codex branch keeps short_id empty."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _isolate_daemon_log(monkeypatch, tmp_path)
+    from fno.agents.registry import (
+        AgentEntry,
+        load_registry,
+        restamp_harness_session_id,
+        write_registry,
+    )
+
+    write_registry([
+        AgentEntry(
+            name="t-codex",
+            harness="codex",
+            harness_session_id=BIRTH,
+            cwd="/proj",
+            log_path="",
+            status="live",
+        )
+    ])
+    entry = restamp_harness_session_id(
+        name="t-codex", harness="codex", session_id=REMINT, predecessor_reachable=True
+    )
+    assert entry is not None
+    branch = next(row for row in load_registry() if row.harness_session_id == REMINT)
+    assert branch.short_id == ""
 
 
 def test_observation_unknown_evidence_parks_b_and_overwrites_nothing(
@@ -218,10 +270,10 @@ def test_observation_succession_replay_is_idempotent_and_byte_stable(
 
     _spawned_row()
     _observe("target-x-f0c2", REMINT, predecessor_reachable=False)
-    before = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    before = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     entry, outcome = _observe("target-x-f0c2", REMINT, predecessor_reachable=False)
     assert outcome == "no-op"
-    after = (tmp_path / ".fno" / "agents" / "registry.json").read_text()
+    after = read_registry_document(tmp_path / ".fno" / "agents" / "registry.json")[0]
     assert after == before, "a replay must not rewrite the file"
     row = load_registry()[0]
     assert row.predecessor_session_ids == [BIRTH], "A appears exactly once"
@@ -546,3 +598,55 @@ def test_non_claude_restamp_emits_the_classified_transition(
     assert classified[0]["data"]["classification"] == "succession"
     assert classified[0]["data"]["predecessor_session_id"] == BIRTH
     assert classified[0]["data"]["successor_session_id"] == REMINT
+
+
+# -- one name store: the session-names fold ----------------------------------
+
+
+def _row_with_sid(name, sid, short):
+    from fno.agents.registry import AgentEntry, write_registry
+
+    write_registry([
+        AgentEntry(
+            name=name,
+            harness="claude",
+            harness_session_id=sid,
+            short_id=short,
+            cwd="/proj",
+            log_path="",
+            status="live",
+        )
+    ])
+
+
+def test_reconcile_migration_folds_a_file_alias_into_its_row_ac5_hp(
+    tmp_path, monkeypatch
+) -> None:
+    """AC5-HP: an alias folded onto the row (the Rust sweep does the fold; its
+    append + idempotence are pinned Rust-side) resolves as a mail address from
+    the row, so the operator's legible name keeps working."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.discover import _alias_to_session_ids
+    from fno.agents.registry import append_row_alias, load_registry
+
+    _row_with_sid("target-x-f0c2", BIRTH, "f0c2abcd")
+
+    assert append_row_alias("f0c2abcd", "legible-alias") is True
+    row = load_registry()[0]
+    assert "legible-alias" in row.aliases, "the row carries the folded alias"
+    ids, read_ok = _alias_to_session_ids("legible-alias", None)
+    assert read_ok and BIRTH in ids, "mail resolution answers from the row"
+
+
+def test_append_row_alias_refuses_an_alias_another_row_answers_to(
+    tmp_path, monkeypatch
+) -> None:
+    """An ambiguous alias is no address: the append fails closed when another
+    row already answers to it, so `find` never has to guess."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.registry import append_row_alias, load_registry
+
+    _row_with_sid("row-a", BIRTH, "aaaa1111")
+    _row_with_sid("legible-alias", REMINT, "bbbb2222")
+    assert append_row_alias("row-a", "legible-alias") is False
+    assert "legible-alias" not in load_registry()[0].aliases, "the ambiguous alias never lands"

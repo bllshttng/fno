@@ -44,10 +44,16 @@ make_repo() {
   (cd "$_dir" && git init -q && mkdir -p .fno home/.fno) || fail "repo setup failed in $_dir"
   printf '# isolated\n' > "${_dir}/.fno/config.toml"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
-  cat > "${_dir}/home/.fno/graph.json" <<'JSON'
+  # State-path stub pins init's manifest to the scenario space dir; other verbs
+  # delegate to the real fno-agents so the modern claim stays real.
+  mkdir -p "${_dir}/bin" "${_dir}/space"
+  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod 755 "${_dir}/bin/fno-agents"
+  cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "${_dir}/home/.fno/graph.json"
 {"entries":[
   {"id":"tst-aa00aa00","title":"first guard node","session_id":null},
-  {"id":"tst-bb00bb00","title":"second guard node","session_id":null}
+  {"id":"tst-bb00bb00","title":"second guard node","session_id":null},
+  {"id":"tstd0d1","title":"legacy dashless node","session_id":null}
 ]}
 JSON
 }
@@ -55,10 +61,14 @@ JSON
 # $1 = tmp repo dir, $2 = TARGET_INPUT ; sets STATE / ERRLOG globals
 run_init() {
   local _dir="$1" _input="$2"
-  STATE="${_dir}/.fno/target-state.md"
+  STATE="${_dir}/space/target-state.md"
   ERRLOG="${_dir}/stderr.log"
   (cd "$_dir" && \
     HOME="${_dir}/home" \
+    PATH="${_dir}/bin:$PATH" \
+    FNO_TEST_SPACE="${_dir}/space" \
+    FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+    FNO_TARGET_INIT_GATED=1 \
     TARGET_START=1 \
     TARGET_INPUT="$_input" \
     TARGET_LOCATION_OK="main-acknowledged" \
@@ -114,7 +124,7 @@ pass "AC3-ERR: ambiguous input sets no single graph_node_id and says why"
 # ── x-cd1e: ambiguous for the MANIFEST is not ambiguous for the CLAIM ─────
 # A two-node payload used to take zero claims, which is the worst of the three
 # options: two nodes are being built and the store recorded neither, so both
-# read free to every king that checked. The manifest still holds one
+# read free to every lead that checked. The manifest still holds one
 # graph_node_id (asserted above); the claims are per node.
 log "x-cd1e: 'tst-aa00aa00 tst-bb00bb00' claims BOTH nodes"
 MK2="$(grep '^target_claim_multi_keys:' "$STATE" 2>/dev/null | sed 's/^target_claim_multi_keys:[[:space:]]*//' | tr -d '"\r')"
@@ -208,5 +218,29 @@ CK6="$(claim_key_of "$STATE")"
 [[ "$CK6" == "node:tst-aa00aa00" ]] \
   || fail "archived: a live node stopped resolving when an archive exists (got '${CK6}')"
 pass "archived: a live node still resolves alongside an archive"
+
+# ── A dash-less literal id binds like its dashed kin ───────────────────────
+# A config prefix with no separator minted "<prefix><4hex>" literals. Backlog
+# resolution is format-agnostic, so a literal id that the graph holds must
+# claim here too; the token shape used to require the prefix-dash and
+# silently skipped it. Free text still cannot claim: the probe is
+# presence-based, so only a literal graph id matches.
+log "dashless: literal 'tstd0d1' claims node:tstd0d1"
+
+make_repo TMP7; _ALL_TMPS+=("$TMP7")
+run_init "$TMP7" "beast mode tstd0d1"
+CK7="$(claim_key_of "$STATE")"
+[[ "$CK7" == "node:tstd0d1" ]] \
+  || fail "dashless: literal dash-less id did not claim (got '${CK7}')"
+pass "dashless: literal dash-less id claims its node"
+
+# The dashed ids in the SAME graph must still resolve, and the two shapes
+# must not read as one ambiguous pair.
+make_repo TMP8; _ALL_TMPS+=("$TMP8")
+run_init "$TMP8" "tst-aa00aa00"
+CK8="$(claim_key_of "$STATE")"
+[[ "$CK8" == "node:tst-aa00aa00" ]] \
+  || fail "dashless: a dashed id stopped resolving once a dashless sibling exists (got '${CK8}')"
+pass "dashless: dashed ids still resolve alongside a dashless sibling"
 
 log "All node-guard tokenize scenarios passed"

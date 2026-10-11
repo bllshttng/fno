@@ -10,6 +10,7 @@ use fno_agents::codex_ask::{
     approval_flag, build_argv_create, build_argv_resume, inject_from_name, parse_jsonl_line,
     sandbox_flag, sandbox_flag_resume, CodexAskError, JsonlEvent,
 };
+use fno_agents::codex_posture::BOUNDED_NETWORK_OVERRIDE;
 use std::path::PathBuf;
 
 /// Guards tests that mutate the process-global `PATH` (the crate's own
@@ -46,9 +47,17 @@ fn inject_from_name_no_escaping() {
 
 #[test]
 fn sandbox_flag_default_is_bounded() {
-    // Sandbox tokens only (workspace sandbox); approval is a separate global
-    // flag emitted before `exec` - see approval_flag.
-    assert_eq!(sandbox_flag(false), vec!["--sandbox", "workspace-write"]);
+    // Sandbox tokens (workspace sandbox + network override); approval is a
+    // separate global flag emitted before `exec` - see approval_flag.
+    assert_eq!(
+        sandbox_flag(false),
+        vec![
+            "--sandbox",
+            "workspace-write",
+            "-c",
+            BOUNDED_NETWORK_OVERRIDE
+        ]
+    );
 }
 
 #[test]
@@ -105,11 +114,24 @@ fn sandbox_flag_resume_yolo_is_bypass() {
 // build_argv_create
 // ---------------------------------------------------------------------------
 
+/// A project dir that provably does not exist.
+///
+/// These tests pin the plan grant's ABSENT-cwd fallback, which fires only when
+/// the dir is missing: with a real cwd the grant shells out to `fno do plan
+/// path` and returns whatever that install configured. A fixed `/tmp/proj` made
+/// the verdict depend on whether some earlier run had left that path behind on
+/// the machine, and on this box it had.
+fn absent_project_dir() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("fno-codex-argv-absent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 #[test]
 fn build_argv_create_default_sandbox() {
-    let cwd = PathBuf::from("/tmp/proj");
+    let cwd = absent_project_dir();
     let full_prompt = "[from: alice]\n\nhello";
-    let argv = build_argv_create(&cwd, full_prompt, false, None, None, None);
+    let argv = build_argv_create(&cwd, full_prompt, false, None, None, None, &[]);
     assert_eq!(
         &argv[..8],
         [
@@ -119,7 +141,7 @@ fn build_argv_create_default_sandbox() {
             "exec",
             "--json",
             "-C",
-            "/tmp/proj",
+            cwd.to_string_lossy().as_ref(),
             "--skip-git-repo-check",
         ]
     );
@@ -134,15 +156,15 @@ fn build_argv_create_default_sandbox() {
 fn build_argv_create_forwards_model() {
     // x-c772: an explicit --model reaches `codex exec --model <m>` (between
     // --skip-git-repo-check and the sandbox flag). None/empty = no --model.
-    let cwd = PathBuf::from("/tmp/proj");
-    let argv = build_argv_create(&cwd, "hi", false, Some("gpt-5.5"), None, None);
+    let cwd = absent_project_dir();
+    let argv = build_argv_create(&cwd, "hi", false, Some("gpt-5.5"), None, None, &[]);
     let i = argv
         .iter()
         .position(|a| a == "--model")
         .expect("--model present");
     assert_eq!(argv[i + 1], "gpt-5.5");
     // empty model = no flag (parity with the None case)
-    let argv_none = build_argv_create(&cwd, "hi", false, Some(""), None, None);
+    let argv_none = build_argv_create(&cwd, "hi", false, Some(""), None, None, &[]);
     assert!(!argv_none.iter().any(|a| a == "--model"));
 }
 
@@ -150,15 +172,25 @@ fn build_argv_create_forwards_model() {
 fn build_argv_create_forwards_add_dir() {
     // x-b6e2: a user --add-dir grants extra write access on `codex exec`. codex's
     // own cwd rides -C, so add-dir is purely additive. Empty/None adds no USER
-    // flag; the bounded worker's internal plan grant remains.
-    let cwd = PathBuf::from("/tmp/proj");
-    let argv = build_argv_create(&cwd, "hi", false, None, None, Some("/extra"));
+    // flag; the bounded worker's internal plan grant remains. UV_CACHE_DIR is
+    // pinned to a missing path (authoritative, so no grant) because the test
+    // counts --add-dir and the host's real cache would add one.
+    let _uv_guard = PATH_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let uv_prev = std::env::var_os("UV_CACHE_DIR");
+    unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
+    let cwd = absent_project_dir();
+    let argv = build_argv_create(&cwd, "hi", false, None, None, Some("/extra"), &[]);
     let i = argv
         .iter()
         .position(|a| a == "--add-dir")
         .expect("--add-dir present");
     assert_eq!(argv[i + 1], "/extra");
-    let none = build_argv_create(&cwd, "hi", false, None, None, Some(""));
+    let none = build_argv_create(&cwd, "hi", false, None, None, Some(""), &[]);
+    match uv_prev {
+        Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
+        None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
+    }
+    drop(_uv_guard);
     assert!(!none.iter().any(|a| a == "/extra"));
     assert_eq!(none.iter().filter(|a| *a == "--add-dir").count(), 1);
 }
@@ -184,7 +216,7 @@ fn build_argv_create_grants_git_metadata_write_in_a_repo() {
         .output()
         .unwrap();
 
-    let argv = build_argv_create(dir.path(), "hi", false, None, None, None);
+    let argv = build_argv_create(dir.path(), "hi", false, None, None, None, &[]);
     let i = argv
         .iter()
         .position(|a| a == "--add-dir")
@@ -195,7 +227,7 @@ fn build_argv_create_grants_git_metadata_write_in_a_repo() {
     );
 
     // Full yolo is already unsandboxed: no grant to make.
-    let yolo = build_argv_create(dir.path(), "hi", true, None, None, None);
+    let yolo = build_argv_create(dir.path(), "hi", true, None, None, None, &[]);
     assert!(!yolo.iter().any(|a| a == "--add-dir"));
 }
 
@@ -242,11 +274,20 @@ fn build_argv_create_internal_grants_compose_with_user_add_dir() {
     }
     unsafe { std::env::set_var("PATH", &new_path) };
 
-    let argv = build_argv_create(dir.path(), "hi", false, None, None, Some("/extra"));
+    // The test counts --add-dir, so the uv cache is pinned to a missing path
+    // (authoritative, so no grant): the host's real cache would add one.
+    let uv_prev = std::env::var_os("UV_CACHE_DIR");
+    unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
+
+    let argv = build_argv_create(dir.path(), "hi", false, None, None, Some("/extra"), &[]);
 
     match old_path {
         Some(path) => unsafe { std::env::set_var("PATH", path) },
         None => unsafe { std::env::remove_var("PATH") },
+    }
+    match uv_prev {
+        Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
+        None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
     }
 
     assert_eq!(argv.iter().filter(|a| *a == "--add-dir").count(), 3);
@@ -267,7 +308,7 @@ fn build_argv_create_approval_precedes_exec() {
     // Regression (pr704): --ask-for-approval is a GLOBAL flag and MUST come
     // before the `exec` subcommand, or codex aborts with
     // `error: unexpected argument '--ask-for-approval' found`.
-    let argv = build_argv_create(&PathBuf::from("/x"), "m", false, None, None, None);
+    let argv = build_argv_create(&PathBuf::from("/x"), "m", false, None, None, None, &[]);
     let approval = argv
         .iter()
         .position(|a| a == "--ask-for-approval")
@@ -282,7 +323,7 @@ fn build_argv_create_approval_precedes_exec() {
 #[test]
 fn build_argv_create_yolo() {
     let cwd = PathBuf::from("/work");
-    let argv = build_argv_create(&cwd, "msg", true, None, None, None);
+    let argv = build_argv_create(&cwd, "msg", true, None, None, None, &[]);
     // --dangerously-bypass-approvals-and-sandbox replaces --sandbox workspace-write
     assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
     assert!(!argv.contains(&"--sandbox".to_string()));
@@ -291,7 +332,7 @@ fn build_argv_create_yolo() {
 
 #[test]
 fn build_argv_create_no_resume_subcommand() {
-    let argv = build_argv_create(&PathBuf::from("/x"), "m", false, None, None, None);
+    let argv = build_argv_create(&PathBuf::from("/x"), "m", false, None, None, None, &[]);
     // Should be `codex --ask-for-approval never exec --json -C ...`, not
     // `codex exec resume`. The exec subcommand follows the global approval flag.
     assert_eq!(argv[0], "codex");
@@ -380,8 +421,8 @@ fn build_argv_resume_repins_the_bounded_posture_in_a_repo() {
         roots.contains(want.to_str().unwrap()),
         "{roots} should grant {want:?}"
     );
-    // Both overrides ride their own -c token.
-    assert_eq!(argv.iter().filter(|a| *a == "-c").count(), 2);
+    // Each override rides its own -c token: mode, network, roots.
+    assert_eq!(argv.iter().filter(|a| *a == "-c").count(), 3);
 
     // Full yolo is already unsandboxed: there is no posture to re-pin.
     let yolo = build_argv_resume(dir.path(), "s123", "p", true, None);
@@ -555,5 +596,25 @@ fn error_interrupted_exit_code_130() {
         msg.contains("SIGINT") || msg.contains("Ctrl-C"),
         "msg: {}",
         msg
+    );
+}
+
+#[test]
+fn fenced_tokens_ride_before_the_prompt_fence() {
+    let dir = tempfile::tempdir().unwrap();
+    let argv = build_argv_create(
+        dir.path(),
+        "msg",
+        false,
+        None,
+        None,
+        None,
+        &["-c".to_string(), "key=1".to_string()],
+    );
+    let prompt_pos = argv.iter().position(|t| t == "--").expect("a prompt fence");
+    assert_eq!(
+        &argv[prompt_pos - 2..prompt_pos],
+        &["-c".to_string(), "key=1".to_string()],
+        "the fenced tokens land before the prompt fence: {argv:?}"
     );
 }

@@ -1,4 +1,4 @@
-"""Tests for config.post_merge - the /fno:pr merged skill config block.
+"""Tests for config.post_merge - the /fno:ship pr merged skill config block.
 
 Covers the mechanical, deterministic half of the post-merge ritual BDD:
 per-project parking-lot-path resolution and the "missing config fails loud /
@@ -35,7 +35,6 @@ def _load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str):
 
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     return config_mod.load_settings()
 
 
@@ -47,7 +46,6 @@ def _config_get(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, key: str, conte
 
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     from fno.cli import app
 
     return CliRunner().invoke(app, ["config", "get", key])

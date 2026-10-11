@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from fno.paths_testing import use_tmpdir
+from fno.registry_door import read_registry_document
 
 ROUTE_ENV = {
     "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
@@ -45,6 +46,8 @@ class _FakeRunner:
 
     def __call__(self, argv, **kwargs):
         self.calls.append(list(argv))
+        if argv[:4] == ["codex", "app-server", "daemon", "start"]:
+            return subprocess.CompletedProcess(argv, 0, '{"status":"alreadyRunning"}', "")
         if argv[1:4] == ["mux", "pane", "run"]:
             return subprocess.CompletedProcess(argv, 0, "7\n", "")
         if argv[1:4] == ["mux", "pane", "ls"]:
@@ -221,7 +224,6 @@ def test_account_only_spawn_records_no_route_path(tmp_path, monkeypatch) -> None
 
 def test_ac7_registry_stores_the_path_never_the_route_contents(tmp_path, monkeypatch) -> None:
     """AC7: the registry file carries a path and no credential."""
-    from fno import paths
 
     _spawn_pane(
         monkeypatch,
@@ -229,7 +231,7 @@ def test_ac7_registry_stores_the_path_never_the_route_contents(tmp_path, monkeyp
         route_env=dict(ROUTE_ENV),
         route_provider="zai",
     )
-    raw = paths.agents_registry_path().read_text(encoding="utf-8")
+    raw = json.dumps(read_registry_document()[0])
     assert "route-settings" in raw  # the path IS recorded
     assert "ANTHROPIC_AUTH_TOKEN" not in raw
     assert "zai-secret-token" not in raw
@@ -367,12 +369,13 @@ def test_ac2_hp_revive_restores_the_recorded_route(tmp_path, monkeypatch) -> Non
 
 def test_ac3_err_revive_refuses_when_the_route_file_is_gone(tmp_path, monkeypatch) -> None:
     """AC3-ERR: refuse non-zero, name the route, start nothing."""
-    from fno.agents.dispatch import DispatchAskError, restore_route_for_relaunch
+    from fno.agents.dispatch import restore_route_for_relaunch
+    from fno.agents.dispatch_errors import RouteRestoreRefused
     from fno.agents.registry import load_registry
 
     path = _routed_claude_row(tmp_path, monkeypatch)
     Path(path).unlink()
-    with pytest.raises(DispatchAskError) as exc:
+    with pytest.raises(RouteRestoreRefused) as exc:
         restore_route_for_relaunch(load_registry()[0])
     assert path in str(exc.value)
     assert exc.value.exit_code == 2
@@ -398,20 +401,62 @@ def test_ac5_hp_a_never_routed_row_restores_nothing(tmp_path, monkeypatch) -> No
     assert restore_route_for_relaunch(row) is None
 
 
-def test_ac4_err_a_codex_pane_records_no_route_so_it_cannot_half_restore(
+requires_rust = pytest.mark.dev_build
+
+
+@requires_rust
+def test_ac4_a_routed_codex_pane_records_identity_but_never_a_route_file(
     tmp_path, monkeypatch
 ) -> None:
-    """AC4-ERR, the honest half: no door may relaunch on HALF a route.
+    """AC4, flipped by x-3954: a routed codex pane records its route IDENTITY
+    on the row (`route_provider_id` + `model_name`, identifiers only) and still
+    records no route-settings file. The endpoint lives in no artifact at all:
+    every relaunch door re-resolves the route from today's config in Rust
+    (`codex_route.rs`) or refuses, so a half restore onto codex's default
+    provider stays impossible rather than merely avoided.
 
-    A codex route lives in `-c` config args, not the env, so recording
-    `CodexRoute.env` would let a relaunch land on codex's default provider while
-    holding the route's API key - working, wrong, and silent. Not recording is
-    what makes that impossible; codex relaunch stays exactly as it is today.
+    The provider record is pinned via a TOML config (re-pinned AFTER
+    use_tmpdir, which points FNO_CONFIG at a YAML file the Rust reader cannot
+    parse), so the REAL resolution path runs - no stubbed resolver.
     """
     from fno.agents.registry import load_registry
 
-    _spawn_pane(monkeypatch, tmp_path, provider="codex", route_env=dict(ROUTE_ENV))
-    assert load_registry()[0].route_settings_path is None
+    use_tmpdir(monkeypatch, tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        f'[config]\nstate_dir = "{tmp_path / ".fno"}/"\n'
+        "[model_routing]\n"
+        '[model_routing.roles]\ncodex-verify = "zai-openai,glm-5.3-flash[1m]"\n'
+        "[model_routing.providers.zai-openai]\n"
+        'protocol = "openai"\n'
+        'base_url = "https://api.z.ai/api/coding/paas/v4"\n'
+        'api_key_env = "ZAI_API_KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FNO_CONFIG", str(cfg))
+    monkeypatch.setenv("ZAI_API_KEY", "zai-secret-token")
+    for var in ("FNO_SESSION", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID"):
+        monkeypatch.delenv(var, raising=False)
+
+    from fno.agents import mux_spawn
+
+    monkeypatch.setattr(
+        mux_spawn,
+        "_backfill_codex_session_id",
+        lambda *a, **k: "019fb024-2327-75f3-8b80-06e9d5ade05f",
+    )
+    mux_spawn.dispatch_spawn_pane(
+        name="router",
+        message="go",
+        provider="codex",
+        cwd=tmp_path,
+        runner=_FakeRunner(),
+        role="codex-verify",
+    )
+    row = load_registry()[0]
+    assert row.route_settings_path is None
+    assert row.route_provider_id == "zai-openai"
+    assert row.model_name == "glm-5.3-flash[1m]"
 
 
 def test_restore_never_replays_the_auth_scrub_floor(tmp_path, monkeypatch) -> None:
@@ -589,7 +634,7 @@ def test_cli_resume_gates_the_recorded_provider_before_dispatch(
             "--harness",
             "claude",
             "--substrate",
-            "bg",
+            "thread",
             "--resume",
             session_id,
         ],
@@ -598,7 +643,11 @@ def test_cli_resume_gates_the_recorded_provider_before_dispatch(
     assert result.exit_code == 0, result.output
     assert events[0] == (
         "gate",
-        ("router", "bg", {"force": False, "no_wait": False, "route_provider": "zai"}),
+        ("router", "bg", {
+            "force": False, "no_wait": False, "route_provider": "zai",
+            "account": None, "seed": "go", "session_phase": "",
+            "succession_scope": None,
+        }),
     )
     assert events[1][0] == "dispatch"
     assert events[1][1]["route_provider"] == "zai"
@@ -693,7 +742,7 @@ def test_the_account_picker_never_fires_on_a_revive(tmp_path, monkeypatch, capsy
     )
 
     # Seam 1: the argv rewrite the CLI applies before either runtime.
-    args = ["spawn", "router", "--resume", "sess-1", "--substrate", "bg"]
+    args = ["spawn", "router", "--resume", "sess-1", "--substrate", "thread"]
     assert rr._pick_account_at_seam(args) == args
 
     # Seam 2: the in-process caller that bypasses argument parsing. The restore
@@ -781,10 +830,12 @@ def test_a_legacy_row_without_launch_account_stays_unknown(tmp_path, monkeypatch
         ]
     )
     target = paths.agents_registry_path()
-    raw = json.loads(target.read_text(encoding="utf-8"))
+    raw = read_registry_document(target)[0]
     del raw["agents"][0]["launch_account"]
     del raw["agents"][0]["related_session_id"]
-    target.write_text(json.dumps(raw), encoding="utf-8")
+    from tests._table_seed import seed_registry
+
+    seed_registry(raw.pop("agents"), path=target, replace=True, **raw)
     row = load_registry()[0]
     assert row.launch_account is None
     assert row.related_session_id is None
@@ -794,7 +845,6 @@ def test_registry_json_emits_the_new_keys_on_every_row(tmp_path, monkeypatch) ->
     """The v19 bump rationale: asdict emits the keys, so a stale reader must
     refuse on version, not TypeError on the kwarg."""
     use_tmpdir(monkeypatch, tmp_path)
-    from fno import paths
     from fno.agents.registry import AgentEntry, write_registry
 
     write_registry(
@@ -808,7 +858,7 @@ def test_registry_json_emits_the_new_keys_on_every_row(tmp_path, monkeypatch) ->
             )
         ]
     )
-    raw = paths.agents_registry_path().read_text(encoding="utf-8")
+    raw = json.dumps(read_registry_document()[0])
     assert json.loads(raw)["schema_version"] >= 19
     assert '"launch_account"' in raw
     assert '"related_session_id"' in raw
@@ -819,7 +869,7 @@ def test_registry_json_emits_the_new_keys_on_every_row(tmp_path, monkeypatch) ->
 # One row per door that re-enters or re-launches a Claude session:
 #
 #   door                 owned by                      wired in
-#   attach (inline)      dispatch.attach_agent         2.1
+#   attach (inline)      crates/fno-agents client_verbs run_attach (reentry.rs plan; no Python leg)
 #   resume live wake     resume_cli wake arm           2.1
 #   resume dead          resume_cli --resume arm       2.1
 #   mux attach           crates/fno server AttachAgent 2.2 (cargo matrix)
@@ -849,7 +899,7 @@ def _routed_glm_row(tmp_path, monkeypatch, *, launch_account="makers"):
     """The operator's failing shape: routed GLM worker on an isolated account."""
     path = _routed_claude_row(tmp_path, monkeypatch)
     if launch_account is not None:
-        from fno.agents.registry import load_registry, update_registry
+        from fno.agents.registry import update_registry
 
         def _stamp(rows):
             for r in rows:
@@ -861,132 +911,8 @@ def _routed_glm_row(tmp_path, monkeypatch, *, launch_account="makers"):
     return path
 
 
-def _capture_claude_invocation(monkeypatch):
-    """Capture every claude argv + env the attach/resume paths would run."""
-    import fno.agents.harnesses.claude as claude_mod
-
-    captured: list[dict] = []
-
-    def _fake_run(argv, **kwargs):
-        captured.append({"argv": list(argv), "env": kwargs.get("env")})
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(claude_mod, "_subprocess_run", _fake_run)
-    return captured
-
-
-def _no_mux(monkeypatch):
-    import fno.agents.mux_spawn as mux_mod
-
-    monkeypatch.setattr(
-        mux_mod,
-        "_run_mux",
-        lambda *a, **k: subprocess.CompletedProcess([], 24, "", "no server"),
-    )
-
-
-def _attach(name: str = "router"):
-    from fno.agents.dispatch import attach_agent
-
-    return attach_agent(name)
-
-
-def test_matrix_attach_routed_row_carries_account_and_route(tmp_path, monkeypatch) -> None:
-    """Door: inline attach. Routed row: the claude invocation must carry the
-    account namespace and the route settings, never ambient env."""
-    import fno.agents.account_env as account_env_mod
-
-    class _Overlay:
-        account_id = "makers"
-        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-        lane = "config-dir"
-
-    monkeypatch.setattr(
-        account_env_mod, "resolve_account_overlay", lambda _id: _Overlay()
-    )
-    _routed_glm_row(tmp_path, monkeypatch)
-    _no_mux(monkeypatch)
-    captured = _capture_claude_invocation(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch.is_provider_available", lambda p: True
-    )
-    _attach()
-    assert captured, "a claude attach must have run"
-    argv, env = captured[0]["argv"], captured[0]["env"]
-    assert argv[:2] == ["claude", "attach"], argv
-    assert "--settings" in argv, f"the recorded route must ride the argv: {argv}"
-    assert env and env.get("CLAUDE_CONFIG_DIR") == "/acct/makers/.claude", (
-        f"the recorded account namespace must ride the env: {env}"
-    )
-
-
-def test_matrix_attach_unknown_account_refuses_before_claude(tmp_path, monkeypatch) -> None:
-    """Door: inline attach. A routed row with no launch-account evidence
-    refuses; bare `claude attach` is never observed."""
-    from fno.agents.dispatch import DispatchAskError
-
-    _routed_glm_row(tmp_path, monkeypatch, launch_account=None)
-    _no_mux(monkeypatch)
-    captured = _capture_claude_invocation(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch.is_provider_available", lambda p: True
-    )
-    with pytest.raises(DispatchAskError) as exc:
-        _attach()
-    assert not captured, "no claude process may start on a refused row"
-    assert "launch account" in str(exc.value)
-
-
-def test_matrix_attach_default_row_stays_bare(tmp_path, monkeypatch) -> None:
-    """Door: inline attach. Default-Anthropic control: a proven default row
-    keeps the historical bare invocation."""
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.registry import AgentEntry, write_registry
-
-    write_registry(
-        [
-            AgentEntry(
-                name="plain",
-                cwd=str(tmp_path),
-                log_path="",
-                harness="claude",
-                short_id="deadbeef",
-                harness_session_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-                launch_account="default",
-            )
-        ]
-    )
-    _no_mux(monkeypatch)
-    captured = _capture_claude_invocation(monkeypatch)
-    monkeypatch.setattr(
-        "fno.agents.dispatch.is_provider_available", lambda p: True
-    )
-    result = _attach("plain")
-    assert result.exit_code == 0
-    assert captured[0]["argv"] == ["claude", "attach", "deadbeef"]
-    # env is None today (inherit). Once the resolver lands it may pass an
-    # explicit env, but a default row must NOT pin a foreign account dir.
-    env = captured[0]["env"] or {}
-    assert not env.get("CLAUDE_CONFIG_DIR") or env["CLAUDE_CONFIG_DIR"] == str(
-        Path.home() / ".claude"
-    )
-
-
-def test_matrix_resume_routed_row_wakes_under_the_binding(tmp_path, monkeypatch) -> None:
-    """Door: resume (the Python wake arm; the dead relaunch arm is Rust's and
-    carries --settings there). The woken attach runs under the recorded
-    account namespace with the route restored into its env."""
-    import fno.agents.account_env as account_env_mod
-
-    class _Overlay:
-        account_id = "makers"
-        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-        lane = "config-dir"
-
-    monkeypatch.setattr(
-        account_env_mod, "resolve_account_overlay", lambda _id: _Overlay()
-    )
-    _routed_glm_row(tmp_path, monkeypatch)
+def test_python_resume_refuses_a_routed_claude_row_without_waking(tmp_path) -> None:
+    """The Python fallback cannot own Claude's account-pinned resume route."""
     from types import SimpleNamespace
 
     from fno.agents.resume_cli import resume_logic
@@ -997,47 +923,29 @@ def test_matrix_resume_routed_row_wakes_under_the_binding(tmp_path, monkeypatch)
         cwd=str(tmp_path),
         short_id="deadbeef",
         harness_session_id="sess-1",
-        route_settings_path=_routed_claude_row(tmp_path, monkeypatch),
+        route_settings_path="/route/settings.json",
         launch_account="makers",
         provider="zai",
     )
-    seen: dict = {}
-    reads: list[str] = []
-
-    def _state():
-        # Stateful supervisor: the row sits at "Needs input" until the first
-        # wake injects the message, then it is "Working" - the transition the
-        # exit-16 loop needs to observe on its post-wake read.
-        reads.append("r")
-        return "Working" if len(reads) > 1 else "Needs input"
-
-    def _wake(short_id, *, message, route_env, cwd, account_env=None):
-        seen["route_env"] = route_env
-        seen["account_env"] = account_env
+    launches: list[tuple] = []
 
     res = resume_logic(
         name="router",
         registry_loader=lambda: [entry],
         path_checker=lambda b: True,
         cwd_checker=lambda c: True,
-        claim_fn=lambda s: None,
-        execvp=lambda *a, **k: None,
-        emit_event=lambda *a, **k: None,
-        wake_fn=_wake,
-        agents_state_fn=lambda: {"deadbeef": {"live_status": _state()}},
+        execvp=lambda *args, **kwargs: launches.append(args),
     )
-    assert res.exit_code == 0
-    assert seen["account_env"] == {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
-    assert seen["route_env"] and "ANTHROPIC_BASE_URL" in seen["route_env"], (
-        "the recorded route must ride the wake env"
-    )
+    assert res.exit_code == 13
+    assert "resumes through the fno-agents runtime" in res.stderr
+    assert launches == []
 
 
 def test_matrix_spawn_resume_inherits_the_recorded_account(tmp_path, monkeypatch) -> None:
     """Door: spawn --resume (revive). The revived row inherits the source
     row's launch account - the transcript lives under the config dir it was
-    created in, so the account is a fact about the transcript."""
-    from types import SimpleNamespace
+    created in, so the account is a fact about the transcript. The recorded
+    account's overlay rides the spawn, so the process BILLS there too."""
 
     from fno.agents import dispatch
     from fno.agents.harnesses.base import ProviderResult
@@ -1052,11 +960,24 @@ def test_matrix_spawn_resume_inherits_the_recorded_account(tmp_path, monkeypatch
         lambda home, short: "sess-1",
     )
 
+    seen = {}
+
     def _fake_bg_create(**kwargs):
+        seen.update(kwargs)
         return ProviderResult(0, "", "", 1, session_id_out="feedface")
 
     monkeypatch.setattr(
         "fno.agents.harnesses.claude.bg_create", _fake_bg_create
+    )
+
+    class _Overlay:
+        account_id = "makers"
+        env = {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}
+        lane = "config-dir"
+
+    monkeypatch.setattr(
+        "fno.agents.account_env.resolve_account_overlay",
+        lambda account_id, **kwargs: _Overlay(),
     )
     result = dispatch.dispatch_spawn(
         name="router",
@@ -1071,6 +992,9 @@ def test_matrix_spawn_resume_inherits_the_recorded_account(tmp_path, monkeypatch
     row = load_registry()[0]
     assert row.launch_account == "makers", (
         "a revive inherits the source row's account axis"
+    )
+    assert seen["account_env"] == {"CLAUDE_CONFIG_DIR": "/acct/makers/.claude"}, (
+        "the recorded account's overlay must ride the resume spawn"
     )
 
 
@@ -1168,6 +1092,7 @@ def test_matrix_spawn_resume_default_control_inherits_default(
                 harness="claude",
                 harness_session_id="sess-1",
                 launch_account="default",
+                requested_model="claude-opus-5",
             )
         ]
     )
@@ -1363,3 +1288,58 @@ def test_unrouted_bg_row_leaves_the_request_unknown(tmp_path, monkeypatch) -> No
     row = next(r for r in load_registry() if r.name == "plain-bg")
     assert row.requested_model is None
     assert row.requested_effort is None
+
+
+# --- a foreign endpoint is never offered the Artifact tool -------------------
+
+
+def test_foreign_route_settings_deny_artifact(tmp_path, monkeypatch):
+    """A route off api.anthropic.com writes ``permissions.deny: ["Artifact"]``.
+
+    claude 2.1.265 gave the Artifact tool an ``input_schema`` pattern holding
+    ``\\p{Cc}``. z.ai's Anthropic-compatible endpoint refuses any tools pattern
+    with a ``\\p{...}`` escape and answers ``400 [1210]``, so every fresh
+    interactive routed worker died on its first turn. The tool needs Anthropic's
+    own backend, so a routed worker loses nothing when it is not offered.
+    """
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.model_routing import materialize_route_settings
+
+    path = materialize_route_settings(dict(ROUTE_ENV))
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert payload["permissions"] == {"deny": ["Artifact"]}
+
+
+def test_anthropic_route_settings_keep_artifact(tmp_path, monkeypatch):
+    """An Anthropic endpoint keeps the tool. The deny stays on the defect."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.model_routing import materialize_route_settings
+
+    env = dict(ROUTE_ENV)
+    env["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"
+    path = materialize_route_settings(env)
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    assert "permissions" not in payload
+
+
+@pytest.mark.parametrize(
+    "base_url,denied",
+    [
+        ("https://api.anthropic.com", False),
+        ("https://api.anthropic.com/v1", False),
+        ("HTTPS://API.ANTHROPIC.COM", False),
+        ("api.anthropic.com", False),
+        ("https://api.anthropic.com:443", False),
+        # A host that merely STARTS with Anthropic's is somebody else's.
+        ("https://api.anthropic.com.proxy.example", True),
+        ("https://evil.example/api.anthropic.com", True),
+        ("https://api.z.ai/api/anthropic", True),
+        ("", False),
+    ],
+)
+def test_deny_matches_the_whole_host(base_url, denied):
+    """The endpoint test parses the host. A substring test got both ends wrong."""
+    from fno.agents.model_routing import _foreign_endpoint_tool_denies
+
+    got = _foreign_endpoint_tool_denies({"ANTHROPIC_BASE_URL": base_url})
+    assert bool(got) is denied

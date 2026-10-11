@@ -14,8 +14,9 @@
 //! was a stale served row, not logic, and these tests keep it that way.
 
 use fno_agents::loopcheck::{
-    classify_coverage_tiled, compute_range_tiling, coverage_receipt_line, Coverage,
-    CoverageProducer, CoverageVerdict, Freshness, RangeTiling, ReviewState,
+    classify_coverage_tiled, compute_range_tiling, coverage_event_data_tiled,
+    coverage_receipt_line, Coverage, CoverageProducer, CoverageVerdict, Freshness,
+    FreshnessResolver, RangeTiling, ReviewState,
 };
 use std::fs;
 use std::path::Path;
@@ -104,11 +105,12 @@ fn tiling_for(repo: &Path, events: &str) -> RangeTiling {
         BRANCH,
         &git(repo, &["rev-parse", "HEAD"]),
         2,
+        None,
     )
 }
 
 #[test]
-fn ac4_hp_three_ranges_tile_with_an_empty_gap_set() {
+fn tile_rows() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -127,10 +129,7 @@ fn ac4_hp_three_ranges_tile_with_an_empty_gap_set() {
     assert_eq!(tiling.gaps, Vec::<(String, String)>::new());
     assert!(tiling.dropped.is_empty());
     assert_eq!(tiling.chain_heads.len(), 3);
-}
 
-#[test]
-fn ac4_err_missing_middle_range_names_the_gap_by_sha() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -148,10 +147,7 @@ fn ac4_err_missing_middle_range_names_the_gap_by_sha() {
     // uncovered (c3). "Run a review at HEAD" is the instruction that caused
     // the loop; the refusal must name the range instead.
     assert_eq!(tiling.gaps, vec![(shas[0].clone(), shas[2].clone())]);
-}
 
-#[test]
-fn ac4_edge_off_branch_and_unresolvable_ranges_are_dropped_by_sha() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 3);
@@ -195,7 +191,7 @@ fn ac4_edge_off_branch_and_unresolvable_ranges_are_dropped_by_sha() {
 }
 
 #[test]
-fn fail_verdicts_tile_too_coverage_counts_what_was_read() {
+fn chain_rows() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -211,10 +207,7 @@ fn fail_verdicts_tile_too_coverage_counts_what_was_read() {
     let tiling = tiling_for(repo, &events);
     assert!(tiling.tiled);
     assert_eq!(tiling.gaps, Vec::<(String, String)>::new());
-}
 
-#[test]
-fn chain_members_count_as_reviewed_even_when_individually_stale() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -279,10 +272,7 @@ fn chain_members_count_as_reviewed_even_when_individually_stale() {
         .filter(|v| v.producer == CoverageProducer::LocalAttestation)
         .collect();
     assert_eq!(local_untiled[0].verdict, CoverageVerdict::Stale);
-}
 
-#[test]
-fn a_gapped_chain_does_not_rescue_its_members() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -314,10 +304,7 @@ fn a_gapped_chain_does_not_rescue_its_members() {
         .verdicts
         .iter()
         .all(|v| v.verdict != CoverageVerdict::Reviewed));
-}
 
-#[test]
-fn same_pair_reattest_keeps_the_newer_head() {
     // The live-specimen regression (2026-08-25 writeup, ruling d-747656e4):
     // a session re-attests after pushing a fix. The pair key collapses the
     // two attestations and the LATER one must win - its head, its freshness.
@@ -365,10 +352,7 @@ fn same_pair_reattest_keeps_the_newer_head() {
     );
     assert_eq!(local[0].verdict, CoverageVerdict::Reviewed);
     assert_eq!(local[0].freshness, Some(Freshness::Fresh));
-}
 
-#[test]
-fn distinct_attesters_yield_distinct_verdicts() {
     // The other half of the specimen: two sessions attesting under one
     // reviewer label coexist (the attester lives in the pair key).
     let tmp = TempDir::new().unwrap();
@@ -487,13 +471,13 @@ fn specimen_events() -> String {
 }
 
 #[test]
-fn ac5_marker_specimen_blocks_nothing() {
-    let blockers = disposition_blockers(&specimen_events(), BRANCH, SPECIMEN_HEAD, true);
+fn marker_rows() {
+    // The specimen's fixed findings are terminal: each fix delta was
+    // reviewed by a later round. Origin never gates, so one call covers
+    // every authorship shape.
+    let blockers = disposition_blockers(&specimen_events(), BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers, Vec::new());
-}
 
-#[test]
-fn ac5b_marker_one_open_finding_blocks_by_key() {
     let mut events = specimen_events();
     events.push('\n');
     events.push_str(&dispositions_event(
@@ -507,18 +491,20 @@ fn ac5b_marker_one_open_finding_blocks_by_key() {
         serde_json::json!([]),
         false,
     ));
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, true);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
+    // The specimen's five fixed findings are terminal (later rounds
+    // reviewed each fix delta); only the open finding blocks.
     assert_eq!(blockers.len(), 1);
     assert_eq!(
         blockers[0].finding_key,
         "cli/src/fno/pr/_coverage_gate.py:999:correctness"
     );
     assert_eq!(blockers[0].axis, "open");
-}
 
-#[test]
-fn declined_without_corroboration_blocks() {
-    let events = [dispositions_event(
+    // Origin never gates: the author's own decline with a recorded reason
+    // is terminal exactly as a second session's. What blocks is a decline
+    // with no reason at all.
+    let reasoned = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([finding("sec.rs:1:security", "security", None, true)]),
         serde_json::json!([serde_json::json!({
@@ -529,16 +515,24 @@ fn declined_without_corroboration_blocks() {
         false,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, true);
+    let blockers = disposition_blockers(&reasoned, BRANCH, SPECIMEN_HEAD);
+    assert_eq!(blockers, Vec::new());
+
+    let reasonless = [dispositions_event(
+        SPECIMEN_HEAD,
+        serde_json::json!([finding("sec.rs:1:security", "security", None, true)]),
+        serde_json::json!([serde_json::json!({
+            "finding_key": "sec.rs:1:security",
+            "disposition": "declined",
+            "reason": "  ",
+        })]),
+        false,
+    )]
+    .join("\n");
+    let blockers = disposition_blockers(&reasonless, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 1);
-    assert_eq!(blockers[0].axis, "declined-uncorroborated");
+    assert_eq!(blockers[0].axis, "declined-without-reason");
 
-    let clean = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false);
-    assert_eq!(clean, Vec::new());
-}
-
-#[test]
-fn fixed_in_the_last_round_is_unreviewed() {
     // A fixed disposition recorded on the SAME round that raised the
     // finding: the fix delta was never reviewed.
     let events = [dispositions_event(
@@ -552,13 +546,10 @@ fn fixed_in_the_last_round_is_unreviewed() {
         false,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].axis, "fixed-unreviewed");
-}
 
-#[test]
-fn producer_count_is_never_the_answer() {
     // AC5-EDGE's twin at the gate: an event claiming zero blocking over a
     // CONFIRMED finding tagged style. The gate re-derives; the count is
     // refused.
@@ -569,13 +560,10 @@ fn producer_count_is_never_the_answer() {
         false,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].finding_key, "lie.py:1:style");
-}
 
-#[test]
-fn nonblocking_by_class_needs_no_disposition() {
     let events = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([
@@ -587,13 +575,10 @@ fn nonblocking_by_class_needs_no_disposition() {
     )]
     .join("\n");
     assert_eq!(
-        disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false),
+        disposition_blockers(&events, BRANCH, SPECIMEN_HEAD),
         Vec::new()
     );
-}
 
-#[test]
-fn truncated_remainder_blocks() {
     let events = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([finding("a.py:1:typo", "typo", None, false)]),
@@ -601,17 +586,11 @@ fn truncated_remainder_blocks() {
         true,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].axis, "truncated-remainder");
-}
 
-#[test]
-fn empty_chain_blocks_nothing() {
-    assert_eq!(
-        disposition_blockers("", BRANCH, SPECIMEN_HEAD, true),
-        Vec::new()
-    );
+    assert_eq!(disposition_blockers("", BRANCH, SPECIMEN_HEAD), Vec::new());
 }
 
 // --- AC6: a non-author GitHub approval is a sufficient producer ---
@@ -652,7 +631,7 @@ fn classify_approval(
 }
 
 #[test]
-fn github_approval_counts_when_flag_on_and_approver_is_not_the_author() {
+fn gh_rows() {
     // AC6-HP: alice's PR, bob's APPROVED review pinned to the current head,
     // no local attestation at all. Default-config direction (flag on): the
     // approval covers on its own and corroborates by construction.
@@ -674,13 +653,7 @@ fn github_approval_counts_when_flag_on_and_approver_is_not_the_author() {
     // The receipt's counted list names bob: "1 reviewed (bob)".
     let line = coverage_receipt_line(&rep, None, None);
     assert!(line.contains("1 reviewed (bob)"), "receipt was: {line}");
-    // Corroboration falls out: a counted human approval is by construction
-    // not the author's own attestation.
-    assert!(!rep.rests_on_self_attestation_alone());
-}
 
-#[test]
-fn github_approval_by_the_pr_author_is_recorded_but_never_counted() {
     // AC6-ERR: alice approving her own PR. The verdict stays on the list
     // (auditable) and the counted set stays literally empty, so a run where
     // no approval was collected at all cannot pass this test either.
@@ -696,10 +669,7 @@ fn github_approval_by_the_pr_author_is_recorded_but_never_counted() {
         .any(|v| v.name == "alice" && v.human_approval && v.author_approval));
     assert_eq!(rep.coverage_count(), Some(0));
     assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-}
 
-#[test]
-fn github_approval_flag_off_keeps_todays_exclusion() {
     // AC6-EDGE: github_approval_satisfies = false. bob's approval is still
     // RECORDED on the verdict list and still excluded from the count.
     let rep = classify_approval(
@@ -714,10 +684,7 @@ fn github_approval_flag_off_keeps_todays_exclusion() {
         .any(|v| v.name == "bob" && v.human_approval && !v.author_approval));
     assert_eq!(rep.coverage_count(), Some(0));
     assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-}
 
-#[test]
-fn github_approval_with_unreadable_pr_author_fails_closed() {
     // An unreadable PR author cannot prove the approver is not the author,
     // so the fail-closed direction is "exclude", never "count".
     let rep = classify_approval(&[approval("bob", "h1")], None, true, Freshness::Fresh);
@@ -726,10 +693,7 @@ fn github_approval_with_unreadable_pr_author_fails_closed() {
         .iter()
         .any(|v| v.name == "bob" && v.human_approval && v.author_approval));
     assert_eq!(rep.coverage_count(), Some(0));
-}
 
-#[test]
-fn github_approval_stale_review_is_not_counted() {
     // The freshness rule applies unchanged: an approval whose commit is not
     // fresh reads Stale and never counts, flag or no flag.
     let rep = classify_approval(
@@ -779,7 +743,7 @@ fn attestation_round(
 }
 
 #[test]
-fn round_budget_counts_every_verdict_across_the_pr_life() {
+fn budget_rows() {
     use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
@@ -807,14 +771,10 @@ fn round_budget_counts_every_verdict_across_the_pr_life() {
         ],
     );
     assert_eq!(rounds_since_last_pass(&no_pass, BRANCH, &shas[2], None), 3);
-}
 
-#[test]
-fn round_budget_pass_no_longer_refunds_the_budget() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
-    let (_base, shas, head) = repo_with(repo, 4);
+    let (_base, shas, _head) = repo_with(repo, 4);
     // AC6: the chain pass, round, round is THREE rounds. The pass used to
     // zero the counter and answer 1-and-change for the rounds after it; a
     // self-signed pass refreshed the whole budget on demand (measured on
@@ -832,11 +792,7 @@ fn round_budget_pass_no_longer_refunds_the_budget() {
         3,
         "pass, round, round is three rounds: the pass counts and refunds nothing"
     );
-}
 
-#[test]
-fn round_budget_declared_review_round_wins_when_present() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 3);
@@ -852,11 +808,7 @@ fn round_budget_declared_review_round_wins_when_present() {
         rounds_since_last_pass(&events, BRANCH, head.as_str(), None),
         3
     );
-}
 
-#[test]
-fn round_budget_off_branch_events_do_not_count() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 2);
@@ -874,10 +826,7 @@ fn round_budget_off_branch_events_do_not_count() {
         rounds_since_last_pass(&events, BRANCH, head.as_str(), None),
         1
     );
-}
 
-#[test]
-fn round_budget_is_computed_even_when_tiling_fails_closed() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 3);
@@ -899,14 +848,12 @@ fn round_budget_is_computed_even_when_tiling_fails_closed() {
         BRANCH,
         &head,
         2,
+        None,
     );
     assert!(!tiling.tiled);
     assert_eq!(tiling.rounds_used, 3);
     assert!(tiling.rounds_exhausted);
-}
 
-#[test]
-fn max_rounds_two_is_exhausted_by_the_second_round() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 3);
@@ -925,7 +872,7 @@ fn max_rounds_two_is_exhausted_by_the_second_round() {
             None,
         )],
     );
-    let t1 = compute_range_tiling("git", repo, "origin/main", &one, BRANCH, &head, 2);
+    let t1 = compute_range_tiling("git", repo, "origin/main", &one, BRANCH, &head, 2, None);
     assert_eq!(t1.rounds_used, 1);
     assert!(
         !t1.rounds_exhausted,
@@ -939,7 +886,7 @@ fn max_rounds_two_is_exhausted_by_the_second_round() {
             attestation_round("code-review", &shas[0], &head, "fail", None),
         ],
     );
-    let t2 = compute_range_tiling("git", repo, "origin/main", &two, BRANCH, &head, 2);
+    let t2 = compute_range_tiling("git", repo, "origin/main", &two, BRANCH, &head, 2, None);
     assert_eq!(t2.rounds_used, 2);
     assert!(
         t2.rounds_exhausted,
@@ -948,15 +895,12 @@ fn max_rounds_two_is_exhausted_by_the_second_round() {
 
     // And a max of 3 leaves the same two rounds unexhausted, so the boundary
     // tracks the configured number rather than being pinned to 2.
-    let t2_of_3 = compute_range_tiling("git", repo, "origin/main", &two, BRANCH, &head, 3);
+    let t2_of_3 = compute_range_tiling("git", repo, "origin/main", &two, BRANCH, &head, 3, None);
     assert!(
         !t2_of_3.rounds_exhausted,
         "two of three is still under the cap"
     );
-}
 
-#[test]
-fn max_rounds_one_and_five_track_the_configured_key() {
     // AC9: the key is live at every value, not only at the shipped default.
     // One round exhausts a max of 1; four rounds do not exhaust a max of 5.
     // Pinning only the default 2 cannot tell a working comparison from a
@@ -974,7 +918,7 @@ fn max_rounds_one_and_five_track_the_configured_key() {
             None,
         )],
     );
-    let t1 = compute_range_tiling("git", repo, "origin/main", &one, BRANCH, &head, 1);
+    let t1 = compute_range_tiling("git", repo, "origin/main", &one, BRANCH, &head, 1, None);
     assert_eq!(t1.rounds_used, 1);
     assert!(t1.rounds_exhausted, "one round of a one-round cap is spent");
 
@@ -987,29 +931,10 @@ fn max_rounds_one_and_five_track_the_configured_key() {
             attestation_round("code-review", &shas[2], &shas[3], "fail", None),
         ],
     );
-    let t4 = compute_range_tiling("git", repo, "origin/main", &four, BRANCH, &head, 5);
+    let t4 = compute_range_tiling("git", repo, "origin/main", &four, BRANCH, &head, 5, None);
     assert_eq!(t4.rounds_used, 4);
     assert!(!t4.rounds_exhausted, "four of five is still under the cap");
-}
 
-// --- rounds the attestation chain never saw: the GitHub review axis ---
-
-/// One `gh pr view --json reviews` review object.
-fn review_object(login: &str, state: &str, commit: &str, submitted_at: &str) -> serde_json::Value {
-    serde_json::json!({
-        "author": {"login": login},
-        "state": state,
-        "commit": {"oid": commit},
-        "submittedAt": submitted_at,
-    })
-}
-
-const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
-const PR_AUTHOR: &str = "bllshttng";
-
-#[test]
-fn round_budget_counts_rounds_that_only_github_review_objects_saw() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
@@ -1028,18 +953,15 @@ fn round_budget_counts_rounds_that_only_github_review_objects_saw() {
         rounds_since_last_pass(&events, BRANCH, &head, Some(&reviews)),
         3
     );
-}
 
-#[test]
-fn round_budget_pass_does_not_truncate_the_github_axis() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
     // A pass at 12:00 no longer truncates the reviews axis: the connector
-    // round at 11:00 was a real round and stays counted. Two attested
-    // rounds plus three reviewed commits answer 3 (the max of the axes),
-    // never the refund answer 2-on-the-events-axis-alone.
+    // round at 11:00 was a real round and stays counted. The counter is one
+    // shared set of heads across both axes (the law's sentence), so the
+    // distinct heads attested or reviewed - shas[0..3], four of them -
+    // answer 4, never the refund answer 2-on-the-events-axis-alone.
     let events = events_file(
         repo,
         &[
@@ -1065,13 +987,9 @@ fn round_budget_pass_does_not_truncate_the_github_axis() {
     ];
     assert_eq!(
         rounds_since_last_pass(&events, BRANCH, &head, Some(&reviews)),
-        3
+        4
     );
-}
 
-#[test]
-fn rounds_submitted_before_the_pass_still_count_on_the_reviews_axis() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
@@ -1104,11 +1022,7 @@ fn rounds_submitted_before_the_pass_still_count_on_the_reviews_axis() {
         rounds_since_last_pass(&events, BRANCH, &head, Some(&reviews)),
         3
     );
-}
 
-#[test]
-fn round_budget_pass_without_a_ts_still_counts_the_github_axis() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
@@ -1142,11 +1056,7 @@ fn round_budget_pass_without_a_ts_still_counts_the_github_axis() {
         rounds_since_last_pass(&events, BRANCH, &head, Some(&reviews)),
         3
     );
-}
 
-#[test]
-fn round_budget_counts_review_objects_posted_under_the_pr_author_login() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
@@ -1169,11 +1079,7 @@ fn round_budget_counts_review_objects_posted_under_the_pr_author_login() {
         3,
         "reply volume at one commit is one round; three commits are three"
     );
-}
 
-#[test]
-fn round_budget_takes_the_max_not_the_sum_of_both_axes() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 3);
@@ -1194,11 +1100,7 @@ fn round_budget_takes_the_max_not_the_sum_of_both_axes() {
         rounds_since_last_pass(&events, BRANCH, &head, Some(&reviews)),
         2
     );
-}
 
-#[test]
-fn round_budget_no_reviews_evidence_keeps_the_events_only_answer() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 3);
@@ -1213,6 +1115,21 @@ fn round_budget_no_reviews_evidence_keeps_the_events_only_answer() {
     );
     assert_eq!(rounds_since_last_pass(&events, BRANCH, &head, None), 2);
 }
+
+// --- rounds the attestation chain never saw: the GitHub review axis ---
+
+/// One `gh pr view --json reviews` review object.
+fn review_object(login: &str, state: &str, commit: &str, submitted_at: &str) -> serde_json::Value {
+    serde_json::json!({
+        "author": {"login": login},
+        "state": state,
+        "commit": {"oid": commit},
+        "submittedAt": submitted_at,
+    })
+}
+
+const CONNECTOR: &str = "chatgpt-codex-connector[bot]";
+const PR_AUTHOR: &str = "bllshttng";
 
 // --- the round cap under the operator's ruling: file the rest, keep the hard ---
 
@@ -1245,7 +1162,7 @@ fn cap_verdict_count_for(repo: &std::path::Path, rows: &[String]) -> usize {
 }
 
 #[test]
-fn cap_a_spent_budget_discharges_coverage_with_no_attestation_at_all() {
+fn cap_rows() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 4);
@@ -1303,7 +1220,7 @@ fn cap_a_spent_budget_discharges_coverage_with_no_attestation_at_all() {
 
     // The control: the SAME chain under a budget of 10 is NOT discharged and
     // stays uncovered, so the discharge cannot leak below the cap.
-    let under = compute_range_tiling("git", repo, "origin/main", &events, BRANCH, &head, 10);
+    let under = compute_range_tiling("git", repo, "origin/main", &events, BRANCH, &head, 10, None);
     assert!(!under.rounds_exhausted);
     let rep_under = classify_coverage_tiled(
         &[],
@@ -1325,10 +1242,7 @@ fn cap_a_spent_budget_discharges_coverage_with_no_attestation_at_all() {
         "under the cap the same chain must stay uncovered: {:?}",
         rep_under.verdicts
     );
-}
 
-#[test]
-fn cap_a_retraction_never_mints_coverage_at_the_head_it_revoked() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -1357,10 +1271,7 @@ fn cap_a_retraction_never_mints_coverage_at_the_head_it_revoked() {
     // With it, still 1. A 2 here is `peer` counted as Reviewed on the
     // strength of a row that REVOKES a review.
     assert_eq!(cap_verdict_count_for(repo, &rows), 1);
-}
 
-#[test]
-fn cap_a_zero_evidence_fail_row_never_counts() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -1382,10 +1293,7 @@ fn cap_a_zero_evidence_fail_row_never_counts() {
     ];
     // One real reviewer counts; the hollow row adds nothing.
     assert_eq!(cap_verdict_count_for(repo, &rows), 1);
-}
 
-#[test]
-fn cap_a_slash_prefixed_reviewer_is_the_same_reviewer() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -1404,10 +1312,7 @@ fn cap_a_slash_prefixed_reviewer_is_the_same_reviewer() {
         slashed,
     ];
     assert_eq!(cap_verdict_count_for(repo, &rows), 1);
-}
 
-#[test]
-fn cap_a_reviewer_with_both_a_pass_and_a_fail_link_counts_once() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -1470,10 +1375,7 @@ fn cap_a_reviewer_with_both_a_pass_and_a_fail_link_counts_once() {
         rep.verdicts
     );
     assert_eq!(rep.coverage, Coverage::Covered(1));
-}
 
-#[test]
-fn cap_a_declined_tiling_chain_counts_as_coverage_past_the_budget() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 4);
@@ -1529,7 +1431,7 @@ fn cap_a_declined_tiling_chain_counts_as_coverage_past_the_budget() {
     // The control: the SAME fail chain under the budget changes nothing -
     // no pass exists, so no local verdict at all, coverage uncovered. The
     // spent-budget arm must not leak below the cap.
-    let under = compute_range_tiling("git", repo, "origin/main", &events, BRANCH, &head, 10);
+    let under = compute_range_tiling("git", repo, "origin/main", &events, BRANCH, &head, 10, None);
     assert!(!under.rounds_exhausted);
     let rep_under = classify_coverage_tiled(
         &[],
@@ -1553,11 +1455,8 @@ fn cap_a_declined_tiling_chain_counts_as_coverage_past_the_budget() {
         "under the budget a fail chain still leaves no pass: {:?}",
         rep_under.verdicts
     );
-}
 
-#[test]
-fn cap_only_a_confirmed_correctness_or_security_finding_is_hard() {
-    use fno_agents::loopcheck::{blockers_impossible, blockers_withhold};
+    use fno_agents::loopcheck::blockers_withhold;
     let events = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([
@@ -1569,7 +1468,7 @@ fn cap_only_a_confirmed_correctness_or_security_finding_is_hard() {
         false,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, true);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 3);
     let hard: Vec<&str> = blockers
         .iter()
@@ -1579,16 +1478,12 @@ fn cap_only_a_confirmed_correctness_or_security_finding_is_hard() {
     // CONFIRMED security is hard. Unconfirmed correctness is not. CONFIRMED
     // performance is not - the two categories are the whole list.
     assert_eq!(hard, vec!["a.py:1:security"]);
-    // Under the budget every blocker withholds; at the cap only the hard one.
+    // Hardness is a receipt fact: it gates the standing waiver below the
+    // cap and nothing else. Under the budget every blocker withholds; at
+    // the cap the budget discharges all of them.
     assert!(blockers_withhold(&blockers, false));
-    assert!(blockers_withhold(&blockers, true));
-    assert!(blockers_impossible(&blockers, true));
-    assert!(!blockers_impossible(&blockers, false));
-}
+    assert!(!blockers_withhold(&blockers, true));
 
-#[test]
-fn cap_with_only_fileable_findings_stops_withholding() {
-    use fno_agents::loopcheck::{blockers_impossible, blockers_withhold};
     let events = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([finding("b.py:2:correctness", "correctness", None, true)]),
@@ -1596,7 +1491,7 @@ fn cap_with_only_fileable_findings_stops_withholding() {
         false,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, true);
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
     assert_eq!(blockers.len(), 1);
     assert!(!blockers[0].hard);
     assert!(
@@ -1605,14 +1500,9 @@ fn cap_with_only_fileable_findings_stops_withholding() {
     );
     assert!(
         !blockers_withhold(&blockers, true),
-        "at the cap it is filed, not held"
+        "at the cap the budget discharges it"
     );
-    assert!(!blockers_impossible(&blockers, true));
-}
 
-#[test]
-fn cap_truncated_remainder_is_always_hard() {
-    use fno_agents::loopcheck::blockers_withhold;
     let events = [dispositions_event(
         SPECIMEN_HEAD,
         serde_json::json!([]),
@@ -1620,40 +1510,65 @@ fn cap_truncated_remainder_is_always_hard() {
         true,
     )]
     .join("\n");
-    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD, false);
-    assert!(blockers[0].hard, "what cannot be inspected cannot be filed");
-    assert!(blockers_withhold(&blockers, true));
-}
+    let blockers = disposition_blockers(&events, BRANCH, SPECIMEN_HEAD);
+    assert!(
+        blockers[0].hard,
+        "what cannot be inspected is recorded hard"
+    );
+    // Below the cap it withholds; at the cap the budget discharges it too.
+    assert!(blockers_withhold(&blockers, false));
+    assert!(!blockers_withhold(&blockers, true));
 
-// --- the cap's two axes (shared corpus with the Python gate) -----------------
-//
-// The SAME constructed chain is asserted on the Python side by
-// `test_cap_verdict_reads_the_events_axis_alone_for_impossible` and
-// `test_cap_verdict_agreement_chain_is_impossible_and_names_the_key`
-// (cli/tests/unit/test_pr_coverage_check.py), to the SAME
-// (impossible, rounds_used) pair. No live PR sources this fixture: the
-// specimens that measured the divergence are being cleared while this
-// lands, and on both of them the two axes AGREE - a fixture where they
-// agree cannot show which axis the conjunct reads.
+    use fno_agents::loopcheck::rounds_since_last_pass;
+    // One fail round raising a CONFIRMED correctness finding, plus a reviews
+    // payload naming five distinct reviewed commits, at max_rounds 2.
+    let events = cap_round(0);
+    let head = format!("{:040x}", 0);
+    let reviews: Vec<serde_json::Value> = (0..5)
+        .map(|i| serde_json::json!({"state": "APPROVED", "commit": {"oid": format!("r{i:038x}")}}))
+        .collect();
+    // The reported budget counts one shared head set: the attestation head
+    // plus five distinct reviewed commits answer 6 - a bot round IS a round,
+    // and heads the two axes share are counted once.
+    assert_eq!(
+        rounds_since_last_pass(&events, CAP_BRANCH, &head, Some(&reviews)),
+        6
+    );
+    // The events axis alone: 1 of 2, not spent.
+    assert_eq!(rounds_since_last_pass(&events, CAP_BRANCH, &head, None), 1);
+    let blockers = disposition_blockers(&events, CAP_BRANCH, &head);
+    assert_eq!(blockers.len(), 1);
+    assert!(blockers[0].hard, "CONFIRMED correctness is recorded hard");
 
-const CAP_BRANCH: &str = "feature/x-cap";
-const CAP_KEY: &str = "cli/src/fake.py:779:correctness";
+    // One fail raising the CONFIRMED correctness finding, then five
+    // findings-free passes, each at its own head: six rounds against
+    // max_rounds 2. The Python side asserts the same count and the same
+    // key on the same chain; at the cap the key is context, not a block.
+    let events: String = (0..6).map(cap_round).collect::<Vec<_>>().join("\n");
+    let head = format!("{:040x}", 5);
+    assert_eq!(rounds_since_last_pass(&events, CAP_BRANCH, &head, None), 6);
+    let blockers = disposition_blockers(&events, CAP_BRANCH, &head);
+    assert_eq!(blockers.len(), 1);
+    assert!(blockers[0].hard);
+    assert_eq!(blockers[0].finding_key, CAP_KEY);
 
-fn cap_round(i: usize) -> String {
-    serde_json::json!({
-        "ts": format!("2026-08-31T2{i:02}:00:00Z"),
-        "type": "review_attestation",
-        "source": "hook",
-        "data": {
+    // The parity corpus row: an undeclared fail at head A, a declared
+    // verify pass (review_round 1) at head B, an undeclared fail at head C.
+    // The declared verify does not double-count the fail it verifies; the
+    // trailing undeclared round still counts. The Python half
+    // (test_cap_verdict_mixed_declared_chain_reads_two) asserts the same 2
+    // on the same chain.
+    let row = |i: usize, verdict: &str, review_round: Option<i64>| {
+        let mut data = serde_json::json!({
             "reviewer": "code-review",
             "head_sha": format!("{i:040x}"),
-            "verdict": if i == 0 { "fail" } else { "pass" },
+            "verdict": verdict,
             "session_id": "s-cap",
             "branch": CAP_BRANCH,
-            "reviewed_base_sha": format!("{}","a".repeat(40)),
+            "reviewed_base_sha": "a".repeat(40),
             "reviewed_head_sha": format!("{i:040x}"),
-            "findings_blocking": if i == 0 { 1 } else { 0 },
-            "findings": if i == 0 {
+            "findings_blocking": if verdict == "fail" { 1 } else { 0 },
+            "findings": if verdict == "fail" {
                 serde_json::json!([{
                     "category": "correctness",
                     "verdict": "CONFIRMED",
@@ -1662,62 +1577,30 @@ fn cap_round(i: usize) -> String {
                     "finding_key": CAP_KEY,
                 }])
             } else { serde_json::json!([]) },
-        },
-    })
-    .to_string()
-}
+        });
+        if let Some(n) = review_round {
+            data["review_round"] = serde_json::json!(n);
+        }
+        serde_json::json!({
+            "ts": format!("2026-08-31T2{i:02}:00:00Z"),
+            "type": "review_attestation",
+            "source": "hook",
+            "data": data,
+        })
+        .to_string()
+    };
+    let events = [
+        row(0, "fail", None),
+        row(1, "pass", Some(1)),
+        row(2, "fail", None),
+    ]
+    .join("\n");
+    let head = format!("{:040x}", 2);
+    assert_eq!(rounds_since_last_pass(&events, CAP_BRANCH, &head, None), 2);
 
-#[test]
-fn cap_the_impossible_conjunct_reads_the_events_axis_alone() {
-    use fno_agents::loopcheck::{blockers_impossible, rounds_since_last_pass};
-    // One fail round raising a CONFIRMED correctness finding, plus a reviews
-    // payload naming five distinct reviewed commits, at max_rounds 2.
-    let events = cap_round(0);
-    let head = format!("{:040x}", 0);
-    let reviews: Vec<serde_json::Value> = (0..5)
-        .map(|i| serde_json::json!({"state": "APPROVED", "commit": {"oid": format!("r{i:038x}")}}))
-        .collect();
-    // The reported budget: max of both axes (a bot round IS a round). The
-    // Python side asserts rounds_used == 5 on this same chain.
-    assert_eq!(
-        rounds_since_last_pass(&events, CAP_BRANCH, &head, Some(&reviews)),
-        5
-    );
-    // The events axis alone: 1 of 2, not spent.
-    assert_eq!(rounds_since_last_pass(&events, CAP_BRANCH, &head, None), 1);
-    let blockers = disposition_blockers(&events, CAP_BRANCH, &head, true);
-    assert_eq!(blockers.len(), 1);
-    assert!(blockers[0].hard, "CONFIRMED correctness is hard");
-    // Budget axis spent, impossible axis not: the conjunct the gate applies
-    // reads the events axis, so this chain is NOT impossible - the unspent
-    // capacity is local and a disposition-carrying attestation clears it.
-    assert!(blockers_impossible(&blockers, true));
-    assert!(!blockers_impossible(&blockers, false));
-}
-
-#[test]
-fn cap_the_agreement_chain_is_impossible_on_both_gates() {
-    use fno_agents::loopcheck::{blockers_impossible, rounds_since_last_pass};
-    // One fail raising the CONFIRMED correctness finding, then five
-    // findings-free passes, each at its own head: six events-axis rounds
-    // against max_rounds 2. Both axes agree here, and the chain is
-    // impossible - the Python side asserts the same pair on the same chain.
-    let events: String = (0..6).map(cap_round).collect::<Vec<_>>().join("\n");
-    let head = format!("{:040x}", 5);
-    assert_eq!(rounds_since_last_pass(&events, CAP_BRANCH, &head, None), 6);
-    let blockers = disposition_blockers(&events, CAP_BRANCH, &head, true);
-    assert_eq!(blockers.len(), 1);
-    assert!(blockers[0].hard);
-    assert_eq!(blockers[0].finding_key, CAP_KEY);
-    assert!(blockers_impossible(&blockers, true));
-}
-
-#[test]
-fn cap_range_tiling_seeds_the_events_axis_off_the_events_count() {
-    use fno_agents::loopcheck::rounds_since_last_pass;
-    // compute_range_tiling holds no review objects, so both its budget and
-    // its impossible axis start as the events-only answer; the refresh sites
-    // inside read_pr_info widen the budget and leave the impossible axis.
+    // compute_range_tiling holds no review objects, so its budget starts as
+    // the events-only answer; the refresh sites inside read_pr_info widen
+    // it to both axes.
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (_base, shas, head) = repo_with(repo, 2);
@@ -1769,10 +1652,45 @@ fn cap_range_tiling_seeds_the_events_axis_off_the_events_count() {
     let tiling = tiling_for(repo, &events);
     assert_eq!(tiling.rounds_used, 2);
     assert!(tiling.rounds_exhausted, "2 of 2 spends the budget");
-    assert!(
-        tiling.events_rounds_exhausted,
-        "no review objects in hand: both axes are the events answer"
-    );
+}
+
+// --- the cap's round count (shared corpus with the Python gate) --------------
+//
+// The SAME constructed chain is asserted on the Python side by
+// `test_cap_verdict_rounds_read_the_max_of_both_axes` and
+// `test_cap_verdict_counts_the_chain_and_names_the_key`
+// (cli/tests/unit/test_pr_coverage_check.py), to the SAME rounds_used and
+// the SAME named key. No live PR sources this fixture.
+
+const CAP_BRANCH: &str = "feature/x-cap";
+const CAP_KEY: &str = "cli/src/fake.py:779:correctness";
+
+fn cap_round(i: usize) -> String {
+    serde_json::json!({
+        "ts": format!("2026-08-31T2{i:02}:00:00Z"),
+        "type": "review_attestation",
+        "source": "hook",
+        "data": {
+            "reviewer": "code-review",
+            "head_sha": format!("{i:040x}"),
+            "verdict": if i == 0 { "fail" } else { "pass" },
+            "session_id": "s-cap",
+            "branch": CAP_BRANCH,
+            "reviewed_base_sha": format!("{}","a".repeat(40)),
+            "reviewed_head_sha": format!("{i:040x}"),
+            "findings_blocking": if i == 0 { 1 } else { 0 },
+            "findings": if i == 0 {
+                serde_json::json!([{
+                    "category": "correctness",
+                    "verdict": "CONFIRMED",
+                    "blocking": true,
+                    "has_required_fields": true,
+                    "finding_key": CAP_KEY,
+                }])
+            } else { serde_json::json!([]) },
+        },
+    })
+    .to_string()
 }
 
 // --- x-aecc: declining must satisfy coverage ---------------------------------
@@ -1828,7 +1746,7 @@ fn declined(key: &str) -> serde_json::Value {
 }
 
 #[test]
-fn xaecc_marker1_fail_only_chain_fully_dispositioned_reads_covered() {
+fn xaecc_rows() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, _shas, head) = repo_with(repo, 2);
@@ -1908,10 +1826,47 @@ fn xaecc_marker1_fail_only_chain_fully_dispositioned_reads_covered() {
         unattested.is_empty(),
         "an answered fail satisfies the reviewers gate: {unattested:?}"
     );
-}
 
-#[test]
-fn xaecc_fixed_in_a_later_round_answers_too() {
+    // The counter counts REVIEWS, passes or not: a fail round that answered
+    // the head reads reviewed_count 1 and passed_count 0, and a second
+    // reviewer's fail round makes it 2 and 0 - never "zero reviews" on a PR
+    // two rounds were spent reviewing.
+    let data = coverage_event_data_tiled(1, &rep, &head, "", None, Some(&tiling));
+    assert_eq!(data["reviewed_count"], serde_json::json!(1));
+    assert_eq!(data["passed_count"], serde_json::json!(0));
+    let peer_decline = {
+        let mut row: serde_json::Value = serde_json::from_str(&declined_round(
+            &base,
+            &head,
+            serde_json::json!([finding("c.py:3:correctness", "correctness", None, true)]),
+            serde_json::json!([declined("c.py:3:correctness")]),
+        ))
+        .unwrap();
+        row["ts"] = serde_json::json!("2026-08-26T20:00:00Z");
+        row["data"]["reviewer"] = serde_json::json!("peer");
+        row.to_string()
+    };
+    let mut lines_two: Vec<String> = events.lines().map(str::to_string).collect();
+    lines_two.push(peer_decline);
+    let events_two = events_file(repo, &lines_two);
+    let rep_two = classify_coverage_tiled(
+        &[],
+        &[],
+        &events_two,
+        &[],
+        true,
+        None,
+        &at_head,
+        BRANCH,
+        &head,
+        Some(&tiling),
+        None,
+        false,
+    );
+    let data_two = coverage_event_data_tiled(1, &rep_two, &head, "", None, Some(&tiling));
+    assert_eq!(data_two["reviewed_count"], serde_json::json!(2));
+    assert_eq!(data_two["passed_count"], serde_json::json!(0));
+
     // The other terminal disposition: findings raised in round 1, fixed, and
     // a LATER round reviewed the fix delta (the specimen shape). The only
     // attestations are fails.
@@ -1943,10 +1898,7 @@ fn xaecc_fixed_in_a_later_round_answers_too() {
         rep.coverage
     );
     assert_eq!(rep.review_state(), Some(ReviewState::Reviewed));
-}
 
-#[test]
-fn xaecc_marker2_one_nonterminal_finding_withholds_and_is_named() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, _shas, head) = repo_with(repo, 2);
@@ -1996,7 +1948,7 @@ fn xaecc_marker2_one_nonterminal_finding_withholds_and_is_named() {
         "an unanswered fail must not count as a review"
     );
     assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-    let blockers = disposition_blockers(&events, BRANCH, &head, false);
+    let blockers = disposition_blockers(&events, BRANCH, &head);
     assert_eq!(blockers.len(), 1, "the refusal names exactly one finding");
     assert_eq!(blockers[0].finding_key, k2);
     assert_eq!(blockers[0].axis, "open");
@@ -2012,10 +1964,7 @@ fn xaecc_marker2_one_nonterminal_finding_withholds_and_is_named() {
         false,
     );
     assert_eq!(unattested.len(), 1);
-}
 
-#[test]
-fn xaecc_cap_files_the_soft_remainder_and_answers() {
     // Filed at the cap is the third terminal disposition: rounds spent with
     // only non-hard blockers, the fail still answers (the merge gate files
     // them; only a CONFIRMED correctness/security finding keeps withholding).
@@ -2066,15 +2015,7 @@ fn xaecc_cap_files_the_soft_remainder_and_answers() {
         rep.coverage
     );
     assert_eq!(rep.review_state(), Some(ReviewState::Reviewed));
-}
 
-/// A same-head RETRACTION of a pass (review finding 1): the retraction is
-/// the pair's latest fail, the pair's own round-1 fail carried findings that
-/// are all declined, and the chain's blockers are empty - the exact shape a
-/// chain-global guard would read as answered. The retribution it must not
-/// buy: the revoked pass must NOT come back as a Reviewed verdict.
-#[test]
-fn xaecc_r1_a_retraction_never_resurrects_the_revoked_pass() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, shas, head) = repo_with(repo, 2);
@@ -2151,13 +2092,7 @@ fn xaecc_r1_a_retraction_never_resurrects_the_revoked_pass() {
         1,
         "the reviewers gate withholds on the retraction too"
     );
-}
 
-/// A bystander reviewer's findings-free fail (review finding 2): another
-/// reviewer's declined findings must not satisfy it, on the coverage axis or
-/// the reviewers gate.
-#[test]
-fn xaecc_r2_a_bystanders_findings_free_fail_stays_unanswered() {
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path();
     let (base, _shas, head) = repo_with(repo, 2);
@@ -2217,4 +2152,153 @@ fn xaecc_r2_a_bystanders_findings_free_fail_stays_unanswered() {
         1,
         "sigma stays unattested: {unattested:?}"
     );
+}
+
+/// A same-head RETRACTION of a pass (review finding 1): the retraction is
+/// the pair's latest fail, the pair's own round-1 fail carried findings that
+/// are all declined, and the chain's blockers are empty - the exact shape a
+/// chain-global guard would read as answered. The retribution it must not
+/// buy: the revoked pass must NOT come back as a Reviewed verdict.
+
+/// A bystander reviewer's findings-free fail (review finding 2): another
+/// reviewer's declined findings must not satisfy it, on the coverage axis or
+/// the reviewers gate.
+
+// --- the carry: a rebase that ships identical content keeps its chain ---
+// x-ee4c: the tiling walk asks review_freshness the question it already
+// answers, instead of asking git for a sha the rebase deleted.
+
+/// A repo where origin/main moved and BRANCH was rebased onto it. The
+/// branch's commits keep their content, so every sha changes. With
+/// `extra_edit`, a post-rebase commit edits a .rs file: the
+/// conflict-resolution shape that must NOT carry.
+fn rebased_repo(repo: &Path, extra_edit: bool) -> (String, String, String) {
+    Command::new("git")
+        .current_dir(repo)
+        .args(["init", "-q", "-b", BRANCH])
+        .output()
+        .expect("git init");
+    git(repo, &["config", "user.email", "t@t.t"]);
+    git(repo, &["config", "user.name", "t"]);
+    let base = commit(repo, "base");
+    git(repo, &["update-ref", "refs/remotes/origin/main", &base]);
+    let _c1 = commit(repo, "c1");
+    let pre_head = commit(repo, "c2");
+    // main moves with an unrelated file, then the branch rebases onto it.
+    git(repo, &["checkout", "-q", "-b", "main", &base]);
+    fs::write(repo.join("unrelated.txt"), "base moved").unwrap();
+    git(repo, &["add", "unrelated.txt"]);
+    git(repo, &["commit", "-qm", "base moved"]);
+    git(repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(repo, &["checkout", "-q", BRANCH]);
+    git(repo, &["rebase", "-q", "refs/remotes/origin/main"]);
+    if extra_edit {
+        fs::write(repo.join("code.rs"), "fn main() {}\n// edited line\n").unwrap();
+        git(repo, &["add", "code.rs"]);
+        git(repo, &["commit", "-qm", "conflict edit"]);
+    }
+    let post_head = git(repo, &["rev-parse", "HEAD"]);
+    (base, pre_head, post_head)
+}
+
+#[test]
+fn rebase_rows() {
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let (base, pre_head, post_head) = rebased_repo(repo, false);
+    assert_ne!(pre_head, post_head, "the rebase must move every sha");
+    let events = events_file(
+        repo,
+        &[attestation("code-review", &base, &pre_head, "pass")],
+    );
+    let resolver = FreshnessResolver::new("git", repo, "origin/main", &post_head, 100);
+    let tiling = compute_range_tiling(
+        "git",
+        repo,
+        "origin/main",
+        &events,
+        BRANCH,
+        &post_head,
+        2,
+        Some(&resolver),
+    );
+    assert!(
+        tiling.tiled,
+        "identical content must carry: {:?}",
+        tiling.gaps
+    );
+    assert!(tiling.gaps.is_empty());
+    // The chain names the PRE-rebase head: the review that happened is the
+    // one the row cites.
+    assert!(
+        tiling.chain_heads.contains(&pre_head),
+        "chain cites the pre-rebase head: {:?}",
+        tiling.chain_heads
+    );
+    // The sha path and the carry are independent answers: the drop is still
+    // recorded even though the carry covered the walk.
+    assert!(
+        tiling.dropped.contains(&pre_head),
+        "the sha-path drop stays auditable: {:?}",
+        tiling.dropped
+    );
+    assert_eq!(
+        tiling.carried,
+        vec![(pre_head.clone(), "carried_base_sync".to_string())],
+        "the carry names its head and its proof"
+    );
+
+    // The negative twin, and the test that proves the carry is a proof
+    // rather than a waiver: one edited line of .rs breaks the identity, the
+    // interdiff arm is above zero, and the gap stays named by sha.
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let (base, pre_head, post_head) = rebased_repo(repo, true);
+    let events = events_file(
+        repo,
+        &[attestation("code-review", &base, &pre_head, "pass")],
+    );
+    let resolver = FreshnessResolver::new("git", repo, "origin/main", &post_head, 100);
+    let tiling = compute_range_tiling(
+        "git",
+        repo,
+        "origin/main",
+        &events,
+        BRANCH,
+        &post_head,
+        2,
+        Some(&resolver),
+    );
+    assert!(
+        !tiling.tiled,
+        "changed content must not carry: {:?}",
+        tiling.carried
+    );
+    assert!(
+        !tiling.gaps.is_empty(),
+        "the gap stays named by sha: {:?}",
+        tiling.gaps
+    );
+    assert!(tiling.carried.is_empty());
+
+    // The fail-closed default: None is exactly today's behavior.
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path();
+    let (base, pre_head, post_head) = rebased_repo(repo, false);
+    let events = events_file(
+        repo,
+        &[attestation("code-review", &base, &pre_head, "pass")],
+    );
+    let tiling = compute_range_tiling(
+        "git",
+        repo,
+        "origin/main",
+        &events,
+        BRANCH,
+        &post_head,
+        2,
+        None,
+    );
+    assert!(!tiling.tiled);
+    assert!(tiling.carried.is_empty());
 }

@@ -1,409 +1,44 @@
-"""fno agents restart - restart running fno processes onto freshly-installed binaries (x-69b3).
+"""fno agents restart - restart running fno processes onto freshly-installed binaries.
 
 `fno doctor update && fno agents restart` is the reboot loop: `update` installs new binaries,
 `restart` swaps the RUNNING processes onto them.
 
-- Agents daemon: ALWAYS restarted - SIGTERM the stale daemon and lazy-start a
-  fresh one from the current binary; PTY workers survive. Safe: the daemon holds
-  no user session state.
-- Mux servers: a STALE-wire server below the compatibility floor is
-  auto-restarted only when it has no live panes, healing pair-deploy skew
-  without killing sessions. A stale-wire server with live panes is reported and
-  spared unless --mux. A CURRENT-wire server stays opt-in behind --mux.
-- Worker revival: killing a mux server also kills the worker PTYs it hosted.
-  After a kill, registered claude workers that died with the server are
-  respawned onto their recorded session (`fno agents spawn --resume`, the
-  revive-in-place lane) so the restart reconnects them instead of orphaning
-  them. Best-effort and opt-out via --no-revive; bg workers survive the kill
-  and are never touched.
+The verb itself lives in the Rust `fno-agents restart`; this module is a pass-through
+that execs it, so the flag spellings and the receipt cannot drift between the doors.
 """
-from __future__ import annotations
 
-import json
-import shutil
 import subprocess
-import time
-from typing import Any, Callable, Optional
 
 import typer
 
-# Killed panes' worker processes take a moment to die; probing liveness too
-# early would read them as survivors and skip the revive.
-_REVIVE_SETTLE_SECS = 3.0
-
-
-def _revive_enabled() -> bool:
-    """Resolve whether crash-recovery worker revival is armed (x-aaaf wave 2).
-
-    ``config.restart.enabled`` defaults True (matches the spawner's prior,
-    ungated behavior). A malformed value degrades to True (never opt-in), but
-    a config that fails to load at all degrades to False - the global
-    invariant that an unreadable config resolves every gate to off, never on.
-
-    Also stops when ``config.autonomy.enabled`` (the wave-3 master panic
-    switch) is off, checked first. Only reached when the operator did not
-    pass an explicit ``--revive``/``--no-revive`` (that always wins - an
-    explicit human command is not autonomy).
-    """
-    from fno.config import autonomy_master_enabled
-
-    if not autonomy_master_enabled():
-        return False
-    try:
-        from fno.config import load_settings
-
-        return bool(load_settings().restart.enabled)
-    except Exception:  # noqa: BLE001 - fail-safe to disabled on a read failure
-        return False
-
-
-def _mux_sessions() -> Optional[list[dict[str, Any]]]:
-    """Live mux sessions via `fno mux ls --json`, or None when the mux front door
-    is unavailable / the call fails. Best-effort: never raises."""
-    fno = shutil.which("fno")
-    if not fno:
-        return None
-    try:
-        proc = subprocess.run(
-            [fno, "mux", "ls", "--json"], capture_output=True, text=True, timeout=10
-        )
-    except subprocess.TimeoutExpired:
-        typer.echo(
-            "fno agents restart: `fno mux ls --json` gave up after 10s; skipped mux check "
-            "(a wedged server? `fno mux doctor`).",
-            err=True,
-        )
-        return None
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        data = json.loads(proc.stdout or "[]")
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, list) else None
-
-
-def _agents_rows() -> list[dict[str, Any]]:
-    """Registered agents via `fno agents list --json`; [] on any failure."""
-    fno = shutil.which("fno")
-    if not fno:
-        return []
-    try:
-        proc = subprocess.run(
-            [fno, "agents", "list", "--json"], capture_output=True, text=True, timeout=15
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
-        return []
-    try:
-        data = json.loads(proc.stdout or "[]")
-    except json.JSONDecodeError:
-        return []
-    if isinstance(data, list):
-        rows = data
-    elif isinstance(data, dict):
-        rows = data.get("agents", [])
-    else:
-        rows = []
-    return [r for r in rows if isinstance(r, dict)]
-
-
-def is_revivable(row: dict[str, Any]) -> bool:
-    """True when `row` (an `fno agents list --json` row) is a claude worker with
-    a recorded resumable session - the exact predicate `_revive_orphans` applies
-    per orphan. The update-readiness resolver (`fno.update`) calls this same
-    function to count what `--revive` would bring back: one predicate, two
-    callers, so they cannot drift apart. Checks `harness`, the canonical
-    identity field (`AgentEntry.harness`) - the legacy `provider` key was
-    removed from the row schema and is always absent now."""
-    return row.get("harness") == "claude" and bool(row.get("session_id"))
-
-
-def _revive_orphans(
-    pre_live: dict[str, dict[str, Any]],
-    say: Callable[..., None],
-    result: dict[str, Any],
-) -> None:
-    """Respawn workers orphaned by a mux-server kill onto their recorded claude
-    sessions. Best-effort: a failed revive is reported in the summary but never
-    fails the restart (which already succeeded); revive-in-place refuses to
-    double-spawn if the worker is actually still alive."""
-    fno = shutil.which("fno")
-    if not fno:
-        return
-    time.sleep(_REVIVE_SETTLE_SECS)
-    try:
-        subprocess.run([fno, "agents", "reconcile"], capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        pass
-    now_live = {r.get("name") for r in _agents_rows() if r.get("status") == "live"}
-    for name, row in pre_live.items():
-        if name in now_live:
-            continue
-        session = row.get("session_id")
-        if not is_revivable(row):
-            result["agents_revive_skipped"].append(name)
-            say(
-                f"fno agents restart: worker '{name}' died with its mux server and has no "
-                "resumable claude session; not revived.",
-                err=True,
-            )
-            continue
-        # Pin the provider explicitly: a bare spawn inherits
-        # config.agents.defaults.provider, and a non-claude default makes the
-        # spawn seam inject --provider <that>, which the --resume guard then
-        # rejects - every revive would fail in such an environment. --substrate
-        # bg is what --resume implies; naming it is belt-and-suspenders.
-        cmd = [
-            fno, "agents", "spawn", "--name", name,
-            "--harness", "claude", "--substrate", "bg", "--resume", str(session),
-        ]
-        if row.get("cwd"):
-            cmd += ["--cwd", str(row["cwd"])]
-        try:
-            rc = subprocess.run(cmd, capture_output=True, text=True, timeout=120).returncode
-        except (OSError, subprocess.SubprocessError):
-            rc = 1
-        if rc == 0:
-            result["agents_revived"].append(name)
-            say(f"fno agents restart: revived worker '{name}' onto session {session}.")
-        else:
-            result["agents_revive_failed"].append(name)
-            say(
-                f"fno agents restart: could not revive worker '{name}' (spawn --resume "
-                f"exited {rc}); resume it manually: fno agents resume {name}",
-                err=True,
-            )
-
 
 def restart_command(
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-F",
-        help="Break-glass daemon restart: allow fno-agents to SIGKILL a wedged lock holder.",
-    ),
-    mux: bool = typer.Option(
-        False,
-        "--mux",
-        help="Also restart live mux servers (DESTRUCTIVE: ends their shells/panes).",
-    ),
-    revive: Optional[bool] = typer.Option(
-        None,
-        "--revive/--no-revive",
-        help="After killing a mux server, respawn the claude workers that died with "
-        "it onto their recorded sessions (spawn --resume). Workers that survive "
-        "(bg substrate) or have no recorded session are left alone. Unset resolves "
-        "config.restart.enabled (default True); an explicit flag always wins "
-        "(x-aaaf wave 2).",
-    ),
-    json_out: bool = typer.Option(
-        False, "--json", "-J", help="Emit a single JSON summary on stdout; text to stderr."
-    ),
+    force: bool = typer.Option(False, "--force", "-F", help="Break-glass daemon restart."),
+    mux: bool = typer.Option(False, "--mux", help="Also restart live mux servers."),
+    json_out: bool = typer.Option(False, "--json", "-J", help="JSON summary on stdout."),
 ) -> None:
-    """Restart running fno processes onto freshly-installed binaries.
-
-    The agents daemon restarts always (PTY workers survive). A stale-wire mux
-    server below the compatibility floor is auto-restarted only when it hosts
-    no live panes; one with live panes is reported and spared unless --mux. A
-    current-wire server is reported by default and restarted only with --mux.
-    Claude workers that die with a killed server are respawned onto their
-    recorded sessions (--no-revive to skip).
-    """
-    revive = revive if revive is not None else _revive_enabled()
-    result: dict[str, Any] = {
-        "daemon": None,
-        "mux_sessions": [],  # all LIVE rows, including spared ones; the set actually restarted is mux_restarted
-        "mux_spared": [],  # stale-wire live-pane servers spared by default
-        "mux_wedged": [],  # wedged rows: actionable failures (holds socket, not accepting)
-        "mux_other": [],  # other non-live rows (stale/unqueryable): reported, never killed
-        "mux_restarted": [],
-        "agents_revived": [],
-        "agents_revive_failed": [],
-        "agents_revive_skipped": [],
-    }
-    failures: list[str] = []  # non-empty -> exit 1
-
-    def say(msg: str, err: bool = False) -> None:
-        # In --json mode all human text goes to stderr so stdout stays one object.
-        if json_out or err:
-            typer.echo(msg, err=True)
-        else:
-            typer.echo(msg)
-
-    # 1. Agents daemon (safe: PTY workers survive). The primary action - an actual
-    # restart FAILURE fails the command so a chained `fno doctor update && fno agents restart`
-    # surfaces it. An absent binary is "nothing to restart", not a failure.
+    """Restart running fno processes onto freshly-installed binaries."""
     from fno import rust_binary
 
     binary = rust_binary.resolve_installed_binary()
     if binary is None:
-        result["daemon"] = "skipped-no-binary"
-        say("fno agents restart: no installed fno-agents binary; skipping daemon restart", err=True)
-    else:
-        try:
-            daemon_cmd = [str(binary), "restart"]
-            if force:
-                daemon_cmd.append("--force")
-            rc = subprocess.run(daemon_cmd, timeout=120).returncode
-        except (OSError, subprocess.SubprocessError) as exc:
-            result["daemon"] = "failed"
-            say(f"fno agents restart: could not run fno-agents restart ({exc})", err=True)
-            failures.append(f"daemon: {exc}")
-        else:
-            if rc == 0:
-                result["daemon"] = "restarted"
-                say("fno agents restart: agents daemon restarted (PTY workers survive).")
-            else:
-                result["daemon"] = f"failed:{rc}"
-                say(f"fno agents restart: fno-agents restart exited {rc}", err=True)
-                failures.append(f"daemon: exit {rc}")
-
-    # 2. Mux servers. ONLY live sessions are restart targets; stale/unqueryable
-    # rows are reported, never killed (killing a non-live socket is meaningless
-    # and could unlink a socket that `kill-server` owns).
-    sessions = _mux_sessions()
-    if sessions is None:
-        say("fno agents restart: mux front door unavailable; skipped mux check.")
-    else:
-        # One partition pass over the rows: the live-side buckets hold their
-        # invariants by construction instead of by five comprehensions
-        # agreeing with each other.
-        live_rows: list[dict] = []
-        live: list[str] = []
-        stale_live: list[str] = []
-        stale_pane_live: list[dict] = []
-        stale_pane_sessions: list[str] = []
-        stale_pane_free: list[str] = []
-        current_live: list[str] = []
-        wedged: list[dict] = []
-        other: list[str] = []
-        for s in sessions:
-            if not (isinstance(s, dict) and s.get("session")):
-                continue
-            state = s.get("state")
-            if state == "wedged":
-                # A wedged server holds its socket but never accepts (x-82c6):
-                # a broken server, NOT a benign non-live socket.
-                wedged.append(s)
-            elif state != "live":
-                other.append(s["session"])
-            else:
-                live_rows.append(s)
-                live.append(s["session"])
-                # (x-1a85) A stale-wire live server is below the compatibility
-                # floor. A pane-less one still heals pair-deploy skew
-                # automatically. A server with live panes is spared because
-                # killing it closes their PTYs; --mux remains the deliberate
-                # break-glass lever.
-                if s.get("stale"):
-                    stale_live.append(s["session"])
-                    if (s.get("panes") or 0) > 0:
-                        stale_pane_live.append(s)
-                        stale_pane_sessions.append(s["session"])
-                    else:
-                        stale_pane_free.append(s["session"])
-                else:
-                    current_live.append(s["session"])
-        result["mux_sessions"] = live
-        result["mux_stale"] = stale_live
-        result["mux_spared"] = [] if mux else stale_pane_sessions
-        result["mux_wedged"] = [w["session"] for w in wedged]
-        result["mux_other"] = other
-        for w in wedged:
-            name = w["session"]
-            log = w.get("log") or "(server log path unknown)"
-            say(
-                f"fno agents restart: mux session '{name}' is WEDGED (holds its socket but is not "
-                f"accepting connections). `fno mux kill-server {name}` recovers it "
-                f"(escalates to SIGTERM/SIGKILL; its log: {log}).",
-                err=True,
-            )
-            failures.append(f"mux: {name} wedged")
-        if other:
-            say(f"fno agents restart: {len(other)} non-live mux row(s) (not restarted): {other}.")
-        if not mux:
-            for row in stale_pane_live:
-                say(
-                    f"fno agents restart: mux session '{row['session']}' has {row['panes']} live "
-                    "pane(s); its stale-wire server is spared. Use `fno agents restart --mux` "
-                    "to force-kill and revive it."
-                )
-                # Sparing is deliberate, but the fleet is NOT healed: an exit 0
-                # here lets automation conclude the skew was cleared, the same
-                # ok:true lie the wedged rows stopped telling (x-82c6).
-                failures.append(
-                    f"mux: {row['session']} spared (stale wire, "
-                    f"{row.get('panes') or 0} live pane(s)); --mux forces"
-                )
-
-        # Restart stale-wire servers only when pane-less by default; --mux adds
-        # the stale live-pane servers and all current-wire servers.
-        to_restart = (stale_live if mux else stale_pane_free) + (current_live if mux else [])
-        if not live:
-            say("fno agents restart: no live mux sessions.")
-        # Snapshot live workers BEFORE the kill: the kill is what orphans them,
-        # so this is the only moment their pre-kill liveness is observable.
-        pre_live: dict[str, dict[str, Any]] = {}
-        if to_restart and revive:
-            pre_live = {
-                r["name"]: r
-                for r in _agents_rows()
-                if r.get("name") and r.get("status") == "live"
-            }
-        if to_restart:
-            fno = shutil.which("fno")
-            if not fno:
-                say(
-                    "fno agents restart: mux session(s) need restarting but the `fno` mux binary is "
-                    "not on PATH; cannot restart them.",
-                    err=True,
-                )
-                failures.append("mux: fno not on PATH")
-            else:
-                for name in to_restart:
-                    reason = "stale wire version" if name in stale_live else "requested"
-                    # The belt must exceed kill-server's worst case (connect +
-                    # drain + unlink waits, then the SIGTERM/SIGKILL ladder);
-                    # raising the ladder means raising this too.
-                    try:
-                        kc = subprocess.run(
-                            [fno, "mux", "kill-server", name],
-                            capture_output=True,
-                            text=True,
-                            timeout=20,
-                        ).returncode
-                    except subprocess.TimeoutExpired:
-                        say(f"fno agents restart: gave up on mux session '{name}' after 20s.", err=True)
-                        failures.append(f"mux: kill {name} timed out")
-                        continue
-                    except (OSError, subprocess.SubprocessError):
-                        kc = 1
-                    if kc == 0:
-                        result["mux_restarted"].append(name)
-                        say(
-                            f"fno agents restart: mux session '{name}' killed ({reason}); the next "
-                            "attach starts a fresh server on the new binary."
-                        )
-                    else:
-                        say(f"fno agents restart: could not kill mux session '{name}' (exit {kc}).", err=True)
-                        failures.append(f"mux: kill {name} exit {kc}")
-        if revive and result["mux_restarted"] and pre_live:
-            _revive_orphans(pre_live, say, result)
-        # Current-wire servers left running (opt-in): report so the operator can
-        # restart them deliberately. Skipped when --mux already restarted them.
-        if current_live and not mux:
-            say(
-                f"fno agents restart: {len(current_live)} live mux session(s) on the current wire: "
-                f"{current_live}. Killing one ends its shells/panes; that stays opt-in. Do it "
-                "with `fno mux kill-server <name>`, or `fno agents restart --mux` for all."
-            )
-
-    result["ok"] = not failures
+        typer.echo(
+            "fno agents restart: no installed fno-agents binary; skipping daemon restart",
+            err=True,
+        )
+        raise typer.Exit(0)
+    daemon_cmd = [str(binary), "restart"]
+    if force:
+        daemon_cmd.append("--force")
+    if mux:
+        daemon_cmd.append("--mux")
     if json_out:
-        typer.echo(json.dumps(result))
-    if failures:
+        daemon_cmd.append("--json")
+    # Inherited streams, not captured ones: a capture printed all of stderr
+    # before all of stdout, so the verdict line was no longer the last line.
+    try:
+        proc = subprocess.run(daemon_cmd, timeout=600)
+    except (OSError, subprocess.SubprocessError) as exc:
+        typer.echo(f"fno agents restart: could not run fno-agents restart ({exc})", err=True)
         raise typer.Exit(1)
+    raise typer.Exit(proc.returncode)

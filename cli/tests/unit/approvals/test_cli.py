@@ -20,6 +20,11 @@ from fno.approvals import (
 from fno.approvals.cli import approvals_app
 from fno.approvals.policy import ConfigAuthority
 
+# The `db` fixture files its request through the Rust effect gate
+# (`authorized-merge` op effect-submit), so the module needs this checkout's
+# fno-agents dev build; smoke legs skip via the dev_build marker.
+pytestmark = pytest.mark.dev_build
+
 runner = CliRunner()
 
 FOUNDER = "principal:founder"
@@ -102,7 +107,9 @@ def test_ac10_ui_inspection_never_executes_the_effect(db: Path, tmp_path: Path) 
     _invoke("ls", "--db", str(db))
     _invoke("show", digest, "--db", str(db))
 
-    events = (tmp_path / "events.jsonl").read_text().splitlines()
+    from tests._event_rows import event_rows
+
+    events = [json.dumps(e) for e in event_rows(tmp_path / "events.jsonl")]
     types = [json.loads(line)["type"] for line in events if line.strip()]
     assert types == ["approval_requested"]
 

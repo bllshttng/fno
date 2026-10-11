@@ -8,8 +8,10 @@ invariant, so future drift could reintroduce it (a new helper path that
 constructs the ``target-session:<sid>`` holder and releases the node claim, or
 an exit handler that unlinks it).
 
-The ONLY source files permitted to release a ``node:<id>`` claim:
-  1. ``skills/target/scripts/handoff.sh``      - deliberate self-handoff (holder-verified)
+The target self-handoff shell must not release a ``node:<id>`` claim directly.
+It delegates archive plus exact-holder release to
+``fno.state.target_handoff.prepare_manifest_and_release`` so shell and target
+handoffs share one recoverable custody operation.
 
 A "node-release site" is a ``claim release`` invocation whose released KEY
 resolves to a ``node:`` prefix (a literal, or a local variable / ``format!``
@@ -34,6 +36,8 @@ import ast
 import re
 from pathlib import Path
 
+from fno.lint_cli import _rust_cfg_test_lines
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # crates/ is in scope because the megawalk walker (the legitimate node-claim
@@ -45,13 +49,14 @@ SCAN_DIRS = ["cli/src/fno", "scripts", "skills", "hooks", "crates"]
 # A NEW entry here requires an equivalent justification (a holder-verified,
 # single-authority release at a sanctioned lifecycle boundary).
 ALLOWLIST = {
-    "skills/target/scripts/handoff.sh",
-    # `fno backlog unclaim`/`release`: the sanctioned one-shot un-claim verb. Its
-    # lockfile release is holder-verified - it drops the lock ONLY when the
-    # holder is stale (PID dead / TTL expired) or matches the invoking session,
-    # and REFUSES a live foreign holder (warn + point at force-release). Single
-    # authority at an explicit operator lifecycle boundary (x-a747).
-    "cli/src/fno/graph/cli.py",
+    # `fno backlog unclaim`/`release`/`requeue`: the sanctioned one-shot un-claim
+    # and queue-return verbs. Their lockfile release is holder-verified - it
+    # drops the lock ONLY when the holder is stale (PID dead / TTL expired) or
+    # matches the invoking session, and REFUSES a live foreign holder (warn +
+    # point at force-release). Single authority at an explicit operator
+    # lifecycle boundary (x-a747). Lives in graph/requeue.py since the
+    # queue-return subject moved there out of the over-budget graph/cli.py.
+    "cli/src/fno/backlog/requeue.py",
     # init-target-state.sh: the acquire-then-validate refusal (x-e957). Releases
     # the claim THIS SAME BLOCK acquired one line earlier, with the holder it
     # just minted, when the post-acquire containment read says the node was
@@ -65,7 +70,7 @@ ALLOWLIST = {
     "hooks/helpers/init-target-state.sh",
     # graph/store.py release_node_claim_at_closure: the node-CLOSURE release.
     # Fired at the one choke point every closure path funnels through (the
-    # terminal-rung transition inside locked_mutate_graph, plus the tracker
+    # terminal-rung transition inside commit_rows_via_store, plus the tracker
     # seam right after close()) and nowhere else, it is deliberately
     # holder-agnostic: a closed node has no work left to protect, so there is
     # no legitimate holder to verify - the terminal rung IS the authority.
@@ -75,6 +80,27 @@ ALLOWLIST = {
     # completion). Scratch-graph closures are gated out; only the process's
     # configured graph releases.
     "cli/src/fno/graph/store.py",
+    # crates/fno-agents/src/backlog/session_cli.rs run_close: the
+    # BLUEPRINT-CLOSE terminal release. A spawn dispatch acquires
+    # node:<id> under spawn-handover:<worker> and a blueprint session never
+    # runs init, so the close is the only terminal that lifecycle has.
+    # Holder-scoped: it releases ONLY the session's own spawn-handover or
+    # blueprint-session holder and leaves a successor target session's
+    # rebound claim intact, so the ab-588326a7 shape (a helper releasing
+    # somebody else's claim) cannot occur here by construction. Not releasing
+    # at all leaves the node un-dispatchable until TTL with advance skipping
+    # it as already-claimed.
+    "crates/fno-agents/src/backlog/session_cli.rs",
+    # crates/fno-agents/src/backlog/update_cli.rs apply_mutators: the
+    # operator's explicit `update --locked-by null` clear ("'null' to
+    # release" per update_help.txt). Holder-scoped: it drops the lock only
+    # when the holder is stale (pid dead / TTL expired) or matches the
+    # invoking session, and REFUSES a live foreign holder naming
+    # `fno agents claim release` - the unclaim/requeue contract (x-dd1f
+    # review round; the pre-fix site released whatever holder the record
+    # named). Explicit operator lifecycle boundary, never a helper's own
+    # initiative.
+    "crates/fno-agents/src/backlog/update_cli.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}
@@ -169,11 +195,15 @@ _RS_ADORN = r"(?:\.to_string\(\)|\.into\(\)|\.to_owned\(\))?"
 _RS_RELEASE = re.compile(
     r'"claim"' + _RS_ADORN + r'\s*,\s*"release"' + _RS_ADORN + r"\s*,\s*(&?\s*[^,\]\)]+)"
 )
+_RS_DIRECT_RELEASE = re.compile(r"\brelease\s*\(\s*(&?\s*[^,\]\)]+)")
 _RS_BIND = re.compile(r"\blet\s+(?:mut\s+)?([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(.+)$")
 
 
 def _rust_node_release_lines(text: str) -> list[int]:
     lines = text.splitlines()
+    test_lines = _rust_cfg_test_lines(lines)
+    lines = ["" if index in test_lines else line for index, line in enumerate(lines, 1)]
+    text = "\n".join(lines)
     node_vars: set[str] = set()
     for line in lines:
         if line.lstrip().startswith("//"):
@@ -192,6 +222,13 @@ def _rust_node_release_lines(text: str) -> list[int]:
         # membership catches a `&claim_key` bound to `format!("node:...)`
         # elsewhere. The leading-quote anchor avoids the `dispatch-node:` holder
         # substring trap.
+        if '"node:' in key or key in node_vars:
+            hits.append(scrubbed.count("\n", 0, m.start()) + 1)
+    # The direct form: `release(claim_key, ...)` — the same key check, so the
+    # claims::release front the session verbs call is as visible as the
+    # literal-argument spelling above.
+    for m in _RS_DIRECT_RELEASE.finditer(scrubbed):
+        key = m.group(1).strip().lstrip("&").strip()
         if '"node:' in key or key in node_vars:
             hits.append(scrubbed.count("\n", 0, m.start()) + 1)
     return sorted(set(hits))
@@ -336,6 +373,18 @@ def test_both_sanctioned_sites_detected():
     )
 
 
+def test_target_handoff_delegates_node_release_to_python_prepare_owner():
+    shell = (REPO_ROOT / "skills/target/scripts/handoff.sh").read_text(encoding="utf-8")
+    owner = (REPO_ROOT / "cli/src/fno/state/target_handoff.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "-m fno.state.target_handoff prepare" in shell
+    assert _shell_node_release_lines(shell) == []
+    assert "def prepare_manifest_and_release(" in owner
+    assert "released = release_exact(claim_key, holder)" in owner
+
+
 def test_matcher_classifies_keys_by_prefix():
     """AC1-ERR / AC1-EDGE: in-test fixtures, no tree mutation. The matcher flags
     a node: release and ignores other-prefix / generic-param releases."""
@@ -376,6 +425,13 @@ def test_matcher_classifies_keys_by_prefix():
     assert _rust_node_release_lines(
         '// .args(["claim", "release", "node:foo", "--holder", &h])'
     ) == []
+    # Test bindings and releases do not hide or taint the following production scope.
+    assert _rust_node_release_lines(
+        '#[cfg(test)]\nmod tests {\nfn fixture() {\n'
+        'let key = "node:test";\nrelease(key, "test-holder");\n}\n}\n'
+        'fn production(key: &str) {\nrelease(key, "holder");\n'
+        'release("node:real", "holder");\n}\n'
+    ) == [10]
     # python: node f-string flagged; generic key param + session literal ignored
     assert _python_node_release_lines('release_claim(f"node:{i}", h)') == [1]
     assert _python_node_release_lines(

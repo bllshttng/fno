@@ -1,16 +1,18 @@
 """PR-state watcher: atomic watermark store.
 
-Persists per-PR polling state to ``~/.fno/pr-watcher-state.json`` (default).
-The path is injectable for tests.
+Persists per-PR polling state to ``~/.fno/state/pr-watcher-state.json``
+(default). The path is injectable for tests.
 
 Entry schema per key::
 
     {
         "last_review_ts": str | None,   # ISO-8601 ts of last dispatched review
         "last_seen_state": str,          # PR state at last observation ("OPEN", "MERGED", ...)
-        "merge_dispatched": bool,        # True once /fno:pr merged was fired
+        "merge_dispatched": bool,        # True once /fno:ship pr merged was fired
         "retries": int,                  # consecutive dispatch failures
         "parked": str | None,            # non-None = reason we stopped polling
+        "last_polled_at": str,           # ISO ts of last rich read; orders the next
+                                         # tick's scan least-recently-polled first
     }
 
 Key format: ``"{repo_slug}#{pr_number}"`` (globally unique across repos).
@@ -26,6 +28,7 @@ Baseline discipline:
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -35,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from fno.paths import state_dir
+from fno.paths import state_runtime_file
 
 log = logging.getLogger(__name__)
 
@@ -133,11 +136,13 @@ def _merge_entries(legacy: dict, canonical: dict) -> dict:
 def pr_watcher_state_path() -> Path:
     """Return the default path to the pr-watcher state JSON file.
 
-    Mirrors graph_json() / ledger_json() style: delegates to state_dir()
-    so the path follows any user-configured ``config.state_dir`` override
-    (and the test HOME redirect in conftest.py keeps it out of ~/.fno).
+    Mirrors graph_json() / ledger_json() style: delegates to the paths
+    module so the path follows any user-configured ``config.state_dir``
+    override (and the test HOME redirect in conftest.py keeps it out of
+    ~/.fno). Resolves under ``state/`` per the state-root tidiness law,
+    renaming a legacy root file on first resolve.
     """
-    return state_dir() / "pr-watcher-state.json"
+    return state_runtime_file("pr-watcher-state.json")
 
 
 # ---------------------------------------------------------------------------
@@ -191,15 +196,25 @@ class WatermarkStore:
     def set(self, key: str, entry: dict) -> None:
         """Upsert *entry* under *key* and persist atomically.
 
+        Takes an advisory flock on ``<path>.lock`` (the same file the Rust
+        pr-park mutations hold) and re-reads the disk state under it, so a
+        park sweep that rewrote the file while this tick sat in a long merge
+        is merged, not clobbered by this process's load-once dict.
+
         Uses a tmp file + ``os.replace`` so readers never see a partial
         write.  The tmp file is created in the same directory as the state
         file (same filesystem) to guarantee the replace is atomic on POSIX.
         The tmp file is removed on failure so no garbage is left behind.
         """
-        self.load()  # ensure _data is initialised
-        assert self._data is not None
-        self._data[key] = entry
-        self._persist()
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = Path(str(self._path) + ".lock")
+        with open(lock_path, "a") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            fresh = self._read_or_reset()
+            fresh[key] = entry
+            self._data = fresh
+            self._persist()
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
     def normalize_keys(self) -> KeyNormalization:
         """Rewrite legacy keys to globally-qualified keys in memory.
@@ -301,8 +316,11 @@ class WatermarkStore:
     def _persist(self) -> None:
         assert self._data is not None
         self._path.parent.mkdir(parents=True, exist_ok=True)
+
         tmp_path: Optional[Path] = None
-        try:
+
+        def _write_tmp() -> Path:
+            nonlocal tmp_path
             fd, tmp_str = tempfile.mkstemp(
                 dir=self._path.parent,
                 prefix=".pr-watcher-state.tmp.",
@@ -311,7 +329,18 @@ class WatermarkStore:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(self._data, fh, indent=2)
                 fh.write("\n")
-            os.replace(tmp_path, self._path)
+            return tmp_path
+
+        try:
+            tmp_path = _write_tmp()
+            try:
+                os.replace(tmp_path, self._path)
+            except FileNotFoundError:
+                # A concurrent sweeper removed the tmp between write and
+                # replace (seen live mid-merge-queue). Rewrite once
+                # instead of aborting the caller's queue walk.
+                tmp_path = _write_tmp()
+                os.replace(tmp_path, self._path)
         except Exception:
             if tmp_path and tmp_path.exists():
                 try:

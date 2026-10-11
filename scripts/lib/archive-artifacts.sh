@@ -90,7 +90,10 @@ _archive_artifacts() {
     fi
 
     # Archive scratchpad to plan_dir (sidecar for file plans, folder itself for folder plans).
-    local scratchpad_dir="${REPO_ROOT}/.fno/scratchpad"
+    # The scratchpad lives beside the manifest, in the worktree slice of the
+    # repo's space (init creates both there).
+    local scratchpad_dir
+    scratchpad_dir="$(dirname "$state_file")/scratchpad"
     TARGET_SCRATCHPAD_ARCHIVED=false
     if [[ -d "$scratchpad_dir" ]]; then
         local session_start final_status iteration
@@ -117,7 +120,7 @@ SMEOF
     fi
 
     # Session-aware archival of stale gate artifacts (Phase 2 task 2.3 of
-    # loop-correctness-sweep, ab-83be25ea). Cross-session contamination:
+    # loop-correctness-sweep). Cross-session contamination:
     # if `.fno/artifacts/` carries gate artifacts whose session_id
     # frontmatter does NOT match the live state file's session_id, those
     # artifacts are stranded from a prior session. Move them to
@@ -125,7 +128,8 @@ SMEOF
     # current-session attestations - the gate verifier already filters by
     # session_id, but a janitor pass keeps the disk clean and preserves
     # the prior session's evidence near the plan.
-    local artifacts_dir="${REPO_ROOT}/.fno/artifacts"
+    local artifacts_dir
+    artifacts_dir="$(dirname "$state_file")/artifacts"
     local current_sid
     current_sid=$(sed -n 's/^session_id:[[:space:]]*//p' "$state_file" | head -1 | tr -d '"' \
         | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')

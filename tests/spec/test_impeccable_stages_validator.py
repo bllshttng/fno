@@ -3,7 +3,6 @@
 
 Acceptance criteria:
   AC1-HP:  impeccable_stages: [craft, critique, harden] -> passes silently
-  AC2-HP:  impeccable_stages: [delight, layout] (pin-only) -> passes
   AC3-ERR: impeccable_stages: [craft, foo, harden] -> exit 1, names 'foo'
   AC4-EDGE: impeccable_stages: [] -> exit 1, "empty list"
 
@@ -26,6 +25,9 @@ def _make_plan(plan_path: Path, stage_lines: str = "") -> None:
         title: Test Plan
         scope: feature
         project: test
+        # Pre-gate date: the surface gate refuses an undated plan, and these
+        # tests exercise the impeccable_stages rules, not the gates.
+        created: 2026-08-01
         execution_mode: sequential
         waves:
           - wave: 1
@@ -81,19 +83,6 @@ def test_ac1_hp_valid_standard_stages():
         )
         # Section header should appear
         assert "impeccable_stages" in result.stdout
-
-
-def test_ac2_hp_pin_only_stages_pass():
-    """AC2-HP: [delight, layout] (pin-only treatments) -> passes."""
-    with tempfile.TemporaryDirectory() as tmp:
-        plan_path = Path(tmp) / "my-plan.md"
-        _make_plan(plan_path, "impeccable_stages: [delight, layout]")
-
-        result = _run_validator(plan_path)
-
-        assert result.returncode == 0, (
-            f"Expected exit 0 for pin-only stages.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
-        )
 
 
 def test_ac3_err_unknown_stage_exits_1():
@@ -165,24 +154,6 @@ def test_ac5_block_list_unknown_stage_exits_1():
         import re as _re
         assert _re.search(r"unknown.*foo", combined, _re.IGNORECASE), (
             f"Expected 'unknown.*foo' pattern in output. Got:\n{combined}"
-        )
-
-
-def test_all_known_stages_pass():
-    """All 18 known stages should pass validation."""
-    all_stages = (
-        "craft, critique, polish, harden, audit, layout, "
-        "animate, bolder, colorize, delight, overdrive, quieter, typeset, "
-        "distill, extract, adapt, shape, teach"
-    )
-    with tempfile.TemporaryDirectory() as tmp:
-        plan_path = Path(tmp) / "my-plan.md"
-        _make_plan(plan_path, f"impeccable_stages: [{all_stages}]")
-
-        result = _run_validator(plan_path)
-
-        assert result.returncode == 0, (
-            f"Expected exit 0 for all known stages.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
 
 

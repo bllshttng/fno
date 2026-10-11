@@ -10,10 +10,10 @@ domains:
   {domain-name}:
     phases:
       execute: {skill-name}     # default: fno:execute waves
-      review: {skill-name}      # default: native final-head request-self-review; sigma runs once post-ship only when configured
+      review: {skill-name}      # default: the in-session fno lane (/fno:review <size> --comment; the rounds run before the PR opens)
       validate: {bash-command}  # default: detected from project
-      ship: {skill-name}        # default: fno:pr create
-      external: {skill-name}    # default: fno:pr check
+      ship: {skill-name}        # default: fno:ship pr create
+      external: {skill-name}    # default: fno:ship pr check
       docs: {skill-name}        # default: fno:ship-docs
     allow_claw: true|false      # default: true — set false to block autonomous mode
 ```
@@ -29,10 +29,10 @@ The `code` domain is never declared — it's the implicit fallback. These are it
 | Phase | Default Skill/Command | Purpose |
 |-------|----------------------|---------|
 | execute | `fno:execute waves` | Wave orchestration with TDD |
-| review | `fno do target request-self-review --pr <n>` on the final pushed HEAD (sigma via `fno:review` only when configured) | Code quality + integration tests |
-| validate | *(project-detected)* | `npm run build` / `pytest` / etc. |
-| ship | `fno:pr create` | Create GitHub PR |
-| external | `fno:pr check` | External AI review (Gemini, etc.) |
+| review | `/fno:review <size> --comment` on the final local HEAD, before the PR, in this session (Codex `$fno:review`) | Code quality + integration tests |
+| validate | the tests covering the changed files (`fno doctor test <files>` / `npm run build` / etc.) | Never the whole suite: CI runs it. A whole-suite run that is truly needed starts as a background task so the test:suite queue never blocks the turn |
+| ship | `fno:ship pr create` | Create GitHub PR |
+| external | `fno:ship pr check` | External AI review (Gemini, etc.) |
 | docs | `fno:ship-docs` | Architecture + how-to docs |
 
 ## Resolution Chain
@@ -116,36 +116,9 @@ Controls whether autonomous (unattended) target runs can run for this domain:
 
 Use `allow_claw: false` for domains with real-world consequences (trading, deployments) where human confirmation is critical.
 
-## Model Fallback Chain
+## Model Fallback
 
-Configure automatic model fallback when the primary model hits rate limits or errors:
-
-```yaml
-# In config.toml config section:
-config:
-  model_fallback:
-    chain:
-      - claude-opus-4-6      # primary
-      - claude-sonnet-4-6    # first fallback
-      - claude-haiku-4-5     # emergency fallback
-    retry_on:
-      - rate_limit            # 429
-      - overloaded            # 529
-      - timeout               # connection timeout
-    max_retries_per_model: 2  # tries per model before moving to next
-    cooldown_seconds: 60      # wait before retry on rate limit
-```
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `chain` | `[claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5]` | Ordered model preference |
-| `retry_on` | `[rate_limit, overloaded, timeout]` | Error types that trigger retry/fallback |
-| `max_retries_per_model` | `2` | Attempts per model before falling to next |
-| `cooldown_seconds` | `60` | Wait before retrying on rate limit |
-
-**Interactive (`/target`):** Presents the user with options (wait/switch/pause) via AskUserQuestion.
-
-**Autonomous (unattended):** The external loop script (`scripts/run-target-loop.sh`) handles fallback automatically - detects errors, waits cooldown, retries with `--model` flag, moves through the chain.
+There is no `config.model_fallback` block. Load [references/model-fallback.md](model-fallback.md) for the real interactive-mode boundary: presenting rate-limit/overload options via AskUserQuestion, never an automated chain, login, or model selection.
 
 ## Shell API
 

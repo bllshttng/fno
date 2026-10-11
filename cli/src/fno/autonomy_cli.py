@@ -1,6 +1,6 @@
 """fno agents autonomy status - one table listing every path that can start a
 session without an operator asking: its trigger, its gate key, its resolved
-value, and the precedence rank that supplied it (x-aaaf wave 1).
+value, and the precedence rank that supplied it (x-aaaa wave 1).
 
 The deliverable an operator actually asked for: "what can spawn without me"
 answerable in one command, buildable before any gate is unified (wave 3).
@@ -18,7 +18,8 @@ Exit code is always 0 - this is introspection, never a gate (AC9-ERR).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from functools import lru_cache
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -40,6 +41,16 @@ class SpawnerStatus:
     gate_key: str
     armed: Optional[bool]  # None = ungated (no gate exists yet)
     rank: str  # "env" | "config" | "default" | "autonomy" | "ungated"
+    source: Optional[str] = None  # dispatch source code; None = n/a
+    verb: Optional[str] = None  # dispatch verb code, or "resolved" at runtime
+
+
+@lru_cache(maxsize=1)
+def _provenance_by_spawner() -> dict:
+    # Lazy: an import-time binary exec would break collection on a stale binary.
+    from fno.agents.naming import provenance_rows
+
+    return {row[0]: row for row in provenance_rows()}
 
 
 def _settings_for(project_root: Optional[Path]):
@@ -88,7 +99,7 @@ def _advance_status(project_root: Optional[Path]) -> SpawnerStatus:
 
     armed, rank = _auto_continue_resolve(project_root)
     return SpawnerStatus(
-        "advance (node-walk)", "PR merge (reconcile / /pr merged)",
+        "advance (node-walk)", "PR merge (reconcile / /fno:ship pr merged)",
         "config.auto_continue.enabled", armed, rank,
     )
 
@@ -96,7 +107,7 @@ def _advance_status(project_root: Optional[Path]) -> SpawnerStatus:
 def _dispatch_lanes_status(project_root: Optional[Path]) -> SpawnerStatus:
     # dispatch_lanes has no gate check of its own; every caller invokes it
     # only after auto_continue_enabled() already passed (design doc,
-    # x-aaaf), so its armed state and rank are the SAME resolution.
+    # x-aaaa), so its armed state and rank are the SAME resolution.
     from fno.backlog.advance import _auto_continue_resolve
 
     armed, rank = _auto_continue_resolve(project_root)
@@ -167,7 +178,7 @@ def _pr_watch_status(project_root: Optional[Path]) -> SpawnerStatus:
 
 
 def _recovery_status(project_root: Optional[Path]) -> SpawnerStatus:
-    """x-aaaf wave 3: found while building the registry ratchet (task 3.3) --
+    """x-aaaa wave 3: found while building the registry ratchet (task 3.3) --
     recovery.py's crash-recovery respawn had a real config.recovery.enabled
     gate but was reachable with the master switch off (pr_watch/cli.py checked
     recovery.enabled alone, never autonomy.enabled). Fixed alongside this row."""
@@ -214,22 +225,6 @@ def _keep_going_status(project_root: Optional[Path]) -> SpawnerStatus:
     )
 
 
-def _blueprint_auto_launch_status(project_root: Optional[Path]) -> SpawnerStatus:
-    try:
-        armed, rank = _gate_with_master(
-            project_root, lambda: _settings_for(project_root).target.auto_launch_on_blueprint
-        )
-        return SpawnerStatus(
-            "blueprint auto-launch", "/blueprint completion",
-            "config.target.auto_launch_on_blueprint", armed, rank,
-        )
-    except Exception:  # noqa: BLE001
-        return SpawnerStatus(
-            "blueprint auto-launch", "/blueprint completion",
-            "config.target.auto_launch_on_blueprint", False, "default",
-        )
-
-
 def _groom_status(project_root: Optional[Path]) -> SpawnerStatus:
     try:
         armed, rank = _gate_with_master(
@@ -243,22 +238,6 @@ def _groom_status(project_root: Optional[Path]) -> SpawnerStatus:
         return SpawnerStatus(
             "groom (_spawn_groom_worker)", "fno backlog groom",
             "config.groom.enabled", False, "default",
-        )
-
-
-def _restart_status(project_root: Optional[Path]) -> SpawnerStatus:
-    try:
-        armed, rank = _gate_with_master(
-            project_root, lambda: _settings_for(project_root).restart.enabled
-        )
-        return SpawnerStatus(
-            "restart (_revive_orphans)", "orphan sweep (fno agents restart --mux)",
-            "config.restart.enabled", armed, rank,
-        )
-    except Exception:  # noqa: BLE001
-        return SpawnerStatus(
-            "restart (_revive_orphans)", "orphan sweep (fno agents restart --mux)",
-            "config.restart.enabled", False, "default",
         )
 
 
@@ -276,31 +255,31 @@ def _evals_status(project_root: Optional[Path]) -> SpawnerStatus:
         )
 
 
-def _king_loop_status(project_root: Optional[Path]) -> SpawnerStatus:
-    """The king loop (x-e747), the first row here that is a loop rather than a
+def _lead_loop_status(project_root: Optional[Path]) -> SpawnerStatus:
+    """The lead loop, the first row here that is a loop rather than a
     trigger.
 
     Every other row in this table is woken by an external event: a PR merge, a
     launchd tick, a daemon tick, a node's birth. Not one sustains itself. The
-    table was the honest statement of that gap, so a king row landing in it is
+    table was the honest statement of that gap, so a lead row landing in it is
     the honest statement of the fix.
 
-    One thing this row does NOT claim. A king that terminates cleanly on an
+    One thing this row does NOT claim. A lead that terminates cleanly on an
     empty board EXITS. Nothing here restarts it when the board refills; an
     external watchdog owns that trigger.
     """
     try:
         armed, rank = _gate_with_master(
-            project_root, lambda: _settings_for(project_root).king.enabled
+            project_root, lambda: _settings_for(project_root).lead.enabled
         )
         return SpawnerStatus(
-            "king loop", "board non-empty (stop hook / loop run)",
-            "config.king.enabled", armed, rank,
+            "lead loop", "board non-empty (stop hook / loop run)",
+            "config.lead.enabled", armed, rank,
         )
     except Exception:  # noqa: BLE001
         return SpawnerStatus(
-            "king loop", "board non-empty (stop hook / loop run)",
-            "config.king.enabled", False, "default",
+            "lead loop", "board non-empty (stop hook / loop run)",
+            "config.lead.enabled", False, "default",
         )
 
 
@@ -317,27 +296,37 @@ def collect_status(project_root: Optional[Path] = None) -> list[SpawnerStatus]:
         _pr_watch_status(project_root),
         _recovery_status(project_root),
         _keep_going_status(project_root),
-        _blueprint_auto_launch_status(project_root),
-        # x-aaaf wave 2: previously ungated, now gated - see GroomBlock /
+        # x-aaaa wave 2: previously ungated, now gated - see GroomBlock /
         # RestartBlock / EvalsBlock in fno.config.
         _groom_status(project_root),
-        _restart_status(project_root),
         _evals_status(project_root),
-        _king_loop_status(project_root),
+        _lead_loop_status(project_root),
     ]
-    return rows
+    # stamp each row with its dispatch provenance codes.
+    stamped = []
+    for r in rows:
+        codes = _provenance_by_spawner().get(r.name)
+        stamped.append(replace(r, source=codes[1] if codes else None, verb=codes[2] if codes else None))
+    return stamped
 
 
 def format_table(rows: list[SpawnerStatus]) -> str:
-    headers = ("SPAWNER", "TRIGGER", "GATE KEY", "ARMED", "RANK")
+    headers = ("SPAWNER", "TRIGGER", "GATE KEY", "ARMED", "RANK", "SOURCE", "VERB")
 
     def _armed_cell(v: Optional[bool]) -> str:
         if v is None:
             return "ungated"
         return "true" if v else "false"
 
+    def _code_cell(v: Optional[str]) -> str:
+        return v or "-"
+
     table_rows = [
-        (r.name, r.trigger, r.gate_key, _armed_cell(r.armed), r.rank) for r in rows
+        (
+            r.name, r.trigger, r.gate_key, _armed_cell(r.armed), r.rank,
+            _code_cell(r.source), _code_cell(r.verb),
+        )
+        for r in rows
     ]
     widths = [
         max(len(headers[i]), *(len(row[i]) for row in table_rows)) if table_rows else len(headers[i])

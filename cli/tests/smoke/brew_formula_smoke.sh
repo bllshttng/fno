@@ -54,6 +54,59 @@ fail=0
 pass() { printf 'PASS[%s] %s\n' "$1" "$2"; }
 miss() { printf 'FAIL[%s] %s\n' "$1" "$2"; fail=1; }
 run_capture() { OUT="$("$@" 2>&1)"; RC=$?; return "$RC"; }
+# run_capture_bounded MAX_SECONDS cmd...: run_capture with a wall-clock bound.
+# Homebrew's own fetches (update metadata, bottles) have no mid-transfer
+# deadline, so a stalled ghcr.io/PyPI read would sit silent until the job
+# timeout (the same stall the channel matrix's brew row hit twice on
+# 2026-10-06). A bound here turns that stall into an honest rc=124 the check
+# scores as a channel failure. Standalone copy: this script runs alone on a
+# clean runner, like its own run_capture above.
+BOUND_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-brew-bound.XXXXXX")"
+trap 'rm -f "$BOUND_LOG"' EXIT
+run_capture_bounded() {
+  local max="$1" pid waited=0
+  shift
+  : >"$BOUND_LOG"
+  "$@" >"$BOUND_LOG" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$waited" -ge "$max" ]; then
+      break
+    fi
+    sleep 5
+    waited=$((waited + 5))
+  done
+  if ! kill -0 "$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null
+    RC=$?
+    OUT="$(cat "$BOUND_LOG")"
+    return 0
+  fi
+  # The bound fired. TERM the job AND its live children (brew's auto-update
+  # runs git/curl beneath it), grace-wait, then KILL; no step here can block
+  # past the grace bound.
+  pkill -TERM -P "$pid" 2>/dev/null
+  kill -TERM "$pid" 2>/dev/null
+  local grace=0
+  while kill -0 "$pid" 2>/dev/null && [ "$grace" -lt 10 ]; do
+    sleep 1
+    grace=$((grace + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    pkill -KILL -P "$pid" 2>/dev/null
+    kill -KILL "$pid" 2>/dev/null
+  fi
+  wait "$pid" 2>/dev/null
+  OUT="exceeded the ${max}s bound; last output: $(tail -3 "$BOUND_LOG" | tr '\n' ' ')"
+  RC=124
+}
+# The bound helper self-checks its two modes: a bounded command keeps its real
+# rc, and an overrun is killed at the bound with rc=124. A silent regression
+# here would mis-score the release-gating install leg.
+run_capture_bounded 5 /usr/bin/false
+[ "$RC" -eq 1 ] || { echo "bounded capture lost the real rc (got $RC, want 1)"; exit 1; }
+run_capture_bounded 1 sleep 9
+[ "$RC" -eq 124 ] || { echo "bounded capture did not fire at the bound (got $RC, want 124)"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # STRUCTURAL tier (always)
@@ -77,18 +130,24 @@ need_grep "wheel-file"  'pip".*install.*Dir\["\*\.whl"\]' \
   "pip-installs the wheel FILE, not virtualenv_install_with_resources' unpacked dir"
 need_grep "symlink"     'bin\.install_symlink +Dir\[libexec/"bin/fno-agents\*"\]' \
   "explicitly symlinks the shared_scripts binaries (Locked Decision 4)"
+need_grep "frontdoor"   'bin\.install_symlink +libexec/"bin/fno"' \
+  "symlinks the Rust fno front door onto the keg bin (x-538e)"
 need_grep "test-binaries" 'fno-agents.+fno-agents-daemon.+fno-agents-worker' \
-  "test block asserts all three binaries"
+  "test block asserts all three agent binaries"
+need_grep "test-frontdoor" 'fno mux ls' \
+  "test block proves the front door runs (mux ls)"
 need_grep "license"     'license +"Apache-2\.0"' "declares the license"
 
 # --- check 3: brew style (ignore tap-context-only Sorbet/frozen/PyPiUrls cops) ---
 if command -v brew >/dev/null 2>&1; then
   STYLE="$(brew style "$FORMULA" 2>&1 || true)"
   # Drop the cops a loose-file-outside-a-tap trips but a real tap formula never
-  # needs: Sorbet sigils, frozen-string-literal, and the PyPiUrls cop crash on
-  # the placeholder url. Anything else (ordering, layout, lint) is a real miss.
+  # needs: Sorbet sigils, frozen-string-literal, the PyPiUrls cop crash on
+  # the placeholder url, and DuplicateMethods - which fires only when the LIVE
+  # tap's Fno class is also loaded beside this copy (installed-tap machines).
+  # Anything else (ordering, layout, lint) is a real miss.
   REAL="$(printf '%s' "$STYLE" | grep -E ': [CWE]: ' \
-            | grep -Ev 'Sorbet/|FrozenStringLiteralComment|PyPiUrls' || true)"
+            | grep -Ev 'Sorbet/|FrozenStringLiteralComment|PyPiUrls|Lint/DuplicateMethods' || true)"
   if [ -z "$REAL" ]; then
     pass "style" "no structural style offenses (Sorbet/frozen/PyPiUrls are tap-context noise)"
   else
@@ -152,15 +211,17 @@ class Fno < Formula
   depends_on "python@3.13"
 
   def install
-    system Formula["python@3.13"].opt_bin/"python3.13", "-m", "venv", libexec
+    system formula_opt_bin("python@3.13")/"python3.13", "-m", "venv", libexec
     system libexec/"bin/pip", "install", "--disable-pip-version-check", Dir["*.whl"].first
+    bin.install_symlink libexec/"bin/fno"
     bin.install_symlink libexec/"bin/fno-py"
     bin.install_symlink Dir[libexec/"bin/fno-agents*"]
   end
 
   test do
+    assert_match "[]", shell_output("#{bin}/fno mux ls --json")
     assert_match "fno", shell_output("#{bin}/fno-py --version")
-    %w[fno-agents fno-agents-daemon fno-agents-worker].each do |b|
+    %w[fno fno-py fno-agents fno-agents-daemon fno-agents-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end
@@ -168,7 +229,7 @@ end
 RUBY
 
   # --- check 4: install (no pre-existing fno - guaranteed by the guard above) ---
-  run_capture brew install --build-from-source "$TAP/fno"
+  run_capture_bounded 900 brew install --build-from-source "$TAP/fno"
   if [ "$RC" -eq 0 ]; then
     pass "install" "brew install of the local-wheel formula succeeded (rc=0)"
   else
@@ -177,15 +238,25 @@ RUBY
 
   KEGBIN="$(brew --prefix 2>/dev/null)/bin"
 
-  # --- check 5: all three binaries resolve under the keg bin ---
-  for b in fno-agents fno-agents-daemon fno-agents-worker; do
+  # --- check 5: all four executables resolve under the keg bin ---
+  for b in fno fno-py fno-agents fno-agents-daemon fno-agents-worker; do
     if [ -x "$KEGBIN/$b" ]; then pass "binary:$b" "present + executable on the keg bin"
     else miss "binary:$b" "absent (the explicit symlink must surface the wheel's shared_scripts)"; fi
   done
 
-  # --- check 6: fno-py --version runs (no 127) + brew test passes ---
-  # The keg bin carries `fno-py` (the Python CLI console script); the `fno` mux
-  # front door is a separate binary, not shipped by the brew/py-wheel channel yet.
+  # --- check 6: the advertised command runs (no 127) + brew test passes ---
+  # `fno mux ls` proves the Rust front door natively; fno-py --version proves
+  # the Python component beside it (x-538e AC2-HP).
+  if [ -x "$KEGBIN/fno" ]; then
+    run_capture "$KEGBIN/fno" mux ls
+    if [ "$RC" -eq 0 ]; then
+      pass "mux" "fno mux ls runs from the keg bin (rc=0)"
+    else
+      miss "mux" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
+    fi
+  else
+    miss "mux" "fno front door not on the keg bin at $KEGBIN/fno"
+  fi
   if [ -x "$KEGBIN/fno-py" ]; then
     run_capture "$KEGBIN/fno-py" --version
     if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qi 'fno'; then
@@ -198,7 +269,7 @@ RUBY
   fi
   run_capture brew test "$TAP/fno"
   if [ "$RC" -eq 0 ]; then
-    pass "brew-test" "brew test fno passed (version + three binaries)"
+    pass "brew-test" "brew test fno passed (mux + version + the full binary set)"
   else
     miss "brew-test" "rc=$RC out: $(printf '%s' "$OUT" | tail -4)"
   fi
@@ -208,11 +279,12 @@ RUBY
   # -e follows symlinks (a broken/orphaned symlink reads as absent), so also
   # check -L to catch a symlink brew left behind pointing at a removed keg.
   if [ "$RC" -eq 0 ] \
+     && [ ! -e "$KEGBIN/fno" ] && [ ! -L "$KEGBIN/fno" ] \
      && [ ! -e "$KEGBIN/fno-py" ] && [ ! -L "$KEGBIN/fno-py" ] \
      && [ ! -e "$KEGBIN/fno-agents" ] && [ ! -L "$KEGBIN/fno-agents" ]; then
     pass "uninstall" "brew uninstall removed the keg + symlinks cleanly"
   else
-    miss "uninstall" "rc=$RC; keg bin still has fno/fno-agents after uninstall"
+    miss "uninstall" "rc=$RC; keg bin still has fno/fno-py/fno-agents after uninstall"
   fi
 fi
 

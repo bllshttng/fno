@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/lib/drive-authority.sh
-# Operator-authority enforcement seam (Phase 6 Wave 8, cv-b36e32b1).
+# Superuser-authority enforcement seam (Phase 6 Wave 8, cv-b36e32b1).
 #
 # When an operator holds an interactive/step/paranoid drive window on any agent
 # (design LD3/LD29), the bytes flowing into that agent's PTY were authored by
@@ -9,10 +9,10 @@
 # operator-initiated and MUST NOT be honored as LLM authorship.
 #
 # Detection is delegated to the shipped primitive `fno agents drive-authority`
-# (Wave 4, ab-8d258ddb): `--json` reports every open authority window
+# (Wave 4): `--json` reports every open authority window
 # (interactive/step/paranoid; "watch" is read-only and excluded), reading each
 # agent's daemon-owned state.json. This module is the bash consumption seam the
-# Python-layer stop hook + graph-write-protect hook call.
+# Python-layer stop hook + write-gate hook call.
 #
 # ── Session scoping by per-agent identity (cv-140f09c3) ─────────────────────
 # `fno agents drive-authority` reports windows MACHINE-WIDE: every agent under
@@ -25,7 +25,7 @@
 # <promise> into THIS transcript. We scope to that agent by IDENTITY, not by
 # cwd: the PTY worker stamps the agent's short_id into the child's environment
 # as FNO_AGENTS_SELF_SHORT_ID (crates/fno-agents/src/worker.rs), and the child
-# (claude/codex) plus any Stop / graph-write-protect hook it spawns inherit it.
+# (claude/codex) plus any Stop / write-gate hook it spawns inherit it.
 # The guard fires only when an open authority window targets that same short_id.
 #
 # Identity beats cwd on both correctness fronts that scoped this before:
@@ -44,7 +44,7 @@
 # cost of not refusing an operator-typed promise on a genuinely-driven session.
 
 # drive_authority_active
-#   rc 0  an operator authority window is open ON THIS SESSION'S AGENT
+#   rc 0  a superuser authority window is open ON THIS SESSION'S AGENT
 #         (a window whose short_id == $FNO_AGENTS_SELF_SHORT_ID)
 #   rc 1  no such window, OR self-identity unknown / fno|jq absent (fail-open)
 #

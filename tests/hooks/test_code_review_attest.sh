@@ -85,6 +85,9 @@ BIN="$TMP/bin"
 mkdir -p "$BIN"
 EMITTED="$TMP/emitted.jsonl"
 CLASSIFY_MARKER="$TMP/classify.ran"
+CLAIM_JSON="$TMP/claims.json"
+RELEASED="$TMP/released.txt"
+printf '%s\n' '[]' > "$CLAIM_JSON"
 export CLASSIFY_PYTHONPATH="$REPO_ROOT/cli/src"
 # The interpreter that can import the real classifier, chosen POSITIVELY and
 # proven before any case runs.
@@ -127,16 +130,36 @@ if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; t
   printf '%s\n' "\$*" >> "$EMITTED"
   exit 0
 fi
+if [[ "\${1:-}" == "agents" && "\${2:-}" == "claim" && "\${3:-}" == "list" ]]; then
+  [[ "\${FNO_TEST_CLAIM_LIST_FAIL:-}" == "1" ]] && exit 19
+  [[ "\${FNO_TEST_CLAIM_LIST_MALFORMED:-}" == "1" ]] && printf '%s\n' '{malformed' && exit 0
+  [[ "\${FNO_TEST_CLAIM_ROW_MALFORMED:-}" == "1" ]] \
+    && printf '%s\n' '[{"key":"review:branch:feat/x","holder":"review-session:S","expired":false,"acquired_at":1,"metadata":"broken"}]' \
+    && exit 0
+  [[ "\${FNO_TEST_CLAIM_KEY_EMPTY:-}" == "1" ]] \
+    && printf '%s\n' '[{"key":"review:branch:","holder":"review-session:S","expired":false,"acquired_at":1,"metadata":{"head_sha":"deadbeef","invocation_id":"ri-test"}}]' \
+    && exit 0
+  cat "$CLAIM_JSON"
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "release" ]]; then
+  printf '%s\n' "\$*" >> "$RELEASED"
+  exit 0
+fi
 if [[ "\${1:-}" == "do" && "\${2:-}" == "review" && "\${3:-}" == "classify" ]]; then
-  f=""; shift 3
+  f=""; attest=""; contract="json_block"; xctx="inline"; ctx="unknown"; shift 3
   while [[ \$# -gt 0 ]]; do
     case "\$1" in
       --findings-file) f="\$2"; shift 2 ;;
+      --attest) attest="\$2"; shift 2 ;;
+      --output-contract) contract="\$2"; shift 2 ;;
+      --execution-context) xctx="\$2"; shift 2 ;;
+      --reviewer-context) ctx="\$2"; shift 2 ;;
       *) shift ;;
     esac
   done
   printf '%s\n' "\$f" >> "$CLASSIFY_MARKER"
-  PYTHONPATH="\$CLASSIFY_PYTHONPATH" "\$CLASSIFY_PYTHON" - "\$f" <<'PY'
+  record="\$(PYTHONPATH="\$CLASSIFY_PYTHONPATH" "\$CLASSIFY_PYTHON" - "\$f" <<'PY'
 import json, sys
 from fno.review.cli import build_emit_record, RecordBuildError
 with open(sys.argv[1], encoding="utf-8") as fh:
@@ -147,20 +170,44 @@ except RecordBuildError as exc:
     print(f"classify: {exc}", file=sys.stderr)
     raise SystemExit(2)
 PY
-  exit \$?
+)" || exit \$?
+  if [[ -n "\$attest" ]]; then
+    # The shell delegates its findings-path emit to `classify --attest`; the
+    # stub mirrors the verb contract: verdict measured from the classified
+    # record, written as the one emit line the assertions grep. The injected
+    # emit failure fires here too, exactly as it does on the sink branch.
+    if [[ "\${FNO_TEST_EMIT_FAIL:-}" == "1" ]]; then
+      echo "injected event emit failure" >&2
+      exit 17
+    fi
+    if [[ "\$contract" == "prose_unparseable" ]]; then
+      verdict="fail"
+    else
+      verdict="\$(jq -r 'if (.findings_blocking // 1) == 0 then "pass" else "fail" end' <<<"\$record")"
+    fi
+    payload="\$(jq -cn --argjson rec "\$record" --arg verdict "\$verdict" --arg reviewer "\$attest" \
+      --arg contract "\$contract" --arg xctx "\$xctx" --arg ctx "\$ctx" \
+      '{reviewer:\$reviewer,head_sha:"stub",verdict:\$verdict,session_id:"",output_contract:\$contract,execution_context:\$xctx,reviewer_context:\$ctx} + \$rec')"
+    printf '%s\n' "doctor event emit -t review_attestation -s target -d \$payload" >> "$EMITTED"
+  fi
+  echo "\$record"
+  exit 0
 fi
 exit 0
 STUB
 chmod +x "$BIN/fno-stub"
 
 HOOK_STDOUT="$TMP/hook-stdout.txt"
+HOOK_STDERR="$TMP/hook-stderr.txt"
 
 run_hook() {
   # $1 = payload JSON on stdin
   : > "$EMITTED"
   : > "$CLASSIFY_MARKER"
+  : > "$RELEASED"
   : > "$HOOK_STDOUT"
-  printf '%s' "$1" | FNO="$BIN/fno-stub" bash "$HOOK" >"$HOOK_STDOUT" 2>/dev/null
+  : > "$HOOK_STDERR"
+  printf '%s' "$1" | FNO="$BIN/fno-stub" bash "$HOOK" >"$HOOK_STDOUT" 2>"$HOOK_STDERR"
 }
 
 attested() { [[ -s "$EMITTED" ]]; }
@@ -192,6 +239,16 @@ expect_silent_noclassify() {
   if classified; then fail "$1: silent but the classifier ran"; else pass "$1: silent, classifier never ran"; fi
 }
 
+# Codex Stop stdout must be one JSON object or nothing; the attestation
+# status line lives on stderr, so an attesting run leaves stdout empty.
+expect_stop_stdout_empty() {
+  if [[ -s "$HOOK_STDOUT" ]]; then
+    fail "$1: stdout not empty (Codex Stop requires JSON or nothing): $(cat "$HOOK_STDOUT")"
+  else
+    pass "$1: stdout empty"
+  fi
+}
+
 post_tool_use() {
   # $1 = tool name, $2 = tool_input JSON
   jq -nc --arg cwd "$WORK" --arg tool "$1" --argjson ti "$2" \
@@ -200,8 +257,10 @@ post_tool_use() {
 
 subagent_stop() {
   # $1 = description (may be empty), $2 = last assistant message
-  jq -nc --arg cwd "$WORK" --arg desc "$1" --arg msg "$2" \
-    '{hook_event_name:"SubagentStop", cwd:$cwd, agent_name:$desc, last_assistant_message:$msg}'
+  local session="${3-}"
+  jq -nc --arg cwd "$WORK" --arg desc "$1" --arg msg "$2" --arg session "$session" \
+    '{hook_event_name:"SubagentStop", cwd:$cwd, agent_name:$desc, last_assistant_message:$msg}
+     + (if $session == "" then {} else {session_id:$session} end)'
 }
 
 codex_item_completed() {
@@ -338,15 +397,16 @@ grep -q '"findings_nonblocking":1' "$EMITTED" \
 [[ "$(grep -c '"stage":"started"' "$EMITTED" || true)" == "1" ]] \
   && pass "ac3hp one reviewer observation row" \
   || fail "ac3hp emitted $(grep -c '"stage":"started"' "$EMITTED" || true) reviewer rows"
-grep -q 'classified 2 finding(s): 1 blocking, 1 non-blocking' "$HOOK_STDOUT" \
-  && pass "ac3hp stdout carries the classification line" \
-  || fail "ac3hp classification line missing: $(cat "$HOOK_STDOUT")"
+grep -q 'classified 2 finding(s): 1 blocking, 1 non-blocking' "$HOOK_STDERR" \
+  && pass "ac3hp stderr carries the classification line" \
+  || fail "ac3hp classification line missing: $(cat "$HOOK_STDERR")"
 
 echo "== Codex Stop: exact-turn structured review evidence =="
 CODEX_TURN="turn-clean"
 CODEX_CLEAN_ITEM="$(codex_item_completed "$CODEX_TURN" '{"findings":[]}')"
 run_hook "$(codex_stop "$CODEX_CLEAN_ITEM" "$CODEX_TURN" "no findings")"
 expect_attest_verdict "codex-stop-empty-findings" pass
+expect_stop_stdout_empty "codex-stop-empty-findings"
 
 CODEX_DIRECT_CLEAN="$(codex_exited_review_mode "$CODEX_TURN" '{"findings":[]}')"
 run_hook "$(codex_stop "$CODEX_DIRECT_CLEAN" "$CODEX_TURN" "no findings")"
@@ -355,6 +415,7 @@ expect_attest_verdict "codex-stop-direct-empty-findings" pass
 CODEX_DIRTY_ITEM="$(codex_item_completed "$CODEX_TURN" '{"findings":[{"file":"a.py","summary":"boom"}]}')"
 run_hook "$(codex_stop "$CODEX_DIRTY_ITEM" "$CODEX_TURN" "no findings")"
 expect_attest_verdict "codex-stop-nonempty-findings" fail
+expect_stop_stdout_empty "codex-stop-nonempty-findings"
 
 CODEX_DIRECT_DIRTY="$(codex_exited_review_mode "$CODEX_TURN" '{"findings":[{"file":"a.py","summary":"boom"}]}')"
 run_hook "$(codex_stop "$CODEX_DIRECT_DIRTY" "$CODEX_TURN" "no findings")"
@@ -395,7 +456,7 @@ expect_silent "codex-stop-prose-without-structured-review"
 # --- THE VERDICT CORPUS (tests/hooks/fixtures/code-review-attest) ----------
 # One byte-exact file per measured final-text shape, the ruled verdict encoded
 # in the filename suffix (.attest / .unparseable / .silent). The walker drives
-# over every file, so the suite is pinned to the MEASURED PAYLOADS rather than
+# over every file manifest.json rules, so the suite is pinned to the MEASURED PAYLOADS rather than
 # to the predicate: flipping the hook's rule without re-measuring the corpus
 # goes red here (the negative control: flip the rule, watch this walk go red,
 # revert). The payloads live in files because a retyped copy drifts - the live
@@ -409,10 +470,33 @@ CORPUS_TX="$CORPUS_DIR/agent-c0rpu5.jsonl"
 jq -nc '{forkedSkill:true, skillName:"code-review"}' \
   > "$CORPUS_DIR/agent-c0rpu5.forked-skill.marker.json"
 
+# The corpus is enumerated by manifest.json, never by a glob over the directory.
+# A glob lets any file on disk cast a ruling. Commit 59697cfa3 renamed six
+# fixtures from .silent to .unparseable, and the six .silent paths stayed on
+# disk untracked afterwards. Each one then asserted the exact contract its own
+# rename had reversed, so this suite read 58 pass / 6 fail on that machine while
+# CI stayed green, because CI checks out clean. A red nobody else can reproduce
+# is the worst kind. The manifest is the ruling; the directory must agree with
+# it in both directions, so a fixture added without a ruling also goes red.
+MANIFEST="$FIXTURES/manifest.json"
+manifest_names="$(jq -r '.shapes | keys[]' "$MANIFEST" | sort)"
+disk_names="$(cd "$FIXTURES" && ls | grep -E '\.(attest|unparseable|silent)$' | sort)"
+if [[ "$manifest_names" == "$disk_names" ]]; then
+  pass "corpus: manifest.json and the fixtures directory name the same files"
+else
+  fail "corpus: manifest and directory disagree
+  only in manifest: $(comm -23 <(printf '%s\n' "$manifest_names") <(printf '%s\n' "$disk_names") | tr '\n' ' ')
+  only on disk:     $(comm -13 <(printf '%s\n' "$manifest_names") <(printf '%s\n' "$disk_names") | tr '\n' ' ')"
+fi
+
 echo "== The verdict corpus: every measured shape, ruled by filename =="
-for fixture in "$FIXTURES"/*.attest "$FIXTURES"/*.unparseable "$FIXTURES"/*.silent; do
-  [[ -f "$fixture" ]] || continue
-  name="$(basename "$fixture")"
+# while-read, never a bare for: a manifest key with whitespace in it must
+# arrive as ONE name (and fail the -f check on its own), not word-split into
+# two bogus names.
+while IFS= read -r name; do
+  [[ -n "$name" ]] || continue
+  fixture="$FIXTURES/$name"
+  [[ -f "$fixture" ]] || { fail "corpus $name: ruled by the manifest, missing on disk"; continue; }
   payload="$(jq -nc --arg cwd "$WORK" --arg tp "$CORPUS_TX" --rawfile msg "$fixture" \
     '{hook_event_name:"SubagentStop", cwd:$cwd, agent_type:"general-purpose",
       agent_id:"c0rpu5", agent_transcript_path:$tp, last_assistant_message:$msg}')"
@@ -441,7 +525,7 @@ for fixture in "$FIXTURES"/*.attest "$FIXTURES"/*.unparseable "$FIXTURES"/*.sile
       if attested; then fail "corpus $name: attested (ruled silent)"; else pass "corpus $name: silent"; fi
       ;;
   esac
-done
+done <<< "$manifest_names"
 
 echo "== A prose review the SIZE of the measured ones still attests =="
 # The three live forks that motivated x-c446 ended in 3497, 2531 and 3357
@@ -480,12 +564,12 @@ expect_attest_verdict "header-opens-message" pass
 PARTIAL_FINDINGS=$'## Review findings\n\n```json\n[{"file":"a.py","summary":"boom","failure_scenario":"the review lost its completion path"}]\n```'
 run_hook "$(forked_skill_stop "$PARTIAL_FINDINGS" "code-review")"
 expect_attest_verdict "subagent-nonempty-findings" fail
-grep -q "classified 1 finding(s): 1 blocking, 0 non-blocking" "$HOOK_STDOUT" \
+grep -q "classified 1 finding(s): 1 blocking, 0 non-blocking" "$HOOK_STDERR" \
   && pass "subagent partial receipt carries finding count" \
-  || fail "subagent partial receipt lost finding count: $(cat "$HOOK_STDOUT")"
-grep -q "reviewed head $WORK_HEAD" "$HOOK_STDOUT" \
+  || fail "subagent partial receipt lost finding count: $(cat "$HOOK_STDERR")"
+grep -q "reviewed head $WORK_HEAD" "$HOOK_STDERR" \
   && pass "subagent partial receipt carries reviewed head" \
-  || fail "subagent partial receipt lost reviewed head: $(cat "$HOOK_STDOUT")"
+  || fail "subagent partial receipt lost reviewed head: $(cat "$HOOK_STDERR")"
 
 : > "$HOOK_STDOUT"
 : > "$TMP/hook-stderr.txt"
@@ -614,6 +698,132 @@ elif ! grep -q 'prose_unparseable' "$EMITTED"; then
   fail "second-fence-nonempty: attested without output_contract=prose_unparseable: $(cat "$EMITTED")"
 else
   pass "second-fence-nonempty: attested fail/prose_unparseable, later fence never read as findings"
+fi
+
+echo "== SubagentStop: the held review checkout is the emit target =="
+git -C "$WORK" checkout -q -B main "$(git -C "$WORK" rev-parse HEAD~1)"
+git -C "$WORK" branch -f feat/x "$WORK_HEAD"
+git -C "$WORK" worktree add "$TMP/held" feat/x >/dev/null
+HOLD_HEAD="$WORK_HEAD"
+jq -nc --arg head "$HOLD_HEAD" '[{
+  key:"review:branch:feat/x", holder:"review-session:S", state:"live",
+  expired:false, acquired_at:1,
+  metadata:{head_sha:$head, invocation_id:"ri-held"}
+}]' > "$CLAIM_JSON"
+
+run_hook "$(subagent_stop "" "$PARTIAL_FINDINGS" S)"
+HOLD_HP_RC=$?
+if [[ "$HOLD_HP_RC" == "0" ]] \
+  && grep -q 'review_attestation' "$EMITTED" \
+  && grep -q 'feat/x' "$EMITTED" \
+  && grep -q 'review-hold release --branch feat/x' "$RELEASED"; then
+  pass "held checkout emits feat/x and releases the hold"
+else
+  fail "held checkout did not emit/release: rc=$HOLD_HP_RC emitted=$(cat "$EMITTED") released=$(cat "$RELEASED")"
+fi
+
+git -C "$WORK" worktree remove -f "$TMP/held" >/dev/null 2>&1
+set +e
+run_hook "$(subagent_stop "" "$PARTIAL_FINDINGS" S)"
+NO_WT_RC=$?
+set -e
+if [[ "$NO_WT_RC" == "2" ]] \
+  && grep -q 'review_invocation' "$EMITTED" \
+  && grep -q 'target_not_checked_out' "$EMITTED" \
+  && grep -q 'ri-held' "$EMITTED" \
+  && ! grep -q 'review_attestation' "$EMITTED" \
+  && grep -q 'feat/x' "$RELEASED" \
+  && grep -q 'feat/x' "$HOOK_STDERR"; then
+  pass "missing held checkout refuses, records, and releases"
+else
+  fail "missing held checkout contract failed: rc=$NO_WT_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR") released=$(cat "$RELEASED")"
+fi
+
+git -C "$WORK" worktree add "$TMP/held" feat/x >/dev/null
+echo moved >> "$TMP/held/a.txt"
+git -C "$TMP/held" add a.txt
+git -C "$TMP/held" commit -qm moved
+set +e
+run_hook "$(subagent_stop "" "$PARTIAL_FINDINGS" S)"
+MOVED_RC=$?
+set -e
+if [[ "$MOVED_RC" == "2" ]] \
+  && grep -q 'target_head_moved' "$EMITTED" \
+  && ! grep -q 'review_attestation' "$EMITTED" \
+  && grep -q 'feat/x' "$HOOK_STDERR"; then
+  pass "moved held checkout refuses without attesting"
+else
+  fail "moved held checkout contract failed: rc=$MOVED_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR")"
+fi
+git -C "$WORK" worktree remove -f "$TMP/held" >/dev/null 2>&1
+printf '%s\n' '[]' > "$CLAIM_JSON"
+
+: > "$EMITTED"
+: > "$CLASSIFY_MARKER"
+set +e
+printf '%s' "$(subagent_stop "" "$PARTIAL_FINDINGS" S)" \
+  | FNO="$BIN/fno-stub" FNO_TEST_CLAIM_LIST_FAIL=1 bash "$HOOK" \
+    >"$HOOK_STDOUT" 2>"$HOOK_STDERR"
+CLAIM_READ_RC=$?
+set -e
+if [[ "$CLAIM_READ_RC" == "2" ]] \
+  && [[ ! -s "$EMITTED" ]] \
+  && [[ ! -s "$CLASSIFY_MARKER" ]] \
+  && grep -q 'claim could not be read' "$HOOK_STDERR"; then
+  pass "claim-reader failure refuses before wrong-checkout attestation"
+else
+  fail "claim-reader failure was not fail-closed: rc=$CLAIM_READ_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR")"
+fi
+
+: > "$EMITTED"
+: > "$CLASSIFY_MARKER"
+set +e
+printf '%s' "$(subagent_stop "" "$PARTIAL_FINDINGS" S)" \
+  | FNO="$BIN/fno-stub" FNO_TEST_CLAIM_LIST_MALFORMED=1 bash "$HOOK" \
+    >"$HOOK_STDOUT" 2>"$HOOK_STDERR"
+CLAIM_MALFORMED_RC=$?
+set -e
+if [[ "$CLAIM_MALFORMED_RC" == "2" ]] \
+  && [[ ! -s "$EMITTED" ]] \
+  && [[ ! -s "$CLASSIFY_MARKER" ]] \
+  && grep -q 'claim was malformed' "$HOOK_STDERR"; then
+  pass "malformed claim data refuses before wrong-checkout attestation"
+else
+  fail "malformed claim data was not fail-closed: rc=$CLAIM_MALFORMED_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR")"
+fi
+
+: > "$EMITTED"
+: > "$CLASSIFY_MARKER"
+set +e
+printf '%s' "$(subagent_stop "" "$PARTIAL_FINDINGS" S)" \
+  | FNO="$BIN/fno-stub" FNO_TEST_CLAIM_ROW_MALFORMED=1 bash "$HOOK" \
+    >"$HOOK_STDOUT" 2>"$HOOK_STDERR"
+CLAIM_ROW_MALFORMED_RC=$?
+set -e
+if [[ "$CLAIM_ROW_MALFORMED_RC" == "2" ]] \
+  && [[ ! -s "$EMITTED" ]] \
+  && [[ ! -s "$CLASSIFY_MARKER" ]] \
+  && grep -q 'claim row was malformed' "$HOOK_STDERR"; then
+  pass "malformed claim row refuses before wrong-checkout attestation"
+else
+  fail "malformed claim row was not fail-closed: rc=$CLAIM_ROW_MALFORMED_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR")"
+fi
+
+: > "$EMITTED"
+: > "$CLASSIFY_MARKER"
+set +e
+printf '%s' "$(subagent_stop "" "$PARTIAL_FINDINGS" S)" \
+  | FNO="$BIN/fno-stub" FNO_TEST_CLAIM_KEY_EMPTY=1 bash "$HOOK" \
+    >"$HOOK_STDOUT" 2>"$HOOK_STDERR"
+CLAIM_KEY_EMPTY_RC=$?
+set -e
+if [[ "$CLAIM_KEY_EMPTY_RC" == "2" ]] \
+  && [[ ! -s "$EMITTED" ]] \
+  && [[ ! -s "$CLASSIFY_MARKER" ]] \
+  && grep -q 'claim row was malformed' "$HOOK_STDERR"; then
+  pass "empty claim branch refuses before wrong-checkout attestation"
+else
+  fail "empty claim branch was not fail-closed: rc=$CLAIM_KEY_EMPTY_RC emitted=$(cat "$EMITTED") stderr=$(cat "$HOOK_STDERR")"
 fi
 
 echo ""

@@ -1,6 +1,6 @@
 # Cross-project inbox: fleet substrate
 
-The inbox lets four agent roles (footnote, acme-web, example-pipeline, marketing) communicate across projects with traceable, idempotent message delivery. Megawalk drains each project's inbox at the top of every iteration so cross-project knowledge survives session compaction, project boundaries, and offline windows.
+The inbox lets four agent roles (footnote, acme-web, example-pipeline, marketing) communicate across projects with traceable, idempotent message delivery. The retired megawalk walker drained each project's inbox at the top of every iteration. Recipients drain with `fno agents mail drain` today. The mechanism keeps cross-project knowledge surviving session compaction, project boundaries, and offline windows.
 
 > **Note (2026-06):** the headless `fno watch` launchd drain daemon (`scripts/fno-watch.sh`, the `com.fno.watch` plist, `install-drain-prompt.sh`), the in-session unread-mail wake hooks, and archive rotation (`inbox/archive.py`) were removed. The cross-session relay supersedes the autonomous-push use case; recipients drain with `fno agents mail drain` (manual or via an autonomous worker). The headless-drain subsection below is retained for historical context only. Megawalk itself was also cut earlier, so its Step 0 drain is historical too. Operators who previously ran `fno watch install` should remove the now-orphaned launchd job once; see the migration note in `docs/guides/cross-project-inbox.md`.
 
@@ -70,7 +70,7 @@ The system rides on two storage layers that already existed for related but dist
 **graph.json** stays the source of truth for *work*. A new graph entry represents a feature that should ship. The plan adds four nullable provenance fields to every entry so the work can carry a "where did this come from" trail:
 
 ```yaml
-source_kind: organic | from_inbox | from_observation | from_supervisor
+source_kind: organic | from_inbox | from_observation | from_supervisor | operator_request
 source_project: example-pipeline            # who told us about it
 source_session_id: 20260504T235919Z-...      # target session that produced the heads-up
 source_inbox_msg: msg-a4f1b2                 # the inbox message that triggered triage

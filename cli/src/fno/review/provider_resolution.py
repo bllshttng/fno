@@ -1,4 +1,4 @@
-"""Per-agent provider resolution for the cross-model review panel (ab-6c8f4c61).
+"""Per-agent provider resolution for the cross-model review panel.
 
 Resolves which provider kind (``claude`` | ``codex`` | ``gemini``) each review
 agent runs on, given the operator's ``config.review.agent_harnesses`` map and
@@ -174,33 +174,6 @@ def resolve_agent_provider(
     )
 
 
-def resolve_panel_providers(
-    agents: Sequence[str],
-    *,
-    agent_providers: dict[str, str],
-    implementer_provider: str,
-    available_providers: Sequence[str],
-    known_agents: Sequence[str] | None = None,
-) -> dict[str, ResolvedProvider]:
-    """Resolve every panel ``agent`` to a provider. The single resolution path.
-
-    A thin map over :func:`resolve_agent_provider` so the ``fno do review`` panel
-    (``build_review_runner``) and the ``/review sigma`` skill (via
-    ``fno do review --print-providers``) resolve through ONE code path - the
-    "one resolution path, no drift" invariant. Never raises.
-    """
-    return {
-        agent: resolve_agent_provider(
-            agent,
-            agent_providers=agent_providers,
-            implementer_provider=implementer_provider,
-            available_providers=available_providers,
-            known_agents=known_agents,
-        )
-        for agent in agents
-    }
-
-
 # ---------------------------------------------------------------------------
 # I/O wrappers (production wiring) - thin, defensive, reuse the substrate.
 # ---------------------------------------------------------------------------
@@ -337,7 +310,7 @@ def available_provider_kinds(
         if not locked:
             kinds.append(kind)
 
-    # Quota-aware ordering (x-5d3e): stably demote a kind whose provider
+    # Quota-aware ordering: stably demote a kind whose provider
     # records are ALL exhausted below kinds that still have headroom, so an
     # `alternate` agent prefers a provider that can actually serve. UNKNOWN
     # keeps its place (no snapshot -> order unchanged, backward compatible).

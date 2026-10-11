@@ -10,7 +10,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-GUARD="${REPO_ROOT}/hooks/graph-write-protect.sh"
+GUARD="${REPO_ROOT}/hooks/write-gate.sh"
 
 PASS=0; FAIL=0
 pass() { PASS=$((PASS+1)); printf '[gwp] PASS: %s\n' "$*"; }
@@ -54,6 +54,28 @@ expect "AC1-HP: jq -i graph.json" block \
 # ── AC2-HP: Bash redirect to target-state.md is blocked ───────────────────────
 expect "AC2-HP: >> target-state.md" block \
   '{"tool_name":"Bash","tool_input":{"command":"echo '\''auto_merge_approved: true'\'' >> .fno/target-state.md"}}'
+
+# ── Space-path arms: both real manifest shapes after the spaces move ──────────
+expect "gwp: >> space-root manifest" block \
+  '{"tool_name":"Bash","tool_input":{"command":"echo '\''auto_merge_approved: true'\'' >> /home/u/.fno/spaces/proj-1234abcd/target-state.md"}}'
+expect "gwp: >> worktree-slice manifest" block \
+  '{"tool_name":"Bash","tool_input":{"command":"echo '\''auto_merge_approved: true'\'' > /home/u/.fno/spaces/proj-1234abcd/worktrees/wt/target-state.md"}}'
+expect "gwp: tee into space manifest" block \
+  '{"tool_name":"Bash","tool_input":{"command":"printf x | tee /home/u/.fno/spaces/proj-1234abcd/worktrees/wt/target-state.md"}}'
+expect "gwp: sed -i on space manifest" block \
+  '{"tool_name":"Bash","tool_input":{"command":"sed -i s/a/b/ /home/u/.fno/spaces/proj-1234abcd/worktrees/wt/target-state.md"}}'
+
+# ── Wave 10.1: graph.db and its WAL siblings join the protected family ────────
+expect "gwp: >> graph.db" block \
+  '{"tool_name":"Bash","tool_input":{"command":"echo x > ~/.fno/graph.db"}}'
+expect "gwp: cp into graph.db-shm" block \
+  '{"tool_name":"Bash","tool_input":{"command":"cp staged ~/.fno/graph.db-shm"}}'
+expect "gwp: Edit graph.db" block \
+  '{"tool_name":"Edit","tool_input":{"file_path":"/proj/.fno/graph.db","old_string":"a","new_string":"b"}}'
+expect "gwp: Edit graph.db-wal" block \
+  '{"tool_name":"Edit","tool_input":{"file_path":"/proj/.fno/graph.db-wal","old_string":"a","new_string":"b"}}'
+expect "gwp: backups/ graph.db.<stamp> snapshot stays editable" approve \
+  '{"tool_name":"Edit","tool_input":{"file_path":"/proj/.fno/backups/graph.db.20260914T120000000000","old_string":"a","new_string":"b"}}'
 
 # ── AC3-HP: Edit to target-state.md blocked (unconditional immutability) ──────
 expect "AC3-HP: Edit target-state.md" block \
@@ -118,18 +140,27 @@ expect "unrelated Edit approved" approve \
   '{"tool_name":"Edit","tool_input":{"file_path":"/proj/src/main.py","old_string":"a","new_string":"b"}}'
 
 # An artifact edit during this agent's drive window is allowed and emits the
-# canonical operator audit event rather than the legacy event shape.
+# canonical operator audit event rather than the legacy event shape. The gate
+# reads drive windows from the native agents store, so the fixture plants one
+# agent whose state.json holds an open interactive window for this session's
+# short id.
 _DRIVE_STUB=$(mktemp -d)
-_DRIVE_EVENTS="$_DRIVE_STUB/events.jsonl"
-cat > "$_DRIVE_STUB/fno" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' '{"sessions":[{"short_id":"drive-test"}]}'
-SH
-chmod +x "$_DRIVE_STUB/fno"
+_DRIVE_EVENTS="$_DRIVE_STUB/journal/events.jsonl"
+# The journal lives under its own directory, disjoint from the agents-home
+# parent: the store routes to the state root only when the journal sits in
+# the agents-home's parent, and this read must answer the same rows on a
+# reader that predates the routing.
+mkdir -p "$_DRIVE_STUB/journal" "$_DRIVE_STUB/agents/drive-agent"
+printf '%s\n' '{"short_id":"drive-test","pty":{"drive_active":true,"drive_mode":"interactive","drive_session_id":"s-drive"}}' \
+  > "$_DRIVE_STUB/agents/drive-agent/state.json"
 _DRIVE_OUT=$(printf '%s' '{"tool_name":"Edit","tool_input":{"file_path":"/proj/.fno/artifacts/proof.md","old_string":"a","new_string":"b"}}' \
-  | PATH="$_DRIVE_STUB:$PATH" FNO_AGENTS_SELF_SHORT_ID=drive-test EVENTS_FILE="$_DRIVE_EVENTS" bash "$GUARD" 2>/dev/null)
+  | FNO_AGENTS_HOME="$_DRIVE_STUB/agents" FNO_AGENTS_SELF_SHORT_ID=drive-test \
+    FNO_EVENTS_PATH="$_DRIVE_EVENTS" bash "$GUARD" 2>/dev/null)
 if [[ "$_DRIVE_OUT" == "{}" ]] \
-  && jq -e 'select(.type == "operator_initiated" and .source == "hook" and .data.action_type == "artifact_edited_operator_initiated" and .data.file_path == "/proj/.fno/artifacts/proof.md")' "$_DRIVE_EVENTS" >/dev/null 2>&1; then
+  && _ROWS_BIN="${FNO_ROWS_BIN:-${FNO_BIN:-${REPO_ROOT}/crates/fno/target/debug/fno}}" \
+  && [[ -x "$_ROWS_BIN" ]] \
+  && "$_ROWS_BIN" doctor event rows --events "$_DRIVE_EVENTS" 2>/dev/null \
+     | jq -e '.[] | fromjson | select(.type == "operator_initiated" and .source == "hook" and .data.action_type == "artifact_edited_operator_initiated" and .data.file_path == "/proj/.fno/artifacts/proof.md")' >/dev/null 2>&1; then
   pass "artifact edit emits canonical operator audit"
 else
   fail "artifact edit canonical operator audit: verdict=$_DRIVE_OUT events=$(cat "$_DRIVE_EVENTS" 2>/dev/null)"
@@ -164,6 +195,18 @@ expect "P1 quoted redirect \$HOME blocked" block \
   '{"tool_name":"Bash","tool_input":{"command":"echo x > \"$HOME/.fno/graph.json\""}}'
 expect "P1 quoted tee ./ blocked" block \
   '{"tool_name":"Bash","tool_input":{"command":"tee \"./.fno/target-state.md\""}}'
+# A substitution closer (`)` or a backtick) after the path is a right bound
+# too, or the write slips the adjacency match inside $( ) and `( )`.
+expect "subst redirect graph.json blocked" block \
+  '{"tool_name":"Bash","tool_input":{"command":"N=$(echo x > ~/.fno/graph.json)"}}'
+expect "backtick redirect graph.json blocked" block \
+  '{"tool_name":"Bash","tool_input":{"command":"N=`echo x > ~/.fno/graph.json`"}}'
+expect "subst tee graph.json blocked" block \
+  '{"tool_name":"Bash","tool_input":{"command":"N=$(echo x | tee ~/.fno/graph.json)"}}'
+expect "subshell redirect graph.json blocked" block \
+  '{"tool_name":"Bash","tool_input":{"command":"(echo x > ~/.fno/graph.json)"}}'
+expect "subst read graph.json approved" approve \
+  '{"tool_name":"Bash","tool_input":{"command":"N=$(cat ~/.fno/graph.json)"}}'
 # P1: separator-equivalent paths (// and /./) resolve to the same protected file.
 expect "P1 double-slash redirect blocked" block \
   '{"tool_name":"Bash","tool_input":{"command":"echo x > ~/.fno//graph.json"}}'

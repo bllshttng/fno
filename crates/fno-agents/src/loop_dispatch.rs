@@ -134,11 +134,15 @@ pub fn driver_default_max(lib: &Path) -> Result<u64, LoopError> {
 /// otherwise `fno_bin` is used as-is (callers pass `"fno"` for production and a
 /// tempdir stub path for tests).
 pub(crate) fn fno_cmd(fno_bin: &str) -> Command {
-    let binary = std::env::var("FNO_BIN")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| fno_bin.to_string());
-    Command::new(binary)
+    if let Some(v) = std::env::var("FNO_BIN").ok().filter(|s| !s.is_empty()) {
+        return Command::new(v);
+    }
+    // A caller-passed stub path wins; the production default rides the crate
+    // resolver so a lib unit test cannot reach the installed fno.
+    if fno_bin == "fno" {
+        return Command::new(crate::scrape::fno_bin());
+    }
+    Command::new(fno_bin)
 }
 
 /// Run a spawn closure, retrying briefly on ETXTBSY ("Text file busy", os error
@@ -241,7 +245,7 @@ pub fn which_binary(name: &str) -> Option<PathBuf> {
     None
 }
 
-// ── launch-time headroom picking (x-7d45) ─────────────────────────────────────
+// ── launch-time headroom picking ─────────────────────────────────────
 
 /// The single env var a picked account contributes to the driver's environment.
 const PICKED_ENV_KEY: &str = "CLAUDE_CONFIG_DIR";
@@ -361,7 +365,7 @@ fn pick_would_undo_a_route_with(
 /// `fno`, an absent `fno`, a refusal - is an `Err` the caller logs and ignores,
 /// so the loop cannot be wedged by it.
 fn pick_account_env() -> Result<PickedEnv, String> {
-    let out = Command::new("fno")
+    let out = Command::new(crate::scrape::fno_bin())
         .args(PICK_ARGV)
         .output()
         .map_err(|e| format!("could not run `fno config accounts pick`: {e}"))?;
@@ -378,7 +382,7 @@ fn pick_account_env() -> Result<PickedEnv, String> {
 pub struct ShelloutSession {
     child: Child,
     /// Path the driver redirects claude stdout+stderr into (env `OUTPUT_FILE`),
-    /// read after exit to classify a claude bg-guard refusal (x-4504). `None`
+    /// read after exit to classify a claude bg-guard refusal. `None`
     /// when the dispatcher env carried no `OUTPUT_FILE`. The driver truncates
     /// this file at the start of every `driver_invoke`, so after `wait()` it
     /// holds exactly this iteration's output.
@@ -573,7 +577,7 @@ impl Dispatcher for ShelloutDispatcher {
             .map_err(|e| LoopError::Dispatch(format!("spawn bash driver_invoke: {e}")))?;
 
         // Capture OUTPUT_FILE (the driver's stdout+stderr sink) so the walk can
-        // classify a claude bg-guard refusal after exit (x-4504).
+        // classify a claude bg-guard refusal after exit.
         let output_file = self
             .env
             .iter()
@@ -824,7 +828,7 @@ mod tests {
     }
 
     // AC1-EDGE: opencode resolves to the `opencode` binary (loop-wrapper path,
-    // x-6007). The loop-wrapper drivers have fixed binary names (no env/alias
+    //). The loop-wrapper drivers have fixed binary names (no env/alias
     // precedence, unlike claude-code).
     #[test]
     fn loop_wrapper_drivers_resolve_to_fixed_binaries() {

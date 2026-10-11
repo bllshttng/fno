@@ -44,15 +44,6 @@ def test_ac1_hp_nameless_spawn_mints_slug():
     assert "-" in out[2]  # adjective-noun slug
 
 
-def test_ac2_edge_lone_bg_positional_is_substrate_and_name_autogens():
-    out = _norm(["spawn", "bg"])
-    assert out[:2] == ["spawn", "--name"]
-    assert out[-2:] == ["--substrate", "bg"]
-    # a NAME slug was minted, not the substrate word
-    assert out[2] not in ("bg", "--substrate")
-    assert "-" in out[2]
-
-
 def test_workspace_value_flag_not_misread_as_name_or_substrate():
     # Codex P2 (x-8317 US2): --workspace is a value flag, so its value is never
     # the agent name (a nameless spawn still mints a slug), and a substrate-shaped
@@ -95,19 +86,21 @@ def test_autogen_exhaustion_exits_2():
 # --- AC2-HP / AC3-HP / AC3-EDGE: -r widening ---------------------------------
 
 def test_ac2_hp_short_form_revival_normalizes_fully():
-    out = _norm(["spawn", "--name", "foo", "-r", SHORT, "bg"])
-    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "bg"]
+    out = _norm(["spawn", "--name", "foo", "-r", SHORT, "thread"])
+    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
 
 
-def test_ac3_hp_resume_implies_bg():
+def test_ac3_hp_resume_implies_thread():
     out = _norm(["spawn", "--name", "foo", "-r", UUID])
-    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "bg"]
+    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
 
 
-def test_implied_bg_is_announced_on_stderr():
+def test_implied_lane_is_silent():
+    # A spawn prints what the user acts on: the implied substrate rides the
+    # spawn receipt, not a stderr announcement.
     err = io.StringIO()
     _norm(["spawn", "--name", "foo", "-r", UUID], stderr=err)
-    assert "implied by --resume" in err.getvalue()
+    assert err.getvalue() == ""
 
 
 def test_resume_does_not_override_explicit_substrate():
@@ -120,7 +113,7 @@ def test_resume_does_not_override_explicit_substrate():
 def test_ac3_edge_uppercase_uuid_tolerated():
     upper = UUID.upper()
     out = _norm(["spawn", "--name", "foo", "--resume", upper])
-    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "bg"]
+    assert out == ["spawn", "--name", "foo", "--resume", UUID, "--substrate", "thread"]
 
 
 # --- AC1-ERR / AC2-ERR / refusals --------------------------------------------
@@ -251,7 +244,7 @@ def test_value_flag_values_are_never_counted_as_positionals():
     for flag, value in (
         ("--route", "zai,glm-5.2"),
         ("--account", "readyrule"),
-        ("--crown", "level=1,scope=x-1234"),
+        ("--promote", "level=1,scope=x-1234"),
     ):
         out = _norm(["spawn", flag, value, "do the thing"])
         assert out[1] == "--name", f"{flag}: no name minted"
@@ -264,14 +257,14 @@ def test_output_format_value_is_not_counted_as_a_positional():
         "--substrate", "headless",
         "--harness", "claude",
         "--output-format", "json",
-        "/fno:pr check 7",
+        "/fno:ship pr check 7",
     ])
     assert out[1] == "--name"
     assert out[3:] == [
         "--substrate", "headless",
         "--harness", "claude",
         "--output-format", "json",
-        "/fno:pr check 7",
+        "/fno:ship pr check 7",
     ]
 
 
@@ -307,6 +300,17 @@ def test_spawn_value_flags_cover_every_cmd_spawn_value_option():
     )
 
 
+def test_existing_pane_is_removed_only_from_the_fno_spawn_head():
+    from fno.agents.spawn_defaults import extract_existing_pane
+
+    args, pane = extract_existing_pane(
+        ["spawn", "--name", "worker", "--pane=19", "work", "--", "--pane", "7"]
+    )
+
+    assert pane == 19
+    assert args == ["spawn", "--name", "worker", "work", "--", "--pane", "7"]
+
+
 # --- x-1caa: the `--` passthrough boundary at the seam ------------------------
 
 def test_passthrough_fence_tokens_are_not_prompt_positionals():
@@ -326,27 +330,60 @@ def test_single_fenced_seed_still_the_message():
     assert out == ["spawn", "--name", "w", "--", "--flag-shaped seed"]
 
 
-@pytest.mark.parametrize(
-    "substrate_args",
-    [
-        ["--substrate", "bg"],
-        ["--substrate", "headless"],
-        ["--headless"],
-        ["-p"],
-    ],
-)
-def test_off_pane_substrate_refuses_multi_token_passthrough(substrate_args):
-    # AC7: bg/headless argv builders carry none of the pane's guards, so fenced
-    # passthrough is refused at the seam - the one front door both runtimes
-    # share - rather than silently becoming seed text on the Rust lane.
+def test_off_pane_substrate_with_uncarried_tokens_demotes_to_pane():
+    # A thread lane carries only the spellings its contract row maps, so an
+    # unmapped fenced token demotes the spawn to the pane at the seam - the
+    # one front door both runtimes share - instead of refusing on the
+    # substrate or silently dropping the token on the Rust lane.
     err = io.StringIO()
-    with pytest.raises(SystemExit) as exc:
-        _norm(
-            ["spawn", "--name", "w", *substrate_args, "hi", "--", "--verbose", "x"],
-            stderr=err,
-        )
-    assert exc.value.code == 2
-    assert "pane-only" in err.getvalue()
+    out = _norm(
+        [
+            "spawn", "--name", "w", "-H", "codex",
+            "--substrate", "bg", "hi", "--", "--verbose", "x",
+        ],
+        stderr=err,
+    )
+    assert out[out.index("--substrate") + 1] == "pane"
+    assert "no carrier for --verbose" in err.getvalue()
+
+
+def test_thread_substrate_with_carried_tokens_stays():
+    # codex thread maps -c/--config/--add-dir: the spawn keeps its lane.
+    err = io.StringIO()
+    out = _norm(
+        [
+            "spawn", "--name", "w", "-H", "codex",
+            "--substrate", "thread", "hi", "--", "-c", "key=1",
+        ],
+        stderr=err,
+    )
+    assert out[out.index("--substrate") + 1] == "thread"
+    assert "no carrier" not in err.getvalue()
+
+
+def test_claude_bg_carries_fenced_tokens():
+    # claude's bg lane takes the whole harness argv, so its row carries ["*"]:
+    # fenced tokens pass through untouched, on any substrate.
+    err = io.StringIO()
+    out = _norm(
+        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose", "x"],
+        stderr=err,
+    )
+    assert out[out.index("--substrate") + 1] == "bg"
+    assert "--verbose" in out
+    assert "no carrier" not in err.getvalue()
+
+
+@pytest.mark.parametrize("substrate_args", [["--headless"], ["-p"]])
+def test_headless_keeps_fenced_tokens(substrate_args):
+    # The one-shot lanes carry fenced tokens (appended before the prompt).
+    err = io.StringIO()
+    out = _norm(
+        ["spawn", "--name", "w", *substrate_args, "hi", "--", "--verbose", "x"],
+        stderr=err,
+    )
+    assert "--verbose" in out
+    assert "no carrier" not in err.getvalue()
 
 
 def test_off_pane_single_fenced_seed_untouched():
@@ -357,18 +394,17 @@ def test_off_pane_single_fenced_seed_untouched():
     assert out == ["spawn", "--name", "w", "--substrate", "bg", "--", "--flag seed"]
 
 
-def test_single_fenced_token_beside_a_message_is_passthrough_on_bg():
-    # With a MESSAGE before the fence, even one fenced token can only be
-    # passthrough - on bg/headless that is the unguarded Rust lane, refused by
-    # name instead of silently folded into the seed text there.
+def test_single_fenced_token_beside_a_message_is_carried_on_claude_bg():
+    # With a MESSAGE before the fence, even one fenced token is passthrough -
+    # and claude's bg lane carries the whole harness argv, so it passes
+    # through instead of being refused or folded into the seed text.
     err = io.StringIO()
-    with pytest.raises(SystemExit) as exc:
-        _norm(
-            ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose"],
-            stderr=err,
-        )
-    assert exc.value.code == 2
-    assert "pane-only" in err.getvalue()
+    out = _norm(
+        ["spawn", "--name", "w", "--substrate", "bg", "hi", "--", "--verbose"],
+        stderr=err,
+    )
+    assert "--verbose" in out
+    assert "no carrier" not in err.getvalue()
 
 
 def test_fenced_provider_resume_is_not_fnos_resume():
@@ -379,24 +415,24 @@ def test_fenced_provider_resume_is_not_fnos_resume():
     assert out[-2:] == ["--resume", UUID]
 
 
-def test_implied_bg_substrate_splices_before_the_fence():
-    # --resume plus a fenced seed: the implied `--substrate bg` lands in the
-    # fno head, never past the fence where click would read it as passthrough
-    # positionals and lose the lane.
+def test_implied_thread_substrate_splices_before_the_fence():
+    # --resume plus a fenced seed: the implied `--substrate thread` lands in
+    # the fno head, never past the fence where click would read it as
+    # passthrough positionals and lose the lane.
     out = _norm(["spawn", "-r", UUID, "--", "--flag seed"])
     assert out.index("--substrate") < out.index("--")
-    assert out[out.index("--substrate") + 1] == "bg"
+    assert out[out.index("--substrate") + 1] == "thread"
 
 
 # --- x-b80d: a node-driven spawn mints t-<node>-<slug>-<model> ----------------
 
 def test_node_spawn_mints_provenance_name():
     # The registry row's NAME is the only node carrier, so the mint must put
-    # the node and slug there: t-x919-sentinel-arms-glm52.
+    # the node and slug there: t-x919-sentinel-glm.
     out = _norm(
         ["spawn", "--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
     )
-    assert out[1:3] == ["--name", "t-x919-sentinel-arms-glm52"]
+    assert out[1:3] == ["--name", "t-x919-sentinel-glm"]
     assert out[3:] == ["--node", "x919", "--slug", "sentinel-arms", "--model", "glm-5.2", "go"]
 
 
@@ -405,7 +441,7 @@ def test_node_spawn_model_tag_comes_from_route_when_no_model():
     out = _norm(
         ["spawn", "--node", "x919", "--slug", "arms", "--route", "zai,glm-5.2", "go"]
     )
-    assert out[2] == "t-x919-arms-glm52"
+    assert out[2] == "t-x919-arms-glm"
 
 
 def test_node_spawn_route_slash_spelling_also_feeds_the_tag():
@@ -414,7 +450,7 @@ def test_node_spawn_route_slash_spelling_also_feeds_the_tag():
     out = _norm(
         ["spawn", "--node", "x919", "--slug", "arms", "--route", "zai/glm-5.2", "go"]
     )
-    assert out[2] == "t-x919-arms-glm52"
+    assert out[2] == "t-x919-arms-glm"
 
 
 def test_node_spawn_re_spawn_suffixes_the_taken_name():
@@ -423,11 +459,11 @@ def test_node_spawn_re_spawn_suffixes_the_taken_name():
     # is the two-worker implement+review shape).
     argv = ["spawn", "--node", "x919", "--slug", "arms", "--model", "glm-5.2", "go"]
     first = _norm(argv, existing_names=set())
-    assert first[2] == "t-x919-arms-glm52"
-    second = _norm(argv, existing_names={"t-x919-arms-glm52"})
-    assert second[2] == "t-x919-arms-glm52-2"
-    third = _norm(argv, existing_names={"t-x919-arms-glm52", "t-x919-arms-glm52-2"})
-    assert third[2] == "t-x919-arms-glm52-3"
+    assert first[2] == "t-x919-arms-glm"
+    second = _norm(argv, existing_names={"t-x919-arms-glm"})
+    assert second[2] == "t-x919-arms-glm-2"
+    third = _norm(argv, existing_names={"t-x919-arms-glm", "t-x919-arms-glm-2"})
+    assert third[2] == "t-x919-arms-glm-3"
 
 
 def test_node_spawn_without_model_omits_the_tag():
@@ -453,12 +489,12 @@ def test_graph_read_failure_falls_back_to_adjective_noun(monkeypatch):
     # A spawn must never die on a naming lookup: the graph read raising falls
     # back to the plain adjective-noun mint, not a refusal, not a t-<node>
     # name built on an unresolved identity.
-    import fno.graph.load as gl
+    import fno.graph.store as gl
 
-    def _raise():
+    def _raise(*args):
         raise RuntimeError("graph unreadable")
 
-    monkeypatch.setattr(gl, "load_graph", _raise)
+    monkeypatch.setattr(gl, "read_nodes_by_ids", _raise)
     out = _norm(["spawn", "--node", "x919", "--slug", "arms", "go"])
     from fno.agents import spawn_defaults as sd
 
@@ -468,12 +504,12 @@ def test_graph_read_failure_falls_back_to_adjective_noun(monkeypatch):
 def test_graph_read_supplies_the_slug_when_flag_absent(monkeypatch):
     # --slug omitted: the best-effort graph read fills id + slug, and a slug
     # input normalizes to the canonical id.
-    import fno.graph.load as gl
+    import fno.graph.store as gl
 
     monkeypatch.setattr(
         gl,
-        "load_graph",
-        lambda: [{"id": "x-919abcd", "slug": "sentinel-arms", "plan_path": None}],
+        "read_nodes_by_ids",
+        lambda path, tokens: {"entries": [{"id": "x-919abcd", "slug": "sentinel-arms", "plan_path": None}], "missing": []},
     )
     out = _norm(["spawn", "--node", "x-919abcd", "--model", "glm-5.2", "go"])
-    assert out[2] == "t-x-919abcd-sentinel-arms-glm52"
+    assert out[2] == "t-919abcd-sentinel-glm"

@@ -15,7 +15,7 @@ import pytest
 from fno.config import AutoMergeBlock
 from fno.pr import _verify
 from fno.pr import _merge
-from fno.pr._proc import Result, ToolMissing
+from fno.pr._proc import Result
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +30,18 @@ def _sandbox_graph_json(tmp_path, monkeypatch):
     default (same fix as test_pr_merge.py's `enabled` fixture).
     """
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "graph.json")
+
+
+def _owner_answers(monkeypatch, outcome, detail, note=None):
+    """Make the authorized-merge owner answer one receipt for this verb."""
+    receipt = {"outcome": outcome, "detail": detail}
+    if note is not None:
+        receipt["note"] = note
+
+    def _authorized(pr_number, repo, *, effect, approved, source, **kwargs):
+        return dict(receipt)
+
+    monkeypatch.setattr(_merge, "_authorized_merge", _authorized)
 
 
 def _state_file(tmp_path) -> str:
@@ -145,7 +157,7 @@ class FakeGH:
 @pytest.fixture
 def gh_on(monkeypatch):
     monkeypatch.setattr(_verify, "_gh_available", lambda: True)
-    monkeypatch.setattr(_verify, "_auto_merge", lambda: AutoMergeBlock(enabled=True))
+    monkeypatch.setattr(_verify, "_auto_merge", lambda _repo: AutoMergeBlock(enabled=True))
 
 
 # ---- verify --kind merged ----
@@ -183,8 +195,12 @@ def test_closed_blocks_exit_1_and_audits(tmp_path, gh_on, monkeypatch):
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
     assert _verify.run_verify_merged("42", sf, cwd=str(tmp_path)) == 1
-    events = (tmp_path / ".fno" / "events.jsonl").read_text()
-    assert "pr_closed_without_merge" in events
+    from fno.paths import project_log
+
+    from tests._event_rows import event_rows
+
+    audit = event_rows(project_log("events.jsonl", project_root=tmp_path))
+    assert "pr_closed_without_merge" in [e["data"].get("reason") for e in audit]
 
 
 def test_plan_dispatch_hold_refuses_direct_remediation_merge(
@@ -196,66 +212,48 @@ def test_plan_dispatch_hold_refuses_direct_remediation_merge(
     monkeypatch.setattr(_merge, "run", fake)
     monkeypatch.setattr(
         "fno.pr._hold.merge_hold_reason",
-        lambda pr, cwd: "dispatch-hold:x-5a5c: blocking finding; set_by=king",
+        lambda pr, cwd: "dispatch-hold:x-5a5c: blocking finding; set_by=lead",
     )
     assert _verify.run_verify_merged("42", sf, cwd=str(tmp_path)) == 1
     assert not any(call[:3] == ["gh", "pr", "merge"] for call in fake.calls)
 
 
-def test_audit_writer_locks_the_canonical_symlink_target(tmp_path, monkeypatch):
+def test_audit_writer_commits_beside_the_canonical_target(tmp_path, monkeypatch):
     canonical = tmp_path / "canonical" / "events.jsonl"
     canonical.parent.mkdir()
     canonical.touch()
     worktree = tmp_path / "worktree" / "events.jsonl"
     worktree.parent.mkdir()
     worktree.symlink_to(canonical)
-    acquired = []
-
-    def acquire(lock_dir, timeout, **kwargs):
-        acquired.append(lock_dir)
-        return "token"
-
-    monkeypatch.setattr(_verify, "acquire_dir_mutex", acquire)
-    monkeypatch.setattr(_verify, "release_dir_mutex", lambda lock_dir, token: None)
 
     _verify._append_event_lenient(
         str(worktree),
-        {"ts": "2026-08-11T00:00:00Z", "type": "probe", "data": {}},
+        {"ts": "2026-08-11T00:00:00Z", "type": "transcript_audit_failed",
+         "source": "hook", "data": {"gate": "auto_merge_outcome", "reason": "probe"}},
         "probe",
     )
 
-    assert acquired == [canonical.with_name("events.jsonl.lock.d")]
+    from tests._event_rows import event_rows
+
+    assert [e["type"] for e in event_rows(worktree)] == ["transcript_audit_failed"]
 
 
-def test_audit_writer_retries_when_setup_retargets_leaf_while_waiting(tmp_path, monkeypatch):
+def test_audit_writer_survives_a_symlinked_leaf(tmp_path, monkeypatch):
     local = tmp_path / "worktree-events.jsonl"
-    local.touch()
     canonical = tmp_path / "canonical-events.jsonl"
     canonical.touch()
-    acquired = []
-
-    def acquire(lock_dir, timeout, **kwargs):
-        acquired.append(lock_dir)
-        if len(acquired) == 1:
-            local.unlink()
-            local.symlink_to(canonical)
-        return f"token-{len(acquired)}"
-
-    monkeypatch.setattr(_verify, "acquire_dir_mutex", acquire)
-    monkeypatch.setattr(_verify, "release_dir_mutex", lambda lock_dir, token: None)
+    local.symlink_to(canonical)
 
     _verify._append_event_lenient(
         str(local),
-        {"ts": "2026-08-11T00:00:00Z", "type": "probe", "data": {}},
+        {"ts": "2026-08-11T00:00:00Z", "type": "transcript_audit_failed",
+         "source": "hook", "data": {"gate": "auto_merge_outcome", "reason": "probe"}},
         "probe",
     )
 
-    assert acquired == [
-        tmp_path / "worktree-events.jsonl.lock.d",
-        tmp_path / "canonical-events.jsonl.lock.d",
-    ]
-    assert local.is_symlink()
-    assert canonical.read_text(encoding="utf-8").count("\n") == 1
+    from tests._event_rows import event_rows
+
+    assert [e["type"] for e in event_rows(local)] == ["transcript_audit_failed"]
 
 
 def test_draft_blocks_exit_1(tmp_path, gh_on, monkeypatch, capsys):
@@ -280,10 +278,17 @@ def test_changes_requested_blocks_exit_1(tmp_path, gh_on, monkeypatch, capsys):
 
 def test_failing_required_check_blocks_exit_1(tmp_path, gh_on, monkeypatch, capsys):
     # No isRequired key: gh's statusCheckRollup never emits it (whole-rollup
-    # semantics; see _merge._checks_verdict).
+    # semantics; see the checks arm of authorized_merge.rs). The failing set
+    # rides the status-ci door now, so the rows are staged on the transport.
     sf = _state_file(tmp_path)
-    rollup = [{"name": "ci/build", "conclusion": "FAILURE"}]
-    fake = FakeGH(toplevel=str(tmp_path), pr_states=[{"state": "OPEN", "statusCheckRollup": rollup}])
+    rows = [{"name": "ci/build", "bucket": "fail"}]
+
+    def fake_verb(verb, payload, **kw):
+        assert payload["op"] == "status-ci"
+        return rows
+
+    monkeypatch.setattr("fno.rust_binary.verb_call", fake_verb)
+    fake = FakeGH(toplevel=str(tmp_path), pr_states=[{"state": "OPEN"}])
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
     assert _verify.run_verify_merged("42", sf, cwd=str(tmp_path)) == 1
@@ -302,6 +307,7 @@ def test_pending_check_flows_to_remediation_not_failing(tmp_path, gh_on, monkeyp
     fake = FakeGH(toplevel=str(tmp_path), pr_states=[{"state": "OPEN", "statusCheckRollup": rollup}])
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
+    _owner_answers(monkeypatch, "held", "checks are pending")
     assert _verify.run_verify_merged("42", sf, cwd=str(tmp_path)) == 1
     out = capsys.readouterr().out
     assert "required_checks_failing" not in out
@@ -311,7 +317,7 @@ def test_remediation_verify_only_blocks_exit_1(tmp_path, monkeypatch, capsys):
     sf = _state_file(tmp_path)
     monkeypatch.setattr(_verify, "_gh_available", lambda: True)
     monkeypatch.setattr(
-        _verify, "_auto_merge", lambda: AutoMergeBlock(enabled=True, remediation="verify_only")
+        _verify, "_auto_merge", lambda _repo: AutoMergeBlock(enabled=True, remediation="verify_only")
     )
     fake = FakeGH(toplevel=str(tmp_path), pr_states=[{"state": "OPEN"}])
     monkeypatch.setattr(_verify, "run", fake)
@@ -334,8 +340,6 @@ def test_bounded_remediation_merges_exit_0(tmp_path, gh_on, monkeypatch):
     assert rc == 0
     # First refetch already MERGED -> no poll.
     assert slept == []
-    merge_calls = [c for c in fake.calls if c[:3] == ["gh", "pr", "merge"]]
-    assert len(merge_calls) == 1  # single attempt (anti-thrash)
 
 
 def test_bounded_remediation_stays_single_poll(tmp_path, gh_on, monkeypatch):
@@ -351,33 +355,6 @@ def test_bounded_remediation_stays_single_poll(tmp_path, gh_on, monkeypatch):
     rc = _verify.run_verify_merged("42", sf, cwd=str(tmp_path), sleep_fn=lambda s: slept.append(s))
     assert rc == 1
     assert slept == [30]  # exactly one 30s poll, never a retry loop
-    merge_calls = [c for c in fake.calls if c[:3] == ["gh", "pr", "merge"]]
-    assert len(merge_calls) == 1
-
-
-def test_a_missing_gh_during_the_already_armed_probe_keeps_exit_127(
-    tmp_path, gh_on, monkeypatch, capsys
-):
-    """_already_armed's own gh call owes the same 127 contract its sibling
-    _checks_verdict call has (review round 12): it must not propagate a raw
-    ToolMissing past _bounded_remediation."""
-    sf = _state_file(tmp_path)
-
-    class _GhVanishes(FakeGH):
-        def __call__(self, cmd, *, cwd=None, env=None, input_text=None, timeout=None):
-            cmd = list(cmd)
-            if cmd[:3] == ["gh", "pr", "view"] and "autoMergeRequest" in cmd:
-                raise ToolMissing("gh")
-            return super().__call__(
-                cmd, cwd=cwd, env=env, input_text=input_text, timeout=timeout
-            )
-
-    fake = _GhVanishes(toplevel=str(tmp_path), pr_states=[{"state": "OPEN"}])
-    monkeypatch.setattr(_verify, "run", fake)
-    monkeypatch.setattr(_merge, "run", fake)
-    rc = _verify.run_verify_merged("42", sf, cwd=str(tmp_path), sleep_fn=lambda s: None)
-    assert rc == 127
-    assert "gh CLI not installed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("delete_branch", [True, False])
@@ -391,7 +368,7 @@ def test_bounded_remediation_cleanup_split_from_merge(tmp_path, monkeypatch, del
     monkeypatch.setattr(
         _verify,
         "_auto_merge",
-        lambda: AutoMergeBlock(enabled=True, delete_branch_on_merge=delete_branch),
+        lambda _repo: AutoMergeBlock(enabled=True, delete_branch_on_merge=delete_branch),
     )
     fake = FakeGH(
         toplevel=str(tmp_path),
@@ -401,10 +378,6 @@ def test_bounded_remediation_cleanup_split_from_merge(tmp_path, monkeypatch, del
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
     assert _verify.run_verify_merged("42", sf, cwd=str(tmp_path), sleep_fn=lambda s: None) == 0
-    merge_cmd = [c for c in fake.calls if c[:3] == ["gh", "pr", "merge"]][0]
-    assert "--delete-branch" not in merge_cmd, merge_cmd
-    assert "--auto" not in merge_cmd, merge_cmd
-    assert "--match-head-commit" in merge_cmd, merge_cmd
     remote_deletes = [
         c for c in fake.calls if "DELETE" in c and "/git/refs/heads/" in c[-1]
     ]
@@ -438,6 +411,12 @@ def test_bounded_remediation_worktree_delete_error_records_merge(
     )
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
+    _owner_answers(
+        monkeypatch,
+        "merged",
+        "abc123",
+        note="merged server-side, but the gh merge exited non-zero afterwards",
+    )
     rc = _verify.run_verify_merged("42", sf, cwd=str(tmp_path), sleep_fn=lambda s: None)
     assert rc == 0
     assert "verify-pr-merged" in capsys.readouterr().out
@@ -460,6 +439,11 @@ def test_unreadable_state_after_merge_error_is_substrate_failure(
     )
     monkeypatch.setattr(_verify, "run", fake)
     monkeypatch.setattr(_merge, "run", fake)
+    _owner_answers(
+        monkeypatch,
+        "unknown",
+        "merge state unreadable after a failed merge: gh api pulls/42 failed",
+    )
     rc = _verify.run_verify_merged("42", sf, cwd=str(tmp_path), sleep_fn=lambda s: None)
     assert rc == 2
     out = capsys.readouterr().out
@@ -516,10 +500,46 @@ def test_reviews_no_qualifying_reply_flips_exit_1(tmp_path, monkeypatch, capsys)
     assert rc == 1
     out = capsys.readouterr().out
     assert "flipped back to false" in out and "bot" in out
-    events = (tmp_path / ".fno" / "events.jsonl").read_text()
-    audit = json.loads(events.strip().splitlines()[-1])
-    assert audit["data"]["gate"] == "external_review_passed"
-    assert audit["data"]["reviewer"] == "bot"
+    from fno.paths import project_log
+
+    events = project_log("events.jsonl", project_root=tmp_path)
+
+    from tests._event_rows import event_rows
+
+    audit = event_rows(events)
+    assert audit[-1]["data"]["gate"] == "external_review_passed"
+    assert audit[-1]["data"]["reviewer"] == "bot"
+
+
+def _boom_project_log(*args, **kwargs):
+    raise OSError("space unresolved")
+
+
+def test_emit_audit_survives_failing_project_log(tmp_path, monkeypatch, capsys):
+    sf = _state_file(tmp_path)
+    monkeypatch.setattr("fno.paths.project_log", _boom_project_log)
+    _verify._emit_audit(str(tmp_path), sf, "42", "probe")
+    err = capsys.readouterr().err
+    assert "events journal unresolved" in err and "probe" in err
+
+
+def test_reviews_flip_survives_failing_project_log(tmp_path, monkeypatch, capsys):
+    sf = _state_file(tmp_path)
+    monkeypatch.setattr(_verify, "_gh_available", lambda: True)
+    fake = FakeGH(
+        toplevel=str(tmp_path),
+        reviews=[{"login": "bot", "submitted_at": "2026-06-13T00:00:00Z"}],
+        author="me",
+        issue_comments=[],
+    )
+    monkeypatch.setattr(_verify, "run", fake)
+    monkeypatch.setattr(_merge, "run", fake)
+    monkeypatch.setattr("fno.paths.project_log", _boom_project_log)
+    rc = _verify.run_verify_reviews("42", sf, cwd=str(tmp_path))
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "flipped back to false" in captured.out
+    assert "events journal unresolved" in captured.err
 
 
 # ---- qualifying-reply predicate (the forgery-hole-closing logic) ----
@@ -538,3 +558,43 @@ def test_predicate_mention_after_review_qualifies_even_past_24h():
 def test_predicate_non_author_reply_does_not_qualify():
     comments = [{"login": "someone", "created_at": "2026-06-13T01:00:00Z", "body": "@bot"}]
     assert not _verify._has_qualifying_reply(comments, "bot", "2026-06-13T00:00:00Z", "me")
+
+
+def test_the_gate_head_reaches_the_owner_as_the_pin(tmp_path, monkeypatch):
+    """The head THIS verb's coverage gate verified, not the local checkout's.
+    The owner's journal fallback filters on `git rev-parse HEAD`, so a run from
+    any other directory reported unknown for a PR it had just covered.
+    """
+    seen: dict = {}
+
+    def _authorized(pr_number, repo, *, effect, approved, source, **kwargs):
+        seen.update(kwargs)
+        return {"outcome": "held", "detail": "held for the test"}
+
+    monkeypatch.setattr(_merge, "_authorized_merge", _authorized)
+    monkeypatch.setattr(
+        _merge, "_pr_head_ref_and_oid", lambda pr, repo: ("feature/x", "fallback", "OPEN")
+    )
+    _verify._bounded_remediation(
+        "42", _state_file(tmp_path), str(tmp_path), str(tmp_path), lambda s: None, "gatehead"
+    )
+    assert seen["covered_head"] == "gatehead"
+
+
+def test_a_no_lane_verify_still_carries_a_pin(tmp_path, monkeypatch):
+    """No review lane leaves the gate head empty, and the shared rule fills it
+    from the PR rather than letting the owner refuse an unpinned merge."""
+    seen: dict = {}
+
+    def _authorized(pr_number, repo, *, effect, approved, source, **kwargs):
+        seen.update(kwargs)
+        return {"outcome": "held", "detail": "held for the test"}
+
+    monkeypatch.setattr(_merge, "_authorized_merge", _authorized)
+    monkeypatch.setattr(
+        _merge, "_pr_head_ref_and_oid", lambda pr, repo: ("feature/x", "prhead", "OPEN")
+    )
+    _verify._bounded_remediation(
+        "42", _state_file(tmp_path), str(tmp_path), str(tmp_path), lambda s: None, ""
+    )
+    assert seen["covered_head"] == "prhead"

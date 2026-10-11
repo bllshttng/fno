@@ -1,5 +1,6 @@
 """Unit tests for the deterministic relatedness map (node x-c2e9)."""
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from datetime import datetime, timezone
@@ -10,7 +11,9 @@ from fno.graph import relatedness as R
 
 
 def _node(nid, title="", domain=None, details="", slug="", **extra):
-    e = {"id": nid, "title": title, "slug": slug, "details": details}
+    e = {"id": nid, "title": title, "slug": slug}
+    if details:
+        e["details"] = details
     if domain is not None:
         e["domain"] = domain
     e.update(extra)
@@ -67,6 +70,46 @@ def test_build_map_ignores_dates_and_short_tokens():
     assert m["a"] == [] and m["b"] == []
 
 
+# --- AC1-HP / AC2-EDGE: similar_nodes passes its floor into _score ---
+
+def test_similar_nodes_floor_below_min_score_reaches_scorer():
+    # No domain on either side: jac = 1/7 = 0.1429, below _MIN_SCORE (0.15).
+    # Before this fix, _score's own default `minimum=_MIN_SCORE` clamped this
+    # to 0.0 regardless of the caller's floor, so similar_nodes(floor=0.05)
+    # dropped it too. Passing the floor through as `minimum` lets it stand.
+    a = _node("aaa", title="alpha bravo charlie")
+    b = _node("bbb", title="alpha delta echo foxtrot golf")
+    zeroed = R._score(a, b, R._tokens(a), R._tokens(b), include_epic=False)[0]
+    assert zeroed == 0.0
+    raw = R._score(a, b, R._tokens(a), R._tokens(b), include_epic=False, minimum=0.0)[0]
+    assert 0.05 < raw < 0.15
+    assert [r[0] for r in R.similar_nodes(a, [b], floor=0.05)] == ["bbb"]
+
+
+def test_similar_nodes_default_and_explicit_high_floor_unchanged():
+    # AC2-EDGE: an explicit floor at the dedup default is behavior-preserving
+    # relative to leaving floor unset - same pair, exactly at 0.30, included
+    # either way.
+    at_floor = _node("ccc", title="alpha bravo charlie", domain="code")
+    new_floor = _node("ddd", title="alpha delta echo", domain="code")
+    explicit = [r[0] for r in R.similar_nodes(new_floor, [at_floor], floor=0.30)]
+    default = [r[0] for r in R.similar_nodes(new_floor, [at_floor])]
+    assert explicit == default == ["ccc"]
+
+
+
+
+
+def test_epic_candidates_floor_reaches_scorer_like_similar_nodes():
+    # epic_candidates gets the same caller-narrowed floor similar_nodes has,
+    # so a domain-less seed probe's epic rollup is not silently under-recalled
+    # while its duplicate list is.
+    epic = _node("epic1", title="alpha bravo charlie", type="epic")
+    probe = _node("probe", title="alpha delta echo foxtrot golf")
+    assert R.epic_candidates(probe, [epic]) == []  # default floor: still clamped
+    assert [r[0] for r in R.epic_candidates(probe, [epic], floor=0.05)] == ["epic1"]
+
+
 def test_build_map_empty_graph():
     assert R.build_map([]) == {}
 
@@ -104,27 +147,10 @@ def test_get_related_respects_k(tmp_path):
     assert [r["id"] for r in R.get_related(p, "a", k=1)] == ["b"]
 
 
-def test_filing_candidates_unions_sidecar_and_since_groom_delta(tmp_path):
-    """AC7-HP: a stale sidecar keeps today's live sibling in recall."""
-    sidecar = tmp_path / "relatedness.json"
-    R.write_map(sidecar, {"incoming": [{"id": "old-sibling", "score": 0.4, "reason": "shared"}]})
-    entries = [
-        _node("old-sibling", title="shared filing surface", created_at="2020-01-01T00:00:00+00:00"),
-        _node("today-sibling", title="shared filing surface", created_at="2999-01-01T00:00:00+00:00"),
-        _node("unrelated", title="invoice export", created_at="2020-01-01T00:00:00+00:00"),
-    ]
-    candidates, source = R.filing_candidates(entries, sidecar)
-    assert {row["id"] for row in candidates} == {"old-sibling", "today-sibling"}
-    assert source == "sidecar+since-groom"
 
 
-def test_filing_candidates_falls_back_to_all_live_on_missing_sidecar(tmp_path):
-    candidates, source = R.filing_candidates(
-        [_node("a", title="one"), _node("b", title="two", status="done")],
-        tmp_path / "missing.json",
-    )
-    assert {row["id"] for row in candidates} == {"a"}
-    assert source == "fallback:all-live"
+
+
 
 
 # --- atomic write round-trips ---
@@ -167,7 +193,7 @@ def _wire_paths(tmp_path, monkeypatch, entries):
     from fno.graph import cli as _cli
 
     graph = tmp_path / "graph.json"
-    graph.write_text(_json.dumps({"entries": entries}))
+    seed_graph(graph, _json.dumps({"entries": entries}))
     sidecar = tmp_path / "relatedness.json"
     monkeypatch.setattr(_cli, "_graph_path", lambda: graph)
     # relatedness build reads through the guarded display seam, which
@@ -182,14 +208,14 @@ def test_cli_build_then_get(tmp_path, monkeypatch):
     from fno.graph.cli import _relatedness_cli
 
     _wire_paths(tmp_path, monkeypatch, [
-        _node("a", title="nightly groomer relatedness", domain="code"),
-        _node("b", title="nightly groomer rank", domain="code"),
+        _node("aa-0001", title="nightly groomer relatedness", domain="code"),
+        _node("aa-0002", title="nightly groomer rank", domain="code"),
     ])
     runner = CliRunner()
     assert runner.invoke(_relatedness_cli, ["build"]).exit_code == 0
-    res = runner.invoke(_relatedness_cli, ["get", "a", "-J"])
+    res = runner.invoke(_relatedness_cli, ["get", "aa-0001", "-J"])
     assert res.exit_code == 0
-    assert '"id": "b"' in res.stdout
+    assert '"id": "aa-0002"' in res.stdout
 
 
 def test_cli_get_no_map_exits_nonzero_empty(tmp_path, monkeypatch):

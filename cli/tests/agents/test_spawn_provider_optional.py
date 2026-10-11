@@ -66,7 +66,9 @@ def _stub_pane_path(monkeypatch) -> dict:
 
     monkeypatch.setattr(spawn_gate, "run_gate", fake_run_gate)
     monkeypatch.setattr(mux_spawn, "resolve_provenance", fake_resolve_provenance)
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_pane", fake_dispatch_spawn_pane)
+    monkeypatch.setattr(
+        mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch_spawn_pane
+    )
     monkeypatch.setattr(agents_cli, "_spawn_guard_decision", fake_spawn_guard)
     return received
 
@@ -76,7 +78,7 @@ def test_spawn_without_provider_defaults_to_claude(monkeypatch, runner):
     received = _stub_pane_path(monkeypatch)
     from fno.agents.cli import agents_app
 
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"])
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"])
 
     assert result.exit_code == 0, result.output
     assert received["provider"] == "claude"
@@ -102,7 +104,7 @@ def test_unverified_seed_prints_receipt_then_exits_nonzero(monkeypatch, runner):
 
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **kwargs: mux_spawn.MuxSpawnResult(
             name=kwargs["name"],
             provider=kwargs["provider"],
@@ -112,27 +114,31 @@ def test_unverified_seed_prints_receipt_then_exits_nonzero(monkeypatch, runner):
             session_uuid=None,
             seed="unattempted",
             seed_source="delivered",
-            fno_id=kwargs["name"],
         ),
     )
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"]
+        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
     )
 
     assert result.exit_code == 22
     receipt = json.loads(result.stdout.strip().splitlines()[-1])
     assert receipt["seed"] == "unattempted"
     assert receipt["seed_source"] == "delivered"
-    assert receipt["fno_id"] == "w1"
+    # The receipt no longer carries fno_id: the row's id is its own mint, read
+    # off `fno agents list --json` (thread_id) and `fno mux pane ls`.
+    assert "fno_id" not in receipt
 
 
 def _pane_receipt(monkeypatch, **fields):
     from fno.agents import mux_spawn
 
+    # Stub at the wrapper seam: cmd_spawn's pane lane rides
+    # dispatch_spawn_bounded_pane, and stubbing the inner pane spawn would let
+    # the real wrapper reach for a live mux tab listing first.
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **kwargs: mux_spawn.MuxSpawnResult(
             name=kwargs["name"],
             provider=kwargs["provider"],
@@ -140,7 +146,6 @@ def _pane_receipt(monkeypatch, **fields):
             pane_id=7,
             child_pid=42,
             session_uuid=None,
-            fno_id=kwargs["name"],
             **fields,
         ),
     )
@@ -169,7 +174,7 @@ def test_an_unobservable_pane_exits_nonzero_without_denying_the_seed(
     )
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"]
+        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
     )
 
     assert result.exit_code == 22, "a pane nobody could see must not certify a spawn"
@@ -194,7 +199,7 @@ def test_an_observed_pane_with_a_delivered_seed_exits_clean(monkeypatch, runner)
     )
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"]
+        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
     )
 
     assert result.exit_code == 0, result.output
@@ -218,7 +223,7 @@ def test_the_pane_observation_is_omitted_when_the_spawn_never_set_it(
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"]
+        agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"]
     )
 
     assert result.exit_code == 0, result.output
@@ -232,7 +237,7 @@ def test_spawn_infers_claude_from_harness(monkeypatch, runner):
     received = _stub_pane_path(monkeypatch)
     from fno.agents.cli import agents_app
 
-    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "hello", "--node", "x-test"])
+    result = runner.invoke(agents_app, ["spawn", "--name", "w1", "/fix hello", "--node", "x-test", "--substrate", "pane"])
 
     assert result.exit_code == 0, result.output
     assert received["provider"] == "claude"
@@ -246,7 +251,7 @@ def test_spawn_explicit_provider_still_wins(monkeypatch, runner):
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--node", "x-test", "--harness", "gemini"]
+        agents_app, ["spawn", "--name", "w1", "/fix hi", "--node", "x-test", "--harness", "gemini"]
     )
     assert result.exit_code == 0, result.output
     assert received["provider"] == "gemini"
@@ -258,7 +263,7 @@ def test_spawn_empty_model_rejected(monkeypatch, runner):
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--node", "x-test", "--model", ""]
+        agents_app, ["spawn", "--name", "w1", "/fix hi", "--node", "x-test", "--model", ""]
     )
     assert result.exit_code == 2
     assert called == {}

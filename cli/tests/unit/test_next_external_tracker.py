@@ -7,12 +7,12 @@ winner parity. Every test points the seam at a contradictory local graph file:
 if selection ever answered from it, the sentinels give the test away.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
@@ -82,6 +82,52 @@ class FakeTracker:
     def close(self, id):
         raise AssertionError("close is not part of selection")
 
+    def _call(self, op, id=None):
+        """The door-shaped document: open entries joined with sidecar fields,
+        closed rows as tombstones."""
+        assert op == "snapshot"
+        import fno.tracker.sidecar as sidecar_store
+
+        entries = []
+        for c in self.list_open():
+            try:
+                sc = sidecar_store.load(c.id)
+            except Exception as exc:
+                raise RuntimeError(f"sidecar read failed for {c.id}: {exc}")
+            entries.append({
+                "id": c.id,
+                "title": c.title,
+                "state": "open",
+                "status": _open_status(pr_number=sc.pr_number, plan_path=sc.plan_path),
+                "parent": c.parent,
+                "blocked_by": list(c.blocked_by),
+                "priority": c.priority,
+                "rank": c.rank,
+                "created_at": c.created_at,
+                "cwd": sc.cwd,
+                "plan_path": sc.plan_path,
+                "pr_number": sc.pr_number,
+                "pr_url": sc.pr_url,
+                "additional_prs": sc.additional_prs,
+                "batch": sc.batch,
+                "contained_in": sc.contained_in,
+                "sessions": sc.sessions,
+                "claimed_at": sc.claimed_at,
+                "cost_usd": sc.cost_usd,
+            })
+        for r in self._rows:
+            if r.get("state", "open") != "open":
+                entries.append(
+                    {"id": r["id"], "state": "closed", "status": "done", "completed_at": "closed"}
+                )
+        return {"backend": self.name, "entries": entries}
+
+
+def _open_status(*, pr_number, plan_path):
+    if pr_number:
+        return "in_review"
+    return "ready" if plan_path else "idea"
+
 
 def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
     """Point tracker, sidecar store, claims, and the local graph at fakes."""
@@ -99,11 +145,11 @@ def _wire(monkeypatch, tmp_path, rows, sidecars, **tracker_kwargs):
                         lambda i: sidecar_dir / f"{i}.json")
     # The contradictory local graph: every value here must never surface.
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": [
+    seed_graph(g, json.dumps({"entries": [
         {"id": r["id"], "title": "GRAPH-SENTINEL", "cwd": "/graph-cwd",
          "status": "ready", "priority": "p0"}
         for r in rows
-    ]}), encoding="utf-8")
+    ]}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
@@ -117,6 +163,23 @@ def _rows_basic():
         {"id": "EXT-lo", "title": "Low prio leaf", "priority": "p3",
          "created_at": _days_ago(1)},
     ]
+
+
+def test_next_never_selects_a_closed_tombstone(tmp_path, monkeypatch):
+    """AC10-HP: a closed row rides the snapshot as a tombstone; selection
+    filters it out even when it ranks first."""
+    rows = [
+        {"id": "EXT-done", "title": "Already closed", "priority": "p0",
+         "state": "closed", "created_at": _days_ago(1)},
+        {"id": "EXT-hi", "title": "High prio leaf", "priority": "p1",
+         "created_at": _days_ago(2)},
+    ]
+    _wire(monkeypatch, tmp_path, rows, {
+        "EXT-hi": {"plan_path": "/plans/hi.md"},
+    })
+    r = runner.invoke(app, ["backlog", "next"], catch_exceptions=False)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["id"] == "EXT-hi"
 
 
 def test_next_joins_once_and_ranks_over_the_open_set(tmp_path, monkeypatch):
@@ -199,7 +262,7 @@ def test_next_winner_parity_between_backends(tmp_path, monkeypatch):
     never crosses in a sidecar."""
     monkeypatch.delenv("FNO_TRACKER_BACKEND", raising=False)
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": [
+    seed_graph(g, json.dumps({"entries": [
         {"id": "ab-aaa00001", "title": "Leaf under epic", "status": "ready",
          "priority": "p2", "parent": "ab-eee00001",
          "created_at": _days_ago(2), "plan_path": "/p/1.md"},
@@ -208,7 +271,7 @@ def test_next_winner_parity_between_backends(tmp_path, monkeypatch):
          "plan_path": "/p/2.md"},
         {"id": "ab-eee00001", "title": "The epic", "status": "ready",
          "priority": "p3", "created_at": _days_ago(3)},
-    ]}), encoding="utf-8")
+    ]}))
     import fno.graph._constants as gc
     import fno.graph.store as gs
 
@@ -217,9 +280,13 @@ def test_next_winner_parity_between_backends(tmp_path, monkeypatch):
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
 
-    r = runner.invoke(app, ["backlog", "next", "-A"], catch_exceptions=False)
-    assert r.exit_code == 0, r.output
-    graph_winner = json.loads(r.output)["id"]
+    # The graph half answers through the native door (the wheel spelling
+    # tombstones there); the external half below stays on the wheel.
+    from tests.goldens._door import door_graph
+
+    code, out, err = door_graph(g, "next", "-A")
+    assert code == 0, err
+    graph_winner = json.loads(out)["id"]
 
     rows = [
         {"id": "ab-aaa00001", "title": "Leaf under epic", "priority": "p2",
@@ -263,6 +330,9 @@ def test_next_starvation_receipts_explain_the_joined_denominator(
     assert "design" in r.output
 
 
+# --- x-2fe6 AC10-EDGE: the external node claim must land in the GLOBAL root ---
+
+
 def test_next_claim_uses_the_claims_subsystem_not_the_graph(
     tmp_path, monkeypatch
 ):
@@ -274,7 +344,9 @@ def test_next_claim_uses_the_claims_subsystem_not_the_graph(
         "EXT-hi": {"plan_path": "/plans/hi.md"},
         "EXT-lo": {"plan_path": "/plans/lo.md"},
     })
-    before = g.read_text()
+    from fno.graph.store import read_graph_strict
+
+    before = read_graph_strict(g)
 
     r = runner.invoke(
         app, ["backlog", "next", "--claim", "sess-ext-1"],
@@ -283,36 +355,44 @@ def test_next_claim_uses_the_claims_subsystem_not_the_graph(
     assert r.exit_code == 0, r.output
     doc = json.loads(r.output)
     assert doc["id"] == "EXT-hi"
-    # The graph file is untouched.
-    assert g.read_text() == before
-    # The claim exists in the claims dir under the opaque id.
+    # The claim lives only in the claims store: every served row keeps its
+    # pre-run values except the projected claim fields, which now carry the
+    # holder. No mirror row is written anywhere.
+    after = read_graph_strict(g)
+    claim_fields = {
+        "locked_by", "locked_by_harness", "locked_by_harness_session",
+        "locked_at", "session_id",
+    }
+    strip = lambda rs: [
+        {k: v for k, v in row.items() if k not in claim_fields} for row in rs
+    ]
+    assert strip(after) == strip(before)
+    served = {row["id"]: row.get("locked_by") for row in after}
+    assert served["EXT-hi"] == "sess-ext-1"
+    # The claim exists in the claims store under the opaque id.
+    from fno.claims.core import claim_status
+
     claims_root = tmp_path / "claims"
-    locks = list(claims_root.rglob("*EXT-hi*"))
-    assert locks, f"no claim lock for EXT-hi under {claims_root}"
+    assert claim_status("node:EXT-hi")["holder"] == "sess-ext-1"
     # No claim pointer in the sidecar.
     sc = json.loads((Path(str(claims_root)).parent / "sidecars" / "EXT-hi.json").read_text())
     assert "locked_by" not in sc
 
 
-# --- x-2fe6 AC10-EDGE: the external node claim must land in the GLOBAL root ---
-
-
 def test_external_claim_lands_where_every_node_reader_looks(tmp_path, monkeypatch):
     """A `node:` claim written to the cwd-default tree is a lock nobody honors.
 
-    Every reader of a `node:` key resolves the global root through
-    `claims_root_for` (`_read_node_claim` documents the trap in as many words:
-    a bare `claim_status(key)` reads the wrong tree as free). The external arm
-    of `backlog next --claim` was the one `node:` site that passed no `root=`,
-    so its lock landed under the cwd-default root and the node still read
-    `free` to the dispatch guard.
+    The native leg routes every `node:` reader to the global root (the routing
+    golden: crates/fno-agents/tests/claims_root_parity.rs), so the external arm
+    of `backlog next --claim` must write there too: a lock under the
+    cwd-default tree reads `free` to the dispatch guard.
 
     The two roots are pinned APART here on purpose. Every other test in this
     file sets `FNO_CLAIMS_ROOT`, which `claims_dir()` and `global_claims_root()`
     both honor, so they collapse to one directory and the bug is invisible.
     """
     from fno.claims.core import claim_status
-    from fno.claims.io import claims_dir, claims_root_for, global_claims_root
+    from fno.claims.io import claims_dir, global_claims_root
 
     rows = _rows_basic()
     _wire(monkeypatch, tmp_path, rows, {
@@ -337,9 +417,10 @@ def test_external_claim_lands_where_every_node_reader_looks(tmp_path, monkeypatc
     assert json.loads(r.output)["id"] == "EXT-hi"
 
     key = "node:EXT-hi"
-    # The positive marker: the reader that every dispatch surface uses finds
-    # the claim, and names the same holder the acquire was given.
-    info = claim_status(key, root=claims_root_for(key))
+    # The positive marker: the reader that every dispatch surface uses (the
+    # bare native read, global routing inside) finds the claim, and names the
+    # same holder the acquire was given.
+    info = claim_status(key)
     assert info["holder"] == "sess-ext-root"
     # A TTL, and this is the half that makes the lock HONORED rather than merely
     # visible. Selection runs in a process that exits as soon as it prints the
@@ -348,12 +429,8 @@ def test_external_claim_lands_where_every_node_reader_looks(tmp_path, monkeypatc
     # would certify the instrument while the target stayed broken. The TTL is
     # what survives the selector's exit, so assert the TTL, not the state.
     assert info["expires_at"], info
-    # And it is the same lockfile the acquire wrote, not a second one.
-    globals_ = list(claims_dir(global_claims_root()).rglob("*EXT-hi*"))
-    assert globals_, f"no lock under the global root {global_claims_root()}"
-    assert not list(claims_dir().rglob("*EXT-hi*")), (
-        "the claim landed in the cwd-default tree, where no node reader looks"
-    )
+    # And it landed under the global root, not the cwd-default tree.
+    assert claim_status(key, root=global_claims_root())["holder"] == "sess-ext-root"
 
 
 def test_the_external_claim_still_blocks_after_its_selector_exits(
@@ -373,10 +450,9 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(
     asks the guard the question a dispatcher asks.
     """
     import json
-    import re
 
-    from fno.claims.core import claim_path, claim_status
-    from fno.claims.io import claims_root_for
+    from fno.claims.core import claim_status
+    from tests._table_seed import update_claim
 
     rows = _rows_basic()
     _wire(monkeypatch, tmp_path, rows, {
@@ -390,22 +466,16 @@ def test_the_external_claim_still_blocks_after_its_selector_exits(
     assert json.loads(r.output)["id"] == "EXT-hi"
 
     key = "node:EXT-hi"
-    root = claims_root_for(key)
-    path = claim_path(key, root=root)
-
     dead = 999_999
     import psutil
 
     while psutil.pid_exists(dead):
         dead += 1
-    text = path.read_text()
-    patched, n = re.subn(r"(?m)^pid:.*$", f"pid: {dead}", text)
-    assert n == 1, f"expected exactly one pid line in the claim: {text!r}"
-    path.write_text(patched)
+    update_claim(key, pid=dead)
 
     # Dead pid INSIDE the TTL is `suspect`, and suspect blocks. Without the TTL
     # the same reading is `stale`, which does not.
-    assert claim_status(key, root=root)["state"] == "suspect"
+    assert claim_status(key)["state"] == "suspect"
 
     from fno.agents.cli import _spawn_guard_decision
 

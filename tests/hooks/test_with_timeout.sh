@@ -218,6 +218,15 @@ badrc=$?
     && pass "refused bound runs nothing" \
     || fail "a refused bound still ran the command: $badout"
 
+# 3c. The caller's stdin reaches the command. Bash hands an async job /dev/null
+#     for stdin when job control is off, so before the explicit `<&0` a piped
+#     caller got silence - the defect that kept law-stage-inject printing no law
+#     at all (measured 2026-09-22).
+stdinout="$(/bin/bash -c 'set -uo pipefail; source "$1"; printf through | with_timeout 5 cat' _ "$LIB" 2>/dev/null)"
+[[ "$stdinout" == "through" ]] \
+    && pass "caller's stdin passes through to the command" \
+    || fail "piped stdin was dropped: got [$stdinout], expected [through]"
+
 # 4. Nothing reaches the caller's stderr. An unwaited job killed by a signal
 #    makes bash announce "Terminated" on whoever sourced the helper.
 errfile="$TMP/err"
@@ -264,7 +273,8 @@ fi
 #    caller can cover this: the defect being fixed was six implementations of one
 #    operation, five of which capped nothing, and two of those were found only by
 #    running this grep by hand. The positive control matters as much as the
-#    absence - assert a positive marker, never an absence (AGENTS.md).
+#    absence - assert a positive marker, never an absence
+#    (scripts/lib/assert-absent.sh).
 defs="$(grep -rlE '^[[:space:]]*(_?with_timeout|_timeout)\(\)' "$REPO_ROOT/hooks" "$REPO_ROOT/scripts" --include='*.sh' 2>/dev/null | sort)"
 if [[ "$defs" == "$REPO_ROOT/scripts/lib/with-timeout.sh" ]]; then
     # Scope named honestly: this proves uniqueness across hooks/ and scripts/,
@@ -320,7 +330,7 @@ PY
 # Scope control: the known UserPromptSubmit hooks must all parse out, else the
 # json read broke and every check below is vacuous (AGENTS.md: an empty result is
 # a claim, not a success).
-for _known in inside-leg-report.sh born-with-why-offer-inject.sh inject-mail-notify.sh; do
+for _known in session-state.sh born-with-why-offer-inject.sh inject-mail-notify.sh; do
     grep -qx "$_known" <<<"$ups_hooks" \
         || fail "scope control: $_known missing from parsed UserPromptSubmit hooks; guard cannot run"
 done
@@ -333,9 +343,11 @@ for name in $ups_hooks; do
 
     # (a) If it touches a daemon at all - a bare fno/fno-agents token, or a
     #     resolved "$VAR" report RPC over a socket - it must source the bound.
+    #     scripts/lib/hook-budget.sh counts: it sources with-timeout.sh and
+    #     bounds through it, so the bound is present either way.
     if grep -qE '\b(fno|fno-agents)\b' "$f" \
        || grep -qE '"\$[A-Z_][A-Z_]*"[[:space:]]+report' "$f"; then
-        grep -qE '(^|[[:space:]])source[[:space:]].*with-timeout\.sh' "$f" \
+        grep -qE '(^|[[:space:]])source[[:space:]].*(with-timeout|hook-budget)\.sh' "$f" \
             || { fail "$name shells to a daemon but does not source scripts/lib/with-timeout.sh"; guard_fail=1; }
     fi
 

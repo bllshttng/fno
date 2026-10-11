@@ -7,7 +7,7 @@ Welcome. This guide covers the dev environment, how to run the tests and gates l
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). Most contributors also have `jq`, `gh` (authenticated), and `git`.
 
 ```bash
-git clone https://github.com/bllshttng/fno.git
+git clone https://github.com/bllshttng/footnote.git
 cd footnote
 uv tool install ./cli      # puts `fno` on your PATH
 fno --version
@@ -70,7 +70,7 @@ There is also a large set of bash integration tests under `tests/` (hooks, gates
 CI runs these on every PR (`.github/workflows/`):
 
 - **cli-ci** - `uv build`, the pytest suite, `fno config paths verify`, and the bash hook/gate/event integration tests.
-- **rust-ci** - `cargo test --lib --bins`, then `cargo test --test '*' -- --test-threads=1`, `cargo build --bin fno-agents`, and `scripts/check-event-schema-parity.sh`.
+- **rust-ci** - `cargo test --lib --bins`, then `cargo test --test '*' -- --test-threads=1`, `cargo build --bin fno-agents`, `scripts/check-event-schema-parity.sh`, and the generated-copies dirty-tree step. Editing a canonical capability or merge-posture table means rebuild, then commit the regenerated copies.
 - **provider-smoke** - provider-adapter smoke checks.
 
 Run these locally before pushing:
@@ -80,15 +80,15 @@ Run these locally before pushing:
   bash scripts/generate-skill-bundles.sh
   fno doctor bundle check          # must report "skill bundles fresh"
   ```
-- **Static checks** in `scripts/ci/`: `check-no-hardcoded-paths.sh`, `check-no-stale-skill-refs.sh`, `check-registry-schema-parity.sh`. Run the one that covers your area.
+- **Static checks** in `scripts/ci/`: `check-no-hardcoded-paths.sh`, `check-no-stale-skill-refs.sh`. Run the one that covers your area.
 
 ## Skill self-containment
 
-Driver skills (`/target`, `/megawalk`) must stay portable to any markdown-aware runtime. CI enforces four invariants: no `${REPO_ROOT}/scripts/` references, no `${SKILL_DIR}/../../scripts/` path escapes, no `Skill()` runtime calls between driver skills, and no `../../_shared/` or sibling-skill path escapes. Reuse shared content through the bundler, not through relative paths. See [docs/architecture/skill-encapsulation.md](docs/architecture/skill-encapsulation.md).
+Driver skills (`/target`) must stay portable to any markdown-aware runtime. CI enforces four invariants: no `${REPO_ROOT}/scripts/` references, no `${SKILL_DIR}/../../scripts/` path escapes, no `Skill()` runtime calls between driver skills, and no `../../_shared/` or sibling-skill path escapes. Reuse shared content through the bundler, not through relative paths. See [docs/architecture/skill-encapsulation.md](docs/architecture/skill-encapsulation.md).
 
 ## State files are CLI-owned
 
-Never hand-edit `~/.fno/graph.json` or the immutable session manifest `.fno/target-state.md` (an inputs-only file; the only legal post-init write is first-fill of `plan_path` via `fno state set`). Use the `fno` verbs (e.g. `fno backlog`). Hooks detect direct graph mutations post-hoc. See `skills/using-fno/SKILL.md` for the full surface map.
+Never hand-edit `~/.fno/graph.db` or the immutable session manifest `.fno/target-state.md` (an inputs-only file; the only legal post-init write is first-fill of `plan_path` via `fno state set`). Use the `fno` verbs (e.g. `fno backlog`). Hooks detect direct graph mutations post-hoc. See `skills/using-fno/SKILL.md` for the full surface map.
 
 ## Conventions
 

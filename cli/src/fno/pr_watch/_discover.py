@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,11 +37,12 @@ from fno.pr._proc import run as _rest_run
 
 log = logging.getLogger(__name__)
 
-# Exact terminal reads are only a bounded fallback after the repository-level
-# open and closed listings. A missing key is not permission to spend the whole
-# tick on one black-holed endpoint.
-MAX_EXACT_TERMINAL_READS = 3
-EXACT_TERMINAL_READ_TIMEOUT_S = 5.0
+#: Under this much budget left, `read_pr_state` does not start its reviews
+#: leg: a sliver spawns a gh process certain to time out, spending the
+#: deadline to learn nothing. The leg's own measured cost was 1.42s mean over
+#: eight real open PRs on 2026-09-03, rounded down so a fast read is never
+#: refused.
+REVIEWS_LEG_FLOOR_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,7 @@ class PrCandidate:
     # The originating session's harness (claude|codex|gemini): selects which
     # live vehicle the warm route uses. None -> claude (back-compat default).
     source_harness: Optional[str] = None
-    # The originating session's cwd: the direct-finalize rung (x-88df) resolves
+    # The originating session's cwd: the direct-finalize rung resolves
     # its on-disk transcript + manifest from here. None -> probe skipped (cold).
     source_cwd: Optional[str] = None
     # The latest pre-dispatch ``phase: ship`` identity from the node's
@@ -106,6 +108,8 @@ class PrObservation:
     # post-merge dispatcher uses, so the daemon and reconcile mark the SAME
     # merge. None on an open PR or when gh omits it.
     merge_sha: Optional[str] = None
+    # The PR's draft flag from the same gh pr view call; the tick's flip leg reads OPEN + is_draft.
+    is_draft: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -282,13 +286,21 @@ def read_pr_state(
     merge state. Additionally reads reviews from ``gh pr view --json
     reviews,createdAt`` to compute ``latest_review_ts``.
 
+    ``timeout_s`` is the budget for the WHOLE call, not for each leg. It used
+    to bound each leg separately, so one candidate could spend twice the
+    declared number and walk past a tick deadline that is only checked
+    between candidates. One residual: a rate-limited merge-state read adds
+    ``_rest._REASON_DIAGNOSTIC_TIMEOUT_S`` to decorate its own fast error.
+
     Raises ``ReconcileError`` on any gh failure (non-zero returncode, timeout,
-    parse failure, missing binary). The caller is responsible for catching and
-    skipping this candidate; the error is NOT swallowed here so the tick loop
-    (task 1.2) can record it cleanly.
+    parse failure, missing binary) and on a budget that the merge-state leg
+    consumed on its own. The caller is responsible for catching and skipping
+    this candidate; the error is NOT swallowed here so the tick loop can
+    record it cleanly.
     """
     repo_slug = candidate.repo_slug
     cwd_str = str(candidate.repo_dir) if candidate.repo_dir else None
+    started = time.monotonic()
 
     # Step 1: Get merge state via the existing reconcile helper.
     merge_state: PrMergeState = query_pr_merge_state(
@@ -300,6 +312,14 @@ def read_pr_state(
         include_files=False,
     )
 
+    remaining = timeout_s - (time.monotonic() - started)
+    if remaining < REVIEWS_LEG_FLOOR_S:
+        raise ReconcileError(
+            f"read_pr_state #{candidate.pr_number} left {remaining:.2f}s of its "
+            f"{timeout_s:.1f}s budget after the merge-state read, under the "
+            f"{REVIEWS_LEG_FLOOR_S:.1f}s the reviews read costs; it was not started"
+        )
+
     # Step 2: Get reviews + comments + PR metadata for latest_review_ts and opened_at.
     # We include 'comments' (issue/review comments) in addition to 'reviews' so
     # that bot activity posted as a comment (not a formal review submission) is
@@ -307,7 +327,7 @@ def read_pr_state(
     cmd = ["gh", "pr", "view", str(candidate.pr_number)]
     if repo_slug:
         cmd += ["--repo", repo_slug]
-    cmd += ["--json", "reviews,comments,createdAt,number,state,url,mergedAt"]
+    cmd += ["--json", "reviews,comments,createdAt,number,state,url,mergedAt,isDraft"]
 
     try:
         result = runner(
@@ -315,12 +335,13 @@ def read_pr_state(
             capture_output=True,
             text=True,
             check=False,
-            timeout=timeout_s,
+            timeout=remaining,
             cwd=cwd_str,
         )
     except subprocess.TimeoutExpired as exc:
         raise ReconcileError(
-            f"gh pr view #{candidate.pr_number} (reviews) timed out after {timeout_s}s"
+            f"gh pr view #{candidate.pr_number} (reviews) timed out after {remaining:.1f}s, "
+            f"what was left of a {timeout_s:.1f}s call budget"
         ) from exc
     except OSError as exc:
         raise ReconcileError(f"gh subprocess failed to launch: {exc}") from exc
@@ -353,6 +374,7 @@ def read_pr_state(
         latest_review_ts=latest_review_ts,
         opened_at=opened_at,
         merge_sha=merge_state.merge_sha,
+        is_draft=row.get("isDraft") if isinstance(row.get("isDraft"), bool) else None,
     )
 
 
@@ -373,14 +395,14 @@ def read_tracked_pr_states(
     counts into the failure return so a degraded sweep cannot read as a
     clean one. Successful listings also return every OPEN PR, even when it
     was absent from the cache, so the swept snapshot converges to repository
-    truth. A tracked key absent from the open list is resolved from one
-    bounded repository-level ``state=closed`` listing before any exact
-    ``repos/<slug>/pulls/<n>`` fallback. A failed closed listing leaves the
-    terminal keys UNKNOWN and increments the failure count.
+    truth. A tracked key absent from a successful open listing is NOT_OPEN:
+    the tick needs nothing more than that fact, and the closed-listing
+    page walk it replaced timed out at 30s against page 5. A failed open
+    listing leaves its keys UNKNOWN and increments the failure count.
 
     Returns ``(states, sweep_failures)``.
     """
-    from fno.pr._rest import _map_pr_state, list_prs_rest
+    from fno.pr._rest import list_prs_rest
     from fno.pr_watch._state import make_watermark_key, parse_watermark_key
 
     grouped: dict[str, set[int]] = defaultdict(set)
@@ -395,7 +417,6 @@ def read_tracked_pr_states(
         states[canonical] = "UNKNOWN"
 
     sweep_failures = 0
-    exact_reads_used = 0
     for repo, requested in sorted(grouped.items()):
         try:
             rows, reason = list_prs_rest(repo, state="open", runner=runner, timeout=timeout_s)
@@ -415,85 +436,10 @@ def read_tracked_pr_states(
             states[key] = state
             returned.add(number)
 
-        terminal_requested = requested - returned
-        if terminal_requested:
-            try:
-                closed_rows, closed_reason = list_prs_rest(
-                    repo,
-                    state="closed",
-                    requested_numbers=terminal_requested,
-                    runner=runner,
-                    timeout=timeout_s,
-                )
-            except (subprocess.TimeoutExpired, OSError, ToolMissing) as exc:
-                closed_rows, closed_reason = None, str(exc)
-            if closed_rows is None:
-                log.warning(
-                    "pr-watch: terminal-state batch failed for %s: %s",
-                    repo,
-                    closed_reason,
-                )
-                sweep_failures += 1
-                continue
-            for row in closed_rows:
-                number, state = row["number"], row["state"]
-                if number not in terminal_requested:
-                    continue
-                key = make_watermark_key(repo_slug=repo, pr_number=number)
-                states[key] = state
-                returned.add(number)
-
-        # The open and closed lists prove only what they returned. Every
-        # per-key failure counts toward the failure total: a sweep whose keys
-        # stay unresolved must never read as outcome ok (the AC4 swallowed-
-        # failure shape).
-        unresolved = sorted(requested - returned)
-        if exact_reads_used >= MAX_EXACT_TERMINAL_READS:
-            if unresolved:
-                log.warning(
-                    "pr-watch: exact terminal-read cap exhausted; keeping %d keys UNKNOWN",
-                    len(unresolved),
-                )
-                sweep_failures += len(unresolved)
-            continue
-        exact_timeout_s = min(float(timeout_s), EXACT_TERMINAL_READ_TIMEOUT_S)
-        for offset, number in enumerate(unresolved):
-            if exact_reads_used >= MAX_EXACT_TERMINAL_READS:
-                remaining = len(unresolved) - offset
-                log.warning(
-                    "pr-watch: exact terminal-read cap exhausted; keeping %d keys UNKNOWN",
-                    remaining,
-                )
-                sweep_failures += remaining
-                break
-            exact_reads_used += 1
-            try:
-                res = runner(
-                    ["gh", "api", f"repos/{repo}/pulls/{number}"], timeout=exact_timeout_s
-                )
-            except (subprocess.TimeoutExpired, OSError, ToolMissing) as exc:
-                log.warning("pr-watch: per-key read failed for %s#%d: %s", repo, number, exc)
-                sweep_failures += 1
-                continue
-            if not res.ok:
-                log.warning(
-                    "pr-watch: per-key read failed for %s#%d: %s",
-                    repo,
-                    number,
-                    (getattr(res, "stderr", "") or "").strip()[:200],
-                )
-                sweep_failures += 1
-                continue
-            try:
-                one = json.loads(res.stdout)
-            except json.JSONDecodeError:
-                log.warning("pr-watch: per-key read for %s#%d was not JSON", repo, number)
-                sweep_failures += 1
-                continue
-            if not isinstance(one, dict):
-                log.warning("pr-watch: per-key read for %s#%d was not an object", repo, number)
-                sweep_failures += 1
-                continue
-            states[make_watermark_key(repo_slug=repo, pr_number=number)] = _map_pr_state(one)
+        for number in sorted(requested - returned):
+            # Absence means not open only because the open listing pages to a
+            # short page: list_prs_rest warns loudly at its 20-page ceiling
+            # (2000 open PRs per repo, against 14 measured for footnote).
+            states[make_watermark_key(repo_slug=repo, pr_number=number)] = "NOT_OPEN"
 
     return states, sweep_failures

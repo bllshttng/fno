@@ -10,6 +10,7 @@ replay tool-fault path, and the one hard failure: an isolation violation.
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 import typer
@@ -18,6 +19,13 @@ from typer.testing import CliRunner
 from fno.observer import cli
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _unpaused_loop_gate(monkeypatch):
+    from fno import loops
+
+    monkeypatch.setattr(loops, "loops_paused", lambda: False)
 
 
 def _item(session_id, node_id, plan_path):
@@ -47,15 +55,15 @@ def _wire(monkeypatch, tmp_path, items):
 
 
 def _events(path):
-    if not path.exists():
-        return []
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(path)
 
 
 def _good_plan(tmp_path, name):
     p = tmp_path / name
     p.write_text(
-        "# Plan\n\n## Failure Modes\n\nboundaries\n\n"
+        "---\ntitle: t\n---\n\n# Plan\n\n## Failure Modes\n\nboundaries\n\n"
         "## Execution Strategy\n\n```yaml\ntasks:\n- id: '1'\n  surface: ['a.py']\n```\n"
     )
     return p
@@ -161,6 +169,84 @@ def test_sweep_partial_when_an_item_is_unscorable(monkeypatch, tmp_path):
     payload = json.loads(r.output)
     assert payload["state"] == "partial"
     assert payload["coverage_pct"] == 90  # 9 of 10 scored
+
+
+# --------------------------------------------------------------------------- #
+# review sweep reads the attestation evidence
+# --------------------------------------------------------------------------- #
+
+def _wire_review(monkeypatch, tmp_path, items, by_id, stdout, returncode=0):
+    """Redirect events + digest into tmp; inject corpus + stub the binary round-trip."""
+    import fno.paths as paths
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setattr(cli, "_events_paths", lambda: [events_path])
+    monkeypatch.setattr(cli, "_load_corpus", lambda skill, since: ({"items": items, "attributed": len(items)}, by_id))
+    monkeypatch.setattr(paths, "observer_reports_dir", lambda *a, **k: tmp_path / "reports")
+    monkeypatch.setattr(cli, "find_dev_binary", lambda: "/fake/fno-agents")
+    captured = {}
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **k):
+        if "review-summary" not in cmd:
+            return real_run(cmd, *a, **k)  # event-store commits keep their real path
+        captured["payload"] = json.loads(k.get("input") or "{}")
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    return captured, events_path
+
+
+def test_sweep_review_reads_evidence_and_digest_names_it(monkeypatch, tmp_path):
+    """One binary round-trip classifies every item; the digest carries the
+    evidence line verbatim after the verdicts line (AC2-HP)."""
+    items = [_item(f"s{i}", f"x-{i}", None) for i in range(10)]
+    by_id = {f"x-{i}": {"id": f"x-{i}", "pr_number": 100 + i} for i in range(10)}
+    states = ["scored", "clean", "no_pr"] + ["no_attestation"] * 7
+    ev_items = [
+        {"node": f"x-{i}", "pr_number": 100 + i, "state": s, "finding_precision": "pass" if s == "scored" else None}
+        for i, s in enumerate(states)
+    ]
+    evidence_line = "evidence: scored=1 clean=1 missing=8 (no_node=0 no_pr=1 no_attestation=7)"
+    captured, events_path = _wire_review(
+        monkeypatch, tmp_path, items, by_id,
+        json.dumps({"items": ev_items, "evidence_line": evidence_line, "counts": {}}),
+    )
+    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "review"])
+    assert r.exit_code == 0, r.output
+    payload = captured["payload"]
+    assert payload == [{"node": f"x-{i}", "pr_number": 100 + i} for i in range(10)]
+    findings = [e for e in _events(events_path) if e["type"] == "skill_eval_finding"]
+    assert len(findings) == 1
+    assert findings[0]["data"]["dimension"] == "finding_precision"
+    assert findings[0]["data"]["verdict"] == "pass"
+    digest = list((tmp_path / "reports").glob("review-*.md"))[0].read_text()
+    assert evidence_line in digest
+    assert digest.index("verdicts:") < digest.index(evidence_line)
+    assert evidence_line in r.output
+
+
+def test_sweep_review_unread_evidence_names_the_fault(monkeypatch, tmp_path):
+    """A failed binary round-trip leaves every item a gap, names the fault in
+    the digest, and fabricates no verdict (AC2-ERR)."""
+    items = [_item(f"s{i}", f"x-{i}", None) for i in range(10)]
+    by_id = {f"x-{i}": {"id": f"x-{i}", "pr_number": 100 + i} for i in range(10)}
+    captured, events_path = _wire_review(monkeypatch, tmp_path, items, by_id, "{}", returncode=1)
+    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "review"])
+    assert r.exit_code == 0, r.output
+    assert r.output.startswith("partial:")
+    digest = list((tmp_path / "reports").glob("review-*.md"))[0].read_text()
+    assert "evidence: unread (fno-agents review-summary --evidence failed)" in digest
+    assert not [e for e in _events(events_path) if e["type"] == "skill_eval_finding"]
+
+
+def test_sweep_blueprint_digest_has_no_evidence_line(monkeypatch, tmp_path):
+    """The evidence line is review-only: a blueprint digest never carries one (AC2-EDGE)."""
+    items = [_item(f"s{i}", f"x-{i}", _good_plan(tmp_path, f"p{i}.md")) for i in range(10)]
+    _wire(monkeypatch, tmp_path, items)
+    r = runner.invoke(cli.observer_app, ["sweep", "--skill", "blueprint"])
+    assert r.exit_code == 0, r.output
+    digest = list((tmp_path / "reports").glob("blueprint-*.md"))[0].read_text()
+    assert "evidence:" not in digest
 
 
 # --------------------------------------------------------------------------- #
@@ -396,16 +482,18 @@ def test_target_gh_failure_is_repo_coverage_gap():
 def _wire_replay(monkeypatch, tmp_path, item):
     events_path = _wire(monkeypatch, tmp_path, [item])
     monkeypatch.setattr(cli, "_read_plan_text", lambda *a, **k: "# Doc\n\nbuild a widget\n")
-    import fno.claims.core as claims
-    monkeypatch.setattr(claims, "acquire_claim", lambda **k: object())
-    monkeypatch.setattr(claims, "release_claim", lambda *a, **k: None)
+    import fno.backlog.single_flight as sf
+    monkeypatch.setattr(
+        sf, "acquire_flight",
+        lambda key, **k: sf.Flight(key=key, holder="replay:fake", held=False),
+    )
     return events_path
 
 
 def test_replay_happy_path_emits_tagged_finding(monkeypatch, tmp_path):
     item = _item("s-rep", "x-rep", None)
     events_path = _wire_replay(monkeypatch, tmp_path, item)
-    fresh = "## Failure Modes\nx\n\n## Execution Strategy\n```yaml\ntasks:\n- id: '1'\n  surface: ['a.py']\n```\n"
+    fresh = "---\ntitle: t\n---\n\n## Failure Modes\nx\n\n## Execution Strategy\n```yaml\ntasks:\n- id: '1'\n  surface: ['a.py']\n```\n"
     cli._replay(
         skill="blueprint", corpus_item="s-rep", skill_ref="cand-branch",
         run_id="obs-fno:blueprint-test", since=90,
@@ -441,10 +529,10 @@ def test_already_scored_tolerates_non_dict_json_lines(tmp_path):
 def test_replay_concurrent_holder_refuses_without_stomping(monkeypatch, tmp_path):
     item = _item("s-rep", "x-rep", None)
     _wire_replay(monkeypatch, tmp_path, item)
-    import fno.claims.core as claims
-    def _held(**k):
-        raise claims.ClaimHeldByOther(holder="peer:999", pid=999, host="h", key=k.get("key", "obs"))
-    monkeypatch.setattr(claims, "acquire_claim", _held)
+    import fno.backlog.single_flight as sf
+    def _held(key, **k):
+        return sf.Flight(key=key, holder="peer:999", held=True)
+    monkeypatch.setattr(sf, "acquire_flight", _held)
     with pytest.raises(typer.Exit) as exc:
         cli._replay(
             skill="blueprint", corpus_item="s-rep", skill_ref=None,
@@ -487,11 +575,18 @@ def test_replay_isolation_violation_hard_fails(monkeypatch, tmp_path):
     item = _item("s-rep", "x-rep", None)
     events_path = _wire_replay(monkeypatch, tmp_path, item)
     monkeypatch.setattr(cli, "_write_workdir_settings", lambda wd: None)
+    from fno import loops
+    monkeypatch.setattr(loops, "loops_paused", lambda: False)
 
     class _P:
         returncode, stdout, stderr = 0, "", ""
 
-    monkeypatch.setattr(cli.subprocess, "run", lambda *a, **k: _P())
+    real_run = cli.subprocess.run
+
+    def run(argv, *args, **kwargs):
+        return _P() if argv[0] == "git" else real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
     from fno.observer import isolation
     monkeypatch.setattr(isolation, "collect_eval_session_ids", lambda wd, **k: ({"leak"}, None))
     monkeypatch.setattr(
@@ -501,7 +596,7 @@ def test_replay_isolation_violation_hard_fails(monkeypatch, tmp_path):
             violations=[isolation.Violation(path=tmp_path / "ledger.json", session_id="leak", line_number=1, detail="x")],
         ),
     )
-    fresh = "## Failure Modes\nx\n\n## Execution Strategy\n```yaml\ntasks:\n- id: '1'\n  surface: ['a.py']\n```\n"
+    fresh = "---\ntitle: t\n---\n\n## Failure Modes\nx\n\n## Execution Strategy\n```yaml\ntasks:\n- id: '1'\n  surface: ['a.py']\n```\n"
     with pytest.raises(typer.Exit) as exc:
         cli._replay(
             skill="blueprint", corpus_item="s-rep", skill_ref=None,

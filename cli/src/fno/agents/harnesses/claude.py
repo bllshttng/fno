@@ -29,7 +29,6 @@ real CLI drift. When ``claude`` changes its stdin convention, only the
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import re
@@ -38,18 +37,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 from fno.agents.harnesses._claude_session_registry import (
-    TERMINAL_STATES,
-    SessionLocator,
-    _jobs_dir_for,
     locate_session,
-    read_state_json,
-    read_timeline_tail,
     resolve_session_uuid,
-    roster_live,
+    revive_proof_or_refuse,
 )
 from fno.agents.harnesses.base import ProviderResult, ReachabilityProbeError
 from fno.agents.writable_dirs import worker_writable_dirs
@@ -168,7 +161,7 @@ def _tier3_tokens(
     deny_tools: Optional[str] = None,
     computed_dirs: "Sequence[str]" = (),
 ) -> list[str]:
-    """x-b6e2: claude's own spellings for the Tier-3 passthrough flags, in a fixed
+    """x-aaaa: claude's own spellings for the Tier-3 passthrough flags, in a fixed
     order (--add-dir/--agent/--allowedTools/--disallowedTools), skipping empty.
     claude-only (the fail-closed for other providers lives at the CLI/client
     guard); kept identical to the Rust HarnessFlags::push_onto for argv parity.
@@ -230,7 +223,7 @@ def _build_argv(
     set, so the substrate is verified portably. The smoke-marker test
     (Locked Decision 4) catches real-CLI drift.
 
-    A truthy ``model`` (x-571f per-node pin) appends ``--model <m>`` between
+    A truthy ``model`` (per-node pin) appends ``--model <m>`` between
     ``--name`` and the message; unset/empty means today's argv byte-for-byte.
     The model/permission/effort flags are kept identical to the Rust
     ``build_argv`` (AC2-FR cross-runtime parity).
@@ -253,19 +246,19 @@ def _build_argv(
     lane = "interactive_resume" if resume_session_id else "interactive_create"
     identity = render_session_argv("claude", lane, resume_session_id)
     argv = [identity[0], "--bg", "--name", name]
-    # x-6de8: a routed bg session's serving process is forked by the daemon
+    # a routed bg session's serving process is forked by the daemon
     # without the per-spawn ANTHROPIC_* env; --settings is read by the session
     # process itself and survives that fork, so the route actually applies.
     if settings_path:
         argv += ["--settings", settings_path]
-    # x-dfa4: exact passthrough to claude's own --permission-mode; the caller
+    # exact passthrough to claude's own --permission-mode; the caller
     # resolves --yolo -> bypassPermissions before this point. Kept identical to
     # the Rust build_argv (cross-runtime parity). Empty/None = unchanged argv.
     if permission_mode:
         argv += ["--permission-mode", permission_mode]
     if effort:
         argv += ["--effort", effort]
-    # x-b6e2: Tier-3 passthrough, same order as the Rust build_argv (parity).
+    # x-aaaa: Tier-3 passthrough, same order as the Rust build_argv (parity).
     argv += _tier3_tokens(
         add_dir,
         agent,
@@ -378,6 +371,7 @@ def headless_create(
     account_env: Optional[Mapping[str, str]] = None,
     route_env: Optional[Mapping[str, str]] = None,
     name: Optional[str] = None,
+    passthrough: Optional[Sequence[str]] = None,
 ) -> ProviderResult:
     """Run a one-shot ``claude -p`` without creating a background session.
 
@@ -391,7 +385,7 @@ def headless_create(
 
         route_env = resolve_spawn_route(None, route_env)
     argv = ["claude", "-p"]
-    # x-6de8: apply an explicit --route via --settings, same as bg_create. A
+    # apply an explicit --route via --settings, same as bg_create. A
     # direct `claude -p` subprocess would inherit route env too, but --settings
     # keeps the two lanes identical and is the mechanism that survives the bg
     # daemon fork, so the route behaves the same whichever substrate the caller
@@ -411,28 +405,32 @@ def headless_create(
         argv += ["--model", model]
     if effort:
         argv += ["--effort", effort]
-    # x-b6e2: Tier-3 passthrough, same order as the Rust headless builder.
+    # x-aaaa: Tier-3 passthrough, same order as the Rust headless builder.
     argv += _tier3_tokens(
         add_dir, agent, tools, deny_tools, computed_dirs=worker_writable_dirs(cwd)
     )
     if output_format:
         argv += ["--output-format", output_format]
+    if passthrough:
+        from fno.agents.mux_spawn import pane_passthrough_tokens
+
+        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
     # Behind `--` like every other claude seed: a leading-flag seed must be
     # the prompt positional, not a claude flag.
     argv += ["--", message or "hello"]
     # A one-shot `claude -p` inherits the parent env, so an ambient
     # ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN would override BOTH a per-spawn
-    # account overlay (x-d012) AND a routed --settings token (x-6de8, codex P1):
+    # account overlay AND a routed --settings token (codex P1):
     # claude prefers an env credential over the settings file, so a routed
     # headless spawn from a logged-in shell would authenticate with the primary
     # Claude account instead of the selected provider (routing failure / wrong
     # billing). compose_worker_credentials scrubs the inherited auth vars
     # whenever we route or pin an account and applies the same scrub/account/
-    # route precedence as every other seam (x-8552), belt-and-suspenders with
+    # route precedence as every other seam, belt-and-suspenders with
     # --settings. Without either overlay, inherit the parent env untouched.
     spawn_env: Optional[dict[str, str]] = None
     # Identity scrubbing is NOT done here: worker_environment() below is the
-    # floor every adapter's child env crosses (x-b57a), so an adapter cannot
+    # floor every adapter's child env crosses, so an adapter cannot
     # decline it and the next adapter cannot miss it. The env is constructed
     # only when an overlay or an incoherent model env demands one; a coherent,
     # overlay-free call still passes None and inherits byte-identically (there
@@ -535,6 +533,7 @@ def bg_create(
     agent: Optional[str] = None,
     tools: Optional[str] = None,
     deny_tools: Optional[str] = None,
+    passthrough: Optional[Sequence[str]] = None,
     account_env: Optional[Mapping[str, str]] = None,
     sandbox_settings: Optional[Mapping[str, object]] = None,
 ) -> ProviderResult:
@@ -546,14 +545,14 @@ def bg_create(
         cwd: Working directory passed to subprocess.run so claude inherits
             it for tool execution.
         timeout: Subprocess timeout in seconds. ``None`` means no timeout.
-        role: Optional routing role (x-d2fe). An auxiliary role (coordinate /
+        role: Optional routing role. An auxiliary role (coordinate /
             tidy / orient / consolidate) with a configured provider key routes
             the worker to a secondary provider via env overrides; ``None`` or a
             production role leaves the spawn env byte-for-byte as today.
         route_env: Optional pre-resolved explicit route env (from ``spawn
             --route``, already fail-closed at the CLI). When present it WINS over
             ``role`` (named intent beats auto-routing) and is merged directly.
-        model: Optional per-node model pin (x-571f). Truthy appends
+        model: Optional per-node model pin. Truthy appends
             ``--model <m>`` to the ``claude --bg`` argv; unset leaves it as
             today. Orthogonal to ``role``: the argv pin beats a role's env
             model, which is the right precedence (node pin is more specific).
@@ -580,11 +579,11 @@ def bg_create(
         )
     msg_bytes = message.encode("utf-8")
     use_stdin = len(msg_bytes) > _ARGV_OVERFLOW_THRESHOLD
-    # x-6de8: a routed bg session loses its ANTHROPIC_* env across the daemon
+    # a routed bg session loses its ANTHROPIC_* env across the daemon
     # fork; write it to a --settings file the session process reads itself.
     # An --account spawn has the same problem: the env scrub below is dropped at
     # the fork too, so the scrub (and an api_key account's resolved ANTHROPIC_*)
-    # rides a settings file as well. --account and --route compose (x-5ed4):
+    # rides a settings file as well. --account and --route compose:
     # when both are present the route wins the settings file (route-wins
     # atomicity - endpoint+auth+model as one unit), and the account overlay
     # rides the spawn env below (CLAUDE_CONFIG_DIR selects the per-account daemon).
@@ -603,9 +602,9 @@ def bg_create(
     # Without a route/account there is no settings file, so an env-only scrub
     # of the model vars below is decorative for `claude --bg`: the serving
     # session is forked by the claude daemon with the DAEMON's own env
-    # (x-6de8), never this process's spawn_env. Float a settings file
+    #, never this process's spawn_env. Float a settings file
     # flooring the offending vars so the fix reaches the actual worker in the
-    # plain unrouted case too - the shape x-4709 exists to fix. The floor
+    # plain unrouted case too - the shape exists to fix. The floor
     # covers COHERENT inherited claims as well: a daemon-forked child cannot
     # be reached by the spawn_env clear below, and an unrouted child running
     # on a model the launching shell happened to export is the same
@@ -634,6 +633,10 @@ def bg_create(
         settings_path=settings_path,
         cwd=cwd,
     )
+    if passthrough:
+        from fno.agents.mux_spawn import pane_passthrough_tokens
+
+        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
 
     # Inject FNO_AGENT_* env vars so nested `fno agents ask` calls
     # from inside the spawned agent attribute back to this parent.
@@ -643,7 +646,7 @@ def bg_create(
     # SESSION gracefully via caller_kind=nested_agent + from_session_id=None.
     spawn_env = dict(os.environ)
     # Identity scrubbing happens in worker_environment() below, the floor every
-    # adapter's child env crosses (x-b57a): a spawned child inherits its
+    # adapter's child env crosses: a spawned child inherits its
     # parent's ROUTE (account/model below) but never its parent's IDENTITY - a
     # claude reviewer spawned from a codex parent carrying a foreign
     # CODEX_THREAD_ID would stamp the parent's session and read as
@@ -671,14 +674,14 @@ def bg_create(
     spawn_env["FNO_AGENT_SELF"] = name
     spawn_env["FNO_AGENT_HARNESS"] = "claude"
     # Raise the harness Stop-hook block cap so fno's repeated-block loop is not
-    # force-ended at the default 9 (x-1680). Non-auth spawn env reaches the bg
+    # force-ended at the default 9. Non-auth spawn env reaches the bg
     # session process the same way FNO_AGENT_SELF above does.
     spawn_env["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"] = claude_stop_hook_block_cap()
 
-    # Role-based model routing (x-d2fe) and the per-spawn account overlay
-    # (x-d012) compose through ONE function (x-8552): scrub inherited auth vars,
+    # Role-based model routing and the per-spawn account overlay
+    # compose through ONE function: scrub inherited auth vars,
     # layer the account (profile + its own login), layer the route last so it
-    # wins endpoint+auth+model as one unit (x-2af5 atomicity) while
+    # wins endpoint+auth+model as one unit (atomicity) while
     # CLAUDE_CONFIG_DIR survives. The role or explicit route was resolved once
     # above; reusing that captured value keeps mutable manifest discovery from
     # changing within one launch.
@@ -704,7 +707,7 @@ def bg_create(
     # floor CLEARS this group for every adapter (a child must never inherit its
     # parent's seed attribution); setting before it would be silently undone.
     #
-    # KNOWN GAP on this lane, and the same one x-6de8 names ~90 lines up: a
+    # KNOWN GAP on this lane, and the same one names ~90 lines up: a
     # ROUTED `claude --bg` session is forked by the claude daemon with the
     # DAEMON's env, not this spawn_env, so these fields do not reach that
     # child and its SessionStart renders no sidecar. The forgery refusal below
@@ -722,10 +725,13 @@ def bg_create(
     # here and demoted to durable, blaming a spawn failure that never happened.
     spawn_env.update(_seed_provenance_env(message, node=os.environ.get("FNO_NODE")))
 
+    from fno.rust_binary import resolve_binary
+
+    spawn_argv = [str(resolve_binary() or "fno-agents"), "claude-birth-exec", "--", *argv]
     start = time.monotonic()
     try:
         result = _subprocess_run(
-            argv,
+            spawn_argv,
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -743,11 +749,9 @@ def bg_create(
             stderr=f"claude --bg timed out after {exc.timeout}s",
         ) from exc
     except FileNotFoundError as exc:
-        # claude went missing between the PATH check and exec. Rare race
-        # (user uninstalled claude mid-flight) but still possible.
         raise ProviderSubprocessError(
             exit_code=127,
-            stderr=f"claude CLI not found: {exc}",
+            stderr=f"fno-agents or claude CLI not found: {exc}. Run `fno doctor update`.",
         ) from exc
     duration_ms = int((time.monotonic() - start) * 1000)
 
@@ -756,10 +760,13 @@ def bg_create(
     exit_code = result.returncode
 
     if exit_code != 0:
+        stderr += " Run `fno doctor update`." if "unknown verb: claude-birth-exec" in stderr else ""
         raise ProviderSubprocessError(exit_code=exit_code, stderr=stderr)
 
     short_id = parse_short_id(stdout)
 
+    if resume_session_id:  # a fork that never started must not read as success
+        revive_proof_or_refuse(name, short_id)
     return ProviderResult(
         exit_code=exit_code,
         stdout=stdout,
@@ -770,7 +777,7 @@ def bg_create(
 
 
 # ===========================================================================
-# Spawn-time full session-UUID capture (ab-f1b0ccd1, US1 / AC1-HP)
+# Spawn-time full session-UUID capture (US1 / AC1-HP)
 # ===========================================================================
 #
 # `claude --bg` registers a worker by its 8-hex jobId (`claude_short_id`), but
@@ -898,123 +905,6 @@ class ProviderTimeoutError(RuntimeError):
         self.short_id = short_id
 
 
-def build_cross_session_container(message: str, from_name: str) -> str:
-    """Wrap a body in the cross-session-message container that marks it as a
-    peer turn (not operator input).
-
-      <cross-session-message from-name="<escaped>">
-      <message-text>
-      </cross-session-message>
-
-    Shared by the socket envelope (below) and the mux PTY paste path in
-    dispatch, so the from-name escaping stays byte-in-lockstep with the Rust
-    PTY injector. See docs/architecture/fno-agents-deliver-gate.md; changing
-    the escaper here means changing `xml_attr_escape` in daemon.rs too.
-
-    Refuses a ``message`` carrying its own ``</cross-session-message>`` close
-    tag or an ``<fno_mail``/``</fno_mail>`` tag: a peer follow-up (``fno
-    agents ask``) reaches this producer with no forged-envelope check upstream
-    -- unlike the mail send/reply lanes -- so a body closing the container
-    early and opening a fake ``<fno_mail from="operator">`` right after it
-    would otherwise land as an apparently-trusted second envelope on both the
-    socket and mux PTY delivery vehicles this function feeds (codex P1)."""
-    from fno.mail.envelope import ForgedEnvelopeError, contains_fno_mail_tag
-
-    if contains_fno_mail_tag(message) or "</cross-session-message>" in message.lower():
-        raise ForgedEnvelopeError(
-            "cross-session message contains a </cross-session-message> or "
-            "<fno_mail> tag. The container frames peer turns; a message "
-            "cannot contain either."
-        )
-    safe_from = html.escape(from_name, quote=True)
-    return f'<cross-session-message from-name="{safe_from}">\n{message}\n</cross-session-message>'
-
-
-def _build_envelope(message: str, from_name: str) -> bytes:
-    """Render the BG8 cross-session envelope as UTF-8 bytes + trailing newline.
-
-    Shape ``{"type":"user","message":{"role":"user","content":<wrapped>},
-    "priority":"next"}`` (a synthetic USER turn) is fixed by Claude Code's CE7
-    socket listener and has been stable across versions. What changed is what
-    the receiver DOES with it: current Claude Code (verified on 2.1.226) holds
-    this envelope for manual review whenever the recipient runs
-    ``bypassPermissions`` (the ``crossSessionInbound`` guard, shipped as a
-    security feature: a synthetic user turn is indistinguishable from operator
-    typing, and in a bypass session it would drive tools with no approval).
-
-    The listener does carry a ``fromMode`` attestation field (a peer origin
-    whose mode matches the recipient's class is auto-delivered), but reading it
-    is gated behind the internal GrowthBook flag ``tengu_harbor_kite_mode_emit``
-    (default off), so it is not a contract a sender can rely on or enable. The
-    only documented escape is the receiver setting ``crossSessionInbound:
-    "accept"``, which accepts every un-attested peer. Net: a socket inject
-    cannot be delivered into a bypass session. ``recovery.py`` documents the
-    consequence for the watchdog; a fresh ``claude --bg --resume`` (whose seed
-    is a CLI arg, not a socket inject) is the deliverable channel.
-
-    XML-attribute escape is mandatory; the dispatch layer rejects XML-unsafe
-    input before we get here, but a defensive escape keeps the envelope safe in
-    every code path.
-    """
-    wrapped = build_cross_session_container(message, from_name)
-    envelope = {
-        "type": "user",
-        "message": {"role": "user", "content": wrapped},
-        "priority": "next",
-    }
-    return (json.dumps(envelope, separators=(",", ":")) + "\n").encode("utf-8")
-
-
-# Transport-level send outcome. The only success state of a single-shot AF_UNIX
-# write is "the bytes were written to the local socket end"; it does NOT mean the
-# recipient accepted the message. A ``bypassPermissions`` recipient holds
-# cross-session messages by design (Claude Code >=2.1.226 ``crossSessionInbound``
-# guard), and that hold is asynchronous and undetectable from the sender. Callers
-# that need a delivery guarantee must use a channel with an ack (or a fresh
-# process whose seed is a CLI arg, not a socket inject). See ``_build_envelope``.
-SEND_WRITTEN = "written"
-
-
-def send_to_session(sock_path: str, content: str, from_name: str) -> str:
-    """Single-shot send of the BG8 envelope over the messaging socket.
-
-    Opens an AF_UNIX SOCK_STREAM, writes the rendered envelope plus a
-    newline, closes. Raises :class:`ProviderSocketError` on any
-    connect/write/close failure, with the underlying ``OSError`` chained
-    as ``__cause__``. On success returns :data:`SEND_WRITTEN`.
-
-    "Written" is a TRANSPORT outcome, not a delivery outcome: it means the bytes
-    hit the kernel buffer, not that the peer accepted them. A
-    ``bypassPermissions`` recipient holds the message by design and the sender
-    cannot tell. On AF_UNIX SOCK_STREAM, post-``sendall`` close-time errors
-    (EIO, ECONNRESET) are the only reliable "your bytes never made it across"
-    signal, so a close OSError is propagated as a send failure rather than
-    swallowed; a clean close still only proves the write, not the delivery.
-    """
-    payload = _build_envelope(content, from_name)
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(_SEND_SOCKET_TIMEOUT_SEC)
-    primary_exc: Optional[BaseException] = None
-    try:
-        sock.connect(sock_path)
-        sock.sendall(payload)
-    except OSError as exc:
-        primary_exc = exc
-    finally:
-        try:
-            sock.close()
-        except OSError as close_exc:
-            # If a primary error already exists, prefer it; close
-            # failures after a send error are noise. Otherwise surface
-            # the close error - on AF_UNIX it signals the recipient
-            # didn't accept the bytes.
-            if primary_exc is None:
-                raise ProviderSocketError(f"close after send failed: {close_exc}") from close_exc
-    if primary_exc is not None:
-        raise ProviderSocketError(str(primary_exc)) from primary_exc
-    return SEND_WRITTEN
-
-
 def liveness_probe(sock_path: str) -> bool:
     """Return ``True`` iff a 250 ms connect to ``sock_path`` succeeds.
 
@@ -1036,271 +926,6 @@ def liveness_probe(sock_path: str) -> bool:
             pass
 
 
-def _session_truth_state(short_id: str, cwd: Path) -> str:
-    """Family-1 verdict for a known Claude transcript; never raises."""
-    from fno.agents.session_truth import resolve_session_truth
-
-    session_id = resolve_session_uuid(short_id)
-    if not session_id:
-        return str(resolve_session_truth(short_id).get("state") or "unknown")
-    session = SimpleNamespace(
-        agent="claude", session_id=session_id, cwd=str(cwd), short_id=short_id
-    )
-    return str(resolve_session_truth(
-        short_id, resolve=lambda _handle: (session, [])
-    ).get("state") or "unknown")
-
-
-def wait_for_reply(
-    jobs_dir: Path,
-    baseline_updated_at: Optional[str],
-    timeline_offset: int,
-    timeout: float,
-    poll_interval: float = 0.5,
-) -> str:
-    """Poll ``jobs_dir/state.json`` until a fresh terminal state appears.
-
-    Exit conditions per Locked Decision #9:
-
-      ``state.updated_at`` is lexicographically greater than
-      ``baseline_updated_at`` AND ``state`` is in
-      ``{done, completed, failed, needs-input}``.
-
-    On exit, prefer ``state.output.result`` as the reply text; fall
-    back to :func:`read_timeline_tail` from the captured byte offset
-    when ``output.result`` is empty or absent.
-
-    Raises :class:`ProviderTimeoutError` when ``timeout`` seconds pass
-    without satisfying the exit condition. ``baseline_updated_at`` may
-    be ``None`` when the recipient never wrote state.json before the
-    send; in that case any terminal state with a non-null ``updated_at``
-    counts as a transition.
-    """
-    deadline = time.monotonic() + timeout
-    final_snap = None
-    while True:
-        try:
-            snap = read_state_json(jobs_dir)
-        except (FileNotFoundError, json.JSONDecodeError):
-            # FileNotFoundError: recipient hasn't created state.json yet.
-            # JSONDecodeError: atomic-rename window (read_state_json
-            # already retried once inside; if we still see this we treat
-            # it as transient and poll again).
-            snap = None
-        # PermissionError, IsADirectoryError, EROFS, etc. are NOT
-        # retryable - polling for 600 s would mask the cause as a
-        # timeout. Let them propagate.
-
-        if snap is not None and snap.state in TERMINAL_STATES:
-            advanced = baseline_updated_at is None or (
-                snap.updated_at is not None and snap.updated_at > baseline_updated_at
-            )
-            if advanced:
-                final_snap = snap
-                break
-
-        if time.monotonic() >= deadline:
-            raise ProviderTimeoutError(elapsed_sec=timeout)
-
-        time.sleep(poll_interval)
-
-    if final_snap.output_result:
-        return final_snap.output_result
-    return read_timeline_tail(jobs_dir, timeline_offset)
-
-
-def ask_followup(
-    claude_short_id: str,
-    message: str,
-    cwd: Path,
-    from_name: str,
-    timeout: float,
-    poll_interval: float = 0.5,
-    jobs_dir: Optional[Path] = None,
-) -> str:
-    """Orchestrate locate -> probe -> send -> wait_for_reply for one follow-up.
-
-    Returns the recipient's reply text (output.result preferred,
-    timeline tail fallback). Raises :class:`ProviderOrphanError` when
-    the session is not reachable, :class:`ProviderSocketError` on send
-    failure, and :class:`ProviderTimeoutError` on poll timeout.
-
-    ``cwd`` lets the family-1 transcript resolver survive EnterWorktree even
-    when the socket registry points at the launch directory.
-    """
-    locator: Optional[SessionLocator] = locate_session(claude_short_id)
-    if locator is None:
-        # Distinguish socket-null (suspended) from not-found by re-reading
-        # the sessions dir: not-found is "no entry at all"; socket-null is
-        # "entry exists but messagingSocketPath is null".
-        reason = _classify_orphan_reason(claude_short_id)
-        # x-2681: a socket-null session that is live in the daemon roster is
-        # reachable over the daemon control.sock even though the BG8 messaging
-        # socket is down. Fall back to that vehicle before transcript truth.
-        if reason == "socket-null" and roster_live(claude_short_id):
-            return _ask_via_control_sock(
-                claude_short_id,
-                message,
-                from_name,
-                timeout,
-                jobs_dir=jobs_dir,
-                poll_interval=poll_interval,
-            )
-        if _session_truth_state(claude_short_id, cwd) not in {"done", "stalled"}:
-            reason = "truth-live-inject-failed"
-        raise ProviderOrphanError(reason=reason, short_id=claude_short_id)
-
-    if not liveness_probe(locator.messaging_socket_path):
-        # Socket exists but is dead. Same control.sock fallback when roster-live.
-        if roster_live(claude_short_id):
-            return _ask_via_control_sock(
-                claude_short_id,
-                message,
-                from_name,
-                timeout,
-                jobs_dir=jobs_dir,
-                poll_interval=poll_interval,
-            )
-        if _session_truth_state(claude_short_id, cwd) not in {"done", "stalled"}:
-            raise ProviderOrphanError(
-                reason="truth-live-inject-failed",
-                short_id=claude_short_id,
-                detail=locator.messaging_socket_path,
-            )
-        raise ProviderOrphanError(
-            reason="liveness-failed",
-            short_id=claude_short_id,
-            detail=locator.messaging_socket_path,
-        )
-
-    # Capture baseline BEFORE send so a same-tick recipient transition
-    # is not missed AND so pre-send output.result cannot impersonate the
-    # reply (AC2-EDGE baseline invariant).
-    target_jobs_dir = jobs_dir if jobs_dir is not None else locator.jobs_dir
-    baseline_updated_at: Optional[str] = None
-    timeline_offset = 0
-    try:
-        snap = read_state_json(target_jobs_dir)
-        baseline_updated_at = snap.updated_at
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        baseline_updated_at = None
-    timeline_path = target_jobs_dir / "timeline.jsonl"
-    if timeline_path.exists():
-        try:
-            timeline_offset = timeline_path.stat().st_size
-        except OSError:
-            timeline_offset = 0
-
-    send_to_session(locator.messaging_socket_path, message, from_name)
-
-    return wait_for_reply(
-        jobs_dir=target_jobs_dir,
-        baseline_updated_at=baseline_updated_at,
-        timeline_offset=timeline_offset,
-        timeout=timeout,
-        poll_interval=poll_interval,
-    )
-
-
-def _ask_via_control_sock(
-    short_id: str,
-    message: str,
-    from_name: str,
-    timeout: float,
-    *,
-    jobs_dir: Optional[Path] = None,
-    poll_interval: float = 0.5,
-) -> str:
-    """x-2681 ask-lane fallback: deliver ``message`` to a roster-live but
-    socket-null session over the daemon ``control.sock`` (the tested Rust
-    ``mail-inject`` verb), then collect the reply from the bg jobs-dir.
-
-    Reuses the SAME single wire vehicle as ``fno agents mail send`` -- Python never
-    opens ``control.sock``. The message is wrapped in the cross-session-message
-    container so the recipient reads it as a peer turn, matching the socket
-    path's framing.
-
-    Outcomes:
-      - inject not confirmed -> ``ProviderOrphanError("roster-live-inject-failed")``:
-        a delivery failure on a LIVE session, so the dispatch caller reports it
-        WITHOUT stamping the row orphaned (AC6-FR).
-      - delivered, reply collected from the jobs-dir tail -> the reply text.
-      - delivered, no jobs-dir reply within budget -> ``ProviderTimeoutError``
-        (message landed, not lost; exit 15). Operator sessions with no bg
-        jobs-dir degrade here for v1 (Open Questions 1/3: bg is the confirmed
-        reply surface; never fabricate an empty reply).
-    """
-    from fno.agents.dispatch import _mail_inject_claude  # lazy: no import cycle
-
-    target_jobs_dir = jobs_dir if jobs_dir is not None else _jobs_dir_for(short_id)
-    # Baseline the reply surface BEFORE inject so a pre-existing terminal state
-    # cannot impersonate this turn's reply (mirrors ask_followup's invariant).
-    baseline_updated_at: Optional[str] = None
-    try:
-        baseline_updated_at = read_state_json(target_jobs_dir).updated_at
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        baseline_updated_at = None
-    timeline_offset = 0
-    timeline_path = target_jobs_dir / "timeline.jsonl"
-    if timeline_path.exists():
-        try:
-            timeline_offset = timeline_path.stat().st_size
-        except OSError:
-            timeline_offset = 0
-
-    wrapped = build_cross_session_container(message, from_name)
-    if not _mail_inject_claude(short_id, wrapped):
-        raise ProviderOrphanError(
-            reason="roster-live-inject-failed",
-            short_id=short_id,
-        )
-
-    # Delivered. A bg recipient writes state.json/timeline; poll for its reply.
-    # No jobs-dir (operator session) -> nothing to poll: report delivered-no-reply
-    # rather than spin the full timeout or fabricate an empty reply.
-    if not target_jobs_dir.exists():
-        raise ProviderTimeoutError(elapsed_sec=0.0, short_id=short_id)
-
-    return wait_for_reply(
-        jobs_dir=target_jobs_dir,
-        baseline_updated_at=baseline_updated_at,
-        timeline_offset=timeline_offset,
-        timeout=timeout,
-        poll_interval=poll_interval,
-    )
-
-
-def _classify_orphan_reason(short_id: str) -> OrphanReason:
-    """Distinguish ``not-found`` from ``socket-null`` after locate returned None.
-
-    ``locate_session`` returns ``None`` for both cases — we re-scan the
-    sessions directory to figure out which one applies, so the dispatch
-    layer can map to the AC-required stderr reason discriminator.
-    """
-    from fno.agents.harnesses._claude_session_registry import (
-        _sessions_dir,
-    )
-
-    sessions = _sessions_dir()
-    if not sessions.exists():
-        return "not-found"
-    for path in sessions.glob("*.json"):
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            continue
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("jobId") != short_id:
-            continue
-        if raw.get("kind") != "bg":
-            continue
-        sock = raw.get("messagingSocketPath")
-        if sock is None or sock == "":
-            return "socket-null"
-    return "not-found"
-
-
 # ---------------------------------------------------------------------------
 # US3 — read-path additions: claude_agents_json() + logs()
 # ---------------------------------------------------------------------------
@@ -1310,7 +935,6 @@ _AGENTS_JSON_TIMEOUT_DEFAULT = 3.0
 
 # Locked Decision 3 — 500ms polling cadence for --follow without an
 # inotify/fsevents dep. Matches US2's state.json polling pattern.
-_FOLLOW_POLL_INTERVAL = 0.5
 
 
 # The OUTPUT vocabulary: what this parser promises its callers, regardless of
@@ -1319,21 +943,9 @@ _FOLLOW_POLL_INTERVAL = 0.5
 # through unchanged so consumers that already adapted aren't blocked on us.
 KNOWN_LIVE_STATUSES = frozenset({"Working", "Needs input", "Idle", "Done"})
 
-# The "not blocked" subset of KNOWN_LIVE_STATUSES -- every status except
-# "Needs input", lowercased for case-insensitive callers. Single source for
-# resume_cli.py's wake-skip check and read.py's live_status fill-in gate,
-# which used to each hand-enumerate this same subset and had already drifted
-# out of sync with each other by the time review caught it.
 NOT_BLOCKED_STATUSES_LOWER = frozenset(
     s.lower() for s in KNOWN_LIVE_STATUSES if s != "Needs input"
 )
-
-# The WAKE-skip subset, deliberately narrower than NOT_BLOCKED_STATUSES_LOWER.
-# The risk that set guards is injecting keystrokes MID-TURN, and that risk is
-# Working's alone. Idle is between turns: the one state the wake lane exists to
-# move, and the state a silent session sits in. Done has no process to reach.
-# Kept separate because read.py's fill-in gate still needs the idle/done pair.
-WAKE_SKIP_STATUSES_LOWER = frozenset({"working", "done"})
 
 # The INPUT vocabulary: every spelling observed from a real binary, mapped onto
 # the output set. Widening the output set instead (accepting "blocked" as its
@@ -1347,6 +959,21 @@ _LIVE_STATUS_INPUT = {
     "needs input": "Needs input",
     "idle": "Idle",
     "done": "Done",
+    "failed": "Done",
+    # claude emits this routinely for a terminal row with no live
+    # turn. Liveness is the axis this vocabulary carries, and a stopped
+    # session has none - same as a failed one above. Outcome (why it
+    # stopped) is a different axis this vocabulary does not carry; do not
+    # widen this mapping to answer that question.
+    "stopped": "Done",
+    # The registry's own spellings fold through the same map, so both row
+    # producers (claude's roster and fno's registry) read one watchdog
+    # vocabulary: `live`/`spawning`/`restarting` are alive states, `ready` is
+    # alive with no turn in flight, the same axis as Idle.
+    "live": "Working",
+    "spawning": "Working",
+    "restarting": "Working",
+    "ready": "Idle",
 }
 
 # Field aliases for the row schema. claude's `agents --json` emits `id` and
@@ -1377,7 +1004,7 @@ def _normalize_live_status(value: Any) -> Any:
 
 
 def _alias_value(
-    row: dict, keys: tuple[str, ...], valid, normalize=None
+    row: dict, keys: tuple[str, ...], valid, normalize=None, recognized=None
 ) -> tuple[Any, Optional[str]]:
     """Resolve one field across its schema aliases. Returns (value, warning).
 
@@ -1389,7 +1016,13 @@ def _alias_value(
 
     When two aliases both hold valid but DIFFERENT values there is no way to
     tell which the producer meant, so the first value in ``keys`` order is
-    returned with a warning rather than a silent pick.
+    returned with a warning rather than a silent pick - UNLESS ``recognized``
+    is given and every found value passes it (AC6/AC8): ``state``
+    already wins by the fixed ``keys`` order regardless, so a disagreement
+    between two individually-understood values is precedence working as
+    documented, not drift. Passing ``recognized`` in (rather than making this
+    function itself status-aware) keeps the short-id call site, which never
+    passes it, on its original always-warn-on-difference behavior.
 
     ``normalize`` is applied per alias BEFORE the comparison, so two spellings
     of the same meaning (``state: working`` / ``status: busy``) agree instead of
@@ -1407,6 +1040,8 @@ def _alias_value(
     # non-None JSON value, and hashing a dict/list one would raise TypeError
     # out of a function contracted to be best-effort.
     if any(other != value for _, other in found[1:]):
+        if recognized is not None and all(recognized(v) for _, v in found):
+            return value, None
         pairs = ", ".join(f"{k}={v!r}" for k, v in raw)
         return value, f"conflicting values across aliases ({pairs}); used {value!r}"
     return value, None
@@ -1590,6 +1225,19 @@ def claude_agents_json(
     rows, warnings = claude_agents_rows(timeout=timeout)
     out_map: dict[str, dict] = {}
     agent_rows = len(rows)
+    # both drift families below are collected per DISTINCT shape while
+    # iterating and emitted once each after the loop, rather than once per
+    # row. A value drift is loud once no matter how many rows carry it
+    # (AC7-EDGE); a genuine fleet can carry the same unmapped value or the
+    # same alias disagreement on dozens of rows, and a line per row buries the
+    # one fact ("stopped is unmapped") under noise that scales with fleet
+    # size instead of with distinct causes.
+    unrecognized_status_counts: dict[str, int] = {}
+    conflict_message_counts: dict[str, int] = {}
+
+    def _status_recognized(v: Any) -> bool:
+        return isinstance(v, str) and v in KNOWN_LIVE_STATUSES
+
     for index, row in enumerate(rows):
         short_id, id_warning = _alias_value(row, _SHORT_ID_KEYS, _valid_short_id)
         if short_id is None:
@@ -1602,12 +1250,23 @@ def claude_agents_json(
             warnings.append(
                 f"claude agents --json {_row_label(row, index, 'non-interactive rows')} short id {id_warning}"
             )
+        # `recognized` scopes the alias-conflict suppression to THIS call site
+        # only (AC6/AC8/AC9): a disagreement between two values that
+        # both already resolve to a known live-status is precedence working
+        # as documented (`state` wins - unchanged), not drift, so it stays
+        # quiet. A disagreement touching a genuinely unknown value still
+        # warns; the short-id call above passes no `recognized` and keeps its
+        # original always-warn-on-difference behavior untouched.
         live_status, status_warning = _alias_value(
-            row, _STATUS_KEYS, _valid_status, normalize=_normalize_live_status
+            row,
+            _STATUS_KEYS,
+            _valid_status,
+            normalize=_normalize_live_status,
+            recognized=_status_recognized,
         )
         if status_warning:
-            warnings.append(
-                f"claude agents --json {_row_label(row, index, 'non-interactive rows')} status {status_warning}"
+            conflict_message_counts[status_warning] = (
+                conflict_message_counts.get(status_warning, 0) + 1
             )
         # The isinstance guard short-circuits before the frozenset lookup: a
         # non-string status (dict/list under drift) is itself unrecognized, and
@@ -1615,12 +1274,19 @@ def claude_agents_json(
         if live_status is not None and (
             not isinstance(live_status, str) or live_status not in KNOWN_LIVE_STATUSES
         ):
-            warnings.append(
-                f"claude agents --json {_row_label(row, index, 'non-interactive rows')} has unrecognized status="
-                f"{live_status!r} (expected one of {sorted(KNOWN_LIVE_STATUSES)}); "
-                "passing through unchanged"
-            )
+            key = repr(live_status)
+            unrecognized_status_counts[key] = unrecognized_status_counts.get(key, 0) + 1
         out_map[short_id] = {"live_status": live_status}
+    for value_repr, count in unrecognized_status_counts.items():
+        rows_word = "row" if count == 1 else "rows"
+        warnings.append(
+            f"claude agents --json {count} {rows_word} with unrecognized status="
+            f"{value_repr} (expected one of {sorted(KNOWN_LIVE_STATUSES)}); "
+            "passing through unchanged"
+        )
+    for message, count in conflict_message_counts.items():
+        rows_word = "row" if count == 1 else "rows"
+        warnings.append(f"claude agents --json {count} {rows_word} status {message}")
     # A per-row warning is quiet enough that a schema change dropping EVERY row
     # shipped unnoticed once already: 42 warnings into a list most callers never
     # print, and an empty map that reads exactly like "no agents running". A
@@ -1815,73 +1481,6 @@ def claude_stop(short_id: str, *, timeout: float = 30.0) -> tuple[int, str]:
     return (result.returncode, result.stderr or "")
 
 
-def claude_rm(short_id: str, *, timeout: float = 30.0) -> tuple[int, str]:
-    """Run ``claude rm`` on the short id, with a wall-clock timeout.
-
-    Returns ``(exit_code, stderr_text)``. Non-zero exits do NOT raise; the
-    caller (``dispatch.rm_agent``) inspects exit_code to decide whether
-    ``--force`` should override the refusal.
-
-    Raises:
-        FileNotFoundError: claude not on PATH (caller maps to exit 14).
-        subprocess.TimeoutExpired: wall-clock exceeded (caller maps to 15).
-    """
-    result = _subprocess_run(
-        ["claude", "rm", short_id],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return (result.returncode, result.stderr or "")
-
-
-def claude_attach(
-    short_id: str,
-    *,
-    env: Optional[dict[str, str]] = None,
-    settings_path: Optional[str] = None,
-    scrub_vars: Optional[Sequence[str]] = None,
-) -> int:
-    """Run ``claude attach <short_id>`` inheriting parent stdio.
-
-    Returns claude's exit code. Output is NOT captured: the claude TUI
-    takes over stdin/stdout/stderr until the operator detaches. No
-    timeout is applied because attach is an interactive verb whose
-    duration is operator-driven, not bounded by fno.
-
-    x-d285: ``env`` is the row's recorded ACCOUNT binding (a
-    ``CLAUDE_CONFIG_DIR`` overlay) and ``settings_path`` the validated
-    route-settings file; a fresh claude process re-resolves its namespace
-    from ambient env, so the recorded binding must ride the child or the
-    attach lands in whatever namespace the caller happened to sit in.
-    ``scrub_vars`` are cleared from the child env before the overlay is
-    applied: claude prefers an env credential over a settings file, so an
-    ambient credential would silently override the binding. All three
-    default to None/off, which reproduces the historical bare invocation
-    for a proven default row byte-for-byte.
-
-    Raises:
-        FileNotFoundError: claude not on PATH (caller maps to exit 14).
-    """
-    argv = ["claude", "attach", short_id]
-    if settings_path:
-        argv += ["--settings", settings_path]
-    run_kwargs: dict[str, Any] = {}
-    if env or scrub_vars:
-        child_env = dict(os.environ)
-        for var in scrub_vars or ():
-            child_env.pop(var, None)
-        child_env.pop("CLAUDE_CONFIG_DIR", None)
-        if env:
-            child_env.update(env)
-        # The same identity-scrub floor every adapter's child env crosses: the
-        # attach client resolves its target from the jobId argument, never from
-        # an ambient session marker this shell happens to carry.
-        from fno.setup.github_cli import worker_environment
-
-        run_kwargs["env"] = worker_environment(child_env)
-    result = _subprocess_run(argv, **run_kwargs)
-    return result.returncode
 
 
 def claude_logs_reachable(short_id: str, *, timeout: float = 10.0) -> bool:
@@ -2051,138 +1650,15 @@ def release_session_writer_claim(
 
 
 # =====================================================================
-# Phase 5 (US6) — MCP channel backend for ask_followup
+# MCP channel reachability probe
 # =====================================================================
 #
-# The MCP backend is a SECOND send path alongside US2's
-# messagingSocketPath socket. Both backends remain supported
-# indefinitely (Locked Decision 6). The dispatcher (agents/dispatch.py)
-# picks the MCP backend when the AgentEntry has ``mcp_channel_id`` set
-# AND ``mcp_channel_reachable`` returns True; otherwise it falls back
-# to the socket path. The user-visible behavior is identical regardless
-# of backend — only the wire transport differs.
-#
-# Design note: Locked Decision 9 specifies ``mcp_channel_id`` as a
-# server-generated UUIDv4. In this PR the value is populated from
-# ``claude_short_id`` (1:1) so the sidecar can route by its native
-# session id without an additional id-translation layer. The field
-# type permits a UUIDv4 swap without a schema bump; we flag this in
-# the PR body as a follow-up.
-
-
-class MCPChannelSendError(RuntimeError):
-    """Raised when the MCP send path fails after a successful reachability probe.
-
-    Mirror of :class:`ProviderSocketError` for the MCP transport. The
-    dispatcher catches this and falls back to ``ask_followup`` (US2
-    socket path), emitting a ``mcp_channel_demoted_to_socket`` event
-    with ``reason="send_failed_post_probe"`` (per spec AC1-ERR).
-
-    Carries the underlying ``reason`` discriminator (from the sidecar's
-    response payload) so the demotion event's reason field is
-    machine-stable.
-    """
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(f"MCP channel send error: {reason}")
-        self.reason = reason
-
-
-def ask_followup_via_mcp(
-    claude_short_id: str,
-    message: str,
-    cwd: Path,
-    from_name: str,
-    timeout: float,
-    poll_interval: float = 0.5,
-    jobs_dir: Optional[Path] = None,
-    mcp_channel_id: Optional[str] = None,
-) -> str:
-    """MCP-backed follow-up send + state.json reply poll.
-
-    Mirrors :func:`ask_followup` but routes the send through the
-    fno MCP sidecar instead of the messagingSocketPath socket.
-    The reply-collection half is identical (same ``wait_for_reply``
-    over the session's state.json + timeline.jsonl) because the MCP
-    transport only changes how the message arrives — it does NOT
-    change how the reply is observed.
-
-    Raises:
-        ProviderOrphanError: session is no longer in
-            ``~/.claude/sessions/`` (the jobs dir for reply polling
-            could not be located).
-        MCPChannelSendError: sidecar refused the send (channel not
-            registered, channel write failed, or sidecar unreachable
-            mid-call). The dispatcher should fall back to socket.
-        ProviderTimeoutError: poll timeout exceeded.
-
-    ``cwd`` locates family-1 transcript truth when reply-poll setup fails.
-    ``mcp_channel_id``, when provided, is the AgentEntry's stored id;
-    it currently equals ``claude_short_id`` (see module-level design
-    note above). The parameter is accepted explicitly so callers
-    surface the agent's persistent id at the call site even though
-    the sidecar routes by session id today.
-    """
-    routing_key = mcp_channel_id or claude_short_id
-
-    # Decouple from the messagingSocketPath socket (Task 1.1): the MCP transport
-    # routes the send through the sidecar (by routing_key) and observes the reply
-    # by polling the session's jobs-dir, neither of which needs a live socket.
-    # locate_session() SKIPS socket-null/idle sessions and would falsely orphan
-    # an idle-but-resumable session, so derive the jobs-dir directly from the
-    # short-id instead. An absent jobs-dir means the session never ran (typo /
-    # never-launched) -> genuine orphan, preserving fail-fast on a bad id.
-    if jobs_dir is not None:
-        target_jobs_dir = jobs_dir
-    else:
-        target_jobs_dir = _jobs_dir_for(claude_short_id)
-        if not target_jobs_dir.exists():
-            reason = _classify_orphan_reason(claude_short_id)
-            if _session_truth_state(claude_short_id, cwd) not in {"done", "stalled"}:
-                reason = "truth-live-inject-failed"
-            raise ProviderOrphanError(reason=reason, short_id=claude_short_id)
-    baseline_updated_at: Optional[str] = None
-    timeline_offset = 0
-    try:
-        snap = read_state_json(target_jobs_dir)
-        baseline_updated_at = snap.updated_at
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        baseline_updated_at = None
-    timeline_path = target_jobs_dir / "timeline.jsonl"
-    if timeline_path.exists():
-        try:
-            timeline_offset = timeline_path.stat().st_size
-        except OSError:
-            timeline_offset = 0
-
-    # Imported lazily to keep MCP optional at provider-module import
-    # time — the MCP package is shipped alongside, but harnesses/claude.py
-    # is also imported by code paths that never touch the channel surface.
-    from fno.mcp import build_channel_notification
-    from fno.mcp import client as _mcp_client
-
-    envelope = build_channel_notification(
-        content=message,
-        meta={
-            "source": "fno",
-            "from_name": from_name,
-            "session_id": routing_key,
-        },
-    )
-    try:
-        _mcp_client.send_to_channel(routing_key, envelope)
-    except _mcp_client.MCPSidecarError as exc:
-        raise MCPChannelSendError(exc.reason) from exc
-    except _mcp_client.MCPSidecarUnreachable as exc:
-        raise MCPChannelSendError(f"sidecar_unreachable:{exc.reason}") from exc
-
-    return wait_for_reply(
-        jobs_dir=target_jobs_dir,
-        baseline_updated_at=baseline_updated_at,
-        timeline_offset=timeline_offset,
-        timeout=timeout,
-        poll_interval=poll_interval,
-    )
+# Locked Decision 9 specifies ``mcp_channel_id`` as a server-generated
+# UUIDv4. The value is populated from ``claude_short_id`` (1:1) so the
+# sidecar can route by its native session id without an additional
+# id-translation layer. The ask transport that used to ride this channel
+# was ported to the Rust runtime; the probe survives for the dispatcher's
+# liveness scan.
 
 
 def mcp_channel_reachable(

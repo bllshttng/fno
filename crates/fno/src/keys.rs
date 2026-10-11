@@ -13,8 +13,9 @@
 //! select tab · `&` close tab · `w` sideline row selector · `b` toggle sideline ·
 //! `s` toggle status row · `?` key-table overlay · `d` detach · `[`/`]` jump
 //! prev/next command block · `v` select block · `y` copy selection · `r` rerun
-//! block (x-38c4) · `,` rename tab (x-c150) · prefix-prefix = one literal
-//! prefix byte · `<`/`>` reorder the active tab (x-0333). Prefix + anything
+//! block · `R` ask the pane to repaint · `,` rename tab
+//! · prefix-prefix = one literal
+//! prefix byte · `<`/`>` reorder the active tab. Prefix + anything
 //! unmapped is swallowed with BEL - a chord typo must never leak half a chord
 //! into the pane (AC2-UI's never-leak guarantee).
 //!
@@ -74,8 +75,10 @@ pub struct KeymapWarning(pub String);
 
 /// Parse a key spec into the byte a terminal sends for it.
 ///
-/// Accepted: `C-a` / `Ctrl-a` / `^a` for a control byte, or a single printable
-/// ASCII character for itself. Deliberately narrow: a spec vocabulary wider than
+/// Accepted: `ctrl+a` / `C-a` / `Ctrl-a` / `^a` for a control byte, or a single
+/// printable ASCII character for itself. `ctrl+` is the printed form
+/// ([`key_disp`]), so a label copied into config round-trips; the older dash
+/// spellings stay accepted. Deliberately narrow: a spec vocabulary wider than
 /// the scanner (which dispatches on ONE post-prefix byte) would advertise binds
 /// that could never fire.
 pub fn parse_key(spec: &str) -> Option<u8> {
@@ -91,18 +94,24 @@ pub fn parse_key(spec: &str) -> Option<u8> {
         _ => {
             let lower = s.to_ascii_lowercase();
             let rest = lower
-                .strip_prefix("ctrl-")
+                .strip_prefix("ctrl+")
+                .or_else(|| lower.strip_prefix("ctrl-"))
                 .or_else(|| lower.strip_prefix("c-"))?;
             (rest.chars().count() == 1).then(|| ctrl_letter(rest.chars().next()?))?
         }
     }
 }
 
-/// How a byte prints in the which-key modal: `C-b` for a control byte, the
-/// character itself otherwise.
-fn key_disp(b: u8) -> String {
+/// How a byte prints in the which-key modal: `ctrl+b` for a control byte, the
+/// character itself otherwise. Lowercase: `C` does not read as ctrl and a
+/// capital `B` reads as the uppercase key. A plus, never a dash: a dash reads
+/// as negative (user ruling 2026-10-09), and this one printer owns every
+/// rendered key label - the which-key table, menu hints, and the rebind
+/// warnings all draw from it, so none can drift back to a dash. The printed
+/// form parses ([`parse_key`]), so a label copied into config still works.
+pub fn key_disp(b: u8) -> String {
     match b {
-        1..=26 => format!("C-{}", (b - 1 + b'a') as char),
+        1..=26 => format!("ctrl+{}", (b - 1 + b'a') as char),
         _ => (b as char).to_string(),
     }
 }
@@ -190,8 +199,9 @@ pub fn resolve_keymap(
                 slot.1 = *byte;
             }
         }
-        // A key sitting on the prefix byte can never dispatch.
-        if let Some((action, _)) = final_map.iter().find(|(_, k)| *k == prefix) {
+        // A key sitting on the prefix byte can never dispatch. Sentinel
+        // rows (key 0) hold no chord, so they can sit beside anything.
+        if let Some((action, _)) = final_map.iter().find(|(_, k)| *k == prefix && *k != 0) {
             let action = action.clone();
             if let Some(i) = proposed.iter().position(|(a, _)| *a == action) {
                 warnings.push(KeymapWarning(format!(
@@ -213,8 +223,11 @@ pub fn resolve_keymap(
         }
         // Two actions on one byte: the later PROPOSAL loses, so a swap survives
         // (each half moves off the other's key) while a genuine double-booking
-        // is refused.
+        // is refused. Sentinel rows (key 0) hold no chord and never collide.
         let dup = final_map.iter().enumerate().find_map(|(i, (_, k))| {
+            if *k == 0 {
+                return None;
+            }
             final_map[i + 1..]
                 .iter()
                 .find(|(_, k2)| k2 == k)
@@ -282,6 +295,60 @@ fn resolve_prefix_change_with_rebinds(
     Ok(map)
 }
 
+/// Resolve moving one action to `byte` against the live keymap, with the
+/// same rules a config file gets. A refusal carries the resolver's sentence
+/// and changes nothing; the returned map is safe to pass to [`reinstall`].
+pub fn resolve_rebind(action: &str, byte: u8) -> Result<Keymap, String> {
+    let map = keymap();
+    resolve_rebind_with(map.prefix, &map.rebinds, action, byte)
+}
+
+fn resolve_rebind_with(
+    prefix: u8,
+    live: &[(String, u8)],
+    action: &str,
+    byte: u8,
+) -> Result<Keymap, String> {
+    let default = default_bindings()
+        .into_iter()
+        .find(|kb| kb.action == action)
+        .map(|kb| kb.key);
+    // Moving an action back to its shipped key drops the rebind.
+    let mut specs: Vec<(String, String)> = live
+        .iter()
+        .filter(|(a, _)| a != action)
+        .map(|(a, b)| (a.clone(), key_disp(*b)))
+        .collect();
+    if default != Some(byte) {
+        specs.push((action.to_string(), key_disp(byte)));
+    }
+    let (map, warnings) = resolve_keymap(Some(&key_disp(prefix)), &specs);
+    if let Some(warning) = warnings.first() {
+        return Err(warning.0.clone());
+    }
+    if !bindings_for(&map)
+        .iter()
+        .any(|kb| kb.action == action && kb.key == byte)
+    {
+        return Err(format!(
+            "config.mux.keys.{action}: {} could not be applied; unchanged",
+            key_disp(byte)
+        ));
+    }
+    Ok(map)
+}
+
+/// The whole `[mux.keys]` table for a map, as the JSON object `fno config
+/// set mux.keys` takes.
+pub fn rebinds_json(map: &Keymap) -> String {
+    let table: serde_json::Map<String, serde_json::Value> = map
+        .rebinds
+        .iter()
+        .map(|(action, byte)| (action.clone(), key_disp(*byte).into()))
+        .collect();
+    serde_json::Value::Object(table).to_string()
+}
+
 static KEYMAP: std::sync::RwLock<Option<Keymap>> = std::sync::RwLock::new(None);
 
 /// Install the resolved keymap read from config. First call wins; later config
@@ -346,8 +413,8 @@ pub const PANE_IDS_REPEAT_WINDOW: Duration = Duration::from_millis(750);
 const PASTE_OPEN: &[u8] = b"\x1b[200~";
 const PASTE_CLOSE: &[u8] = b"\x1b[201~";
 
-/// (x-e10f) The GLOBAL sideline chord's prefix: Ctrl+Opt+arrow is
-/// `ESC [ 1 ; 7 X` (xterm modifier 7 = 1 + Alt 2 + Ctrl 4), the rung above
+/// The GLOBAL sideline chord's prefix: Ctrl+Opt+arrow is
+/// `ESC [ 1; 7 X` (xterm modifier 7 = 1 + Alt 2 + Ctrl 4), the rung above
 /// the prefix-gated ctrl(5)/shift(2) arrows in [`esc_chord`]. Shared by the
 /// `ChordEsc` scanner branch (which holds and releases candidates against it)
 /// and [`esc_chord`] itself, so the scanner and the parser cannot disagree
@@ -360,34 +427,74 @@ const GLOBAL_CHORD_PREFIX: &[u8] = b"\x1b[1;7";
 pub enum Event {
     Forward(Vec<u8>),
     Cmd(Command),
-    /// Prefix+digit: select the Nth tab of the viewed squad. The scanner
-    /// only knows the index; the client resolves it to a stable `TabId`
-    /// against its last `Layout` (v3: `SelectTab` names ids, not indices).
+    /// Digit tab jump: select the tab at this 1-BASED ordinal - the
+    /// number the operator reads off the tab strip. The scanner only knows the
+    /// ordinal; the client resolves it to a stable `TabId` against its last
+    /// `Layout` (v3: `SelectTab` names ids, not indices). caution
+    /// lives at that resolution: the ordinal is the SHIFTING identifier space
+    /// and is resolved to the id once, at keypress, never carried.
     SelectTabIdx(usize),
     Detach,
     /// Open the sideline selector (prefix+w). Selector-mode keys are
     /// interpreted by the client's view layer, not here.
     OpenSelector,
-    /// Open the answer overlay (prefix+a, x-c929). Overlay-mode keys (a digit
+    /// Open the answer overlay (prefix+a). Overlay-mode keys (a digit
     /// answers, `n`/`N` cycle the blocked queue, Enter focuses, Esc closes) are
     /// interpreted by the client's view layer, not here (like OpenSelector).
     OpenAnswers,
-    /// Open the yard overlay (prefix+m, x-b2bf): the fleet as f[no]nimals -
+    /// Open the yard overlay (prefix+m): the fleet as f[no]nimals -
     /// collection - one eye glyph per citizen, one spotlight sprite at a
     /// time. Overlay-mode keys (`n`/`N` pick, `q`/Esc close) are interpreted
     /// by the client's view layer, not here (like OpenAnswers).
     OpenYard,
+    /// Open the experimental backlog board (prefix+O). Whether the board
+    /// actually opens is the client's call: the sideline menu's
+    /// `experimental: backlog view` pref gates it, and the chord degrades to
+    /// a notice while the pref is off.
+    OpenBacklogBoard,
+    CycleSidelineView,
+    /// (redefined by) Toggle the org block on the left
+    /// sideline between its three-line glance and the full reading: load
+    /// against the cap, what saturates the box, the working/idle/dead
+    /// census, and the lane advisor's own answer. The block is always
+    /// visible; this only expands or collapses it, and the client's view
+    /// layer interprets that, not here.
+    OpenTeam,
+    /// Toggle the activity feed panel on the right edge (e):
+    /// questions, decisions and node lifecycle, newest first. The panel is
+    /// chrome and consumes no keys; a click deep-links a row and the border
+    /// drags (interpreted by the client's view layer, like OpenAnswers).
+    OpenFeed,
+    /// Focus the activity feed panel, opening it first when it is closed.
+    /// Distinct from `OpenFeed`: the panel consumes no keys until this fires.
+    FocusFeed,
     /// Show/hide the sideline (prefix+b).
     TogglePanel,
-    /// (x-b186) Cycle the sideline density slim -> regular -> extended
+    /// Toggle the new-agent composer at the sideline's bottom (prefix+i).
+    /// Opening a retained draft reveals it untouched; opening with the
+    /// sideline hidden shows the sideline first, so the composer is never
+    /// open and unpainted.
+    ToggleComposer,
+    /// Toggle the full-screen sideline (prefix+F): the agent table takes the
+    /// terminal width and the panes do not paint. The composer is not
+    /// touched; prefix+i owns it. Client-local paint: no `Resize` travels in
+    /// either direction.
+    ToggleFullSideline,
+    /// Cycle the sideline density slim -> regular -> extended
     /// (prefix+B). Orthogonal to [`Event::TogglePanel`]: this changes how much
     /// each row shows, that changes whether the panel renders at all.
     CycleDensity,
-    /// (x-b186) Toggle the extended table's order between by-squad and
+    /// Toggle the extended table's order between by-squad and
     /// by-status (prefix+o). Inert in the other densities, which render no
     /// table - but the preference still persists, so the choice survives a
     /// round trip through slim.
     ToggleAgentSort,
+    /// Cycle the sideline agents view's group-by axis: workspace -> team ->
+    /// cwd -> status (prefix+G). Persisted like the density.
+    CycleAgentGroup,
+    /// Show or hide the card's `node · PR` header row (prefix+Y). The header
+    /// shows at every width now; this is the operator's off switch.
+    ToggleCardHead,
     /// Show/hide the status row (prefix+s). Client-local (US4, AC4-FR).
     ToggleStatus,
     /// Reveal each visible pane's stable id while the key repeats.
@@ -396,36 +503,65 @@ pub enum Event {
     /// dismisses it (US4, AC4-EDGE).
     ShowKeys,
     /// Jump the focused pane's shared scroll to the prev/next command block
-    /// (prefix+`[` / prefix+`]`, x-38c4). The client resolves the focused pane.
+    /// (prefix+`[` / prefix+`]`). The client resolves the focused pane.
     BlockJump(BlockDir),
-    /// Move the focused pane's block selection (prefix+v walks older, x-38c4).
+    /// Move the focused pane's block selection (prefix+v walks older).
     BlockSelect(BlockDir),
-    /// Rerun the focused pane's selected block command (prefix+r, x-38c4).
+    /// Rerun the focused pane's selected block command (prefix+r).
     BlockRerun,
     /// Dispatch the next ready backlog node into a new pane (prefix+g, "grab
-    /// work", x-6f77). The server shells the Python porcelain; no-work and
+    /// work"). The server shells the Python porcelain; no-work and
     /// refusal outcomes come back as a one-line notice.
     DispatchNext,
-    /// Open in-scrollback search on the focused pane (prefix+/, x-e780). The
+    /// Open in-scrollback search on the focused pane (prefix+/). The
     /// client enters a local typing mode; the query and n/N/Esc are interpreted
     /// by the client's view layer, not here (like OpenSelector / OpenAnswers).
     SearchOpen,
-    /// Open the session navigator (prefix+f, x-653d): a global goto picker over
+    /// Open the session navigator (prefix+f): a global goto picker over
     /// a flat catalog of every squad/tab/agent/card. The client owns the typing
-    /// mode (text filter, Tab state filter, Ctrl-n/p cursor, Enter goto); the
+    /// mode (text filter, Tab state pane focus, Ctrl-n/p cursor, Enter goto); the
     /// chord only opens it (like SearchOpen).
     OpenNav,
+    /// Open or close the notifications bell panel (prefix+q).
+    ToggleBell,
+    /// Open the Messages tab (prefix+M) from anywhere: the mail overlay
+    /// takes the keyboard, its own bare keys move and open (the messages
+    /// help section). Case pair with `m` (the yard), the h/H convention.
+    OpenMessages,
+    /// Open the settings modal (prefix+S). The same surface the sideline
+    /// menu's `settings` row opens, reached from the keyboard. Case pair
+    /// with `s` (toggle-status), the h/H focus/resize convention.
+    OpenSettings,
+    /// Open the connections modal (prefix+A): provider accounts and combo
+    /// routing. Case pair with `a` (answers).
+    OpenConnections,
+    /// Open the thread-sweep counts modal (prefix+T): the sideline menu's
+    /// `sweep threads` row, on the keyboard. The modal still asks before
+    /// anything is reaped.
+    OpenSweepThreads,
     /// Open the rename-tab name overlay for the active tab (prefix+,, tmux
-    /// `rename-window` convention, x-c150). The client owns the typing mode
+    /// `rename-window` convention). The client owns the typing mode
     /// and resolves the active tab's stable id; the chord only opens it.
     OpenRename,
+    /// Open the move-tab-to-position prompt (prefix+#): type the
+    /// 1-based destination ordinal. The client owns the typing mode, computes
+    /// the delta against the tab's current index, and sends ONE
+    /// `Command::ReorderTab`; the chord only opens the prompt.
+    OpenMoveTo,
     /// Reorder the active tab one slot within its squad (prefix+`<`/`>`,
-    /// x-0333). The client resolves the active tab's stable id before sending.
+    ///). The client resolves the active tab's stable id before sending.
     ReorderTab(i32),
     /// Cycle the ACTIVE squad's sideline section one step through
-    /// expanded -> live-only -> collapsed (prefix+z, x-975a). The client owns
+    /// expanded -> live-only -> collapsed (prefix+z). The client owns
     /// the state and resolves the active squad; the chord only fires the step.
     CycleSection,
+    /// Open the sideline MENU popup (prefix+P): the footer `menu` button's
+    /// action, reached from the keyboard. `M` belongs to open-messages.
+    OpenSidelineMenu,
+    /// Open the new-workspace name overlay (prefix+N): the `+ new workspace`
+    /// footer's action, reached from the keyboard. Case pair with `n`
+    /// (next tab).
+    OpenCreate,
     /// Swallowed unmapped chord: the client sounds BEL.
     Bell,
 }
@@ -435,8 +571,8 @@ enum State {
     /// Bytes forward; `usize` is the rolling PASTE_OPEN match index (how
     /// many marker bytes the forwarded tail already matches).
     Normal(usize),
-    /// (x-e10f) Accumulating a GLOBAL chord candidate that began in `Normal`
-    /// (Ctrl+Opt+Left = `ESC [ 1 ; 7 D`): bytes are HELD, not forwarded, and
+    /// Accumulating a GLOBAL chord candidate that began in `Normal`
+    /// (Ctrl+Opt+Left = `ESC [ 1; 7 D`): bytes are HELD, not forwarded, and
     /// release to the pane the moment the sequence diverges from the chord
     /// prefix - with the paste-open roll re-run over the released bytes - so
     /// a partial chord never leaks mid-sequence and a lone Esc is released as
@@ -444,6 +580,12 @@ enum State {
     ChordEsc(Vec<u8>),
     /// Saw the prefix; the next key (or escape sequence) is a chord.
     Prefix,
+    /// Holding a tab number: the digits typed so far after a prefix
+    /// digit or an Alt+digit. More digits keep appending; Enter, any
+    /// non-digit, or the caller's quiet-window flush resolves the ordinal.
+    /// Bytes stored are the raw digit bytes so the parse (and its cap) lives
+    /// in one place.
+    Digits(Vec<u8>),
     /// Accumulating an escape sequence after the prefix (arrows / Ctrl-arrows
     /// / Shift-arrows / a paste-open marker), possibly split across reads.
     PrefixEsc(Vec<u8>),
@@ -487,6 +629,18 @@ impl Default for Scanner {
 /// tail matches after consuming `b`. The only self-overlap in either marker
 /// is a fresh ESC, so the KMP fallback table collapses to "mismatch: retry
 /// as position 0, i.e. matched-1 iff b is ESC".
+/// A carry holding exactly one ESC is a bare Esc press once input has gone
+/// quiet: a whole CSI arrives in one write, so nothing legitimately follows
+/// a lone `0x1b` after the flush window. Clears the carry and answers true;
+/// any other carry (a partial sequence) is left untouched.
+pub fn take_lone_esc(esc: &mut Vec<u8>) -> bool {
+    let lone = esc.as_slice() == [0x1b];
+    if lone {
+        esc.clear();
+    }
+    lone
+}
+
 fn roll(idx: usize, b: u8, marker: &[u8]) -> usize {
     if b == marker[idx] {
         idx + 1
@@ -509,7 +663,7 @@ impl Scanner {
         while i < bytes.len() {
             let b = bytes[i];
             i += 1;
-            // (x-e10f fix) A released chord candidate re-dispatches its LAST
+            // (fix) A released chord candidate re-dispatches its LAST
             // byte through the Normal arms (see ChordEsc below): replay drops
             // the pre-increment so the same byte runs again in the new state.
             let mut replay = false;
@@ -522,7 +676,7 @@ impl Scanner {
                         flush(&mut plain, &mut out);
                         self.state = State::Prefix;
                     } else if b == 0x1b {
-                        // (x-e10f) A bare ESC may open the global sideline
+                        // A bare ESC may open the global sideline
                         // chord (Ctrl+Opt+Left). Hold it in ChordEsc instead
                         // of forwarding; it releases on the next byte unless
                         // the chord prefix keeps matching. A non-repeat byte
@@ -569,7 +723,7 @@ impl Scanner {
                     }
                 }
                 State::ChordEsc(mut seq) => {
-                    // (x-e10f) Held global-chord candidate. Accumulate only
+                    // Held global-chord candidate. Accumulate only
                     // while the bytes still spell the Ctrl+Opt-arrow prefix;
                     // a completed prefix plus its final byte resolves through
                     // `esc_chord` - the SAME parse the prefix path uses, not a
@@ -583,6 +737,15 @@ impl Scanner {
                     seq.push(b);
                     if GLOBAL_CHORD_PREFIX.starts_with(&seq) {
                         self.state = State::ChordEsc(seq);
+                    } else if seq.len() == 2 && seq[1].is_ascii_digit() {
+                        // Alt+digit arms the same tab-number buffer
+                        // the prefix digit path arms: ESC + digit is the one
+                        // representable modifier form of a digit (Ctrl+digit
+                        // is not, Locked Decision 1), and later PLAIN digits
+                        // keep appending, so Alt+3 4 reaches tab 34 with no
+                        // second Alt. Any pending plain bytes go first.
+                        flush(&mut plain, &mut out);
+                        self.state = State::Digits(vec![seq[1]]);
                     } else if seq.len() == GLOBAL_CHORD_PREFIX.len() + 1 {
                         match esc_chord(&seq) {
                             EscScan::Complete(ev) => {
@@ -622,10 +785,47 @@ impl Scanner {
                 State::Prefix => {
                     if b == 0x1b {
                         self.state = State::PrefixEsc(vec![0x1b]);
+                    } else if b.is_ascii_digit() {
+                        // A digit holds instead of firing: more
+                        // digits keep appending (tab 34 is reachable), Enter
+                        // or a non-digit resolves, and the caller's
+                        // quiet-window flush covers the number-then-nothing
+                        // case. One buffer, three doors in.
+                        self.state = State::Digits(vec![b]);
                     } else {
                         let ev = self.chord(b);
                         self.arm_if_repeat(&ev, now);
                         out.push(ev);
+                    }
+                }
+                State::Digits(mut digits) => {
+                    if b.is_ascii_digit() && digits.len() < 6 {
+                        // (review) Six digits is far past any tab strip; the
+                        // cap only bounds the buffer, never the receipt - a
+                        // longer typing resolves to the out-of-range notice
+                        // naming the FULL number, so nothing a digit gesture
+                        // absorbs is ever silent.
+                        digits.push(b);
+                        self.state = State::Digits(digits);
+                    } else if b == b'\r' || b == b'\n' {
+                        // Enter resolves explicitly - the no-wait door.
+                        flush(&mut plain, &mut out);
+                        out.push(select_tab_event(&digits));
+                        self.state = State::Normal(0);
+                    } else if b == 0x1b {
+                        // Esc cancels the gesture; the Esc itself is consumed,
+                        // never forwarded - it may only have been closing the
+                        // number the operator just typed.
+                        self.state = State::Normal(0);
+                    } else {
+                        // Any other byte ends the number and is re-dispatched
+                        // through the Normal arms, so prefix+3+j still lands
+                        // tab 3 AND forwards `j` exactly as the old
+                        // fire-immediately behavior did.
+                        flush(&mut plain, &mut out);
+                        out.push(select_tab_event(&digits));
+                        self.state = State::Normal(0);
+                        replay = true;
                     }
                 }
                 State::PrefixEsc(mut seq) => {
@@ -643,6 +843,10 @@ impl Scanner {
                         // Still ambiguous between a chord and a marker: keep
                         // accumulating (split-across-reads safe).
                         self.state = State::PrefixEsc(seq);
+                    } else if seq.len() == 2 && seq[1].is_ascii_digit() {
+                        // Alt+digit after the prefix: same buffer, so
+                        // both modifier forms reach one gesture.
+                        self.state = State::Digits(vec![seq[1]]);
                     } else {
                         match esc_chord(&seq) {
                             EscScan::Complete(ev) => {
@@ -663,7 +867,7 @@ impl Scanner {
         out
     }
 
-    /// (x-e10f) A global-chord candidate is held, waiting for more bytes.
+    /// A global-chord candidate is held, waiting for more bytes.
     /// The client read loop polls this to arm its quiet-window flush, the
     /// analog of tmux's escape-time: a lone Esc must not wait for the next
     /// keypress forever.
@@ -671,7 +875,7 @@ impl Scanner {
         matches!(self.state, State::ChordEsc(_))
     }
 
-    /// (x-e10f fix) Release a held global-chord candidate once input has gone
+    /// (fix) Release a held global-chord candidate once input has gone
     /// quiet past the flush window: the held bytes forward to the pane exactly
     /// as a divergence release would send them, and the paste-open roll
     /// resumes where the hold paused it. `None` when nothing is held. This is
@@ -683,6 +887,24 @@ impl Scanner {
             let idx = release_to_plain(&mut plain, &seq);
             self.state = paste_state(idx);
             (!plain.is_empty()).then_some(Event::Forward(plain))
+        } else {
+            None
+        }
+    }
+
+    /// A tab number is being held, waiting for Enter, a non-digit,
+    /// or the caller's quiet-window flush. The client read loop polls this to
+    /// arm that window - a number typed and then left alone must still land,
+    /// without waiting for the next keypress forever.
+    pub fn digits_pending(&self) -> bool {
+        matches!(self.state, State::Digits(_))
+    }
+
+    /// Resolve a held tab number once input has gone quiet past the
+    /// flush window. `None` when nothing is held.
+    pub fn flush_digits(&mut self) -> Option<Event> {
+        if let State::Digits(digits) = std::mem::replace(&mut self.state, State::Normal(0)) {
+            (!digits.is_empty()).then(|| select_tab_event(&digits))
         } else {
             None
         }
@@ -752,7 +974,7 @@ fn flush(plain: &mut Vec<u8>, out: &mut Vec<Event>) {
     }
 }
 
-/// (x-e10f) Release a held global-chord candidate to the forwarded stream,
+/// Release a held global-chord candidate to the forwarded stream,
 /// re-running the paste-open roll over every released byte (the hold paused
 /// the roll, so it catches up byte-for-byte). Rolling from 0 is exact: the
 /// candidate starts with ESC, and `roll` reaches 1 on an ESC from ANY prior
@@ -775,19 +997,28 @@ fn paste_state(idx: usize) -> State {
     }
 }
 
-/// Which help-modal section a prefix chord belongs to (x-8ccf). Declaration
+/// Which help-modal section a prefix chord belongs to. Declaration
 /// order is the render order the which-key modal groups by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySection {
     Global,
+    /// Hard-coded chords the scanner dispatches OUTSIDE the rebindable
+    /// keymap (`esc_chord` and the global sideline chord). They carry no
+    /// [`KeyBinding`] and cannot rebind; the modal lists them through
+    /// [`meta_rows`] as reference, the same channel [`KeySection::SidelineRows`]
+    /// uses for bare keys.
+    GlobalNoPrefix,
     Navigation,
     WorkspacesTabs,
     Panes,
-    /// (x-f300) Bare keys the sideline handles on the SELECTED row - no prefix.
+    /// Bare keys the sideline handles on the SELECTED row - no prefix.
     /// They are not chords, so they carry no [`KeyBinding`]; the modal shows them
     /// through [`meta_rows`] purely as reference, which is why removing a dead
     /// row was undiscoverable before.
     SidelineRows,
+    /// Bare keys the Messages tab owns while it holds the keyboard
+    /// (the operator's item 8): no prefix, no rebind, reference only.
+    Messages,
 }
 
 impl KeySection {
@@ -795,16 +1026,18 @@ impl KeySection {
     pub fn title(self) -> &'static str {
         match self {
             KeySection::Global => "global",
+            KeySection::GlobalNoPrefix => "global (no prefix)",
             KeySection::Navigation => "navigation",
             KeySection::WorkspacesTabs => "workspaces & tabs",
             KeySection::Panes => "panes",
-            KeySection::SidelineRows => "sideline rows (no prefix)",
+            KeySection::SidelineRows => "sideline rows (no prefix, not rebindable)",
+            KeySection::Messages => "messages (while the tab holds the keyboard)",
         }
     }
 }
 
 /// One prefix-chord binding: the single source of truth shared by the chord
-/// dispatcher ([`chord`]) and the which-key modal renderer (x-8ccf, Locked 3).
+/// dispatcher ([`chord`]) and the which-key modal renderer (Locked 3).
 /// Help that reads THIS cannot drift from what the dispatcher runs; the parity
 /// test (`bindings_are_the_chord_table`) fails loudly if the two disagree.
 pub struct KeyBinding {
@@ -839,8 +1072,32 @@ fn default_bindings() -> Vec<KeyBinding> {
     };
     vec![
         // panes
-        b(b'%', "split-h", Cmd(C::SplitH), Panes, "split horizontal"),
-        b(b'"', "split-v", Cmd(C::SplitV), Panes, "split vertical"),
+        b(
+            b'%',
+            "split-right",
+            Cmd(C::SplitDir(Dir::Right)),
+            Panes,
+            "split right",
+        ),
+        b(
+            b'"',
+            "split-down",
+            Cmd(C::SplitDir(Dir::Down)),
+            Panes,
+            "split down",
+        ),
+        // Key 0 is the sentinel for "bindable, no default chord": arrows and
+        // hjkl are taken by focus and resize, so `split-up`/`split-left` ship
+        // unbound and materialize in the live table only once a
+        // `config.mux.keys` rebind names them (see `bindings_for`).
+        b(0, "split-up", Cmd(C::SplitDir(Dir::Up)), Panes, "split up"),
+        b(
+            0,
+            "split-left",
+            Cmd(C::SplitDir(Dir::Left)),
+            Panes,
+            "split left",
+        ),
         b(
             b'h',
             "focus-left",
@@ -911,6 +1168,13 @@ fn default_bindings() -> Vec<KeyBinding> {
         // workspaces & tabs
         b(b'c', "new-tab", Cmd(C::NewTab), WorkspacesTabs, "new tab"),
         b(
+            b'N',
+            "new-workspace",
+            OpenCreate,
+            WorkspacesTabs,
+            "new workspace",
+        ),
+        b(
             b'n',
             "next-tab",
             Cmd(C::NextTab),
@@ -953,6 +1217,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             WorkspacesTabs,
             "move tab right",
         ),
+        b(
+            b'#',
+            "move-tab-to",
+            OpenMoveTo,
+            WorkspacesTabs,
+            "move tab to an index",
+        ),
         // navigation (scrollback blocks + goto/search)
         b(
             b'[',
@@ -982,6 +1253,13 @@ fn default_bindings() -> Vec<KeyBinding> {
             Navigation,
             "copy selection",
         ),
+        b(
+            b'R',
+            "redraw-pane",
+            Cmd(C::RedrawPane { pane: None }),
+            Navigation,
+            "ask the pane to repaint",
+        ),
         b(b'r', "rerun-block", BlockRerun, Navigation, "rerun block"),
         b(b'/', "search", SearchOpen, Navigation, "search scrollback"),
         // The label names every row class `nav_rows()` actually emits. The old
@@ -993,7 +1271,7 @@ fn default_bindings() -> Vec<KeyBinding> {
             "find",
             OpenNav,
             Navigation,
-            "find: goto squad/tab/pane/agent",
+            "find: goto workspace/tab/pane/agent",
         ),
         // global
         b(
@@ -1005,6 +1283,28 @@ fn default_bindings() -> Vec<KeyBinding> {
         ),
         b(b'a', "answers", OpenAnswers, Global, "answer queue"),
         b(
+            b'M',
+            "open-messages",
+            OpenMessages,
+            Global,
+            "open Messages (mail)",
+        ),
+        b(
+            b'A',
+            "connections",
+            OpenConnections,
+            Global,
+            "connections (accounts, combos)",
+        ),
+        b(b'e', "feed", OpenFeed, Global, "activity feed"),
+        b(
+            b'E',
+            "feedfocus",
+            FocusFeed,
+            Global,
+            "focus the activity feed (arrows, enter)",
+        ),
+        b(
             b'm',
             "yard",
             OpenYard,
@@ -1012,11 +1312,60 @@ fn default_bindings() -> Vec<KeyBinding> {
             "the yard (fleet as a menagerie)",
         ),
         b(
+            b'P',
+            "sideline-menu",
+            OpenSidelineMenu,
+            Global,
+            "sideline menu (palette)",
+        ),
+        b(
+            b'C',
+            "org",
+            OpenTeam,
+            Global,
+            "the org block (load, census, lanes)", // minimize/expand, sideline
+        ),
+        b(
+            b'q',
+            "notifications-bell",
+            ToggleBell,
+            Global,
+            "open notifications for questions and announcements",
+        ),
+        b(
+            b'O',
+            "open-backlog-board",
+            OpenBacklogBoard,
+            Global,
+            "open the backlog board (experimental pref)",
+        ),
+        b(
+            b'V',
+            "cycle-sideline-view",
+            CycleSidelineView,
+            Global,
+            "cycle sideline view (agents, backlog, org)",
+        ),
+        b(
             b'b',
             "toggle-sideline",
             TogglePanel,
             Global,
             "toggle sideline",
+        ),
+        b(
+            b'i',
+            "toggle-composer",
+            ToggleComposer,
+            Global,
+            "new-agent composer",
+        ),
+        b(
+            b'F',
+            "full-sideline",
+            ToggleFullSideline,
+            Global,
+            "full-screen sideline",
         ),
         b(
             b'B',
@@ -1032,7 +1381,35 @@ fn default_bindings() -> Vec<KeyBinding> {
             Global,
             "sort table columns",
         ),
+        b(
+            b'W',
+            "cycle-agent-group",
+            CycleAgentGroup,
+            Global,
+            "group agents by workspace, lead, cwd, or status",
+        ),
+        b(
+            b'Y',
+            "toggle-card-head",
+            ToggleCardHead,
+            Global,
+            "show or hide the card header row",
+        ),
         b(b's', "toggle-status", ToggleStatus, Global, "toggle status"),
+        b(
+            b'S',
+            "settings",
+            OpenSettings,
+            Global,
+            "settings (theme, toggles, prefix)",
+        ),
+        b(
+            b'T',
+            "sweep-threads",
+            OpenSweepThreads,
+            Global,
+            "sweep threads (close, reap)",
+        ),
         b(
             b'\\',
             "show-pane-ids",
@@ -1063,8 +1440,30 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     bindings_for(&keymap())
 }
 
+/// Every rebindable binding as the settings page lists it: the live table
+/// plus the actions that ship with no chord, which read "unbound" so the
+/// page can give them one.
+pub fn editable_bindings() -> Vec<KeyBinding> {
+    let map = keymap();
+    let mut rows = default_bindings();
+    for kb in &mut rows {
+        if kb.key == 0 {
+            kb.disp = "unbound".into();
+        }
+        if let Some((_, byte)) = map.rebinds.iter().find(|(a, _)| a == kb.action) {
+            kb.key = *byte;
+            kb.disp = key_disp(*byte);
+        }
+    }
+    rows
+}
+
 fn bindings_for(map: &Keymap) -> Vec<KeyBinding> {
     let mut rows = default_bindings();
+    // A sentinel row (key 0: bindable, no default chord) enters the live
+    // table only once a rebind gives it a real key; shipping it unbound
+    // would break the parity contract between `chord()` and the modal.
+    rows.retain(|kb| kb.key != 0 || map.rebinds.iter().any(|(a, _)| a == &kb.action));
     for (action, byte) in &map.rebinds {
         if let Some(kb) = rows.iter_mut().find(|kb| kb.action == action) {
             kb.key = *byte;
@@ -1114,6 +1513,10 @@ pub struct MenuKeyBinding {
 /// at build time and per offered action on every in-menu keypress.
 pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
     MenuKeyBinding {
+        action: "open-in-portal",
+        key: b'P',
+    },
+    MenuKeyBinding {
         action: "rename-tab",
         key: b'r',
     },
@@ -1141,14 +1544,20 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "move-tab-right",
         key: b'>',
     },
-    // (x-d545) The row-menu verbs, teachable by keyboard now. Letters reuse
+    // The move-to prompt: same byte as its prefix chord, one
+    // vocabulary inside the menu and out.
+    MenuKeyBinding {
+        action: "move-tab-to",
+        key: b'#',
+    },
+    // The row-menu verbs, teachable by keyboard now. Letters reuse
     // the sideline's own vocabulary so the two scopes teach one keyboard:
     // `s` stop (the sideline spends `x` on stop-then-remove and `X` on bulk
     // reap, so the menu's own free mnemonic takes Stop), `p` peek (the
     // sideline's attach/peek neighbour), `m` mail (the peek overlay's reply
     // key), `d` diff (the prefix-chord diff-pane letter, now a menu byte
-    // too), `o` open-here, and `r` resume (peek `r` resumes; the row menu
-    // never offers rename, so the byte cannot collide inside one open menu).
+    // too), `o` open-here, `r` resume (peek `r` resumes), and `l` label
+    // (the row rename renames the registry LABEL).
     MenuKeyBinding {
         action: "stop-row",
         key: b's',
@@ -1172,6 +1581,31 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
     MenuKeyBinding {
         action: "resume-row",
         key: b'r',
+    },
+    MenuKeyBinding {
+        action: "rename-agent",
+        key: b'l',
+    },
+    // `c` closes the portal seat only - the viewer, never the row it
+    // shows; `x` stays the destructive row verb.
+    MenuKeyBinding {
+        action: "close-portal",
+        key: b'c',
+    },
+    // `h` lifts the hold the row wears (Remove hold / Remove DND - one
+    // entry, the mark names itself). Free in menu scope: the popup's own
+    // navigation runs on arrows, and `h` is no other menu byte.
+    MenuKeyBinding {
+        action: "release-hold",
+        key: b'h',
+    },
+    // `t` flips the row menu's Split Direction group between pane and
+    // portal (the split.opens start, flipped in-menu before the arrow is
+    // pressed). Free in menu scope: the placement picker's `t` (new tab)
+    // is a different scope, and `t` is no other menu byte.
+    MenuKeyBinding {
+        action: "toggle-split-opens",
+        key: b't',
     },
 ];
 
@@ -1208,55 +1642,40 @@ pub fn menu_byte_for(action_id: &str) -> Option<u8> {
 /// table, and a rebind has to reach every one of them or the feature reads as
 /// broken from whichever surface was missed.
 ///
-/// A teaser, not the key list: it names one action per group and sends the
-/// reader to `?` for the rest. An action missing from the table drops silently
-/// rather than printing a gap.
+/// A teaser, not the key list: the short bar a pending prefix paints at
+/// once. Each key comes off the LIVE
+/// key table via [`key_for`], so a rebind shows the real key; an action
+/// missing from the table drops silently rather than printing a gap. The
+/// full table stays in `?`.
 pub fn prefix_hint() -> String {
-    // (actions, how their keys join, the phrase that follows). No actions means
-    // a literal entry: the digit range is structural, not a binding.
-    const GROUPS: &[(&[&str], &str, &str)] = &[
-        (&["split-h", "split-v"], " ", "split"),
-        (
-            &["focus-left", "focus-down", "focus-up", "focus-right"],
-            "",
-            "focus",
-        ),
-        (
-            &["resize-left", "resize-down", "resize-up", "resize-right"],
-            "",
-            "resize",
-        ),
-        (&["close-pane"], "", "close"),
-        (&["new-tab"], "", "tab"),
-        (&["next-tab", "prev-tab"], "/", "cycle"),
-        (&[], "", "1-9 tab"),
-        (&["close-tab"], "", "close-tab"),
-        (&["selector"], "", "select"),
-        (&["toggle-sideline"], "", "sideline"),
-        (&["grab-work"], "", "grab"),
-        (&["find"], "", "find"),
-        (&["search"], "", "search"),
-        (&["toggle-status"], "", "status"),
-        (&["detach"], "", "detach"),
-        (&["show-keys"], "", "all keys"),
+    // (action id, the phrase that follows). `esc cancel` is literal: esc
+    // cancels a pending prefix structurally, before any binding lookup.
+    const BAR: &[(&str, &str)] = &[
+        ("selector", "workspaces"),
+        ("toggle-composer", "new agent"),
+        ("find", "find"),
+        ("show-keys", "all keys"),
     ];
     let rows = key_bindings();
-    let mut parts: Vec<String> = Vec::new();
-    for (actions, sep, phrase) in GROUPS {
-        if actions.is_empty() {
-            parts.push(phrase.to_string());
-            continue;
-        }
-        let keys: Vec<String> = actions
+    let mut parts: Vec<String> = vec!["esc cancel".to_string()];
+    for (action, phrase) in BAR {
+        let Some(key) = rows
             .iter()
-            .filter_map(|a| rows.iter().find(|kb| kb.action == *a))
+            .find(|kb| kb.action == *action)
             .map(|kb| kb.disp.clone())
-            .collect();
-        if !keys.is_empty() {
-            parts.push(format!("{} {phrase}", keys.join(sep)));
-        }
+        else {
+            continue;
+        };
+        parts.push(format!("{key} {phrase}"));
     }
-    format!(" {}", parts.join(" \u{b7} "))
+    format!(" {} ", parts.join(" \u{b7} "))
+}
+
+/// The one-line key hint the sideline paints while the row selector is open,
+/// so the keys the selector answers never need discovering by accident. The
+/// words name what the selector's own handlers run (client `selector_keys`).
+pub fn selector_hint() -> &'static str {
+    " selector: arrows/hjkl move \u{b7} enter open \u{b7} space peek \u{b7} x stop/remove \u{b7} P portal \u{b7} esc close "
 }
 
 /// Display-only pseudo-bindings the modal shows but `chord()` handles as
@@ -1264,17 +1683,19 @@ pub fn prefix_hint() -> String {
 /// and the prefix-prefix literal. Kept beside [`key_bindings`] so the modal's
 /// row set stays complete without polluting the executable table.
 ///
-/// The literal-prefix row is built from the LIVE prefix: a frozen `C-b C-b`
-/// would advertise a dead sequence the moment anyone set `config.mux.prefix`.
+/// The literal-prefix row is built from the LIVE prefix: a frozen `ctrl-b
+/// ctrl-b` would advertise a dead sequence the moment anyone set
+/// `config.mux.prefix`.
 pub fn meta_rows() -> Vec<(String, String, KeySection)> {
     let p = key_disp(prefix());
-    vec![
-        // The digit range is nine by construction (one byte, nine of them), so
-        // the row states its own ceiling and names the uncapped way past it
-        // rather than leaving a 14-tab operator to discover `f` by accident.
+    let rows = vec![
+        // The digit jump reads arbitrary numbers now, so the row
+        // names the resolve doors instead of a nine-tab ceiling: Enter is the
+        // explicit one, the quiet window covers number-then-nothing, and a
+        // non-digit ends the number and falls through to the next chord.
         (
-            "1-9".into(),
-            "select tab (first 9; f goes past)".into(),
+            format!("{p} <n>"),
+            "jump to tab by number (Enter; Alt works too)".into(),
             KeySection::WorkspacesTabs,
         ),
         (
@@ -1282,16 +1703,33 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             format!("literal {p}"),
             KeySection::Global,
         ),
-        // (x-e10f) The global sideline chord: a multi-byte CSI, so it lives
-        // HERE with the other display-only rows rather than in the single-byte
-        // key_bindings table the modal executes from - the scanner's ChordEsc
-        // branch dispatches it, not chord().
+        // The hard-coded, non-rebindable chords: the global sideline chord
+        // (a multi-byte CSI the scanner's ChordEsc branch dispatches, not
+        // chord()) and the prefix-gated arrow ladder. The guard test
+        // (`every_hardcoded_chord_scans_to_a_listed_event`) fails when a
+        // scanner chord has no row here, so this table cannot lag the
+        // dispatch path.
         (
             "Ctrl+Opt+Left".into(),
-            "sideline (global, no prefix)".into(),
-            KeySection::Global,
+            "open the sideline row selector".into(),
+            KeySection::GlobalNoPrefix,
         ),
-        // (x-f300) The dead-row removal paths. Bare sideline keys, not chords -
+        (
+            format!("{p} arrows"),
+            "focus the pane in that direction".into(),
+            KeySection::GlobalNoPrefix,
+        ),
+        (
+            format!("{p} Ctrl+arrows"),
+            "resize the pane".into(),
+            KeySection::GlobalNoPrefix,
+        ),
+        (
+            format!("{p} Shift+arrows"),
+            "move the pane".into(),
+            KeySection::GlobalNoPrefix,
+        ),
+        // The dead-row removal paths. Bare sideline keys, not chords -
         // listed here so the reference names them; Enter on them BELs.
         (
             "x".into(),
@@ -1304,11 +1742,36 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             KeySection::SidelineRows,
         ),
         (
+            "h".into(),
+            "remove hold / DND (inside the row menu)".into(),
+            KeySection::SidelineRows,
+        ),
+        (
+            ".".into(),
+            "pin or unpin the row (inside the row selector)".into(),
+            KeySection::SidelineRows,
+        ),
+        (
+            "shift+up/down".into(),
+            "reorder the row manually (inside the row selector)".into(),
+            KeySection::SidelineRows,
+        ),
+        // Enter reaches portal 0; P opens the next free portal so a
+        // second thread lands BESIDE the first instead of repointing it. The
+        // tab menu's Join actions then tile them. Like the 1-9 row, it states
+        // its own ceiling and names the way past it: any portal is
+        // findable by index through the navigator.
+        (
+            "P".into(),
+            "open the next free portal (Enter uses portal 0; f finds one by index)".into(),
+            KeySection::SidelineRows,
+        ),
+        (
             "right-click".into(),
-            // (x-7683) All three triggers of the same menu, so a terminal that
+            // All three triggers of the same menu, so a terminal that
             // never forwards the button does not read as a dead feature. The
             // header-only clear-dead action stays named here too - it was the
-            // only in-app documentation of that behavior (x-7683 review). The
+            // only in-app documentation of that behavior (review). The
             // hold duration formats from the client's one constant, so a
             // retune can never leave this label stale.
             format!(
@@ -1322,28 +1785,77 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
         // them instead of leaving an operator to discover them by accident,
         // or not at all.
         (
-            format!("{p} w then r"),
-            "rename the focused workspace row".into(),
+            format!("{p} w then r/J/K/x"),
+            "rename · move · remove (confirm) the workspace row".into(),
             KeySection::SidelineRows,
+        ),
+        // The Messages tab's bare keys (item 8): no prefix, no rebind -
+        // reference rows so the tab's keyboard is discoverable from the
+        // help surface, not only from its painted hint line.
+        (
+            "j/k".into(),
+            "move within a column".into(),
+            KeySection::Messages,
         ),
         (
-            format!("{p} w then J/K"),
-            "move the focused workspace row down/up".into(),
-            KeySection::SidelineRows,
+            "h/l or arrows".into(),
+            "move between the 3 columns".into(),
+            KeySection::Messages,
         ),
         (
-            format!("{p} w then x"),
-            "remove the focused workspace (confirm)".into(),
-            KeySection::SidelineRows,
+            "enter".into(),
+            "open the selection".into(),
+            KeySection::Messages,
         ),
-    ]
+        (
+            "esc".into(),
+            "back one column; from column 1 close the tab".into(),
+            KeySection::Messages,
+        ),
+        (
+            "a/b".into(),
+            "all · broadcasts filter (column 1)".into(),
+            KeySection::Messages,
+        ),
+        (
+            "s".into(),
+            "toggle the agent sort".into(),
+            KeySection::Messages,
+        ),
+        ("d".into(), "session details".into(), KeySection::Messages),
+        (
+            "m".into(),
+            "the conversation's chat id".into(),
+            KeySection::Messages,
+        ),
+        (
+            "y/Y".into(),
+            "copy the bubble's fmail id / body".into(),
+            KeySection::Messages,
+        ),
+    ];
+    // Bindable, no default chord: the two split directions with no free key.
+    // Listed while unbound so the reference names the action and its rebind
+    // door; each row leaves this table once a rebind materializes the action
+    // in `key_bindings` (no double row).
+    let mut rows = rows;
+    for (action, label) in [("split-up", "split up"), ("split-left", "split left")] {
+        if key_for(action).is_none() {
+            rows.push((
+                "-".into(),
+                format!("{label} (no default chord; rebind via config.mux.keys.{action})"),
+                KeySection::Panes,
+            ));
+        }
+    }
+    rows
 }
 
 /// The single-byte chord table. PREFIX (literal) and the digit range are
 /// structural specials; every other byte is resolved from [`key_bindings`], the
 /// same table the which-key modal renders, so dispatch and help cannot diverge.
 /// Resolve a post-prefix byte to its [`Event`] as if the prefix were held - the
-/// which-key modal's execution path (x-8ccf US3): a keypress in the modal runs
+/// which-key modal's execution path (US3): a keypress in the modal runs
 /// EXACTLY what `prefix+<key>` runs, because both go through this one table.
 /// `Event::Bell` means the byte is unbound (the modal dismisses on it).
 pub fn resolve_chord(byte: u8) -> Event {
@@ -1354,11 +1866,26 @@ fn chord(b: u8) -> Event {
     chord_for(&keymap(), b)
 }
 
+/// Parse held digit bytes into the 1-based ordinal event. An
+/// unparseable or zero reading still emits the event: the CLIENT resolves it
+/// against the live layout and answers with a notice naming the miss, never a
+/// silent BEL - a number that does nothing reads as a dead keybind.
+fn select_tab_event(digits: &[u8]) -> Event {
+    let n: u32 = std::str::from_utf8(digits)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    Event::SelectTabIdx(n as usize)
+}
+
 fn chord_for(map: &Keymap, b: u8) -> Event {
     match b {
         // prefix-prefix = one literal prefix byte, whatever the prefix now is.
         _ if b == map.prefix => Event::Forward(vec![b]),
-        b'1'..=b'9' => Event::SelectTabIdx((b - b'1') as usize),
+        // 1-based ordinal; the scan loop routes digits into the
+        // multi-digit buffer before this table is consulted, so a lone
+        // resolution here only serves `resolve_chord` callers.
+        b'1'..=b'9' => Event::SelectTabIdx((b - b'0') as usize),
         _ => bindings_for(map)
             .into_iter()
             .find(|kb| kb.key == b)
@@ -1373,10 +1900,10 @@ enum EscScan {
     Invalid,
 }
 
-/// Arrows (`ESC [ A..D` -> focus), Ctrl-arrows (`ESC [ 1 ; 5 A..D` -> resize),
-/// Shift-arrows (`ESC [ 1 ; 2 A..D` -> move the pane, x-aa95) after the
-/// prefix, and the one GLOBAL rung: Ctrl+Opt-Left (`ESC [ 1 ; 7 D` -> open
-/// the sideline, x-e10f), which the `ChordEsc` branch also reaches without a
+/// Arrows (`ESC [ A..D` -> focus), Ctrl-arrows (`ESC [ 1; 5 A..D` -> resize),
+/// Shift-arrows (`ESC [ 1; 2 A..D` -> move the pane) after the
+/// prefix, and the one GLOBAL rung: Ctrl+Opt-Left (`ESC [ 1; 7 D` -> open
+/// the sideline), which the `ChordEsc` branch also reaches without a
 /// prefix. Anything that stops matching every prefix is swallowed as one Bell.
 /// (The paste-open marker is peeled off by the caller before this runs.)
 ///
@@ -1408,14 +1935,14 @@ fn esc_chord(seq: &[u8]) -> EscScan {
             return EscScan::Invalid;
         }
     }
-    // Complete Ctrl-arrow: ESC [ 1 ; 5 X
+    // Complete Ctrl-arrow: ESC [ 1; 5 X
     if seq.len() == 6 && seq.starts_with(CTRL) {
         return match arrow(seq[5]) {
             Some(dir) => EscScan::Complete(Event::Cmd(Command::ResizeDir(dir))),
             None => EscScan::Invalid,
         };
     }
-    // Complete Shift-arrow: ESC [ 1 ; 2 X. `target: None` - the server resolves
+    // Complete Shift-arrow: ESC [ 1; 2 X. `target: None` - the server resolves
     // the destination by direction, so this rides the same `move_leaf` the drop
     // path does (Locked Decision 4: one mutation path, two gestures).
     if seq.len() == 6 && seq.starts_with(SHIFT) {
@@ -1428,7 +1955,7 @@ fn esc_chord(seq: &[u8]) -> EscScan {
             None => EscScan::Invalid,
         };
     }
-    // Complete Ctrl+Opt-arrow: ESC [ 1 ; 7 X. Only Left (D) is bound - the
+    // Complete Ctrl+Opt-arrow: ESC [ 1; 7 X. Only Left (D) is bound - the
     // sideline chord. From the prefix this rung is Invalid on the other
     // finals (one Bell, like any unbound chord); from the global ChordEsc
     // branch the caller forwards them instead.
@@ -1447,6 +1974,61 @@ fn esc_chord(seq: &[u8]) -> EscScan {
         return EscScan::Partial;
     }
     EscScan::Invalid
+}
+
+/// The chords the scanner dispatches OUTSIDE the rebindable keymap, as
+/// (display, event) pairs: the global sideline chord (truly prefix-free) and
+/// the PREFIX-GATED arrow ladder (`prefix` + arrows focuses, `prefix` +
+/// Ctrl+arrows resizes, `prefix` + Shift+arrows moves). One source for the
+/// which-key modal's "global (no prefix)" rows and for the guard test that
+/// fails when a hard-coded chord this list never names completes - the exact
+/// gap that hid Ctrl+Opt+Left from every help surface.
+pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
+    use Command as C;
+    use Event::*;
+    vec![
+        ("Ctrl+Opt+Left", OpenSelector),
+        ("Up", Cmd(C::FocusDir(Dir::Up))),
+        ("Down", Cmd(C::FocusDir(Dir::Down))),
+        ("Left", Cmd(C::FocusDir(Dir::Left))),
+        ("Right", Cmd(C::FocusDir(Dir::Right))),
+        ("Ctrl+Up", Cmd(C::ResizeDir(Dir::Up))),
+        ("Ctrl+Down", Cmd(C::ResizeDir(Dir::Down))),
+        ("Ctrl+Left", Cmd(C::ResizeDir(Dir::Left))),
+        ("Ctrl+Right", Cmd(C::ResizeDir(Dir::Right))),
+        (
+            "Shift+Up",
+            Cmd(C::MovePane {
+                mover: None,
+                target: None,
+                dir: Dir::Up,
+            }),
+        ),
+        (
+            "Shift+Down",
+            Cmd(C::MovePane {
+                mover: None,
+                target: None,
+                dir: Dir::Down,
+            }),
+        ),
+        (
+            "Shift+Left",
+            Cmd(C::MovePane {
+                mover: None,
+                target: None,
+                dir: Dir::Left,
+            }),
+        ),
+        (
+            "Shift+Right",
+            Cmd(C::MovePane {
+                mover: None,
+                target: None,
+                dir: Dir::Right,
+            }),
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -1494,11 +2076,14 @@ mod tests {
             events,
             vec![
                 Event::Forward(b"a".to_vec()),
-                Event::Cmd(Command::SplitH),
+                Event::Cmd(Command::SplitDir(Dir::Right)),
                 Event::Forward(b"b".to_vec()),
             ]
         );
-        assert_eq!(scan_all(&[b"\x02\""]), vec![Event::Cmd(Command::SplitV)]);
+        assert_eq!(
+            scan_all(&[b"\x02\""]),
+            vec![Event::Cmd(Command::SplitDir(Dir::Down))]
+        );
         assert_eq!(
             scan_all(&[b"\x02l"]),
             vec![Event::Cmd(Command::FocusDir(Dir::Right))]
@@ -1508,16 +2093,38 @@ mod tests {
             vec![Event::Cmd(Command::ResizeDir(Dir::Up))]
         );
         assert_eq!(scan_all(&[b"\x02x"]), vec![Event::Cmd(Command::ClosePane)]);
-        assert_eq!(scan_all(&[b"\x027"]), vec![Event::SelectTabIdx(6)]);
+        // Digits hold into the multi-digit buffer instead of firing:
+        // a lone digit waits for the caller's flush, Enter resolves
+        // explicitly, and a non-digit resolves AND forwards - the old
+        // single-digit muscle memory (tab, then next key) is preserved.
+        assert_eq!(scan_all(&[b"\x027"]), vec![]);
+        assert_eq!(scan_all(&[b"\x027\r"]), vec![Event::SelectTabIdx(7)]);
+        let mut digits = Scanner::default();
+        let now = Instant::now();
+        assert_eq!(digits.scan(b"\x023", now), vec![]);
+        assert_eq!(digits.scan(b"4", now), vec![]);
+        assert_eq!(
+            digits.scan(b"j", now),
+            vec![Event::SelectTabIdx(34), Event::Forward(b"j".to_vec())]
+        );
+        // Alt+digit arms the same buffer, and later plain digits append.
+        let mut alt = Scanner::default();
+        assert_eq!(alt.scan(b"\x1b3", now), vec![]);
+        assert_eq!(alt.scan(b"0", now), vec![]);
+        assert_eq!(alt.scan(b"\r", now), vec![Event::SelectTabIdx(30)]);
         assert_eq!(scan_all(&[b"\x02&"]), vec![Event::Cmd(Command::CloseTab)]);
         assert_eq!(scan_all(&[b"\x02w"]), vec![Event::OpenSelector]);
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02b"]), vec![Event::TogglePanel]);
+        assert_eq!(scan_all(&[b"\x02i"]), vec![Event::ToggleComposer]);
+        // prefix+O opens the experimental backlog board (pref-gated client-side).
+        assert_eq!(scan_all(&[b"\x02O"]), vec![Event::OpenBacklogBoard]);
+        assert_eq!(scan_all(&[b"\x02F"]), vec![Event::ToggleFullSideline]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);
         assert_eq!(scan_all(&[b"\x02?"]), vec![Event::ShowKeys]);
         assert_eq!(scan_all(&[b"\x02d"]), vec![Event::Detach]);
         assert_eq!(scan_all(&[b"\x02g"]), vec![Event::DispatchNext]);
-        // prefix+/ opens in-scrollback search (x-e780); the `/` never leaks.
+        // prefix+/ opens in-scrollback search; the `/` never leaks.
         let searched = scan_all(&[b"a\x02/b"]);
         assert_eq!(
             searched,
@@ -1527,7 +2134,7 @@ mod tests {
                 Event::Forward(b"b".to_vec()),
             ]
         );
-        // prefix+f opens the session navigator (x-653d); the `f` never leaks,
+        // prefix+f opens the session navigator; the `f` never leaks,
         // and prefix+g stays "grab work" (DispatchNext, unchanged).
         assert_eq!(
             scan_all(&[b"a\x02fb"]),
@@ -1538,6 +2145,18 @@ mod tests {
             ]
         );
         assert_eq!(scan_all(&[b"\x02g"]), vec![Event::DispatchNext]);
+    }
+
+    #[test]
+    fn sideline_menu_rows_open_from_the_keyboard() {
+        // The menu-only surfaces got chords: S settings, A connections,
+        // T sweep threads - case pairs with s/a, per the h/H convention.
+        assert_eq!(scan_all(&[b"\x02S"]), vec![Event::OpenSettings]);
+        assert_eq!(scan_all(&[b"\x02A"]), vec![Event::OpenConnections]);
+        assert_eq!(scan_all(&[b"\x02T"]), vec![Event::OpenSweepThreads]);
+        // ... and the lowercase halves still mean what they meant.
+        assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
+        assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);
     }
 
     #[test]
@@ -1565,7 +2184,7 @@ mod tests {
 
     #[test]
     fn client_keys_shift_arrow_moves_the_pane() {
-        // x-aa95: the arrow ladder is plain=focus, ctrl=resize, shift=move.
+        // the arrow ladder is plain=focus, ctrl=resize, shift=move.
         // Both ids ride as None - the bind knows a direction and nothing else,
         // so the server resolves the focused pane and its neighbour.
         assert_eq!(
@@ -1631,7 +2250,7 @@ mod tests {
 
     #[test]
     fn client_keys_block_navigation_chords_map_and_never_leak() {
-        // AC-HP (Change 3): the x-38c4 chords produce their events and the chord
+        // AC-HP (Change 3): the chords produce their events and the chord
         // bytes never reach the pane. `x` stays ClosePane (block-select is `v`).
         assert_eq!(
             scan_all(&[b"\x02["]),
@@ -1679,6 +2298,8 @@ mod tests {
         assert_eq!(parse_key("C-a"), Some(0x01));
         assert_eq!(parse_key("Ctrl-a"), Some(0x01));
         assert_eq!(parse_key("^a"), Some(0x01));
+        assert_eq!(parse_key("ctrl+a"), Some(0x01), "the printed form parses");
+        assert_eq!(parse_key("Ctrl+Q"), Some(0x11), "case-insensitive plus");
         assert_eq!(parse_key("c-B"), Some(0x02), "case-insensitive");
         assert_eq!(parse_key(" C-b "), Some(0x02), "trimmed");
         assert_eq!(parse_key("q"), Some(b'q'));
@@ -1694,7 +2315,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_keymap_applies_a_prefix_and_a_rebind() {
+    fn resolve_keymap_apply_rows() {
         let (map, warn) = resolve_keymap(
             Some("C-a"),
             &[("detach".into(), "Q".into()), ("SEARCH".into(), "?".into())],
@@ -1707,10 +2328,69 @@ mod tests {
         );
         assert_eq!(map.prefix, 0x01);
         assert_eq!(map.rebinds, vec![("detach".to_string(), b'Q')]);
+
+        // A REAL exchange: `n` and `p` trade places, neither moving to a free
+        // key first. Checking entries one at a time against a half-applied map
+        // refuses both (whichever comes first sees the other still parked on its
+        // target), so this is the case that pins judging the FINAL assignment.
+        for order in [
+            vec![("next-tab", "p"), ("prev-tab", "n")],
+            vec![("prev-tab", "n"), ("next-tab", "p")],
+        ] {
+            let entries: Vec<(String, String)> = order
+                .iter()
+                .map(|(a, k)| ((*a).to_string(), (*k).to_string()))
+                .collect();
+            let (map, warn) = resolve_keymap(None, &entries);
+            assert!(warn.is_empty(), "a swap is legal: {warn:?}");
+            assert_eq!(map.rebinds.len(), 2, "both halves of the swap apply");
+            let key = |a: &str| map.rebinds.iter().find(|(x, _)| x == a).map(|(_, k)| *k);
+            assert_eq!((key("next-tab"), key("prev-tab")), (Some(b'p'), Some(b'n')));
+        }
+
+        // The same rule at one more step: no ordering of a cycle has a free key
+        // to start from, so any sequential check rejects all three.
+        let (map, warn) = resolve_keymap(
+            None,
+            &[
+                ("focus-left".into(), "j".into()),
+                ("focus-down".into(), "k".into()),
+                ("focus-up".into(), "h".into()),
+            ],
+        );
+        assert!(warn.is_empty(), "a cycle is legal: {warn:?}");
+        assert_eq!(map.rebinds.len(), 3);
+
+        let map = resolve_prefix_change_with_rebinds("C-a", &[]).unwrap();
+        assert_eq!(map.prefix, 0x01);
+
+        let collision =
+            resolve_prefix_change_with_rebinds("Q", &[("detach".to_string(), b'Q')]).unwrap_err();
+        assert!(collision.contains("prefix"), "{collision}");
+
+        let digit = resolve_prefix_change_with_rebinds("3", &[]).unwrap_err();
+        assert!(digit.contains("1-9 select tabs"), "{digit}");
+
+        // One settings rebind runs the same rules against the live map.
+        let p = DEFAULT_PREFIX;
+        let digit = resolve_rebind_with(p, &[], "detach", b'3').unwrap_err();
+        assert!(digit.contains("1-9 select tabs"), "{digit}");
+        let on_prefix = resolve_rebind_with(p, &[], "detach", p).unwrap_err();
+        assert!(on_prefix.contains("is the prefix"), "{on_prefix}");
+        let taken = resolve_rebind_with(p, &[], "detach", b'c').unwrap_err();
+        assert!(
+            taken.starts_with("config.mux.keys.detach: c would also be"),
+            "{taken}"
+        );
+        let free = resolve_rebind_with(p, &[], "detach", b'Q').unwrap();
+        assert_eq!(free.rebinds, vec![("detach".to_string(), b'Q')]);
+        assert_eq!(rebinds_json(&free), r#"{"detach":"Q"}"#);
+        let home = resolve_rebind_with(p, &free.rebinds, "detach", b'd').unwrap();
+        assert!(home.rebinds.is_empty(), "the shipped key drops the rebind");
     }
 
     #[test]
-    fn resolve_keymap_refuses_rather_than_breaking_the_keyboard() {
+    fn resolve_keymap_refusal_rows() {
         // Each refusal keeps a keyboard that WORKS. Applying any of these would
         // shadow a binding or bind a chord that can never fire.
         let cases: [(&str, &str, &str); 4] = [
@@ -1731,6 +2411,51 @@ mod tests {
         let (map, warn) = resolve_keymap(Some("meta-q"), &[]);
         assert_eq!(map.prefix, DEFAULT_PREFIX);
         assert!(warn[0].0.contains("config.mux.prefix"));
+
+        // `chord()` matches the prefix byte BEFORE the table, so an action left
+        // on the prefix is unreachable while the key table still advertises it.
+        // The prefix loses, because refusing it keeps every chord while the
+        // alternative silently costs one.
+        let (map, warn) = resolve_keymap(Some("d"), &[]);
+        assert_eq!(map.prefix, DEFAULT_PREFIX);
+        assert!(
+            warn.iter().any(|w| w.0.contains("is already detach")),
+            "{warn:?}"
+        );
+        // Moving the action out of the way first makes the same prefix legal.
+        let (map, warn) = resolve_keymap(Some("d"), &[("detach".into(), "Q".into())]);
+        assert!(warn.is_empty(), "{warn:?}");
+        assert_eq!(map.prefix, b'd');
+        assert_eq!(map.rebinds, vec![("detach".to_string(), b'Q')]);
+        // And a REBIND onto the prefix loses instead, since the prefix is the
+        // more global choice.
+        let (map, warn) = resolve_keymap(Some("C-a"), &[("detach".into(), "C-a".into())]);
+        assert_eq!(map.prefix, 0x01);
+        assert!(map.rebinds.is_empty());
+        assert!(
+            warn.iter().any(|w| w.0.contains("is the prefix")),
+            "{warn:?}"
+        );
+
+        // The final-map collision check only sees NAMED bindings, so `3` looked
+        // free. It is not: `chord()` resolves the prefix before the structural
+        // `1-9` branch, so `prefix+3` would forward a literal `3` while the key
+        // modal went on advertising the whole range. A quietly missing tab is
+        // worse than a refusal, which at least says why.
+        for spec in ["1", "3", "9"] {
+            let (map, warn) = resolve_keymap(Some(spec), &[]);
+            assert_eq!(map.prefix, DEFAULT_PREFIX, "prefix={spec} must not apply");
+            assert!(
+                warn.iter().any(|w| w.0.contains("1-9 select tabs")),
+                "prefix={spec} should say why, said {warn:?}"
+            );
+        }
+        // Asserted on the resolver rather than through `chord()`, because
+        // `install` is process-global and first-call-wins: a test that installs
+        // a keymap decides the keyboard for whichever tests run after it.
+        //
+        // `0` is not in the tab range, so it stays a legal prefix.
+        assert_eq!(resolve_keymap(Some("0"), &[]).0.prefix, b'0');
     }
 
     #[test]
@@ -1741,14 +2466,11 @@ mod tests {
         // one contains a particular character.
         let rows = key_bindings();
         let hint = prefix_hint();
-        // Byte-identical to the string this generator replaced. Generating it
-        // was meant to change nothing an operator sees until they rebind
-        // something, so the shipped rendering is worth pinning.
+        // Byte-identical to the shipped short bar: esc cancel plus
+        // one key per line, every glyph read from the live table.
         assert_eq!(
             hint,
-            " % \" split · hjkl focus · HJKL resize · x close · c tab · n/p cycle \
-             · 1-9 tab · & close-tab · w select · b sideline · g grab · f find \
-             · / search · s status · d detach · ? all keys"
+            " esc cancel · w workspaces · i new agent · f find · ? all keys "
         );
         let disp = |action: &str| {
             rows.iter()
@@ -1756,7 +2478,7 @@ mod tests {
                 .map(|kb| kb.disp.clone())
                 .expect("action is in the shipped table")
         };
-        for action in ["detach", "find", "search", "show-keys", "new-tab"] {
+        for action in ["selector", "toggle-composer", "find", "show-keys"] {
             assert!(
                 hint.contains(&disp(action)),
                 "the hint must name {action} on the key it actually answers on \
@@ -1764,11 +2486,11 @@ mod tests {
                 disp(action)
             );
         }
-        // A rebind moves the hint with it. Resolved locally rather than
-        // installed, since `install` is a process-global OnceLock.
-        let (map, warn) = resolve_keymap(None, &[("detach".into(), "Q".into())]);
+        // A rebind moves the glyph the bar reads. Resolved locally rather
+        // than installed, since `install` is a process-global OnceLock.
+        let (map, warn) = resolve_keymap(None, &[("find".into(), "Q".into())]);
         assert!(warn.is_empty(), "Q is free: {warn:?}");
-        assert_eq!(map.rebinds, vec![("detach".to_string(), b'Q')]);
+        assert_eq!(map.rebinds, vec![("find".to_string(), b'Q')]);
         let rebound: Vec<KeyBinding> = {
             let mut rows = default_bindings();
             for (action, byte) in &map.rebinds {
@@ -1782,7 +2504,7 @@ mod tests {
         assert_eq!(
             rebound
                 .iter()
-                .find(|kb| kb.action == "detach")
+                .find(|kb| kb.action == "find")
                 .map(|kb| kb.disp.as_str()),
             Some("Q"),
             "the table moved, so the hint built from it moves too"
@@ -1820,111 +2542,9 @@ mod tests {
     }
 
     #[test]
-    fn a_digit_prefix_is_refused_like_a_digit_rebind() {
-        // The final-map collision check only sees NAMED bindings, so `3` looked
-        // free. It is not: `chord()` resolves the prefix before the structural
-        // `1-9` branch, so `prefix+3` would forward a literal `3` while the key
-        // modal went on advertising the whole range. A quietly missing tab is
-        // worse than a refusal, which at least says why.
-        for spec in ["1", "3", "9"] {
-            let (map, warn) = resolve_keymap(Some(spec), &[]);
-            assert_eq!(map.prefix, DEFAULT_PREFIX, "prefix={spec} must not apply");
-            assert!(
-                warn.iter().any(|w| w.0.contains("1-9 select tabs")),
-                "prefix={spec} should say why, said {warn:?}"
-            );
-        }
-        // Asserted on the resolver rather than through `chord()`, because
-        // `install` is process-global and first-call-wins: a test that installs
-        // a keymap decides the keyboard for whichever tests run after it.
-        //
-        // `0` is not in the tab range, so it stays a legal prefix.
-        assert_eq!(resolve_keymap(Some("0"), &[]).0.prefix, b'0');
-    }
-
-    #[test]
-    fn resolve_keymap_swaps_two_bound_keys() {
-        // A REAL exchange: `n` and `p` trade places, neither moving to a free
-        // key first. Checking entries one at a time against a half-applied map
-        // refuses both (whichever comes first sees the other still parked on its
-        // target), so this is the case that pins judging the FINAL assignment.
-        for order in [
-            vec![("next-tab", "p"), ("prev-tab", "n")],
-            vec![("prev-tab", "n"), ("next-tab", "p")],
-        ] {
-            let entries: Vec<(String, String)> = order
-                .iter()
-                .map(|(a, k)| ((*a).to_string(), (*k).to_string()))
-                .collect();
-            let (map, warn) = resolve_keymap(None, &entries);
-            assert!(warn.is_empty(), "a swap is legal: {warn:?}");
-            assert_eq!(map.rebinds.len(), 2, "both halves of the swap apply");
-            let key = |a: &str| map.rebinds.iter().find(|(x, _)| x == a).map(|(_, k)| *k);
-            assert_eq!((key("next-tab"), key("prev-tab")), (Some(b'p'), Some(b'n')));
-        }
-    }
-
-    #[test]
-    fn resolve_keymap_keeps_a_three_way_cycle() {
-        // The same rule at one more step: no ordering of a cycle has a free key
-        // to start from, so any sequential check rejects all three.
-        let (map, warn) = resolve_keymap(
-            None,
-            &[
-                ("focus-left".into(), "j".into()),
-                ("focus-down".into(), "k".into()),
-                ("focus-up".into(), "h".into()),
-            ],
-        );
-        assert!(warn.is_empty(), "a cycle is legal: {warn:?}");
-        assert_eq!(map.rebinds.len(), 3);
-    }
-
-    #[test]
-    fn resolve_keymap_refuses_a_prefix_that_shadows_a_chord() {
-        // `chord()` matches the prefix byte BEFORE the table, so an action left
-        // on the prefix is unreachable while the key table still advertises it.
-        // The prefix loses, because refusing it keeps every chord while the
-        // alternative silently costs one.
-        let (map, warn) = resolve_keymap(Some("d"), &[]);
-        assert_eq!(map.prefix, DEFAULT_PREFIX);
-        assert!(
-            warn.iter().any(|w| w.0.contains("is already detach")),
-            "{warn:?}"
-        );
-        // Moving the action out of the way first makes the same prefix legal.
-        let (map, warn) = resolve_keymap(Some("d"), &[("detach".into(), "Q".into())]);
-        assert!(warn.is_empty(), "{warn:?}");
-        assert_eq!(map.prefix, b'd');
-        assert_eq!(map.rebinds, vec![("detach".to_string(), b'Q')]);
-        // And a REBIND onto the prefix loses instead, since the prefix is the
-        // more global choice.
-        let (map, warn) = resolve_keymap(Some("C-a"), &[("detach".into(), "C-a".into())]);
-        assert_eq!(map.prefix, 0x01);
-        assert!(map.rebinds.is_empty());
-        assert!(
-            warn.iter().any(|w| w.0.contains("is the prefix")),
-            "{warn:?}"
-        );
-    }
-
-    #[test]
-    fn resolve_prefix_change_reuses_the_full_keymap_validator() {
-        let map = resolve_prefix_change_with_rebinds("C-a", &[]).unwrap();
-        assert_eq!(map.prefix, 0x01);
-
-        let collision =
-            resolve_prefix_change_with_rebinds("Q", &[("detach".to_string(), b'Q')]).unwrap_err();
-        assert!(collision.contains("prefix"), "{collision}");
-
-        let digit = resolve_prefix_change_with_rebinds("3", &[]).unwrap_err();
-        assert!(digit.contains("1-9 select tabs"), "{digit}");
-    }
-
-    #[test]
     fn meta_rows_name_the_live_prefix() {
         // The literal-prefix row is built from `prefix()`, so it cannot keep
-        // advertising `C-b C-b` after the prefix moves. Asserted against the
+        // advertising `ctrl-b ctrl-b` after the prefix moves. Asserted against the
         // default here (`install` is process-global and one-shot, so a test must
         // not take it); the construction is what stops the drift.
         let rows = meta_rows();
@@ -1938,7 +2558,7 @@ mod tests {
     }
 
     #[test]
-    fn rebinding_moves_the_chord_and_its_help_together() {
+    fn rebinding_moves_the_chord_and_materializes_sentinel_rows() {
         // The key-table parity rule, carried onto rebinds: whatever the modal
         // prints is what the dispatcher runs. Applied to a LOCAL table copy -
         // `install` is process-global and one-shot, so a test must not take it.
@@ -1952,8 +2572,54 @@ mod tests {
         }
         let detach = rows.iter().find(|kb| kb.action == "detach").unwrap();
         assert_eq!(detach.key, 0x11);
-        assert_eq!(detach.disp, "C-q", "the key table prints the NEW key");
+        assert_eq!(detach.disp, "ctrl+q", "the key table prints the NEW key");
         assert_eq!(detach.event, Event::Detach);
+
+        // The two no-default split actions live in the table as sentinel
+        // rows (key 0). They resolve only under an explicit rebind, which
+        // materializes the row with its real key; the live table never
+        // carries a key-0 row, so the parity contract holds untouched.
+        let (map, warnings) = resolve_keymap(
+            None,
+            &[
+                ("split-left".into(), "G".into()),
+                ("split-up".into(), "u".into()),
+            ],
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let rows = bindings_for(&map);
+        let left = rows
+            .iter()
+            .find(|kb| kb.action == "split-left")
+            .expect("materialized");
+        assert_eq!(left.key, b'G');
+        assert_eq!(left.disp, "G");
+        assert_eq!(left.event, Event::Cmd(Command::SplitDir(Dir::Left)));
+        let up = rows
+            .iter()
+            .find(|kb| kb.action == "split-up")
+            .expect("materialized");
+        assert_eq!(up.key, b'u');
+        assert_eq!(up.event, Event::Cmd(Command::SplitDir(Dir::Up)));
+        // No row ships key 0, and every row's key resolves to its own event:
+        // the parity shape, asserted on the local table.
+        for kb in &rows {
+            assert!(kb.key != 0, "sentinel row {} leaked", kb.action);
+            assert_eq!(
+                chord_for(&map, kb.key),
+                kb.event,
+                "chord diverged from row {}",
+                kb.action
+            );
+        }
+        // While unbound (the default map), the modal lists the action with
+        // its rebind door instead of a chord.
+        assert!(
+            meta_rows().iter().any(|(disp, label, _)| {
+                disp == "-" && label.contains("split up") && label.contains("split-up")
+            }),
+            "the unbound action is named in the reference"
+        );
     }
 
     #[test]
@@ -1981,16 +2647,48 @@ mod tests {
     }
 
     #[test]
-    fn client_keys_prefix_unmapped_swallows_with_bell() {
-        // The 'q' must NOT be forwarded - swallow + BEL.
-        assert_eq!(scan_all(&[b"\x02q"]), vec![Event::Bell]);
+    fn default_keys_never_collide_or_land_on_a_special() {
+        // Two defaults on one byte would fail SILENTLY: `chord_for` keeps the
+        // first row and `resolve_keymap`'s no-proposal branch breaks out of the
+        // duplicate loop without a warning, so one action would dispatch while
+        // the modal still advertised both. The prefix byte and every digit are
+        // structural specials that route before the table (the literal-prefix
+        // forward and the tab-ordinal buffer), so a binding parked there is
+        // unreachable while the help still shows it.
+        let mut seen = std::collections::HashSet::new();
+        for kb in default_bindings() {
+            // Sentinel rows (key 0: bindable, no default chord) hold no
+            // chord, so the uniqueness rule does not apply to them.
+            if kb.key == 0 {
+                continue;
+            }
+            assert!(
+                seen.insert(kb.key),
+                "key {} bound twice (second: {:?})",
+                kb.disp,
+                kb.action
+            );
+            assert_ne!(kb.key, DEFAULT_PREFIX, "{} sits on the prefix", kb.action);
+            assert!(
+                !kb.key.is_ascii_digit(),
+                "{} sits on the tab-ordinal digits",
+                kb.action
+            );
+        }
+    }
 
-        // (x-3e17, AC2-INV) The never-leak guarantee, swept over the whole byte
-        // space rather than one specimen. This design deliberately adds NO
-        // scanner chord and NO held-byte state - the discoverability fix is
-        // four label strings - and this is what pins that: if a later change
-        // starts accumulating bytes after the prefix, some byte in this sweep
-        // stops being a lone Bell and the assertion names it.
+    #[test]
+    fn client_keys_prefix_unmapped_swallows_with_bell() {
+        // An unbound byte ('u' here) must NOT be forwarded - swallow + BEL.
+        assert_eq!(scan_all(&[b"\x02u"]), vec![Event::Bell]);
+
+        // (AC2-INV) The never-leak guarantee, swept over the whole byte
+        // space rather than one specimen. adds ONE deliberate held-byte
+        // state, the tab-number buffer, so the digits 0-9 join the exclusion
+        // set: a digit after the prefix holds into the buffer (with its own
+        // out-of-range notice downstream) instead of answering one Bell. If a
+        // later change starts accumulating any OTHER byte after the prefix,
+        // this sweep names it.
         //
         // ESC is excluded because it legitimately opens a multi-byte arrow scan
         // (Partial, not Bell); the digits and the prefix are structural
@@ -1998,7 +2696,7 @@ mod tests {
         let bound: std::collections::HashSet<u8> =
             key_bindings().into_iter().map(|kb| kb.key).collect();
         for b in 0u8..=255 {
-            if b == prefix() || b == 0x1b || (b'1'..=b'9').contains(&b) || bound.contains(&b) {
+            if b == prefix() || b == 0x1b || b.is_ascii_digit() || bound.contains(&b) {
                 continue;
             }
             assert_eq!(
@@ -2011,7 +2709,7 @@ mod tests {
 
     #[test]
     fn bindings_are_the_chord_table() {
-        // x-8ccf Locked 3 / parity: the which-key modal renders `key_bindings()`;
+        // Locked 3 / parity: the which-key modal renders `key_bindings()`;
         // `chord()` dispatches through the same table. Assert they cannot diverge:
         // every table row's key resolves (via the real chord path) to exactly the
         // event the row advertises, and every key is listed once.
@@ -2039,7 +2737,7 @@ mod tests {
 
     #[test]
     fn menu_accelerators_round_trip_and_stay_out_of_the_prefix_scope() {
-        // x-91a1 AC1: every menu binding resolves to a glyph and back to the
+        // AC1: every menu binding resolves to a glyph and back to the
         // same byte/action pair, the prefix table keeps its own meanings
         // untouched (menu `x` did not rebind prefix+x), and a prefix-only
         // action has no menu key to advertise.
@@ -2108,7 +2806,7 @@ mod tests {
             scan_all(&[b"\x1b\x02%"]),
             vec![
                 Event::Forward(b"\x1b".to_vec()),
-                Event::Cmd(Command::SplitH)
+                Event::Cmd(Command::SplitDir(Dir::Right))
             ]
         );
         // A near-miss CSI ahead of the prefix: same re-dispatch of the tail.
@@ -2116,7 +2814,7 @@ mod tests {
             scan_all(&[b"\x1b[1;3\x02%"]),
             vec![
                 Event::Forward(b"\x1b[1;3".to_vec()),
-                Event::Cmd(Command::SplitH)
+                Event::Cmd(Command::SplitDir(Dir::Right))
             ]
         );
     }
@@ -2137,7 +2835,10 @@ mod tests {
         assert!(s.chord_pending());
         assert_eq!(s.flush_chord(), Some(Event::Forward(b"\x1b".to_vec())));
         assert!(!s.chord_pending());
-        assert_eq!(s.scan(b"\x02%", now), vec![Event::Cmd(Command::SplitH)]);
+        assert_eq!(
+            s.scan(b"\x02%", now),
+            vec![Event::Cmd(Command::SplitDir(Dir::Right))]
+        );
         assert_eq!(s.flush_chord(), None, "nothing held: a no-op");
         // A partial multi-byte candidate flushes the same way.
         let mut s = Scanner::default();
@@ -2146,8 +2847,65 @@ mod tests {
     }
 
     #[test]
+    fn every_hardcoded_chord_scans_to_a_listed_event() {
+        // The guard the key table lacked: EVERY chord the hard-coded scanner
+        // paths can complete must appear in [`hardcoded_chords`] - and so in
+        // the modal's "global (no prefix)" rows. A new hard-coded chord added
+        // without a table row fails here, which is exactly how Ctrl+Opt+Left
+        // went missing from every help surface.
+        let listed = hardcoded_chords();
+        let dir_seq = [
+            (b'A', Dir::Up),
+            (b'B', Dir::Down),
+            (b'C', Dir::Right),
+            (b'D', Dir::Left),
+        ];
+        // The ladder rungs are PREFIX-GATED (the global chord is the only
+        // prefix-free one), so every ladder sequence carries the default
+        // prefix byte the Scanner::default binds.
+        let mut sequences: Vec<(Vec<u8>, &str)> = vec![(b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left")];
+        for (final_byte, _dir) in dir_seq {
+            let f = final_byte as char;
+            sequences.push((format!("\x02\x1b[{f}").into_bytes(), "arrows"));
+            sequences.push((format!("\x02\x1b[1;5{f}").into_bytes(), "Ctrl+arrows"));
+            sequences.push((format!("\x02\x1b[1;2{f}").into_bytes(), "Shift+arrows"));
+        }
+        assert_eq!(
+            listed.len(),
+            sequences.len(),
+            "a chord joined or left the hard-coded set"
+        );
+        for (seq, display) in sequences {
+            let events = scan_all(&[&seq]);
+            assert_eq!(events.len(), 1, "{display}: one chord, one event");
+            let produced = &events[0];
+            assert!(
+                listed.iter().any(|(_, e)| e == produced),
+                "{display} scans to {produced:?}, which the key table never lists"
+            );
+        }
+        // And the modal's rows name the section: the global chord and the
+        // three ladder rungs are documented, non-empty, the ladder rows
+        // displaying the live prefix.
+        let rows = meta_rows();
+        let p = key_disp(prefix());
+        for display in [
+            "Ctrl+Opt+Left".to_string(),
+            format!("{p} arrows"),
+            format!("{p} Ctrl+arrows"),
+            format!("{p} Shift+arrows"),
+        ] {
+            assert!(
+                rows.iter()
+                    .any(|(d, _, s)| *d == display && *s == KeySection::GlobalNoPrefix),
+                "the key table never lists {display}"
+            );
+        }
+    }
+
+    #[test]
     fn client_keys_global_ctrl_opt_left_opens_selector_consumed() {
-        // x-e10f AC12: ESC[1;7D with NO prefix fires OpenSelector and the
+        // AC12: ESC[1;7D with NO prefix fires OpenSelector and the
         // bytes are consumed, never forwarded - the accepted cost of a global
         // grab (a pane program binding Ctrl+Opt+Arrow loses it). Surrounding
         // typing still forwards, in order, on both sides of the chord.
@@ -2174,7 +2932,7 @@ mod tests {
 
     #[test]
     fn client_keys_global_chord_hold_releases_non_chord_escapes() {
-        // x-e10f: the hold is invisible to everything that is not the chord -
+        // the hold is invisible to everything that is not the chord -
         // bare arrows, Opt+arrow word motion, Alt+x, a lone Esc answered by a
         // later key, and whole pastes all forward byte-exact, paste mode
         // still engages under the hold, and the chord fires after a
@@ -2216,7 +2974,7 @@ mod tests {
     }
 
     #[test]
-    fn client_keys_paste_passes_prefix_and_ctrl_backslash_verbatim() {
+    fn client_keys_paste_rows() {
         // AC5-HP: everything between the markers - prefix bytes, 0x1C -
         // forwards untouched, markers included; no chord, no detach.
         let mut input = Vec::new();
@@ -2225,10 +2983,7 @@ mod tests {
         input.extend_from_slice(PASTE_CLOSE);
         let events = scan_all(&[&input]);
         assert_eq!(forwarded_only(&events), input);
-    }
 
-    #[test]
-    fn client_keys_paste_markers_split_one_byte_per_read_still_engage() {
         // AC5-ERR: the whole paste arrives one byte per read.
         let mut input = Vec::new();
         input.extend_from_slice(PASTE_OPEN);
@@ -2243,11 +2998,11 @@ mod tests {
         for c in &chunks {
             s.scan(c, now);
         }
-        assert_eq!(s.scan(b"\x02%", now), vec![Event::Cmd(Command::SplitH)]);
-    }
+        assert_eq!(
+            s.scan(b"\x02%", now),
+            vec![Event::Cmd(Command::SplitDir(Dir::Right))]
+        );
 
-    #[test]
-    fn client_keys_paste_open_during_pending_prefix_bells_then_pastes() {
         // AC5-EDGE: prefix pressed, then a paste-open arrives - the dangling
         // chord dies with one BEL, the marker forwards, paste mode engages
         // (the prefix byte inside the paste is inert).
@@ -2263,10 +3018,7 @@ mod tests {
         expect.extend_from_slice(b"\x02x");
         expect.extend_from_slice(PASTE_CLOSE);
         assert_eq!(forwarded_only(&events[1..]), expect);
-    }
 
-    #[test]
-    fn client_keys_unterminated_paste_keeps_forwarding_prefix_inert() {
         // AC5-FR: no close marker ever arrives. Bytes keep forwarding
         // verbatim (chords disabled, input never bricked).
         let now = Instant::now();
@@ -2279,10 +3031,7 @@ mod tests {
             vec![Event::Forward(b"\x02d more".to_vec())],
             "prefix stays inert until 201~ or reconnect"
         );
-    }
 
-    #[test]
-    fn client_keys_fizzled_marker_prefix_was_already_forwarded() {
         // ESC [ 2 J (clear screen, not a paste marker): every byte reaches
         // the pane and the scanner stays in Normal with chords live.
         let now = Instant::now();
@@ -2290,13 +3039,16 @@ mod tests {
         assert_eq!(events, vec![Event::Forward(b"\x1b[2J".to_vec())]);
         let mut s = Scanner::default();
         s.scan(b"\x1b[20", now);
-        assert_eq!(s.scan(b"\x02%", now), vec![Event::Cmd(Command::SplitH)]);
+        assert_eq!(
+            s.scan(b"\x02%", now),
+            vec![Event::Cmd(Command::SplitDir(Dir::Right))]
+        );
     }
 
     const RESIZE_R: Event = Event::Cmd(Command::ResizeDir(Dir::Right));
 
     #[test]
-    fn repeat_window_holds_resize_without_prefix() {
+    fn repeat_window_rows() {
         // AC1-HP: prefix+L arms the window; bare L keeps resizing, each repeat
         // extending it. One prefix chord + N bare keys -> N+1 Resize events.
         let mut s = Scanner::default();
@@ -2312,10 +3064,7 @@ mod tests {
             t += Duration::from_millis(30);
             assert_eq!(s.scan(b"L", t), vec![RESIZE_R], "bare L repeats the resize");
         }
-    }
 
-    #[test]
-    fn repeat_window_extends_on_each_repeat() {
         // A bare L near the end of the window pushes the deadline out, so a
         // second bare L that would have missed the ORIGINAL window still lands.
         let mut s = Scanner::default();
@@ -2332,10 +3081,7 @@ mod tests {
             s.scan(b"L", t0 + Duration::from_millis(700)),
             vec![RESIZE_R]
         );
-    }
 
-    #[test]
-    fn repeat_window_lapses_after_the_window() {
         // AC2-HP: no input for >500ms lapses the window; the next bare resize
         // key takes its ordinary meaning (forwarded to the pane, no resize).
         let mut s = Scanner::default();
@@ -2346,10 +3092,7 @@ mod tests {
             vec![Event::Forward(b"J".to_vec())],
             "a bare J after the window forwards; it does not resize"
         );
-    }
 
-    #[test]
-    fn repeat_window_disarms_and_forwards_a_non_resize_byte() {
         // AC3-ERR: any non-resize byte during the window disarms it and reaches
         // the pane byte-identically, and a following resize key no longer repeats.
         let mut s = Scanner::default();
@@ -2365,12 +3108,9 @@ mod tests {
             vec![Event::Forward(b"L".to_vec())],
             "window is gone: bare L now forwards instead of resizing"
         );
-    }
 
-    #[test]
-    fn repeat_window_esc_disarms_immediately() {
         // AC5-FR: Esc is the explicit hatch - it disarms the window and no
-        // resize fires from it. Since x-e10f a lone ESC is also the first
+        // resize fires from it. Since a lone ESC is also the first
         // byte of the global chord, so it is HELD until the next byte says
         // it is not the chord (ChordEsc); it then forwards with that byte,
         // byte-exact. The disarm itself is unchanged and immediate.
@@ -2387,10 +3127,7 @@ mod tests {
             vec![Event::Forward(b"\x1bK".to_vec())],
             "disarmed by Esc: the released ESC and the bare K forward, no resize"
         );
-    }
 
-    #[test]
-    fn repeat_window_prefix_disarms_then_chords_normally() {
         // Invariant: prefix inside the window disarms first, then the chord runs
         // as usual - a prefix+resize re-arms; a prefix+other does not.
         let mut s = Scanner::default();
@@ -2398,7 +3135,7 @@ mod tests {
         s.scan(b"\x02L", t0); // arm
         assert_eq!(
             s.scan(b"\x02%", t0 + Duration::from_millis(100)),
-            vec![Event::Cmd(Command::SplitH)],
+            vec![Event::Cmd(Command::SplitDir(Dir::Right))],
             "prefix+% still splits inside the window"
         );
         // prefix+% is not a resize, so the window is now closed: bare L forwards.
@@ -2406,10 +3143,7 @@ mod tests {
             s.scan(b"L", t0 + Duration::from_millis(130)),
             vec![Event::Forward(b"L".to_vec())]
         );
-    }
 
-    #[test]
-    fn repeat_window_ctrl_arrow_resize_also_arms() {
         // A resize can arm from a Ctrl-arrow chord too (not just a letter); the
         // repeat set itself stays the letters (the muscle-memory hold path).
         let mut s = Scanner::default();
@@ -2424,10 +3158,7 @@ mod tests {
             vec![RESIZE_R],
             "the window it armed accepts a bare L"
         );
-    }
 
-    #[test]
-    fn repeat_window_never_arms_without_a_resize_chord() {
         // Today's behavior byte-for-byte when no resize has fired: a bare L is
         // just pane input. (scan_all uses a fixed clock and never resizes first.)
         assert_eq!(scan_all(&[b"L"]), vec![Event::Forward(b"L".to_vec())]);
@@ -2440,10 +3171,7 @@ mod tests {
             vec![Event::Forward(b"L".to_vec())],
             "focus chord does not open a resize repeat window"
         );
-    }
 
-    #[test]
-    fn repeat_window_public_arm_and_disarm_drive_the_window() {
         // arm_repeat opens a window a bare resize key repeats in (the modal
         // dispatch path uses this); disarm_repeat closes it (the mouse path).
         let mut s = Scanner::default();
@@ -2460,10 +3188,7 @@ mod tests {
             vec![Event::Forward(b"L".to_vec())],
             "disarm_repeat closes it: bare L forwards again"
         );
-    }
 
-    #[test]
-    fn repeat_window_flood_emits_one_resize_per_key() {
         // AC4-EDGE (scanner half): a flood of bare H within the window emits one
         // ResizeDir(Left) each - the MIN-size clamp is the server's job, tested
         // there; the scanner just keeps emitting without error.

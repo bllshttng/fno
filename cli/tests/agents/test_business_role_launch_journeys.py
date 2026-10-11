@@ -69,6 +69,8 @@ class _MuxRunner:
 
     def __call__(self, argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(argv))
+        if argv[:4] == ["codex", "app-server", "daemon", "start"]:
+            return subprocess.CompletedProcess(argv, 0, '{"status":"alreadyRunning"}', "")
         if argv[1:4] == ["mux", "pane", "run"]:
             return subprocess.CompletedProcess(argv, 0, "7\n", "")
         if argv[1:4] == ["mux", "pane", "ls"]:
@@ -95,7 +97,7 @@ class _MuxRunner:
         if argv[1:4] == ["mux", "pane", "read"]:
             return subprocess.CompletedProcess(argv, 0, "", "")
         if argv[1:4] == ["mux", "pane", "kill"]:
-            assert argv[4:] == ["--session", "main", "7"]
+            assert argv[4:] == ["--server", "main", "7"]
             return subprocess.CompletedProcess(argv, 0, "", "")
         raise AssertionError(f"unexpected mux call: {argv}")
 
@@ -112,6 +114,42 @@ def _configure_codex(monkeypatch: pytest.MonkeyPatch) -> None:
         model_routing,
         "_routing_block",
         lambda settings: ModelRoutingBlock(providers=OPENAI_PROVIDER),
+    )
+
+    # x-3954: the provider half of the route resolves in Rust through the
+    # spawn-overlay verb. These journeys test the ROLE-to-argv plumbing, not
+    # the builder (the marked tests in test_model_routing.py pin the real
+    # binary), so answer the codex-route kind with exactly the tokens Rust
+    # builds; every other kind rides the real transport.
+    from fno.agents import spawn_overlay_client
+
+    real_call = spawn_overlay_client.spawn_overlay_call
+
+    def fake_overlay(payload):
+        if payload.get("kind") != "codex-route":
+            return real_call(payload)
+        provider = payload["provider"]
+        model = payload["model"]
+        return {
+            "refusal": None,
+            "unrouted": None,
+            "provider": provider,
+            "model": model,
+            "config_args": [
+                "-c",
+                "model_providers."
+                + provider
+                + "={ base_url = 'https://example.test/v1', env_key = 'OPENAI_API_KEY', wire_api = 'chat' }",
+                "-c",
+                "model_provider='" + provider + "'",
+                "-c",
+                "model='" + model + "'",
+            ],
+            "env": [["OPENAI_API_KEY", "openai-key"], ["FNO_ROUTE_PROVIDER", provider]],
+        }
+
+    monkeypatch.setattr(
+        "fno.agents.spawn_overlay_client.spawn_overlay_call", fake_overlay
     )
 
 

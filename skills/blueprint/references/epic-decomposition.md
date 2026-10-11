@@ -27,7 +27,7 @@ unchanged - auto-group only changes the default for `scope: epic` inputs.
 
 **Resolve the ceiling `N`** as the minimum of every ceiling that applies, with
 the config default as the floor of last resort. This mirrors decompose's own
-`effective = min(max_children, explicit)` (x-066a) exactly, so blueprint's `N`
+`effective = min(max_children, explicit)` exactly, so blueprint's `N`
 and the `--max-prs` it forwards stay in lockstep with the CLI and the two
 surfaces never disagree about the cap.
 
@@ -42,7 +42,7 @@ treat a bad value as unset and defer the check to decompose - procedure step 3
 skips decompose entirely when the waves cohere into a single group, so deferring
 would let a malformed durable cap pass silently on that path. Blueprint fails
 fast so the refusal holds on every path, matching decompose's own
-malformed-value refusal (x-066a US5); blueprint never invents a cap from a bad
+malformed-value refusal (US5); blueprint never invents a cap from a bad
 value, nor silently falls back to the default on one.
 
 | Case | `N` (blueprint's grouping ceiling AND `--max-prs` forwarded) |
@@ -61,7 +61,7 @@ today's single-doc behavior (not error) if the config read fails** - treat an
 unreadable ceiling as 4, never abort the blueprint. Because the epic's own
 `max_children` now sits above the config default in this ladder, an author who
 declares `max_children: 6` above a default of 4 gets 6 honored on the bare
-`/blueprint <epic-doc>` path (x-066a US3), not silently clamped to 4.
+`/blueprint <epic-doc>` path (US3), not silently clamped to 4.
 
 `N` is a **ceiling, not a quota** (Locked Decision #3): cohesive work uses
 fewer groups; never pad to `N`. This guardrail applies identically to
@@ -126,6 +126,8 @@ is known):
    This is the reconciliation step: discovery mints at finding granularity and delivery ships at PR granularity, and `adopt` (not `/think`) is what draws the one-plan-one-node boundary between them.
    See `extraction-vs-think.md`.
 
+   Before the epic is blueprinted (no plan yet), the same fold is available directly: `fno backlog contain <epic> <id>...` stamps containment with no group scaffolding. A later decompose that names those ids in a group converges, re-stamping the group child. A decompose that leaves one out names it in the unadopted warning.
+
    There is no epic-scoped child listing verb, so let decompose tell you. It is
    idempotent, so running it and refining the spec is safe: any child no group
    adopted is named on stderr as
@@ -169,7 +171,7 @@ is known):
    ```bash
    cat > /tmp/groups-$$.json <<'JSON'
    [
-     {"slug": "1", "title": "Group 1: backend API", "waves": "1-3", "blocked_by_groups": [], "adopt": ["ab-1a2b3c4d", "ab-5e6f7a8b"]},
+     {"slug": "1", "title": "Group 1: backend API", "waves": "1-3", "blocked_by_groups": [], "adopt": ["ab-1a2b3c4d", "x-aaaa"]},
      {"slug": "2", "title": "Group 2: frontend", "waves": "4-6", "blocked_by_groups": ["1"], "dep": "contract"},
      {"slug": "3", "title": "Group 3: novel index engine", "waves": "7", "blocked_by_groups": ["1"], "needs_think": true}
    ]
@@ -201,6 +203,8 @@ is known):
    inline-fill below (the decompose invocation is the consent for that spawn).
    Leave it off (the default) for a group whose scope is already clear from the
    epic; that child takes the inline-fill path.
+
+   `needs_think` is a field of the GROUP SPEC you pass to `fno backlog decompose`, never a plan frontmatter key. It is validated on the group (`_decompose.py` `NormalizedGroup`) and read as the sole consent for the fan-out spawn (`graph/cli.py`). A census of plan frontmatter therefore finds zero uses of it by construction, and that zero says nothing about whether the flag is used. This step above is its step.
 
 7. **Inline-fill every child you own BEFORE linking (MANDATORY).** Decompose
    births each child UNLINKED (`status: idea`, no `plan_path`), so nothing
@@ -254,20 +258,15 @@ is known):
    inline-filling every child would blow this session's context budget - the
    failure it trades against is worse than the cost.
 
-**Slug stability.** Use stable slugs across re-decomposition so idempotency
-holds. Numeric (`1`, `2`, ...) is the simple default; named slugs
-(`auth-flow`) are fine as long as they do not change between runs.
+**Slug stability.** Use stable slugs across re-decomposition so idempotency holds. Numeric (`1`, `2`, ...) is the simple default. Named slugs (`auth-flow`) are fine as long as they do not change between runs.
 
-**Packaging: `separate` only.** Every child gets its own self-contained
-quick-plan file - `plan == PR == node` for children too. Decompose scaffolds a
-stub per child (`## Why (from epic)` + Context / Changes / Files to Modify /
-Verification, born `status: idea`) at the canonical `fno do plan path` name in the
-child's own project plans dir (reported as `scaffolded plan:`; existing legacy
-`<stem>.group-<slug>.md` stubs are grandfathered in place), and births the
-child WITHOUT a `plan_path` - identity is the durable `group_slug` field, so the
-unlinked child is still found on re-decompose. Linking the filled plan (inline
-step 2, or the fan-out pass) is what makes it `ready`. It is the default (and
-only) packaging - `--plans` need not be passed; `--plans fragment` errors.
+**Packaging: `separate` only.** Every child gets its own self-contained quick-plan file. `plan == PR == node` for children too. Decompose scaffolds one stub per child, born `status: idea`. The stub carries `## Why (from epic)` plus Context, Changes, Files to Modify, Verification and Execution Strategy. It lands at the canonical `fno do plan path` name in the child's own project plans dir, reported as `scaffolded plan:`. Legacy `<stem>.group-<slug>.md` stubs are grandfathered in place. The child is born WITHOUT a `plan_path`. Identity is the durable `group_slug` field, so the unlinked child is still found on re-decompose. Linking the filled plan makes it `ready`, from inline step 2 or the fan-out pass. This is the default and only packaging. You need not pass `--plans`, and `--plans fragment` errors.
+
+**The child is born carrying its parent's wave slice.** `group N` reads the epic's Execution Strategy to partition the children. The partition already exists by the time each child is minted. The scaffold emits the slice for that child's wave range. It preserves each task's `surface` and each wave's `difficulty` band, rather than minting a child unable to hold the answer the epic computed.
+
+Wave numbers and task ids keep the epic's numbering, so a child task traces back to the wave it came from. A `blocked_by` naming a task outside the slice is dropped, because that blocker ships in a sibling child's PR. Keeping the dangling id makes the task graph unsolvable and refuses a width measurement outright.
+
+When no slice resolves, the child gets the pre-change section list plus a comment naming why. It never gets an empty Execution Strategy block, which measures width 0 and reads as a narrow plan rather than a missing one.
 
 Scaffolding is idempotent on the slug: re-running upserts the same children, an
 existing scaffolded file is never clobbered (a builder's edits survive a

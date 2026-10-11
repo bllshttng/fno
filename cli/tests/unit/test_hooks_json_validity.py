@@ -1,11 +1,5 @@
-"""Validate hooks/hooks.json structure after the consolidation pass.
-
-The cuts in Phase 02 removed hooks/distill-task-signal.sh plus its
-TaskCreated/TaskCompleted registrations. The merges in Phase 04 updated
-the postmortem script path in target-stop-hook.sh. If any of these touched
-hooks.json incorrectly we want a hard test failure rather than a runtime
-no-op hook discovered the next time a BLOCKED transition fires.
-"""
+"""Validate the hook manifests: every registered path resolves, and each guard
+that must reach both harnesses is wired exactly once on each."""
 from __future__ import annotations
 
 import json
@@ -21,42 +15,22 @@ HOOKS_JSON = REPO_ROOT / "hooks" / "hooks.json"
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
-def test_hooks_json_is_valid_json() -> None:
-    """A malformed hooks.json means every hook silently no-ops at runtime."""
+def test_hooks_json_command_paths_resolve() -> None:
+    """Every declared module and plugin-rooted command path must exist on disk."""
     data = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     assert "hooks" in data, "expected top-level 'hooks' key"
-
-
-def test_hooks_json_no_distill_references() -> None:
-    """Phase 02 removed skills/distill/ and hooks/distill-task-signal.sh."""
-    text = HOOKS_JSON.read_text(encoding="utf-8")
-    assert "distill-task-signal" not in text, (
-        "hooks.json still references the removed distill-task-signal.sh hook"
-    )
-    # The TaskCreated and TaskCompleted hook arrays existed only to fire
-    # distill-task-signal. They should be gone too; if they reappear later
-    # for an unrelated hook, that's fine - this assertion catches the
-    # specific stale-registration class.
-    data = json.loads(text)
-    hooks = data.get("hooks", {})
-    for key in ("TaskCreated", "TaskCompleted"):
-        if key in hooks:
-            # Permit re-registration of these events for non-distill hooks
-            # in the future; only fail if a distill artifact survives.
-            for entry in hooks[key]:
-                for hook in entry.get("hooks", []):
-                    cmd = hook.get("command", "")
-                    assert "distill" not in cmd, (
-                        f"{key} still fires a distill-named command: {cmd}"
-                    )
-
-
-def test_hooks_json_command_paths_resolve() -> None:
-    """Every command: path under ${CLAUDE_PLUGIN_ROOT}/... must exist on disk."""
-    data = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
     placeholder = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT(:-[^}]*)?\}")
     failures: list[str] = []
+    modules = data.get("modules", [])
+    assert isinstance(modules, list), "expected top-level 'modules' to be a list"
+    for module in modules:
+        if not isinstance(module, str) or not module:
+            failures.append(f"invalid module path {module!r}")
+            continue
+        path = (HOOKS_JSON.parent / module).resolve()
+        if not path.is_file():
+            failures.append(f"missing module path {path}")
     for event, registrations in data.get("hooks", {}).items():
         for reg in registrations:
             for hook in reg.get("hooks", []):
@@ -77,32 +51,6 @@ def test_hooks_json_command_paths_resolve() -> None:
         pytest.fail("hooks.json references missing files:\n  " + "\n  ".join(failures))
 
 
-def test_no_law_authority_gate_is_registered() -> None:
-    """Ruling d-e1eec854 retired the staged-law approval gate.
-
-    A registration left behind would shell a file that no longer exists on every
-    Bash call, so the absence is asserted rather than assumed. The file itself
-    stays one release as a no-op tombstone (`fno doctor lint hook-tombstones`):
-    sessions started before the retirement still hold its registration, so the
-    path must exist and do nothing when run.
-    """
-    import subprocess
-    import sys
-
-    text = HOOKS_JSON.read_text(encoding="utf-8")
-    assert "law-authority-gate" not in text
-    stub = REPO_ROOT / "hooks" / "law-authority-gate.py"
-    assert stub.exists(), "retired gate keeps a one-release no-op tombstone"
-    probe = subprocess.run(
-        [sys.executable, str(stub)],
-        input="{}",
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert probe.returncode == 0, "the tombstone must be a no-op, not a gate"
-
-
 def test_codex_plugin_manifest_points_to_session_start_hook() -> None:
     manifest = json.loads(
         (REPO_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
@@ -117,15 +65,19 @@ def test_codex_plugin_manifest_points_to_session_start_hook() -> None:
             "hooks": [
                 {
                     "type": "command",
-                    "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/session-start.sh",
+                    "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-run.sh codex-session-start",
                 },
                 {
                     "type": "command",
                     "command": "${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh",
                 },
+                {
+                    "type": "command",
+                    "command": "${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh",
+                },
             ],
         },
-        # The whoami/crown block gets its OWN entry on startup: the combined
+        # The whoami/role block gets its OWN entry on startup: the combined
         # wrapper payload is truncated by codex at ~2500 tokens before the
         # whoami block (position 3 of the combined output) ever lands.
         {
@@ -133,13 +85,14 @@ def test_codex_plugin_manifest_points_to_session_start_hook() -> None:
             "hooks": [
                 {
                     "type": "command",
-                    "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-observe-hook.sh --source-id inject-fno-agent-whoami --expected inject-fno-agent-whoami -- ${PLUGIN_ROOT}/hooks/inject-fno-agent-whoami.sh",
+                    "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-run.sh codex-whoami",
                 }
             ],
         },
     ]
-    resolved = hooks[0]["hooks"][0]["command"].replace("${PLUGIN_ROOT}", str(REPO_ROOT))
-    assert str(REPO_ROOT / "hooks" / "session-start.sh") in resolved
+    producers = _declaration_groups()["codex-session-start"]["producers"]
+    assert producers[0]["id"] == "session-start-combined"
+    assert producers[0]["argv"][0] == "${PLUGIN_ROOT}/hooks/session-start.sh"
 
 
 def test_codex_hooks_use_supported_event_names_and_existing_commands() -> None:
@@ -242,19 +195,6 @@ def test_write_guard_is_registered_once_per_harness(
     assert len(others) == 1, f"{config_path.name} registers a second location classifier"
 
 
-def test_hook_configs_do_not_register_harness_ownership_guard() -> None:
-    for config_path in (HOOKS_JSON, CODEX_HOOKS_JSON):
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-        commands = [
-            hook.get("command", "")
-            for registration in data["hooks"].get("PreToolUse", [])
-            for hook in registration.get("hooks", [])
-        ]
-        assert not any("worktree-harness-guard" in command for command in commands), (
-            f"{config_path.name} still blocks sessions by harness ownership"
-        )
-
-
 def test_worktree_peer_notice_is_carried_by_claude_and_codex_sessionstart() -> None:
     """Both harness manifests reach ONE carrier, which owns the predicate.
 
@@ -263,23 +203,25 @@ def test_worktree_peer_notice_is_carried_by_claude_and_codex_sessionstart() -> N
     so there is exactly one observation path for both harnesses."""
     helper = "helpers/worktree-live-peers.sh"
     carrier = "worktree-peers-session-start.sh"
-    claude_commands = [
-        hook["command"]
-        for registration in json.loads(HOOKS_JSON.read_text(encoding="utf-8"))[
-            "hooks"
-        ]["SessionStart"]
-        for hook in registration.get("hooks", [])
+    claude_producers = [
+        producer
+        for group in _declaration_groups().values()
+        if group.get("harness") == "claude"
+        for producer in group.get("producers", [])
     ]
-    assert sum(carrier in c for c in claude_commands) == 1
+    assert sum(
+        producer["argv"][0].endswith(carrier) for producer in claude_producers
+    ) == 1
 
-    codex_commands = [
-        hook["command"]
-        for registration in json.loads(CODEX_HOOKS_JSON.read_text(encoding="utf-8"))[
-            "hooks"
-        ]["SessionStart"]
-        for hook in registration.get("hooks", [])
+    codex_startup = [
+        producer
+        for producer in _declaration_groups()["codex-session-start"]["producers"]
     ]
-    assert sum("hooks/session-start.sh" in c for c in codex_commands) == 1
+    # Anchored on "/": the group now also carries frontdoor-nudge-session-start.sh,
+    # whose name ends in session-start.sh without being the combined carrier.
+    assert sum(
+        producer["argv"][0].endswith("/session-start.sh") for producer in codex_startup
+    ) == 1
     # The carrier owns the predicate; the Codex wrapper delegates to the carrier
     # and must not call the helper itself (one observation path, not two).
     carrier_src = (REPO_ROOT / "hooks" / carrier).read_text(encoding="utf-8")
@@ -302,6 +244,24 @@ def test_worktree_activity_writer_is_carried_by_both_posttooluse_manifests() -> 
         assert sum("claim-heartbeat.sh" in command for command in commands) == 1
 
 
+def test_edit_integrity_wired_on_both_posttooluse_manifests() -> None:
+    """Both harnesses run the edit-integrity shim once, under Edit|Write."""
+    for manifest_path in (HOOKS_JSON, CODEX_HOOKS_JSON):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))["hooks"][
+            "PostToolUse"
+        ]
+        # law-stage-inject also rides Edit|Write by design, so the count of
+        # registrations is incidental; the shim must appear exactly once.
+        commands = [
+            hook["command"]
+            for registration in manifest
+            if registration.get("matcher") == "Edit|Write"
+            for hook in registration.get("hooks", [])
+        ]
+        assert sum("edit-integrity.sh" in command for command in commands) == 1, manifest_path
+        assert (REPO_ROOT / "hooks" / "edit-integrity.sh").is_file()
+
+
 def test_release_codex_marketplace_points_at_repo_plugin_root() -> None:
     marketplace = json.loads(
         (REPO_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
@@ -317,36 +277,6 @@ def test_release_codex_marketplace_points_at_repo_plugin_root() -> None:
     assert (plugin_root / ".codex-plugin" / "plugin.json").is_file()
 
 
-def test_codex_marketplace_has_no_legacy_dev_alias() -> None:
-    assert not (
-        REPO_ROOT
-        / ".agents"
-        / "marketplaces"
-        / "footnote-dev"
-        / ".agents"
-        / "plugins"
-        / "marketplace.json"
-    ).exists()
-
-
-def test_postmortem_script_is_executable() -> None:
-    """Phase 04 moved generate-postmortem.sh; the stop hook must still find it.
-
-    Even with the path updated in target-stop-hook.sh, a permission regression
-    would silently disable postmortem capture on every BLOCKED transition.
-    """
-    pm = REPO_ROOT / "skills" / "target" / "scripts" / "postmortem" / "generate-postmortem.sh"
-    assert pm.is_file(), f"postmortem generator missing at {pm}"
-    assert os.access(pm, os.X_OK), f"postmortem generator not executable: {pm}"
-
-
-def test_preflight_runner_is_executable() -> None:
-    """Phase 04 also moved run-checks.sh; target invokes it."""
-    pf = REPO_ROOT / "skills" / "target" / "scripts" / "preflight" / "run-checks.sh"
-    assert pf.is_file(), f"preflight runner missing at {pf}"
-    assert os.access(pf, os.X_OK), f"preflight runner not executable: {pf}"
-
-
 def test_drain_hook_wired_into_claude_and_codex_sessionstart() -> None:
     """The cross-harness mail drain must fire for a CLAUDE recipient too.
 
@@ -355,14 +285,23 @@ def test_drain_hook_wired_into_claude_and_codex_sessionstart() -> None:
     block inside the wrapper never runs for claude. The receive side is only
     symmetric if inject-mail-drain-session-start.sh is ALSO in claude's array.
     """
-    claude = HOOKS_JSON.read_text(encoding="utf-8")
-    assert "inject-mail-drain-session-start.sh" in claude, (
-        "claude SessionStart is missing the mail-drain hook: a hand-started "
+    cmds = [
+        hook["command"]
+        for registration in json.loads(HOOKS_JSON.read_text(encoding="utf-8"))[
+            "hooks"
+        ]["SessionStart"]
+        for hook in registration.get("hooks", [])
+    ]
+    cmds += [
+        " ".join(producer["argv"])
+        for group in _declaration_groups().values()
+        if group.get("harness") == "claude"
+        for producer in group.get("producers", [])
+    ]
+    assert any("inject-mail-drain-session-start.sh" in c for c in cmds), (
+        "claude SessionStart is missing the mail-drain producer: a hand-started "
         "claude session addressed claude-<id> would never drain its mail"
     )
-    ss = json.loads(claude)["hooks"]["SessionStart"]
-    cmds = [h["command"] for entry in ss for h in entry.get("hooks", [])]
-    assert any("inject-mail-drain-session-start.sh" in c for c in cmds)
 
 
 def test_plan_location_guard_wired_into_claude_and_codex_pretooluse() -> None:
@@ -483,7 +422,7 @@ def test_every_manifest_hook_is_wired_and_pretooluse_launches() -> None:
     # does not set the other var. Pins that the probe is not masking a
     # wrong-placeholder manifest into a false green.
     wrong = _launch_plugin_hook(
-        "bash ${CLAUDE_PLUGIN_ROOT}/hooks/graph-write-protect.sh",
+        "bash ${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh",
         root_value=str(REPO_ROOT),
         shell=shell,
         root_var="PLUGIN_ROOT",
@@ -494,17 +433,23 @@ def test_every_manifest_hook_is_wired_and_pretooluse_launches() -> None:
     )
 
 
-
 def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> None:
-    """The unbounded-generator refusal must fire on BOTH Bash lanes.
+    """One shared dispatcher must own the complete Bash guard chain on BOTH lanes.
 
-    A concurrent branch rewriting either manifest can drop this registration
-    and still merge clean, so the assertion names both commands rather than
-    counting hooks. Order matters too: git-protection.py runs first, so a
-    refusal it already owns is never re-decided here.
+    A concurrent branch rewriting either manifest can drop a registration
+    and still merge clean, so the assertion pins one command per harness.
+    Guard ordering is owned inside the dispatcher and covered at that boundary.
     """
-    guard = "hooks/bg-process-guard.py"
-    assert (REPO_ROOT / guard).is_file(), f"guard missing at {guard}"
+    # The chain lives inside the dispatcher now; these are its guards.
+    for guard in (
+        "hooks/git-protection.py",
+        "hooks/bin-install-guard.sh",
+        "hooks/bg-process-guard.py",
+        "hooks/pipe-guard.sh",
+        "hooks/recursive-grep-guard.py",
+        "hooks/test-run-guard.sh",
+    ):
+        assert (REPO_ROOT / guard).is_file(), f"guard missing at {guard}"
 
     for path, root_var, matcher in (
         (HOOKS_JSON, "CLAUDE_PLUGIN_ROOT", "Bash"),
@@ -524,78 +469,92 @@ def test_bg_process_guard_wired_beside_git_protection_on_both_harnesses() -> Non
         commands = [
             hook.get("command") for hook in registrations[0].get("hooks", [])
         ]
-        expected = [
-            f"python3 ${{{root_var}}}/hooks/git-protection.py",
-            f"python3 ${{{root_var}}}/{guard}",
-        ]
+        expected = [f"bash ${{{root_var}}}/hooks/pretooluse-bash-dispatch.sh"]
         assert commands == expected, (
             f"{path.name} PreToolUse {matcher!r} chain drifted: {commands}"
         )
 
 
-def test_observer_expected_lists_match_their_group_source_ids() -> None:
-    """Per event group, set(--expected) must equal the group's --source-id set.
-
-    The observer blocks until one record exists per expected id, so a hook
-    registered without joining the sibling --expected lists leaves the group
-    waiting on an id it will never see, and a stale list reports a complete
-    census while a hook's delivered bytes go uncounted. The lists are
-    hand-maintained in four command lines across two manifests; this pins
-    them to the registration set so they cannot drift silently.
-    """
-    for path in (HOOKS_JSON, CODEX_HOOKS_JSON):
-        for event, entries in json.loads(path.read_text(encoding="utf-8"))[
-            "hooks"
-        ].items():
-            for entry in entries:
-                source_ids: list[str] = []
-                expected_lists: list[str] = []
-                for hook in entry.get("hooks", []):
-                    command = hook.get("command", "")
-                    source = re.search(r"--source-id (\S+)", command)
-                    expected = re.search(r"--expected (\S+)", command)
-                    if source:
-                        source_ids.append(source.group(1))
-                    if expected:
-                        expected_lists.append(expected.group(1))
-                if not source_ids:
-                    continue
-                # Every observer-wrapped command in the group must declare the
-                # list at all: a missing --expected would otherwise pass
-                # vacuously (nothing to compare) while the census drifts.
-                assert len(expected_lists) == len(source_ids), (
-                    f"{path.name} {event} matcher={entry.get('matcher', '')!r}: "
-                    f"{len(source_ids) - len(expected_lists)} observer command(s) "
-                    "carry --source-id without --expected"
-                )
-                registration = set(source_ids)
-                for expected in expected_lists:
-                    assert set(expected.split(",")) == registration, (
-                        f"{path.name} {event} matcher={entry.get('matcher', '')!r}: "
-                        f"--expected {expected!r} != registered source ids "
-                        f"{sorted(registration)}"
-                    )
+def _declaration_groups() -> dict:
+    return json.loads(
+        (REPO_ROOT / "hooks" / "context-hooks.json").read_text(encoding="utf-8")
+    )["groups"]
 
 
 def test_both_postcompact_reinject_hooks_are_registered_on_supported_harnesses() -> None:
     expected_sources = [
         "target-postcompact-reinject",
-        "king-postcompact-reinject",
+        "lead-postcompact-reinject",
     ]
-    cases = (
-        (HOOKS_JSON, "SessionStart", "compact"),
-        (CODEX_HOOKS_JSON, "PostCompact", ""),
+    groups = _declaration_groups()
+    claude_compact = [
+        producer["id"]
+        for producer in groups["claude-session-start"]["producers"]
+        if "compact" in (producer.get("sources") or [])
+    ]
+    assert claude_compact == expected_sources, (
+        f"claude compact-only producer set drifted: {claude_compact}"
     )
-    for path, event, matcher in cases:
-        entries = json.loads(path.read_text(encoding="utf-8"))["hooks"][event]
-        entry = next(item for item in entries if item.get("matcher", "") == matcher)
-        commands = [hook.get("command", "") for hook in entry["hooks"]]
-        source_ids = [
-            re.search(r"--source-id (\S+)", command).group(1)
-            for command in commands
-            if "context-observe-hook.sh" in command
-        ]
-        assert source_ids == expected_sources, (
-            f"{path.name} {event} matcher={matcher!r} reinject set drifted: "
-            f"{source_ids}"
-        )
+    codex_ids = [
+        producer["id"]
+        for producer in groups["codex-post-compact"]["producers"]
+    ]
+    assert codex_ids == expected_sources, (
+        f"codex PostCompact producer set drifted: {codex_ids}"
+    )
+
+
+def test_law_stage_inject_is_wired_on_both_harnesses() -> None:
+    """The law-at-the-review-stage block must reach the decision point on
+    every harness that runs a review: Claude Skill calls (PostToolUse), and
+    the typed or mailed prompt verbs on Claude and Codex (UserPromptSubmit).
+    A registration on one lane only leaves the other harness reviewing
+    against law it never saw."""
+    script = "law-stage-inject.sh"
+    claude = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))
+    skill_lane = [
+        hook.get("command", "")
+        for registration in claude["hooks"]["PostToolUse"]
+        if registration.get("matcher") == "Skill"
+        for hook in registration.get("hooks", [])
+    ]
+    assert sum(script in command for command in skill_lane) == 1, skill_lane
+    claude_prompts = [
+        hook.get("command", "")
+        for registration in claude["hooks"]["UserPromptSubmit"]
+        for hook in registration.get("hooks", [])
+    ]
+    assert sum(script in command for command in claude_prompts) == 1, claude_prompts
+    codex = json.loads(CODEX_HOOKS_JSON.read_text(encoding="utf-8"))
+    codex_prompts = [
+        hook.get("command", "")
+        for registration in codex["hooks"]["UserPromptSubmit"]
+        for hook in registration.get("hooks", [])
+    ]
+    assert sum(script in command for command in codex_prompts) == 1, codex_prompts
+
+
+def test_context_hooks_declaration() -> None:
+    """The runner declaration satisfies the contract the manifests relied on.
+
+    Every group a manifest names through context-run.sh exists; producer ids
+    are unique within a group; every argv[0] resolves to an executable script
+    under the repo (the exec-bit gate scans this file too)."""
+    groups = _declaration_groups()
+    named = set()
+    for path in (HOOKS_JSON, CODEX_HOOKS_JSON):
+        for match in re.finditer(
+            r"context-run\.sh\s+([\w-]+)", path.read_text(encoding="utf-8")
+        ):
+            named.add(match.group(1))
+    assert named <= set(groups), f"manifest names unknown groups: {sorted(named - set(groups))}"
+    for name, group in groups.items():
+        ids = [producer["id"] for producer in group["producers"]]
+        assert len(ids) == len(set(ids)), f"group {name} has duplicate producer ids"
+        for producer in group["producers"]:
+            argv0 = producer["argv"][0]
+            resolved = REPO_ROOT / argv0.replace("${PLUGIN_ROOT}/", "")
+            assert resolved.is_file(), f"group {name}: missing script {resolved}"
+            assert os.access(resolved, os.X_OK), (
+                f"group {name}: not executable {resolved}"
+            )

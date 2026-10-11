@@ -14,7 +14,8 @@
 #   handoff-restore-failed <node> reason="..."                     exit 12
 #
 # Environment overrides (for testing):
-#   FNO_DIR      override .fno/ dir (default: .fno relative to cwd)
+#   FNO_DIR      pin the legacy cwd-relative .fno/ layout (production resolves
+#                the manifest and journal through `fno-agents state path`)
 #   HANDOFF_VERIFY_TIMEOUT   seconds to poll for child live status (default: 60)
 #   HANDOFF_VERIFY_INTERVAL  poll interval in seconds (default: 5)
 #
@@ -101,12 +102,62 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# Helper: resolve the fno-agents binary (env pin, then build tree, then PATH)
+# ---------------------------------------------------------------------------
+_handoff_agents_bin() {
+  if [ -n "${FNO_AGENTS_BIN:-}" ] && [ -x "${FNO_AGENTS_BIN}" ]; then
+    printf '%s' "$FNO_AGENTS_BIN"
+    return 0
+  fi
+  local _root _bin
+  _root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+  for _bin in "$_root/crates/fno-agents/target/release/fno-agents" \
+              "$_root/crates/fno-agents/target/debug/fno-agents"; do
+    if [ -x "$_bin" ]; then
+      printf '%s' "$_bin"
+      return 0
+    fi
+  done
+  _bin="$(command -v fno-agents 2>/dev/null || true)"
+  [ -n "$_bin" ] && printf '%s' "$_bin"
+}
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+_FNO_DIR_EXPLICIT="${FNO_DIR+x}"
 FNO_DIR="${FNO_DIR:-.fno}"
 STATE_FILE="$FNO_DIR/target-state.md"
 EVENTS_FILE="$FNO_DIR/events.jsonl"
-ARTIFACTS_DIR="$FNO_DIR/artifacts/handoff"
+
+# The manifest and the journal live in the project space, not the checkout:
+# init writes <space>/worktrees/<name>/target-state.md through fno.paths, and
+# every other reader resolves it with `fno-agents state path`. The bare
+# cwd-relative defaults above parked every self-handoff from a space-keyed
+# worktree ("manifest .fno/target-state.md not found", exit 10). An explicit
+# FNO_DIR is the test override and keeps the cwd-relative layout verbatim; an
+# fno-agents that cannot answer (missing binary, pre-verb install) falls back
+# to the same layout rather than parking blind.
+if [ -z "$_FNO_DIR_EXPLICIT" ]; then
+  _AGENTS_BIN="$(_handoff_agents_bin)"
+  if [ -n "$_AGENTS_BIN" ]; then
+    _RESOLVED="$("$_AGENTS_BIN" state path target-state 2>/dev/null)" \
+      && [ -n "$_RESOLVED" ] && STATE_FILE="$_RESOLVED"
+    _RESOLVED="$("$_AGENTS_BIN" state path events 2>/dev/null)" \
+      && [ -n "$_RESOLVED" ] && EVENTS_FILE="$_RESOLVED"
+  fi
+fi
+# Custody belt for a manifest an older init wrote into the checkout (the
+# paths.target_state_path_or_legacy fallback): handoff follows the file that
+# exists.
+if [ ! -f "$STATE_FILE" ] && [ -f "$FNO_DIR/target-state.md" ]; then
+  STATE_FILE="$FNO_DIR/target-state.md"
+fi
+# Session-keyed siblings live beside the manifest; shared diagnostics beside
+# the journal.
+SESSION_DIR="$(dirname "$STATE_FILE")"
+DIAG_DIR="$(dirname "$EVENTS_FILE")"
+ARTIFACTS_DIR="$SESSION_DIR/artifacts/handoff"
 
 # Poll tuning (env-overridable for tests)
 VERIFY_TIMEOUT="${HANDOFF_VERIFY_TIMEOUT:-60}"
@@ -187,7 +238,7 @@ _parse_manifest_field() {
 # multiline /target input carrying a `graph_node_id:` line would otherwise be
 # read first (codex review, PR #531). When there is no second `^---`
 # (unterminated frontmatter) or the field is absent from the body, we fall back
-# to a whole-file scan so the ab-c2edd785 false-park modes stay fixed. Mirrors
+# to a whole-file scan so the false-park modes stay fixed. Mirrors
 # the placement-independent, shape-validated reader in
 # cli/src/fno/cost/_register.py.
 _parse_body_field() {
@@ -269,7 +320,7 @@ fi
 # Step 1: Preconditions (refuse = parked BEFORE any state mutation)
 # ---------------------------------------------------------------------------
 
-# Master switch check (x-aaaf wave 3 follow-up): config.autonomy.enabled
+# Master switch check (wave 3 follow-up): config.autonomy.enabled
 # outranks every spawner-specific gate, including this one, and is checked
 # first for the same reason autonomy_master_enabled() checks it first in
 # every Python resolver - a panic switch something else can bypass is not
@@ -342,7 +393,7 @@ if [ "$_CLAIM_HOLDER_ACTUAL" != "$CLAIM_HOLDER" ]; then
 fi
 
 # Per-session sentinel: refuse double-handoff
-SENTINEL="$FNO_DIR/.handoff-done-$SESSION_ID"
+SENTINEL="$SESSION_DIR/.handoff-done-$SESSION_ID"
 if [ -f "$SENTINEL" ]; then
   echo "parked $NODE_ID reason=\"handoff already completed for this session (idempotent refusal)\""
   exit "$_EXIT_PARKED"
@@ -387,7 +438,19 @@ _NODE_SLUG="$(fno backlog get "$NODE_ID" 2>/dev/null | jq -r '.slug // empty' 2>
 _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
   | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//' | cut -c1-48)"
 [ -n "$_NODE_SLUG" ] || _NODE_SLUG="work"
-CHILD_NAME="target-${NODE_ID}-${_NODE_SLUG}-g${CHILD_GEN}"
+# the child name is minted through the canonical bridge -
+# sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
+# is distinguishable from a manual t- worker. The generation rides as the
+# never-shaved discriminator. A mint refusal parks the handoff loudly.
+_CHILD_NAME_OUT="$(FNO_AGENTS_RUNTIME=python fno agents name --source sh --verb t \
+  "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
+_CHILD_NAME_RC=$?
+if [ "$_CHILD_NAME_RC" -ne 0 ]; then
+  _NAME_WHY="$(printf '%s' "${_CHILD_NAME_OUT:-agent name cannot be represented}" | tr '\n"' '  ' | cut -c1-200)"
+  echo "parked $NODE_ID reason=\"canonical naming failed (rc=$_CHILD_NAME_RC): $_NAME_WHY\""
+  exit "$_EXIT_PARKED"
+fi
+CHILD_NAME="${_CHILD_NAME_OUT##*$'\n'}"
 _CAPABILITY_NONCE="${HANDOFF_CAPABILITY_NONCE:-$(date +%s)-$$-${RANDOM:-0}}"
 _CAPABILITY_CWD="${HANDOFF_CAPABILITY_EXPECTED_CWD:-$PWD}"
 _CAPABILITY_ROOT="${HANDOFF_CAPABILITY_EXPECTED_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
@@ -516,18 +579,47 @@ Successor name: ${CHILD_NAME}
 BRIEFEOF
 fi
 
-# Durable resume receipt (x-c3a2): write the typed, immutable, versioned
+# Durable resume receipt: write the typed, immutable, versioned
 # receipt alongside the brief. The brief is human-readable succession context;
 # the receipt is the machine-readable EVIDENCE a successor revalidates against
 # live claim/HEAD/worktree before any write. Best-effort: a receipt write
 # failure (fno unavailable, identity already written) must NOT abort the
 # handoff - the brief + `delegated` event remain the primary succession path.
 # The receipt reuses the event-journal reducers, so it stores no second copy.
+#
+# Task-context binding: when the attempt carries a declared binding,
+# revalidate its required sources natively BEFORE the bound receipt is
+# prepared (the parent still holds authority here) and embed it in the
+# receipt. A refusal parks the handoff BEFORE any delegation commits: required
+# context changed under the binding, so the successor must not inherit it
+# silently. An authorized task revision mints a new binding; nothing here
+# overrides changed constraints.
+_TASK_CONTEXT_FILE=".fno/artifacts/handoff/task-context-${NODE_ID}.json"
+_TC_EMBED=""
+if [ -f "$_TASK_CONTEXT_FILE" ]; then
+  _TC_BINDING="$(cat "$_TASK_CONTEXT_FILE" 2>/dev/null || true)"
+  _TC_ANSWER="$(printf '{"binding":%s,"expect":{"node":"%s"},"root":"%s"}' \
+    "$_TC_BINDING" "$NODE_ID" "$PWD" \
+    | fno-agents task-context-revalidate 2>/dev/null || true)"
+  case "$_TC_ANSWER" in
+    *'"ok":true'*)
+      _TC_EMBED=1
+      ;;
+    *)
+      _TC_DETAIL="$(printf '%s' "${_TC_ANSWER:-native verifier unavailable}" | tr '\n' ' ' | cut -c1-300)"
+      _emit_event "handoff_failed" \
+        "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"context_revalidation\",\"detail\":\"$_TC_DETAIL\"}"
+      echo "parked $NODE_ID reason=\"context_revalidation: $_TC_DETAIL\""
+      exit "$_EXIT_PARKED"
+      ;;
+  esac
+fi
+
 _RECEIPT_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
 _RECEIPT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 _RECEIPT_REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || true)"
 _TMP_RECEIPT_ERR="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/fno-receipt-err.$$")"
-if fno do resume receipt write \
+if ${_TC_EMBED:+FNO_TASK_CONTEXT_FILE="$_TASK_CONTEXT_FILE"} fno do resume receipt write \
       --node "$NODE_ID" \
       --session "$SESSION_ID" \
       --phase "$BOUNDARY" \
@@ -549,7 +641,7 @@ else
 fi
 rm -f "$_TMP_RECEIPT_ERR" 2>/dev/null || true
 
-# Builder crumb trail (x-4852): the shared journal carries multiple nodes, so
+# Builder crumb trail: the shared journal carries multiple nodes, so
 # select only crumbs correlated to this handoff's node. Summarize that tail for
 # the delegation receipt and append the last crumbs to the successor's brief so
 # it picks up from the trail instead of re-deriving. Best-effort: a missing,
@@ -597,49 +689,91 @@ fi
 # From this point, unwind must release the dispatch reservation on failure.
 
 # ---------------------------------------------------------------------------
-# Step 4: Archive target-state.md to {plan_path}.artifacts/
+# Steps 4-5: Python-owned manifest archive + exact-holder claim release
 # ---------------------------------------------------------------------------
 PLAN_ARTIFACTS_DIR="${PLAN_PATH}.artifacts"
-mkdir -p "$PLAN_ARTIFACTS_DIR"
 ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
-_ARCHIVE_RC=0
-mv "$STATE_FILE" "$ARCHIVED_STATE" 2>/dev/null || _ARCHIVE_RC=$?
-
-if [ "$_ARCHIVE_RC" -ne 0 ]; then
-  # Unwind: release dispatch reservation
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
-    --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
-  echo "parked $NODE_ID reason=\"failed to archive manifest (rc=$_ARCHIVE_RC)\""
-  exit "$_EXIT_PARKED"
+_PREPARE_RC=0
+# Bootstrap the interpreter the way every other Python-delegating script does
+# (scripts/lib/fno-python.sh): a PYTHONPATH sourced from an env var that only
+# test harness files set left production running the leg with an empty path.
+_HANDOFF_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$_HANDOFF_REPO_ROOT" ]; then
+  # Non-repo cwd (the handoff smoke sandbox): the script's own location still
+  # names this checkout, so the shared bootstrap stays reachable.
+  _HANDOFF_REPO_ROOT="$(cd "$_SCRIPT_DIR/../../.." 2>/dev/null && pwd || true)"
 fi
+_HANDOFF_PYTHON="python3"
+_HANDOFF_PKG_SRC=""
+if [ -n "$_HANDOFF_REPO_ROOT" ] && [ -f "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh" ]; then
+  # shellcheck source=scripts/lib/fno-python.sh
+  . "$_HANDOFF_REPO_ROOT/scripts/lib/fno-python.sh"
+  fno_python_init "$_HANDOFF_REPO_ROOT"
+  _HANDOFF_PYTHON="${FNO_PYTHON:-python3}"
+  _HANDOFF_PKG_SRC="${_HANDOFF_REPO_ROOT}/cli/src"
+fi
+_HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
+FNO_CLAIMS_ROOT="$HOME" PYTHONPATH="${_HANDOFF_PKG_SRC}${PYTHONPATH:+:${PYTHONPATH}}" \
+  "$_HANDOFF_PYTHON" -m fno.state.target_handoff prepare \
+  --state "$STATE_FILE" \
+  --archive "$ARCHIVED_STATE" \
+  --claim-key "node:$NODE_ID" \
+  --holder "$CLAIM_HOLDER" >"$_HANDOFF_PREPARE_LOG" 2>&1 || _PREPARE_RC=$?
+# A nonzero code the module did NOT emit (10/12 are its own outcomes) means
+# the module never ran to its own error handling: the interpreter or the
+# import failed. The two classes get different reasons and details, so an
+# operator reading the event can tell a broken bootstrap from a real
+# handoff refusal.
+_HANDOFF_PREPARE_STDOUT="$(cat "$_HANDOFF_PREPARE_LOG" 2>/dev/null)"
+rm -f "$_HANDOFF_PREPARE_LOG"
 
-# ---------------------------------------------------------------------------
-# Step 5: Release node claim
-# ---------------------------------------------------------------------------
-_RELEASE_RC=0
-FNO_CLAIMS_ROOT="$HOME" fno agents claim release "node:$NODE_ID" \
-  --holder "$CLAIM_HOLDER" >/dev/null 2>&1 || _RELEASE_RC=$?
-
-if [ "$_RELEASE_RC" -ne 0 ]; then
-  # Unwind: restore manifest, release dispatch reservation
-  _RESTORE_RC=0
-  mv "$ARCHIVED_STATE" "$STATE_FILE" 2>/dev/null || _RESTORE_RC=$?
+if [ "$_PREPARE_RC" -ne 0 ]; then
   FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
     --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
 
-  _emit_event "handoff_failed" \
-    "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"release_failed\",\"detail\":\"claim release exited $_RELEASE_RC\"}"
+  case "$_PREPARE_RC" in
+    10|12)
+      # The module's own failure receipt (a JSON object on stdout) is the
+      # truth about what it refused; pass its fields through rather than
+      # paraphrasing them into a flat string.
+      _PREPARE_EVENT="$(printf '%s' "$_HANDOFF_PREPARE_STDOUT" \
+        | jq -c --arg node "$NODE_ID" --arg session "$SESSION_ID" \
+          '{node_id:$node, session_id:$session, reason:"prepare_failed",
+            detail:(.reason // "prepare failed"),
+            restored:(.restored // null), live_holder:(.live_holder // null)}' 2>/dev/null)"
+      if [ -z "$_PREPARE_EVENT" ]; then
+        _PREPARE_EVENT="$(jq -cn --arg node "$NODE_ID" --arg session "$SESSION_ID" \
+          --arg detail "$(printf '%s' "$_HANDOFF_PREPARE_STDOUT" | head -c 400)" \
+          '{node_id:$node, session_id:$session, reason:"prepare_failed", detail:$detail}')"
+      fi
+      ;;
+    *)
+      # Any other code means the module never reached its own error
+      # handling: the interpreter or the import failed.
+      _PREPARE_EVENT="$(jq -cn --arg node "$NODE_ID" --arg session "$SESSION_ID" \
+        --arg detail "interpreter or import failed (rc=$_PREPARE_RC): $(printf '%s' "$_HANDOFF_PREPARE_STDOUT" | head -3 | tr '\n' ' ' | head -c 300)" \
+        '{node_id:$node, session_id:$session, reason:"prepare_bootstrap_failed", detail:$detail}')"
+      ;;
+  esac
 
-  if [ "$_RESTORE_RC" -ne 0 ]; then
-    # Archive is gone AND restore failed: unrecoverable
-    echo "handoff-restore-failed $NODE_ID reason=\"release_failed + restore_failed\""
+  _emit_event "handoff_failed" "$_PREPARE_EVENT"
+
+  if [ "$_PREPARE_RC" -eq 12 ]; then
+    echo "handoff-restore-failed $NODE_ID reason=\"prepare failed + restore failed\""
     exit "$_EXIT_RESTORE_FAILED"
   fi
 
-  echo "parked $NODE_ID reason=\"claim release failed (rc=$_RELEASE_RC)\""
+  echo "parked $NODE_ID reason=\"handoff prepare failed (rc=$_PREPARE_RC)\""
   exit "$_EXIT_PARKED"
 fi
+
+# Positive receipt, not an absence: the module returned rc=0, so its JSON
+# said the manifest is archived and the node claim release was positively
+# confirmed. Relaying the line gives every reader (operator tail, journey
+# smoke) one observable marker for the custody handover the stubbed CLI
+# calls around it cannot show.
+echo "prepare: archived manifest and released node:$NODE_ID"
 
 # From this point, the parent's claim is released. Any failure that cannot
 # restore the manifest MUST exit 12.
@@ -649,7 +783,7 @@ fi
 # ---------------------------------------------------------------------------
 # Build command: inject the refusal flag when auto_merge_approved != true.
 # The flag is the attributable carrier in the command; the exported env var is
-# the MECHANICAL carrier (x-9d11): the successor's init folds TARGET_NO_MERGE
+# the MECHANICAL carrier: the successor's init folds TARGET_NO_MERGE
 # even if it never passes the flag through, so a post-compaction or thin-skinned
 # child cannot inherit merge authority the parent refused.
 SPAWN_FLAGS=""
@@ -762,10 +896,14 @@ done
 
 if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
   fno agents stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim release "node:$NODE_ID" \
-    --holder "$_CHILD_EXPECTED_HOLDER" >/dev/null 2>&1 || true
   fno agents rm "$CHILD_NAME" >/dev/null 2>&1 || true
 
+  # No shell-side node release here, and not as a formality: the child never
+  # proved custody, so a release naming the child's holder is a guess about
+  # who holds the key - against a still-free claim it is a HolderMismatch the
+  # non-strict CLI reports as success, the exact silent-custody defect the
+  # prepare owner exists to retire. The REACQUIRE below is the receipt: it
+  # takes over a stale/dead claim or fails loud naming the live holder.
   _REACQ_RC=0
   FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "node:$NODE_ID" \
     --holder "$CLAIM_HOLDER" --ttl "$CLAIM_TTL" >/dev/null 2>&1 || _REACQ_RC=$?
@@ -818,7 +956,7 @@ fi
 _emit_event "session_satisfied" \
   "{\"source\":\"delegated\",\"reason\":\"do-phase delegated to $CHILD_NAME\",\"session_id\":\"$SESSION_ID\",\"gate_state_hash\":\"$_GATE_HASH\"}"
 
-# 8c. Delegating session's ledger session-record (step 6, ab-f8e5f214 / AC7-EDGE).
+# 8c. Delegating session's ledger session-record (step 6, / AC7-EDGE).
 # The manifest was archived in Step 4, so the stop-hook shim's finalize cannot
 # read it (and in fact the shim exits early on the now-missing manifest). Write
 # the paper-trail row HERE via the `finalize` verb against the ARCHIVED manifest,
@@ -826,26 +964,14 @@ _emit_event "session_satisfied" \
 # writes ONLY the ledger row (stamp/graduate/handoff stay the SUCCESSOR's job)
 # and emits session_finalized for observability. Best-effort: failure never
 # blocks the committed delegation. Resolve fno-agents the same way the shim does.
-_ABI_AGENTS_BIN=""
-if [ -n "${FNO_AGENTS_BIN:-}" ] && [ -x "${FNO_AGENTS_BIN}" ]; then
-  _ABI_AGENTS_BIN="$FNO_AGENTS_BIN"
-else
-  _REPO_ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-  if [ -x "${_REPO_ROOT}/crates/fno-agents/target/release/fno-agents" ]; then
-    _ABI_AGENTS_BIN="${_REPO_ROOT}/crates/fno-agents/target/release/fno-agents"
-  elif [ -x "${_REPO_ROOT}/crates/fno-agents/target/debug/fno-agents" ]; then
-    _ABI_AGENTS_BIN="${_REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
-  elif command -v fno-agents >/dev/null 2>&1; then
-    _ABI_AGENTS_BIN="$(command -v fno-agents)"
-  fi
-fi
+_ABI_AGENTS_BIN="$(_handoff_agents_bin)"
 if [ -n "$_ABI_AGENTS_BIN" ]; then
   "$_ABI_AGENTS_BIN" finalize \
     --state "$ARCHIVED_STATE" \
     --cwd "$PWD" \
     --reason delegated \
     --events "$EVENTS_FILE" \
-    >>"$FNO_DIR/finalize.stderr.log" 2>&1 \
+    >>"$DIAG_DIR/finalize.stderr.log" 2>&1 \
     || echo "handoff: WARN: finalize (delegated ledger record) exited non-zero; paper-trail row may be missing (non-blocking)" >&2
 else
   echo "handoff: WARN: fno-agents binary not found; skipping delegated ledger record (non-blocking)" >&2
@@ -921,12 +1047,12 @@ true  # python3 best-effort; rc ignored
 
 # 8e. Touch per-session sentinel; clear any PreCompact arming marker (guard c).
 touch "$SENTINEL"
-rm -f "$FNO_DIR/.handoff-armed-$SESSION_ID"
+rm -f "$SESSION_DIR/.handoff-armed-$SESSION_ID"
 
 # ---------------------------------------------------------------------------
 # Step 8 complete: print delegated line (step 9 is the calling LLM's job)
 # ---------------------------------------------------------------------------
-# Crumb-trail annotation (x-4852): operator-visible, printed BEFORE the strict
+# Crumb-trail annotation: operator-visible, printed BEFORE the strict
 # `delegated ...` decision line so the parser (which keys on that prefix) is
 # unaffected. The successor inherits the same worktree events.jsonl + the brief.
 echo "$_CRUMB_SUMMARY"

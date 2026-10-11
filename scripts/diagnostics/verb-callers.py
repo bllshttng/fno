@@ -138,12 +138,14 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 # no longer prove the leaf-specific AST walk. The two independent controls
 # below still pin a nested list-literal call and a kept agents leaf.
 AST_CONTROLS = {"agents spawn": 2, "backlog done": 1}
-INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog update": 10}
+# `backlog next` replaces the retired `backlog update` as the third
+# internal-text control: a live backlog leaf whose python leg still sweeps.
+INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog next": 10}
 
 # Verbs reachable ONLY through shell command substitution, where the binary
 # name is glued to a variable assignment and is not a bare token:
 #   hooks/helpers/init-target-state.sh   _OWNED_OUT="$(fno do target resolve-owned-identity
-#   skills/pr/SKILL.md                   policy_json="$(candidate_fno do pr evidence-required
+#   skills/ship/SKILL.md                   policy_json="$(candidate_fno do pr evidence-required
 # Both scored zero and sat in the dead set until an independent whole-repo walk
 # contradicted it. They are controls now: a tokenizer change that loses this
 # shape emits no candidate list instead of a wrong one.
@@ -166,7 +168,16 @@ SUBSTITUTION_CONTROLS = {
 # `Command::new(<ident>_bin())` and missed needs_overlay.rs outright, because the
 # real call reads `tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())`
 # and the qualifier's `::` and parens defeat that pattern.
-_RUST_ARGS_RE = re.compile(r"\.args\(\s*&?\s*\[([^\]]*)\]", re.S)
+# Two shapes name a verb from Rust. `.args(&[...])` at the spawn site, and a
+# same-crate helper called `fno(cwd, &[...])` that forwards the slice to one
+# `Command::new("fno")`. The second exists because consolidating five probes
+# behind a single spawn site (authorized_merge.rs) hid `do pr info` and four
+# siblings from this sweep, and an invisible caller is how a live verb gets
+# deleted. `\bfno\(` cannot match inside `some_fno(`: there is no word
+# boundary after an underscore.
+_RUST_ARGS_RE = re.compile(
+    r"(?:\.args\(|\bfno\()\s*(?:[^()\[\]]*,\s*)?&?\s*\[([^\]]*)\]", re.S
+)
 _RUST_STR_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _RUST_CMD_LITERAL_RE = re.compile(r'Command::new\(\s*"([^"]+)"')
 

@@ -30,31 +30,55 @@
 //! - `pane` verbs (the list lives in [`PANE_VERBS`], named once): the
 //!   per-reply shapes in [`render_reply`].
 
+mod completion;
+mod harness_command;
+mod pane_submit;
+mod restore;
+
+pub use self::harness_command::command;
+use self::pane_submit::{pane_text, send_pane_bytes, submit_pane};
+use self::restore::workspace_restore;
+
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::server::lifecycle_target;
+use crate::server::lifecycle_target::pane_table_host;
+
+pub(crate) use crate::mux_rows::{pid_from_sidecar, read_wire_version};
+use crate::pane_send_audit::{pane_send_is_control_only, PaneSendAudit};
 use crate::proto::{
     self, err_code, read_msg_sync, write_msg_sync, BlockSel, ClientMsg, ControlVerb, LayoutScope,
     PanePlacement, PaneTarget, PlacementFallback, ServerMsg, SquadLayout, TabPaneOccupant, TabSel,
     WaitOutcome, BUILD_VERSION, DEFAULT_SESSION, PROTO_VERSION,
 };
+use crate::review_invocation::{append_review_invocation, review_invocation_command};
 use crate::tree::Dir;
 
 /// Bound every probe: a wedged server counts as alive-but-unqueryable, never
 /// a hang. Generous next to a socket round-trip, tight next to a human.
-const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Resolve the target session: explicit flag/arg > `FNO_SESSION` (set in
-/// every pane the server spawns) > the default. Pure, so precedence is
-/// unit-testable (Locked 7).
-pub fn resolve_session(explicit: Option<&str>, env: Option<&str>) -> String {
-    explicit
-        .map(str::to_string)
-        .or_else(|| env.filter(|s| !s.is_empty()).map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_SESSION.to_string())
-}
+mod server_axis;
+
+pub use crate::cli_args::{BlockAnnotateArgs, BlockPipeArgs, MuxCommon};
+
+mod block_args;
+pub mod kill_policy;
+mod pane_args;
+mod pane_keeper_list;
+use block_args::{parse_block_annotate, parse_block_args};
+use clap::Parser as _;
+pub use pane_args::{
+    parse_pane_args, ParsedPane, PANE_LS_IDENTITY_HELP, PANE_REFERENCE_USAGE, PANE_RUN_WORKER_HELP,
+    PANE_SEND_RAW_HELP,
+};
+pub(crate) use pane_keeper_list::pane_keeper_list;
+pub use server_axis::{
+    env_server, note_server_flag, resolve_session, LEGACY_SERVER_ENV, SERVER_ENV,
+};
 
 /// What one socket probe learned.
 enum Probe {
@@ -70,7 +94,7 @@ enum Probe {
     /// proves the server is alive and reachable, just proto-old.
     Unqueryable,
     /// Holds the socket but never ACCEPTS a connection (connect times out): a
-    /// wedged server, alive-but-stuck. Split from `Unqueryable` (x-82c6) so
+    /// wedged server, alive-but-stuck. Split from `Unqueryable` so
     /// `restart --mux` stops reporting ok while a wedged server keeps running.
     /// Because a dead server releases its socket (connect REFUSED -> `Stale`),
     /// a connect-timeout implies a LIVE holder that is not accepting.
@@ -131,12 +155,12 @@ fn probe(sock: &Path) -> Probe {
 /// The zsh OSC 133 shell-integration snippet: `precmd` emits `D;<exit>` (the
 /// just-finished command) then `A` (new prompt); `B` (command start) rides at
 /// the END of `PROMPT` so it fires when the prompt finishes drawing - the
-/// user's keystrokes are then echoed in the B..C window, which is what x-38c4's
+/// user's keystrokes are then echoed in the B..C window, which is what
 /// rerun byte-captures as the command line (emitting B in `preexec` alongside C
 /// leaves that window empty: readline has already echoed by then). `preexec`
 /// emits `C` (Enter pressed, output begins). Idempotent (guarded +
 /// double-eval-safe), no absolute paths (AC4-UI). A pane that eval's this
-/// captures blocks (US1) and their command lines (x-38c4).
+/// captures blocks (US1) and their command lines.
 pub(crate) const ZSH_SHELL_INIT: &str = r#"if [ -z "${_FNO_OSC133:-}" ]; then
   _FNO_OSC133=1
   autoload -Uz add-zsh-hook
@@ -151,7 +175,7 @@ fi
 /// The bash OSC 133 snippet: `_fno_osc133_prompt` (LAST in `PROMPT_COMMAND`)
 /// emits `D;<exit>`/`A` and arms; `B` (command start) rides at the END of `PS1`
 /// (`\[...\]` non-counting) so it fires when the prompt finishes drawing - the
-/// user's keystrokes then echo in the B..C window that x-38c4's rerun
+/// user's keystrokes then echo in the B..C window that rerun
 /// byte-captures as the command line. The `DEBUG` trap emits `C` on the FIRST
 /// command after the prompt, then disarms - so a pipeline emits it once, and
 /// the commands inside `PROMPT_COMMAND` (and a bare Enter) do not trip it. The
@@ -188,9 +212,9 @@ fi
 /// (Warp/iTerm) works with zero setup (AC4-EDGE) - the scanner does not care
 /// who emits. An unsupported / missing shell is a one-line error (AC4-ERR).
 pub fn shell_init(shell: Option<&str>, json: bool) -> i32 {
-    let snippet = match shell {
-        Some("zsh") => ZSH_SHELL_INIT,
-        Some("bash") => BASH_SHELL_INIT,
+    let (snippet, completion) = match shell {
+        Some("zsh") => (ZSH_SHELL_INIT, Some(self::completion::zsh_script())),
+        Some("bash") => (BASH_SHELL_INIT, Some(self::completion::bash_script())),
         Some(other) => {
             eprintln!("fno mux shell-init: unsupported shell {other:?}; supported: zsh, bash");
             return EXIT_USAGE;
@@ -200,15 +224,22 @@ pub fn shell_init(shell: Option<&str>, json: bool) -> i32 {
             return EXIT_USAGE;
         }
     };
-    // --json wraps the snippet in the stable envelope (a script reads `.snippet`);
-    // the default prints the raw snippet for `eval "$(fno mux shell-init zsh)"`.
+    let completion = completion.unwrap_or_default();
+    // --json keeps the envelope additive: the snippet is byte-identical, and
+    // the completion generated from the typed tree rides its own field. The
+    // default prints both for `eval "$(fno mux shell-init zsh)"`.
     if json {
         println!(
             "{}",
-            serde_json::json!({ "shell": shell.unwrap_or(""), "snippet": snippet })
+            serde_json::json!({
+                "shell": shell.unwrap_or(""),
+                "snippet": snippet,
+                "completion": completion,
+            })
         );
     } else {
         print!("{snippet}");
+        print!("{completion}");
     }
     EXIT_OK
 }
@@ -219,7 +250,7 @@ pub fn shell_init(shell: Option<&str>, json: bool) -> i32 {
 struct SessionRow {
     name: String,
     probe: Probe,
-    /// (x-1a85) The wire version the server stamped in its `.ver` sidecar, or
+    /// The wire version the server stamped in its `.ver` sidecar, or
     /// `None` when absent (a pre-sidecar server, i.e. an older build). Only
     /// meaningful for a `Live` row.
     wire_version: Option<u32>,
@@ -230,7 +261,7 @@ impl SessionRow {
         matches!(self.probe, Probe::Live { .. })
     }
 
-    /// (x-1a85) A LIVE server this client cannot attach to. Floor-admitting
+    /// A LIVE server this client cannot attach to. Floor-admitting
     /// binaries ([`proto::FLOOR_SINCE_PROTO`] and newer) accept any client at
     /// or above their floor, so a sidecar at or above that generation is
     /// compatible, including a newer server. Older sidecars predate the
@@ -247,21 +278,10 @@ impl SessionRow {
     }
 }
 
-/// Read a session socket's `.ver` sidecar (x-1a85) and parse the stamped wire
-/// version. `None` on any read/parse failure (absent sidecar = older server).
-fn read_wire_version(sock: &Path) -> Option<u32> {
-    std::fs::read_to_string(proto::version_sidecar_path(sock))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
-
 /// Enumerate `*.sock` stems in the mux dir, sorted. `Err` is an unreadable dir
 /// the caller must distinguish from "no sessions" (a permissions/IO error must
 /// never read as empty); `NotFound` returns an empty list (no session ever
-/// started here, AC6-FR). Shared by `ls`/picker (which then probe) and `doctor`
-/// (which version-probes) so both see the same session set.
+/// started here, AC6-FR). A graph keeper's `<graph>.store.sock` sibling is never a session: probing it with a mux frame reads as unreachable and poisons the fold (the e2e sandboxes put the graph inside the mux dir). Shared by `ls`/picker and `doctor` so both see the same session set.
 fn session_names() -> Result<Vec<String>, String> {
     let dir = proto::mux_dir();
     let entries = match std::fs::read_dir(&dir) {
@@ -273,7 +293,9 @@ fn session_names() -> Result<Vec<String>, String> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let p = e.path();
-            (p.extension().and_then(|x| x.to_str()) == Some("sock"))
+            let is_session = p.extension().and_then(|x| x.to_str()) == Some("sock")
+                && !p.to_string_lossy().ends_with(".store.sock");
+            is_session
                 .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
                 .flatten()
         })
@@ -320,11 +342,14 @@ fn session_row_json(row: &SessionRow) -> serde_json::Value {
         } => serde_json::json!({
             "session": name, "state": "live",
             "clients": clients, "squads": squads, "panes": panes,
-            // (x-1a85) `stale` = live but on a wire this client cannot attach
+            // `stale` = live but on a wire this client cannot attach
             // to. Restart policy may auto-restart a pane-less server, but
             // spares live-pane servers. `wire_version` is null for a
             // pre-sidecar (older) server.
             "stale": stale, "wire_version": wire_version,
+            // change 4: the census classifies the mux server's build
+            // from this pid; null when the sidecar is absent or unparseable.
+            "pid": pid_from_sidecar(name),
         }),
         Probe::Unqueryable => serde_json::json!({ "session": name, "state": "unqueryable" }),
         Probe::Wedged => {
@@ -374,19 +399,19 @@ pub fn ls(json: bool) -> i32 {
                 squads,
                 panes,
             } => {
-                // (x-1a85) An incompatible live server is flagged with the fix
+                // An incompatible live server is flagged with the fix
                 // that actually applies: plain restart auto-heals a pane-less
                 // one; a server holding panes needs the --mux lever.
                 let tail = if stale {
                     if *panes > 0 {
-                        " [incompatible wire - spared; `fno agents restart --mux` revives it]"
+                        " [incompatible wire - spared; `fno agents restart --mux` restarts it]"
                     } else {
                         " [incompatible wire - `fno agents restart` auto-heals it]"
                     }
                 } else {
                     ""
                 };
-                println!("{name}: {clients} clients, {squads} squads, {panes} panes{tail}")
+                println!("{name}: {clients} clients, {squads} workspaces, {panes} panes{tail}")
             }
             Probe::Unqueryable => println!("{name}: alive (unqueryable - older server?)"),
             Probe::Wedged => {
@@ -440,6 +465,8 @@ pub fn pick_session() -> Option<String> {
 }
 
 /// A logical picker keystroke, folded from raw bytes (arrows -> Up/Down).
+pub mod mux_rows;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PickKey {
     Up,
@@ -502,8 +529,7 @@ fn fold_pick_keys(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<PickKey> {
 /// (terminals emit an arrow as one write) and low-stakes pre-attach.
 fn pick_keys_from_read(esc: &mut Vec<u8>, bytes: &[u8]) -> Vec<PickKey> {
     let mut keys = fold_pick_keys(esc, bytes);
-    if esc.as_slice() == [0x1b] {
-        esc.clear();
+    if crate::keys::take_lone_esc(esc) {
         keys.push(PickKey::Esc);
     }
     keys
@@ -614,7 +640,7 @@ fn render_picker(p: &Picker) -> String {
                 squads,
                 panes,
             } => format!(
-                "{}  ({clients} clients, {squads} squads, {panes} panes)",
+                "{}  ({clients} clients, {squads} workspaces, {panes} panes)",
                 row.name
             ),
             Probe::Unqueryable => format!("{}  (alive, unqueryable)", row.name),
@@ -718,7 +744,7 @@ fn run_picker(rows: Vec<SessionRow>) -> Option<String> {
     result
 }
 
-/// Which rung ended a `kill-server` run (x-48a5): printed on both surfaces,
+/// Which rung ended a `kill-server` run: printed on both surfaces,
 /// because a silent recovery cannot be told apart from one that did nothing.
 #[derive(Debug, PartialEq, Eq)]
 enum KillPath {
@@ -775,56 +801,6 @@ const SIGTERM_GRACE: Duration = Duration::from_secs(3);
 /// Unrecoverable. SIGKILL is immediate; this only bounds a slow reap.
 const SIGKILL_GRACE: Duration = Duration::from_secs(1);
 
-/// `fno mux kill-server [<name>]`: shut one session down. A live server Byes
-/// its clients, kills every pane child, and exits (its SocketGuard unlinks
-/// the socket); a stale socket is unlinked here with a message (exit 0); no
-/// socket at all is "no server" (exit 1). A wedged holder - one that never
-/// accepted, or accepted and never answered - is escalated through SIGTERM
-/// and SIGKILL to unlink (x-48a5): a recovery verb must not depend on the
-/// subsystem it recovers. Every run prints which rung ended it, and an
-/// unrecoverable state names the next action instead of leaving a dead `&&`
-/// chain with no hint.
-pub fn kill_server(session: &str, json: bool) -> i32 {
-    let sock = match proto::socket_path(session) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("fno: {e}");
-            return EXIT_USAGE;
-        }
-    };
-    if !sock.exists() {
-        eprintln!("fno: no server for session {session:?}");
-        return EXIT_ERROR;
-    }
-    let outcome = kill_server_inner(session, &sock);
-    match outcome.path {
-        KillPath::Unrecoverable => eprintln!("{}", outcome.note),
-        _ => {
-            // On success `--json` prints `{session, killed, note, path}`;
-            // errors stay on stderr (mirrors the pane verbs' json/error split).
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "session": session,
-                        "killed": true,
-                        "note": outcome.note,
-                        "path": outcome.path.json_tag(),
-                    })
-                );
-            } else {
-                println!("{}", outcome.note);
-            }
-        }
-    }
-    outcome.exit_code()
-}
-
-/// The work of `kill-server`, returning the rung taken instead of printing.
-/// Both dead ends of the old verb - a connect that timed out, and a graceful
-/// request the connected server never answered - enter the same escalation
-/// ladder instead of refusing, because that is exactly the state the verb
-/// exists for.
 fn kill_server_inner(session: &str, sock: &Path) -> KillOutcome {
     let stream = match proto::connect_unix_timeout(sock, PROBE_TIMEOUT) {
         Ok(s) => s,
@@ -921,7 +897,7 @@ fn plain_unrecoverable(msg: String) -> KillOutcome {
 /// only refuses `/` and NUL (`proto::socket_path`), so a name (and the mux
 /// dir it sits under) can legally carry spaces or shell metacharacters that
 /// would otherwise split the command or run unintended syntax when copied
-/// into a shell (x-48a5).
+/// into a shell.
 fn shell_quote(p: &Path) -> String {
     format!("'{}'", p.to_string_lossy().replace('\'', r"'\''"))
 }
@@ -1128,7 +1104,7 @@ fn escalate(session: &str, sock: &Path, context: &str) -> KillOutcome {
 /// zombie regardless of who calls it, not only its parent: a bare-init
 /// container that never reaps an adopted orphan would otherwise never
 /// converge here, waiting out every grace window for an ESRCH that can only
-/// come after a reap that never happens (x-48a5).
+/// come after a reap that never happens.
 fn holder_gone(pid: i32, sock: &Path, grace: Duration) -> bool {
     let deadline = Instant::now() + grace;
     loop {
@@ -1399,7 +1375,7 @@ fn socket_dir_check() -> Check {
 /// emitters, so the advertised spelling cannot drift from the verb that exists.
 const PRUNE_REMEDY: &str = "fno mux workspace prune";
 
-/// The squad-store orphan verdict (x-a572 US3), pure so the ok/warn/Na rendering
+/// The squad-store orphan verdict (US3), pure so the ok/warn/Na rendering
 /// is unit-testable without a store. `total` is the persisted squad count;
 /// `orphan` is how many the prune predicate would reap (unnamed, every origin
 /// gone, no live member). Read-only: doctor detects and names the remedy, it
@@ -1407,71 +1383,26 @@ const PRUNE_REMEDY: &str = "fno mux workspace prune";
 fn squad_store_verdict(total: usize, orphan: usize) -> Check {
     if total == 0 {
         Check {
-            name: "squad store".into(),
+            name: "workspace store (squads.json)".into(),
             verdict: Verdict::Na,
-            detail: "no squads persisted".into(),
+            detail: "no workspaces persisted".into(),
             remedy: None,
         }
     } else if orphan == 0 {
         Check {
-            name: "squad store".into(),
+            name: "workspace store (squads.json)".into(),
             verdict: Verdict::Ok,
-            detail: format!("{total} squad(s), none orphaned"),
+            detail: format!("{total} workspace(s), none orphaned"),
             remedy: None,
         }
     } else {
         Check {
-            name: "squad store".into(),
+            name: "workspace store (squads.json)".into(),
             verdict: Verdict::Warn,
-            detail: format!("{orphan} orphaned squad(s) (no surviving origin, no live member)"),
+            detail: format!("{orphan} orphaned workspace(s) (no surviving origin, no live member)"),
             remedy: Some(PRUNE_REMEDY.into()),
         }
     }
-}
-
-/// `fno mux doctor`'s squad-store check: count how many persisted squads the
-/// prune predicate would reap. Read-only (load + registry/roster reads, no pane
-/// probe, no mutation). An unreadable registry means the count is unknown, so
-/// the check warns and points at the prune verb (which is fail-safe regardless).
-fn squad_store_check() -> Check {
-    let loaded = crate::squad_store::load();
-    let total = loaded.squads.len();
-    if total == 0 {
-        return squad_store_verdict(0, 0);
-    }
-    let Some(live) = live_set_or_unknown() else {
-        return Check {
-            name: "squad store".into(),
-            verdict: Verdict::Warn,
-            detail: "agent registry unreadable; orphan count unknown".into(),
-            remedy: Some(PRUNE_REMEDY.into()),
-        };
-    };
-    let origin_exists = |p: &str| std::path::Path::new(p).exists();
-    // ONE argument set with the prune that actually runs. This counter used to
-    // pass an empty `live_cwds` and no clock, so the number the operator read
-    // could disagree with what a bare `prune` would do. `include_named: false`
-    // stays hardcoded on purpose: it is what a bare `prune` uses.
-    let (_, live_cwds, ..) = live_tabs();
-    let now = crate::squad_store::now_epoch_secs();
-    let orphan = loaded
-        .squads
-        .iter()
-        .filter(|sq| {
-            matches!(
-                crate::squad_store::prune_decision_at(
-                    sq,
-                    false,
-                    Some(&live),
-                    &live_cwds,
-                    &origin_exists,
-                    now,
-                ),
-                crate::squad_store::PruneDecision::Prune
-            )
-        })
-        .count();
-    squad_store_verdict(total, orphan)
 }
 
 /// Run every check. The fs/net/env reads live here; the verdict logic each one
@@ -1493,9 +1424,11 @@ fn gather_checks() -> Vec<Check> {
         }),
     }
     #[cfg(not(test))]
-    checks.push(legacy_mux_root_check());
+    checks.push(doctor::legacy_mux_root_check());
     #[cfg(not(test))]
-    checks.push(legacy_squads_newer_check());
+    checks.push(doctor_squads::legacy_squads_newer_check());
+    #[cfg(not(test))]
+    checks.push(doctor_squads::agents_squads_orphan_check());
     #[cfg(not(test))]
     if let Some((detail, remedy)) = proto::pending_config_warning() {
         checks.push(Check {
@@ -1510,174 +1443,18 @@ fn gather_checks() -> Vec<Check> {
         &std::env::var("COLORTERM").unwrap_or_default(),
     ));
     checks.push(clipboard_check(crate::clipboard::available_tool()));
-    checks.push(squad_store_check());
-    checks.push(board_scope_check());
+    checks.push(doctor::squad_store_check());
+    checks.push(doctor::board_scope_check());
+    checks.push(doctor::canonical_venv_check());
     checks
-}
-
-/// Sessions stranded at the pre-config-chain root `~/.fno/mux` when this
-/// process resolves its socket dir elsewhere through the ambient chain
-/// (`config.state_dir`). A daemon bound before an upgrade - or started from a
-/// directory with no state_dir override while clients run inside one that has
-/// it - keeps serving a dir no current client lands on, and every reaper
-/// (`ls`-based) resolves the new root, so nothing finds it to reap. Visible
-/// ONLY here, which is why it is a `warn` with the one command that reaches
-/// the old root.
-#[cfg(not(test))]
-fn legacy_mux_root_check() -> Check {
-    // An explicit FNO_MUX_DIR relocates the sockets ON PURPOSE (the documented
-    // test seam, scratch dirs, operator partitions), and a pinned FNO_CONFIG
-    // is the same deliberate relocation from the other side: an isolated demo
-    // env running doctor. Sessions at the global root are then live for every
-    // normal client, and "restart them under the resolved root" would direct
-    // an operator to kill a healthy fleet - into a tempdir, or out of the
-    // real machine's mux. The check is about UPGRADE divergence only.
-    if std::env::var_os("FNO_MUX_DIR").is_some_and(|v| !v.is_empty())
-        || std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty())
-    {
-        return Check {
-            name: "legacy mux root".into(),
-            verdict: Verdict::Na,
-            detail: "FNO_MUX_DIR or a pinned FNO_CONFIG relocates the sockets on purpose".into(),
-            remedy: None,
-        };
-    }
-    // The same helper the resolver's own fallback uses, so this comparison
-    // can never drift from what mux_dir actually falls back to. Canonical
-    // forms catch a state_dir that aliases the legacy root through a
-    // symlink or a `..` segment - lexically distinct, physically the same
-    // dir, and warning there would direct an operator to kill a fleet that
-    // never moved.
-    let legacy = proto::legacy_mux_root();
-    let resolved = proto::mux_dir();
-    let same_root = match (
-        std::fs::canonicalize(&resolved),
-        std::fs::canonicalize(&legacy),
-    ) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => resolved == legacy,
-    };
-    if same_root {
-        return Check {
-            name: "legacy mux root".into(),
-            verdict: Verdict::Na,
-            detail: "resolved dir is the legacy root".into(),
-            remedy: None,
-        };
-    }
-    let socks = std::fs::read_dir(&legacy)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x == "sock"))
-                .count()
-        })
-        .unwrap_or(0);
-    if socks == 0 {
-        return Check {
-            name: "legacy mux root".into(),
-            verdict: Verdict::Na,
-            detail: "no sessions at the legacy root".into(),
-            remedy: None,
-        };
-    }
-    Check {
-        name: "legacy mux root".into(),
-        verdict: Verdict::Warn,
-        detail: format!(
-            "{socks} session socket(s) sit at the pre-config-chain root {} this \
-             process no longer resolves",
-            legacy.display()
-        ),
-        remedy: Some(format!(
-            "FNO_MUX_DIR='{}' fno mux ls; kill-server or restart them under the \
-             resolved root",
-            legacy.display()
-        )),
-    }
-}
-
-/// The migration-overlap window: a pre-upgrade daemon still bound to the
-/// legacy root keeps writing the legacy squads.json AFTER this process
-/// seeded the state-root copy, and the read path stops seeing the legacy
-/// file the moment the primary exists (the fallback is NotFound-only).
-/// Merging the two stores is reconciliation work beyond a check, but the
-/// DIVERGENCE is visible: warn when the legacy file is newer than the copy
-/// it seeded, which is exactly the old server's signature.
-#[cfg(not(test))]
-fn legacy_squads_newer_check() -> Check {
-    if !proto::legacy_fallback_allowed() {
-        return Check {
-            name: "legacy squads store".into(),
-            verdict: Verdict::Na,
-            detail: "an explicit override isolates the store on purpose".into(),
-            remedy: None,
-        };
-    }
-    let primary = crate::squad_store::squads_path();
-    let legacy = proto::legacy_sidecar_path("squads.json");
-    let newer = match (std::fs::metadata(&primary), std::fs::metadata(&legacy)) {
-        (Ok(p), Ok(l)) => match (p.modified(), l.modified()) {
-            (Ok(pm), Ok(lm)) => lm > pm,
-            _ => false,
-        },
-        _ => false,
-    };
-    if !newer {
-        return Check {
-            name: "legacy squads store".into(),
-            verdict: Verdict::Na,
-            detail: "no legacy copy is outrunning the resolved store".into(),
-            remedy: None,
-        };
-    }
-    Check {
-        name: "legacy squads store".into(),
-        verdict: Verdict::Warn,
-        detail: format!(
-            "the legacy {} is newer than the resolved {}; a pre-upgrade \
-             server may still be writing it",
-            legacy.display(),
-            primary.display()
-        ),
-        remedy: Some(
-            "restart the old mux server under the resolved root, then run \
-             `fno mux workspace prune` once"
-                .into(),
-        ),
-    }
-}
-
-/// What the backlog board would be scoped to (x-20f1).
-///
-/// Resolves LIVE, the same way a client does at spawn, so this answers "what
-/// will a server started from here show". A server already running latched its
-/// scope when it was spawned; changing the config takes a `mux kill-server`,
-/// and this line is where that is visible.
-///
-/// Read-only and advisory: a refusal is a `warn`, not a `fail`, because nothing
-/// is broken - the board just falls back to every project. But it must be
-/// VISIBLE here, because that fallback is silent everywhere else: a board
-/// correctly scoped to one project and a board that could not resolve one and
-/// widened look nothing alike, and only this line says which you got.
-fn board_scope_check() -> Check {
-    let (scope, why) = crate::backlog_view::resolve_board_scope(crate::server::config_get);
-    let refused = matches!(
-        &scope,
-        crate::backlog_view::BoardScope::Projects(s) if s.is_empty()
-    );
-    Check {
-        name: "backlog board scope".into(),
-        verdict: if refused { Verdict::Warn } else { Verdict::Ok },
-        detail: why,
-        remedy: refused
-            .then(|| "set config.project.id in this repo, or config.mux.board_scope=all".into()),
-    }
 }
 
 /// Render every check and return the exit code: `EXIT_ERROR` iff any check
 /// FAILed (a version skew), else `EXIT_OK`. Pure over the check list so the
 /// exit mapping and both output shapes are testable without a live server.
-fn render_doctor(checks: &[Check], json: bool) -> i32 {
+/// Dependency rows render beside the checks but never touch the exit: an
+/// unavailable optional backend is advisory for a plain workspace.
+fn render_doctor(checks: &[Check], deps: &[doctor_boundary::DependencyRow], json: bool) -> i32 {
     let failed = checks.iter().any(|c| c.verdict == Verdict::Fail);
     if json {
         let arr: Vec<_> = checks
@@ -1691,12 +1468,35 @@ fn render_doctor(checks: &[Check], json: bool) -> i32 {
                 })
             })
             .collect();
-        println!("{}", serde_json::json!({ "ok": !failed, "checks": arr }));
+        let deps_json: Vec<_> = deps.iter().map(|d| d.json.clone()).collect();
+        println!(
+            "{}",
+            serde_json::json!({ "ok": !failed, "checks": arr, "dependencies": deps_json })
+        );
     } else {
         for c in checks {
             match &c.remedy {
                 Some(r) => println!("{}: {} - {} [{}]", c.name, c.verdict.word(), c.detail, r),
                 None => println!("{}: {} - {}", c.name, c.verdict.word(), c.detail),
+            }
+        }
+        for d in deps {
+            match &d.check.remedy {
+                Some(r) => {
+                    println!(
+                        "{}: {} - {} [{}]",
+                        d.check.name,
+                        d.check.verdict.word(),
+                        d.check.detail,
+                        r
+                    )
+                }
+                None => println!(
+                    "{}: {} - {}",
+                    d.check.name,
+                    d.check.verdict.word(),
+                    d.check.detail
+                ),
             }
         }
     }
@@ -1709,202 +1509,56 @@ fn render_doctor(checks: &[Check], json: bool) -> i32 {
 
 /// `fno mux doctor [--json]`: read-only environment diagnostics.
 pub fn doctor(json: bool) -> i32 {
-    render_doctor(&gather_checks(), json)
+    let deps = doctor_boundary::dependency_rows(&std::env::current_dir().unwrap_or_default());
+    render_doctor(&gather_checks(), &deps, json)
+}
+
+/// `fno mux stats` body lives in server_stats, beside its answer.
+pub fn stats(json: bool) -> i32 {
+    crate::server_stats::cli(json)
 }
 
 // ---------------------------------------------------------------------------
-// `fno mux workspace prune` - reap dead-origin residue (x-a572)
+// `fno mux workspace prune` - reap dead-origin residue
 // ---------------------------------------------------------------------------
 
-/// `fno mux workspace <verb> ...`: the workspace-store maintenance family. Only
-/// `prune` exists today; a bare verb or an unknown verb is usage. Carries the
-/// tokens after the verb family verbatim, like `pane`/`block`.
+/// `fno mux workspace <verb> ...`: the workspace-store maintenance family.
+/// Only `prune` and `restore` exist; a bare or unknown verb is usage. Tokens
+/// after the family verb carry verbatim, like `pane`/`block`.
 ///
-/// The retired `fno mux squad` spelling is GONE: it was an unadvertised alias
-/// of this family, named by nothing outside its own test, and a second spelling
-/// of one verb is a leaf the surface pays for twice. `--squad` stays a
-/// hidden-deprecated flag alias alongside the canonical `--workspace`. The
-/// user-facing/internal vocabulary split that leaves behind - `workspace`
-/// everywhere a person types, `squad` throughout this crate's identifiers - is
-/// a decision, not an unfinished rename: renaming ~2900 internal sites buys no
-/// user-visible change and collides with every in-flight mux branch. The two
-/// remaining user-adjacent
-/// spellings, the `squad` key in the `--json` placement receipt and
-/// `~/.fno/squads.json`, ride the next change that bumps `PROTO_VERSION` or
-/// migrates the store for a real reason, where the compatibility window and
-/// the migration already exist.
-pub fn workspace(args: &[OsString], env_session: Option<&str>) -> i32 {
-    // main.rs routes here only with a token after the family verb, so a bare
-    // `mux workspace` never reaches this function - it is the global usage
-    // arm. That leaves exactly one failure shape here, an unknown verb, and a
-    // non-UTF-8 one is simply unknown rather than a second branch.
-    let sub = args
-        .first()
-        .map(|a| a.to_string_lossy())
-        .unwrap_or_default();
-    match sub.as_ref() {
-        "prune" => squad_prune(&args[1..]),
-        "restore" => workspace_restore(&args[1..], env_session),
-        _ => {
-            eprintln!("fno mux workspace: unknown verb {sub:?} (expected prune|restore)");
-            EXIT_USAGE
-        }
+/// The retired `fno mux squad` spelling is GONE: an unadvertised alias named
+/// by nothing outside its own test. `--squad` stays a hidden-deprecated flag
+/// alias beside the canonical `--workspace`. The user-facing/internal
+/// vocabulary split that leaves behind - `workspace` where a person types,
+/// `squad` in this crate's identifiers - is a decision, not an unfinished
+/// rename: renaming ~2900 internal sites buys no user-visible change. The
+/// remaining user-adjacent `squad` spellings, the key in the `--json`
+/// placement receipt and `~/.fno/squads.json`, ride the next change that
+/// bumps `PROTO_VERSION` or migrates the store for a real reason.
+pub fn workspace(
+    op: crate::cli_args::WorkspaceOp,
+    args: &[OsString],
+    env_session: Option<&str>,
+) -> i32 {
+    match op {
+        crate::cli_args::WorkspaceOp::Prune(_) => squad_prune(args),
+        crate::cli_args::WorkspaceOp::Restore(_) => workspace_restore(args, env_session),
     }
 }
 
-/// `fno mux workspace restore` (x-7b5e): one verb brings the stored
+/// `fno mux workspace restore`: one verb brings the stored
 /// workspaces' worker members back. Every live, non-tombstoned member
 /// resumes through its own harness's declared `interactive_resume` argv in a
 /// pane at its stored cwd; a member that cannot resume is named with its
 /// reason, and a rerun FOCUSES the live panes instead of opening second
 /// writers. `--dry-run` prints the plan without starting anything - at
 /// twenty workers the operator reads it before twenty processes start.
-fn workspace_restore(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let mut dry_run = false;
-    let mut json = false;
-    let mut harness: Option<String> = None;
-    let mut session: Option<String> = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.to_str() {
-            Some("--dry-run") => dry_run = true,
-            Some("--json") => json = true,
-            Some("--harness") => {
-                harness = Some(match it.next().and_then(|v| v.to_str()) {
-                    Some(v) => v.to_string(),
-                    None => {
-                        eprintln!("fno mux workspace restore: --harness needs a value");
-                        return EXIT_USAGE;
-                    }
-                });
-            }
-            Some("--session") => {
-                session = Some(match it.next().and_then(|v| v.to_str()) {
-                    Some(v) => v.to_string(),
-                    None => {
-                        eprintln!("fno mux workspace restore: --session needs a value");
-                        return EXIT_USAGE;
-                    }
-                });
-            }
-            Some(other) => {
-                eprintln!("fno mux workspace restore: unknown argument {other:?}");
-                return EXIT_USAGE;
-            }
-            None => {
-                eprintln!("fno mux workspace restore: non-UTF-8 argument");
-                return EXIT_USAGE;
-            }
-        }
-    }
-    if let Some(h) = harness.as_deref().filter(|h| h.trim().is_empty()) {
-        eprintln!("fno mux workspace restore: --harness needs a non-empty value, got {h:?}");
-        return EXIT_USAGE;
-    }
-    let session = resolve_session(session.as_deref(), env_session);
-    let sock = match proto::socket_path(&session) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("fno mux workspace restore: {e}");
-            return EXIT_ERROR;
-        }
-    };
-    let verb = ControlVerb::WorkspaceRestore {
-        dry_run,
-        harness: harness.clone(),
-    };
-    match control_roundtrip(&sock, &session, verb) {
-        Ok(ServerMsg::WorkspaceRestored { rows }) => {
-            let count = |want: &str| rows.iter().filter(|r| r.outcome == want).count();
-            if json {
-                let payload = serde_json::json!({
-                    "session": session,
-                    "dry_run": dry_run,
-                    "harness": harness,
-                    "resumed": count("resumed"),
-                    "focused": count("focused"),
-                    "refused": count("refused"),
-                    "planned": count("planned"),
-                    "members": rows,
-                });
-                println!("{payload}");
-            } else {
-                for row in &rows {
-                    match row.outcome.as_str() {
-                        "resumed" => println!(
-                            "resumed {}{} pane {} squad {}{}",
-                            row.member,
-                            row.harness
-                                .as_deref()
-                                .map(|h| format!(" ({h})"))
-                                .unwrap_or_default(),
-                            row.pane.map(|p| p.to_string()).unwrap_or_default(),
-                            row.squad,
-                            row.notice
-                                .as_deref()
-                                .map(|n| format!(" - {n}"))
-                                .unwrap_or_default(),
-                        ),
-                        "focused" => println!(
-                            "focused {} pane {} squad {}",
-                            row.member,
-                            row.pane.map(|p| p.to_string()).unwrap_or_default(),
-                            row.squad,
-                        ),
-                        "planned" => println!(
-                            "planned {}{}",
-                            row.member,
-                            row.harness
-                                .as_deref()
-                                .map(|h| format!(" ({h})"))
-                                .unwrap_or_default(),
-                        ),
-                        _ => println!(
-                            "refused {}: {}",
-                            row.member,
-                            row.reason.as_deref().unwrap_or("no reason given"),
-                        ),
-                    }
-                }
-                println!(
-                    "restore: {} resumed, {} focused, {} refused, {} planned{}",
-                    count("resumed"),
-                    count("focused"),
-                    count("refused"),
-                    count("planned"),
-                    if dry_run {
-                        " (dry run: nothing started)"
-                    } else {
-                        ""
-                    },
-                );
-            }
-            EXIT_OK
-        }
-        Ok(ServerMsg::Err { msg, .. }) => {
-            eprintln!("fno mux workspace restore: {msg}");
-            EXIT_ERROR
-        }
-        Ok(other) => {
-            eprintln!("fno mux workspace restore: unexpected reply: {other:?}");
-            EXIT_ERROR
-        }
-        Err(e) => {
-            eprintln!("fno mux workspace restore: {e}");
-            match e {
-                ControlError::Unanswered(_) => EXIT_CONTROL_UNANSWERED,
-                _ => EXIT_ERROR,
-            }
-        }
-    }
-}
-
 /// The live attach-id set, or `None` when the liveness query failed. A
 /// present-but-unreadable registry/roster is a failed query (AC3-FR): the prune
 /// predicate then treats every member as unknown-liveness and keeps everything.
 /// Absent files mean no agents system is running -> nothing is live.
 fn live_set_or_unknown() -> Option<std::collections::HashSet<String>> {
-    let unreadable = |p: &Path| p.exists() && std::fs::read_to_string(p).is_err();
+    let unreadable = |p: &Path| p.exists() && crate::registry_read::registry_text(p).is_err();
     if unreadable(&crate::agents_view::registry_path())
         || unreadable(&crate::agents_view::roster_path())
     {
@@ -1913,42 +1567,13 @@ fn live_set_or_unknown() -> Option<std::collections::HashSet<String>> {
     Some(crate::server::live_attach_ids_snapshot())
 }
 
-fn add_agent_evidence(
-    agent: &crate::agents_view::RegistryAgent,
-    evidence: &mut crate::squad_store::MemberEvidence,
-    liveness: crate::agents_view::Liveness,
-) {
-    let mut add = |identity: &str| match liveness {
-        crate::agents_view::Liveness::Alive => evidence.add_live(identity),
-        crate::agents_view::Liveness::Dead => evidence.add_dead(identity),
-        crate::agents_view::Liveness::Unmeasured => {}
-    };
-    if let (Some(harness), Some(session_id)) =
-        (agent.harness.as_deref(), agent.effective_identity())
-    {
-        match liveness {
-            crate::agents_view::Liveness::Alive => evidence.add_live_pair(harness, session_id),
-            crate::agents_view::Liveness::Dead => evidence.add_dead_pair(harness, session_id),
-            crate::agents_view::Liveness::Unmeasured => {}
-        }
-        return;
-    }
-    add(&agent.name);
-    if let Some(id) = agent.attach_id.as_deref() {
-        add(id);
-    }
-    if let Some(id) = agent.effective_identity() {
-        add(id);
-    }
-}
-
 /// Read exact positive live/dead identities for the squad-member classifier.
 /// Missing stores are the only complete-empty case; a present but malformed or
 /// unreadable store contributes no verdict and therefore keeps unknown members.
 fn member_evidence() -> crate::squad_store::MemberEvidence {
     let registry_path = crate::agents_view::registry_path();
     let roster_path = crate::agents_view::roster_path();
-    let registry = std::fs::read_to_string(&registry_path);
+    let registry = crate::registry_read::registry_text(&registry_path);
     let roster = std::fs::read_to_string(&roster_path);
     let complete_empty = matches!(
         (&registry, &roster),
@@ -1961,31 +1586,48 @@ fn member_evidence() -> crate::squad_store::MemberEvidence {
         std::collections::HashSet::new(),
     );
     let now = crate::squad_store::now_epoch_secs().unwrap_or_default() as u64;
-    if let Ok(raw) = registry {
-        if let Some(rows) = crate::agents_view::derive_rows(&raw, now) {
-            for row in rows {
-                match row.liveness {
-                    crate::agents_view::Liveness::Alive => {
-                        add_agent_evidence(&row, &mut evidence, row.liveness)
-                    }
-                    crate::agents_view::Liveness::Dead => {
-                        add_agent_evidence(&row, &mut evidence, row.liveness)
-                    }
-                    crate::agents_view::Liveness::Unmeasured => {}
-                }
+    // The registry leg: rows when the read parsed, and completeness
+    // only then. A present-but-garbage file is a failed read (fail safe); a
+    // NotFound file is the legitimate absence of any agents system.
+    let mut rows: Vec<crate::agents_view::RegistryAgent> = Vec::new();
+    let registry_read_ok = match &registry {
+        Ok(raw) => {
+            if let Some(derived) = crate::agents_view::derive_rows(raw, now) {
+                rows = derived;
+                true
+            } else {
+                false
             }
         }
-    }
-    if let Ok(raw) = roster {
-        if let Some(rows) = crate::agents_view::parse_roster(&raw) {
-            for row in rows {
-                evidence.add_live(row.name);
-                evidence.add_live(row.short_id);
-            }
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    };
+    // Parsed once: the live names fold from the parse, and
+    // completeness requires the parse to have SUCCEEDED - a roster that
+    // reads but does not parse is a failed liveness surface (its live
+    // population is unknown), not a readable one.
+    let roster_parsed = roster
+        .as_ref()
+        .ok()
+        .and_then(|raw| crate::agents_view::parse_roster(raw));
+    if let Some(parsed) = &roster_parsed {
+        for row in parsed {
+            evidence.add_live(row.name.clone());
+            evidence.add_live(row.short_id.clone());
         }
     }
-    if let Ok(raw) = std::fs::read_to_string(registry_path.with_file_name("events.jsonl")) {
-        for line in raw.lines() {
+    let roster_read_ok = match (&roster, &roster_parsed) {
+        (_, Some(_)) => true,
+        (Err(e), None) => e.kind() == std::io::ErrorKind::NotFound,
+        (Ok(_), None) => false,
+    };
+    // The same segmented journal read the server sweep uses: a
+    // death marker rotated out of the live file is still a marker. This
+    // evidence gates the sweep modal and the CLI apply, so it must agree
+    // with the server sweep's view of the same durable rows.
+    let (journal_raw, _) =
+        crate::spawn_journal::read_journal_text_at(&registry_path.with_file_name("events.jsonl"));
+    {
+        for line in journal_raw.lines() {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
@@ -2019,154 +1661,25 @@ fn member_evidence() -> crate::squad_store::MemberEvidence {
             }
         }
     }
+    // The never-bound name set and the reaped-row inputs ride the same
+    // journal text: one walk yields the markers, the spawned names, and the
+    // still-held receipts.
+    let events = crate::spawn_journal::parse_journal_events(&journal_raw);
+    for name in events.never_bound.keys() {
+        evidence.add_dead_name(name.clone());
+    }
+    let held = crate::spawn_journal::held_worker_names(&events.receipts);
+    evidence.fold_registry_rows(
+        &rows,
+        events.spawned_names,
+        held,
+        registry_read_ok && roster_read_ok,
+    );
     if complete_empty {
         evidence.mark_complete_attach_set();
     }
+    crate::squad_cascade::fold_receipt_leg(&mut evidence, &registry_path);
     evidence
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LiveTab {
-    session: String,
-    squad_id: u64,
-    squad_name: Option<String>,
-    tab_id: u64,
-    pane_count: usize,
-    pristine: bool,
-}
-
-/// Read every live tab once, keeping WHICH sessions answered. The same
-/// snapshot supplies squad liveness cwds and the empty-tab candidates, so the
-/// receipt and the destructive pass cannot disagree because one probe was
-/// newer than the other. Returns `(tabs, cwds, answered, unreachable)`:
-/// `answered` counts the sessions whose `PaneLs` returned a `PaneList` and
-/// `unreachable` holds the sorted names of the rest. A dead server leaves its
-/// socket behind by design (`kill-server` owns removal, see
-/// [`session_names`]), so an unreachable session is a steady state, not an
-/// anomaly - folding the per-session fact into one boolean disabled the sweep
-/// for every healthy session and reported a clean exit 0 (x-6e79).
-fn live_tabs() -> (Vec<LiveTab>, Vec<String>, usize, Vec<String>) {
-    let Ok(names) = session_names() else {
-        // The session list itself is unreadable: nothing was probed, so no
-        // session answered, and the refusal below must name that hole rather
-        // than a clean zero.
-        return (
-            Vec::new(),
-            Vec::new(),
-            0,
-            vec!["<session list unreadable>".into()],
-        );
-    };
-    let mut groups: std::collections::BTreeMap<(String, u64, u64), LiveTab> =
-        std::collections::BTreeMap::new();
-    let mut cwds = Vec::new();
-    let mut answered = 0usize;
-    let mut unreachable = Vec::new();
-    for name in names {
-        let Ok(sock) = proto::socket_path(&name) else {
-            unreachable.push(name);
-            continue;
-        };
-        match control_roundtrip(&sock, &name, ControlVerb::PaneLs) {
-            Ok(ServerMsg::PaneList { panes }) => {
-                answered += 1;
-                for pane in panes {
-                    cwds.push(pane.cwd.clone());
-                    let key = (name.clone(), pane.squad_id, pane.tab_id);
-                    let tab = groups.entry(key).or_insert_with(|| LiveTab {
-                        session: name.clone(),
-                        squad_id: pane.squad_id,
-                        squad_name: pane.squad_name.clone(),
-                        tab_id: pane.tab_id,
-                        pane_count: 0,
-                        pristine: true,
-                    });
-                    tab.pane_count += 1;
-                    tab.pristine &= pane.pristine_idle_shell;
-                }
-            }
-            _ => unreachable.push(name),
-        }
-    }
-    (groups.into_values().collect(), cwds, answered, unreachable)
-}
-
-#[derive(Debug, Default)]
-struct TabPruneOutcome {
-    closed: usize,
-    would_close: usize,
-    skipped_named: usize,
-    kept: usize,
-}
-
-fn prune_live_tabs(tabs: &[LiveTab], include_named: bool, dry_run: bool) -> TabPruneOutcome {
-    let mut out = TabPruneOutcome::default();
-    // Tabs still open per workspace, counted up front and decremented as this
-    // loop folds. A workspace's LAST tab is never surplus: closing it removes
-    // the squad, and the server de-persists a removed squad's store row, so the
-    // tab arm would delete exactly the row the live-pane arm below promises to
-    // protect, in one command. A static count is not enough - three pristine
-    // tabs would each read "not the last one" and the loop would close all
-    // three. Folding surplus tabs is this arm's job; destroying a workspace is
-    // `squad close`, and the store consequence belongs to the squad arm.
-    let mut open_tabs: std::collections::HashMap<(&str, u64), usize> =
-        std::collections::HashMap::new();
-    for tab in tabs {
-        *open_tabs
-            .entry((tab.session.as_str(), tab.squad_id))
-            .or_default() += 1;
-    }
-    for tab in tabs {
-        if tab
-            .squad_name
-            .as_deref()
-            .is_some_and(|name| !name.is_empty())
-            && !include_named
-        {
-            out.skipped_named += 1;
-            continue;
-        }
-        let open = open_tabs
-            .get_mut(&(tab.session.as_str(), tab.squad_id))
-            .expect("counted above");
-        if *open < 2 {
-            out.kept += 1;
-            continue;
-        }
-        if !tab.pristine || tab.pane_count == 0 {
-            out.kept += 1;
-            continue;
-        }
-        // Both branches decrement on the SAME counter, and only when the tab
-        // actually goes: a refused or failed close leaves it open, so the
-        // remaining count must not move or the next tab of this squad would
-        // read one fewer than are really there.
-        if dry_run {
-            out.would_close += 1;
-            *open -= 1;
-            continue;
-        }
-        let Ok(sock) = proto::socket_path(&tab.session) else {
-            out.kept += 1;
-            continue;
-        };
-        match control_roundtrip(
-            &sock,
-            &tab.session,
-            ControlVerb::TabClose {
-                squad: PaneTarget::SquadId(tab.squad_id),
-                tab: TabSel::Id(tab.tab_id),
-                force: false,
-            },
-        ) {
-            Ok(ServerMsg::TabClosed { .. }) => {
-                out.closed += 1;
-                *open -= 1;
-            }
-            Ok(_) | Err(_) => out.kept += 1,
-        }
-    }
-    out
 }
 
 /// Which halves of the sweep the per-session probe results permit.
@@ -2175,11 +1688,7 @@ fn prune_live_tabs(tabs: &[LiveTab], include_named: bool, dry_run: bool) -> TabP
 /// and an unreachable session contributes ZERO tab rows, so its tabs cannot be
 /// touched by a fold over what was collected.
 ///
-/// The store pass is NOT per-session and stays globally fail-closed.
-/// `live_cwds` is cross-session PROTECTIVE evidence: a live pane's cwd makes
-/// `prune_decision_with_evidence` return Keep, and an unreachable session
-/// contributes no cwds, so running the store pass on partial evidence would
-/// turn a Keep into a Prune. Absent liveness must never read as dead.
+/// The store pass is NOT per-session and stays globally fail-closed. `live_cwds` is cross-session PROTECTIVE evidence: a live pane's cwd makes `prune_decision_with_evidence` return Keep, and an unreachable session contributes no cwds, so running the store pass on partial evidence would turn a Keep into a Prune. Absent liveness must never read as dead.
 struct SweepScope {
     fold_tabs: bool,
     sweep_store: bool,
@@ -2194,25 +1703,42 @@ fn sweep_scope(answered: usize, unreachable: &[String]) -> SweepScope {
 
 /// The refusal line for a store pass blocked on an unprobeable session: it
 /// names WHICH sessions, so a stale socket can never again read as a clean
-/// zero (x-6e79).
+/// zero.
 fn unreachable_notice(unreachable: &[String]) -> String {
     format!(
-        "server liveness incomplete for session(s) {}; no squad records changed",
+        "server liveness incomplete for session(s) {}; no workspace records changed",
         unreachable.join(", ")
     )
 }
 
 /// `fno mux workspace prune [--dry-run] [--include-named] [--tabs-only]
-/// [--dead-only] [--json]`: remove squads
+/// [--dead-only] [--include-used-shells] [--json]`: remove squads
 /// whose every recorded origin is gone and which host no live member or pane
-/// (x-a572). Named squads require `--include-named`. The predicate is
+///. Named squads require `--include-named`. The predicate is
 /// re-evaluated under the store lock against fresh fs state, and the receipt is
 /// built from the locked closure's actual removals - never the pre-lock
 /// candidate list (AC1-UI). `--dry-run` writes nothing. `--tabs-only` runs the
 /// tab fold alone and leaves every squad row and member record untouched;
 /// `--dead-only` reaps dead members alone and removes no squad row; together
-/// they run exactly those two halves, so the sweep modal's "both" can never
-/// remove a squad row the modal never offered to remove.
+/// (with `--include-used-shells`) they run every half EXCEPT the
+/// squad-row pass, so the sweep modal's "both" can never remove a squad row
+/// the modal never offered to remove.
+///
+/// `--include-used-shells` is the one tab-fold widening, and it is
+/// OPT-IN: a tab of spent bare shells (every pane `cmd: None`, no `fno_id`,
+/// measured idle now) closes only when this flag names the category. Without
+/// the flag the receipt still counts that population (`tabs_used_shells`)
+/// and splits every kept tab by reason, so the operator can see the size of
+/// the choice before making it. The receipt names each tab it would close
+/// (dry-run) or closed (apply) in `tabs_close_named`.
+///
+/// An orphaned worker tab (v71) - its stored member judged Dead by the
+/// server - closes under the DEFAULT flags, ahead of the pristine test. So
+/// does a spawned-name pane: the pane carries the worker name the
+/// spawn captured (`unresolved:spawned-name`), and once the shared evidence
+/// fold judges that name dead the pane routes by the orphan verdict under
+/// default flags too. `--include-used-shells` stays the opt-in for shells
+/// with no worker history at all.
 ///
 /// Two arms run in ONE call and they must not contradict each other. The tab arm
 /// folds surplus pristine tabs; the squad arm decides store rows, and a live pane
@@ -2226,13 +1752,15 @@ fn squad_prune(args: &[OsString]) -> i32 {
     let mut json = false;
     let mut tabs_only = false;
     let mut dead_only = false;
+    let mut include_used_shells = false;
     for a in args {
         match a.to_str() {
             Some("--dry-run") => dry_run = true,
             Some("--include-named") => include_named = true,
-            Some("--json") => json = true,
+            Some("--json") | Some("-J") => json = true,
             Some("--tabs-only") => tabs_only = true,
             Some("--dead-only") => dead_only = true,
+            Some("--include-used-shells") => include_used_shells = true,
             Some(other) => {
                 eprintln!("fno mux workspace prune: unknown argument {other:?}");
                 return EXIT_USAGE;
@@ -2244,14 +1772,19 @@ fn squad_prune(args: &[OsString]) -> i32 {
         }
     }
 
-    let evidence = member_evidence();
-    let (tabs, live_cwds, answered, unreachable) = live_tabs();
-    let scope = sweep_scope(answered, &unreachable);
-    let tab_outcome = if scope.fold_tabs && !dead_only {
-        prune_live_tabs(&tabs, include_named, dry_run)
+    let evidence = crate::squad_cascade::fold_cascade_verdicts(member_evidence());
+    let (tabs, live_cwds, answered_names, unreachable) = live_tabs();
+    let scope = sweep_scope(answered_names.len(), &unreachable);
+    // `--dead-only` ALONE skips the tab fold (store-only scope), but
+    // the combined `--tabs-only --dead-only` scope runs BOTH halves - the
+    // sweep modal's "both" queues exactly that pair, and gating tabs on bare
+    // `!dead_only` made it close zero tabs while reporting both.
+    let tab_outcome = if scope.fold_tabs && (!dead_only || tabs_only) {
+        prune_live_tabs_measuring_named(&tabs, include_named, dry_run, include_used_shells)
     } else {
         TabPruneOutcome {
             kept: tabs.len(),
+            kept_not_probed: tabs.len(),
             ..TabPruneOutcome::default()
         }
     };
@@ -2375,9 +1908,12 @@ fn squad_prune(args: &[OsString]) -> i32 {
         eprintln!("fno mux workspace prune: {notice}");
     }
 
-    let probed = answered + unreachable.len();
+    // (v71) After a real store pass, every answering session re-reads the
+    // file just written, so the next persist cannot undo the pass.
+    let reload = prune_sync::reload_live_sessions(scope.sweep_store && !dry_run, &answered_names);
+    let probed = answered_names.len() + unreachable.len();
     if json {
-        render_prune_json(
+        prune_sync::render_prune_json(
             &removed,
             dry_run,
             kept_unknown,
@@ -2386,20 +1922,18 @@ fn squad_prune(args: &[OsString]) -> i32 {
             members_reaped,
             members_kept_live,
             members_kept_unknown,
-            tab_outcome.closed,
-            tab_outcome.would_close,
-            tab_outcome.skipped_named,
-            tab_outcome.kept,
+            &tab_outcome,
             probed,
             &unreachable,
             notice.as_deref(),
+            &reload,
         );
     } else {
         let verb = if applied { "pruned" } else { "would prune" };
         for sq in &removed {
             println!(
                 "{verb} {} origins={} members={} - {}",
-                prune_identity(sq),
+                prune_sync::prune_identity(sq),
                 sq.origins.join(","),
                 sq.members,
                 crate::squad_store::prune_reason(sq)
@@ -2428,7 +1962,7 @@ fn squad_prune(args: &[OsString]) -> i32 {
         } else if !applied {
             println!("dry-run: no changes written");
         }
-        print_prune_summary(
+        prune_sync::print_prune_summary(
             verb,
             removed.len(),
             kept_unknown,
@@ -2438,148 +1972,14 @@ fn squad_prune(args: &[OsString]) -> i32 {
             members_kept_live,
             members_kept_unknown,
             include_named,
-            tab_outcome.closed,
-            tab_outcome.would_close,
-            tab_outcome.skipped_named,
-            tab_outcome.kept,
-            answered,
+            &tab_outcome,
+            answered_names.len(),
             probed,
             &unreachable,
+            &reload,
         );
     }
     EXIT_OK
-}
-
-/// A pruned squad's identity line: its name if named, else its durable key.
-fn prune_identity(sq: &crate::squad_store::PrunedSquad) -> String {
-    if sq.name.is_empty() {
-        format!("<key:{}>", sq.key)
-    } else {
-        sq.name.clone()
-    }
-}
-
-/// The one-line summary after a (dry-)run: count pruned plus why the rest stayed.
-#[allow(clippy::too_many_arguments)]
-fn print_prune_summary(
-    verb: &str,
-    n: usize,
-    kept_unknown: usize,
-    skipped_named: usize,
-    kept_protected: usize,
-    members_reaped: usize,
-    members_kept_live: usize,
-    members_kept_unknown: usize,
-    include_named: bool,
-    tabs_closed: usize,
-    tabs_would_close: usize,
-    tabs_skipped_named: usize,
-    tabs_kept: usize,
-    answered: usize,
-    probed: usize,
-    unreachable: &[String],
-) {
-    let mut parts = vec![format!("{verb} {n} squad(s)")];
-    // The acted-on count carries its mood in the verb: an apply run says
-    // `closed`, a dry-run says `would close`. Never both numbers at once - the
-    // apply reading `tabs 1 (would close 0, ...)` put the closed count beside
-    // a zero and read as a no-op.
-    let (tabs_word, tabs_n) = if verb == "pruned" {
-        ("closed", tabs_closed)
-    } else {
-        ("would close", tabs_would_close)
-    };
-    parts.push(format!(
-        "tabs {tabs_word} {tabs_n} (skipped named {tabs_skipped_named}, kept {tabs_kept}, server reachable {answered}/{probed})"
-    ));
-    if !unreachable.is_empty() {
-        parts.push(format!(
-            "skipped unreachable session(s): {}",
-            unreachable.join(", ")
-        ));
-    }
-    if kept_protected > 0 {
-        parts.push(format!("kept {kept_protected} (live/origin)"));
-    }
-    if kept_unknown > 0 {
-        parts.push(format!("kept {kept_unknown} (liveness unknown)"));
-    }
-    if skipped_named > 0 && !include_named {
-        parts.push(format!(
-            "skipped {skipped_named} named (pass --include-named)"
-        ));
-    }
-    if members_reaped > 0 {
-        let mverb = if verb == "pruned" {
-            "reaped"
-        } else {
-            "would reap"
-        };
-        parts.push(format!(
-            "{mverb} {members_reaped} dead member(s) from surviving squads"
-        ));
-    }
-    if members_kept_live > 0 {
-        parts.push(format!("kept {members_kept_live} live member(s)"));
-    }
-    if members_kept_unknown > 0 {
-        parts.push(format!("kept {members_kept_unknown} unknown member(s)"));
-    }
-    println!("{}", parts.join("; "));
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_prune_json(
-    removed: &[crate::squad_store::PrunedSquad],
-    dry_run: bool,
-    kept_unknown: usize,
-    skipped_named: usize,
-    kept_protected: usize,
-    members_reaped: usize,
-    members_kept_live: usize,
-    members_kept_unknown: usize,
-    tabs_closed: usize,
-    tabs_would_close: usize,
-    tabs_skipped_named: usize,
-    tabs_kept: usize,
-    probed: usize,
-    unreachable: &[String],
-    notice: Option<&str>,
-) {
-    let pruned: Vec<_> = removed
-        .iter()
-        .map(|sq| {
-            serde_json::json!({
-                "name": sq.name,
-                "key": sq.key,
-                "origins": sq.origins,
-                "members": sq.members,
-                "reason": crate::squad_store::prune_reason(sq),
-            })
-        })
-        .collect();
-    println!(
-        "{}",
-        serde_json::json!({
-            "pruned": pruned,
-            "pruned_count": pruned.len(),
-            "dry_run": dry_run,
-            "kept_protected": kept_protected,
-            "kept_unknown": kept_unknown,
-            "skipped_named": skipped_named,
-            "members_reaped": members_reaped,
-            "members_kept_live": members_kept_live,
-            "members_kept_unknown": members_kept_unknown,
-            "tabs_closed": tabs_closed,
-            "tabs_would_close": tabs_would_close,
-            "tabs_skipped_named": tabs_skipped_named,
-            "tabs_kept": tabs_kept,
-            "server_reachable": unreachable.is_empty(),
-            "sessions_probed": probed,
-            "sessions_unreachable": unreachable,
-            "notice": notice,
-        })
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2599,14 +1999,14 @@ pub const EXIT_WAIT_EXITED: i32 = 12; // wait: the pane's child exited
 pub const EXIT_WAIT_COMMAND_DONE: i32 = 13; // wait: --command-done, OSC 133 D fired (v6)
 pub const EXIT_BLOCK_UNAVAILABLE: i32 = 14; // read --block: evicted/nonexistent/markerless (v6)
 pub const EXIT_TARGET_NOT_IDLE: i32 = 15; // block pipe: receiving agent not idle (guard refused)
-pub const EXIT_NOT_FOUND: i32 = 16; // where: the fno_id is not in the registry (x-d865)
-pub const EXIT_NOT_PANE_HOSTED: i32 = 17; // where: in registry but hosts no live pane (x-d865)
-pub const EXIT_REGISTRY_UNAVAILABLE: i32 = 18; // where: the registry could not be read (x-d865)
-pub const EXIT_NO_CLIENT: i32 = 19; // pane focus: no attached viewer to move (x-3e17)
+pub const EXIT_NOT_FOUND: i32 = 16; // where: the fno_id is not in the registry
+pub const EXIT_NOT_PANE_HOSTED: i32 = 17; // where: in registry but hosts no live pane
+pub const EXIT_REGISTRY_UNAVAILABLE: i32 = 18; // where: the registry could not be read
+pub const EXIT_NO_CLIENT: i32 = 19; // pane focus: no attached viewer to move
 pub const EXIT_CONTROL_UNANSWERED: i32 = 20; // verb sent, no reply; outcome unknown
-pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive (x-07c2)
+pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive
 
-/// (x-07c2) The shared exit-17 line for a paneless row: the peek route every
+/// The shared exit-17 line for a paneless row: the peek route every
 /// paneless row has, plus the drive route when the row's tier is Drive (an
 /// attach id on a live row - `fno agents attach` opens the dedicated thread
 /// pane). One builder so `where`, `view`, and `focus` cannot drift into
@@ -2615,6 +2015,10 @@ pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive (x-07
 /// it is the right place to say what does reach the row.
 fn paneless_route_hint(verb: &str, row: &crate::agents_view::RegistryAgent) -> String {
     let name = &row.name;
+    // The state rides in the line: unresolved and absent no longer
+    // collapse into one string, which is what kept the pane-table
+    // contradiction invisible.
+    let state = lifecycle_target::row_identity_state(row);
     // Ask the same function the server ships in AgentRow.reach, so the CLI
     // hint and the TUI's actual reach behavior can never drift apart.
     let tier = crate::agents_view::thread_reach(row.harness.as_deref(), row.attach_id.as_deref());
@@ -2625,20 +2029,20 @@ fn paneless_route_hint(verb: &str, row: &crate::agents_view::RegistryAgent) -> S
         // its own (agents_view.rs's own doc comment on attach_id) - an
         // exited Drive-tier row falls through to the plain follow hint.
         crate::proto::Reach::Drive if !row.exited => format!(
-            "{verb}: {name} hosts no live pane; follow it with: fno agents peek {name} --follow, or drive it: fno agents attach {name}"
+            "{verb}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow, or drive it: fno agents attach {name}"
         ),
         // Locate never has a transcript reader (that's the whole reason it's
         // Locate, not Follow) - a peek --follow hint here is a route
         // guaranteed to fail. Point at the one route that actually works.
         crate::proto::Reach::Locate => format!(
-            "{verb}: {name} hosts no live pane; open it with: fno agents attach {name}"
+            "{verb}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agents attach {name}"
         ),
         _ => format!(
-            "{verb}: {name} hosts no live pane; follow it with: fno agents peek {name} --follow"
+            "{verb}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents peek {name} --follow"
         ),
     }
 }
-pub const EXIT_AMBIGUOUS: i32 = 21; // view/where: selector matches a family, not one agent (x-b80d)
+pub const EXIT_AMBIGUOUS: i32 = 21; // view/where: selector matches a family, not one agent
 pub const EXIT_SUBMIT_UNCONFIRMED: i32 = 22; // text landed, but no post-submit marker appeared
 pub const EXIT_TARGET_IDENTITY_MISMATCH: i32 = 23; // send: pane occupant differs from addressee
 pub const EXIT_TARGET_DND: i32 = 25; // pane send: target declared DND; bytes did not land
@@ -2675,7 +2079,7 @@ const DEFAULT_WAIT_TIMEOUT_S: u64 = 30;
 /// How long to wait for a non-`wait` reply. A `wait` reply gets its own
 /// deadline (`timeout_ms` + slack) so the bounded server wait is never cut
 /// short by the client's read timeout.
-const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Total time a control caller keeps reading a reply that has not arrived.
 /// The per-read bound (CONTROL_TIMEOUT) says when the socket goes quiet; this
@@ -2683,7 +2087,7 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
 /// consumed nothing leaves the frame boundary intact (proto::read_fill), so
 /// polling again is safe - it is the ONE thing that is safe here, because the
 /// verb has already reached the server and must never be sent twice.
-const CONTROL_REPLY_DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const CONTROL_REPLY_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The reply deadline for `dispatch()`'s own `send_control` call. `pane
 /// wait`'s read timeout is the CALLER's stated patience (`--timeout` plus
@@ -2741,7 +2145,7 @@ pub enum SendSource {
     Stdin,
 }
 
-/// What `pane focus` (and `mux view`) was pointed at (x-b80d): a pane id, a
+/// What `pane focus` (and `mux view`) was pointed at: a pane id, a
 /// registry selector, or the interactive picker.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FocusTarget {
@@ -2786,7 +2190,7 @@ fn parse_focus_target(raw: Option<&String>) -> Result<(FocusTarget, Option<Strin
 #[derive(Debug, PartialEq, Eq)]
 pub enum PaneCmd {
     Ls {
-        /// (x-d865) `--fno-id <id>`: filter the listing to panes hosting this
+        /// `--fno-id <id>`: filter the listing to panes hosting this
         /// fno session id (client-side over `PaneInfo.fno_id`).
         fno_id: Option<String>,
     },
@@ -2795,24 +2199,19 @@ pub enum PaneCmd {
         lines: Option<u16>,
         block: Option<BlockSel>,
     },
-    /// (x-d865) `pane split <pane> --direction <dir> [--focus]`.
+    /// `pane split <pane> --direction <dir> [--focus]`.
     Split {
         pane: u64,
         direction: Dir,
         focus: bool,
     },
-    /// (x-d865) `pane break <pane> [--name <s>]`.
+    /// `pane break <pane> [--name <s>]`.
     Break {
         pane: u64,
         name: Option<String>,
     },
-    /// (x-3e17) `pane focus <pane>`: move the OPERATOR's view to a pane, rather
-    /// than acting on the pane for an agent. Every other `pane` verb is the
-    /// latter; this is the one that points a human at something.
-    /// (x-b80d) The pane may be named by what a person remembers: an all-digit
-    /// argument is a pane id exactly as before; anything else is a selector
-    /// resolved against the agent registry, and `--fzf` (no argument) opens
-    /// the interactive picker.
+    /// `pane focus <pane>`: move the OPERATOR's view to a pane; every other `pane` verb acts for an
+    /// agent. A digit argument is a pane id, else a registry selector; `--fzf` opens the picker.
     Focus {
         target: FocusTarget,
     },
@@ -2821,10 +2220,10 @@ pub enum PaneCmd {
         argv: Vec<String>,
         claim: bool,
         placement: PanePlacement,
-        /// (x-5f7f) `--worker <registry-name>`: record this pane as a squad
-        /// member joined to that registry row, so it survives a mux restart
-        /// as an idle, resumable row.
+        /// `--worker <name>`: a squad member joined to that registry row, resumable after a restart.
         worker: Option<String>,
+        /// `--size <cols>x<rows>`: the pty size; a client viewing the tab later fits it to its screen.
+        size: Option<(u16, u16)>,
     },
     Send {
         pane: u64,
@@ -2840,17 +2239,28 @@ pub enum PaneCmd {
         /// `--raw`: type these bytes verbatim. Default OFF, so an ordinary
         /// `pane send` carries the same `<fno_mail>` envelope the mail lane
         /// produces and is refused when the pane is showing an option prompt
-        /// (node x-3a64). Raw is for the genuine keystroke cases: a digit
+        /// (node). Raw is for the genuine keystroke cases: a digit
         /// answering a prompt, a bare control key, a shell command, clearing a
         /// modal. An envelope around the character `1` is nonsense.
         raw: bool,
-        /// (v51, x-588a) The pane-captured identity the caller addressed.
+        /// (v51) The pane-captured identity the caller addressed.
         expected_identity: Option<String>,
         /// `--style-exception <reason>`: the reasoned one-send exception the
         /// mail verbs honor, threaded to the Python renderer so the escape
         /// hatch keeps one shape across every enveloped lane. A raw send
         /// never renders, so the flag beside `--raw` has no effect.
         style_exception: Option<String>,
+        /// `--source <label>`: caller-declared provenance for the
+        /// audit row. The mail lane declares `mail`; absent, the row reads
+        /// `unattributed:<pid>`. Declared, never sniffed from the payload:
+        /// `--raw` carries both a wrapped mail body and an operator's
+        /// verbatim keystrokes, which no byte inspection can tell apart.
+        provenance: Option<String>,
+        /// (v94) `--hold-pass`: the caller's send already passed the Rust
+        /// hold gate (own send, `control:` mail), so the pane's DND refusal
+        /// stands down for this write. Hidden: it exists for the two
+        /// transport arms above it, never for interactive typing.
+        hold_pass: bool,
     },
     Wait {
         pane: u64,
@@ -2861,6 +2271,10 @@ pub enum PaneCmd {
     },
     Kill {
         pane: u64,
+        /// `--hand-off-to <socket>`: release the pane to the thread lane
+        /// instead of killing it. The keeper socket is renamed there and
+        /// the child keeps running.
+        hand_off_to: Option<String>,
     },
     Claim {
         pane: u64,
@@ -2880,30 +2294,12 @@ pub enum PaneCmd {
     },
 }
 
-/// The result of parsing the tokens after `mux pane`. Public for the same
-/// reason as [`PaneCmd`]: the daemon-side refusal round-trip test reads it.
-#[derive(Debug, PartialEq, Eq)]
-pub struct ParsedPane {
-    pub session: Option<String>,
-    pub json: bool,
-    pub cmd: PaneCmd,
-}
-
-/// Read the value of a `--flag value` pair, advancing `i` past the value.
-fn flag_value(args: &[OsString], i: &mut usize, flag: &str) -> Result<String, String> {
-    *i += 1;
-    args.get(*i)
-        .and_then(|a| a.to_str())
-        .map(str::to_string)
-        .ok_or_else(|| format!("{flag} needs a value"))
-}
-
 fn parse_u64(s: &str, flag: &str) -> Result<u64, String> {
     s.parse::<u64>()
         .map_err(|_| format!("{flag} needs a number, got {s:?}"))
 }
 
-/// A direction word: `left|right|up|down` (x-d865, shared by split/run).
+/// A direction word: `left|right|up|down` (shared by split/run).
 fn parse_dir(s: &str, flag: &str) -> Result<Dir, String> {
     match s {
         "left" => Ok(Dir::Left),
@@ -2916,7 +2312,7 @@ fn parse_dir(s: &str, flag: &str) -> Result<Dir, String> {
     }
 }
 
-/// A `--tab <spec>` selector (x-d865, ordinals x-1499). Grammar: `active` |
+/// A `--tab <spec>` selector (ordinals). Grammar: `active` |
 /// `new` | `id:<n>` (the STABLE tab id, preferred in scripts) | `ordinal:<n>`
 /// (explicit form of a bare integer) | `name:<s>` | a bare integer (the
 /// 1-based ordinal the UI shows as `·N`; convenience only - ordinals renumber
@@ -2965,413 +2361,12 @@ fn parse_block_sel(s: &str) -> Result<BlockSel, String> {
 /// `split` and `break` shipped without reaching the first, so an operator who
 /// typed a bare `fno mux pane` to discover the surface was told verbs that
 /// exist do not.
-pub const PANE_VERBS: &str = "ls|read|run|send|wait|kill|claim|release|split|break|focus|keeper";
-pub const PANE_REFERENCE_USAGE: &str =
-    "pane refs are <pane-id> or <session>:<pane-id>; --session overrides the prefix";
-
-/// `pane send`'s one non-obvious flag, stated where an operator looks for it
-/// (node x-3a64). The default is the surprising half, so name it first and show
-/// the raw case with a real payload rather than a placeholder: an envelope
-/// around the character `1` is the nonsense the flag exists to avoid.
-pub const PANE_SEND_RAW_HELP: &str = "pane send wraps the text in an <fno_mail> envelope by \
-default, so a worker can tell a peer's message from its operator's, and refuses a pane showing \
-an option prompt. The enveloped body passes the same style and word-budget gates as mail; \
---style-exception <reason> excepts one reasoned send. --raw types the bytes verbatim for \
-genuine keystrokes: `fno mux pane send 45 --text 1 --raw --submit` answers a prompt with a digit.";
-
-/// `pane run --worker`'s one line, same posture as [`PANE_SEND_RAW_HELP`]: the
-/// flag records the pane as a squad member joined to the registry row by name,
-/// so a non-claude worker survives a mux restart as an idle, resumable row
-/// instead of vanishing (x-5f7f). Without it nothing is recorded - a plain
-/// `pane run` stays byte-identical.
-pub const PANE_RUN_WORKER_HELP: &str = "pane run --worker <registry-name> records the pane as a \
-squad member joined to that registry row: after a mux restart the member stays as an idle row in \
-the agent panel, and selecting it resumes the session through its own harness. A keeper-hosted \
-worker pane outlives the server outright and a fresh server re-adopts it in place (`fno mux pane \
-keeper list` reads them); startup restore holds (default) or idles it by policy; `fno mux \
-workspace restore` respawns it on demand. A run without --worker records no member.";
-
-pub fn parse_pane_args(args: &[OsString]) -> Result<ParsedPane, String> {
-    let verb = args
-        .first()
-        .and_then(|a| a.to_str())
-        .ok_or_else(|| format!("pane needs a verb: {PANE_VERBS}"))?;
-    if matches!(verb, "-h" | "--help") {
-        return Err(format!(
-            "{PANE_REFERENCE_USAGE}; verbs: {PANE_VERBS}\n{PANE_SEND_RAW_HELP}\n{PANE_RUN_WORKER_HELP}"
-        ));
-    }
-
-    // Hidden verb subtree: `pane keeper list` reads the keeper sockets
-    // directly (no server), so it parses here and dispatches before any
-    // session resolution.
-    if verb == "keeper" {
-        let sub = args
-            .get(1)
-            .and_then(|a| a.to_str())
-            .ok_or_else(|| "pane keeper needs a verb: list".to_string())?;
-        if sub != "list" {
-            return Err(format!("unknown pane keeper verb: {sub} (expected list)"));
-        }
-        let mut json = false;
-        let mut stale_after = None;
-        let mut i = 2;
-        while i < args.len() {
-            let tok = args[i]
-                .to_str()
-                .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-            match tok {
-                "--json" => json = true,
-                "--stale-after" => {
-                    let value = flag_value(args, &mut i, "--stale-after")?;
-                    stale_after = Some(parse_duration(&value)?);
-                }
-                other => return Err(format!("unknown flag: {other}")),
-            }
-            i += 1;
-        }
-        return Ok(ParsedPane {
-            session: None,
-            json,
-            cmd: PaneCmd::KeeperList { json, stale_after },
-        });
-    }
-
-    // `run` is special: leading options/directives, then the command argv
-    // verbatim (its own flags are NOT ours to parse), optionally after `--`.
-    if verb == "run" {
-        let mut session = None;
-        let mut json = false;
-        let mut cwd = None;
-        let mut claim = false;
-        let mut worker = None;
-        let mut squad = None;
-        let mut split = None;
-        let mut tab = None;
-        let mut at = None;
-        let mut at_current = false;
-        let mut max_panes = None;
-        let mut i = 1;
-        while i < args.len() {
-            let tok = args[i]
-                .to_str()
-                .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-            match tok {
-                "-h" | "--help" => {
-                    return Err(format!(
-                        "{PANE_REFERENCE_USAGE}; verbs: {PANE_VERBS}\n{PANE_SEND_RAW_HELP}\n{PANE_RUN_WORKER_HELP}"
-                    ))
-                }
-                "--" => {
-                    i += 1;
-                    break;
-                }
-                "--json" => json = true,
-                "--claim" => claim = true,
-                "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-                "--cwd" => cwd = Some(flag_value(args, &mut i, "--cwd")?),
-                // (x-5f7f) The registry name of the worker this pane hosts.
-                // Validated here with the same rule the store's load gate
-                // holds, so an unrecordable name refuses before any pane
-                // exists rather than landing in the store and being dropped
-                // at the next load.
-                "--worker" => {
-                    let name = flag_value(args, &mut i, "--worker")?;
-                    if !crate::squad_store::valid_worker_name(&name) {
-                        return Err(
-                            "--worker needs a registry name ([A-Za-z0-9._-], <=64 chars)"
-                                .into(),
-                        );
-                    }
-                    worker = Some(name);
-                }
-                "--workspace" | "--squad" | "-s" | "workspace" | "squad" => {
-                    let name = flag_value(args, &mut i, tok)?;
-                    if name.trim().is_empty() {
-                        return Err("--workspace/-s needs a nonblank workspace name".into());
-                    }
-                    squad = Some(name);
-                }
-                "--split" | "-x" | "split" => {
-                    split = Some(parse_dir(&flag_value(args, &mut i, tok)?, "split/-x")?);
-                }
-                // (x-d865) exact placement: land in a named tab, adjacent to an
-                // anchor pane.
-                "--tab" => tab = Some(parse_tab_sel(&flag_value(args, &mut i, "--tab")?)?),
-                // Bare "at" mirrors the "split" alias above: the outer
-                // pane-run transport (mux_spawn.py placement_args) sends
-                // placement directives unprefixed, and this arm's absence
-                // used to fall through to `_ => break`, folding "at" and
-                // everything after it into the spawned process's own argv
-                // instead of the placement it named.
-                "--at" | "at" => {
-                    let v = flag_value(args, &mut i, "--at")?;
-                    if v == "current" {
-                        at_current = true;
-                    } else {
-                        at = Some(parse_u64(&v, "--at")?);
-                    }
-                }
-                "--max-panes" => {
-                    let value = flag_value(args, &mut i, "--max-panes")?;
-                    let parsed = value.parse::<usize>().map_err(|_| {
-                        format!("--max-panes needs a positive integer, got {value:?}")
-                    })?;
-                    if parsed == 0 {
-                        return Err("--max-panes needs a positive integer, got 0".into());
-                    }
-                    max_panes = Some(parsed);
-                }
-                t if t.starts_with("--") => return Err(format!("unknown flag: {t}")),
-                _ => break, // first bare token begins the command argv
-            }
-            i += 1;
-        }
-        let argv = args[i..]
-            .iter()
-            .map(|a| {
-                a.to_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| "non-UTF-8 argv".to_string())
-            })
-            .collect::<Result<Vec<String>, String>>()?;
-        if argv.is_empty() {
-            return Err("pane run needs a command".to_string());
-        }
-        let mut fallback = PlacementFallback::NewTab;
-        if at_current {
-            // `--at current` resolves the calling pane from FNO_PANE here in the
-            // one parser both high- and low-level callers route through, and opts
-            // into strict placement (Refuse). FNO_SESSION selects the server via
-            // resolve_session; a missing/invalid FNO_PANE is a usage error before
-            // any process is spawned (AC1-ERR).
-            if split.is_none() {
-                return Err("--at current requires --split".to_string());
-            }
-            let fno_pane = std::env::var("FNO_PANE")
-                .ok()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .and_then(|s| s.parse::<u64>().ok())
-                .ok_or_else(|| {
-                    "--at current requires a numeric FNO_PANE (run it inside a mux pane)"
-                        .to_string()
-                })?;
-            at = Some(fno_pane);
-            fallback = PlacementFallback::Refuse;
-        }
-        return Ok(ParsedPane {
-            session,
-            json,
-            cmd: PaneCmd::Run {
-                cwd,
-                argv,
-                claim,
-                worker,
-                placement: PanePlacement {
-                    target: squad
-                        .map(PaneTarget::SquadName)
-                        .unwrap_or(PaneTarget::CurrentRoute),
-                    split,
-                    here: false,
-                    tab,
-                    at,
-                    fallback,
-                    max_panes,
-                    thread_pane: false,
-                },
-            },
-        });
-    }
-
-    // Every other verb: a single flag/positional pass (no embedded argv).
-    let mut session = None;
-    let mut json = false;
-    let mut lines = None;
-    let mut text = None;
-    let mut stdin = false;
-    let mut guarded = false;
-    let mut submit = false;
-    let mut raw = false;
-    let mut style_exception: Option<String> = None;
-    let mut quiet_ms = None;
-    let mut pattern = None;
-    let mut timeout_s = None;
-    let mut pid = None;
-    let mut block = None;
-    let mut command_done = false;
-    let mut direction = None;
-    let mut focus = false;
-    let mut fzf = false;
-    let mut name = None;
-    let mut fno_id = None;
-    let mut positionals: Vec<String> = Vec::new();
-    let mut i = 1;
-    while i < args.len() {
-        let tok = args[i]
-            .to_str()
-            .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-        match tok {
-            "--json" => json = true,
-            "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-            // (x-d865) split/break/ls flags.
-            "--direction" | "-d" => {
-                direction = Some(parse_dir(&flag_value(args, &mut i, tok)?, tok)?)
-            }
-            "--focus" => focus = true,
-            // (x-b80d) focus-only: open the interactive pane picker.
-            "--fzf" => fzf = true,
-            "--name" => name = Some(flag_value(args, &mut i, "--name")?),
-            "--fno-id" => fno_id = Some(flag_value(args, &mut i, "--fno-id")?),
-            "--pid" => pid = Some(parse_u64(&flag_value(args, &mut i, "--pid")?, "--pid")? as u32),
-            "--lines" => {
-                lines = Some(parse_u64(&flag_value(args, &mut i, "--lines")?, "--lines")? as u16)
-            }
-            "--block" => block = Some(parse_block_sel(&flag_value(args, &mut i, "--block")?)?),
-            "--command-done" => command_done = true,
-            "--text" => text = Some(flag_value(args, &mut i, "--text")?),
-            "--stdin" => stdin = true,
-            "--guarded" => guarded = true,
-            "--submit" => submit = true,
-            "--raw" => raw = true,
-            "--style-exception" => {
-                style_exception = Some(flag_value(args, &mut i, "--style-exception")?)
-            }
-            "--quiet-ms" => {
-                quiet_ms = Some(parse_u64(
-                    &flag_value(args, &mut i, "--quiet-ms")?,
-                    "--quiet-ms",
-                )?)
-            }
-            "--pattern" => pattern = Some(flag_value(args, &mut i, "--pattern")?),
-            "--timeout" => {
-                timeout_s = Some(parse_u64(
-                    &flag_value(args, &mut i, "--timeout")?,
-                    "--timeout",
-                )?)
-            }
-            t if t.starts_with("--") => return Err(format!("unknown flag: {t}")),
-            other => positionals.push(other.to_string()),
-        }
-        i += 1;
-    }
-
-    // A pane positional is a bare pane id (`76`) or a `<session>:<pane>`
-    // selector (`main:76`) - the exact form the daemon's pane-worker
-    // refusals print and the agents JSON contract documents as the kill
-    // remedy. An explicit `--session` flag wins over the selector's
-    // session, the same explicit-flag-first order `resolve_session`
-    // applies to FNO_SESSION.
-    let mut selector_session: Option<String> = None;
-    let mut pane_arg = |what: &str| -> Result<u64, String> {
-        let raw = positionals
-            .first()
-            .ok_or_else(|| format!("pane {what} needs a pane id"))?;
-        let (session, pane) = parse_pane_ref(raw)?;
-        if selector_session.is_none() {
-            selector_session = session;
-        }
-        Ok(pane)
-    };
-
-    // Before the match: the Send arm below MOVES `style_exception`, and a
-    // post-match validation would not compile. Same refusal shape as the
-    // `--raw` check, which sits after only because bool is Copy.
-    if style_exception.is_some() && verb != "send" {
-        return Err("--style-exception pairs only with pane send".into());
-    }
-    let cmd = match verb {
-        "ls" => PaneCmd::Ls { fno_id },
-        "read" => PaneCmd::Read {
-            pane: pane_arg("read")?,
-            lines,
-            block,
-        },
-        "split" => PaneCmd::Split {
-            pane: pane_arg("split")?,
-            direction: direction
-                .ok_or_else(|| "pane split needs --direction <left|right|up|down>".to_string())?,
-            focus,
-        },
-        "break" => PaneCmd::Break {
-            pane: pane_arg("break")?,
-            name: name.filter(|n| !n.trim().is_empty()),
-        },
-        "focus" => {
-            if fzf && !positionals.is_empty() {
-                return Err("--fzf takes no pane id or selector".into());
-            }
-            let (target, session) = if fzf {
-                (FocusTarget::Pick, None)
-            } else {
-                parse_focus_target(positionals.first())?
-            };
-            if selector_session.is_none() {
-                selector_session = session;
-            }
-            PaneCmd::Focus { target }
-        }
-        "send" => {
-            let pane = pane_arg("send")?;
-            let source = match (text, stdin) {
-                (Some(_), true) => return Err("pane send takes --text OR --stdin, not both".into()),
-                (Some(t), false) => SendSource::Text(t),
-                (None, true) => SendSource::Stdin,
-                // The bare-submit keystroke the attribution refusal names as
-                // `--raw`: an omitted payload is an empty text ONLY when both
-                // flags are present. Every other source-less form keeps the
-                // arity error, because it expresses no operation.
-                (None, false) if raw && submit => SendSource::Text(String::new()),
-                (None, false) => return Err("pane send needs --text <s> or --stdin".into()),
-            };
-            PaneCmd::Send {
-                pane,
-                source,
-                guarded,
-                submit,
-                raw,
-                expected_identity: fno_id,
-                style_exception,
-            }
-        }
-        "wait" => PaneCmd::Wait {
-            pane: pane_arg("wait")?,
-            quiet_ms,
-            pattern,
-            timeout_ms: timeout_s.unwrap_or(DEFAULT_WAIT_TIMEOUT_S) * 1000,
-            command_done,
-        },
-        "kill" => PaneCmd::Kill {
-            pane: pane_arg("kill")?,
-        },
-        "claim" => PaneCmd::Claim {
-            pane: pane_arg("claim")?,
-            // The holder is the CALLER (it outlives this one-shot CLI); the
-            // parent pid is the honest default when --pid is not passed.
-            pid: pid.unwrap_or_else(std::os::unix::process::parent_id),
-        },
-        "release" => PaneCmd::Release {
-            pane: pane_arg("release")?,
-        },
-        other => return Err(format!("unknown pane verb: {other} ({PANE_VERBS})")),
-    };
-    if fzf && verb != "focus" {
-        return Err("--fzf pairs only with pane focus".into());
-    }
-    if raw && verb != "send" {
-        return Err("--raw pairs only with pane send".into());
-    }
-    if session.is_none() {
-        session = selector_session;
-    }
-    Ok(ParsedPane { session, json, cmd })
-}
-
 /// `fno mux pane <verb> ...`: parse, resolve the session, run the verb over a
 /// one-shot v4 control connection, print machine-readable output, return the
 /// exit code. `env_session` is `FNO_SESSION` (set in every pane).
-pub fn pane(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let parsed = match parse_pane_args(args) {
+pub fn pane(op: crate::cli_args::PaneOp, env_session: Option<&str>) -> i32 {
+    let args = op.tail();
+    let mut parsed = match parse_pane_args(&op, &args) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("fno mux pane: {e}");
@@ -3383,7 +2378,7 @@ pub fn pane(args: &[OsString], env_session: Option<&str>) -> i32 {
     if let PaneCmd::KeeperList { json, stale_after } = parsed.cmd {
         return pane_keeper_list(json, stale_after);
     }
-    // (x-b80d) focus by selector or picker resolves the HOST session from the
+    // focus by selector or picker resolves the HOST session from the
     // registry row: FNO_SESSION names the session you sit in, not the one the
     // target pane lives in. An explicit --session still wins, like `where`.
     if let PaneCmd::Focus { target } = &parsed.cmd {
@@ -3401,6 +2396,10 @@ pub fn pane(args: &[OsString], env_session: Option<&str>) -> i32 {
         }
     }
     let session = resolve_session(parsed.session.as_deref(), env_session);
+    if let Err(e) = pane_args::apply_split_anchor_default(&mut parsed) {
+        eprintln!("fno mux pane: {e}");
+        return EXIT_USAGE;
+    }
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,
         Err(e) => {
@@ -3426,156 +2425,9 @@ fn parse_duration(value: &str) -> Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(n.saturating_mul(unit)))
 }
 
-/// `fno mux pane keeper list`: one row per keeper socket under the panes
-/// dir, probed DIRECTLY (connect + Identify, short timeout). Answers "did
-/// the keeper survive" with the keeper's own word - its pid, its child's
-/// pid, its cwd and argv - never with a process count. A socket nobody
-/// lives behind is listed with the reason, because a silent zero is the
-/// receipt-can-lie shape. Read-only: this verb never unlinks anything (the
-/// server's readopt sweep owns that).
-pub(crate) fn pane_keeper_list(json: bool, stale_after: Option<std::time::Duration>) -> i32 {
-    let dir = crate::pty::keeper_dir();
-    let mut rows: Vec<serde_json::Value> = Vec::new();
-    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.extension().map(|x| x == "sock").unwrap_or(false))
-                .collect()
-        })
-        .unwrap_or_default();
-    names.sort();
-    for path in names {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let (session, pane_key) = match stem.rsplit_once('-') {
-            Some((s, key)) if key.chars().all(|c| c.is_ascii_digit()) => {
-                (s.to_string(), key.to_string())
-            }
-            _ => (stem.to_string(), String::new()),
-        };
-        let mut row = serde_json::json!({
-            "socket": path.display().to_string(),
-            "session": session,
-            "pane_key": pane_key,
-        });
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        // Short timeouts everywhere: a wedged keeper must not wedge the read.
-        match std::os::unix::net::UnixStream::connect(&path) {
-            Err(e) => {
-                row["stale"] = serde_json::json!(format!("no listener: {e}"));
-            }
-            Ok(mut stream) => {
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(750)));
-                let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(750)));
-                let identified = (|| -> Option<serde_json::Value> {
-                    use crate::pty::{
-                        keeper_decode, keeper_frame_identify, KeeperRead, KEEPER_TAG_IDENTIFY_REPLY,
-                    };
-                    use std::io::{Read as _, Write as _};
-                    stream.write_all(&keeper_frame_identify()).ok()?;
-                    let mut buf: Vec<u8> = Vec::new();
-                    let mut read_buf = [0u8; 4096];
-                    loop {
-                        loop {
-                            match keeper_decode(&buf) {
-                                KeeperRead::NeedMore => break,
-                                KeeperRead::Frame(tag, payload, used) => {
-                                    buf.drain(..used);
-                                    if tag == KEEPER_TAG_IDENTIFY_REPLY {
-                                        return serde_json::from_slice(&payload).ok();
-                                    }
-                                }
-                            }
-                        }
-                        match stream.read(&mut read_buf) {
-                            Ok(0) | Err(_) => return None,
-                            Ok(n) => buf.extend_from_slice(&read_buf[..n]),
-                        }
-                    }
-                })();
-                match identified {
-                    None => {
-                        row["stale"] = serde_json::json!("no identify answer inside the timeout");
-                    }
-                    Some(reply) => {
-                        for field in ["v", "keeper_pid", "child_pid", "cwd", "argv", "started_at"] {
-                            row[field] =
-                                reply.get(field).cloned().unwrap_or(serde_json::Value::Null);
-                        }
-                        let child_pid = reply.get("child_pid").and_then(serde_json::Value::as_u64);
-                        if let Some(pid) = child_pid {
-                            // SAFETY: signal 0 is the existence probe.
-                            let hit = unsafe { libc::kill(pid as libc::pid_t, 0) };
-                            if hit != 0 {
-                                row["stale"] =
-                                    serde_json::json!(format!("child pid {pid} is gone"));
-                            }
-                        }
-                        let age = reply
-                            .get("started_at")
-                            .and_then(serde_json::Value::as_u64)
-                            .map(|t| now.saturating_sub(t));
-                        if let (Some(age), Some(cap)) = (age, stale_after) {
-                            if age > cap.as_secs() {
-                                row["stale"] = serde_json::json!(format!(
-                                    "aged {age}s (> {}s)",
-                                    cap.as_secs()
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        rows.push(row);
-    }
-    if json {
-        println!(
-            "{}",
-            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
-        );
-    } else if rows.is_empty() {
-        println!("no keeper panes");
-    } else {
-        for row in &rows {
-            let stale = row.get("stale").and_then(serde_json::Value::as_str);
-            let desc = match stale {
-                Some(reason) => format!(" (STALE: {reason})"),
-                None => String::new(),
-            };
-            println!(
-                "session {} pane {} keeper {} child {} cwd {}{}",
-                row.get("session")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("?"),
-                row.get("pane_key")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("?"),
-                row.get("keeper_pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "?".into()),
-                row.get("child_pid")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|p| p.to_string())
-                    .unwrap_or_else(|| "?".into()),
-                row.get("cwd")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("?"),
-                desc,
-            );
-        }
-    }
-    EXIT_OK
-}
-
 /// Resolve `--session`/env, connect to the EXISTING server, run one control
 /// verb, render the reply. The shared spine of the `tab`/`layout` porcelains
-/// (x-d865); `where` has its own registry-first path.
+///; `where` has its own registry-first path.
 fn run_on_existing_server(
     session_flag: Option<&str>,
     env_session: Option<&str>,
@@ -3620,27 +2472,6 @@ fn run_on_existing_server(
     }
 }
 
-/// Split off a leading `--session <s>` / `--json` prefix shared by the small
-/// `tab`/`layout` verbs, returning the rest for verb-specific parsing.
-fn take_common_flags(args: &[OsString]) -> Result<(Option<String>, bool, Vec<String>), String> {
-    let mut session = None;
-    let mut json = false;
-    let mut rest = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let tok = args[i]
-            .to_str()
-            .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-        match tok {
-            "--json" => json = true,
-            "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-            other => rest.push(other.to_string()),
-        }
-        i += 1;
-    }
-    Ok((session, json, rest))
-}
-
 /// A `--workspace <name>` (alias `--squad`) -> `PaneTarget`, defaulting to `CurrentRoute`.
 ///
 /// `id:<n>` addresses a squad by the id `fno mux pane ls` reports, so a caller
@@ -3662,18 +2493,10 @@ fn squad_target(squad: Option<String>) -> PaneTarget {
     }
 }
 
-/// `fno mux tab ls|create|rename|join|close ...` (x-d865).
-pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let verb = match args.first().and_then(|a| a.to_str()) {
-        Some(v) => v.to_string(),
-        None => {
-            eprintln!("fno mux tab: needs a verb: ls|create|rename|join|close");
-            return EXIT_USAGE;
-        }
-    };
-    // Flag pass over the tokens after the verb.
-    let mut session = None;
-    let mut json = false;
+/// `fno mux tab ls|create|rename|join|close ...`.
+pub fn tab(op: crate::cli_args::TabOp, args: &[OsString], env_session: Option<&str>) -> i32 {
+    // Flag pass over the tokens after the operation word (the typed tree
+    // guarantees one was present and names this op).
     let mut squad = None;
     let mut name = None;
     let mut tab_sel = None;
@@ -3681,31 +2504,72 @@ pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
     let mut at = None;
     let mut dir = None;
     let mut force = false;
-    let mut i = 1;
-    while i < args.len() {
-        let tok = match args[i].to_str() {
-            Some(t) => t,
-            None => {
-                eprintln!("fno mux tab: non-UTF-8 argument");
-                return EXIT_USAGE;
-            }
-        };
+    let mut to = None;
+    // The common grammar rides MuxCommon::take; this pass keeps tab's own
+    // flags and their duplicate refusals.
+    let (common, tab_args) = match MuxCommon::take(args) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("fno mux tab: {e}");
+            return EXIT_USAGE;
+        }
+    };
+    let session = common.server.or(common.session);
+    let json = common.json;
+    let mut i = 0;
+    while i < tab_args.len() {
+        let tok = tab_args[i].as_str();
         let res = (|| -> Result<(), String> {
+            let value = |what: &str| -> Result<String, String> {
+                match tab_args.get(i + 1) {
+                    Some(v) => Ok(v.clone()),
+                    None => Err(format!("{what} needs a value")),
+                }
+            };
             match tok {
-                "--json" => json = true,
-                "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-                "--workspace" | "--squad" | "-s" => squad = Some(flag_value(args, &mut i, tok)?),
-                "--name" => name = Some(flag_value(args, &mut i, "--name")?),
+                "--workspace" | "--squad" | "-s" => {
+                    let v = value(tok)?;
+                    i += 1;
+                    squad = Some(v);
+                }
+                "--name" => {
+                    let v = value("--name")?;
+                    i += 1;
+                    name = Some(v);
+                }
                 "--tab" => {
                     if tab_sel.is_some() {
                         return Err("duplicate --tab".into());
                     }
-                    tab_sel = Some(parse_tab_sel(&flag_value(args, &mut i, "--tab")?)?);
+                    let v = value("--tab")?;
+                    i += 1;
+                    tab_sel = Some(parse_tab_sel(&v)?);
                 }
-                "--src" => src = Some(parse_tab_sel(&flag_value(args, &mut i, "--src")?)?),
-                "--at" => at = Some(parse_u64(&flag_value(args, &mut i, "--at")?, "--at")?),
+                // A POSITION, not a tab: ordinal only, parsed as the
+                // 1-based `Index` selector so the shared "ordinal starts at 1"
+                // refusal covers a 0 or a past-the-end number.
+                "--to" => {
+                    if to.is_some() {
+                        return Err("duplicate --to".into());
+                    }
+                    let v = value("--to")?;
+                    i += 1;
+                    to = Some(TabSel::Index(parse_u64(&v, "--to")? as usize));
+                }
+                "--src" => {
+                    let v = value("--src")?;
+                    i += 1;
+                    src = Some(parse_tab_sel(&v)?);
+                }
+                "--at" => {
+                    let v = value("--at")?;
+                    i += 1;
+                    at = Some(parse_u64(&v, "--at")?);
+                }
                 "--dir" | "--direction" | "-d" => {
-                    dir = Some(parse_dir(&flag_value(args, &mut i, tok)?, tok)?)
+                    let v = value(tok)?;
+                    i += 1;
+                    dir = Some(parse_dir(&v, tok)?);
                 }
                 "--force" => {
                     if force {
@@ -3724,15 +2588,15 @@ pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
         i += 1;
     }
 
-    let verb = match verb.as_str() {
-        "ls" => ControlVerb::TabLs {
+    let verb = match op {
+        crate::cli_args::TabOp::Ls(_) => ControlVerb::TabLs {
             squad: squad_target(squad),
         },
-        "create" => ControlVerb::TabCreate {
+        crate::cli_args::TabOp::Create(_) => ControlVerb::TabCreate {
             squad: squad_target(squad),
             name: name.filter(|n| !n.trim().is_empty()),
         },
-        "rename" => {
+        crate::cli_args::TabOp::Rename(_) => {
             let (Some(tab), Some(name)) = (tab_sel, name) else {
                 eprintln!("fno mux tab rename: needs --tab <sel> and --name <s>");
                 return EXIT_USAGE;
@@ -3743,7 +2607,7 @@ pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
                 name,
             }
         }
-        "join" => {
+        crate::cli_args::TabOp::Join(_) => {
             let (Some(src_tab), Some(anchor_pane), Some(direction)) = (src, at, dir) else {
                 eprintln!("fno mux tab join: needs --src <sel> --at <pane> --dir <dir>");
                 return EXIT_USAGE;
@@ -3754,7 +2618,7 @@ pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
                 direction,
             }
         }
-        "close" => {
+        crate::cli_args::TabOp::Close(_) => {
             let Some(tab) = tab_sel else {
                 eprintln!("fno mux tab close: needs --tab <sel> (bulk close: {PRUNE_REMEDY})");
                 return EXIT_USAGE;
@@ -3765,15 +2629,25 @@ pub fn tab(args: &[OsString], env_session: Option<&str>) -> i32 {
                 force,
             }
         }
-        other => {
-            eprintln!("fno mux tab: unknown verb {other} (ls|create|rename|join|close)");
-            return EXIT_USAGE;
+        // The direct-destination move: `--to` names the POSITION (the
+        // same 1-based ordinal the tab bar shows), the server computes the
+        // delta and runs the trunk the interactive reorder runs.
+        crate::cli_args::TabOp::Move(_) => {
+            let (Some(tab), Some(to)) = (tab_sel, to) else {
+                eprintln!("fno mux tab move: needs --tab <sel> and --to <ordinal>");
+                return EXIT_USAGE;
+            };
+            ControlVerb::TabReorder {
+                squad: squad_target(squad),
+                tab,
+                to,
+            }
         }
     };
     run_on_existing_server(session.as_deref(), env_session, json, verb)
 }
 
-/// A `--template <name>` -> [`TemplateName`] (x-c4d4). Names match the wire
+/// A `--template <name>` -> [`TemplateName`]. Names match the wire
 /// enum's kebab-case spelling.
 fn parse_template_name(s: &str) -> Result<crate::proto::TemplateName, String> {
     use crate::proto::TemplateName::*;
@@ -3789,7 +2663,7 @@ fn parse_template_name(s: &str) -> Result<crate::proto::TemplateName, String> {
     }
 }
 
-/// A `--slot <spec>` -> [`SlotBinding`] (x-c4d4). `-` is an explicit shell slot;
+/// A `--slot <spec>` -> [`SlotBinding`]. `-` is an explicit shell slot;
 /// `fno:<id>` (or a bare `<id>`) binds a session. Only `-` is a shell, so a
 /// coordinator never accidentally leaves an intended binding empty.
 fn parse_slot(s: &str) -> crate::proto::SlotBinding {
@@ -3803,7 +2677,7 @@ fn parse_slot(s: &str) -> crate::proto::SlotBinding {
     }
 }
 
-/// The on-disk `.toml` spec (x-c4d4): `template = "main-left"`,
+/// The on-disk `.toml` spec: `template = "main-left"`,
 /// `slots = ["fno:af4dac55", "-", ...]`. Strings (not the wire enum shape) so a
 /// hand-authored file matches the `.fno` config idiom; converted to a
 /// [`LayoutSpec`] here, the same struct the `--template`/`--slot` flags build.
@@ -3822,46 +2696,54 @@ fn load_spec_file(path: &str) -> Result<crate::proto::LayoutSpec, String> {
     })
 }
 
-/// `fno mux layout get|apply ...` (get: x-d865; apply: x-c4d4).
-pub fn layout(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let (session, json, rest) = match take_common_flags(args) {
+/// `fno mux layout get|apply ...`.
+pub fn layout(op: crate::cli_args::LayoutOp, args: &[OsString], env_session: Option<&str>) -> i32 {
+    let (common, rest) = match MuxCommon::take(args) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("fno mux layout: {e}");
             return EXIT_USAGE;
         }
     };
-    if rest.first().map(String::as_str) == Some("apply") {
-        return layout_apply_cli(session.as_deref(), env_session, json, &rest[1..]);
-    }
-    if rest.first().map(String::as_str) == Some("graft") {
-        return layout_graft_cli(session.as_deref(), env_session, json, &rest[1..]);
-    }
-    // Otherwise `get` (a bare `layout` also means get).
-    let flags = match rest.first().map(String::as_str) {
-        Some("get") | None => args,
-        Some(other) => {
-            eprintln!("fno mux layout: unknown verb {other} (get|apply|graft)");
-            return EXIT_USAGE;
+    let session = common.server.or(common.session);
+    let json = common.json;
+    // The operation word rides the tail (a common flag may sit before it);
+    // the typed tree already resolved it, so route on the op, not on
+    // rest.first().
+    match op {
+        crate::cli_args::LayoutOp::Apply(_) => {
+            return layout_apply_cli(session.as_deref(), env_session, json, &rest[1..]);
         }
-    };
+        crate::cli_args::LayoutOp::Graft(_) => {
+            return layout_graft_cli(session.as_deref(), env_session, json, &rest[1..])
+        }
+        // The common flags already left in `take`, so the loop below sees
+        // only get's own flags.
+        crate::cli_args::LayoutOp::Get(_) => {}
+    }
+    let flags = rest;
     let mut squad = None;
     let mut tab_sel = None;
     let mut i = 0;
     while i < flags.len() {
-        let Some(tok) = flags[i].to_str() else {
-            eprintln!("fno mux layout: non-UTF-8 argument");
-            return EXIT_USAGE;
-        };
+        let tok = flags[i].as_str();
         let res = (|| -> Result<(), String> {
             match tok {
-                "get" | "--json" | "--session" => {
-                    if tok == "--session" {
-                        let _ = flag_value(flags, &mut i, "--session")?;
-                    }
+                "get" => {}
+                "--workspace" | "--squad" | "-s" => {
+                    let Some(v) = flags.get(i + 1) else {
+                        return Err(format!("{tok} needs a value"));
+                    };
+                    squad = Some(v.clone());
+                    i += 1;
                 }
-                "--workspace" | "--squad" | "-s" => squad = Some(flag_value(flags, &mut i, tok)?),
-                "--tab" => tab_sel = Some(parse_tab_sel(&flag_value(flags, &mut i, "--tab")?)?),
+                "--tab" => {
+                    let Some(v) = flags.get(i + 1) else {
+                        return Err("--tab needs a value".into());
+                    };
+                    tab_sel = Some(parse_tab_sel(v)?);
+                    i += 1;
+                }
                 t => return Err(format!("unknown flag: {t}")),
             }
             Ok(())
@@ -3888,7 +2770,7 @@ pub fn layout(args: &[OsString], env_session: Option<&str>) -> i32 {
             scope,
             // The per-pane worker join rides the reply only for the HUMAN
             // rendering; `--json` stays byte-shape identical to the pre-v51
-            // output (x-1499), so a topology diffing consumer sees no new
+            // output, so a topology diffing consumer sees no new
             // key on a healthy reply.
             workers: !json,
         },
@@ -3896,7 +2778,7 @@ pub fn layout(args: &[OsString], env_session: Option<&str>) -> i32 {
 }
 
 /// `fno mux layout apply --template <t> --slot <b>... | --spec <file>
-/// [--workspace <s>] [--tab <sel>] [--focus] [--json]` (x-c4d4). Both input forms
+/// [--workspace <s>] [--tab <sel>] [--focus] [--json]`. Both input forms
 /// assemble the SAME [`LayoutSpec`]; the file form IS the persisted spec (US8),
 /// so apply and restore share one struct.
 fn layout_apply_cli(
@@ -3998,7 +2880,7 @@ fn parse_graft_slot(s: &str) -> Result<crate::proto::LayoutBinding, String> {
 }
 
 /// `fno mux layout graft --at current|<pane> (--spec <file> | --template <name>
-/// --slot <b>...) [--workspace <name>] [--focus]` (v44, x-6928).
+/// --slot <b>...) [--workspace <name>] [--focus]` (v44).
 fn layout_graft_cli(
     session: Option<&str>,
     env_session: Option<&str>,
@@ -4041,19 +2923,13 @@ fn layout_graft_cli(
         return EXIT_USAGE;
     }
 
-    // Resolve the anchor: `current` -> FNO_PANE (run inside a mux pane), else a
-    // numeric pane id. The symbolic resolution lives here so one parser owns it.
+    // Resolve the anchor: `current` -> the calling pane, else a numeric pane id.
     let anchor = match at_raw.as_deref() {
         None => {
             eprintln!("fno mux layout graft: --at <current|pane> is required");
             return EXIT_USAGE;
         }
-        Some("current") => match std::env::var("FNO_PANE")
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse::<u64>().ok())
-        {
+        Some("current") => match pane_args::pane_from_env() {
             Some(p) => p,
             None => {
                 eprintln!(
@@ -4107,10 +2983,7 @@ fn layout_graft_cli(
             let slots = names
                 .iter()
                 .zip(slot_bindings)
-                .map(|(n, b)| LayoutSlot {
-                    name: n.clone(),
-                    binding: b,
-                })
+                .map(|(n, b)| LayoutSlot::new(n.clone(), b))
                 .collect();
             AnchoredLayoutSpec {
                 version: 1,
@@ -4133,7 +3006,7 @@ fn layout_graft_cli(
     )
 }
 
-/// One ambiguity-refusal line's worth of a candidate (x-b80d): exactly what
+/// One ambiguity-refusal line's worth of a candidate: exactly what
 /// the operator needs to disambiguate - the name to retype, the pane it
 /// hosts, and how stale the row is.
 #[derive(Debug, PartialEq, Eq)]
@@ -4144,7 +3017,7 @@ struct Candidate {
     age_s: Option<u64>,
 }
 
-/// What shared selector resolution decided (x-b80d).
+/// What shared selector resolution decided.
 #[derive(Debug, PartialEq, Eq)]
 enum Resolution {
     Found(Box<crate::agents_view::RegistryAgent>),
@@ -4187,7 +3060,7 @@ fn ambiguity_candidates(
 }
 
 /// The one selector resolver shared by `view`, `pane focus` and `where`
-/// (x-b80d, Locked Decision 2: a resolver wired into one door is the
+/// (Locked Decision 2: a resolver wired into one door is the
 /// decorative-guard pitfall). Tiers, first non-empty tier wins; ambiguity
 /// inside the winning tier refuses and never falls through to a looser tier.
 ///
@@ -4277,7 +3150,7 @@ fn resolve_selector(
     Resolution::Found(Box::new((*row).clone()))
 }
 
-/// The refusal listing: one line per candidate (x-b80d).
+/// The refusal listing: one line per candidate.
 fn print_candidates(verb: &str, selector: &str, candidates: &[Candidate]) {
     eprintln!(
         "{verb}: ambiguous selector {selector:?} matches {} agents",
@@ -4293,11 +3166,11 @@ fn print_candidates(verb: &str, selector: &str, candidates: &[Candidate]) {
     }
 }
 
-/// Read the agent registry into derived rows (x-b80d). The shared head of
+/// Read the agent registry into derived rows. The shared head of
 /// every selector door; a read failure is EXIT_REGISTRY_UNAVAILABLE, never a
 /// silent "not found" (the rule `where` already shipped with).
 fn registry_rows_or(verb: &str) -> Result<(Vec<crate::agents_view::RegistryAgent>, u64), i32> {
-    let raw = match std::fs::read_to_string(crate::agents_view::registry_path()) {
+    let raw = match crate::registry_read::registry_text(&crate::agents_view::registry_path()) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("{verb}: no agent registry");
@@ -4322,7 +3195,7 @@ fn registry_rows_or(verb: &str) -> Result<(Vec<crate::agents_view::RegistryAgent
 }
 
 /// Resolve a selector to one row, printing the refusal and its exit code on
-/// any non-Found outcome (x-b80d).
+/// any non-Found outcome.
 fn resolve_row_or_print(
     verb: &str,
     selector: &str,
@@ -4342,7 +3215,7 @@ fn resolve_row_or_print(
 }
 
 /// Connect to one session's server and move the attached viewer to a pane
-/// (x-b80d): the shared tail of `view` and `pane focus`. `render: false`
+/// the shared tail of `view` and `pane focus`. `render: false`
 /// performs the move without printing the receipt - for a caller that has
 /// already put ONE JSON document on stdout and must not add a second
 /// unparsable one.
@@ -4389,7 +3262,7 @@ fn focus_pane(verb: &str, session: &str, pane: u64, render: bool, json: bool) ->
     }
 }
 
-/// Focus by selector (x-b80d): resolve, degrade a paneless row to a `peek`
+/// Focus by selector: resolve, degrade a paneless row to a `peek`
 /// hint rather than an attach (Locked Decision 1: attaching creates a pane,
 /// and the server's fd ceiling makes that a wave-blocking side effect), then
 /// move the viewer. An explicit --session overrides the host like `where`.
@@ -4398,7 +3271,14 @@ fn focus_by_selector(verb: &str, selector: &str, session_flag: Option<&str>, jso
         Ok(r) => r,
         Err(code) => return code,
     };
-    let Some((host_session, pane)) = row.mux.clone() else {
+    // Registry mux field first, then the caller's pane table: a
+    // resolved pane whose registry mux field is stale is no longer reported
+    // as paneless.
+    let hosted = row
+        .mux
+        .clone()
+        .or_else(|| pane_table_host(&row, &resolve_session(session_flag, None)));
+    let Some((host_session, pane)) = hosted else {
         eprintln!("{}", paneless_route_hint(verb, &row));
         return EXIT_NOT_PANE_HOSTED;
     };
@@ -4406,7 +3286,7 @@ fn focus_by_selector(verb: &str, selector: &str, session_flag: Option<&str>, jso
     focus_pane(verb, &session, pane, true, json)
 }
 
-/// One pickable pane-hosted row for the interactive picker (x-b80d).
+/// One pickable pane-hosted row for the interactive picker.
 struct PaneRow {
     name: String,
     session: String,
@@ -4426,7 +3306,7 @@ impl PaneRow {
     }
 }
 
-/// What one focus-picker keystroke asks the IO loop to do (x-b80d). Parallel
+/// What one focus-picker keystroke asks the IO loop to do. Parallel
 /// to [`PickAction`]; the payload is a pane ref, not a session name.
 #[derive(Debug, PartialEq, Eq)]
 enum FocusAction {
@@ -4436,7 +3316,7 @@ enum FocusAction {
     Bell,
 }
 
-/// The filter-list state (x-b80d): every pane-hosted row, the typed filter,
+/// The filter-list state: every pane-hosted row, the typed filter,
 /// and a cursor over the FILTERED view. Pure [`FilterPicker::step`], so the
 /// state machine is unit-testable without a terminal, matching `Picker`.
 /// Letters are filter text here, so movement is arrows only - no j/k.
@@ -4500,7 +3380,7 @@ impl FilterPicker {
     }
 }
 
-/// Render the filter picker (x-b80d). Pure; the IO loop only writes this.
+/// Render the filter picker. Pure; the IO loop only writes this.
 fn render_filter_picker(p: &FilterPicker) -> String {
     let mut out = String::new();
     out.push_str("fno panes - type to filter, \u{2191}\u{2193} move, enter focus, esc quit\r\n");
@@ -4523,7 +3403,7 @@ fn render_filter_picker(p: &FilterPicker) -> String {
     out
 }
 
-/// The interactive focus picker (x-b80d): raw mode, no alt screen, one clear
+/// The interactive focus picker: raw mode, no alt screen, one clear
 /// on every exit path - the `run_picker` skeleton with a filter state machine
 /// and a pane-ref payload. Returns the chosen pane ref, or `None` on quit.
 fn run_focus_picker(rows: Vec<PaneRow>) -> Option<(String, u64)> {
@@ -4594,7 +3474,7 @@ fn run_focus_picker(rows: Vec<PaneRow>) -> Option<(String, u64)> {
     result
 }
 
-/// The `--fzf` door shared by `view` and `pane focus` (x-b80d): refuse a
+/// The `--fzf` door shared by `view` and `pane focus`: refuse a
 /// non-TTY stdin (a picker on a pipe would hang), refuse an empty roster,
 /// then run the picker. Esc is a clean exit 0 that focused nothing.
 fn view_picker(verb: &str, json: bool, url: bool) -> i32 {
@@ -4618,7 +3498,7 @@ fn view_picker(verb: &str, json: bool, url: bool) -> i32 {
     match run_focus_picker(pane_rows) {
         Some((session, pane)) => {
             if url {
-                print_pane_url(verb, &session, pane)
+                crate::web::print_pane_url(verb, &session, pane)
             } else {
                 focus_pane(verb, &session, pane, true, json)
             }
@@ -4627,10 +3507,6 @@ fn view_picker(verb: &str, json: bool, url: bool) -> i32 {
     }
 }
 
-/// Read a session's web-bridge state file (x-b80d) and build the pasteable
-/// per-pane URL. The bridge writes `web-<session>.json` at bind; a file whose
-/// port no longer answers is a corpse, not a bridge, so the TCP probe - not
-/// the file's existence - decides liveness.
 /// The first-eight short form of a session id, matching Python's
 /// `fno.harness_identity.canonical_handle` closely enough for DISPLAY (the
 /// resolver never consumes this spelling, so the ses_ case rule that matters
@@ -4643,74 +3519,8 @@ fn short_handle(session_id: &str) -> String {
         .to_lowercase()
 }
 
-fn print_pane_url(verb: &str, session: &str, pane: u64) -> i32 {
-    let path = proto::mux_dir().join(format!("web-{session}.json"));
-    let hint = format!(
-        "no web bridge for session {session}; start one with: fno mux serve --web --session {session}"
-    );
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        eprintln!("{verb}: {hint}");
-        return EXIT_ERROR;
-    };
-    let state: serde_json::Value = match serde_json::from_str(&raw) {
-        Ok(v) => v,
-        Err(_) => {
-            eprintln!("{verb}: {hint}");
-            return EXIT_ERROR;
-        }
-    };
-    let bind = state
-        .get("bind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1");
-    let port = match state.get("port").and_then(|v| v.as_u64()) {
-        Some(p) => p,
-        None => {
-            eprintln!("{verb}: {hint}");
-            return EXIT_ERROR;
-        }
-    };
-    let token = state
-        .get("token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    // A wide bind is reachable locally too; the pasteable URL says where THIS
-    // machine finds it, mirroring the bind-time print's host hint.
-    let host = if bind == "0.0.0.0" || bind == "::" {
-        "127.0.0.1"
-    } else {
-        bind
-    };
-    // Probe liveness for ANY spelling the operator may have bound. A bare
-    // SocketAddr parse only accepts IPs, so `localhost` and `::1` would skip
-    // the probe and trust a corpse file (codex P2); the tuple form resolves
-    // hostnames and needs no IPv6 brackets.
-    let probe_addr = {
-        use std::net::ToSocketAddrs;
-        (host, port as u16)
-            .to_socket_addrs()
-            .ok()
-            .and_then(|mut it| it.next())
-    };
-    if let Some(addr) = probe_addr {
-        let timeout = std::time::Duration::from_millis(300);
-        if std::net::TcpStream::connect_timeout(&addr, timeout).is_err() {
-            eprintln!("{verb}: {hint}");
-            return EXIT_ERROR;
-        }
-    }
-    // Bracket a literal IPv6 host; a bare ::1 in a URL truncates at the colon.
-    let url_host = if host.contains(':') {
-        format!("[{host}]")
-    } else {
-        host.to_string()
-    };
-    println!("http://{url_host}:{port}/?t={token}&pane={pane}");
-    EXIT_OK
-}
-
 /// Split a `--workspace <name>` (alias `--squad`/`-s`) pair out of an
-/// already-parsed `rest` (x-1499), returning the value and the remaining
+/// already-parsed `rest`, returning the value and the remaining
 /// tokens. Used by the selector verbs whose workspace qualification is a
 /// location concern, so their selector loop never sees the flag.
 fn take_workspace_flag(
@@ -4736,7 +3546,7 @@ fn take_workspace_flag(
     Ok((workspace, out))
 }
 
-/// The tab-location branch shared by `view` and `where` (x-1499): the agent
+/// The tab-location branch shared by `view` and `where`: the agent
 /// resolver found nothing, so treat the selector as a LOCATION - a tab
 /// ordinal, stable id, or name - and answer with what lives there. `focus`
 /// then moves the operator to the tab's focused pane (`view`); `where` only
@@ -4804,7 +3614,7 @@ fn location_lookup(
             // URL on stdout, never the client move - the same precedence the
             // agent-matched path of `view` gives the flag.
             if url {
-                return print_pane_url(verb, &session, pane);
+                return crate::web::print_pane_url(verb, &session, pane);
             }
             // JSON stdout carries exactly ONE document: this receipt. The
             // focus action still runs, but its own receipt is suppressed for
@@ -4821,7 +3631,7 @@ fn location_lookup(
 }
 
 /// Resolve a selector to an agent row, falling through to the tab-location
-/// branch when the agent resolver returns NotFound (x-1499): the shared head
+/// branch when the agent resolver returns NotFound: the shared head
 /// of `view` and `where`. Ambiguity keeps its own refusal; registry failures
 /// keep their own exit class.
 #[allow(clippy::too_many_arguments)]
@@ -4855,21 +3665,22 @@ fn resolve_row_or_location(
     }
 }
 
-/// `fno mux view <selector> [--url] [--fzf] [--json]` (x-b80d): point the
+/// `fno mux view <selector> [--url] [--fzf] [--json]`: point the
 /// operator's view at the pane hosting an agent, selected by what a person
 /// remembers - the node id or slug inside the minted name - rather than a
 /// pane index. Resolution is shared with `where` and `pane focus`; a row
 /// that hosts no pane degrades to a `peek` hint (Locked Decision 1). A
-/// selector that names no agent is retried as a tab LOCATION (x-1499).
+/// selector that names no agent is retried as a tab LOCATION.
 pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
     let verb = "fno mux view";
-    let (session_flag, json, rest) = match take_common_flags(args) {
+    let (common, rest) = match MuxCommon::take(args) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("{verb}: {e}");
             return EXIT_USAGE;
         }
     };
+    let (session_flag, json) = (common.server.or(common.session), common.json);
     let (workspace, rest) = match take_workspace_flag(verb, rest) {
         Ok(t) => t,
         Err(code) => return code,
@@ -4923,96 +3734,45 @@ pub fn view(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(r) => r,
         Err(code) => return code,
     };
-    let Some((host_session, pane)) = row.mux.clone() else {
+    // Registry mux field first, then the caller's pane table: a
+    // resolved pane whose registry mux field is stale is no longer reported
+    // as paneless.
+    let hosted = row
+        .mux
+        .clone()
+        .or_else(|| pane_table_host(&row, &resolve_session(session_flag.as_deref(), env_session)));
+    let Some((host_session, pane)) = hosted else {
         eprintln!("{}", paneless_route_hint(verb, &row));
         return EXIT_NOT_PANE_HOSTED;
     };
     if url {
-        return print_pane_url(verb, &host_session, pane);
+        return crate::web::print_pane_url(verb, &host_session, pane);
     }
     let session = resolve_session(session_flag.as_deref(), Some(&host_session));
     focus_pane(verb, &session, pane, true, json)
 }
 
-/// `fno mux thread <name>` (x-07c2, hidden): the outside-the-TUI reach behind
-/// `fno agents attach <name>`. Sends the ThreadPane control verb, which runs
-/// the exact command a TUI reach runs, and prints where it landed. A missing
-/// server is its own exit code so the CLI caller can fall through to the
-/// inline attach instead of reading a generic failure as one.
-pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
-    let (session_flag, _json, rest) = match take_common_flags(args) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("fno mux thread: {e}");
-            return EXIT_USAGE;
-        }
-    };
-    let Some(name) = rest
-        .first()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    else {
-        eprintln!("fno mux thread: needs an agent name or attach id");
-        return EXIT_USAGE;
-    };
-    if rest.len() > 1 {
-        eprintln!("fno mux thread: takes exactly one name");
-        return EXIT_USAGE;
-    }
-    // A paneless row owns no session routing: the operator's ambient session
-    // (FNO_SESSION / the default) is the server whose thread pane this drives.
-    let session = resolve_session(
-        session_flag
-            .as_deref()
-            .or(env_session)
-            .filter(|s| !s.is_empty()),
-        None,
-    );
-    let sock = match proto::socket_path(&session) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("fno mux thread: {e}");
-            return EXIT_USAGE;
-        }
-    };
-    let stream = match proto::connect_unix_timeout(&sock, PROBE_TIMEOUT) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("fno mux thread: no live mux server ({e})");
-            return EXIT_NO_SERVER;
-        }
-    };
-    match send_control(
-        stream,
-        ControlVerb::ThreadPane { name },
-        CONTROL_TIMEOUT,
-        CONTROL_REPLY_DEADLINE,
-        &session,
-    ) {
-        Ok(ServerMsg::Notice { text }) => {
-            println!("{text}");
-            EXIT_OK
-        }
-        Ok(ServerMsg::Err { msg, .. }) => {
-            eprintln!("fno mux thread: {msg}");
-            EXIT_ERROR
-        }
-        Ok(other) => {
-            eprintln!("fno mux thread: unexpected reply: {other:?}");
-            EXIT_ERROR
-        }
-        Err(ControlError::Unanswered(e)) => {
-            eprintln!("fno mux thread: {e}");
-            EXIT_CONTROL_UNANSWERED
-        }
-        Err(e) => {
-            eprintln!("fno mux thread: {e}");
-            EXIT_ERROR
-        }
-    }
-}
+// The `fno mux thread` verb, same child-module pattern.
+mod thread_verb;
+pub use thread_verb::thread;
+pub mod web_ctl;
+// (v71) The prune aftermath (reload live servers + the receipt), same rule.
+mod prune_sync;
+// (v71) The live-tab fold, same rule; its tests moved with it.
+mod tab_prune;
+use tab_prune::{live_tabs, prune_live_tabs_measuring_named, TabPruneOutcome};
+// (v72) The `fno mux thread reseat` verb, same child-module pattern.
+mod reseat_verb;
+pub use reseat_verb::reseat;
+// (v75) The `fno mux retire-session` verb, same child-module pattern.
+mod retire_session;
+pub use retire_session::retire_session;
 
-/// `fno mux where <fno_id>` (x-d865): resolve an fno session id to its live
+mod doctor;
+mod doctor_boundary;
+#[cfg(not(test))]
+mod doctor_squads;
+/// `fno mux where <fno_id>`: resolve an fno session id to its live
 /// location. Reads the registry to find the hosting mux session, connects to
 /// THAT session's socket, and rounds-trips one `PaneWhere`. The three failure
 /// modes get distinct exit codes (AC1-ERR); a registry read failure never reads
@@ -5020,13 +3780,14 @@ pub fn thread(args: &[OsString], env_session: Option<&str>) -> i32 {
 pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
     // The caller's FNO_SESSION is irrelevant here: `where` resolves the HOST
     // session from the registry, so an explicit --session is the only override.
-    let (session_flag, json, rest) = match take_common_flags(args) {
+    let (common, rest) = match MuxCommon::take(args) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("fno mux where: {e}");
             return EXIT_USAGE;
         }
     };
+    let (session_flag, json) = (common.server.or(common.session), common.json);
     let (workspace, rest) = match take_workspace_flag("fno mux where", rest) {
         Ok(t) => t,
         Err(code) => return code,
@@ -5046,7 +3807,7 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         Ok(r) => r,
         Err(code) => return code,
     };
-    // (x-b80d) Shared selector resolution - the exact/prefix tiers `where`
+    // Shared selector resolution - the exact/prefix tiers `where`
     // shipped with, plus the name tier. `where` keeps its own exit codes for
     // not-found and not-pane-hosted; an ambiguous family is now its own code
     // so a script can tell a typo from a family (Locked Decision 3).
@@ -5056,7 +3817,7 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
             print_candidates("fno mux where", &fno_id, &candidates);
             return EXIT_AMBIGUOUS;
         }
-        // No agent matches: the selector may be a tab LOCATION (x-1499) - an
+        // No agent matches: the selector may be a tab LOCATION - an
         // ordinal, id, or name the operator read off the screen. `where`
         // reports the occupants without moving any client.
         Resolution::NotFound => {
@@ -5082,8 +3843,16 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
         .effective_identity()
         .map(str::to_string)
         .unwrap_or_else(|| fno_id.clone());
-    // The hosting mux session name.
-    let Some(host_session) = row.mux.as_ref().map(|(s, _)| s.clone()) else {
+    // The hosting mux session name: the registry mux field, else the caller's
+    // pane table - the specimen is a live pane the registry mux
+    // field never named, so the pane table is asked before saying paneless.
+    let probe_session = resolve_session(session_flag.as_deref(), env_session);
+    let Some(host_session) = row
+        .mux
+        .as_ref()
+        .map(|(s, _)| s.clone())
+        .or_else(|| pane_table_host(&row, &probe_session).map(|(host, _)| host))
+    else {
         eprintln!("{}", paneless_route_hint("fno mux where", &row));
         return EXIT_NOT_PANE_HOSTED;
     };
@@ -5127,8 +3896,8 @@ pub fn where_(args: &[OsString], env_session: Option<&str>) -> i32 {
 }
 
 /// Resolve `PaneCmd` -> a control verb + the read deadline, then run it.
-fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
-    // (x-d865) `pane ls --fno-id` filters the listing client-side over the
+pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
+    // `pane ls --fno-id` filters the listing client-side over the
     // reply's PaneInfo.fno_id, so capture the filter before `cmd` is consumed.
     let ls_fno_id = match &cmd {
         PaneCmd::Ls { fno_id } => fno_id.clone(),
@@ -5138,6 +3907,10 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
     // every other verb operates on an existing server. `pane ls` against no
     // server is "no panes" (exit 0); the rest are an error (nothing to act on).
     let mut review_command = None;
+    // The pane-send audit row, staged where the exact bytes are
+    // known; emitted once the outcome (exit code) is known - inline on the
+    // submit path, in the shared tail on the paste path.
+    let mut pane_send_audit: Option<PaneSendAudit> = None;
     let (verb, read_timeout) = match cmd {
         // pane() intercepts the keeper read before dispatch; it needs no
         // server and this arm exists to keep the match total.
@@ -5176,14 +3949,15 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
             claim,
             worker,
             placement,
+            size,
         } => {
             let cwd = resolve_run_cwd(cwd, std::env::current_dir().ok());
             (
                 ControlVerb::PaneRun {
                     cwd,
                     argv,
-                    cols: None,
-                    rows: None,
+                    cols: size.map(|s| s.0),
+                    rows: size.map(|s| s.1),
                     claim,
                     placement,
                     worker,
@@ -5199,6 +3973,8 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
             raw,
             expected_identity,
             style_exception,
+            provenance,
+            hold_pass,
         } => {
             let bytes = match source {
                 SendSource::Text(t) => t.into_bytes(),
@@ -5211,16 +3987,26 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
                     buf
                 }
             };
-            // Envelope by default (node x-3a64). A pane drive types at a
+            // Envelope by default (node). A pane drive types at a
             // worker's prompt, and unwrapped it is indistinguishable from the
             // operator typing: no sender, no message id, no reply handle, no
             // authority footer. Delegate to the Python renderer, which is the
-            // SOLE renderer (x-1904 deleted the Rust mirror), and FAIL CLOSED.
+            // SOLE renderer (deleted the Rust mirror), and FAIL CLOSED.
             // A bare-paste fallback would rebuild that exact defect, and would
             // do it precisely when something is already wrong.
             let bytes = if raw {
                 if bytes.len() > RAW_PANE_SEND_CAP_BYTES {
                     eprintln!("fno mux pane send: {}", paste_cap_refusal(bytes.len()));
+                    if !pane_send_is_control_only(&bytes) {
+                        PaneSendAudit::new(
+                            pane,
+                            expected_identity.as_deref(),
+                            &bytes,
+                            submit,
+                            provenance.as_deref(),
+                        )
+                        .emit(session, EXIT_ERROR);
+                    }
                     return EXIT_ERROR;
                 }
                 bytes
@@ -5229,10 +4015,33 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
                     Ok(b) => b,
                     Err(e) => {
                         eprintln!("fno mux pane send: {e}");
+                        if !pane_send_is_control_only(&bytes) {
+                            PaneSendAudit::new(
+                                pane,
+                                expected_identity.as_deref(),
+                                &bytes,
+                                submit,
+                                provenance.as_deref(),
+                            )
+                            .emit(session, EXIT_ERROR);
+                        }
                         return EXIT_ERROR;
                     }
                 }
             };
+            // Stage the row here, where the exact typed bytes are
+            // known; the submit path emits inline below, the paste path in
+            // the shared tail once the reply's exit code is known. Submit-key
+            // sends are control bytes and stage nothing (AC5).
+            if !pane_send_is_control_only(&bytes) {
+                pane_send_audit = Some(PaneSendAudit::new(
+                    pane,
+                    expected_identity.as_deref(),
+                    &bytes,
+                    submit,
+                    provenance.as_deref(),
+                ));
+            }
             review_command = if raw {
                 review_invocation_command(&bytes)
             } else {
@@ -5248,6 +4057,9 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
                     expected_identity.as_deref(),
                     json,
                 );
+                if let Some(audit) = pane_send_audit.take() {
+                    audit.emit(session, code);
+                }
                 if review_command.is_some() {
                     let receipt = match code {
                         EXIT_OK => "submitted",
@@ -5270,6 +4082,7 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
                     bytes,
                     guarded,
                     expected_identity,
+                    hold_pass,
                 },
                 CONTROL_TIMEOUT,
             )
@@ -5290,7 +4103,9 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
             },
             Duration::from_millis(timeout_ms) + Duration::from_secs(2),
         ),
-        PaneCmd::Kill { pane } => (ControlVerb::PaneKill { pane }, CONTROL_TIMEOUT),
+        PaneCmd::Kill { pane, hand_off_to } => {
+            (ControlVerb::PaneKill { pane, hand_off_to }, CONTROL_TIMEOUT)
+        }
         PaneCmd::Claim { pane, pid } => (
             ControlVerb::PaneClaim {
                 pane,
@@ -5310,7 +4125,7 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
     // extended window instead of respecting its own 10s bound.
     let is_wait = matches!(verb, ControlVerb::PaneWait { .. });
     let stream = if is_run {
-        match crate::client::connect_or_spawn(sock) {
+        match crate::client::connect_or_spawn(sock, false) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("fno mux pane: {e}");
@@ -5339,6 +4154,9 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
                     return EXIT_OK;
                 }
                 eprintln!("fno mux pane: cannot reach session {session:?}: {e}");
+                if let Some(audit) = pane_send_audit.take() {
+                    audit.emit(session, EXIT_ERROR);
+                }
                 return EXIT_ERROR;
             }
         }
@@ -5374,6 +4192,9 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
             EXIT_ERROR
         }
     };
+    if let Some(audit) = pane_send_audit.take() {
+        audit.emit(session, code);
+    }
     if review_command.is_some() {
         append_review_invocation(
             session,
@@ -5392,7 +4213,7 @@ fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> i32 {
 
 /// The outcome of a control exchange that did not return a reply.
 #[derive(Debug)]
-enum ControlError {
+pub(crate) enum ControlError {
     /// The exchange failed and nothing is running because of it.
     Fatal(String),
     /// The server refused with an actionable protocol error code.
@@ -5417,7 +4238,7 @@ impl std::fmt::Display for ControlError {
 /// read that times out with nothing consumed is polled again up to
 /// `reply_deadline`: the verb has already reached the server, so re-sending it
 /// (rather than continuing to read) would risk a second pane (LD1).
-fn send_control(
+pub(crate) fn send_control(
     stream: std::os::unix::net::UnixStream,
     verb: ControlVerb,
     read_timeout: Duration,
@@ -5472,7 +4293,7 @@ fn send_control(
 /// Turn one server reply into stdout + an exit code. `command_done_requested`
 /// lets a `wait` note the markerless degradation (asked --command-done, got a
 /// quiet/timeout settle because the pane emitted no OSC 133 `D`).
-/// The human tab label (x-1499): the name when present, else the visible
+/// The human tab label: the name when present, else the visible
 /// `·N` ordinal - the identifier the operator's eye already has. Renderers
 /// print it FIRST and the stable `tab_id` second; the stable id alone names
 /// something the operator cannot find on their own screen.
@@ -5484,12 +4305,12 @@ fn tab_label(name: Option<&str>, ordinal: Option<usize>) -> String {
     }
 }
 
-/// The one-line legend naming the layout geometry's units (x-1499): printed
+/// The one-line legend naming the layout geometry's units: printed
 /// exactly once per human layout rendering, verbatim.
 const LAYOUT_UNITS_LEGEND: &str =
     "x/y are the top-left corner in character cells; rows/cols are the size in character cells.";
 
-/// The human layout rows (x-1499): one per pane, worker-joined, carrying
+/// The human layout rows: one per pane, worker-joined, carrying
 /// both tab identifier forms and the pane's geometry. Pure so the row shape
 /// is unit-testable without a socket; the caller prints the rows and then
 /// [`LAYOUT_UNITS_LEGEND`] exactly once.
@@ -5516,7 +4337,7 @@ fn layout_rows(squads: &[SquadLayout]) -> Vec<String> {
     out
 }
 
-/// The human [`ServerMsg::TabLocation`] receipt lines (x-1499): the summary
+/// The human [`ServerMsg::TabLocation`] receipt lines: the summary
 /// line (workspace, both tab identifier forms, the focused pane) plus one
 /// line per pane naming its worker or the explicit `empty` marker. Pure so
 /// the receipt shape is unit-testable.
@@ -5541,6 +4362,22 @@ fn tab_location_lines(
     out
 }
 
+/// The shape rule lives in `server/lifecycle_target.rs`; re-exported for the public path.
+pub use crate::server::lifecycle_target::session_id_shaped;
+
+/// The `fno_id` column for one pane: `(state, cell)`. Three states
+/// where two lived before. A RESOLVED session id. UNRESOLVED with the reason
+/// named, for a pane carrying fno evidence but no resolvable id:
+/// `spawned-name` (the spawn captured a worker `name`, so the pane is fno's
+/// even though the registry join found no session id) or `name-as-id` (the
+/// registry identity slot holds a worker name). And the `-` sentinel, now
+/// reserved for panes with NO fno evidence at all. Pure so the
+/// self-contradicting row (a worker name beside `-`) is unit-testable without
+/// a socket.
+pub fn pane_identity_cell(p: &proto::PaneInfo) -> (&'static str, String) {
+    lifecycle_target::identity_cell(p.fno_id.as_deref(), p.name.as_deref())
+}
+
 fn render_reply(
     reply: ServerMsg,
     json: bool,
@@ -5549,14 +4386,32 @@ fn render_reply(
 ) -> i32 {
     match reply {
         ServerMsg::PaneList { mut panes } => {
-            // (x-d865) `pane ls --fno-id <id>` filters to panes carrying that id.
+            // `pane ls --fno-id` keeps panes answering to either id spelling.
             if let Some(want) = ls_fno_id {
-                panes.retain(|p| p.fno_id.as_deref() == Some(want));
+                panes.retain(|p| p.answers_id(want));
             }
             if json {
+                // Each row carries `fno_id_state` beside the raw
+                // `fno_id`, so a JSON consumer can tell a resolved session id
+                // from a name-shaped registry identity from an untracked pane
+                // without re-deriving the shape rule. The raw value stays for
+                // callers that match it against a registry identity.
+                let rows: Vec<serde_json::Value> = panes
+                    .iter()
+                    .map(|p| {
+                        let mut obj = serde_json::to_value(p).unwrap_or(serde_json::Value::Null);
+                        if let Some(o) = obj.as_object_mut() {
+                            o.insert(
+                                "fno_id_state".into(),
+                                serde_json::json!(pane_identity_cell(p).0),
+                            );
+                        }
+                        obj
+                    })
+                    .collect();
                 println!(
                     "{}",
-                    serde_json::to_string(&panes).unwrap_or_else(|_| "[]".into())
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".into())
                 );
             } else {
                 for p in &panes {
@@ -5564,10 +4419,12 @@ fn render_reply(
                         .child_pid
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "-".into());
-                    let fno = p.fno_id.as_deref().unwrap_or("-");
+                    // The column names why an id is absent instead of
+                    // printing one dash for two opposite states.
+                    let fno = pane_identity_cell(p).1;
                     let name = p.name.as_deref().unwrap_or("-");
                     let tab = tab_label(p.tab_name.as_deref(), p.tab_ordinal);
-                    // (x-dfe7) The current harness session prints BESIDE the
+                    // The current harness session prints BESIDE the
                     // stable thread id, with the lineage chain named when
                     // present - a successor's retired id must never read as
                     // current, and a branch's fork edge stays visible.
@@ -5609,7 +4466,7 @@ fn render_reply(
             // actually ended up there. `clients_moved` is printed even when it
             // is the obvious 1, because the number is the whole point: a bare
             // "ok" would prove only that the command was accepted. The tab is
-            // named by its visible label AND its stable id (x-1499).
+            // named by its visible label AND its stable id.
             if json {
                 println!(
                     "{}",
@@ -5636,7 +4493,7 @@ fn render_reply(
             tab_ordinal,
         } => {
             // pane break receipt: `--json` is EXACTLY the machine-readable new
-            // tab id; the human line names both identifier forms (x-1499).
+            // tab id; the human line names both identifier forms.
             if json {
                 println!("{}", serde_json::json!({ "tab_id": tab_id }));
             } else {
@@ -5745,7 +4602,7 @@ fn render_reply(
                 );
             } else {
                 // One row per tab: the visible label first, the stable id
-                // second (x-1499). The ordinal is the row's position - the
+                // second. The ordinal is the row's position - the
                 // tabs arrive in display order.
                 for (i, t) in tabs.iter().enumerate() {
                     let mark = if t.active { "*" } else { " " };
@@ -5763,15 +4620,12 @@ fn render_reply(
         }
         ServerMsg::LayoutTree { squads } => {
             if json {
-                // Machine-first: the nested tree + geometry a consumer diffs.
                 println!(
                     "{}",
                     serde_json::to_string(&squads).unwrap_or_else(|_| "[]".into())
                 );
             } else {
-                // The operator-readable rendering (x-1499): one row per pane,
-                // joined to its worker, with both tab identifier forms and
-                // the geometry's units named once below the rows.
+                // The operator-readable rendering: one row per pane.
                 let rows = layout_rows(&squads);
                 for row in &rows {
                     println!("{row}");
@@ -5782,6 +4636,7 @@ fn render_reply(
             }
             EXIT_OK
         }
+        ServerMsg::AgentRowsReceipt { rows } => mux_rows::render_receipt(&rows, json),
         ServerMsg::PaneLocation {
             fno_id,
             squad_id,
@@ -5804,7 +4659,7 @@ fn render_reply(
             } else {
                 let sq = squad_name.as_deref().unwrap_or("-");
                 // Each hosting tab prints label/slot then id, never a bare id
-                // (x-1499): `tabs=bee/27,·2/34`.
+                // `tabs=bee/27,·2/34`.
                 let tabs = tabs
                     .iter()
                     .enumerate()
@@ -5832,7 +4687,7 @@ fn render_reply(
             focus,
             panes,
         } => {
-            // The reverse-location receipt (x-1499): both identifier forms,
+            // The reverse-location receipt: both identifier forms,
             // every pane, and every occupant. `worker=empty` is the POSITIVE
             // marker for an unoccupied pane - absence of output proves
             // nothing.
@@ -5892,7 +4747,7 @@ fn render_reply(
             eprintln!("fno mux: {msg}");
             // Each error class the CLI can act on gets its OWN exit code so a
             // script can branch: BLOCK_UNAVAILABLE (AC2-ERR), TARGET_NOT_IDLE (a
-            // guarded send bounced), and the three `where` outcomes (x-d865:
+            // guarded send bounced), and the three `where` outcomes (:
             // NOT_FOUND / NOT_PANE_HOSTED / REGISTRY_UNAVAILABLE stay distinct so
             // a script never conflates "no such id" with "id has no live pane").
             if code == err_code::BLOCK_UNAVAILABLE {
@@ -5908,7 +4763,7 @@ fn render_reply(
             } else if code == err_code::REGISTRY_UNAVAILABLE {
                 EXIT_REGISTRY_UNAVAILABLE
             } else if code == err_code::NO_CLIENT {
-                // (x-3e17) `pane focus` with nobody watching. Distinct from the
+                // `pane focus` with nobody watching. Distinct from the
                 // dead-pane EXIT_ERROR so a caller can tell "your pane is gone"
                 // from "your mux is running but unattended" and re-notify later.
                 EXIT_NO_CLIENT
@@ -5965,6 +4820,17 @@ fn render_reply(
             }
             EXIT_OK
         }
+        // A one-line receipt. `pane kill --hand-off-to` answers this way:
+        // the pane is released, the keeper is at its new socket, and the
+        // child is still running, which no structured reply describes.
+        ServerMsg::Notice { text } => {
+            if json {
+                println!("{}", serde_json::json!({"notice": text}));
+            } else {
+                println!("{text}");
+            }
+            EXIT_OK
+        }
         // The server only ever answers a control connection with the replies
         // above; anything else is a protocol violation.
         other => {
@@ -5975,61 +4841,8 @@ fn render_reply(
 }
 
 // ---------------------------------------------------------------------------
-// `fno mux block pipe` - cross-pane block piping porcelain (x-fe8f)
+// `fno mux block pipe` - cross-pane block piping porcelain
 // ---------------------------------------------------------------------------
-
-/// A parsed `block pipe` invocation. Pure-parse struct, mirrors [`ParsedPane`].
-#[derive(Debug, PartialEq, Eq)]
-struct ParsedBlockPipe {
-    session: Option<String>,
-    json: bool,
-    from: u64,
-    to: u64,
-    block: BlockSel,
-    force: bool,
-}
-
-/// Parse the tokens after `mux block` into a [`ParsedBlockPipe`]. Pure, so the
-/// grammar is unit-testable without a socket. `pipe` is the only block verb.
-fn parse_block_args(args: &[OsString]) -> Result<ParsedBlockPipe, String> {
-    let verb = args
-        .first()
-        .and_then(|a| a.to_str())
-        .ok_or_else(|| "block needs a verb: pipe | annotate".to_string())?;
-    if verb != "pipe" {
-        return Err(format!("unknown block verb: {verb} (pipe | annotate)"));
-    }
-    let mut session = None;
-    let mut json = false;
-    let mut force = false;
-    let mut from = None;
-    let mut to = None;
-    let mut block = BlockSel::Last;
-    let mut i = 1;
-    while i < args.len() {
-        let tok = args[i]
-            .to_str()
-            .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-        match tok {
-            "--json" => json = true,
-            "--force" => force = true,
-            "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-            "--from" => from = Some(parse_u64(&flag_value(args, &mut i, "--from")?, "--from")?),
-            "--to" => to = Some(parse_u64(&flag_value(args, &mut i, "--to")?, "--to")?),
-            "--block" => block = parse_block_sel(&flag_value(args, &mut i, "--block")?)?,
-            other => return Err(format!("unknown argument: {other}")),
-        }
-        i += 1;
-    }
-    Ok(ParsedBlockPipe {
-        session,
-        json,
-        from: from.ok_or("block pipe needs --from <pane>")?,
-        to: to.ok_or("block pipe needs --to <pane>")?,
-        block,
-        force,
-    })
-}
 
 /// Data-integrity gate on the source block's metadata: an open (still
 /// running) or byte-cap-truncated block must never pipe - partial text is
@@ -6069,7 +4882,7 @@ fn pipe_block_gate(meta: Option<&proto::BlockMeta>) -> Result<(), String> {
 /// connect + [`send_control`], factored so `block pipe` can do two in a row).
 /// Timeouts are parameters, not the hardcoded constants, so a test can force
 /// `Unanswered` in milliseconds instead of waiting out `CONTROL_REPLY_DEADLINE`.
-fn control_roundtrip_with_timeouts(
+pub(crate) fn control_roundtrip_with_timeouts(
     sock: &Path,
     session: &str,
     verb: ControlVerb,
@@ -6081,7 +4894,7 @@ fn control_roundtrip_with_timeouts(
     send_control(stream, verb, read_timeout, reply_deadline, session)
 }
 
-fn control_roundtrip(
+pub(crate) fn control_roundtrip(
     sock: &Path,
     session: &str,
     verb: ControlVerb,
@@ -6102,8 +4915,7 @@ fn control_roundtrip(
 /// The child hits its own bound first now and says which hop was slow.
 const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 
-/// Gate and envelope `bytes` for `session:pane` by shelling to the Python
-/// renderer (`fno agents mail pane-prepare`), the SOLE `<fno_mail>` renderer.
+/// Gate and envelope `bytes` for `session:pane` by shelling to the Python renderer (`fno agents mail pane-prepare`).
 ///
 /// Fails closed on every arm: a missing renderer, a non-zero exit (the pane is
 /// showing an option prompt, hosts no registered agent, or the body cannot be
@@ -6149,6 +4961,7 @@ fn prepare_pane_bytes(
         // frame on exactly those installs, and every non-raw send refused as
         // "frame unreadable".
         .env("FNO_BIN", &exe)
+        .env("FNO_MAIL_FENCE", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -6262,300 +5075,6 @@ fn wait_with_deadline(
     Ok((exit, rendered, diagnostics))
 }
 
-fn positive_post_submit_marker(before_cr: &str, after_cr: &str) -> bool {
-    !after_cr.trim().is_empty() && after_cr != before_cr
-}
-
-fn pane_text(sock: &Path, session: &str, pane: u64) -> Result<String, ControlError> {
-    match control_roundtrip(
-        sock,
-        session,
-        ControlVerb::PaneRead {
-            pane,
-            lines: None,
-            block: None,
-        },
-    )? {
-        ServerMsg::PaneText { text, .. } => Ok(text),
-        ServerMsg::Err { msg, .. } => Err(ControlError::Fatal(msg)),
-        other => Err(ControlError::Fatal(format!(
-            "unexpected pane read reply while confirming submit: {other:?}"
-        ))),
-    }
-}
-
-fn review_invocation_command(bytes: &[u8]) -> Option<(String, String)> {
-    let raw = std::str::from_utf8(bytes).ok()?.trim();
-    let mut parts = raw.splitn(2, char::is_whitespace);
-    let token = parts.next()?.strip_prefix('/')?;
-    let name = token.rsplit(':').next()?;
-    if !matches!(
-        name,
-        "code-review" | "review" | "review-changes" | "sigma-review"
-    ) {
-        return None;
-    }
-    Some((
-        format!("/{name}"),
-        parts.next().unwrap_or("").trim_start().to_string(),
-    ))
-}
-
-fn review_invocation_id() -> String {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("ri-{nanos:x}-{}", std::process::id())
-}
-
-fn review_events_path() -> PathBuf {
-    if let Ok(path) = std::env::var("FNO_EVENTS_PATH") {
-        if !path.is_empty() {
-            return PathBuf::from(path);
-        }
-    }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut command = crate::process_admission::std_command("git");
-    command.args(["-C", &cwd.to_string_lossy(), "rev-parse", "--show-toplevel"]);
-    let probe = crate::process_admission::std_output(&mut command);
-    if let Err(error) = &probe {
-        // The spawn itself failed (admission refusal, missing git). Say so, or
-        // the fallback silently lands the journal where no reader looks.
-        eprintln!("fno mux: review-events git probe failed ({error}); events fall back to the current directory");
-    }
-    let root = probe
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|root| PathBuf::from(root.trim()))
-        .filter(|root| !root.as_os_str().is_empty())
-        .unwrap_or(cwd);
-    root.join(".fno/events.jsonl")
-}
-
-fn review_invocation_branch_and_head() -> (Option<String>, Option<String>) {
-    let git = |args: &[&str]| {
-        let mut command = crate::process_admission::std_command("git");
-        command.args(["rev-parse", "--verify"]).args(args);
-        let probe = crate::process_admission::std_output(&mut command);
-        if let Err(error) = &probe {
-            eprintln!(
-                "fno mux: review-evidence git probe failed ({error}); evidence fields will be null"
-            );
-        }
-        probe
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| String::from_utf8(output.stdout).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let head = git(&["HEAD"]);
-    let mut command = crate::process_admission::std_command("git");
-    command.args(["rev-parse", "--abbrev-ref", "HEAD"]);
-    let branch = crate::process_admission::std_output(&mut command)
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty() && value != "HEAD");
-    (branch, head)
-}
-
-fn append_review_invocation(
-    session: &str,
-    command: Option<(String, String)>,
-    submitted: bool,
-    submit_confirmed: bool,
-    receipt: &str,
-) {
-    if std::env::var_os("FNO_REVIEW_INVOCATION_ID").is_some() {
-        return;
-    }
-    append_review_invocation_at(
-        &review_events_path(),
-        session,
-        command,
-        submitted,
-        submit_confirmed,
-        receipt,
-    );
-}
-
-fn append_review_invocation_at(
-    path: &Path,
-    session: &str,
-    command: Option<(String, String)>,
-    submitted: bool,
-    submit_confirmed: bool,
-    receipt: &str,
-) {
-    let Some((verb, args_raw)) = command else {
-        return;
-    };
-    let (branch, head_sha) = review_invocation_branch_and_head();
-    let invocation_id = review_invocation_id();
-    // `submitted` records whether this send carried a submit key at all. A
-    // plain text write is not a submit, so it must not claim one: the row is
-    // the transport fact an operator debugs a wedged review against.
-    let (submit_required, submit_key, submit_confirmed) = if submitted {
-        (true, "\\r", submit_confirmed)
-    } else {
-        (false, "none", false)
-    };
-    let data = serde_json::json!({
-        "invocation_id": invocation_id,
-        "stage": "sent",
-        "verb": verb,
-        "args_raw": args_raw,
-        "transport": "mux_pane_send_raw",
-        "initiator": "unknown",
-        "target_session_id": session,
-        "submit_required": submit_required,
-        "submit_key": submit_key,
-        "submit_confirmed": submit_confirmed,
-        "receipt": receipt,
-        "branch": branch,
-        "head_sha": head_sha,
-    });
-    let event = serde_json::json!({
-        "ts": review_invocation_timestamp(),
-        "type": "review_invocation",
-        "source": "daemon",
-        "data": data,
-    });
-    let result = (|| -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)?;
-        writeln!(file, "{event}")
-    })();
-    let _ = result;
-}
-
-fn review_invocation_timestamp() -> String {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let days = (seconds / 86_400) as i64;
-    let remainder = seconds % 86_400;
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let month_part = (5 * doy + 2) / 153;
-    let day = doy - (153 * month_part + 2) / 5 + 1;
-    let month = if month_part < 10 {
-        month_part + 3
-    } else {
-        month_part - 9
-    };
-    let year = if month <= 2 { year + 1 } else { year };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        remainder / 3_600,
-        (remainder % 3_600) / 60,
-        remainder % 60
-    )
-}
-
-fn send_pane_bytes(
-    sock: &Path,
-    session: &str,
-    pane: u64,
-    bytes: Vec<u8>,
-    guarded: bool,
-    expected_identity: Option<&str>,
-) -> Result<(), ControlError> {
-    match control_roundtrip(
-        sock,
-        session,
-        ControlVerb::PaneSend {
-            pane,
-            bytes,
-            guarded,
-            expected_identity: expected_identity.map(str::to_string),
-        },
-    )? {
-        ServerMsg::Ok => Ok(()),
-        ServerMsg::Err { code, msg }
-            if code == err_code::TARGET_IDENTITY_MISMATCH || code == err_code::TARGET_DND =>
-        {
-            Err(ControlError::FatalCode { code, msg })
-        }
-        ServerMsg::Err { msg, .. } => Err(ControlError::Fatal(msg)),
-        other => Err(ControlError::Fatal(format!(
-            "unexpected pane send reply while submitting: {other:?}"
-        ))),
-    }
-}
-
-fn submit_pane(
-    sock: &Path,
-    session: &str,
-    pane: u64,
-    bytes: Vec<u8>,
-    guarded: bool,
-    expected_identity: Option<&str>,
-    json: bool,
-) -> i32 {
-    if let Err(e) = send_pane_bytes(sock, session, pane, bytes, guarded, expected_identity) {
-        eprintln!("fno mux pane: {e}");
-        return match e {
-            ControlError::Unanswered(_) => EXIT_CONTROL_UNANSWERED,
-            ControlError::Fatal(_) => EXIT_ERROR,
-            ControlError::FatalCode { code, .. } if code == err_code::TARGET_IDENTITY_MISMATCH => {
-                EXIT_TARGET_IDENTITY_MISMATCH
-            }
-            ControlError::FatalCode { code, .. } if code == err_code::TARGET_DND => EXIT_TARGET_DND,
-            ControlError::FatalCode { .. } => EXIT_ERROR,
-        };
-    }
-    std::thread::sleep(Duration::from_millis(CR_SETTLE_MS));
-    let baseline = pane_text(sock, session, pane).ok();
-    if let Err(e) = send_pane_bytes(sock, session, pane, vec![b'\r'], false, expected_identity) {
-        eprintln!("fno mux pane: text delivered, submission unconfirmed: {e}");
-        if let ControlError::FatalCode { code, .. } = e {
-            if code == err_code::TARGET_IDENTITY_MISMATCH {
-                return EXIT_TARGET_IDENTITY_MISMATCH;
-            }
-            if code == err_code::TARGET_DND {
-                return EXIT_TARGET_DND;
-            }
-        }
-        return EXIT_SUBMIT_UNCONFIRMED;
-    }
-    for attempt in 0..SUBMIT_CONFIRM_ATTEMPTS {
-        if let (Some(before), Ok(after)) = (baseline.as_deref(), pane_text(sock, session, pane)) {
-            if positive_post_submit_marker(before, &after) {
-                // Every failure arm prints, so silence was the ONLY quiet
-                // outcome: a reader with the "no --submit prints nothing"
-                // contract read a silent success as a non-submit and re-sent.
-                // One positive word on stdout, the channel WaitDone reports
-                // its outcome word on.
-                if !json {
-                    println!("submitted");
-                }
-                return render_reply(ServerMsg::Ok, json, false, None);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(SUBMIT_CONFIRM_INTERVAL_MS));
-        if (attempt + 1) % CR_RESUBMIT_EVERY == 0 {
-            let _ = send_pane_bytes(sock, session, pane, vec![b'\r'], false, expected_identity);
-        }
-    }
-    eprintln!("fno mux pane: text delivered, submission unconfirmed");
-    EXIT_SUBMIT_UNCONFIRMED
-}
-
 /// `fno mux block pipe --from <pane> --to <pane> [--block last|<seq>] [--json]
 /// [--force]`: read a COMPLETED block from the source pane and land its text
 /// in the target pane's input. Porcelain over `pane read --block` + `pane
@@ -6650,6 +5169,7 @@ fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
             bytes,
             guarded: !parsed.force,
             expected_identity: None,
+            hold_pass: false,
         },
     ) {
         Ok(ServerMsg::Ok) => {}
@@ -6705,7 +5225,7 @@ fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// `fno mux block annotate` - operator review-finding capture porcelain (x-f8d4)
+// `fno mux block annotate` - operator review-finding capture porcelain
 // ---------------------------------------------------------------------------
 
 /// Cap for the block excerpt carried into the finding: the command line + head
@@ -6714,64 +5234,9 @@ fn block_pipe(args: &[OsString], env_session: Option<&str>) -> i32 {
 /// cap only bounds how much of a large completed block rides into the event.
 const ANNOTATE_EXCERPT_CAP: usize = 2048;
 
-/// A parsed `block annotate` invocation. Pure-parse struct, mirrors
-/// [`ParsedBlockPipe`]. `node` carries the backlog node the finding is scoped
-/// to (the caller supplies the pane's server-tracked `FNO_NODE`, surfaced to
-/// the mux client as `Layout::focus_node`); the porcelain never guesses it.
-#[derive(Debug, PartialEq, Eq)]
-struct ParsedBlockAnnotate {
-    session: Option<String>,
-    from: u64,
-    block: BlockSel,
-    node: String,
-    message: String,
-}
-
-/// Parse the tokens after `mux block annotate` into a [`ParsedBlockAnnotate`].
-/// Pure, so the grammar is unit-testable without a socket. `--node` and `-m`
-/// are required; a missing `--node` is the "specify the node" refusal (a
-/// non-agent pane has no provenance to resolve, so the caller must name it).
-fn parse_block_annotate(args: &[OsString]) -> Result<ParsedBlockAnnotate, String> {
-    // args[0] is the "annotate" verb (block() already routed on it).
-    let mut session = None;
-    let mut from = None;
-    let mut block = BlockSel::Last;
-    let mut node = None;
-    let mut message = None;
-    let mut i = 1;
-    while i < args.len() {
-        let tok = args[i]
-            .to_str()
-            .ok_or_else(|| "non-UTF-8 argument".to_string())?;
-        match tok {
-            "--session" => session = Some(flag_value(args, &mut i, "--session")?),
-            "--from" => from = Some(parse_u64(&flag_value(args, &mut i, "--from")?, "--from")?),
-            "--block" => block = parse_block_sel(&flag_value(args, &mut i, "--block")?)?,
-            "--node" => node = Some(flag_value(args, &mut i, "--node")?),
-            "--message" | "-m" => message = Some(flag_value(args, &mut i, "--message")?),
-            other => return Err(format!("unknown argument: {other}")),
-        }
-        i += 1;
-    }
-    let message = message.ok_or("block annotate needs -m <text>")?;
-    if message.trim().is_empty() {
-        return Err("block annotate: --message is empty".to_string());
-    }
-    Ok(ParsedBlockAnnotate {
-        session,
-        from: from.ok_or("block annotate needs --from <pane>")?,
-        block,
-        node: node.ok_or(
-            "block annotate needs --node <id> (a pane's node cannot be guessed; \
-             pass the node whose work this pane holds)",
-        )?,
-        message,
-    })
-}
-
 /// `fno mux block annotate --from <pane> [--block last|<seq>] -m <text> --node
 /// <id> [--session]`: read a COMPLETED block from the source pane and record it
-/// as an operator review finding against `--node` via `fno backlog annotate add`.
+/// as an operator review finding against `--node` via `fno backlog note <node> --blocking`.
 /// Unlike `block pipe` there is NO target-idle guard (nothing enters a
 /// recipient PTY - delivery is a mail inject the daemon queues); it reuses the
 /// same typed-block gate (an open/truncated/markerless block refuses) and caps
@@ -6843,38 +5308,27 @@ fn block_annotate(args: &[OsString], env_session: Option<&str>) -> i32 {
     //    review) and there is nothing to clean up.
     let excerpt = cap_excerpt(&text, ANNOTATE_EXCERPT_CAP);
 
-    // 2b. Resolve the --from pane's cwd so `fno backlog annotate add` records the finding
-    //     into THAT worktree's .fno/events.jsonl - the one loop-check reads for
-    //     the node - not the caller's cwd (codex P1: a mismatched cwd lands the
-    //     durable finding in the wrong project and never gates). Best-effort: on
-    //     a PaneLs miss inherit the caller cwd (the mail inject still lands).
-    let pane_cwd = pane_cwd_via_ls(&sock, &session, parsed.from);
-
-    // 3. Shell the Python core (`fno backlog annotate add`) via this binary's own `fno`
-    //    entrypoint, so the finding recording + claim-holder delivery ladder
-    //    lives in one place. The
-    //    excerpt rides stdin (`--block-excerpt-file -`), never a temp file.
+    // 3. Shell the note verb (`fno backlog note <node> --blocking`) via this
+    //    binary's own `fno` entrypoint, so the finding recording + claim-holder
+    //    delivery ladder lives in one place. The excerpt rides stdin
+    //    (`--block-excerpt-file -`), never a temp file. The findings store is
+    //    not cwd-bound, so the caller's cwd is fine.
     let fno = std::env::current_exe().unwrap_or_else(|_| "fno".into());
     let mut cmd = crate::process_admission::std_command(&fno);
     cmd.args([
         OsString::from("backlog"),
-        OsString::from("annotate"),
-        OsString::from("add"),
-        OsString::from("--node"),
+        OsString::from("note"),
         OsString::from(&parsed.node),
-        OsString::from("--message"),
+        OsString::from("--blocking"),
         OsString::from(&parsed.message),
         OsString::from("--block-excerpt-file"),
         OsString::from("-"),
     ])
     .stdin(std::process::Stdio::piped());
-    if let Some(cwd) = pane_cwd {
-        cmd.current_dir(cwd);
-    }
     let mut child = match crate::process_admission::std_spawn(&mut cmd) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("fno mux block: cannot run `fno backlog annotate add`: {e}");
+            eprintln!("fno mux block: cannot run `fno backlog note --blocking`: {e}");
             return EXIT_ERROR;
         }
     };
@@ -6887,23 +5341,9 @@ fn block_annotate(args: &[OsString], env_session: Option<&str>) -> i32 {
     match child.wait() {
         Ok(s) => s.code().unwrap_or(EXIT_ERROR),
         Err(e) => {
-            eprintln!("fno mux block: cannot run `fno backlog annotate add`: {e}");
+            eprintln!("fno mux block: cannot run `fno backlog note --blocking`: {e}");
             EXIT_ERROR
         }
-    }
-}
-
-/// Resolve `pane`'s cwd via a `PaneLs` round-trip. Returns `None` on any miss
-/// (unreachable server, pane absent, empty cwd) so the caller degrades to the
-/// inherited cwd rather than failing the annotation outright.
-fn pane_cwd_via_ls(sock: &Path, session: &str, pane: u64) -> Option<String> {
-    match control_roundtrip(sock, session, ControlVerb::PaneLs) {
-        Ok(ServerMsg::PaneList { panes }) => panes
-            .into_iter()
-            .find(|p| p.pane_id == pane)
-            .map(|p| p.cwd)
-            .filter(|c| !c.is_empty()),
-        _ => None,
     }
 }
 
@@ -6921,264 +5361,36 @@ fn cap_excerpt(text: &str, cap: usize) -> String {
     format!("{}\n... [truncated to {cap} bytes]", &text[..end])
 }
 
-/// `fno mux block <verb> ...`: route the block verb family. `pipe` (x-fe8f)
-/// pipes a completed block into another pane's input; `annotate` (x-f8d4)
+/// `fno mux block <verb> ...`: route the block verb family. `pipe`
+/// pipes a completed block into another pane's input; `annotate`
 /// records it as an operator review finding.
-pub fn block(args: &[OsString], env_session: Option<&str>) -> i32 {
-    match args.first().and_then(|a| a.to_str()) {
-        Some("pipe") => block_pipe(args, env_session),
-        Some("annotate") => block_annotate(args, env_session),
-        Some(v) => {
-            eprintln!("fno mux block: unknown block verb: {v} (pipe | annotate)");
-            EXIT_USAGE
-        }
-        None => {
-            eprintln!("fno mux block: block needs a verb: pipe | annotate");
-            EXIT_USAGE
-        }
+pub fn block(op: crate::cli_args::BlockOp, args: &[OsString], env_session: Option<&str>) -> i32 {
+    match op {
+        crate::cli_args::BlockOp::Pipe(_) => block_pipe(args, env_session),
+        crate::cli_args::BlockOp::Annotate(_) => block_annotate(args, env_session),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::pane_submit::positive_post_submit_marker;
     use super::*;
+    use crate::pane_send_audit::{FNO_AGENTS_HOME_GUARD, FNO_BIN_GUARD};
+    use block_args::{ParsedBlockAnnotate, ParsedBlockPipe};
 
-    fn paneless_row(name: &str, attach: Option<&str>) -> crate::agents_view::RegistryAgent {
-        paneless_row_with_harness(name, attach, None)
-    }
+    // The paneless route-hint test lives in its own file; the parent is
+    // shrink-only under the file-budget gate.
+    #[path = "paneless_hint_tests.rs"]
+    mod paneless_hint_tests;
 
-    fn paneless_row_with_harness(
-        name: &str,
-        attach: Option<&str>,
-        harness: Option<&str>,
-    ) -> crate::agents_view::RegistryAgent {
-        crate::agents_view::RegistryAgent {
-            spawned_by_session: None,
-            session_id: None,
-            harness_session_id: None,
-            predecessor_session_ids: Vec::new(),
-            forked_from_session_id: None,
-            name: name.into(),
-            cwd: "/tmp/seen".into(),
-            exited: false,
-            dnd: false,
-            liveness: crate::agents_view::Liveness::Alive,
-            badge: None,
-            reason: None,
-            mux: None,
-            answerable: None,
-            attach_id: attach.map(str::to_owned),
-            external: false,
-            account: None,
-            claude_session_uuid: None,
-            updated_at: None,
-            crown_level: None,
-            crown_scope: None,
-            harness: harness.map(str::to_owned),
-        }
-    }
+    // The reseat registry-half tests, same reason.
+    #[path = "reseat_verb_tests.rs"]
+    mod reseat_verb_tests;
 
-    #[test]
-    fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
-        // AC9-HP: the exit-17 line a paneless row prints names the peek route
-        // every row has AND the drive route a live attach-carrying row has -
-        // never the bare "hosts no live pane" the incident hit. `where`,
-        // `view`, and `focus` share this one builder, so one assertion covers
-        // all three doors.
-        let drive = paneless_route_hint("fno mux where", &paneless_row("t-live", Some("deadbee1")));
-        assert!(drive.contains("fno agents peek t-live --follow"), "{drive}");
-        assert!(drive.contains("fno agents attach t-live"), "{drive}");
-        assert!(drive.contains("hosts no live pane"), "{drive}");
-
-        // Follow tier (a peek-capable harness, no attach id): the peek route
-        // only, still not the bare line.
-        let follow = paneless_route_hint(
-            "fno mux where",
-            &paneless_row_with_harness("t-codex", None, Some("codex")),
-        );
-        assert!(
-            follow.contains("fno agents peek t-codex --follow"),
-            "{follow}"
-        );
-        assert!(!follow.contains("fno agents attach"), "{follow}");
-        assert!(follow.contains("hosts no live pane"), "{follow}");
-
-        // Locate tier (no attach id, no peek reader - e.g. gemini): peek
-        // --follow is a route guaranteed to fail there, so the hint must
-        // name attach instead, never peek.
-        let locate = paneless_route_hint(
-            "fno mux where",
-            &paneless_row_with_harness("t-gemini", None, Some("gemini")),
-        );
-        assert!(locate.contains("fno agents attach t-gemini"), "{locate}");
-        assert!(!locate.contains("--follow"), "{locate}");
-        assert!(locate.contains("hosts no live pane"), "{locate}");
-    }
-
-    #[test]
-    fn workspace_prune_classifies_pristine_running_and_named_tabs() {
-        let tabs = vec![
-            LiveTab {
-                session: "main".into(),
-                squad_id: 1,
-                squad_name: None,
-                tab_id: 11,
-                pane_count: 1,
-                pristine: true,
-            },
-            LiveTab {
-                session: "main".into(),
-                squad_id: 1,
-                squad_name: None,
-                tab_id: 12,
-                pane_count: 1,
-                pristine: false,
-            },
-            LiveTab {
-                session: "main".into(),
-                squad_id: 2,
-                squad_name: Some("named".into()),
-                tab_id: 21,
-                pane_count: 1,
-                pristine: true,
-            },
-        ];
-
-        let outcome = prune_live_tabs(&tabs, false, true);
-        assert_eq!(outcome.would_close, 1);
-        assert_eq!(outcome.closed, 0);
-        assert_eq!(outcome.skipped_named, 1);
-        assert_eq!(outcome.kept, 1);
-    }
-
-    #[test]
-    fn workspace_prune_never_folds_a_workspace_only_tab() {
-        // The tab arm folds SURPLUS pristine tabs. A squad's only tab is not
-        // surplus: closing it removes the squad, and the server de-persists a
-        // removed squad's store row, so one prune run would take both the live
-        // pane and the record the live-pane arm exists to protect. Surplus
-        // pristine tabs still fold - that is what this arm is for - but the
-        // count has to DECREMENT as they go. A static count reads "not the last
-        // one" for every tab of a three-tab squad and folds the workspace away.
-        let only = vec![LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id: 11,
-            pane_count: 1,
-            pristine: true,
-        }];
-        let outcome = prune_live_tabs(&only, false, false);
-        assert_eq!(outcome.closed, 0, "a workspace's only tab is never closed");
-        assert_eq!(outcome.would_close, 0);
-        assert_eq!(outcome.kept, 1);
-
-        let pristine_tab = |tab_id: u64| LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id,
-            pane_count: 1,
-            pristine: true,
-        };
-        let pair = vec![pristine_tab(11), pristine_tab(12)];
-        let outcome = prune_live_tabs(&pair, false, true);
-        assert_eq!(outcome.would_close, 1, "the surplus tab folds");
-        assert_eq!(outcome.kept, 1, "one tab is left standing");
-
-        let three = vec![pristine_tab(11), pristine_tab(12), pristine_tab(13)];
-        let outcome = prune_live_tabs(&three, false, true);
-        assert_eq!(outcome.would_close, 2, "the count decrements as tabs fold");
-        assert_eq!(outcome.kept, 1, "a workspace never folds to zero tabs");
-    }
-
-    #[test]
-    fn workspace_prune_folds_answering_session_despite_dead_sibling() {
-        // AC4-HP (x-6e79): one session answers PaneLs, a sibling (the socket a
-        // dead server left behind) does not. The assertion is that the tab
-        // fold RUNS over the answering session's tabs anyway - asserting the
-        // prune ran proves nothing, it always ran when every socket was live.
-        let scope = sweep_scope(1, &["x7b5e-proof".into()]);
-        assert!(
-            scope.fold_tabs,
-            "a dead sibling does not silence the answering session"
-        );
-
-        let pristine = |tab_id: u64| LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id,
-            pane_count: 1,
-            pristine: true,
-        };
-        // Five tabs in one squad: four pristine, one running. The fold
-        // empties the squad to its LAST tab - the running one is it - so all
-        // four pristine tabs are surplus (the pinned two-tab case folds a
-        // pristine down to a lone running tab the same way).
-        let mut tabs: Vec<LiveTab> = (11..=14).map(pristine).collect();
-        tabs.push(LiveTab {
-            session: "main".into(),
-            squad_id: 1,
-            squad_name: None,
-            tab_id: 15,
-            pane_count: 1,
-            pristine: false,
-        });
-        let outcome = prune_live_tabs(&tabs, false, true);
-        assert_eq!(
-            outcome.would_close, 4,
-            "the fold runs despite the dead sibling"
-        );
-        assert_eq!(outcome.kept, 1, "the squad's last tab stands");
-    }
-
-    #[test]
-    fn workspace_prune_names_the_unreachable_session_in_the_receipt() {
-        // AC5-ERR (x-6e79): a positive marker - the refusal names WHICH
-        // session could not be probed. The measured defect: a dead
-        // x7b5e-proof socket disabled the sweep for every healthy session and
-        // the receipt printed a clean zero at exit 0, naming nothing.
-        let notice = unreachable_notice(&["x7b5e-proof".into()]);
-        assert!(notice.contains("x7b5e-proof"), "{notice}");
-        assert!(
-            notice.contains("no squad records changed"),
-            "the refusal still says nothing changed: {notice}"
-        );
-        let two = unreachable_notice(&["a-dead".into(), "z-dead".into()]);
-        assert_eq!(
-            two,
-            "server liveness incomplete for session(s) a-dead, z-dead; no squad records changed"
-        );
-    }
-
-    #[test]
-    fn workspace_prune_store_pass_stays_closed_on_partial_liveness() {
-        // AC6-EDGE (x-6e79): live_cwds is CROSS-session protective evidence -
-        // a live pane's cwd makes prune_decision_with_evidence return Keep,
-        // and an unreachable session contributes no cwds. Running the store
-        // pass on partial evidence would turn a Keep into a Prune, so it
-        // stays globally fail-closed even while the tab arm folds per
-        // session. Absent liveness must never read as dead.
-        let partial = sweep_scope(1, &["x7b5e-proof".into()]);
-        assert!(partial.fold_tabs, "the tab arm is per-session and safe");
-        assert!(
-            !partial.sweep_store,
-            "partial liveness closes the store pass"
-        );
-        let full = sweep_scope(2, &[]);
-        assert!(
-            full.sweep_store,
-            "every session answered, the store pass runs"
-        );
-        assert!(full.fold_tabs);
-        let none_answered = sweep_scope(0, &[]);
-        assert!(!none_answered.fold_tabs, "nothing answered, nothing folds");
-        assert!(
-            none_answered.sweep_store,
-            "zero sessions is empty, not partial"
-        );
-    }
+    // (v75) The control_roundtrip typed-error test, moved out under the same
+    // rule as the retire-session verb landed beside it.
+    #[path = "control_roundtrip_tests.rs"]
+    mod control_roundtrip_tests;
 
     #[test]
     fn squad_target_reads_the_id_spelling_pane_ls_reports() {
@@ -7203,91 +5415,97 @@ mod tests {
         assert_eq!(squad_target(None), PaneTarget::CurrentRoute);
     }
 
-    #[test]
-    fn mux_session_resolution_flag_beats_env_beats_default() {
-        // Locked 7: --session flag > FNO_SESSION env > "main" (AC3-EDGE).
-        assert_eq!(resolve_session(Some("other"), Some("work")), "other");
-        assert_eq!(resolve_session(None, Some("work")), "work");
-        assert_eq!(resolve_session(None, None), DEFAULT_SESSION);
-        // An empty env var reads as unset, not as a session named "".
-        assert_eq!(resolve_session(None, Some("")), DEFAULT_SESSION);
-    }
+    #[path = "server_axis_flag_tests.rs"]
+    mod server_axis_flag_tests;
 
     fn pane_args(tokens: &[&str]) -> Result<ParsedPane, String> {
-        let args: Vec<OsString> = tokens.iter().map(OsString::from).collect();
-        parse_pane_args(&args)
+        let op = op_of(tokens[0]);
+        let args: Vec<OsString> = tokens[1..].iter().map(OsString::from).collect();
+        parse_pane_args(&op, &args)
+    }
+
+    fn op_of(word: &str) -> crate::cli_args::PaneOp {
+        use crate::cli_args::{MuxTail, PaneOp};
+        let t = || MuxTail { tail: Vec::new() };
+        match word {
+            "ls" => PaneOp::Ls(t()),
+            "read" => PaneOp::Read(t()),
+            "run" => PaneOp::Run(t()),
+            "send" => PaneOp::Send(t()),
+            "wait" => PaneOp::Wait(t()),
+            "kill" => PaneOp::Kill(t()),
+            "claim" => PaneOp::Claim(t()),
+            "release" => PaneOp::Release(t()),
+            "split" => PaneOp::Split(t()),
+            "break" => PaneOp::Break(t()),
+            "focus" => PaneOp::Focus(t()),
+            _ => panic!("no test op mapping for {word}"),
+        }
     }
 
     #[test]
-    fn pane_positional_takes_a_session_colon_pane_selector() {
+    fn pane_positional_parse_rows_session_and_cmd_pairs() {
         // The daemon's pane-worker refusals print exactly `main:76`; the
-        // parser must accept its own instrument's remedy.
-        let parsed = pane_args(&["kill", "main:76"]).expect("selector must parse");
-        assert_eq!(parsed.session.as_deref(), Some("main"));
-        assert_eq!(parsed.cmd, PaneCmd::Kill { pane: 76 });
-    }
-
-    #[test]
-    fn pane_explicit_session_flag_beats_the_selector_session() {
-        let parsed = pane_args(&["kill", "--session", "other", "main:76"]).expect("must parse");
-        assert_eq!(parsed.session.as_deref(), Some("other"));
-        assert_eq!(parsed.cmd, PaneCmd::Kill { pane: 76 });
-    }
-
-    #[test]
-    fn pane_bare_id_still_parses_with_no_session() {
-        let parsed = pane_args(&["kill", "76"]).expect("bare id must parse");
-        assert_eq!(parsed.session, None);
-        assert_eq!(parsed.cmd, PaneCmd::Kill { pane: 76 });
-    }
-
-    #[test]
-    fn pane_focus_accepts_a_session_colon_pane_selector() {
-        let parsed = pane_args(&["focus", "main:76"]).expect("selector must parse");
-        assert_eq!(parsed.session.as_deref(), Some("main"));
-        assert_eq!(
-            parsed.cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Pane(76)
-            }
-        );
-    }
-
-    #[test]
-    fn pane_focus_rejects_a_non_numeric_session_colon_pane_selector() {
-        assert_eq!(
-            pane_args(&["focus", "main:x"]).unwrap_err(),
-            r#"pane id needs a number, got "main:x""#
-        );
-    }
-
-    #[test]
-    fn pane_focus_explicit_session_flag_beats_the_selector_session() {
-        let parsed = pane_args(&["focus", "--session", "other", "main:76"]).expect("must parse");
-        assert_eq!(parsed.session.as_deref(), Some("other"));
-        assert_eq!(
-            parsed.cmd,
-            PaneCmd::Focus {
-                target: FocusTarget::Pane(76)
-            }
-        );
+        // parser must accept its own instrument's remedy. One grammar covers
+        // selector, --session override and bare id across the reference verbs.
+        let rows: &[(&[&str], Option<&str>, PaneCmd)] = &[
+            (
+                &["kill", "main:76"],
+                Some("main"),
+                PaneCmd::Kill {
+                    pane: 76,
+                    hand_off_to: None,
+                },
+            ),
+            (
+                &["kill", "--session", "other", "main:76"],
+                Some("other"),
+                PaneCmd::Kill {
+                    pane: 76,
+                    hand_off_to: None,
+                },
+            ),
+            (
+                &["kill", "76"],
+                None,
+                PaneCmd::Kill {
+                    pane: 76,
+                    hand_off_to: None,
+                },
+            ),
+            (
+                &["focus", "main:76"],
+                Some("main"),
+                PaneCmd::Focus {
+                    target: FocusTarget::Pane(76),
+                },
+            ),
+            (
+                &["focus", "--session", "other", "main:76"],
+                Some("other"),
+                PaneCmd::Focus {
+                    target: FocusTarget::Pane(76),
+                },
+            ),
+        ];
+        for (tokens, session, cmd) in rows {
+            let parsed = pane_args(tokens).unwrap_or_else(|e| panic!("{tokens:?}: {e}"));
+            assert_eq!(parsed.session.as_deref(), *session, "{tokens:?}");
+            assert_eq!(&parsed.cmd, cmd, "{tokens:?}");
+        }
     }
 
     #[test]
     fn pane_help_names_the_two_pane_reference_forms() {
-        let help = pane_args(&["--help"]).unwrap_err();
-        assert!(help.contains("<pane-id>"), "{help}");
-        assert!(help.contains("<session>:<pane-id>"), "{help}");
-        assert!(help.contains("--session overrides"), "{help}");
-    }
-
-    #[test]
-    fn pane_run_help_documents_the_worker_flag() {
-        // x-5f7f: the flag is the capture funnel's front door, so the run
-        // verb's own help names it and what it records. Both spellings of the
-        // help request reach the same text.
-        for help_args in [&["run", "--help"][..], &["--help"][..]] {
-            let help = pane_args(help_args).unwrap_err();
+        // The verb-position help request renders the pane group's help now
+        // (clap); its after_help carries the pane reference line. The run
+        // tail's own -h reaches the same text, plus the worker flag contract.
+        let group = crate::cli_args::pane_group_help();
+        assert!(group.contains("<pane-id>"), "{group}");
+        assert!(group.contains("<session>:<pane-id>"), "{group}");
+        assert!(group.contains("--session overrides"), "{group}");
+        let tail = parse_pane_args(&op_of("run"), &os(&["--help"])).unwrap_err();
+        for help in [group, tail] {
             assert!(help.contains("--worker"), "{help}");
             assert!(
                 help.contains("idle row"),
@@ -7322,18 +5540,22 @@ mod tests {
 
     #[test]
     fn pane_malformed_selector_names_the_raw_token() {
-        assert_eq!(
-            pane_args(&["kill", "main:x"]).unwrap_err(),
-            r#"pane id needs a number, got "main:x""#
-        );
-        assert_eq!(
-            pane_args(&["kill", "main:"]).unwrap_err(),
-            r#"pane id needs a number, got "main:""#
-        );
-        assert_eq!(
-            pane_args(&["kill", ":76"]).unwrap_err(),
-            r#"pane id needs a number, got ":76""#
-        );
+        // Same refusal shape for every verb and every malformed spelling.
+        let rows: &[(&[&str], &str)] = &[
+            (
+                &["kill", "main:x"],
+                r#"pane id needs a number, got "main:x""#,
+            ),
+            (&["kill", "main:"], r#"pane id needs a number, got "main:""#),
+            (&["kill", ":76"], r#"pane id needs a number, got ":76""#),
+            (
+                &["focus", "main:x"],
+                r#"pane id needs a number, got "main:x""#,
+            ),
+        ];
+        for (tokens, expected) in rows {
+            assert_eq!(&pane_args(tokens).unwrap_err(), expected, "{tokens:?}");
+        }
     }
 
     #[test]
@@ -7349,38 +5571,22 @@ mod tests {
                 guarded: false,
                 submit: false,
                 raw: false,
+                hold_pass: false,
                 expected_identity: None,
                 style_exception: None,
+                provenance: None,
             }
         );
     }
 
-    // -- shared selector resolution (x-b80d) --------------------------------
+    // -- shared selector resolution --------------------------------
 
     fn reg_row(name: &str, session_id: Option<&str>) -> crate::agents_view::RegistryAgent {
         crate::agents_view::RegistryAgent {
-            spawned_by_session: None,
             name: name.to_string(),
             cwd: "/x".into(),
             session_id: session_id.map(str::to_string),
-            harness_session_id: None,
-            predecessor_session_ids: Vec::new(),
-            forked_from_session_id: None,
-            exited: false,
-            dnd: false,
-            badge: None,
-            reason: None,
-            mux: None,
-            answerable: None,
-            attach_id: None,
-            external: false,
-            account: None,
-            claude_session_uuid: None,
-            updated_at: None,
-            crown_level: None,
-            crown_scope: None,
-            liveness: crate::agents_view::Liveness::Alive,
-            harness: None,
+            ..Default::default()
         }
     }
 
@@ -7445,7 +5651,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_selector_prefers_the_pane_hosted_spelling() {
+    fn resolve_selector_duplicate_identity_tie_breaks() {
         // One identity, two rows: the pane-hosted spelling wins so a paneless
         // duplicate never masks the live pane.
         let mut paneless = reg_row("wake-cac9965a", Some("aaaa1111"));
@@ -7457,10 +5663,7 @@ mod tests {
             other => panic!("expected Found, got {other:?}"),
         }
         assert!(hosted.mux.is_some());
-    }
 
-    #[test]
-    fn resolve_selector_prefers_a_live_row_over_a_stale_pane_ref() {
         // No writer clears `mux` on exit, so an exited row can carry a dead
         // pane ref: a live pane-hosted spelling of the same identity wins.
         let mut dead = reg_row("t-x919-finish", Some("aaaa1111"));
@@ -7475,10 +5678,7 @@ mod tests {
             }
             other => panic!("expected Found, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn resolve_selector_refuses_a_paneless_live_row_over_a_stale_pane_ref() {
         // A live paneless row and an exited row disagree about the mux ref.
         // The stale ref is not a safe fallback: selecting it can address a
         // different worker after the pane id was reused.
@@ -7496,20 +5696,22 @@ mod tests {
     fn pane_focus_target_parse_digits_vs_selector_vs_fzf() {
         // All digits: the legacy integer door, byte-identical behavior.
         assert_eq!(
-            parse_pane_args(&os(&["focus", "31"])).unwrap().cmd,
+            parse_pane_args(&op_of("focus"), &os(&["31"])).unwrap().cmd,
             PaneCmd::Focus {
                 target: FocusTarget::Pane(31)
             }
         );
         // Anything else is a selector resolved against the registry.
         assert_eq!(
-            parse_pane_args(&os(&["focus", "x919"])).unwrap().cmd,
+            parse_pane_args(&op_of("focus"), &os(&["x919"]))
+                .unwrap()
+                .cmd,
             PaneCmd::Focus {
                 target: FocusTarget::Selector("x919".into())
             }
         );
         assert_eq!(
-            parse_pane_args(&os(&["focus", "t-x919-sentinel"]))
+            parse_pane_args(&op_of("focus"), &os(&["t-x919-sentinel"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Focus {
@@ -7518,16 +5720,18 @@ mod tests {
         );
         // --fzf with no positional opens the picker; with one it is usage.
         assert_eq!(
-            parse_pane_args(&os(&["focus", "--fzf"])).unwrap().cmd,
+            parse_pane_args(&op_of("focus"), &os(&["--fzf"]))
+                .unwrap()
+                .cmd,
             PaneCmd::Focus {
                 target: FocusTarget::Pick
             }
         );
-        assert!(parse_pane_args(&os(&["focus", "--fzf", "31"])).is_err());
-        assert!(parse_pane_args(&os(&["focus", "--fzf", "x919"])).is_err());
-        assert!(parse_pane_args(&os(&["focus"])).is_err());
+        assert!(parse_pane_args(&op_of("focus"), &os(&["--fzf", "31"])).is_err());
+        assert!(parse_pane_args(&op_of("focus"), &os(&["--fzf", "x919"])).is_err());
+        assert!(parse_pane_args(&op_of("focus"), &os(&[])).is_err());
         // --fzf pairs with focus only.
-        assert!(parse_pane_args(&os(&["ls", "--fzf"])).is_err());
+        assert!(parse_pane_args(&op_of("ls"), &os(&["--fzf"])).is_err());
     }
 
     fn pane_row(name: &str, session: &str, pane: u64) -> PaneRow {
@@ -7619,7 +5823,7 @@ mod tests {
     #[test]
     fn mux_ls_json_state_contract() {
         // The `state` string is the contract `fno agents restart --mux` reads; a wedged
-        // row is what flips restart to a non-zero exit (x-82c6), split from the
+        // row is what flips restart to a non-zero exit, split from the
         // (still-live) unqueryable old-build row.
         assert_eq!(session_row_json(&live("s"))["state"], "live");
         assert_eq!(session_row_json(&stale("s"))["state"], "stale");
@@ -7650,7 +5854,7 @@ mod tests {
         }
 
         // The trap the pre-floor reading hid: a sidecar at the floor looks
-        // "in range", but those binaries refuse any != client, so the x-1a85
+        // "in range", but those binaries refuse any != client, so the
         // auto-heal must still see them as stale.
         let mut below_floor = live("old");
         below_floor.wire_version = Some(proto::FLOOR_SINCE_PROTO - 1);
@@ -7677,7 +5881,7 @@ mod tests {
     }
 
     #[test]
-    fn mux_pick_fold_keys_arrows_and_bare_esc_split_across_reads() {
+    fn mux_pick_key_decoding() {
         let mut esc = Vec::new();
         // A plain Down arrow arriving one byte per read.
         let mut got = Vec::new();
@@ -7697,10 +5901,7 @@ mod tests {
             fold_pick_keys(&mut esc, b"a\r\x7f"),
             vec![PickKey::Char(b'a'), PickKey::Enter, PickKey::Backspace]
         );
-    }
 
-    #[test]
-    fn mux_pick_keys_from_read_flushes_a_lone_esc_as_quit() {
         // codex P2: a bare Esc press (single 0x1b byte in a read) must surface
         // as PickKey::Esc so Esc-to-quit works without a second keystroke.
         let mut esc = Vec::new();
@@ -7720,7 +5921,6 @@ mod tests {
             vec![PickKey::Esc, PickKey::Char(b'x')]
         );
     }
-
     #[test]
     fn mux_picker_anchors_cursor_on_first_live_row() {
         // AC5-ERR: a leading stale row must not be where the cursor opens.
@@ -7788,7 +5988,7 @@ mod tests {
     fn mux_render_picker_marks_cursor_and_dims_stale() {
         let mut p = Picker::new(vec![live("work"), stale("dead")]);
         let out = render_picker(&p);
-        assert!(out.contains("work  (1 clients, 2 squads, 3 panes)"));
+        assert!(out.contains("work  (1 clients, 2 workspaces, 3 panes)"));
         assert!(out.contains("dead  (stale)"));
         assert!(out.contains("\x1b[2m"), "stale row dimmed");
         assert!(out.contains("\x1b[7m"), "live cursor row reversed");
@@ -7806,36 +6006,29 @@ mod tests {
     }
 
     #[test]
-    fn mux_kill_server_missing_socket_is_no_server_exit_1() {
+    fn kill_server_refusal_rows() {
         // No env manipulation (unit tests share the process): a name no real
         // session uses resolves to a socket that does not exist -> exit 1.
         // The full live/stale matrix runs e2e against FNO_MUX_DIR-scoped
         // servers in 3.6.
-        let code = kill_server(&format!("fno-test-absent-{}", std::process::id()), false);
+        let code = kill_server(
+            &format!("fno-test-absent-{}", std::process::id()),
+            false,
+            false,
+        );
         assert_eq!(code, EXIT_ERROR, "missing socket must exit 1");
-    }
 
-    #[test]
-    fn mux_kill_server_invalid_name_is_usage_exit_2() {
         assert_eq!(
-            kill_server("../evil", false),
+            kill_server("../evil", false, false),
             EXIT_USAGE,
             "validation precedes any I/O"
         );
     }
 
-    // -- kill-server escalation ladder (x-48a5) ------------------------------
-    //
-    // A kill-server against a healthy server proves nothing: every test
-    // starts from a broken state. The wedge is built in-process - a real
-    // listener on the session socket that accepts connections but never
-    // answers, which is the observed failure exactly (connect succeeds, the
-    // KillServer write succeeds, no answer ever comes).
+    // -- kill-server escalation ladder ----------------------------
+    // A real listener accepts but never answers: the broken control channel.
 
-    /// Bind the wedged holder on `session`'s socket: a real `UnixListener`,
-    /// accepted on a thread that never reads or replies. The thread-local
-    /// test mux dir exists only as a path until something creates it (the
-    /// real server's bind does this via `ensure_private_dir`).
+    /// Bind a listener that accepts connections but never reads or replies.
     fn wedged_listener(session: &str) -> std::path::PathBuf {
         let sock = proto::socket_path(session).unwrap();
         std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
@@ -7854,35 +6047,39 @@ mod tests {
         sock
     }
 
-    /// Spawn a holder pid that ignores SIGTERM (or not, per `ignore_term`)
-    /// and outlives its spawning shell, so it is reparented to init: a child
-    /// of THIS test process would zombie after SIGKILL and keep answering
-    /// `kill(pid, 0)` until reaped, and the real mux server is never a child
-    /// of kill-server. An ignored disposition set before the `&` survives
-    /// into the backgrounded sleep.
-    fn orphan_holder(ignore_term: bool) -> u32 {
-        let trap = if ignore_term { "trap '' TERM; " } else { "" };
-        let out = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{trap}sleep 300 >/dev/null 2>&1 & echo $!"))
-            .stdout(std::process::Stdio::piped())
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .parse()
-            .expect("holder pid")
+    /// Spawn an owned holder with an explicit SIGTERM disposition.
+    fn holder(ignore_term: bool) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let disposition = if ignore_term {
+            libc::SIG_IGN
+        } else {
+            libc::SIG_DFL
+        };
+        let mut command = std::process::Command::new("sleep");
+        command.arg("300").stdout(std::process::Stdio::null());
+        unsafe {
+            command.pre_exec(move || {
+                let mut signals = std::mem::zeroed();
+                libc::sigemptyset(&mut signals);
+                libc::sigaddset(&mut signals, libc::SIGTERM);
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut());
+                libc::signal(libc::SIGTERM, disposition);
+                Ok(())
+            });
+        }
+        command.spawn().unwrap()
     }
 
     fn alive(pid: u32) -> bool {
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
-
     #[test]
     fn kill_server_escalates_to_sigkill_when_sigterm_is_ignored() {
         let session = "w9";
         let sock = wedged_listener(session);
-        let pid = orphan_holder(true);
+        let holder = holder(true);
+        let pid = holder.id();
+        let reaper = std::thread::spawn(move || holder.wait_with_output().unwrap());
         std::fs::write(proto::pid_sidecar_path(&sock), pid.to_string()).unwrap();
         assert!(alive(pid), "holder live before the kill");
 
@@ -7890,6 +6087,7 @@ mod tests {
 
         assert_eq!(out.path, KillPath::Sigkill, "note: {}", out.note);
         assert_eq!(out.exit_code(), EXIT_OK);
+        reaper.join().unwrap();
         assert!(!alive(pid), "holder dead after SIGKILL");
         assert!(!sock.exists(), "socket unlinked");
         assert!(
@@ -7902,19 +6100,22 @@ mod tests {
     fn kill_server_stops_at_sigterm_when_the_holder_answers_it() {
         let session = "w3";
         let sock = wedged_listener(session);
-        let pid = orphan_holder(false);
+        let holder = holder(false);
+        let pid = holder.id();
+        let reaper = std::thread::spawn(move || holder.wait_with_output().unwrap());
         std::fs::write(proto::pid_sidecar_path(&sock), pid.to_string()).unwrap();
 
         let out = kill_server_inner(session, &sock);
 
         assert_eq!(out.path, KillPath::Sigterm, "note: {}", out.note);
         assert_eq!(out.exit_code(), EXIT_OK);
+        reaper.join().unwrap();
         assert!(!alive(pid), "holder died to SIGTERM");
         assert!(!sock.exists(), "socket unlinked");
     }
 
     #[test]
-    fn kill_server_refuses_without_a_pid_sidecar() {
+    fn kill_server_sidecar_refusal_rows() {
         let session = "w1";
         let sock = wedged_listener(session);
 
@@ -7922,7 +6123,6 @@ mod tests {
 
         assert_eq!(out.path, KillPath::Unrecoverable);
         assert_eq!(out.exit_code(), EXIT_ERROR);
-        // Nothing was signalled, nothing unlinked: the socket survives.
         assert!(sock.exists(), "refusal must not unlink");
         assert!(
             out.note.contains("kill -9"),
@@ -7934,17 +6134,12 @@ mod tests {
             "refusal names the recovery chain: {}",
             out.note
         );
-    }
 
-    #[test]
-    fn kill_server_refuses_a_stale_sidecar_whose_pid_was_reused() {
         let session = "w5";
         let sock = wedged_listener(session);
-        let pid = orphan_holder(false);
-        // A start time that cannot match the live process at `pid`: proves
-        // the ladder checks identity, not merely "does something answer
-        // this pid" (x-48a5, a rebind whose sidecar rewrite failed can
-        // leave a stale pid that has since been reused).
+        let mut holder = holder(false);
+        let pid = holder.id();
+        // A mismatched start time proves the ladder checks process identity.
         std::fs::write(proto::pid_sidecar_path(&sock), format!("{pid}:1")).unwrap();
 
         let out = kill_server_inner(session, &sock);
@@ -7957,7 +6152,8 @@ mod tests {
             "refusal names the identity mismatch: {}",
             out.note
         );
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        holder.kill().unwrap();
+        holder.wait().unwrap();
     }
 
     // -- pane verb parsing (the socket-free grammar) -----------------------
@@ -7965,11 +6161,10 @@ mod tests {
     fn os(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
     }
-
     #[test]
-    fn mux_pane_parse_ls_read_kill() {
+    fn pane_parse_arg_rows() {
         assert_eq!(
-            parse_pane_args(&os(&["ls"])).unwrap(),
+            parse_pane_args(&op_of("ls"), &os(&[])).unwrap(),
             ParsedPane {
                 session: None,
                 json: false,
@@ -7977,7 +6172,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_pane_args(&os(&["read", "7", "--lines", "40", "--json"])).unwrap(),
+            parse_pane_args(&op_of("read"), &os(&["7", "--lines", "40", "--json"])).unwrap(),
             ParsedPane {
                 session: None,
                 json: true,
@@ -7990,7 +6185,7 @@ mod tests {
         );
         // --block last | <seq> selects a command block (lines ignored server-side).
         assert_eq!(
-            parse_pane_args(&os(&["read", "7", "--block", "last"]))
+            parse_pane_args(&op_of("read"), &os(&["7", "--block", "last"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Read {
@@ -8000,7 +6195,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_pane_args(&os(&["read", "7", "--block", "3"]))
+            parse_pane_args(&op_of("read"), &os(&["7", "--block", "3"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Read {
@@ -8009,22 +6204,22 @@ mod tests {
                 block: Some(BlockSel::Seq(3)),
             }
         );
-        assert!(parse_pane_args(&os(&["read", "7", "--block", "nope"])).is_err());
+        assert!(parse_pane_args(&op_of("read"), &os(&["7", "--block", "nope"])).is_err());
         assert_eq!(
-            parse_pane_args(&os(&["kill", "3", "--session", "work"])).unwrap(),
+            parse_pane_args(&op_of("kill"), &os(&["3", "--session", "work"])).unwrap(),
             ParsedPane {
                 session: Some("work".into()),
                 json: false,
-                cmd: PaneCmd::Kill { pane: 3 }
+                cmd: PaneCmd::Kill {
+                    pane: 3,
+                    hand_off_to: None
+                }
             }
         );
-    }
 
-    #[test]
-    fn mux_pane_parse_split_break_and_ls_fno_id() {
-        // (x-d865) split needs a direction; --focus opts into focus.
+        // split needs a direction; --focus opts into focus.
         assert_eq!(
-            parse_pane_args(&os(&["split", "5", "--direction", "right"]))
+            parse_pane_args(&op_of("split"), &os(&["5", "--direction", "right"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Split {
@@ -8034,7 +6229,7 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_pane_args(&os(&["split", "5", "-d", "up", "--focus"]))
+            parse_pane_args(&op_of("split"), &os(&["5", "-d", "up", "--focus"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Split {
@@ -8044,11 +6239,11 @@ mod tests {
             }
         );
         assert!(
-            parse_pane_args(&os(&["split", "5"])).is_err(),
+            parse_pane_args(&op_of("split"), &os(&["5"])).is_err(),
             "split without --direction is a usage error"
         );
         assert_eq!(
-            parse_pane_args(&os(&["break", "9", "--name", "solo"]))
+            parse_pane_args(&op_of("break"), &os(&["9", "--name", "solo"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Break {
@@ -8056,31 +6251,31 @@ mod tests {
                 name: Some("solo".into()),
             }
         );
-        // (x-3e17) `pane focus <pane>`: all digits is the legacy integer door.
-        // (x-b80d) The parse-level cases moved to pane_focus_target_parse.
+        // `pane focus <pane>`: all digits is the legacy integer door.
+        // The parse-level cases moved to pane_focus_target_parse.
         assert_eq!(
-            parse_pane_args(&os(&["focus", "31"])).unwrap().cmd,
+            parse_pane_args(&op_of("focus"), &os(&["31"])).unwrap().cmd,
             PaneCmd::Focus {
                 target: FocusTarget::Pane(31)
             }
         );
-        assert!(parse_pane_args(&os(&["focus"])).is_err());
+        assert!(parse_pane_args(&op_of("focus"), &os(&[])).is_err());
         assert_eq!(
-            parse_pane_args(&os(&["ls", "--fno-id", "abc123"]))
+            parse_pane_args(&op_of("ls"), &os(&["--fno-id", "abc123"]))
                 .unwrap()
                 .cmd,
             PaneCmd::Ls {
                 fno_id: Some("abc123".into()),
             }
         );
-    }
 
-    #[test]
-    fn mux_pane_parse_run_tab_and_anchor() {
         // AC2-HP: `run --tab id:10 --at 2 --split down -- <argv>`.
-        let p = parse_pane_args(&os(&[
-            "run", "--tab", "id:10", "--at", "2", "--split", "down", "--", "/bin/cat",
-        ]))
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&[
+                "--tab", "id:10", "--at", "2", "--split", "down", "--", "/bin/cat",
+            ]),
+        )
         .unwrap();
         let PaneCmd::Run { placement, .. } = p.cmd else {
             panic!("expected Run");
@@ -8088,17 +6283,19 @@ mod tests {
         assert_eq!(placement.tab, Some(TabSel::Id(10)));
         assert_eq!(placement.at, Some(2));
         assert_eq!(placement.split, Some(Dir::Down));
-        let capped = parse_pane_args(&os(&[
-            "run",
-            "--at",
-            "2",
-            "--split",
-            "down",
-            "--max-panes",
-            "4",
-            "--",
-            "/bin/cat",
-        ]))
+        let capped = parse_pane_args(
+            &op_of("run"),
+            &os(&[
+                "--at",
+                "2",
+                "--split",
+                "down",
+                "--max-panes",
+                "4",
+                "--",
+                "/bin/cat",
+            ]),
+        )
         .unwrap();
         let PaneCmd::Run { placement, .. } = capped.cmd else {
             panic!("expected Run");
@@ -8107,7 +6304,6 @@ mod tests {
             .unwrap()
             .contains(r#""max_panes":4"#));
     }
-
     #[test]
     fn parse_tab_sel_grammar() {
         assert_eq!(parse_tab_sel("active").unwrap(), TabSel::Active);
@@ -8122,17 +6318,12 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_parse_run_takes_argv_verbatim_after_flags() {
+    fn pane_parse_run_argv_rows() {
         // Leading flags are ours; the command argv (incl. ITS flags) is not.
-        let p = parse_pane_args(&os(&[
-            "run",
-            "--cwd",
-            "/code/foo",
-            "--",
-            "claude",
-            "--print",
-            "hi",
-        ]))
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["--cwd", "/code/foo", "--", "claude", "--print", "hi"]),
+        )
         .unwrap();
         assert_eq!(
             p,
@@ -8145,23 +6336,24 @@ mod tests {
                     claim: false,
                     placement: PanePlacement::default(),
                     worker: None,
+                    size: None,
                 },
             }
         );
         // The `--` is optional: the first bare token begins the argv.
-        let p = parse_pane_args(&os(&["run", "echo", "marker"])).unwrap();
+        assert_eq!(pane_args::parse_size("144x40"), Ok((144, 40)));
+        assert!(parse_pane_args(&op_of("run"), &os(&["--size", "144", "sh"])).is_err());
+        let p = parse_pane_args(&op_of("run"), &os(&["echo", "marker"])).unwrap();
         assert!(
             matches!(p.cmd, PaneCmd::Run { argv, .. } if argv == vec!["echo".to_string(), "marker".into()])
         );
         // An empty command is a usage error.
-        assert!(parse_pane_args(&os(&["run", "--cwd", "/x"])).is_err());
-    }
+        assert!(parse_pane_args(&op_of("run"), &os(&["--cwd", "/x"])).is_err());
 
-    #[test]
-    fn mux_pane_parse_run_accepts_typed_placement_before_argv() {
-        let p = parse_pane_args(&os(&[
-            "run", "squad", "review", "split", "left", "claude", "--print",
-        ]))
+        let p = parse_pane_args(
+            &op_of("run"),
+            &os(&["squad", "review", "split", "left", "claude", "--print"]),
+        )
         .unwrap();
         assert!(matches!(
             p.cmd,
@@ -8177,8 +6369,11 @@ mod tests {
                 ..
             } if name == "review" && argv == &["claude", "--print"]
         ));
-        let aliases =
-            parse_pane_args(&os(&["run", "-s", "review", "-x", "right", "--", "echo"])).unwrap();
+        let aliases = parse_pane_args(
+            &op_of("run"),
+            &os(&["-s", "review", "-x", "right", "--", "echo"]),
+        )
+        .unwrap();
         assert!(matches!(
             aliases.cmd,
             PaneCmd::Run {
@@ -8192,9 +6387,10 @@ mod tests {
                 ..
             } if name == "review"
         ));
-        let long = parse_pane_args(&os(&[
-            "run", "--squad", "review", "--split", "up", "--", "echo",
-        ]))
+        let long = parse_pane_args(
+            &op_of("run"),
+            &os(&["--squad", "review", "--split", "up", "--", "echo"]),
+        )
         .unwrap();
         assert!(matches!(
             long.cmd,
@@ -8210,15 +6406,10 @@ mod tests {
             } if name == "review"
         ));
         // --workspace is an alias for --squad (US2): same PaneTarget.
-        let ws = parse_pane_args(&os(&[
-            "run",
-            "--workspace",
-            "review",
-            "--split",
-            "up",
-            "--",
-            "echo",
-        ]))
+        let ws = parse_pane_args(
+            &op_of("run"),
+            &os(&["--workspace", "review", "--split", "up", "--", "echo"]),
+        )
         .unwrap();
         assert!(matches!(
             ws.cmd,
@@ -8230,17 +6421,20 @@ mod tests {
                 ..
             } if name == "review"
         ));
-        assert!(parse_pane_args(&os(&["run", "squad", " ", "--", "echo"])).is_err());
-        assert!(parse_pane_args(&os(&["run", "--workspace", " ", "--", "echo"])).is_err());
-        assert!(parse_pane_args(&os(&["run", "split", "diagonal", "--", "echo"])).is_err());
-        assert!(parse_pane_args(&os(&["run", "--target", "review", "--", "echo"])).is_err());
+        assert!(parse_pane_args(&op_of("run"), &os(&["squad", " ", "--", "echo"])).is_err());
+        assert!(parse_pane_args(&op_of("run"), &os(&["--workspace", " ", "--", "echo"])).is_err());
+        assert!(parse_pane_args(&op_of("run"), &os(&["split", "diagonal", "--", "echo"])).is_err());
+        assert!(
+            parse_pane_args(&op_of("run"), &os(&["--target", "review", "--", "echo"])).is_err()
+        );
         // Bare "at" (mux_spawn.py's placement_args contract) used to have no
         // alias, so the parser broke its loop on "at" and folded it plus
         // everything after into argv instead of recognizing it as placement
         // - here paired with bare "split", the combo that crashed.
-        let bare_at = parse_pane_args(&os(&[
-            "run", "split", "right", "at", "3", "--json", "--", "codex",
-        ]))
+        let bare_at = parse_pane_args(
+            &op_of("run"),
+            &os(&["split", "right", "at", "3", "--json", "--", "codex"]),
+        )
         .unwrap();
         assert!(bare_at.json);
         assert!(matches!(
@@ -8256,11 +6450,10 @@ mod tests {
             } if argv == &["codex"]
         ));
     }
-
     #[test]
     fn mux_pane_parse_wait_defaults_and_units() {
         // --timeout is seconds -> ms; the default is bounded, never infinite.
-        let p = parse_pane_args(&os(&["wait", "5", "--quiet-ms", "200"])).unwrap();
+        let p = parse_pane_args(&op_of("wait"), &os(&["5", "--quiet-ms", "200"])).unwrap();
         assert_eq!(
             p.cmd,
             PaneCmd::Wait {
@@ -8271,8 +6464,11 @@ mod tests {
                 command_done: false,
             }
         );
-        let p =
-            parse_pane_args(&os(&["wait", "5", "--pattern", "done", "--timeout", "3"])).unwrap();
+        let p = parse_pane_args(
+            &op_of("wait"),
+            &os(&["5", "--pattern", "done", "--timeout", "3"]),
+        )
+        .unwrap();
         assert_eq!(
             p.cmd,
             PaneCmd::Wait {
@@ -8284,7 +6480,7 @@ mod tests {
             }
         );
         // --command-done is a bare flag.
-        let p = parse_pane_args(&os(&["wait", "5", "--command-done"])).unwrap();
+        let p = parse_pane_args(&op_of("wait"), &os(&["5", "--command-done"])).unwrap();
         assert_eq!(
             p.cmd,
             PaneCmd::Wait {
@@ -8298,137 +6494,13 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_parse_send_source_is_text_xor_stdin() {
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--text", "hi\r"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi\r".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--stdin"])).unwrap().cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Stdin,
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        // --guarded opts the send into the server-side turn-taken interlock.
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--stdin", "--guarded"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Stdin,
-                guarded: true,
-                submit: false,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--text", "hi", "--submit"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: true,
-                raw: false,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        // --raw opts OUT of the envelope (node x-3a64). Default false is the
-        // load-bearing half: an opt-in flag would leave every existing caller
-        // unattributed and fix nothing.
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--text", "1", "--raw", "--submit"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("1".into()),
-                guarded: false,
-                submit: true,
-                raw: true,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        assert_eq!(
-            parse_pane_args(&os(
-                &["send", "2", "--text", "hi", "--fno-id", "addressed",]
-            ))
-            .unwrap()
-            .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text("hi".into()),
-                guarded: false,
-                submit: false,
-                raw: false,
-                expected_identity: Some("addressed".into()),
-                style_exception: None,
-            }
-        );
-        // The bare-submit keystroke the attribution refusal promises (x-3081):
-        // `--raw --submit` with no payload parses as an EMPTY raw text, never
-        // the arity error that used to make the refusal's advice false.
-        assert_eq!(
-            parse_pane_args(&os(&["send", "2", "--raw", "--submit"]))
-                .unwrap()
-                .cmd,
-            PaneCmd::Send {
-                pane: 2,
-                source: SendSource::Text(String::new()),
-                guarded: false,
-                submit: true,
-                raw: true,
-                expected_identity: None,
-                style_exception: None,
-            }
-        );
-        // Every other source-less form is still a usage error: `--raw` or
-        // `--submit` alone names no operation, and a plain source-less send
-        // never worked.
-        assert!(parse_pane_args(&os(&["send", "2", "--raw"])).is_err());
-        assert!(parse_pane_args(&os(&["send", "2", "--submit"])).is_err());
-        // Neither / both are usage errors.
-        assert!(parse_pane_args(&os(&["send", "2"])).is_err());
-        assert!(parse_pane_args(&os(&["send", "2", "--text", "x", "--stdin"])).is_err());
-        // --raw pairs only with send: on any other verb it is a usage error, not
-        // a silently ignored flag that reads as "the envelope was skipped".
-        assert!(parse_pane_args(&os(&["read", "2", "--raw"])).is_err());
-    }
-
-    #[test]
     fn mux_pane_parse_send_style_exception() {
-        // The reasoned one-send exception threads to the renderer (x-4268).
+        // The reasoned one-send exception threads to the renderer.
         assert_eq!(
-            parse_pane_args(&os(&[
-                "send",
-                "2",
-                "--text",
-                "hi",
-                "--style-exception",
-                "quoted"
-            ]))
+            parse_pane_args(
+                &op_of("send"),
+                &os(&["2", "--text", "hi", "--style-exception", "quoted"])
+            )
             .unwrap()
             .cmd,
             PaneCmd::Send {
@@ -8439,12 +6511,14 @@ mod tests {
                 raw: false,
                 expected_identity: None,
                 style_exception: Some("quoted".into()),
+                provenance: None,
+                hold_pass: false,
             }
         );
         // A valueless flag and a non-send verb are usage errors, mirroring
         // `--raw`: a silently ignored flag would read as "the exception held".
-        assert!(parse_pane_args(&os(&["send", "2", "--style-exception"])).is_err());
-        assert!(parse_pane_args(&os(&["read", "2", "--style-exception", "why"])).is_err());
+        assert!(parse_pane_args(&op_of("send"), &os(&["2", "--style-exception"])).is_err());
+        assert!(parse_pane_args(&op_of("read"), &os(&["2", "--style-exception", "why"])).is_err());
     }
 
     #[test]
@@ -8453,10 +6527,21 @@ mod tests {
         use std::sync::Mutex;
 
         // The style/budget gates live in the renderer child, so this is their
-        // ownership boundary (x-4268): a DEFAULT send dies on the renderer's
+        // ownership boundary: a DEFAULT send dies on the renderer's
         // nonzero exit with no PaneSend reaching the socket, while the
         // byte-identical --raw payload never launches a renderer and arrives
         // verbatim. The received BYTES are asserted, not `raw: true`.
+        // Serializes against the audit test: this test's dispatches
+        // write audit rows into the process-global agents events file, so the
+        // env is redirected to a scratch dir and never the operator's real
+        // journal.
+        let _agents = FNO_AGENTS_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let agents_dir = std::env::temp_dir().join(format!("fno-agents-sendgates-{}", line!()));
+        let _ = std::fs::remove_dir_all(&agents_dir);
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", &agents_dir);
         let sock = control_test_sock("send-gates");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -8500,6 +6585,8 @@ mod tests {
             raw,
             expected_identity: None,
             style_exception: None,
+            provenance: None,
+            hold_pass: false,
         };
 
         std::env::set_var("FNO_BIN", &script);
@@ -8534,6 +6621,9 @@ mod tests {
             ),
             other => panic!("expected PaneSend at the socket, got {other:?}"),
         }
+
+        std::env::remove_var("FNO_AGENTS_HOME");
+        let _ = std::fs::remove_dir_all(&agents_dir);
     }
 
     #[test]
@@ -8545,6 +6635,17 @@ mod tests {
         // size limit at all, an ungated prose channel. The cap refuses
         // in-process, before any control connection, while a small raw payload
         // in the same run still delivers.
+        // Serializes against the audit test: this test's dispatches
+        // write audit rows into the process-global agents events file, so the
+        // env is redirected to a scratch dir and never the operator's real
+        // journal.
+        let _agents = FNO_AGENTS_HOME_GUARD
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let agents_dir = std::env::temp_dir().join(format!("fno-agents-rawcap-{}", line!()));
+        let _ = std::fs::remove_dir_all(&agents_dir);
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::env::set_var("FNO_AGENTS_HOME", &agents_dir);
         let sock = control_test_sock("raw-cap");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -8573,6 +6674,8 @@ mod tests {
             raw: true,
             expected_identity: None,
             style_exception: None,
+            provenance: None,
+            hold_pass: false,
         };
 
         let over = dispatch("t", &sock, false, send_cmd(big));
@@ -8600,66 +6703,9 @@ mod tests {
             ),
             other => panic!("expected PaneSend at the socket, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn review_invocation_records_a_canonical_positive_receipt() {
-        let path = std::env::temp_dir().join(format!(
-            "fno-review-invocation-{}-{}.jsonl",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_file(&path);
-
-        let command = review_invocation_command(b"/review medium --comment");
-        let command_plain = command.clone();
-        assert_eq!(
-            command,
-            Some(("/review".to_string(), "medium --comment".to_string()))
-        );
-        append_review_invocation_at(
-            &path,
-            "mux-session",
-            command,
-            true,
-            false,
-            "text delivered, submission unconfirmed",
-        );
-
-        let line = std::fs::read_to_string(&path).unwrap();
-        let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(event["type"], "review_invocation");
-        assert_eq!(event["source"], "daemon");
-        assert_eq!(event["data"]["stage"], "sent");
-        assert_eq!(event["data"]["transport"], "mux_pane_send_raw");
-        assert_eq!(
-            event["data"]["receipt"],
-            "text delivered, submission unconfirmed"
-        );
-        assert_eq!(event["data"]["submit_required"], true);
-        assert_eq!(event["data"]["submit_key"], "\\r");
-        assert_eq!(event["data"]["submit_confirmed"], false);
-        assert!(event["data"]["invocation_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ri-"));
-        let _ = std::fs::remove_file(&path);
-
-        // A plain text write with no submit key must not claim one.
-        append_review_invocation_at(
-            &path,
-            "mux-session",
-            command_plain,
-            false,
-            false,
-            "text delivered, no submit requested",
-        );
-        let line = std::fs::read_to_string(&path).unwrap();
-        let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(event["data"]["submit_required"], false);
-        assert_eq!(event["data"]["submit_key"], "none");
-        assert_eq!(event["data"]["submit_confirmed"], false);
-        let _ = std::fs::remove_file(path);
+        std::env::remove_var("FNO_AGENTS_HOME");
+        let _ = std::fs::remove_dir_all(&agents_dir);
     }
 
     #[test]
@@ -8667,7 +6713,9 @@ mod tests {
         // The DEFAULT is the surprising half, so the help must state it. An
         // operator who only learns `--raw` exists still does not know what a
         // plain send now carries.
-        let err = parse_pane_args(&os(&["--help"])).unwrap_err();
+        // The pane group's help is clap's now; its after_help text carries
+        // the send contract.
+        let err = crate::cli_args::pane_group_help();
         assert!(err.contains("--raw"), "{err}");
         assert!(err.contains("<fno_mail>"), "{err}");
         assert!(err.contains("option prompt"), "{err}");
@@ -8724,12 +6772,10 @@ mod tests {
 
     #[test]
     fn mux_pane_parse_rejects_bad_verbs_flags_and_ids() {
-        assert!(parse_pane_args(&os(&["bogus"])).is_err());
-        assert!(parse_pane_args(&os(&[])).is_err());
-        assert!(parse_pane_args(&os(&["read", "notanumber"])).is_err());
-        assert!(parse_pane_args(&os(&["read", "7", "--nope"])).is_err());
+        assert!(parse_pane_args(&op_of("read"), &os(&["notanumber"])).is_err());
+        assert!(parse_pane_args(&op_of("read"), &os(&["7", "--nope"])).is_err());
         assert!(
-            parse_pane_args(&os(&["read"])).is_err(),
+            parse_pane_args(&op_of("read"), &os(&[])).is_err(),
             "read needs a pane id"
         );
     }
@@ -8780,7 +6826,7 @@ mod tests {
     }
 
     #[test]
-    fn mux_shell_init_snippets_are_marker_emitting_and_hygienic() {
+    fn mux_shell_init_contract() {
         for snippet in [ZSH_SHELL_INIT, BASH_SHELL_INIT] {
             // Emits all four FinalTerm markers.
             for m in ["133;A", "133;B", "133;C", "133;D"] {
@@ -8788,7 +6834,7 @@ mod tests {
             }
             // Idempotent: guarded so a double-eval is a no-op (AC4-UI).
             assert!(snippet.contains("_FNO_OSC133"));
-            // x-38c4: `B` rides in the prompt (PROMPT/PS1), not adjacent to `C`
+            // `B` rides in the prompt (PROMPT/PS1), not adjacent to `C`
             // in the run hook - else the B..C window is empty and rerun captures
             // no command (readline has already echoed by preexec/DEBUG time).
             assert!(
@@ -8805,10 +6851,7 @@ mod tests {
                 "snippet must carry no absolute paths"
             );
         }
-    }
 
-    #[test]
-    fn mux_shell_init_unsupported_shell_is_a_usage_error() {
         // AC4-ERR: an unsupported / missing shell exits non-zero.
         assert_eq!(shell_init(Some("zsh"), false), EXIT_OK);
         assert_eq!(shell_init(Some("bash"), false), EXIT_OK);
@@ -8827,25 +6870,20 @@ mod tests {
             remedy: None,
         }
     }
-
     #[test]
-    fn doctor_exit_ok_when_no_check_fails() {
+    fn doctor_exit_table_rows() {
         // AC6-FR/HP: ok/warn/na only -> exit 0 (the exit table's OK row).
         let checks = [check(Verdict::Ok), check(Verdict::Warn), check(Verdict::Na)];
-        assert_eq!(render_doctor(&checks, false), EXIT_OK);
-        assert_eq!(render_doctor(&checks, true), EXIT_OK);
-    }
+        assert_eq!(render_doctor(&checks, &[], false), EXIT_OK);
+        assert_eq!(render_doctor(&checks, &[], true), EXIT_OK);
 
-    #[test]
-    fn doctor_exit_error_when_any_check_fails() {
         // AC6-ERR: a single Fail (version skew) flips the exit non-zero.
         let checks = [check(Verdict::Ok), check(Verdict::Fail)];
-        assert_eq!(render_doctor(&checks, false), EXIT_ERROR);
-        assert_eq!(render_doctor(&checks, true), EXIT_ERROR);
+        assert_eq!(render_doctor(&checks, &[], false), EXIT_ERROR);
+        assert_eq!(render_doctor(&checks, &[], true), EXIT_ERROR);
     }
-
     #[test]
-    fn doctor_version_skew_is_a_failing_check_naming_both_versions() {
+    fn session_check_verdict_rows() {
         // AC6-ERR: the skew verdict carries the server's message (which names
         // both versions + the restart remedy) and renders as a Fail.
         let msg = "protocol version mismatch: client 0.3.0 speaks v7, \
@@ -8853,25 +6891,24 @@ mod tests {
         let c = session_check("main", VersionVerdict::Skew(msg.into()));
         assert_eq!(c.verdict, Verdict::Fail);
         assert!(c.detail.contains("v7") && c.detail.contains("v6"));
-    }
 
+        // A leftover socket is worth cleaning but not a run failure; doctor
+        // never unlinks it (read-only) - the remedy points at kill-server.
+        let c = session_check("old", VersionVerdict::Stale);
+        assert_eq!(c.verdict, Verdict::Warn);
+        assert!(c.remedy.as_deref().unwrap().contains("kill-server old"));
+    }
     #[test]
-    fn squad_store_verdict_empty_is_na() {
+    fn squad_store_verdict_rows() {
         let c = squad_store_verdict(0, 0);
         assert_eq!(c.verdict, Verdict::Na);
-        assert_eq!(c.name, "squad store");
+        assert_eq!(c.name, "workspace store (squads.json)");
         assert!(c.remedy.is_none());
-    }
 
-    #[test]
-    fn squad_store_verdict_clean_is_ok() {
         let c = squad_store_verdict(7, 0);
         assert_eq!(c.verdict, Verdict::Ok);
-        assert!(c.detail.contains("7 squad(s), none orphaned"));
-    }
+        assert!(c.detail.contains("7 workspace(s), none orphaned"));
 
-    #[test]
-    fn squad_store_verdict_orphans_warn_with_prune_remedy() {
         // AC3-UI: N>0 prunable -> warn naming the count + the prune remedy; a
         // Warn never flips doctor's exit non-zero (only Fail does).
         let c = squad_store_verdict(137, 124);
@@ -8879,18 +6916,14 @@ mod tests {
         assert!(c.detail.contains("124 orphaned"));
         assert_eq!(c.remedy.as_deref(), Some("fno mux workspace prune"));
     }
-
     #[test]
-    fn doctor_no_sessions_is_na_not_a_finding() {
+    fn doctor_session_aggregation_rows() {
         // AC6-FR: nothing to check reports cleanly and never fails the run.
         let checks = session_checks(&[], |_| VersionVerdict::Ok);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].verdict, Verdict::Na);
-        assert_eq!(render_doctor(&checks, false), EXIT_OK);
-    }
+        assert_eq!(render_doctor(&checks, &[], false), EXIT_OK);
 
-    #[test]
-    fn doctor_sessions_aggregate_each_verdict() {
         // A live session is Ok; a skewed one Fails the run.
         let names = vec!["good".to_string(), "bad".to_string()];
         let checks = session_checks(&names, |n| match n {
@@ -8898,18 +6931,8 @@ mod tests {
             _ => VersionVerdict::Ok,
         });
         assert_eq!(checks.len(), 2);
-        assert_eq!(render_doctor(&checks, false), EXIT_ERROR);
+        assert_eq!(render_doctor(&checks, &[], false), EXIT_ERROR);
     }
-
-    #[test]
-    fn doctor_stale_socket_is_advisory_not_a_failure() {
-        // A leftover socket is worth cleaning but not a run failure; doctor
-        // never unlinks it (read-only) - the remedy points at kill-server.
-        let c = session_check("old", VersionVerdict::Stale);
-        assert_eq!(c.verdict, Verdict::Warn);
-        assert!(c.remedy.as_deref().unwrap().contains("kill-server old"));
-    }
-
     #[test]
     fn doctor_copy_degraded_without_a_clipboard_tool() {
         // AC6-EDGE: no local tool -> copy flagged degraded (Warn), before the
@@ -8929,29 +6952,12 @@ mod tests {
         assert_eq!(terminal_check("").verdict, Verdict::Warn);
     }
 
-    #[test]
-    fn doctor_text_lines_are_single_line_with_verdict() {
-        // AC6-UI: every finding is one line carrying its verdict word.
-        let c = Check {
-            name: "socket-dir".into(),
-            verdict: Verdict::Warn,
-            detail: "mode 755".into(),
-            remedy: Some("chmod 700".into()),
-        };
-        // Render captures stdout only in an integration harness; here assert the
-        // verdict vocabulary the line is built from stays stable.
-        assert_eq!(c.verdict.word(), "warn");
-        assert_eq!(Verdict::Ok.word(), "ok");
-        assert_eq!(Verdict::Fail.word(), "fail");
-        assert_eq!(Verdict::Na.word(), "n/a");
-    }
-
-    // -- block pipe (x-fe8f) -------------------------------------------------
+    // -- block pipe -------------------------------------------------
 
     #[test]
     fn block_pipe_parses_flags_and_defaults_to_last() {
         assert_eq!(
-            parse_block_args(&os(&["pipe", "--from", "4", "--to", "2"])),
+            parse_block_args(&os(&["--from", "4", "--to", "2"])),
             Ok(ParsedBlockPipe {
                 session: None,
                 json: false,
@@ -8963,7 +6969,6 @@ mod tests {
         );
         assert_eq!(
             parse_block_args(&os(&[
-                "pipe",
                 "--from",
                 "4",
                 "--to",
@@ -8986,20 +6991,12 @@ mod tests {
         );
     }
 
-    // -- block annotate (x-f8d4) --------------------------------------------
+    // -- block annotate --------------------------------------------
 
     #[test]
     fn block_annotate_parses_required_flags() {
         assert_eq!(
-            parse_block_annotate(&os(&[
-                "annotate",
-                "--from",
-                "3",
-                "--node",
-                "x-1",
-                "-m",
-                "off-by-one",
-            ])),
+            parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "off-by-one",])),
             Ok(ParsedBlockAnnotate {
                 session: None,
                 from: 3,
@@ -9011,7 +7008,6 @@ mod tests {
         // --block seq + --session + long --message.
         assert_eq!(
             parse_block_annotate(&os(&[
-                "annotate",
                 "--from",
                 "3",
                 "--block",
@@ -9036,28 +7032,32 @@ mod tests {
     #[test]
     fn block_annotate_usage_errors() {
         // AC2-ERR: a missing --node is a refusal (no guessing the pane's node).
-        assert!(parse_block_annotate(&os(&["annotate", "--from", "3", "-m", "x"])).is_err());
+        assert!(parse_block_annotate(&os(&["--from", "3", "-m", "x"])).is_err());
         // Missing --from, missing -m, empty -m, unknown flag all refuse.
-        assert!(parse_block_annotate(&os(&["annotate", "--node", "x-1", "-m", "x"])).is_err());
-        assert!(parse_block_annotate(&os(&["annotate", "--from", "3", "--node", "x-1"])).is_err());
-        assert!(parse_block_annotate(&os(&[
-            "annotate", "--from", "3", "--node", "x-1", "-m", "  "
-        ]))
-        .is_err());
-        assert!(parse_block_annotate(&os(&[
-            "annotate", "--from", "3", "--node", "x-1", "-m", "x", "--oops",
-        ]))
-        .is_err());
+        assert!(parse_block_annotate(&os(&["--node", "x-1", "-m", "x"])).is_err());
+        assert!(parse_block_annotate(&os(&["--from", "3", "--node", "x-1"])).is_err());
+        assert!(parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "  "])).is_err());
+        assert!(
+            parse_block_annotate(&os(&["--from", "3", "--node", "x-1", "-m", "x", "--oops",]))
+                .is_err()
+        );
     }
 
     #[test]
-    fn block_verb_dispatch_rejects_unknown() {
-        // The verb enumeration now carries both verbs.
-        let e = parse_block_args(&os(&["rerun"])).unwrap_err();
-        assert!(
-            e.contains("annotate"),
-            "verb list must enumerate annotate: {e}"
-        );
+    fn block_ops_declared_in_the_tree() {
+        // The operation words are declared in the typed tree now; the
+        // classifier refuses anything else (AC1-ERR).
+        let block = crate::cli_args::front_command()
+            .get_subcommands()
+            .find(|c| c.get_name() == "mux")
+            .expect("mux declared")
+            .get_subcommands()
+            .find(|c| c.get_name() == "block")
+            .expect("block declared")
+            .clone();
+        for op in ["pipe", "annotate"] {
+            assert!(block.find_subcommand(op).is_some(), "{op} declared");
+        }
     }
 
     #[test]
@@ -9078,10 +7078,10 @@ mod tests {
         // Missing --from / --to, an unknown flag, and an unknown verb are all
         // parse errors (exit 2 at the verb), never a partial pipe.
         assert!(parse_block_args(&os(&["pipe", "--to", "2"])).is_err());
-        assert!(parse_block_args(&os(&["pipe", "--from", "4"])).is_err());
-        assert!(parse_block_args(&os(&["pipe", "--from", "4", "--to", "2", "--oops"])).is_err());
+        assert!(parse_block_args(&os(&["--from", "4"])).is_err());
+        assert!(parse_block_args(&os(&["--from", "4", "--to", "2", "--oops"])).is_err());
         assert!(parse_block_args(&os(&["rerun"])).is_err());
-        assert!(parse_block_args(&os(&["pipe", "--from", "x", "--to", "2"])).is_err());
+        assert!(parse_block_args(&os(&["--from", "x", "--to", "2"])).is_err());
     }
 
     #[test]
@@ -9140,13 +7140,6 @@ mod tests {
     /// A unique short-lived scratch socket path. No tempfile dep: pid + test
     /// name is unique enough for a test process (sun_path stays short - the
     /// limit is ~104 bytes on macOS).
-    /// Serializes any test that mutates the process-global FNO_BIN (today the
-    /// one renderer-gate test). Cargo runs this binary's tests on parallel
-    /// threads; a second mutator added without this guard would race the
-    /// first for the same env slot. A concurrent test that only READS
-    /// FNO_BIN during the window remains a theoretical exposure.
-    static FNO_BIN_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     fn control_test_sock(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fno-control-{}-{name}.sock", std::process::id()))
     }
@@ -9275,39 +7268,7 @@ mod tests {
         assert_ne!(EXIT_CONTROL_UNANSWERED, EXIT_ERROR);
     }
 
-    #[test]
-    fn control_roundtrip_surfaces_unanswered_not_a_flattened_string() {
-        // `where_` and `block pipe` both dispatch through control_roundtrip,
-        // not send_control directly, so a fix that only touches send_control's
-        // callers in `dispatch`/`run_on_existing_server` leaves this path
-        // asserting no pane exists on a mere timeout - exactly the P1 review
-        // found. Pin the typed error, not a stringified one, all the way
-        // through control_roundtrip.
-        let sock = control_test_sock("roundtrip-unanswered");
-        let _ = std::fs::remove_file(&sock);
-        let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut s, _) = listener.accept().unwrap();
-            let _msg: ClientMsg = read_msg_sync(&mut s).unwrap();
-            std::thread::sleep(Duration::from_millis(200));
-        });
-
-        let result = control_roundtrip_with_timeouts(
-            &sock,
-            "test-session",
-            ControlVerb::PaneLs,
-            Duration::from_millis(50),
-            Duration::from_millis(150),
-        );
-        server.join().unwrap();
-        let _ = std::fs::remove_file(&sock);
-
-        assert!(
-            matches!(result, Err(ControlError::Unanswered(_))),
-            "expected Unanswered, got {result:?}"
-        );
-    }
-    // -- x-1499 ordinal translation + human rendering ---------------------
+    // -- ordinal translation + human rendering ---------------------
 
     #[test]
     fn parse_tab_sel_reads_ordinals_and_explicit_forms() {
@@ -9466,3 +7427,5 @@ mod tests {
         assert_eq!(take_workspace_flag("v", vec!["6".into()]).unwrap().0, None);
     }
 }
+
+pub use kill_policy::{kill_selector, kill_server};

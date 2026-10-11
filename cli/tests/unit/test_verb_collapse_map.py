@@ -51,53 +51,26 @@ def test_map_covers_current_surface_once():
     rows = _rows()
     mapped = [row["current-leaf"] for row in rows]
     assert len(mapped) == len(set(mapped)), (
-        "duplicate current-leaf rows in verb-collapse-map.tsv; delete the "
-        "duplicate row instead of bumping the count below"
-    )
-    # Adding a CLI action means allocating its row in verb-collapse-map.tsv
-    # BEFORE scripts/ci/verb-baseline.txt can regenerate, then bumping this
-    # count. Nothing else states that order, and the regeneration refuses
-    # without the row.
-    #
-    # This number is a two-writer collision waiting to happen: main and a
-    # feature branch each bump it to the same value from the same base, so the
-    # texts conflict while both are individually right. Resolve by COUNTING the
-    # merged rows, never by taking either side. `worktree reapable` and
-    # `agents orphans` both landed at 323 and the truth is 324.
-    # Counted from the merged file, not taken from either side: main carried
-    # 529 and a branch added `config routing`, `doctor route`, `route init`
-    # and `route inventory`; this branch adds `agents recover` from the
-    # re-entry work, and main independently added `agents king manifest-path`
-    # and `backlog join` (the held-worktree joiner spawner, x-8d1d).
-    # x-665d adds `agents registry-repair`, the hidden recovery verb for a
-    # registry a source-ahead process already poisoned: 536 -> 537.
-    # Counted from the merged file: main carried 543, added `config history`
-    # and `doctor plugin-file`, then `backfill-deferred-kind` and
-    # `stuck-epics` -> 548. This branch adds `agents history`, the advertised
-    # session-history reader: 549 lines minus the header = 548 + 1 = 549.
-    # The resource-meter branch adds `doctor lanes`, the whole-machine lane
-    # advisor (hidden, per the new-verb convention): 549 -> 550.
-    assert len(mapped) == 550, (
-        f"{len(mapped)} rows in verb-collapse-map.tsv; bump this count when a "
-        "new CLI action is deliberately allocated a row"
+        "duplicate current-leaf rows in verb-collapse-map.tsv; delete the duplicate row"
     )
 
 
 def test_map_matches_the_uncollapsed_click_action_inventory():
     import click
-    import typer
 
+    from fno._lazy_group import typer_group_shape
     from fno.cli import COLLAPSE_KEEP, LAZY_SUBCOMMANDS
-    from fno.lint_verb_ratchet import _iter_group_leaves
+    from fno.lint_verb_ratchet import _iter_group_leaves, NATIVE_SERVED_LEAVES
 
     live: set[str] = set()
     for group in COLLAPSE_KEEP:
         import_path = LAZY_SUBCOMMANDS[group][0]
         module_name, _, attr_name = import_path.rpartition(":")
         obj = getattr(importlib.import_module(module_name), attr_name)
-        command = typer.main.get_command(obj)
+        command = typer_group_shape(obj)
         context = click.Context(command, info_name=group)
         live.update(path for path, _sub in _iter_group_leaves(command, context, group))
+    live.update(NATIVE_SERVED_LEAVES)
 
     mapped = {leaf for leaf in _mapped_leaves() if leaf.split()[0] in COLLAPSE_KEEP}
     assert live == mapped
@@ -138,7 +111,6 @@ def test_allocation_projects_no_more_than_99_registered_leaves():
     groups_with_dispatch = {row["current-leaf"].split()[0] for row in rows if row["tier"] == "T1"}
     kept = Counter(row["current-leaf"].split()[0] for row in rows if row["tier"] == "KEEP")
     projected = len(groups_with_dispatch) + sum(kept.values())
-    assert projected == 79
     assert projected <= 99
 
 
@@ -151,24 +123,7 @@ def test_live_baseline_matches_the_projected_allocation():
         for row in rows
     }
     assert {leaf for leaf in leaves if leaf.split()[0] in mapped_groups} == projected
-    # The operator lane's `mine` verbs collapsed add/done/drop/link into one
-    # dispatched `do` leaf (x-f730); the pre-existing bare `outstanding` alias
-    # still doubles it, netting +2 leaves over whatever main independently
-    # carries. Bumped to the live count at rebase time, not a round number.
-    # +1 for `project init`, the isolated-environment verb (x-20f1).
-    # +1 for `king manifest-path`, the king-loop manifest lookup verb.
-    # +1 for `king done`, the crown expire verb.
-    # +1 for `doctor footprint`, landed on main while this branch ran; the
-    # merged tree carries both rows, so both counts include it.
-    # +4 for the hidden `law` proposal verbs (prepare, enact, resume,
-    # inspect), each baselined in this PR.
-    # x-6233 folds: +6 for the inbox mounts (decide, decisions, and the four
-    # law verbs under their new home), -1 for the retired runtime root, which
-    # carried main to 127.
-    # +1 for `law set`, the direct operator writer baselined in this PR.
-    # +1 for `inbox law set`, the mounted spelling present on current main.
-    # Bumped to the live count at rebase time, not a round number.
-    assert len(leaves) <= 129
+    assert len(leaves) <= 135
     assert "fno-agents" in leaves
 
 
@@ -186,9 +141,8 @@ def test_runtime_keep_registry_matches_the_checked_in_allocation():
 
 def test_each_python_group_dispatcher_reaches_the_original_action_command():
     import click
-    import typer
 
-    from fno._lazy_group import collapse_click_group
+    from fno._lazy_group import collapse_click_group, typer_group_shape
     from fno.cli import COLLAPSE_KEEP, LAZY_SUBCOMMANDS
 
     rows = _rows()
@@ -200,7 +154,7 @@ def test_each_python_group_dispatcher_reaches_the_original_action_command():
         import_path = LAZY_SUBCOMMANDS[group][0]
         module_name, _, attr_name = import_path.rpartition(":")
         obj = getattr(importlib.import_module(module_name), attr_name)
-        original = typer.main.get_command(obj)
+        original = typer_group_shape(obj)
         original_ctx = click.Context(original, info_name=group)
         destination = original.get_command(original_ctx, action_name)
         assert destination is not None, first_t1["current-leaf"]

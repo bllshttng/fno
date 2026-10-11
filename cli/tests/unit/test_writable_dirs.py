@@ -24,6 +24,9 @@ def fake_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point every state resolver at one existing tmp root."""
     state = tmp_path / "state"
     (state / "claims").mkdir(parents=True)
+    agents_home = state / "agents"
+    agents_home.mkdir()
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(agents_home))
     monkeypatch.setattr("fno.paths.state_dir", lambda: state)
     monkeypatch.setattr("fno.claims.io.global_claims_root", lambda: state)
     monkeypatch.setattr("fno.claims.io.claims_dir", lambda root=None: state / "claims")
@@ -80,10 +83,14 @@ def test_granted_root_is_an_ancestor_of_the_live_registry_path(tmp_path, monkeyp
     claims_root = tmp_path / "elsewhere"
     (claims_root / ".fno" / "claims").mkdir(parents=True)
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
+    # Same shape as the claims sibling: the store exists, and the grant has to
+    # reach it. The autouse fixture points FNO_AGENTS_HOME here.
+    (tmp_path / ".fno" / "agents").mkdir(parents=True, exist_ok=True)
 
     from fno import paths
 
     target = paths.agents_registry_path().parent.resolve()
+    target.mkdir(parents=True, exist_ok=True)
     granted = [Path(d).resolve() for d in worker_writable_dirs(tmp_path)]
 
     assert any(target == root or target.is_relative_to(root) for root in granted)
@@ -164,7 +171,7 @@ def one_grant(monkeypatch: pytest.MonkeyPatch) -> str:
     return token
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex", "agy"])
+@pytest.mark.parametrize("provider", ["claude", "agy"])
 def test_pane_lane_carries_the_grant(
     provider: str, one_grant: str, tmp_path: Path
 ) -> None:
@@ -179,17 +186,91 @@ def test_pane_lane_carries_the_grant(
     assert ("--add-dir", one_grant) in pairs
 
 
+def test_codex_pane_lane_drops_the_grant_on_the_remote_launch(
+    one_grant: str, tmp_path: Path
+) -> None:
+    """codex >= 0.156.1 refuses `--add-dir` paired with `--remote`, so riding
+    the grant killed the pane before it painted (x-0a75). The codex pane is
+    the one pane arm whose launch is remote today, so its grant rides out with
+    the strip; claude and agy keep carrying theirs."""
+    from fno.agents.mux_spawn import build_pane_argv
+
+    argv = build_pane_argv("codex", "t", tmp_path, False, None)
+    assert "--remote" in argv
+    assert ("--add-dir", one_grant) not in [
+        (argv[i], argv[i + 1]) for i, tok in enumerate(argv) if tok == "--add-dir"
+    ]
+
+
 def test_codex_pane_grant_leaves_the_sandbox_flag_alone(
     one_grant: str, tmp_path: Path
 ) -> None:
-    """The grant is additive. Widening the default posture to a bypass to make
-    the claim write work was explicitly refused; the two bypass postures are
-    opt-in on purpose."""
+    """The posture stays bounded. Widening the default posture to a bypass to
+    make the claim write work was explicitly refused; the two bypass postures
+    are opt-in on purpose. The grant itself is now daemon-side on this launch
+    form (see the remote-drop test), which is the accepted trade."""
     from fno.agents.mux_spawn import build_pane_argv
 
     argv = build_pane_argv("codex", "t", tmp_path, False, None)
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
-    assert one_grant in argv
+    assert one_grant not in argv
+
+
+def test_strip_remote_add_dirs_spares_non_remote_argv() -> None:
+    """The guard keys on the launch form, not the provider: a non-remote codex
+    argv (a future identity change) keeps its grants untouched."""
+    from fno.agents.writable_dirs import strip_remote_add_dirs
+
+    argv = ["codex", "-C", "/repo", "--add-dir", "/repo/.git", "--", "seed"]
+    assert strip_remote_add_dirs(argv) == argv
+
+
+def test_strip_remote_add_dirs_keeps_order_and_seed() -> None:
+    """A grant beside other flags strips by PAIR; the seed behind `--` and the
+    rest of the argv survive verbatim, so the pane still launches seeded."""
+    from fno.agents.writable_dirs import strip_remote_add_dirs
+
+    argv = [
+        "codex",
+        "--remote",
+        "unix://",
+        "-C",
+        "/repo",
+        "--add-dir",
+        "/repo/.git",
+        "--sandbox",
+        "workspace-write",
+        "--add-dir",
+        "/state",
+        "--add-dir=/fused",
+        "--model",
+        "gpt-6-luna",
+        "--",
+        "seed text",
+    ]
+    assert strip_remote_add_dirs(argv) == [
+        "codex",
+        "--remote",
+        "unix://",
+        "-C",
+        "/repo",
+        "--sandbox",
+        "workspace-write",
+        "--model",
+        "gpt-6-luna",
+        "--",
+        "seed text",
+    ]
+
+
+def test_strip_remote_add_dirs_drops_the_fused_form() -> None:
+    """An operator passthrough can spell the grant fused (`--add-dir=/x`), and
+    codex refuses that form beside --remote exactly like the split one, so the
+    strip drops it too."""
+    from fno.agents.writable_dirs import strip_remote_add_dirs
+
+    argv = ["codex", "--remote", "unix://", "--add-dir=/fused", "--", "seed"]
+    assert strip_remote_add_dirs(argv) == ["codex", "--remote", "unix://", "--", "seed"]
 
 
 def test_claude_bg_lane_carries_the_grant(one_grant: str, tmp_path: Path) -> None:
@@ -544,3 +625,42 @@ def test_seam_creates_the_mail_bus_so_the_grant_is_not_dropped(
     published = export_worker_writable_dirs(tmp_path, env)
     assert mail.is_dir(), "the seam creates it so the grant is real"
     assert str(mail) in published
+
+
+def test_thread_spawn_seam_publishes_the_plan_dir(
+    fake_state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The codex thread lane inherits the plan grant; it must never re-resolve it.
+
+    The thread lane builds no argv, so its only carrier is the ``state_dirs``
+    RPC param, which the Rust client fills from this seam's env var. That made
+    a daemon-side resolver look necessary, and the tempting shape was to call
+    ``provider::plan_content_dir`` inside ``spawn_codex_thread_lane``. It would
+    have been a SECOND resolver for a value this seam already computes, and it
+    shells out to ``fno`` once per spawn from async code on a daemon shared by
+    every codex worker on the machine.
+
+    Nothing was missing. The seam runs for every spawn regardless of substrate,
+    so the plan directory is already in the published set before the client
+    forwards it. This pins that, so the absence of a daemon-side resolver reads
+    as covered rather than as an oversight to fix.
+    """
+    import fno.agents.rust_runtime as rr
+    from fno.agents.writable_dirs import WORKER_ADD_DIRS_ENV
+
+    plans = tmp_path / "vault" / "fno" / "plans"
+    plans.mkdir(parents=True)
+    monkeypatch.setattr(
+        "fno.paths.plans_content_dir", lambda project_root=None: plans
+    )
+    monkeypatch.delenv(WORKER_ADD_DIRS_ENV, raising=False)
+
+    rr._export_worker_dirs_at_seam(
+        ["spawn", "w", "--harness", "codex", "--substrate", "thread", "--cwd", str(tmp_path)]
+    )
+
+    published = os.environ[WORKER_ADD_DIRS_ENV].split(os.pathsep)
+    assert str(plans) in published, (
+        "the thread lane reads its roots from this env var; without the plan "
+        f"directory here a daemon-side resolver looks required. got: {published}"
+    )

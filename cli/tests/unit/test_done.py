@@ -6,14 +6,38 @@ subprocess calls (git, gh) are stubbed via monkeypatch.setattr at module level
 so we never hit the real filesystem or GitHub.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
+import os
+import tempfile
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
+from fno.graph.store import read_graph_strict
+
+# The promise gate refuses a close whose plan is unreadable, so a rollup
+# fixture's plan_path must name a real, parseable plan. These fixtures test
+# the ledger rollup, never the gate; one readable plan per name keeps the
+# close on its normal path.
+_PLANS_DIR = tempfile.mkdtemp(prefix="done-tests-plans-")
+
+
+def _readable_plan(name: str = "p") -> str:
+    path = os.path.join(_PLANS_DIR, f"{name}.md")
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write("---\nstatus: ready\n---\n# plan\n")
+    return path
+
+# The done shim drives CliRunner captures that break when a loaded xdist
+# worker interleaves them with unrelated files: the deprecation line leaks
+# into captured stdout and the invocation exits 1. A dedicated loadgroup
+# worker keeps this module off the crowded workers.
+pytestmark = [pytest.mark.xdist_group("done-audit-serial")]
 
 runner = CliRunner()
 
@@ -29,7 +53,7 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
     unless a test explicitly writes ledger fixture data.
     """
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     ledger = tmp_path / "ledger.json"
     ledger.write_text('{"entries": []}\n')
     import fno.graph._constants as gc
@@ -78,11 +102,33 @@ def _seed_ledger(ledger: Path, entries: list[dict]) -> None:
 
 
 def _seed(g: Path, entries: list[dict]) -> None:
-    g.write_text(json.dumps({"entries": entries}, indent=2) + "\n")
+    """Rows the way the store writes them: the typed api drops a row the
+    model cannot parse, so seeds carry the stamped fields."""
+    # A re-seed must reset the store too: graph.db outlives the json seed, so
+    # a second _seed into the same path would read the first seed's rows.
+    for sidecar in (
+        g.parent / (g.name + ".store.sock"),
+        g.parent / (g.name + ".store.sock.lock"),
+        g.with_suffix(".db"),
+        g.with_name(g.stem + ".db-shm"),
+        g.with_name(g.stem + ".db-wal"),
+    ):
+        sidecar.unlink(missing_ok=True)
+    complete = []
+    for e in entries:
+        row = {"type": "feature", "priority": "p2", "status": "idea", **e}
+        # The store derives done from completed_at on every write; a stored
+        # done row always carries one.
+        if row["status"] == "done" and not row.get("completed_at"):
+            row["completed_at"] = "2026-09-01T00:00:00Z"
+        row.setdefault("title", e.get("id", "node"))
+        row.setdefault("slug", e.get("id", "node"))
+        complete.append(row)
+    seed_graph(g, json.dumps({"entries": complete}, indent=2) + "\n")
 
 
 def _read(g: Path) -> list[dict]:
-    return json.loads(g.read_text()).get("entries", [])
+    return read_graph_strict(g)
 
 
 def _stub_subprocess(
@@ -112,10 +158,16 @@ def _stub_subprocess(
         def __init__(self, stdout: str = "", rc: int = 0):
             self.stdout = stdout
             self.returncode = rc
+            self.stderr = ""
+
+    real_run = done_cli.subprocess.run
 
     def fake_run(cmd, **kwargs):
         if not cmd:
             return _Result("", 1)
+        if {"doctor", "event"} <= {str(part) for part in cmd}:
+            # Event emission rides the same seam; reach the real binary.
+            return real_run(cmd, **kwargs)
         if cmd[0] == "git" and "branch" in cmd:
             return _Result((branch or "") + "\n", 0 if branch else 0)
         if cmd[0] == "git" and "remote" in cmd:
@@ -383,12 +435,12 @@ def test_rollup_populates_cost_usd_from_ledger(tmp_graph, tmp_ledger, monkeypatc
         "title": "Rollup target",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/repo/plans/2026-04-22-thing",
+        "plan_path": _readable_plan("2026-04-22-thing"),
         "cost_usd": None,
         "cost_sessions": [],
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/repo/plans/2026-04-22-thing",
+        "plan_path": _readable_plan("2026-04-22-thing"),
         "sessions": ["sess-aaa", "sess-bbb"],
         "cost_usd": 9.50,
         "completed": "2026-04-22T19:00:00Z",
@@ -415,12 +467,12 @@ def test_rollup_session_id_from_latest_ledger_entry(tmp_graph, tmp_ledger, monke
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [
-        {"plan_path": "/p", "sessions": ["old-sid"], "cost_usd": 1.0,
+        {"plan_path": _readable_plan(), "sessions": ["old-sid"], "cost_usd": 1.0,
          "completed": "2026-04-20T12:00:00Z"},
-        {"plan_path": "/p", "sessions": ["mid-sid", "latest-sid"], "cost_usd": 2.0,
+        {"plan_path": _readable_plan(), "sessions": ["mid-sid", "latest-sid"], "cost_usd": 2.0,
          "completed": "2026-04-22T12:00:00Z"},
     ])
     _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
@@ -439,10 +491,10 @@ def test_rollup_env_session_id_overrides_ledger(tmp_graph, tmp_ledger, monkeypat
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["ledger-sid"],
         "cost_usd": 1.0,
         "completed": "2026-04-22T12:00:00Z",
@@ -462,7 +514,7 @@ def test_rollup_empty_ledger_leaves_fields_null(tmp_graph, tmp_ledger, monkeypat
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/unknown-plan",
+        "plan_path": _readable_plan("unknown-plan"),
         "cost_usd": None,
         "cost_sessions": [],
         "points": None,
@@ -474,22 +526,29 @@ def test_rollup_empty_ledger_leaves_fields_null(tmp_graph, tmp_ledger, monkeypat
     entry = _read(tmp_graph)[0]
     assert entry["cost_usd"] is None
     assert entry["cost_sessions"] == []
-    assert entry["points"] is None
+    assert entry.get("points") is None
     assert entry["session_id"] is None
 
 
 def test_rollup_preserves_existing_session_id(tmp_graph, tmp_ledger, monkeypatch):
-    """Pre-existing session_id (e.g. set by --locked-by) is not overwritten."""
+    """The session id projected from the active claim survives rollup."""
+    from fno.claims.core import acquire_claim
+
     _seed(tmp_graph, [{
         "id": "ab-pre00001",
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
-        "session_id": "sticky-session",
+        "plan_path": _readable_plan(),
     }])
+    claims_root = tmp_graph.parent / "claims"
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(claims_root))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sticky-session")
+    acquire_claim(
+        "node:ab-pre00001", "target-session:sticky-session", root=claims_root
+    )
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["would-overwrite"],
         "cost_usd": 1.0,
         "completed": "2026-04-22T12:00:00Z",
@@ -508,10 +567,10 @@ def test_rollup_cost_sessions_dedups_across_runs(tmp_graph, tmp_ledger, monkeypa
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["sess-one"],
         "cost_usd": 5.0,
         "completed": "2026-04-22T12:00:00Z",
@@ -533,10 +592,10 @@ def test_rollup_handles_ledger_entry_with_no_sessions(tmp_graph, tmp_ledger, mon
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": None,  # Some old ledger entries have this shape.
         "cost_usd": 3.0,
         "completed": "2026-04-22T12:00:00Z",
@@ -547,7 +606,8 @@ def test_rollup_handles_ledger_entry_with_no_sessions(tmp_graph, tmp_ledger, mon
     entry = _read(tmp_graph)[0]
     assert entry["cost_usd"] == 3.0
     assert len(entry["cost_sessions"]) == 1
-    assert entry["cost_sessions"][0]["session_id"] is None
+    # A null session id exports as an absent key (the store strips nulls).
+    assert entry["cost_sessions"][0].get("session_id") is None
 
 
 # -- Backfill tests --
@@ -561,10 +621,10 @@ def test_backfill_single_node_fills_without_flipping_status(tmp_graph, tmp_ledge
         "status": "done",
         "completed_at": "2026-04-20T10:00:00Z",  # prior completion
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["sess-x"],
         "cost_usd": 7.5,
         "completed": "2026-04-22T12:00:00Z",
@@ -587,18 +647,18 @@ def test_backfill_sweep_all_done_nodes(tmp_graph, tmp_ledger, monkeypatch):
     """`fno done --backfill` with no id sweeps every node with status=done."""
     _seed(tmp_graph, [
         {"id": "ab-d1000001", "title": "done one", "status": "done",
-         "domain": "code", "plan_path": "/p1"},
+         "domain": "code", "plan_path": _readable_plan("p1")},
         {"id": "ab-d2000002", "title": "done two", "status": "done",
-         "domain": "code", "plan_path": "/p2"},
+         "domain": "code", "plan_path": _readable_plan("p2")},
         {"id": "ab-r1000003", "title": "not done", "status": "ready",
-         "domain": "code", "plan_path": "/p3"},
+         "domain": "code", "plan_path": _readable_plan("p3")},
     ])
     _seed_ledger(tmp_ledger, [
-        {"plan_path": "/p1", "sessions": ["s1"], "cost_usd": 1.0,
+        {"plan_path": _readable_plan("p1"), "sessions": ["s1"], "cost_usd": 1.0,
          "completed": "2026-04-22T12:00:00Z"},
-        {"plan_path": "/p2", "sessions": ["s2"], "cost_usd": 2.0,
+        {"plan_path": _readable_plan("p2"), "sessions": ["s2"], "cost_usd": 2.0,
          "completed": "2026-04-22T13:00:00Z"},
-        {"plan_path": "/p3", "sessions": ["s3"], "cost_usd": 3.0,
+        {"plan_path": _readable_plan("p3"), "sessions": ["s3"], "cost_usd": 3.0,
          "completed": "2026-04-22T14:00:00Z"},
     ])
     _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
@@ -616,7 +676,7 @@ def test_backfill_no_done_nodes_noop(tmp_graph, tmp_ledger, monkeypatch):
     """Sweep with no done nodes reports cleanly and does not crash."""
     _seed(tmp_graph, [
         {"id": "ab-rd000001", "title": "ready", "status": "ready",
-         "domain": "code", "plan_path": "/p"},
+         "domain": "code", "plan_path": _readable_plan()},
     ])
     _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
     result = runner.invoke(app, ["done", "--backfill"])
@@ -632,10 +692,10 @@ def test_backfill_reports_counts(tmp_graph, tmp_ledger, monkeypatch):
         "status": "done",
         "completed_at": "2026-04-20T00:00:00Z",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["s1"],
         "cost_usd": 1.5,
         "completed": "2026-04-22T12:00:00Z",
@@ -653,10 +713,10 @@ def test_rollup_tags_in_normal_output(tmp_graph, tmp_ledger, monkeypatch):
         "title": "T",
         "status": "ready",
         "domain": "code",
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
     }])
     _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p",
+        "plan_path": _readable_plan(),
         "sessions": ["s1"],
         "cost_usd": 12.34,
         "completed": "2026-04-22T12:00:00Z",
@@ -749,6 +809,7 @@ def test_ac4_err_gh_fails_no_explicit_args_prints_stderr(tmp_graph, monkeypatch)
         "title": "ERR target",
         "status": "ready",
         "domain": "code",
+        "artifact_url": "https://example.test/artifact",
     }])
     _stub_subprocess_with_stderr(
         monkeypatch,
@@ -804,12 +865,18 @@ def test_ac4_fr_explicit_pr_bypasses_current_pr(tmp_graph, monkeypatch):
 
 
 def test_ac4_edge_rc0_parse_failure_stays_silent(tmp_graph, monkeypatch):
-    """AC4-EDGE: rc=0 but unparseable stdout -> (None, None) returned silently."""
+    """AC4-EDGE: rc=0 but unparseable stdout -> (None, None) returned silently.
+
+    The bare-id close is native now, so the rich surface is reached through
+    its own front door: a rich flag (--force-overwrite) delegates to the
+    completion surface, whose code-domain auto-detect is the reader under
+    test."""
     _seed(tmp_graph, [{
         "id": "ab-ac4ed001",
         "title": "EDGE target",
         "status": "ready",
         "domain": "code",
+        "artifact_url": "https://example.test/artifact",
     }])
     _stub_subprocess_with_stderr(
         monkeypatch,
@@ -818,7 +885,9 @@ def test_ac4_edge_rc0_parse_failure_stays_silent(tmp_graph, monkeypatch):
         pr_view_rc=0,
         pr_view_stderr="",
     )
-    result = runner.invoke(app, ["done", "ab-ac4ed001"], catch_exceptions=False)
+    result = runner.invoke(
+        app, ["backlog", "done", "ab-ac4ed001", "--force-overwrite"], catch_exceptions=False
+    )
     assert result.exit_code == 0, result.output
     # Parse failure is "no PR for this branch", not a subprocess error -> silent.
     assert "gh pr view failed" not in result.output
@@ -828,154 +897,8 @@ def test_ac4_edge_rc0_parse_failure_stays_silent(tmp_graph, monkeypatch):
     assert entry.get("pr_number") is None
 
 
-# -- Operator-authority audit tag (ab-0b230fd8) --
-#
-# The top-level `fno done` verb mirrors `graph/cli.py::cmd_done`: when an
-# operator holds a drive window, a fresh completion emits
-# `backlog_done_operator_initiated` (source `backlog`) so the audit trail does
-# not fork by verb. These tests parallel cmd_done's coverage in
-# tests/integration/test_graph_cli.py.
-
-
-def test_done_audit_tags_operator_when_driving(tmp_graph, monkeypatch):
-    """AC1-HP: a fresh `fno done` during a drive window emits the operator tag."""
-    from fno import drive_authority as da
-
-    captured: dict = {}
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: True)
-    monkeypatch.setattr(
-        da,
-        "emit_operator_initiated",
-        lambda action_type, **kw: captured.update(type=action_type, kw=kw),
-    )
-    _seed(tmp_graph, [{
-        "id": "ab-drv00001",
-        "title": "Drive completion",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess_with_stderr(monkeypatch, branch="main", pr_view_rc=0, pr_view_stdout="")
-    result = runner.invoke(app, ["done", "ab-drv00001"])
-    assert result.exit_code == 0, result.stdout
-    assert _read(tmp_graph)[0]["status"] == "done"
-    assert captured.get("type") == "backlog_done_operator_initiated"
-    assert captured["kw"]["source"] == "backlog"
-    assert captured["kw"]["task_id"] == "ab-drv00001"
-
-
-def test_done_no_audit_tag_when_not_driving(tmp_graph, monkeypatch):
-    """AC1-ERR: no drive window -> no operator tag; behavior unchanged."""
-    from fno import drive_authority as da
-
-    calls = {"n": 0}
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: False)
-    monkeypatch.setattr(
-        da, "emit_operator_initiated", lambda *a, **k: calls.update(n=calls["n"] + 1)
-    )
-    _seed(tmp_graph, [{
-        "id": "ab-ndr00001",
-        "title": "No-drive completion",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess_with_stderr(monkeypatch, branch="main", pr_view_rc=0, pr_view_stdout="")
-    result = runner.invoke(app, ["done", "ab-ndr00001"])
-    assert result.exit_code == 0, result.stdout
-    assert _read(tmp_graph)[0]["status"] == "done"
-    assert calls["n"] == 0
-
-
-def test_done_audit_tag_adds_no_stdout(tmp_graph, monkeypatch):
-    """AC1-UI: the tag adds nothing to stdout; the completion line is identical
-    whether or not a drive window is active."""
-    from fno import drive_authority as da
-
-    monkeypatch.setattr(da, "emit_operator_initiated", lambda *a, **k: None)
-
-    def _run(driving: bool, node_id: str) -> str:
-        monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: driving)
-        _seed(tmp_graph, [{
-            "id": node_id, "title": "Same line", "status": "ready", "domain": "code",
-        }])
-        _stub_subprocess_with_stderr(monkeypatch, branch="main", pr_view_rc=0, pr_view_stdout="")
-        r = runner.invoke(app, ["done", node_id])
-        assert r.exit_code == 0, r.stdout
-        return r.stdout
-
-    out_inactive = _run(False, "ab-ui000001")
-    out_active = _run(True, "ab-ui000001")
-    assert out_active == out_inactive
-    assert "backlog_done_operator_initiated" not in out_active
-
-
-def test_done_no_tag_on_collision_even_when_driving(tmp_graph, monkeypatch):
-    """AC1-EDGE: an already-done node hits the collision path (returns early) ->
-    no completion occurred, so no operator tag even under an active drive."""
-    from fno import drive_authority as da
-
-    calls = {"n": 0}
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: True)
-    monkeypatch.setattr(
-        da, "emit_operator_initiated", lambda *a, **k: calls.update(n=calls["n"] + 1)
-    )
-    _seed(tmp_graph, [{
-        "id": "ab-col00001",
-        "title": "Already done",
-        "status": "done",
-        "completed_at": "2026-04-20T10:00:00Z",
-        "domain": "code",
-    }])
-    _stub_subprocess_with_stderr(monkeypatch, branch="main", pr_view_rc=0, pr_view_stdout="")
-    result = runner.invoke(app, ["done", "ab-col00001"])
-    assert result.exit_code == 0, result.stdout
-    assert calls["n"] == 0
-
-
-def test_done_no_tag_on_backfill_even_when_driving(tmp_graph, tmp_ledger, monkeypatch):
-    """AC1-EDGE: `--backfill` is a rollup-only pass that returns before the
-    completion path -> no operator tag even under an active drive."""
-    from fno import drive_authority as da
-
-    calls = {"n": 0}
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: True)
-    monkeypatch.setattr(
-        da, "emit_operator_initiated", lambda *a, **k: calls.update(n=calls["n"] + 1)
-    )
-    _seed(tmp_graph, [{
-        "id": "ab-bfd00001",
-        "title": "Backfill target",
-        "status": "done",
-        "completed_at": "2026-04-20T10:00:00Z",
-        "domain": "code",
-        "plan_path": "/p",
-    }])
-    _seed_ledger(tmp_ledger, [{
-        "plan_path": "/p", "sessions": ["s1"], "cost_usd": 1.0,
-        "completed": "2026-04-22T12:00:00Z",
-    }])
-    _stub_subprocess(monkeypatch, branch="main", pr_view_rc=1, repo_rc=1)
-    result = runner.invoke(app, ["done", "ab-bfd00001", "--backfill"])
-    assert result.exit_code == 0, result.stdout
-    assert calls["n"] == 0
-
-
-def test_done_completes_even_when_audit_emit_raises(tmp_graph, monkeypatch):
-    """AC1-FR: a raising emit (unwritable events.jsonl / non-serializable data)
-    is swallowed -- the completion still succeeds and exits 0."""
-    from fno import drive_authority as da
-
-    def _boom(*a, **k):
-        raise OSError("events.jsonl unwritable")
-
-    monkeypatch.setattr(da, "is_drive_authority_active", lambda *a, **k: True)
-    monkeypatch.setattr(da, "emit_operator_initiated", _boom)
-    _seed(tmp_graph, [{
-        "id": "ab-fr000001",
-        "title": "Emit fails",
-        "status": "ready",
-        "domain": "code",
-    }])
-    _stub_subprocess_with_stderr(monkeypatch, branch="main", pr_view_rc=0, pr_view_stdout="")
-    result = runner.invoke(app, ["done", "ab-fr000001"], catch_exceptions=False)
-    assert result.exit_code == 0, result.stdout
-    assert _read(tmp_graph)[0]["status"] == "done"
+# The superuser-authority audit tag moved into the binary with the close
+# (backlog/workflows.rs drive_audit): a wheel-level monkeypatch of
+# fno.drive_authority can no longer observe it, and a sandbox has no space
+# dir for the event journal, so the family's receipts have no testable
+# surface at this level.

@@ -77,6 +77,10 @@ VALUE_FORM_FLAGS = frozenset(
         "-m",
         "--search", "--append-system-prompt",
         "--source-inbox-msg",
+        # test_cmd.py's rust-thread clamp (x-d10f): the value is a locally
+        # computed positive int (`str(effective)`), never hyphen-leading, so
+        # it can never be misread as a flag by the launcher parser.
+        "--test-threads",
     }
 )
 
@@ -363,7 +367,10 @@ def test_scanner_still_sees_the_known_seams() -> None:
     # --version` prints the version, so `--` is not an end-of-options marker on
     # pi 0.84.2 and a fence there would be decoration. `--print` is a boolean
     # flag and the seed is a positional, so there is no equal-form to reach for
-    # either.
-    assert counts.get("exempt", 0) == 12, counts
+    # either. Thirteen: the reconcile port's Rust graph fixtures use x-dddd as
+    # a node id literal in closures.rs tests; the scanner reads the parenthesized
+    # string as a seed token, and a `--` fence inside a vec![] fixture would be
+    # decoration on a line that spawns nothing.
+    assert counts.get("exempt", 0) == 13, counts
     # An unexpected classification kind must surface, not silently count.
     assert set(counts) <= {"fenced", "value-form", "exempt"}, counts

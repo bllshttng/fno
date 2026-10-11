@@ -20,7 +20,12 @@ from fno.graph import _constants as c
 
 @pytest.mark.parametrize(
     "good",
-    ["ab-55ba9adb", "xy-a3f9", "fno-abcd", "f-1234", "abcdefgh-12345678"],
+    [
+        "ab-55ba9adb", "xy-a3f9", "fno-abcd", "f-1234", "abcdefgh-12345678",
+        "xb299",           # dash-less: the pre-2026-09-27 minter shape
+        "x6a95",
+        "a3f9c1d2",        # bare hex now reads as prefix 'a' + 7 hex
+    ],
 )
 def test_wellformed_accepts(good):
     assert c.is_wellformed_node_id(good)
@@ -33,10 +38,10 @@ def test_wellformed_accepts(good):
         "ab-123456789",    # 9 hex (> 8)
         "AB-12345678",     # uppercase prefix
         "ab-1234567g",     # non-hex char
-        "a3f9c1d2",        # bare hex, no prefix-dash
         "1ab-1234",        # digit-led prefix
         "-12345678",       # empty prefix
         "",                # empty
+        "x123",            # 3 hex after the prefix
     ],
 )
 def test_wellformed_rejects(bad):
@@ -63,9 +68,13 @@ def test_extract_finds_configured_and_legacy():
     assert c.extract_node_ids(text) == ["xy-a3f9", "ab-55ba9adb"]
 
 
-def test_extract_skips_bare_hash():
-    # A bare git short-hash has no prefix-dash -> not a candidate (AC4-ERR).
-    assert c.extract_node_ids("commit a3f9c1d2 fixed it") == []
+def test_extract_returns_bare_hash_for_caller_to_filter():
+    # The dash-less id shape makes an 8-hex git short-hash shape-valid, so it
+    # comes back as a CANDIDATE. Identity stays a graph lookup (AC4-ERR): no
+    # all-hex token can confirm, since mint always prepends the configured
+    # prefix, so the caller's graph filter drops it.
+    assert c.extract_node_ids("commit a3f9c1d2 fixed it") == ["a3f9c1d2"]
+    assert c.extract_node_ids("shipped xb299 today") == ["xb299"]
 
 
 def test_extract_returns_sibling_candidates_for_caller_to_filter():
@@ -130,22 +139,8 @@ def _patch_settings(monkeypatch, *, state_dir=None, **backlog):
         config["state_dir"] = state_dir
     model = SettingsModel(config=config)
     monkeypatch.setattr("fno.config.load_settings", lambda: model)
-    # fno.paths._settings() caches independently of load_settings() and does
-    # not re-invoke it on a cache hit, so a stale value from an earlier test
-    # in this same worker process would otherwise survive the patch above
-    # untouched. Swap in a fresh, empty-cache wrapper (monkeypatch reverts to
-    # the untouched original at teardown) rather than clearing the real cache
-    # in place - clearing in place leaves it populated with THIS test's
-    # model for whichever test in this worker reads it next with no
-    # isolation of its own, which is exactly how a corrupt archive fixture
-    # from one test used to leak a stray warning into an unrelated test.
-    import functools
-
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(
-        paths_mod, "_settings", functools.cache(paths_mod._settings.__wrapped__)
-    )
+    # paths._settings() is an uncached delegation to load_settings(), so the
+    # patch above reaches every paths reader directly - no cache swap needed.
 
 
 def test_prefix_legacy_fallback_when_unset(monkeypatch):
@@ -193,6 +188,18 @@ def test_mint_legacy_scheme_when_unconfigured(monkeypatch):
     assert len(c.node_id_suffix(mid)) == 8
 
 
+def test_mint_normalizes_prefix_without_trailing_dash(monkeypatch):
+    # A config prefix with no separator must not mint bare "<prefix><hex>"
+    # literals: they fail every canonical shape gate downstream (the target
+    # init guard, extract_node_ids, is_wellformed_node_id). The mint owns the
+    # separator so any configured prefix yields a wellformed id.
+    _patch_settings(monkeypatch, id_prefix="x", id_hex_width=4)
+    mid = c.mint_node_id(set())
+    assert c.is_wellformed_node_id(mid)
+    assert mid.startswith("x-")
+    assert len(c.node_id_suffix(mid)) == 4
+
+
 def test_mint_is_unique_against_existing(monkeypatch):
     _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4)
     existing = {c.mint_node_id(set()) for _ in range(50)}
@@ -225,9 +232,9 @@ def test_mint_avoids_archived_id(tmp_path, monkeypatch):
 
     _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4, state_dir=str(tmp_path))
 
-    from fno.paths import graph_archive_json
+    from fno.graph._constants import _graph_archive_json as archive_path_fn
 
-    archive_path = graph_archive_json()
+    archive_path = archive_path_fn()
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     archive_path.write_text(
         json.dumps({"entries": [{"id": "xy-dead", "completed_at": "2026-01-01T00:00:00Z"}]}),
@@ -254,9 +261,9 @@ def test_mint_archive_read_failure_degrades_to_working_pool(tmp_path, monkeypatc
     """A corrupt archive must not block minting (advisory read, x-f69b)."""
     _patch_settings(monkeypatch, id_prefix="xy-", id_hex_width=4, state_dir=str(tmp_path))
 
-    from fno.paths import graph_archive_json
+    from fno.graph._constants import _graph_archive_json as archive_path_fn
 
-    archive_path = graph_archive_json()
+    archive_path = archive_path_fn()
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     archive_path.write_text("{not json at all", encoding="utf-8")
 

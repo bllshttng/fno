@@ -40,7 +40,7 @@ class Move(NamedTuple):
 
 VERB_MOVES: dict[str, Move] = {
     # The 2026-08-22 "mail, test, update stay canonical at root" ruling is
-    # superseded (d-b93d7754, d-df6c29a6, x-6233): mail and test fold like
+    # superseded (d-b93d7754, d-df6c29a6): mail and test fold like
     # every other root verb, and update remains a root verb outright. The
     # nested registrations (agents mail / doctor test / doctor update) are
     # now the canonical spellings; these entries retire the root forms.
@@ -57,22 +57,20 @@ VERB_MOVES: dict[str, Move] = {
         kind="deprecated",
         to="inbox decide",
         leaf_destinations=(
-            ("list", "inbox decisions"),
+            ("list", "backlog decisions"),
             ("reindex", "backlog decide-reindex"),
             ("retract", "backlog decide-retract"),
         ),
     ),
     "delivery": Move(kind="deprecated", to="do delivery"),
-    "dispatch": Move(kind="deprecated", to="agents dispatch"),
     "done": Move(kind="deprecated", to="backlog done"),
     "evals": Move(kind="deprecated", to="doctor evals"),
     "event": Move(kind="deprecated", to="doctor event"),
-    "king": Move(
+    "lead": Move(
         kind="deprecated",
-        to="agents king",
+        to="agents lead",
         leaf_destinations=(("board", "inbox board"),),
     ),
-    "law": Move(kind="deprecated", to="inbox law"),
     "lint": Move(kind="deprecated", to="doctor lint"),
     "loops": Move(kind="deprecated", to="do loops"),
     "mail": Move(kind="deprecated", to="agents mail"),
@@ -92,7 +90,9 @@ VERB_MOVES: dict[str, Move] = {
     ),
     "pr-watch": Move(kind="deprecated", to="do pr watch"),
     "research": Move(kind="deprecated", to="do research"),
-    "restart": Move(kind="deprecated", to="agents restart"),
+    # restart stays a permanent alias (2026-09-30 operator ruling): it is the
+    # muscle-memory spelling, so it forwards silently, no move notice.
+    "restart": Move(kind="alias", to="agents restart"),
     "resume": Move(kind="deprecated", to="do resume"),
     "retro": Move(kind="deprecated", to="backlog retro"),
     "review": Move(kind="deprecated", to="do review"),

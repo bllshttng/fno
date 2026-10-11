@@ -70,6 +70,11 @@ class FakeMux:
     reads it); ``fail_times`` fails a verb for the first N calls (a held claim
     that clears after a retry)."""
 
+    # Captured at import, before any test patches subprocess.run for the whole
+    # process: the mail-envelope render passes through to the real renderer so
+    # the enveloped lane asserts today's bytes, not an empty stub answer.
+    _real_run = staticmethod(subprocess.run)
+
     def __init__(
         self,
         fail_verbs: set[str] | None = None,
@@ -87,11 +92,15 @@ class FakeMux:
         # <verb>`. It assumed otherwise twice over: it indexed argv[3]
         # unconditionally, and it recorded every call into `self.calls`, which
         # every assertion here reads as "the pane verbs, in order". A second
-        # caller appeared (the crown read resolves the registry through the
+        # caller appeared (the role read resolves the registry through the
         # config layer, which runs `git rev-parse`) and broke both.
         #
         # A foreign call is answered as success and NOT recorded, so `calls`
-        # keeps meaning what its readers think it means.
+        # keeps meaning what its readers think it means -- except the
+        # mail-envelope render, which passes through to the real renderer
+        # (same seam test_dispatch_mux_send.py uses).
+        if "mail-envelope" in argv:
+            return self._real_run(argv, input=input, **kwargs)
         if argv[1:3] != ["mux", "pane"] or len(argv) < 4:
             return subprocess.CompletedProcess(argv, 0, "", "")
         verb = argv[3]
@@ -115,6 +124,16 @@ def _patch_mux(monkeypatch, fake: FakeMux) -> None:
     from fno.agents import dispatch as dispatch_mod
 
     monkeypatch.setattr(dispatch_mod.subprocess, "run", fake)
+    # The wholesale subprocess stub also swallows the Rust envelope renderer's
+    # call, whose empty stdout would wrap every payload as the empty string.
+    # Stub the renderer with a deterministic minimal envelope instead.
+    import fno.mail.envelope as envelope
+
+    monkeypatch.setattr(
+        envelope,
+        "_render_in_rust",
+        lambda payload: "<fno_mail>\n{}\n</fno_mail>".format(payload.get("body", "")),
+    )
 
 
 def test_inject_reads_the_undeclared_posture_instead_of_raising(monkeypatch) -> None:
@@ -149,7 +168,7 @@ def test_guarded_inject_pastes_and_submits_without_a_claim(monkeypatch) -> None:
     verbs = [c[0][3] for c in fake.calls]
     assert verbs == ["send", "send"]
     for argv, _ in fake.calls:
-        assert argv[argv.index("--session") + 1] == "work"
+        assert argv[argv.index("--server") + 1] == "work"
         assert argv[4] == "7"
     # Envelope bytes ride --stdin --guarded verbatim; the CR submit is its own send.
     paste, cr = fake.calls[0], fake.calls[1]
@@ -288,23 +307,86 @@ def test_mux_pane_send_refuses_unpinned_submit_contract_without_writing(
     assert fake.calls == []
 
 
-def test_mux_pane_send_delivers_to_a_codex_pane(monkeypatch, capsys) -> None:
-    """The correction this node exists for: mail REACHES a codex pane. It landed
-    in the composer and was never submitted, because a capability table refused
-    the lane before the transport was tried. With submit_keys pinned, the text
-    and the carriage return both go."""
+_LANDED = "working\n<fno_mail>\nhi\n</fno_mail>\n"
+_RESIDENT = "working\n<fno_mail>\nhi\n</fno_mail>\ntab to queue message"
+_QUEUED = "working\n<fno_mail>\nhi\n</fno_mail>\nQueued follow-up inputs"
+_PARTIAL = "working\n<fno_mail>"
+
+
+class _ReadBackMux(FakeMux):
+    """Scripted pane reads: each `frames` entry is one frame; the last one
+    repeats once the script runs out. A None frame is an unreadable pane."""
+
+    def __init__(self, frames):
+        super().__init__()
+        self.frames = list(frames)
+        self.reads = 0
+
+    def __call__(self, argv, input=None, **kwargs):
+        if len(argv) > 3 and argv[3] == "read":
+            self.calls.append((list(argv), input))
+            frame = (
+                self.frames[self.reads]
+                if self.reads < len(self.frames)
+                else self.frames[-1]
+            )
+            self.reads += 1
+            if frame is None:
+                return subprocess.CompletedProcess(argv, 1, "", "read refused")
+            return subprocess.CompletedProcess(argv, 0, frame, "")
+        return super().__call__(argv, input=input, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "frames,expected,extra_keys",
+    [
+        pytest.param([_LANDED], True, ["\r"], id="landed-frame-spends-the-hedge"),
+        pytest.param([_RESIDENT, _QUEUED], "queued", ["\t"], id="busy-affordance-queues"),
+        pytest.param(
+            [_PARTIAL] * 12 + [_LANDED],
+            True,
+            ["\r", "\r"],
+            id="slow-paste-late-key",
+        ),
+        pytest.param([_PARTIAL], "unconfirmed", ["\r", "\r"], id="never-renders-demotes"),
+        pytest.param([None], True, [], id="unreadable-keeps-bytes-written"),
+    ],
+)
+def test_codex_mail_read_back_outcomes(frames, expected, extra_keys, monkeypatch):
+    """Mail REACHES a codex pane, and the composer read-back decides what the
+    receipt may claim. One row per branch of that decision:
+
+    - landed: the payload is visible with no queue affordance. One extra
+      submit key decides (a no-op on a landed frame's empty composer, the
+      submit on a resident one) and a second identical frame reads landed.
+    - busy: the envelope sits under ``tab to queue message`` and the old lane
+      had already printed delivered; the lane sends the queue key itself and
+      classifies the queued frame.
+    - slow paste: the CR preceded the end of typing and landed as a newline;
+      the polls ride out the render, then the late key lands it.
+    - never renders: the resend budget is spent and the send demotes to the
+      durable floor honestly -- never delivered over a composer that may
+      still hold the envelope.
+    - unreadable: the frame proves nothing in either direction, so the
+      bytes-written verdict stands and no retry key fires.
+    """
     from fno.agents.dispatch import _mux_pane_send
 
-    fake = FakeMux()
+    fake = _ReadBackMux(frames)
     _patch_mux(monkeypatch, fake)
-    assert _mux_pane_send(_mux_entry("muxed", "codex"), "hi") is True
+    # guarded=False is the shape the mail lane sends with; the read-back lives
+    # on that path.
+    result = _mux_pane_send(_mux_entry("muxed", "codex"), "hi", guarded=False)
 
-    verbs = [call[0][3] for call in fake.calls]
-    assert "send" in verbs
-    # The carriage return actually rides: without it the message renders under
-    # "tab to queue message" and sits there unsent.
-    written = "".join((call[1] or "") + " ".join(call[0]) for call in fake.calls)
-    assert "\r" in written
+    assert result == expected
+    controls = [
+        call[0][call[0].index("--text") + 1]
+        for call in fake.calls
+        if "--text" in call[0]
+    ]
+    # The initial CR always rides; the rows pin exactly what came after it.
+    assert controls[0] == "\r"
+    assert controls[1:] == extra_keys
 
 
 def test_codex_review_request_queues_only_on_positive_composer_marker(monkeypatch):
@@ -568,54 +650,69 @@ def _capture_audits(monkeypatch) -> list[tuple[dict, object]]:
     return seen
 
 
-def test_mux_pane_send_audits_raw_inject(monkeypatch) -> None:
-    """AC10: the mux pane lane records an agent_raw_inject for an unwrapped
-    payload (it never reaches the Rust mail-inject binary, so this site is
-    mandatory, not decorative) and stays silent for a <fno_mail>-wrapped one.
+def _capture_paste_argv(fake: FakeMux) -> list[str] | None:
+    """The payload paste's argv: the one pane send that carries --stdin."""
+    for argv, _input in fake.calls:
+        if "--stdin" in argv:
+            return argv
+    return None
 
-    Since node x-3a64 an unwrapped payload only reaches the pane through
-    ``raw=True``, the keystroke opt-out -- a default send is enveloped and so is
-    audited by construction. That is the row keeping its meaning, not losing it:
-    it still marks every send that arrives at a prompt with no attribution."""
+
+def test_mux_pane_send_leaves_the_audit_to_the_floor(monkeypatch) -> None:
+    """x-91ba moved the raw-inject row into the `fno mux pane send` verb
+    itself, so this lane writes no row of its own: a second write would make
+    every pane dispatch read as two. The unwrapped-vs-wrapped distinction
+    moved with it -- the floor audits every payload identically and never
+    inspects the bytes to decide."""
     from fno.agents.dispatch import _mux_pane_send
 
     fake = FakeMux()
     _patch_mux(monkeypatch, fake)
     seen = _capture_audits(monkeypatch)
 
-    # Unwrapped -> one audit record; wrapped envelope -> none.
+    # Unwrapped keystroke and wrapped envelope: neither produces a lane row.
     _mux_pane_send(_mux_entry(), "/code-review <level> --comment --fix", raw=True)
     _mux_pane_send(_mux_entry(), "<fno_mail from=\"a\">hi</fno_mail>")
 
-    assert len(seen) == 1, "only the unwrapped payload is audited"
-    event, path = seen[0]
-    # The CANONICAL {type, source, data} envelope, not the flat {kind, ...} shape:
-    # ~/.fno/agents/events.jsonl is canonical-only, and a consumer reading
-    # data.target_session (where schema.yaml says it lives) must not miss this.
-    assert event["type"] == "agent_raw_inject"
-    assert event["source"] == "daemon"
-    data = event["data"]
-    assert data["payload"] == "/code-review <level> --comment --fix"
-    assert data["lane"] == "mux-pane"
-    assert data["harness"] == "claude"
-    assert data["target_cwd"] == "/w"
-    assert data["confirmed"] is True
-    # The Python mux site writes the SAME log the Rust mail-inject binary uses
-    # (~/.fno/agents/events.jsonl), so the audit floor is one file, not two.
-    assert str(path).endswith("agents/events.jsonl")
+    assert seen == [], "the lane must not write a second row beside the floor's"
+    paste = _capture_paste_argv(fake)
+    assert paste is not None
+    assert "--source" not in paste, "no label declared, none passed"
 
 
-def test_mux_pane_send_audit_records_a_failed_send_as_unconfirmed(monkeypatch) -> None:
-    """No phantom records: a stalled pane still audits (the bytes may have
-    landed) but says so, instead of asserting an injection that never happened."""
+def test_mux_pane_send_declared_source_rides_the_paste(monkeypatch) -> None:
+    """A declared source_label reaches the floor's verb on the payload paste,
+    so the floor's row joins the dispatch to its bus record."""
+    from fno.agents.dispatch import _mux_pane_send
+
+    fake = FakeMux()
+    _patch_mux(monkeypatch, fake)
+    _capture_audits(monkeypatch)
+
+    _mux_pane_send(
+        _mux_entry(),
+        "/code-review <level> --comment --fix",
+        raw=True,
+        source_label="mail:msg-abc123",
+    )
+
+    assert _capture_paste_argv(fake) is not None
+    paste = _capture_paste_argv(fake)
+    assert paste is not None
+    assert paste[paste.index("--source") + 1] == "mail:msg-abc123"
+
+
+def test_mux_pane_send_failed_send_writes_no_lane_row(monkeypatch) -> None:
+    """No phantom records, x-91ba shape: a failed send is recorded by the
+    floor's own row (outcome refused, confirmed false); the lane writes
+    nothing and demotes the message to durable."""
     from fno.agents.dispatch import _mux_pane_send
 
     _patch_mux(monkeypatch, FakeMux(fail_verbs={"send"}))
     seen = _capture_audits(monkeypatch)
 
     assert _mux_pane_send(_mux_entry(), "/code-review", raw=True) is False
-    assert len(seen) == 1
-    assert seen[0][0]["data"]["confirmed"] is False
+    assert seen == []
 
 
 def test_mux_pane_send_does_not_audit_cross_session_envelope(monkeypatch) -> None:
@@ -672,87 +769,3 @@ def test_deliver_live_dispatches_on_mux_ref_before_legacy_lanes(
     )
     assert dispatch_mod._deliver_live(worker, "hi", "fno") is True
     assert calls, "worker row keeps the legacy daemon lane during dual-run"
-
-
-# ---------------------------------------------------------------------------
-# `fno agents ask` follow-up on a mux row (routing fix)
-# ---------------------------------------------------------------------------
-# Before the fix, dispatch_ask routed a mux row to the provider follow-up
-# path, which keys on claude_short_id / codex_session_id / gemini_session_id
-# a mux row lacks, and raised exit 12. It must ride PaneSend instead.
-
-
-def _seed(entry) -> None:
-    from fno.agents.registry import write_registry
-
-    write_registry([entry])
-
-
-def test_ask_mux_row_rides_pane_send(tmp_path: Path, monkeypatch) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed(_mux_entry())  # claude provider, mux ref, NO claude_short_id
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-
-    from fno.agents.dispatch import dispatch_ask
-
-    result = dispatch_ask("muxed", "ping", harness=None, cwd=Path("/w"))
-
-    assert result.kind == "followup"
-    assert result.reply == ""  # fire-and-forget: no captured reply
-    assert result.short_id == "work:7"
-    verbs = [c[0][3] for c in fake.calls]
-    assert verbs == ["claim", "send", "send", "release"]
-    # The body rides --stdin inside the cross-session-message container so the
-    # pane reads it as a peer turn, not bare operator input.
-    sent = fake.calls[1][1]
-    assert "<cross-session-message from-name=" in sent
-    assert "\nping\n" in sent
-
-
-def test_ask_mux_preserves_from_name_framing(tmp_path: Path, monkeypatch) -> None:
-    """A --from-name peer message keeps its attribution in the mux container."""
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed(_mux_entry())
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-
-    from fno.agents.dispatch import dispatch_ask
-
-    dispatch_ask("muxed", "ping", harness=None, cwd=Path("/w"), from_name="peer-x")
-    sent = fake.calls[1][1]
-    assert '<cross-session-message from-name="peer-x">' in sent
-
-
-def test_ask_mux_dead_pane_raises_transport_error(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed(_mux_entry())
-    fake = FakeMux(fail_verbs={"send"})
-    _patch_mux(monkeypatch, fake)
-
-    from fno.agents.dispatch import DispatchAskError, dispatch_ask
-
-    with pytest.raises(DispatchAskError) as exc:
-        dispatch_ask("muxed", "ping", harness=None, cwd=Path("/w"))
-    assert exc.value.exit_code == 1  # transport failure, not the old exit 12
-
-
-def test_ask_mux_codex_row_also_rides_pane_send(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """A codex mux row rides pane send, as the name always said it should.
-
-    It previously refused, because [harness.codex] declared
-    submit_keys = ["unsupported"]. That was a declaration, not a measurement.
-    """
-    use_tmpdir(monkeypatch, tmp_path)
-    _seed(_mux_entry(name="samplemux", provider="codex"))
-    fake = FakeMux()
-    _patch_mux(monkeypatch, fake)
-
-    from fno.agents.dispatch import dispatch_ask
-
-    dispatch_ask("samplemux", "ping", harness=None, cwd=Path("/w"))
-    assert [call[0][3] for call in fake.calls], "the pane lane must be tried"

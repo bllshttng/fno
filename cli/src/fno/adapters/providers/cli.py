@@ -1,16 +1,16 @@
 """Typer sub-app for fno config accounts commands.
 
-Phase 02 of the provider rotation substrate (ab-256f6b6e).
+Phase 02 of the provider rotation substrate.
 Provides: list, show, add, test, use, remove.
 
 Phase 03 will wire in staging.stage(record) inside the `add` command.
 """
 from __future__ import annotations
 
-import datetime as _dt
 import os
 import shutil
 import subprocess
+import sys
 import time as time_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, NamedTuple, Optional, cast
@@ -88,7 +88,12 @@ def list_providers(
         False, "--json", "-J", help="Emit a JSON array of record rows (Connections UI)."
     ),
 ) -> None:
-    """List all configured accounts, marking the active one with *."""
+    """List all configured accounts, marking the active one with *.
+
+    The human listing always carries an identity column: the ``.active`` stamp
+    says who PUT a credential in the slot, not who it serves, so the binding
+    verdict and doctor's per-record problems ride the row.
+    """
     config = _load()
 
     def _is_active(record: ProviderRecord) -> bool:
@@ -101,13 +106,30 @@ def list_providers(
     # DISARMED footer below all read the same config, never a parse per row.
     quota = load_quota_config()
 
+    # Binding reads run only for the human listing.
+    needs_binding = not json_output
+    identities, findings, shared = {}, [], set()
+    if needs_binding:
+        now = time_module.time()
+        findings = _doctor_findings()
+        for record in config.records:
+            identities[record.id] = _identity_for(record, config.by_id, now)
+        shared = _shared_identity_ids(identities)
+    problems = {
+        r.id: [f["problem"] for f in findings if f.get("record") == r.id]
+        for r in config.records
+    }
+    # shared-identity rides the problems list: one wire field, both surfaces.
+    for rid in shared:
+        problems[rid].append("shared-identity")
+
     if json_output:
         import json as _json
 
         rows = []
         for record in config.records:
             usage_reading = _usage_age(record.id, ttl=quota.probe_ttl_seconds)
-            rows.append({
+            row = {
                 "id": record.id,
                 "name": record.name,
                 "harness": record.harness,
@@ -115,7 +137,7 @@ def list_providers(
                 "priority": record.priority,
                 "active": _is_active(record),
                 "headroom": _headroom_label(record.id),
-                "snapshot": (
+                "cred-snapshot": (
                     managed.snapshot_age_label(record.id)
                     if record.auth == "managed"
                     else None
@@ -123,7 +145,8 @@ def list_providers(
                 "usage_age_s": usage_reading.age_seconds,
                 "usage_ttl_seconds": usage_reading.ttl_seconds,
                 "usage_stale": usage_reading.stale,
-            })
+            }
+            rows.append(row)
         typer.echo(_json.dumps(rows))
         return
 
@@ -140,8 +163,10 @@ def list_providers(
             f"priority={record.priority}  headroom={headroom_col}"
         )
         if record.auth == "managed":
-            line += f"  snapshot={managed.snapshot_age_label(record.id)}"
+            line += f"  cred-snapshot={managed.snapshot_age_label(record.id)}"
         line += f"  {_usage_age_col(record.id, ttl=quota.probe_ttl_seconds)}"
+        cell = _identity_cell(record, identities.get(record.id), problems[record.id])
+        line += f"  identity={cell}"
         typer.echo(line)
 
     # Two flags, two sentences. Recommend `observe` first: it is the reversible
@@ -165,16 +190,36 @@ def list_providers(
 
 
 # ---------------------------------------------------------------------------
-# usage (quota-aware dispatch, x-5d3e)
+# usage (quota-aware dispatch)
 # ---------------------------------------------------------------------------
 
 
 def _headroom_label(provider_id: str) -> str:
-    """Compact headroom string for the list column. Fail-open to 'unknown'."""
+    """Compact headroom string with its own provenance for the list column.
+
+    The bare state name sat next to the credential-snapshot age on the same
+    line and read as one fact, so an operator took the snapshot age for the
+    verdict's provenance. The source (and the observation age when there was
+    one) keeps the two claims apart. Fail-open to 'unknown'.
+    """
     try:
         from fno.adapters.providers.runtime_state import headroom
 
-        return headroom(provider_id).state.name.lower()
+        h = headroom(provider_id)
+        detail = h.source
+        if detail:
+            if h.observed_at is not None:
+                age = max(0.0, time_module.time() - h.observed_at)
+                if age < 60:
+                    detail += f" {int(age)}s"
+                elif age < 3600:
+                    detail += f" {int(age // 60)}m"
+                elif age < 86400:
+                    detail += f" {int(age // 3600)}h"
+                else:
+                    detail += f" {int(age // 86400)}d"
+            detail = f"({detail})"
+        return f"{h.state.name.lower()}{detail}"
     except Exception:  # noqa: BLE001 - a display read must never break `list`
         return "unknown"
 
@@ -221,6 +266,46 @@ def _usage_age_col(record_id: str, *, ttl: Optional[int] = None) -> str:
     return f"usage={label}"
 
 
+def _identity_cell(record: ProviderRecord, got, problems: list) -> str:
+    """One compact identity token for a list row: matched names the row's own
+    record, mismatch names who the credential really serves, anything unproven
+    renders ``?<reason>`` and never names an account it did not prove."""
+    from fno.adapters.providers.binding import AMBIGUOUS, MATCHED, MISMATCH
+
+    if record.harness != "claude" or record.auth == "api_key":
+        cell = "-"
+    elif got is None:
+        cell = "?no-observation"
+    elif got.status == MATCHED:
+        cell = got.matched_record or got.requested_record or "?"
+    elif got.status == MISMATCH:
+        served_by = (got.matched_record or got.observed_label
+                     or got.observed_principal or "another-account")
+        cell = f"!serves {served_by}"
+    elif got.status == AMBIGUOUS:
+        cell = "?ambiguous"
+    else:
+        cell = f"?{got.reason or 'unknown'}"
+    return cell + "".join(f" !{p}" for p in problems)
+
+
+def _shared_identity_ids(identities: dict) -> set:
+    """Record ids whose observed principal is also observed through a
+    different credential root. Managed records share one slot root (their
+    ``credential_root`` is None), so a managed pair never trips this; two
+    scoped config dirs serving one principal do."""
+    by_principal: dict = {}
+    for got in identities.values():
+        if got is None or got.observed_principal is None:
+            continue
+        by_principal.setdefault(got.observed_principal, set()).add(got.credential_root)
+    return {
+        rid for rid, got in identities.items()
+        if got is not None and got.observed_principal is not None
+        and len(by_principal[got.observed_principal]) > 1
+    }
+
+
 def _fmt_resets_in(resets_at: float | None, now: float) -> str:
     """Render a reset epoch as a relative 'in 40m' / 'reset' string.
 
@@ -239,6 +324,50 @@ def _fmt_resets_in(resets_at: float | None, now: float) -> str:
     hours = mins // 60
     rem = mins % 60
     return f"in {hours}h{rem:02d}m"
+
+
+def _identity_for(record, by_id: dict, now: float):
+    """The effective-account verdict for one claude record, or None.
+
+    The usage surface calls it for a record that HAS an observation to
+    attribute; ``list`` calls it for every claude record, which costs one
+    binding read per record (cached; ``list -J`` does no binding work). Safe
+    for a record with no observation: the owner answers a typed unknown.
+    None means a non-claude record or a read that raised.
+    """
+    from fno.adapters.providers.binding import resolve_account_binding
+
+    if record.harness != "claude":
+        return None
+    try:
+        return resolve_account_binding(
+            record, root=managed.store_root(), by_id=by_id, now=now
+        )
+    except Exception:  # noqa: BLE001 - a report never fails on an identity read
+        return None
+
+
+def _identity_lines(record, got, worst_pct: float, threshold: float, now: float) -> list[str]:
+    """The identity and manual-switch lines for one record's usage row.
+
+    An unproven identity is named rather than passed over. Silence there reads
+    as a proven account.
+    """
+    from fno.adapters.providers.binding import MATCHED
+
+    if got is None:
+        return []
+    prefix = f"{record.id}  [{record.harness}]  "
+    if got.status == MATCHED:
+        # None when two records share the identity, still a match for the pin.
+        served = got.matched_record or got.requested_record
+        age = max(0, int((now - got.observed_at) // 60))
+        lines = [f"{prefix}identity: {served} (observed {age}m ago)"]
+    else:
+        lines = [prefix + got.receipt]
+    if worst_pct >= threshold:
+        lines.append(prefix + "manual switch: " + managed.slot_switch_remedy("the other account"))
+    return lines
 
 
 @cli.command("usage")
@@ -275,7 +404,9 @@ def usage_providers(
 
     config = _load()
     now = _time.time()
-    ttl = load_quota_config(repo_root=_get_repo_root()).probe_ttl_seconds
+    quota = load_quota_config(repo_root=_get_repo_root())
+    ttl = quota.probe_ttl_seconds
+    identities: dict = {}
 
     out: dict[str, object] = {}
     for record in config.records:
@@ -289,6 +420,7 @@ def usage_providers(
                 else UsageRefresh(cached, None if cached.windows else "no-windows")
             )
         if not obs.known:
+            # No identity on an unknown row: identity attributes an observation.
             out[record.id] = {"state": "unknown", "reason": obs.reason or "unknown"}
             continue
         snap = obs.snapshot
@@ -310,6 +442,14 @@ def usage_providers(
         if obs.persisted is False:
             # Additive: the reading is good, only its cache write lost the race.
             entry["persisted"] = False
+        got = identities[record.id] = _identity_for(record, config.by_id, now)
+        if got is not None:
+            entry["identity"] = {
+                "status": got.status,
+                "account": got.matched_record,
+                "reason": got.reason,
+                "observed_at": got.observed_at,
+            }
         out[record.id] = entry
 
     if json_output:
@@ -335,6 +475,11 @@ def usage_providers(
                 f"{record.id}  [{record.harness}]  {w['label']:<8} "
                 f"{w['used_pct']:5.1f}%  {_fmt_resets_in(w['resets_at'], now)}{suffix}"
             )
+        worst = max((w["used_pct"] for w in row["windows"]), default=0.0)
+        for line in _identity_lines(
+            record, identities.get(record.id), worst, quota.defer_threshold_pct, now
+        ):
+            typer.echo(line)
 
 
 @cli.command("window")
@@ -442,7 +587,7 @@ def window_providers(
 
 
 # ---------------------------------------------------------------------------
-# required-bot-check (quota-aware dispatch, x-5d3e US5)
+# required-bot-check (quota-aware dispatch, US5)
 # ---------------------------------------------------------------------------
 
 # Map a required-bot GitHub login (substring match) to the provider CLI kind
@@ -466,7 +611,7 @@ def _bot_provider_cli(bot: str) -> Optional[str]:
 def required_bot_headroom_check() -> list[dict]:
     """Return one dict per required-bot whose provider is EXHAUSTED.
 
-    Read-only + fail-open (x-5d3e US5): reads the CACHED snapshot only (never
+    Read-only + fail-open (US5): reads the CACHED snapshot only (never
     probes at promise time), unions config.review.github_apps + required_bots,
     maps each bot to a provider record via its CLI kind, and reports those whose
     headroom is EXHAUSTED. Any read failure yields an empty list - a telemetry
@@ -594,7 +739,7 @@ def show_provider(
         typer.echo(f"error: account '{provider_id}' not found", err=True)
         raise typer.Exit(1)
     if print_binding:
-        # x-d285: the secret-free projection the Rust re-entry resolver
+        # the secret-free projection the Rust re-entry resolver
         # consumes (`fno-agents reentry-plan` shells this). Same KEY=VALUE
         # grammar as `pick --print-env`, but only the identity/namespace
         # facts - an api_key record's env never reaches stdout, so the
@@ -749,7 +894,7 @@ def _register_config_dir_account(
     config_dir: str,
     scope: str,
 ) -> None:
-    """Register a per-account CLAUDE_CONFIG_DIR account (x-d012).
+    """Register a per-account CLAUDE_CONFIG_DIR account.
 
     The dir IS the account (a full second login); no shared-slot snapshot. The
     resolver keys `spawn --account` off config_dir, so auth is a formality -
@@ -807,7 +952,7 @@ def register_provider(
         None,
         "--config-dir",
         help=(
-            "Register a per-account CLAUDE_CONFIG_DIR account (x-d012) instead of "
+            "Register a per-account CLAUDE_CONFIG_DIR account instead of "
             "a shared-slot managed snapshot. Point at a full second login in its "
             "own dir (e.g. ~/.claude-alt sharing projects/plugins/settings with "
             "~/.claude via symlinks). This is the verified-correct multi-account "
@@ -884,7 +1029,7 @@ def register_provider(
             f"error: the current {record.harness} login is already registered as "
             f"'{holder_id}'; registering it again as '{record.id}' would store one "
             f"credential under two ids.\n"
-            f"  sign into the {record.id} account first:  {record.harness} /logout && "
+            f"  sign into the {record.id} account first (no /logout first):  "
             f"{record.harness} /login\n"
             f"  or give it its own dir:  fno config accounts register {record.id} "
             f"--config-dir ~/.claude-{record.id}",
@@ -898,7 +1043,7 @@ def register_provider(
             f"  a rotated token hides this from the credential check, but the "
             f"proven identity is the same, so two ids would share one quota pool "
             f"and reconciliation could never tell them apart.\n"
-            f"  sign into the {record.id} account first:  {record.harness} /logout && "
+            f"  sign into the {record.id} account first (no /logout first):  "
             f"{record.harness} /login",
             err=True,
         )
@@ -907,7 +1052,8 @@ def register_provider(
         typer.echo(
             f"error: the {record.harness} slot currently holds credentials for two "
             f"different accounts, so registering '{record.id}' could bind the wrong "
-            f"one.\n  sign out and back in as {record.id}, then re-run this command",
+            f"one.\n  " + managed.slot_switch_remedy(record.id)
+            + ", then re-run this command",
             err=True,
         )
         raise typer.Exit(1)
@@ -950,7 +1096,7 @@ def register_provider(
 
 
 # ---------------------------------------------------------------------------
-# pick (launch-time headroom picking, x-7d45)
+# pick (launch-time headroom picking)
 #
 # The ONE picker. No in-session credential swap is possible - a claude process
 # reads CLAUDE_CONFIG_DIR once at launch - so every switch has to happen at a
@@ -1205,17 +1351,14 @@ def pick_env_lines(account_id: str) -> list[str]:
 def _doctor_findings() -> list[dict]:
     """Per-record + per-slot problems in the managed store. Read-only.
 
-    A stale capture, an expired blob, a config dir with no login, and a tainted
+    A stale capture, a missing login, an unproven identity, and a tainted
     slot are four separate silent degradations that each surface only as
     ``unknown`` somewhere downstream. This collects them into one answerable
     question so the operator sees the store's real condition instead of a
     symptom. Never mutates; never prints a secret.
     """
-    import time as _time
-
     config = _load()
     findings: list[dict] = []
-    now = _time.time()
 
     for record in config.records:
         blob = managed.read_blob(record.id)
@@ -1229,16 +1372,6 @@ def _doctor_findings() -> list[dict]:
                         f"holds the same credential as '{holder}'; one of them "
                         f"was captured while the other account was signed in"
                     ),
-                })
-            expires_at = managed.credential_expiry(blob)
-            if expires_at is not None and expires_at <= now:
-                stamp = _dt.datetime.fromtimestamp(
-                    expires_at, _dt.timezone.utc
-                ).strftime("%Y-%m-%dT%H:%MZ")
-                findings.append({
-                    "record": record.id,
-                    "problem": "expired-credential",
-                    "detail": f"stored credential expired {stamp}",
                 })
 
         if (
@@ -1295,39 +1428,64 @@ def _doctor_findings() -> list[dict]:
 
         # Taint watches the door footnote controls; `claude /login` uses the
         # other one and leaves a stamp that is wrong AND untainted, so nothing
-        # downstream hesitates. Comparing the stamp against the live principal
-        # is what turns that into a finding instead of silently wrong billing.
-        try:
-            drift = managed.slot_identity_drift(harness_kind)
-        except (OSError, managed.ManagedStoreError):
-            # A denied or timed-out Keychain read is a diagnosis we could not
-            # make, not a crash in a read-only verb.
-            drift = None
-        if drift and drift.get("ambiguous"):
-            findings.append({
-                "record": f"slot:{harness_kind}",
-                "problem": "ambiguous-slot",
-                "detail": (
-                    "the slot's stored credentials belong to different accounts "
-                    "(a stale scoped Keychain item beside a live unscoped one), so "
-                    "whichever is stamped, some reader gets the other; sign out and "
-                    f"back in, then `fno config accounts reconcile-slot {harness_kind}`"
-                ),
-            })
-        elif drift:
-            findings.append({
-                "record": f"slot:{harness_kind}",
-                "problem": "slot-identity-drift",
-                "detail": (
-                    f"the stamp names '{drift['stamped']}' but the live slot "
-                    f"credential belongs to {drift['live']} (an out-of-band "
-                    f"`{harness_kind} /login`), so usage is being attributed to the "
-                    f"wrong account - repair with "
-                    f"`fno config accounts reconcile-slot {harness_kind}`"
-                ),
-            })
+        # downstream hesitates. Asking the slot who it actually serves is what
+        # turns that into a finding instead of silently wrong billing.
+        findings.extend(_slot_identity_findings(harness_kind, config.by_id))
 
     return findings
+
+
+def _slot_identity_findings(harness_kind: str, by_id: dict) -> list[dict]:
+    """Identity findings for one CLI's shared slot, from the shared binding.
+
+    Free until it can answer. With no stamp, or no principal bound to the
+    stamped record, there is nothing to compare.
+    """
+    from fno.adapters.providers.binding import (
+        AMBIGUOUS,
+        UNKNOWN_RECEIPT,
+        resolve_account_binding,
+    )
+
+    if harness_kind != "claude":
+        return []
+    repair = f"repair with `fno config accounts reconcile-slot {harness_kind}`"
+    where = f"slot:{harness_kind}"
+
+    def _finding(problem: str, detail: str) -> list[dict]:
+        return [{"record": where, "problem": problem, "detail": detail}]
+
+    try:
+        root = managed.store_root()
+        stamped = managed.active_slot_id(harness_kind, root)
+        bound = managed.identity_key(managed.record_principal(stamped, root)) if stamped else None
+    except (OSError, managed.ManagedStoreError):
+        return []  # a diagnosis we could not make, not a crash in a read-only verb
+    if bound is None:
+        return []
+    got = resolve_account_binding(None, harness=harness_kind, root=root, by_id=by_id)
+    if got.status == AMBIGUOUS and got.reason == "ambiguous-slot":
+        return _finding("ambiguous-slot", (
+            "the slot's stored credentials belong to different accounts, so whichever is "
+            "stamped, some reader gets the other; "
+            + managed.slot_switch_remedy("the account to keep")
+            + f", then {repair}"
+        ))
+    if got.observed_principal is None:
+        # An unreadable slot cannot demonstrate drift, so this used to be quiet.
+        return _finding(UNKNOWN_RECEIPT, (
+            f"who the live slot serves could not be proven ({got.reason}), so usage "
+            f"and launch receipts stay unknown rather than naming '{stamped}'; this "
+            f"is not a healthy slot and not a successful switch - {repair}"
+        ))
+    if got.observed_principal == bound:
+        return []
+    return _finding("slot-identity-drift", (
+        f"the stamp names '{stamped}' but the live slot credential belongs to "
+        f"{got.observed_label or got.observed_principal} (an out-of-band "
+        f"`{harness_kind} /login`), so usage is being attributed to the wrong "
+        f"account - {repair}"
+    ))
 
 
 @cli.command("doctor")
@@ -1339,7 +1497,7 @@ def doctor_providers(
     """Report the managed store's real condition. Exits non-zero on any problem.
 
     Read-only. Checks each record for a credential another account already
-    holds, an expired stored credential, and a config_dir that holds no login;
+    holds and a config_dir that holds no login;
     then checks each CLI's slot for taint. Usable as a check in a script.
     """
     import json as _json
@@ -1493,7 +1651,7 @@ def use_provider(
 
     record = config.by_id[provider_id]
 
-    # A config-dir account (x-d012) lives in its own dir; there is no shared-slot
+    # A config-dir account lives in its own dir; there is no shared-slot
     # snapshot to materialize, so a daemon-wide `use` switch does not apply. Refuse
     # cleanly instead of letting managed.switch fail with a cryptic no-snapshot
     # error. Use it per-worker via `fno agents spawn --account <id>`.
@@ -1537,6 +1695,13 @@ def use_provider(
         except managed.SwitchDeferred as exc:
             typer.echo(f"switch deferred: {exc}", err=True)
             raise typer.Exit(2)
+        except managed.NeedsLogin as exc:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                typer.echo(f"{exc} Run in a terminal: fno config accounts use {provider_id}", err=True)
+                raise typer.Exit(1)
+            if managed.run_vault_login(provider_id) != 0:
+                raise typer.Exit(1)
+            result = managed.SwitchResult(active=provider_id)
         except managed.ManagedStoreError as exc:
             typer.echo(f"switch failed: {exc}", err=True)
             raise typer.Exit(1)
@@ -1660,7 +1825,7 @@ def remove_provider(
 
 # ---------------------------------------------------------------------------
 # combos sub-app: add / list / remove / test / use
-# Plan B (Spec 4, ab-0e5a921e). Combos are named ordered provider lists
+# Plan B (Spec 4). Combos are named ordered provider lists
 # with a rotation strategy (fallback | round_robin). Storage lives under
 # ``config.providers.combos.<name>`` in settings.yaml.
 # ---------------------------------------------------------------------------

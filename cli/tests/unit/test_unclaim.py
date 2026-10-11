@@ -4,6 +4,7 @@ Covers the graph-claim clear (always), the safe lockfile release (stale or
 owned), and the live-foreign refusal (never yank a live peer's claim).
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
@@ -20,7 +21,7 @@ runner = CliRunner()
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     import fno.graph._constants as gc
     import fno.graph.store as gs
     monkeypatch.setattr(gc, "GRAPH_JSON", g)
@@ -39,11 +40,13 @@ def claims_root(tmp_path, monkeypatch) -> Path:
 
 
 def _seed(g: Path, entries: list[dict]) -> None:
-    g.write_text(json.dumps({"entries": entries}, indent=2) + "\n")
+    seed_graph(g, json.dumps({"entries": entries}, indent=2) + "\n")
 
 
 def _read(g: Path) -> list[dict]:
-    return json.loads(g.read_text()).get("entries", [])
+    from fno.graph.store import read_graph_strict
+
+    return read_graph_strict(g)
 
 
 def _claimed_node(node_id: str = "ab-1234abcd") -> dict:
@@ -55,35 +58,35 @@ def _claimed_node(node_id: str = "ab-1234abcd") -> dict:
         "project": "p",
         "plan_path": "internal/plan.md",  # so the underlying status is `ready`, not `idea`
         "session_id": "20260101T000000Z-1111-aaaaaa",
-        "claimed_at": "2026-01-01T00:00:00+00:00",
+        "locked_at": "2026-01-01T00:00:00+00:00",
     }
 
 
 # -- graph-side clear --------------------------------------------------------
 
 
-def test_unclaim_reverts_claimed_to_ready(tmp_graph, claims_root):
+def test_unclaim_reverts_claimed_to_ready(tmp_graph, claims_root, native_backlog_door):
     _seed(tmp_graph, [_claimed_node()])
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
     assert result.exit_code == 0, result.output
     node = _read(tmp_graph)[0]
     assert node["session_id"] is None
-    assert node["claimed_at"] is None
+    assert node["locked_at"] is None
     assert node["status"] == "ready"
 
 
-def test_unclaim_idempotent_on_ready_node(tmp_graph, claims_root):
+def test_unclaim_idempotent_on_ready_node(tmp_graph, claims_root, native_backlog_door):
     _seed(tmp_graph, [
         {"id": "ab-1234abcd", "title": "Ready", "slug": "ready", "domain": "code",
          "project": "p", "plan_path": "internal/plan.md",
-         "session_id": None, "claimed_at": None},
+         "session_id": None, "locked_at": None},
     ])
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
     assert result.exit_code == 0, result.output
     assert _read(tmp_graph)[0]["status"] == "ready"
 
 
-def test_unclaim_unknown_node_exits_1(tmp_graph, claims_root):
+def test_unclaim_unknown_node_exits_1(tmp_graph, claims_root, native_backlog_door):
     _seed(tmp_graph, [_claimed_node()])
     result = runner.invoke(app, ["backlog", "unclaim", "ab-deadbeef"])
     assert result.exit_code == 1
@@ -93,21 +96,25 @@ def test_unclaim_unknown_node_exits_1(tmp_graph, claims_root):
 # -- lockfile side -----------------------------------------------------------
 
 
-def _acquire(key: str, holder: str, pid: int, root: Path) -> None:
-    # claims_dir(root) appends ".fno/claims"; pass the FNO_CLAIMS_ROOT itself.
+def _acquire(key: str, holder: str, pid: int) -> None:
+    # No explicit root: an explicit root routes acquire to the legacy Python
+    # writer whose dialect the native claim reader classifies as corrupted.
+    # The claims_root fixture's FNO_CLAIMS_ROOT points the native writer at
+    # the same directory the release path reads.
     from fno.claims.core import acquire_claim
-    acquire_claim(key=key, holder=holder, pid=pid, root=root)
+    acquire_claim(key=key, holder=holder, pid=pid)
 
 
 def _lock_exists(key: str, root: Path) -> bool:
-    from fno.claims.io import claim_path
-    return claim_path(key, root=root).exists()
+    # root is the FNO_CLAIMS_ROOT the fixture set; the claims table answers.
+    from fno.claims.core import claim_status
+    return claim_status(key)["state"] != "free"
 
 
-def test_unclaim_releases_stale_lockfile(tmp_graph, claims_root):
+def test_unclaim_releases_stale_lockfile(tmp_graph, claims_root, native_backlog_door):
     _seed(tmp_graph, [_claimed_node()])
     # pid that is certainly not alive => classify() returns "stale".
-    _acquire("node:ab-1234abcd", "target-session:gone", pid=2_000_000_000, root=claims_root)
+    _acquire("node:ab-1234abcd", "target-session:gone", pid=2_000_000_000)
     assert _lock_exists("node:ab-1234abcd", claims_root)
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
     assert result.exit_code == 0, result.output
@@ -115,13 +122,13 @@ def test_unclaim_releases_stale_lockfile(tmp_graph, claims_root):
     assert _read(tmp_graph)[0]["session_id"] is None
 
 
-def test_unclaim_stale_release_is_holder_verified_toctou(tmp_graph, claims_root, monkeypatch):
+def test_unclaim_stale_release_is_holder_verified_toctou(tmp_graph, claims_root, monkeypatch, native_backlog_door):
     # codex P1: between the stale snapshot and the unlink, another dispatcher
     # reclaims the dead lock with a NEW holder. The release must be holder-
     # verified so it leaves that fresh live lock intact (no two-writer yank).
     _seed(tmp_graph, [_claimed_node()])
     # On-disk reality: a DIFFERENT live holder now owns the lock.
-    _acquire("node:ab-1234abcd", "target-session:fresh-live", pid=os.getpid(), root=claims_root)
+    _acquire("node:ab-1234abcd", "target-session:fresh-live", pid=os.getpid())
     # Stale snapshot the verb sees first reports the OLD dead holder.
     import fno.claims.core as cc
     real_status = cc.claim_status
@@ -135,22 +142,24 @@ def test_unclaim_stale_release_is_holder_verified_toctou(tmp_graph, claims_root,
     assert result.exit_code == 0, result.output
     # The fresh live holder's lock survives (holder mismatch -> release no-ops).
     assert _lock_exists("node:ab-1234abcd", claims_root)
-    assert _read(tmp_graph)[0]["session_id"] is None  # graph still cleared
+    # locked_by is a projection of the claim store: the surviving claim is
+    # the truth the row shows, never a stale mirror of the cleared one.
+    assert _read(tmp_graph)[0]["session_id"] == "target-session:fresh-live"
 
 
-def test_unclaim_refuses_live_foreign_lockfile(tmp_graph, claims_root, monkeypatch):
+def test_unclaim_refuses_live_foreign_lockfile(tmp_graph, claims_root, monkeypatch, native_backlog_door):
     _seed(tmp_graph, [_claimed_node()])
     # A live holder (this pid) that is NOT us => graph cleared, lockfile kept.
-    _acquire("node:ab-1234abcd", "target-session:someone-else", pid=os.getpid(), root=claims_root)
+    _acquire("node:ab-1234abcd", "target-session:someone-else", pid=os.getpid())
     monkeypatch.setattr(
-        "fno.graph.cli._invoking_claim_holder",
+        "fno.backlog.requeue._invoking_claim_holder",
         lambda: "target-session:me-not-them",
     )
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
     assert result.exit_code == 0, result.output
-    # Graph claim still cleared...
-    assert _read(tmp_graph)[0]["session_id"] is None
-    # ...but the live foreign lockfile is left intact, with an override hint.
+    # The row projects the surviving holder: one answer, from the lockfile.
+    assert _read(tmp_graph)[0]["session_id"] == "target-session:someone-else"
+    # The live foreign lockfile is left intact, with an override hint.
     assert _lock_exists("node:ab-1234abcd", claims_root)
     out = result.output + (result.stderr or "")
     assert "release" in out and "--force" in out
@@ -168,16 +177,31 @@ def _point_session_at(tmp_path: Path, monkeypatch, session_id: str) -> None:
     monkeypatch.setattr("fno.graph._intake.repo_root", lambda: str(tmp_path))
 
 
+def _pin_legacy_manifest(tmp_path: Path, monkeypatch) -> None:
+    """Resolve target-state reads to the test's legacy manifest, never a space.
+
+    tmp_path has no .git ancestor, so the space resolver derives the DEFAULT
+    space for the orphan root; on the changed lane an earlier test's space
+    manifest exists there and wins over this test's file, the holder reads
+    mismatched, and the lock is left in place. The release tests pin holder
+    semantics, not path plumbing, so they pin the seam the product reads.
+    """
+    monkeypatch.setattr(
+        "fno.paths.target_state_path_or_legacy",
+        lambda root=None: (Path(root) if root else tmp_path) / ".fno" / "target-state.md",
+    )
+
+
 def test_invoking_session_id_reads_target_state(tmp_path, monkeypatch):
     # Regression: repo_root() is a str; _invoking_session_id must Path()-wrap it
     # before handing it to resolve_session_id, or it silently returns None.
-    import fno.graph.cli as gcli
+    import fno.backlog.requeue as grequeue
     _point_session_at(tmp_path, monkeypatch, "sid-123")
-    assert gcli._invoking_session_id() == "sid-123"
+    assert grequeue._invoking_session_id() == "sid-123"
 
 
 def test_invoking_claim_holder_prefers_manifest_holder(tmp_path, monkeypatch):
-    import fno.graph.cli as gcli
+    import fno.backlog.requeue as grequeue
 
     _point_session_at(tmp_path, monkeypatch, "unique-target-session")
     state = tmp_path / ".fno" / "target-state.md"
@@ -185,29 +209,37 @@ def test_invoking_claim_holder_prefers_manifest_holder(tmp_path, monkeypatch):
         state.read_text() + 'target_claim_holder: "target-session:codex-thread"\n'
     )
 
-    assert gcli._invoking_claim_holder() == "target-session:codex-thread"
+    assert grequeue._invoking_claim_holder() == "target-session:codex-thread"
 
 
-def test_unclaim_releases_own_live_lockfile(tmp_path, tmp_graph, claims_root, monkeypatch):
+def test_unclaim_releases_own_live_lockfile(
+    tmp_path, tmp_graph, claims_root, monkeypatch, native_backlog_door
+):
     _seed(tmp_graph, [_claimed_node()])
-    _acquire("node:ab-1234abcd", "target-session:mine", pid=os.getpid(), root=claims_root)
+    _acquire("node:ab-1234abcd", "target-session:mine", pid=os.getpid())
     _point_session_at(tmp_path, monkeypatch, "mine")  # real helper path, holder = target-session:mine
+    _pin_legacy_manifest(tmp_path, monkeypatch)
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
     assert result.exit_code == 0, result.output
-    assert not _lock_exists("node:ab-1234abcd", claims_root)
+    assert not _lock_exists("node:ab-1234abcd", claims_root), (
+        f"lock remained: output={result.output!r} stderr={(result.stderr or '')!r}"
+    )
 
 
 def test_unclaim_releases_codex_thread_owned_lockfile(
-    tmp_path, tmp_graph, claims_root, monkeypatch
+    tmp_path, tmp_graph, claims_root, monkeypatch, native_backlog_door
 ):
     _seed(tmp_graph, [_claimed_node()])
     holder = "target-session:019f48e4-codex-thread"
-    _acquire("node:ab-1234abcd", holder, pid=os.getpid(), root=claims_root)
+    _acquire("node:ab-1234abcd", holder, pid=os.getpid())
     _point_session_at(tmp_path, monkeypatch, "unique-target-session")
+    _pin_legacy_manifest(tmp_path, monkeypatch)
     state = tmp_path / ".fno" / "target-state.md"
     state.write_text(state.read_text() + f'target_claim_holder: "{holder}"\n')
 
     result = runner.invoke(app, ["backlog", "unclaim", "ab-1234abcd"])
 
     assert result.exit_code == 0, result.output
-    assert not _lock_exists("node:ab-1234abcd", claims_root)
+    assert not _lock_exists("node:ab-1234abcd", claims_root), (
+        f"lock remained: output={result.output!r} stderr={(result.stderr or '')!r}"
+    )

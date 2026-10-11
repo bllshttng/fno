@@ -32,7 +32,7 @@ Bind a node first (`/think` then `/blueprint` files one), then run `/target beas
 Read it back from `fno do target status --json` - the `attended` line carries `; authority: full (beastmode)` when the grant is live.
 Read that line, NOT the raw manifest, and never the bare `authority:` field: authority **fails closed**, requiring a live claim where the `attended` verdict merely biases toward live.
 A live `owner_pid` is deliberately NOT enough - it is alive for every session at init time, so it cannot tell a durable grant from one about to lapse.
-That asymmetry is deliberate - a wrongly-live `attended` costs you one unnecessary prompt, while a wrongly-live authority grant silently un-prompts every future session that reads it (x-4af4: a defunct manifest once auto-locked an attended `/think` for ten days).
+That asymmetry is deliberate - a wrongly-live `attended` costs you one unnecessary prompt, while a wrongly-live authority grant silently un-prompts every future session that reads it (: a defunct manifest once auto-locked an attended `/think` for ten days).
 
 **Under `authority: full`, the deviation rules become:**
 
@@ -41,7 +41,7 @@ That asymmetry is deliberate - a wrongly-live `attended` costs you one unnecessa
 | Bug in plan | fix inline, note it | unchanged |
 | Minor enhancement (<15 min) | implement, note it | unchanged |
 | Architecture decision, missing dependency, ambiguous requirement | STOP, emit `<help>` | **decide, record one ledger entry, continue** |
-| Interactive prompt (`AskUserQuestion`) in a composed skill | ask the operator | **take the recommended option, record it** |
+| Interactive prompt (`AskUserQuestion`) in a composed skill | ask the user | **take the recommended option, record it** |
 | Missing credentials, destructive ambiguity, a genuine blocker | STOP, emit `<help>` | unchanged - still stops |
 
 The split is what the session can *undo*. A wrong architecture call costs a review comment; a wrong destructive call costs data.

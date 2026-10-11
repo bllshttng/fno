@@ -4,15 +4,18 @@ This document describes the `fno agents claim` primitive, its on-disk format, th
 key namespace, and the relationship to the older coordination paths it
 replaces.
 
+## Is this page for you?
+
+You debug a claim refusal ("already held"), or you design anything that must give one worker one node. This page owns the claim primitive and what it replaced. Misreading it makes you reach for the older coordination paths, and then two workers hold one node.
+
+Not for: who dispatches work or where a worker runs. That is the spawn substrate and the loop docs. The caller rule this page enforces: target init claims the node, and callers never claim manually.
+
 ## Problem
 
 Before this work, three partially-overlapping coordination mechanisms ran
 in parallel:
 
-- **Graph node `session_id`** (in `~/.fno/graph.json`): set by
-  `roadmap-tasks.py update --locked-by` to mark "this backlog node is
-  being worked on by session X." Authoritative for `fno backlog next`
-  filtering, but not visible to subsystems that did not load the graph.
+- **Graph node claim fields** are projected from `node:<id>` lockfiles for display and status. The graph row does not own claim state.
 - **Megawalk PID lock** (`pid` field in `megawalk-state.md`): a walker-singleton lock so two megawalk walkers in the same project could not both run. Used `os.kill(pid, 0)` for liveness; no PID-reuse detection. (Now replaced by the `walker:` claim.)
 - **Megawalk `in_flight_nodes`** array: per-walker tracking of which graph nodes the walker had dispatched. Filtered out at `_select_ready_nodes` to avoid double-dispatch within the same walker. (Now replaced by the `node:` claim filter in `fno backlog next`.)
 
@@ -24,8 +27,11 @@ target sessions would dispatch.
 
 ## Design
 
-One primitive, flat key namespace, atomic file-based locking, append-only
-audit trail.
+One primitive, flat key namespace, atomic lockfiles, append-only audit trail.
+
+### Lockfile claim store
+
+The lockfiles under the resolved claims root are the one store used by native `fno-agents claim` verbs and other readers. The open direction is recorded in operator question `q-5e30ff75`.
 
 ### Key namespace
 
@@ -64,18 +70,9 @@ Two modes, mutually exclusive per claim:
   for operators or cron-driven processes where PID is meaningless.
   Valid range is 60s to 24h.
 
-**Hybrid arm (TTL claims that also record a pid).** A TTL claim whose
-clock has expired is not unconditionally stale: if its recorded pid is a
-live process on this host (passing the same host + `create_time` guards as
-PID-liveness), it stays LIVE. This keeps a session that is alive but idle
-or SIGSTOP-suspended past its TTL from having its claim reclaimed by a peer,
-a case TTL refresh cannot cover because a suspended process cannot run its
-own refresh. The arm is purely additive: it only ever extends liveness, so
-a TTL claim whose recorded pid is transient, dead, missing, or off-host
-falls to STALE on expiry exactly as a plain TTL claim does. `node:<id>`
-target claims opt in by recording a durable session pid (see below); the
-megawalk walker records a transient pid, so the arm never fires for it and
-its TTL park-exclusion is unchanged.
+**Hybrid arm (TTL claims that also record a pid).** A TTL claim past its clock is not unconditionally stale. A recorded pid that is live on this host (same host + `create_time` guards as PID-liveness) keeps the claim LIVE. This protects an idle or SIGSTOP-suspended session from peer reclaim past its TTL. A suspended process cannot run its own refresh, and plain TTL semantics cannot cover it. The arm is purely additive: it only ever extends liveness. A TTL claim with a transient, dead, missing, or off-host pid falls to STALE on expiry exactly as a plain TTL claim does. `node:<id>` target claims opt in by recording a durable session pid (see below). The retired megawalk walker recorded a transient pid, so the arm never fired for it. Its TTL park-exclusion is unchanged.
+
+**Blueprint-session claims are clock-only leases.** A `blueprint-session:` claim is a 60-minute lease. It runs from `acquired_at`, or from its explicit `expires_at`. Past the clock it reads STALE like a `review:branch:` hold, whatever the pid or session witness says. A native subagent planner shares its parent's pid and session id. Both outlive a planner stopped mid-close and hold the node for the parent's whole life. The manual `fno agents claim release --holder` is the fast path. The lease is the backstop that caps the strand at one hour.
 
 **Suspect state + skip-not-steal.** A TTL claim still *inside* its
 window whose recorded pid is not live classifies as `suspect`, not `live`.
@@ -111,13 +108,11 @@ manifest fields are an init-time snapshot and graph `status: claimed` names no
 holder, so all guidance compares `fno agents claim status` against the session's own
 id, never a snapshot.
 
-**A held claim proves a holder, never a worker.** A hand `fno agents claim acquire` takes `node:<id>` with nothing launched. A `spawn-handover:` claim covers a launch window whose worker can die before it boots. So the guard reports three reasons, not two. `live-claim` means a holder AND a `fno target init` behind it. `unproven-claim` means a holder and nothing more. That is what `spawn.sh` and `dispatch-node.sh` render as "no worker has reached target init" instead of the old "live worker holds node". `suspect-claim` is unchanged. The discriminator is `_init_reached` in `cli/src/fno/agents/cli.py`. It reads two markers. The `target-session:` holder prefix is a convention, not proof, since a hand acquire writes the same string. The manifest under the dispatcher's cwd must bind `target_claim_key: node:<id>` AND name the observed holder. That holder match is the non-forgeable half. A read fault answers unproven, because an unreadable manifest must never manufacture a worker. `fno backlog next --claim H --external` needs two things to protect the node it hands out, and it had neither. It now routes through `claims_root_for`, because a `node:` lock in the cwd-default tree reads free to every dispatch surface. It also carries `EXTERNAL_SELECTION_TTL`, because selection exits as soon as it prints the node. A pid-liveness claim from a process that exits reads `stale`, and `stale` does not block a dispatch. A free/stale node claim is still not enough to take over a dirty worktree: the exact worktree must be matched to one registry row and its transcript must be positively stale. Dirty plus recent transcript is `occupied_worktree`; any unreadable or non-unique evidence is `unknown`, and both refuse takeover.
+**A held claim proves a holder, never a worker.** A hand `fno agents claim acquire` takes `node:<id>` with nothing launched. A `spawn-handover:` claim covers a launch window whose worker can die before it boots. So the guard reports four reasons, not two. `live-claim` means a holder AND a `fno target init` behind it. `unproven-claim` means a holder and nothing more. That is what `spawn.sh` and `dispatch-node.sh` render as "no worker has reached target init" instead of the old "live worker holds node". `suspect-claim` is unchanged. `worker-row` is the inverse case. A worker ROW occupies the node while the claim does not hold it. The receipt names the row, carries a peek-then-stop remedy, and omits the claim holder. Naming the claim there sent an operator to a claim `fno agents claim status` read as UNCLAIMED. Releasing it frees nothing. An overlay that cannot measure that row's liveness says so on the receipt. It sends the reader to the claim too, because peek can come back showing nothing. The discriminator is `_init_reached` in `cli/src/fno/agents/cli.py`. It reads two markers. The `target-session:` holder prefix is a convention, not proof, since a hand acquire writes the same string. The manifest under the dispatcher's cwd must bind `target_claim_key: node:<id>` AND name the observed holder. That holder match is the non-forgeable half. A read fault answers unproven, because an unreadable manifest must never manufacture a worker. `fno backlog next --claim H --external` needs two things to protect the node it hands out, and it had neither. It now routes through `claims_root_for`, because a `node:` lock in the cwd-default tree reads free to every dispatch surface. It also carries `EXTERNAL_SELECTION_TTL`, because selection exits as soon as it prints the node. A pid-liveness claim from a process that exits reads `stale`, and `stale` does not block a dispatch. A free/stale node claim is still not enough to take over a dirty worktree. Match the exact worktree to one registry row. Its transcript must read positively stale. Dirty plus recent transcript is `occupied_worktree`. Any unreadable or non-unique evidence is `unknown`. Both refuse takeover.
 
 **The reservation is taken after the launch is proven.** `cmd_spawn` runs its node guard below the resume-provider resolution. An exit on that stretch now strands neither `dispatch:<id>` nor the handover `node:<id>`. Below it the only exit is `run_gate`, whose `except BaseException` releases both. On the way out, the reservation is released whenever the substrate is a one-shot (`--once` or `--substrate headless`), as well as on a failed spawn. When the call returns, a one-shot's worker has already exited, so nobody is left to inherit it. `pane` and `bg` keep it, because their worker outlives the caller.
 
-`is_live` returns False for cross-machine claims. The design explicitly does
-not support multi-host coordination - operators running two hosts on the same
-shared filesystem will see both claims as "opaque, not mine to release."
+`is_live` returns False for cross-machine claims. A shared file system is not a way to run two hosts: each host reads the other's claims as opaque, not its own to release. More than one host shares dispatch through one opt-in primary instead. Set `store.remote_url`, and the node, dispatch and reconcile claims live there. A peer's lease is then read on the store clock. The design is in [multiplayer.md](multiplayer.md).
 
 "Same machine" is decided by `claims/hostid.py` (`is_same_machine`), NOT by a
 raw `gethostname()` compare. Identity scopes PID-reuse detection, so it has to
@@ -184,15 +179,27 @@ state; the events log is for observability and forensics.
 
 ### Mux sideline member identity
 
-The mux squad store uses the exact worker identity pair `(harness, harness_session_id)` for non-Claude members. `attach_id` is a display or legacy Claude roster identity, not a cross-harness binding key, and a short session-id prefix is never sufficient for restore.
+The mux workspace store (`squads.json`) uses the exact worker identity pair `(harness, harness_session_id)` for non-Claude members. `attach_id` is a display or legacy Claude roster identity, not a cross-harness binding key, and a short session-id prefix is never sufficient for restore.
 
 The agents lifecycle store at `~/.fno/agents/events.jsonl` owns `agent_spawned` receipts. The repository-local `.fno/events.jsonl` is a project event journal and is not a spawn-receipt source. Persistent thread receipts emit `substrate: thread`; `bg` remains an input alias during the compatibility window, while pane receipts continue to emit `substrate: pane`.
 
+### The registry is keyed by identity. Harness facts are served, never stored
+
+The registry's primary key is the pair `(harness, harness_session_id)`. The row's `name` is a mutable label and an alias. Two rows can share a label. A writer that cannot prove the identity it is writing to must refuse. Every lifecycle verb (stop, remove, mail, respawn) resolves its target by identity first. Only a caller that supplied no identity falls back to the label. A stored snapshot field is never the truth about a live session. Status, a pid, an init-time manifest claim: each is at best a stale measurement.
+
+Readers get facts served with their measurement time instead. The reconcile sweep is the only writer of the served pair, `liveness` (`alive|dead|unmeasured`) and `liveness_measured_at`. A serve-only tick re-runs the sweep's measurement every 60 seconds (`SERVED_LIVENESS_CADENCE`, mirrored per crate in `served_liveness.rs` and pinned by a contract test). It writes the served pair and nothing else: no status transition, no orphan flip, no exit reap. The word is served while its stamp is younger than twice that cadence. `liveness_basis` rides beside it: `fresh` inside the window, `stale` after it, `never-measured` with no measurement. Past the window the word reads null and the reader falls back to the status ladder. A pane row (mux ref or interactive host) with a recorded pid serves from the pid. Alive while it is ours and live, dead once gone. The session-store probe does not matter for these rows. That includes its normal `Err` refusal on a claude row that carries no session id. The sweep's transcript-tail batch also reads the harness's own title for the session. Sources: claude's Ctrl+R `agent-name` transcript record, codex's threads index, opencode's session store. The sweep stores the title only as its diff baseline, emits `agent_renamed` on change, and never rewrites the label. A `/model` inside a worker reports through the PostModelSwitch hook. The daemon stamps `model_basis: verified` on a real change and emits `agent_model_changed`. The spawn-time `requested_model` is untouched.
+
+The daemon's `agent.watch` RPC is the subscription face of that registry. It serves the full document on connect. It serves again whenever the registry's (mtime, len) stamp moves, which is what any write does to the file. Otherwise it answers a bare version echo, so a subscriber pays one stat per idle tick. The mux sideline subscribes through it. Reading `registry.json` directly is the degraded fallback for the supported no-daemon shape. The fallback announces itself with one log line.
+
+### Mail origin and role are separate axes
+
+Mail `origin` is a channel claim and is floored to `peer` whenever the caller has an agent identity. A role is ambient sender standing. The renderer uses the sender's full session ID to read its live registry row. The message cannot assert a role with an origin value, body text, or flag. The trailer reports that verified rung and scope separately from the content's warrant. It never implies superuser authority, and the recipient can still challenge the ruling. An unreadable registry grants no role.
+
 ### Registry row removal is never silent
 
-Every registry row removal announces itself at the write choke point, whatever door drops the row. The remover stages a recovery receipt under `<agents home>/reap-receipts/` first. It then emits one `registry_row_removed` event per row into the same lifecycle store, naming the row and the remover. A row with no resumable identity still announces, with `receipt_staged: false`. `update_registry` is the only removal door in both languages (Rust `state.rs`, Python `registry.py`), so a removal with no event cannot exist. `agent_row_reaped` remains the reap door's own richer event. `registry_row_removed` fires for every door beside it.
+Every registry row removal announces itself at the write choke point, whatever door drops the row. The remover stages a recovery receipt under `<agents home>/reap-receipts/` first. It then emits one `registry_row_removed` event per row into the same lifecycle store, naming the row and the remover. A row with no resumable identity still announces, with `receipt_staged: false`. `update_registry` is the only removal door in both languages (Rust `state.rs`, Python `registry.py`), so a removal with no event cannot exist. `agent_row_reaped` remains the reap door's own richer event. `registry_row_removed` fires for every door beside it. A reaped row finds its node through the one provenance cascade the sweep already trusts (the sessions witness, the registry field, then the name route). The event's `node_id` carries the answer and `node_resolution` names the source that answered, so `node_id` null reads as "no node", never "we did not look".
 
-Squad cleanup uses positive member liveness. A tombstone or exact terminal identity is dead, a current exact identity is live, and an unreadable or unjoinable identity is unknown and remains stored. A missing row alone is not proof of death.
+Workspace cleanup uses positive member liveness. A tombstone or exact terminal identity is dead, a current exact identity is live, and an unreadable or unjoinable identity is unknown and remains stored. A missing row alone is not proof of death.
 
 ## Contract with gates
 
@@ -207,33 +214,49 @@ a session whose gates are all false (it just started).
 
 Concurrency is bounded where the spawn is refused. Two caps bind: `agents.max_live` over the live fleet census, and `agents.provider_limits.<provider>.lanes` per provider. The epic advance derives its width from those same counters. It reads them through the same functions that `fno agents top` and `advance --explain` use. No two surfaces can disagree about why a launch did not happen. The retired `config.parallel.max_lanes` knob was a second authority beside the real one. When the key is set, fno prints one deprecation line and ignores it. The key stays parseable for one release. Delete it from config.
 
+## Reservations: a lane slot held for a name
+
+A reservation is a lane slot held for a worker that has not spawned yet. A lead can order the next freed slot to go to a named worker. Without enforcement the gate knows nothing about the promise. The reserved work loses the race to whatever spawns first, and obeying the order costs the slot. `fno-agents spawn-gate reserve <name> --provider <p> [--ttl 10m] --reason "<why>" [--node <id>]` mints `worker:<name>` under the global claims root with `model_provider`, `reserved_by` and `reserved_reason` metadata. The claim is counted by `provider_live_slot_claims`. A reservation already spends a lane slot against every stranger before the worker exists.
+
+The gate refuses on that lane and names the reservation, in these words:
+
+```
+A reservation is held for a NAME: spawn with --name <that name> to redeem it.
+A reservation expires within 15 minutes, whatever happened to the session that made it.
+Slot order is otherwise first-come; read `fno agents gate-status` for the lane.
+```
+
+The gate skips the redeemer's own reservation in the provider count. It releases the reservation at admission, after every refusing axis has passed. An unrelated CPU or RAM refusal never burns it. Only a claim with the `reserved_by` key is redeemable. A live worker's plain slot claim carries no key. A spawn cannot skip or release it by borrowing the name. A reservation expires within 15 minutes. Nothing that happens to the minting session changes this. Only TTL expiry frees a claim, and pid death does not. A four-hour reservation with a dead holder once wedged the zai lane end to end. When the lane's reservations reach the lane cap, the reserve mode refuses to mint. At least one slot on every capped lane can never be reserved. First-come always has a lane to win. Slot order is otherwise first-come. Read `fno agents gate-status` for the lane. Its lane rows carry a `reserved` array beside `cap`, `live`, `counted` and `parked`.
+
+## Per-territory team cap
+
+`check_territory_cap` (`crates/fno-agents/src/spawn_gate.rs`) is the one enforcement home for the per-territory team cap. The Rust client's own gate passes the node through, and the binary door (`fno-agents territory-verdict`) serves the readout surfaces. Nothing recomputes the verdict elsewhere. A binary or payload fault reads as `territory_unknown`, never as headroom, since an unreadable verdict must never count as free capacity.
+
+The cap refuses (never queues) at `territory_cap`. It stays enforced under `--force`: force speaks for the machine being busy, never for one territory overrunning its team. Waiting cannot help, since the team is full where the caller is standing, so this refuses the same way the provider cap does. `EXIT_TERRITORY_CAP` (86) separates this from the machine-wide cap so a caller can tell "the fleet is full" (queueable) from "this territory's team is over the line" (the other territories keep their headroom).
+
+A node counts for the deepest live role whose scope holds it, then the lowest canonical scope on a tie (`territory::node_owners`). A node that no live role holds counts for its project's loose territory. The org's owned counts read the same rule. A spawn refusal and the org readout can never disagree about whose node a worker is on. Where the L1 fno role and live L2 roles coexist, an L2 node's worker counts for that L2 territory. It never counts for the fno root.
+
+Two CLI verbs read the same Rust territory projection so no two surfaces disagree. `fno config active-backlog` (`config_cli.py`) passes through the `active-backlog-receipt` binary call: territories resolved from the graph, the role registry, the workspace map, and `config.active_backlog`. It is read-only and exit 1 names the unreadable source. `fno config active-backlog-territories` (hidden) passes through `territory-rows`: one row per scope, with its missions, lead or kingless state, and live count against the cap. Both verbs are read-only.
+
+## A dispatch outcome is dispatched, skipped, or failed
+
+Every dispatcher verdict answers one question: is the condition a property of the node, or of the machine? A dispatch failure records `advance_failed` and charges the node's failure budget. A dispatch refusal records `advance_skipped` and leaves the row ready. The discriminator is the spawn gate's own exit code, read once in `cli/src/fno/backlog/advance.py` (`gate_refusal`). Exits 75 to 80 are capacity conditions true for every caller equally: queue timeout, no-wait, RAM, provider cap, load, lead share. They skip as `capacity-refused`. Exit 81 (registry schema) is a spawn path no row can pass, so it skips as `gate-unavailable`. Exit 82 comes from the codex sandbox probe at the spawn seam. The sandbox blocks a tool that every code payload on that lane needs, so it skips as `sandbox-unreachable`. Its provenance marker is `sandbox-probe:`, not `spawn-gate:`. Nothing outside that closed family is machine-scoped. A node fault can only enter it through a gate change.
+
+The sandbox probe (`cli/src/fno/agents/sandbox_probe.py`) runs each check through `codex sandbox`, under the worker's own seatbelt policy, `config.toml`, and git grant. `gh api rate_limit` must print a positive limit. A `git update-ref --stdin` transaction must print `prepare: ok`. It takes the lock a commit takes and then aborts, so it never creates a ref. Two controls keep a refusal honest. A sandboxed echo must return its nonce, or the probe never ran. A tool that fails inside the sandbox runs again outside it. Only a tool that answers outside and fails inside is blocked by the sandbox. A tool that fails in both places, gh logged out or GitHub down, says nothing about the sandbox. It reads unknown and the spawn launches with a note.
+
+The refusal must name its own cause. The gate prints warnings before its verdict, so the last human-readable line before a bare exit code can name an unrelated condition. The consumer therefore carries the gate's own refusal sentence (the last `spawn-gate:` line) beside the code. A reader of the arm output or the journal sees the axis and the numbers, never the warning.
+
+The failure streak follows the same rule in both legs. `cli/src/fno/graph/failure.py` owns the durable streak. Only a node failure counts, only a node close or undefer resets. A dispatch refusal never touches it either way. Charging it parks healthy rows. Resetting it lets a broken node launder its streak by waiting for a busy minute. The in-memory breaker in `crates/fno-agents/src/active_backlog.rs` reads the `skipped` decision the Python dispatcher emits and leaves the streak alone. A tripped breaker names the last failure in its defer reason.
+
+When in doubt, fail toward leaving the row ready. A node fault misread as capacity retries every pass in plain sight. The journal fills with skips and the row sits at the top of the queue. The reverse misreading parks the row and quiets the board, and nobody sees the loss. The exit-code family is closed and every member is emitted before any node work begins, so the visible failure is bounded.
+
 ## Selection-time enforcement (node claims)
 
-`node:<id>` claims are the cross-session mutex that stops two `/target`
-sessions (or a `/target` racing a megawalk-dispatched target) from both
-picking up the same backlog node. Two properties make this work, and both
-differ from the per-walker `walker:` claim:
+`node:<id>` claims are the cross-session mutex. They stop two `/target` sessions (or a `/target` racing an autonomous dispatch) from both picking up the same backlog node. Two properties make this work, and both differ from the per-walker `walker:` claim:
 
-- **Global root.** Node ids are global (they live in `~/.fno/graph.json`),
-  so the lock must coordinate across worktrees, not land in a worktree-local
-  `cwd/.fno/claims`. Node-claim call sites set `FNO_CLAIMS_ROOT=$HOME`
-  so the lock is written to `~/.fno/claims`, a sibling of the global
-  graph. `claims_dir()` honors that env var when no explicit `root` is passed;
-  `global_claims_root()` is the in-process resolver (env, else `$HOME`). The
-  `walker:` singleton keeps its per-root (cwd) location by passing an explicit
-  root, so it is unaffected.
-- **TTL with a durable-pid hybrid arm.** A `/target` node claim is acquired by
-  the one-shot `fno do target init` subprocess, which exits immediately - so a pure
-  PID-liveness claim would be stale on birth and the next session would reclaim
-  it. Node claims are therefore TTL claims (`--ttl ${TARGET_CLAIM_TTL:-2h}`),
-  acquired in `init-target-state.sh` and released by the stop hook. To stop a
-  session that is alive but idle or suspended past its TTL from being reclaimed,
-  init ALSO records a durable session pid (`--pid`, resolved by `fno agents claim
-  session-pid` walking the process tree to the nearest `claude` ancestor) so the
-  hybrid arm keeps the claim LIVE while that process lives. This is degrade-safe:
-  if the durable pid is uncapturable, no `--pid` is recorded and the claim is
-  TTL-only exactly as before. A crashed session's lock self-heals when its pid
-  dies and the TTL expires.
+- **Global root, one claim store.** Node rows live in this repository's `graph.db`. The holder lives in one `node:<id>` lockfile under the global claims root. `locked_by` is a read projection, not a second store. Rootless node claims resolve `$FNO_CLAIMS_ROOT`, else `$HOME`, so every worktree reaches the same lockfiles. `walker:` remains per-root because it passes an explicit root.
+- **TTL with a durable-pid hybrid arm.** A `/target` node claim is acquired by the one-shot `fno do target init` subprocess. That subprocess exits immediately, so the claim needs a TTL (`--ttl ${TARGET_CLAIM_TTL:-2h}`). If a durable session pid resolves, init records it. `fno agents claim session-pid` resolves that pid by walking the process tree to the nearest harness ancestor. The hybrid arm keeps the claim LIVE while that process lives. A thread session with no pid sets `pid_unavailable` instead of recording the short-lived init process. The session witness keeps it live while the session answers. Once its absence is proved, or its lease and grace expire, a dead session reads stale.
+- **A shared host pid never earns the prover stamp.** The hybrid arm needs a pid that dies with its session. Only a harness that forks one binary per session supplies such a pid. codex does not. Its nearest harness ancestor is a shared `codex app-server`. That server hosts every codex session on the machine and outlives all of them. A live reading there proves the server is up. It says nothing about the session. Measured 2026-09-03: a codex claim read LIVE 3h45m past its TTL. Its session had been dead five hours. `fno agents claim reap` cleared nothing. If a harness shares one host process, its claim now stamps `ambient` at write time. `classify` also refuses to extend an expired lease for such a record. It reads the record's own `harness`, which reaches claims already on disk. The deny-list is `pid_dies_with_session` in `crates/fno-agents/src/claims.rs`. `cli/src/fno/claims/session_pid.py` mirrors it. Adding a name costs a measurement. Run one session, walk to its harness ancestor, end the session, and read whether that pid still lives. An unmeasured harness keeps the extension. Most records carry no harness, and a denial there lets a peer reclaim a suspended session's claim.
 
 Two enforcement points:
 
@@ -253,25 +276,25 @@ Two enforcement points:
 
 When a plan declares per-task waves, two sessions can share one node's work. The node claim guards the node. The task claim guards the task.
 
-The key is `task:<node-id>:<task-id>`. It is a plain claim-key namespace beside `node:`, `dispatch:`, `walker:`, and `lane-slot:`. The claim primitive checks a key only for non-emptiness and encoded filename length. So no primitive change and no migration were needed. Task claims are repo-local. The `task:` prefix is not a global-id prefix, like `lane-slot:`. Every worktree of the project's repo coordinates on one store. The rows themselves live in the global graph.
+The key is `task:<node-id>:<task-id>`. It is a plain claim-key namespace beside `node:`, `dispatch:`, `walker:`, and `lane-slot:`. The claim primitive checks a key only for non-emptiness and encoded filename length. So no primitive change and no migration were needed. Task claims are repo-local lockfiles. The `task:` prefix is not a global-id prefix, like `lane-slot:`. Every worktree of the project's repo coordinates on one claims directory, while task rows live in the repo's `graph.db`.
 
 The claim is taken INSIDE the `pending -> in_progress` transition. The verb is `fno backlog task update <node> <task> --status in_progress`. A standalone claim call a worker can forget is never used. This is the shape copied from Claude's own `TaskUpdate` auto-claim. The verb acquires the claim FIRST, outside the graph lock. A peer holder refuses with exit 3 and names the holder. The row is never touched. On success the row (`status`, `owner`, `claimed_at`) is written in one locked graph mutation. A graph-write failure releases the claim before it re-raises. A failed transition leaves no orphan lock. `--status done` writes the row and releases the claim. `--status pending` is the holder-only give-back. It frees a blocked or failed task for the next worker. The `/execute waves` skill claims through this verb before each task dispatch. A held task is logged `[~]` in STATE.md and skipped that round. The boundary emit settles the claim on every task outcome.
 
-Liveness is pure pid-anchored with no TTL, the `reconcile_lane_slot` shape. The pid is the durable harness session pid from `resolve_session_pid`. A dead worker's task frees the instant its process is gone. `acquire_claim`'s stale-recovery step archives the corpse and retries. No heartbeat is needed. The holder is the FULL harness session id (`resolve_self_session_id`), never a head-8 handle. A codex UUIDv7 head-8 is a ~65.5s clock bucket. Two codex workers spawned in one minute then share a handle. The second re-acquires the first's task as idempotent.
+With a resolved session pid, a task claim uses pure PID liveness, so a dead pane worker frees it at once. A thread with no pid sets `pid_unavailable` under a two-hour lease. Its session witness keeps the claim live while that session answers. The absent-session classifier makes a dead thread claim reclaimable. No CLI subprocess pid is substituted. The holder is the full harness session id (`resolve_self_session_id`), never a head-8 handle. A codex UUIDv7 head-8 is a ~65.5s clock bucket. Two codex workers spawned in one minute then share a handle. The second re-acquires the first's task as idempotent.
 
 ## Who writes `node:<id>`, and who can prove it dead
 
-Measured 2026-08-19: nine nodes each named by a live roster worker, and seven read `free`. Two live claimants landed on one node and a third nearly did. The claim is documented as THE work-claim primitive, so four kings read `free` and staffed duplicates onto nodes that already had someone on them.
+Measured 2026-08-19: nine nodes each named by a live roster worker, and seven read `free`. Two live claimants landed on one node and a third nearly did. The claim is documented as THE work-claim primitive, so four leads read `free` and staffed duplicates onto nodes that already had someone on them.
 
 The cause was a guard on one of many paths. `node:<id>` had exactly one producer, a shell script that tokenized a prompt string, and it only ran under `fno do target init`. Every other route to a node bypassed it: a verb buried mid-sentence, a payload naming two ids, a run that went through `/blueprint` instead. This section records the rules that replaced it, because each one is a trap somebody will otherwise re-derive.
 
-### Exactly two producers, and that ceiling is load-bearing
+### Typed producers and holder identity
 
-`fno do target init` and `fno agents spawn --node`. Those two callers hold the node id as a TYPED argument, not as prose to be re-derived. Adding a third is a design change, not a fix. Some paths have no node id at all, such as a prose payload or a hand-started session. Adding producers leaves those permanently unclaimed. That is the same decorative-guard shape wearing a new coat.
+Current paths that acquire `node:<id>` include target init and successor reacquire, `fno backlog next --claim`, `fno backlog session open`, and the resume gate. The operator can also use `fno agents claim acquire node:<id>`. Each route names or resolves a typed node id and supplies a holder. Adding a producer is a design change: specify its holder identity, liveness proof or lease, and release path. Never derive a node id from prose or a worker name.
 
-`/blueprint` deliberately does NOT claim. It writes a plan and does not build. A claim taken there is held across the plan-then-target gap and blocks the target run that follows it. Its frontmatter `claims:` field is plan adoption, an unrelated concept that shares the word.
+`fno backlog session open <node>` takes a `blueprint-session:` claim while a planner works. `session close` releases it. `/blueprint` itself writes only the plan. The plan frontmatter `claims:` field is still adoption metadata, not a lock. The blueprint-session claim ends with its session and is not held across the plan-then-target gap.
 
-The ceiling is also what makes the abandonment probe below safe. That probe assumes a node claim always has a roster-visible counterpart, and both producers create one. A third producer that claims a node without writing a worktree manifest or a registry row makes the probe report a live worker as abandoned.
+Every producer must leave a holder identity the claim reader can check. Missing registry data alone is not proof of abandonment: an unreadable or unresolved witness stays unknown, and unknown keeps the claim. A new holder shape must add its liveness and expiry rule alongside its producer.
 
 ### The reader is the half that covers every path
 
@@ -285,11 +308,21 @@ free, no row resolved to this node (N scanned, M unresolved); ... Confirm with: 
 free, roster not consulted (<reason>)
 ```
 
-The scanned count is the point. A scan of forty rows finding nobody is a different answer from a read that failed. Printing `free` for both is how the defect survives its own fix. Assert one of these strings. Never grep for the absence of the word `free`.
+The scanned count is the point. A scan of forty rows finding nobody is a different answer from a read that failed. Printing `free` for both is how the defect survives its own fix. Assert one of these strings. Never grep for the absence of the word `free`. The finished-session clause is a rider: it is appended to any of these outcomes it can coexist with, not only the clean-roster one.
 
 `roster_rows_unresolved` is the count of scanned rows whose worktree manifest or ledger did not resolve a node. If a worktree basename matches, the reader reports a candidate with `fno agents peek <name>`. It never acquires or infers a claim. `state: free` remains the claim answer.
 
 The join resolves a row's node from the worktree manifest and then the session-keyed ledger, both machine-written. **Never a name regex.** Eight auto-named workers read as nobody-on-this-node on 2026-08-15 and were nearly double-dispatched. Worker names carry their node only by convention, and a convention is not a guard.
+
+### Live work remains visible after the claim window
+
+The claim TTL is not the work duration. A `spawn-handover:` reservation can expire while its blueprint worker is still writing, and a `target-session:` claim can expire when renewal did not run. In both cases the old claim-only reader answers free even though the worker is live.
+
+The positive late-window binding is the session row the spawn already writes, joined to one whole-fleet roster read. `fno backlog worked --json` reports the node id and worker name only when the graph row is open for any phase, the roster row exists for that session id, and the worker is not in a terminal state. Terminal graph nodes are skipped.
+
+The board, ready selection, and dispatch observation consume that worked overlay. They suppress a live node and name the worker; they do not mint a second claim kind. If the roster row transitions to `killed` or leaves the fleet while the graph session row remains open and no plan exists, the overlay disappears on the next read and the node is offered again. The test observes that flip directly; it never waits for a TTL.
+
+An unreadable roster is not an empty worked set without evidence. The overlay emits a named degradation reason, strict mutation paths refuse when required, and the board records the worked source as unreadable. Claim state remains independently fail-closed.
 
 ### Two kinds of death, two proofs
 
@@ -297,15 +330,15 @@ The store also failed in the opposite direction. When nobody was building, it sa
 
 | Claim | Holder | Can it come back under a new pid? | Proof of death |
 |---|---|---|---|
-| `node:<id>` | a session | yes, the daemon respawns it | pid dead AND the holder's own roster row found, reading terminal |
+| `node:<id>` | a session | yes, the daemon respawns it | same-machine pid dead and session witness absent, or node settlement proves abandonment |
 | `dispatch:<id>` | `spawn-cli:<pid>` | no, but its TTL is the boot window | expiry in a sweep, dead pid at the guard about to launch |
-| any, expired TTL | any | n/a | the clock, from any host |
+| any, expired TTL | any | n/a | expiry and grace, unless a live pid or session witness keeps it live |
 
 An **expired TTL** is a wall-clock fact and needs no same-machine proof. Requiring one is what made the store fill forever. This machine wrote `BB16s-MBP`, `BB16s-MacBook-Pro.local` and a tailnet name within one hour. Rows predating the `machine_id` field carry only that moving name, so nothing satisfies their same-machine proof.
 
 **`machine_id` is authoritative whenever present** and every new same-machine proof keys on it through `is_same_machine`, never on a hostname compare. The hostname fallback exists only for pre-`machine_id` rows, and reproducing it exactly is deliberate: those classify no worse than they did before the field existed.
 
-A **`node:` claim is reaped only on a positive finding, and that finding is the HOLDER**. The probe resolves the claim's own holder session id. It requires that row to exist in the roster and to read terminal. Everything else answers unknown, and **unknown KEEPS the claim**.
+A **`node:` claim is reaped only on a positive finding about its holder or its node**. A same-machine session witness can prove the holder absent. Node settlement can prove the claim moot. Missing or unresolved roster data alone is not abandonment. Everything else answers unknown, and **unknown KEEPS the claim**.
 
 The asymmetry is the whole safety argument. An earlier version asked whether any row resolved to the node, read the empty answer as abandonment, and defended it with a scanned-row count. A row count validates the INSTRUMENT, never the TARGET. `fleet_rows` enumerates `claude agents --json --all` and drops interactive rows. A codex worker, an opencode worker, and any hand-started session are invisible to it by construction. A forty-row scan that cannot represent the holder reads as forty rows of proof.
 
@@ -319,9 +352,9 @@ The one exception is a **launch window**. A claim held under `spawn-handover:<wo
 
 Measured 2026-08-21: a live session finished one node and moved to the next. Its claim on the done node read LIVE for 16 hours, past its own TTL. The reaper only asked whether the holder was alive. Two fixes, both at single choke points.
 
-**Closure releases.** Every Python closure path persists through `locked_mutate_graph`. That covers `fno backlog done` (and its deprecated `done` spelling), reconcile, the epic sweep, and `GraphTracker.close`. The Rust daemon shells out to `fno backlog done`. So the store's post-recompute hook is the one place a release covers every path. On a transition into a terminal rung the hook clears the entry's `locked_by`/`claimed_at` mirror. Terminal rungs are `done` and `superseded`, shared as `TERMINAL_RUNGS`. `session_id` stays: on a done node it is cost provenance, not a lock. The hook also force-releases the `node:<id>` claim at both claims roots, holder-agnostic, best-effort. The GitHub tracker backend closes an issue without touching the graph store. Its `close()` calls the same helper. A release failure is a named stderr line, never a failed closure. The reaper is the backstop.
+**Closure releases.** Every Python closure path persists through `commit_rows_via_store`. That covers `fno backlog done` (and its deprecated `done` spelling), reconcile, the epic sweep, and `GraphTracker.close`. The Rust daemon shells out to `fno backlog done`. After the terminal transition lands, the store hook force-releases the `node:<id>` lockfile at the resolved claims roots. The next graph read projects no holder. There is no `node_claims` row or graph mirror to clear. Terminal rungs are `done` and `superseded`, shared as `TERMINAL_RUNGS`. `session_id` stays as cost provenance, not a lock. The GitHub tracker backend closes an issue without touching the graph store. Its `close()` calls the same helper. A release failure is a named stderr line, never a failed closure. The reaper is the backstop.
 
-**The sweep settles node-aware.** `sweep_verdict` is the single reap decision. It runs a settlement reading FIRST on every `node:` claim. A node the graph closed under the claim is positive abandonment. So is an expired lease whose holder's roster row resolves to a DIFFERENT node. Both are reaped. An unexpired lease is never settled away from a live holder. Every unreadable instrument answers unknown: graph, roster, absent row, unresolved node. Unknown KEEPS. The settlement travels with every producer: the hand-typed verb, the unattended reconcile sweep, the spawn guard's targeted reclaim. Reap apply also clears the graph lock mirror for reaped node claims. A reaped worker's node then stops reading `claimed` before `LOCK_TTL_HOURS` passes.
+**The sweep settles node-aware.** `sweep_verdict` is the single reap decision. It reads each `node:` claim and rechecks the same claim generation under its recovery lock before archiving. A node closed under the claim is positive abandonment. So is an expired lease whose holder's row proves it moved to a different node. An unexpired lease is never settled away from a live holder. Every unreadable instrument answers unknown. Unknown keeps the claim. Reap apply archives the lockfile. The graph's projected holder disappears on the next read without a graph write. A remaining open do row can still hold `in_progress` until `requeue` settles that work separately.
 
 ### Renewal re-anchors, and PID-reuse detection survives
 
@@ -363,7 +396,7 @@ fno agents claim release node:ab-stuck --force --reason "operator intervention; 
 
 The archived claim survives in `.fno/claims/.expired/`.
 
-**Why isn't megawalk picking up this ready node?** Cross-check the
+**Why is no dispatcher picking up this ready node?** Cross-check the
 graph status against any held claim:
 
 ```bash
@@ -376,7 +409,7 @@ fno agents claim status node:ab-thisnode
 
 ## The worker must be able to write the claim store
 
-If the worker cannot create the lockfile, the claim is not mutual exclusion. Every harness sandboxes writes to the launch cwd by default. fno's state lives outside it. So a spawned worker on a bounded posture writes nothing and holds no claim. `fno agents claim status node:<id>` then answers `free` while that worker is live, on its branch, doing the work. Any king reading the graph sees a free node and dispatches a second worker onto it. The standing rule "check the claim before manual node work" cannot catch this, because the check returns free.
+If the worker cannot create the lockfile, the claim is not mutual exclusion. Every harness sandboxes writes to the launch cwd by default. fno's state lives outside it. So a spawned worker on a bounded posture writes nothing and holds no claim. `fno agents claim status node:<id>` then answers `free` while that worker is live, on its branch, doing the work. Any lead reading the graph sees a free node and dispatches a second worker onto it. The standing rule "check the claim before manual node work" cannot catch this, because the check returns free.
 
 This is not one harness's problem. codex `workspace-write` is the visible case. A claude worker fails the same way. When a personal `~/.claude/settings.json` grants `permissions.additionalDirectories`, it looks fine on that maintainer's machine. The repository ships no such file, so a fresh clone reproduces it.
 
@@ -406,11 +439,7 @@ archive-then-recreate).
 
 ## Coordination today
 
-`fno agents claim` is the coordination primitive across target, megawalk, and
-megatron. Megawalk's legacy coordination mechanisms (`megawalk-state.md`,
-`in_flight_nodes`, the PID lock) have been removed in favor of the
-`walker:` and `node:` claims. `fno agents claim list` + `events.jsonl` provide
-observability into what is in flight.
+`fno agents claim` is the coordination primitive across target (and the later lead/lead loop arms). Megawalk's legacy coordination mechanisms (`megawalk-state.md`, `in_flight_nodes`, the PID lock) have been removed in favor of the `walker:` and `node:` claims. `fno agents claim list` + `events.jsonl` provide observability into what is in flight.
 
 One legacy mirror remains: `/target` still writes a graph `session_id`
 onto the backlog node when it claims (alongside acquiring the `node:`
@@ -424,7 +453,6 @@ Deferred for separate plans:
 - Per-project claims (`project:<mission>:<project>`) inside megatron's
   per-project dispatcher - the commander-level `fleet:` claim is the
   load-bearing race prevention.
-- Cross-host claim coordination - intentionally out of scope.
 - Web UI / TUI for claim inspection - `fno agents claim list` covers it.
 
 ## Agent primitives: citizens and limbs
@@ -440,7 +468,7 @@ not folklore, and records why the limb cannot be made fully addressable.
 A **citizen** is what `fno agents spawn` produces: a row in the fno agents
 registry, discoverable by `fno agents peek`, addressable by `fno agents mail`,
 holding its own `node:` claim, surviving its spawner's death, and
-handoff-able to a successor king.
+handoff-able to a successor lead.
 Its transcript sits beside its peers at the project root as
 `~/.claude/projects/<proj>/<session-id>.jsonl`.
 
@@ -466,10 +494,9 @@ into a registry row someone would have to go read.
 
 Reach for **`fno agents spawn`** when any of these hold: the work must
 outlive its spawner; someone other than the spawner must observe, message,
-or drive it; it must be handed to a successor king; it holds a `node:`
-claim, since the registry row is what makes the claim attributable; it must
-join king-mediated review, which is mail-shaped and therefore needs a
-handle; or it needs its own worktree or branch.
+or drive it; it must be handed to a successor lead; it holds a `node:`
+claim, since the registry row is what makes the claim attributable; or it
+needs its own worktree or branch. Review does not require a spawned session.
 
 Neither primitive is always correct.
 "Always spawn" discards the limb's real advantages; "always subagent"
@@ -492,6 +519,8 @@ What is shipped instead is observation: `fno agents top --subagents`
 enumerates sidechain transcripts (keyed on `agentId`, not pid, since a limb
 has no pid), lists each with its parent session and an mtime-based liveness
 verdict against a stated threshold, and is claude-only today.
+
+The lead check-in also reads its own session's held subagents from the parent transcript's task notifications, and still gives them no slot and no mail.
 The codex, agy, and opencode task primitives have their own on-disk layouts
 that are unmeasured here; a future harness reader slots into the same
 per-harness discovery seam.
@@ -541,8 +570,12 @@ An overlapping or unevaluated band is never narrowed. Two bands sharing a file c
 
 ## Session history: the reader over live rows, reap receipts and the ledger
 
-`fno agents history <node|pr|session>` resolves one argument against three sources. The sources are live registry rows, reap receipts, and the ledger. It answers the operator's question as a lookup, not a content grep across transcript stores. The question: what did this session work on, and how do I get back to it. `fno whoami ledger` stays as a hidden alias over the same shared matcher. Nothing in flight breaks. The store keeps its file name. The verb names the question. The receipt's `resume` string prints verbatim. The capability table rendered it at reap time. If the table has since moved, re-deriving answers a different question. A live row suppresses its own receipt. A receipt is written as the row drops, so the two never both describe the present.
+`fno agents history <node|pr|session>` resolves the argument to sessions. Each resolved session gets one card built from registry rows, reap receipts, the live graph, ledger, event log and transcript. Python resolves configured paths, and the `fno` binary renders each card. If a source cannot answer a field, the card prints `unknown` with the reason.
 
 Three facts worth recording, because an earlier dispatch brief planned against all three. First, the retained-row store already ships. The GC sweep persists one `ReapReceipt` per reaped row at `~/.fno/reap-receipts/<harness>-<session id>.json` (PR 1326). It carries the row's own fields, a resume command from the capability table, and ledger enrichment where the ledger has the row. The brief's premise that reaping without a new store destroys the resume handle is false. `build_reap_receipt` refuses a row with no session identity or no declared resume form. A refused row is HELD in the registry (`kept_no_receipt`) instead of reaped. Unknown never reaps, so a reap cannot destroy a resume handle. Second, the identity gate is closed. PR 1278 put a resolvable `harness_session_id` on every row at spawn, whatever the harness. The receipt gate has something to build from on every lane. Third, what was actually missing was a reader and an expiry, and both are the same verb. `fno agents history` is the reading. `config.agents.reap_receipts.retain_days` (default 7) is the pruning, expired by the same GC sweep that writes new receipts. A receipt whose `reaped_at` is missing or unparseable is kept and named in the sweep summary. A failed read is not evidence of age.
 
 Every miss names its source. Ledger coverage measured 2026-09-01 over 3647 rows: `session_id` on 3526, `model` on 800, `provider` on about 130, `harness` on none. An explicit `node_id_unrecoverable: true` marks 11 more. The uuid write path never backfilled, so a lookup against an old row legitimately finds nothing. The verb prints `not recorded` with the reason. An empty answer reads, to a stranger, as an absence of work.
+
+## commit_rows compares per-row versions
+
+The whole-graph write names its base with `base_version` and the per-row versions its begin returned. Every graph.db `nodes` and `nodes_raw` row carries a `version` column. The statement that writes the row bumps it, and nothing else writes it. `begin` returns the map `{id: version}` under the historical key `base_digests`. The client sends the touched ids back to `commit_rows` under the same key. Under its write gate the keeper reads `nodes.version` for the touched ids and conflicts on each one whose version moved. A row absent at begin and absent now is a new node, and it never conflicts. A row present now and absent from the map is one another writer created, and it conflicts. The json rollback backend has no row versions, and a client can send no map. Both fall back to the whole-graph compare: `base_version` must equal the current version, or every touched id conflicts. The publish then runs through `locked_mutate` with the current version as its fence, which covers writers outside this keeper. The trust model changed. The old keeper refused a client digest echo and recomputed digests from its own in-memory snapshot ring. The exec lane builds a fresh keeper state per request, so that ring missed on every exec-lane commit. A version stored in graph.db is the only base the keeper has across processes. A client that sends a false version can suppress a real conflict, the same trust `base_version` already carries. The ring, the digests and `base_plan_rungs` on `commit_rows` are gone (2026-09-24). The sqlite publish takes its write lock IMMEDIATE, so a deferred read window cannot refuse it. A busy store retries through one shared helper. Its refusal names attempts, elapsed, and the read-back command.

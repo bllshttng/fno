@@ -346,7 +346,7 @@ def _set_member_pr_refs(
     merge-time `fno backlog reconcile` close each member by its own pr_number.
     """
     from fno.graph._intake import _find_node
-    from fno.graph.store import locked_mutate_graph
+    from fno.graph.store import commit_rows_via_store
     from fno.paths import graph_json
 
     ids = set(member_ids)
@@ -361,7 +361,7 @@ def _set_member_pr_refs(
                 node["pr_number"] = pr_number
         return entries
 
-    locked_mutate_graph(graph_json(), mutator)
+    commit_rows_via_store(graph_json(), mutator)
 
 
 def _clear_member_batch_marks(member_ids: list[str], *, root: Path) -> None:
@@ -373,13 +373,13 @@ def _clear_member_batch_marks(member_ids: list[str], *, root: Path) -> None:
     `fno backlog next` until that TTL expires - delaying the individual-PR
     requeue by up to 2h on the rare abandon-after-success path. Force-releasing
     it here is the obvious fix, but it violates the node-claim-release-authority
-    invariant (ab-588326a7: only the walker/handoff may release a node claim,
+    invariant (: only the walker/handoff may release a node claim,
     never a helper subprocess). The invariant outranks the P2; the requeue is
     correct (eventual), only latency-bound. Aligning the batch-claim lifecycle is
     deferred to cv-30d898f0 (the same 2h-TTL follow-up).
     """
     from fno.graph._intake import _find_node
-    from fno.graph.store import locked_mutate_graph
+    from fno.graph.store import commit_rows_via_store
     from fno.paths import graph_json
 
     ids = set(member_ids)
@@ -391,7 +391,7 @@ def _clear_member_batch_marks(member_ids: list[str], *, root: Path) -> None:
                 node["batch"] = None
         return entries
 
-    locked_mutate_graph(graph_json(), mutator)
+    commit_rows_via_store(graph_json(), mutator)
 
 
 def ship_batch(
@@ -504,9 +504,9 @@ def ship_batch(
             )
 
     if pr_url is None:
-        # Stale-base guard parity (x-9b87): the batch lane is the third
-        # gh-pr-create site (x-712b), so it runs the same check_stale_base the
-        # /pr create + worker/ship.py paths run. The batch worktree is born off
+        # Stale-base guard parity: the batch lane is the third
+        # gh-pr-create site, so it runs the same check_stale_base the
+        # /fno:ship pr create + worker/ship.py paths run. The batch worktree is born off
         # origin/main by `fno agents workspace worktree ensure`, so this is defense-in-depth for a
         # future refactor - refuse via the EXISTING abandon path (never a wedged
         # `refuse`: a batch left open would re-hit the same stale worktree every
@@ -527,6 +527,10 @@ def ship_batch(
                 reason=base_msg or "stale base: refused to open batch PR",
                 members=members,
             )
+        from fno.pr._preflight import check_duplicate_pr
+        if dup := check_duplicate_pr(worktree, f"origin/{base}", pr_title):
+            _abandon_and_requeue(domain, members, root)
+            return ShipResult("abandoned", domain, reason=dup, members=members)
         # Push the batch branch first. `fno agents workspace worktree ensure` creates only a LOCAL
         # branch and the batched worker commits locally, so `gh pr create --head`
         # (which does NOT push) would fail on an unpublished branch and abandon
@@ -539,7 +543,7 @@ def ship_batch(
                 reason=f"git push failed: {(push.stderr or push.stdout or '').strip()[:200]}",
                 members=members,
             )
-        # Same producer the /pr create and worker/ship.py paths run, but with
+        # Same producer the /fno:ship pr create and worker/ship.py paths run, but with
         # NO head ref. The members are the delivery, and they are known here
         # exactly; deriving from the branch adds nothing and got it wrong.
         # A batch minted before the '.' rename still carries
@@ -629,7 +633,14 @@ def _peek_next(
     (MegawalkQueue::with_mission): without it, a same-domain ready node OUTSIDE
     the mission would keep a mission batch open forever (codex P2).
     """
-    cmd = [*_subprocess_util.fno_py_cmd(), "backlog", "next"]
+    # The selection answers natively: the wheel spelling tombstones on the
+    # graph backend, so the peek drives the binary's door, never `fno-py`.
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise PeekError("fno backlog next failed: no fno-agents binary")
+    cmd = [str(binary), "backlog", "next"]
     if project:
         cmd += ["--project", project]
     if mission:
@@ -1040,7 +1051,7 @@ def _root_opt(root: Optional[str]) -> Path:
     `.fno/batches/`, so a raw `Path.cwd()` default would fragment state across
     worktrees. resolve_canonical_repo_root() returns the main checkout from any
     linked worktree (the same category claims_dir() resolves to), so every
-    participant converges on `<canonical>/.fno/batches/` (x-6cdf prerequisite).
+    participant converges on `<canonical>/.fno/batches/` (prerequisite).
     """
     if root:
         return Path(root)

@@ -1,4 +1,4 @@
-"""Auto-stamp the invoking session's own identity + model into a2a envelopes (x-605c).
+"""Auto-stamp the invoking session's own identity + model into a2a envelopes.
 
 The a2a reply protocol is: an agent reads ``<fno_mail from=H ...>`` and runs
 ``fno agents mail send H``. For that return leg to resolve, the OUTBOUND envelope must
@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional
 
 from fno.claims.self_identity import resolve_self_identity as _resolve_self_identity
-from fno.harness_identity import canonical_handle
 
 _TAIL_BYTES = 256 * 1024
 _EXPANDED_TAIL_BYTES = 2 * 1024 * 1024
@@ -25,32 +24,40 @@ class IdentityAmbiguousError(RuntimeError):
     """The ambient markers disagree and no process-tree proof is available."""
 
 
+def runtime_identity_witness(harness: str) -> frozenset:
+    """codex rollout fd ids plus the caller's own spawn row; the row is the claude family's only id witness (name_only stamp, no ancestor carries the id)."""
+    from fno.agents.codex_rollout import codex_rollout_witness
+    from fno.agents.registry import spawn_row_session_ids
+    return codex_rollout_witness(harness) | spawn_row_session_ids(harness)
+
+
 def resolve_self_identity(env: Optional[Mapping[str, str]] = None):
     """Resolve owned identity with the runtime registry collision witness."""
-    def collide(_harness: str, session_id: str) -> Optional[str]:
+    def collide(
+        _harness: str, session_id: str, own_pair: Optional[tuple[str, str]]
+    ) -> Optional[str]:
         from fno.agents.registry import row_owning_session_id
+        from fno.claims.session_pid import resolve_session_harness
 
-        # This layer resolves identity from scratch: it holds no binding it
-        # can prove independently of the markers under test, so the explicit
-        # sentinel is the written self-blind decision. The canonical-proven
-        # guard in claims.self_identity disables this detector exactly where
-        # a proven self would matter.
-        return row_owning_session_id(session_id, self_binding=None)
+        # own_pair is the pair claims.self_identity completed (None when it
+        # could not); the registry's agreement check keeps this detector
+        # self-blind exactly where nothing proves self.
+        return row_owning_session_id(
+            session_id, self_binding=own_pair, walk_harness=resolve_session_harness()
+        )
 
-    return _resolve_self_identity(env, collide=collide)
+    return _resolve_self_identity(
+        env, collide=collide, witness=runtime_identity_witness
+    )
 
 
 def identity_ambiguity_message(identity) -> str:
     """Render the single refusal sentence for an unproven mixed environment.
 
-    The strip lines are the self-rescue: the session cannot prove which
-    harness it is (that is the ambiguity), but the operator knows, and
-    stripping the foreign family's markers - every one the scrub knows about,
-    not just the two the resolver consults - restores self-resolution. Built
-    from :func:`fno.harness_identity.ambient_identity_strip_flags`, which reads
-    the same list the scrub reads, so the text cannot drift from behavior
-    (x-b57a: a poisoned claude session stripped two codex names and nothing
-    changed; all seven restored it).
+    The strip lines are the self-rescue: stripping the foreign family's
+    markers restores self-resolution. Built from
+    :func:`fno.harness_identity.ambient_identity_strip_flags`, which reads the
+    same list the scrub reads, so the text cannot drift from behavior.
     """
     from fno.harness_identity import ambient_identity_strip_flags
 
@@ -81,9 +88,21 @@ def identity_ambiguity_message(identity) -> str:
         if strip_lines
         else ""
     )
+    rejection = identity.rejected[0] if identity.rejected else None
+    # owned_by_live_row is a different ambiguity than mixed families.
+    if rejection:
+        opening = (
+            "cannot decide which session is 'self': id "
+            f"{rejection.get('session_id', '')} is owned by live row "
+            f"{rejection.get('owner', '')}"
+        )
+    else:
+        opening = (
+            "cannot decide which session is 'self': multiple harness markers "
+            "present (inherited env?)"
+        )
     return (
-        "cannot decide which session is 'self': multiple harness markers present "
-        "(inherited env?)\n"
+        f"{opening}\n"
         f"markers: {markers}\n"
         "resolve with: find ~/.codex/sessions ~/.claude/projects -name "
         f"'*{lookup_id}*'\n" + strip_section
@@ -119,10 +138,34 @@ def resolve_self_handle(
     env: Optional[Mapping[str, str]] = None,
 ) -> Optional[str]:
     """Return this process's proven harness handle, or omit it when ambiguous."""
+    # Imported per call, never at module scope: a module-level from-import
+    # binds whatever canonical_handle pointed to at first import, so a test
+    # monkeypatching harness_identity.canonical_handle around this module's
+    # first import poisons every later caller in the worker process (the same
+    # regression reply_resolve.py fixed).
+    from fno.harness_identity import canonical_handle
+
     ident = resolve_self_identity(env)
     if ident.session_id and ident.harness:
         return canonical_handle(ident.session_id)
     return None
+
+
+def resolve_self_harness(
+    env: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
+    """Return this process's proven harness, or None when unprovable.
+
+    The envelope producers stamp it verbatim: a None omits the ``harness``
+    attribute, never renders a guess (``cli``/``unknown`` never hit the wire,
+    A recorded ruling bars the guesses. The same owned resolution every
+    self_* resolver here uses.
+    """
+    try:
+        ident = resolve_self_identity(env)
+    except Exception:  # noqa: BLE001 - an unresolvable identity is an absence
+        return None
+    return ident.harness or None
 
 
 def resolve_self_session_id(

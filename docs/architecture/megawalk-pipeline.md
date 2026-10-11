@@ -2,6 +2,8 @@
 
 # Do-Roadmap: Multi-Session Task Orchestration
 
+> **Historical.** The megawalk skill and walker this document describes are retired (removed 2026-08-03, see [path-census.md](path-census.md)). Nothing below is runnable today. The supported multi-node routes: `/fno:target` per node, `/fno:target bg --all-ready` for a board, `fno backlog advance` for merge-triggered continuation. The active-backlog daemon is the always-on drain ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)). Kept as the design record of the vision-to-backlog, one-task-per-session, discovery-relay pipeline.
+
 > Architecture doc for the megawalk skill - vision-to-backlog generation, one-task-per-session execution, and cross-task discovery relay.
 
 ## Overview
@@ -231,8 +233,7 @@ The state is `LOOPING | PAUSED | COMPLETE | BLOCKED` (per `cli/src/fno/schemas/m
 ### Walker Loop (per iteration)
 
 ```
-read graph.json (hash-validated via .sha256 sidecar)
-  |-> if mismatch -> PAUSED with reconcile hint, exit
+read graph.json (through the store keeper's gated read)
 select_ready_nodes(parallel_cap, deps_satisfied, priority p0..p3)
   |-> for each: WorktreeManager.create() -> ThreadPoolExecutor.submit(_drive_node)
 poll futures (FIRST_COMPLETED, POLL_INTERVAL_S)
@@ -249,8 +250,7 @@ Per-node driving is now owned by the Rust unified-loop runtime (`fno-agents loop
 
 | Primitive | Module | Role |
 |-----------|--------|------|
-| Hash sidecar (`graph.json.sha256`) | `cli/src/fno/graph/load.py` | Detects direct edits; raises `GraphCorruptionError` with `fno backlog rehash` hint |
-| PreToolUse hook (`hooks/graph-write-protect.sh`) | hooks/ | Blocks Edit/Write on `~/.fno/graph.json` end-to-end (test fixtures bypassed) |
+| PreToolUse hook (`hooks/write-gate.sh`) | hooks/ | Blocks Edit/Write on `~/.fno/graph.json` end-to-end (test fixtures bypassed) |
 | HARD-GATE blocks (megawalk SKILL.md) | skills/ | LLM-side guard against direct mutation |
 | PID lock (`_acquire_pid_lock`) | megawalk.py | Prevents concurrent walker processes; reclaims stale locks |
 | Stale-approval pinning | `_check_review_approval` | Approves only if PR head SHA matches the approved review SHA |
@@ -277,7 +277,6 @@ Defensive behavior: in-flight entries with missing `worktree_path`, missing grap
 |------|-------|----|
 | `test_e2e_walker_happy.py` | walker drives 2 ready nodes to COMPLETE | AC1-HP |
 | `test_e2e_stuck.py` | stuck-handler unit + walker-loop integration | AC4-FR (fast variant); AC4-FR-wallclock deferred (infra: needs nightly CI 25min budget) |
-| `test_e2e_graph_corruption.py` | tampered sidecar -> PAUSED with reconcile hint | AC5-FR-graph |
 | `test_e2e_hook_block.py` | PreToolUse hook payload contract | AC5-EDGE-graph (synthesized payloads); AC5-EDGE-graph-dynamic deferred (infra: needs nightly CI with claude --print + API access) |
 | `test_e2e_resume.py` | reconcile in-flight on resume | AC1-FR |
 | `test_e2e_pause_timeout.py` | sentinel + SIGTERM escalation | AC3-ERR |
@@ -288,4 +287,4 @@ Slow integration tests are tagged `@pytest.mark.slow_e2e`; the 30-minute real-ti
 
 ### Migration from Shell Loop
 
-Users invoking the previous shell-driven megawalk (`/megawalk --next` / `--continue`) need no migration: the bare `/megawalk` form continues to work and now dispatches to the walker. The CLI surface adds `fno megawalk` for headless invocation (cron, CI, scripts) - see [megawalk-migration.md](../../megawalk-migration.md) for the surface-change history.
+Users invoking the previous shell-driven megawalk (`/megawalk --next` / `--continue`) need no migration: the bare `/megawalk` form continues to work and now dispatches to the walker. The CLI surface adds `fno megawalk` for headless invocation (cron, CI, scripts) - see [megawalk-migration.md](megawalk-migration.md) for the surface-change history.

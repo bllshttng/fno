@@ -12,15 +12,17 @@ for task delegation, identity, and agent registration.
 | `fno-orchestrator.md` | The orchestrator system prompt injected at session start. |
 | `agents/{explore,oracle,librarian}.md` | Three native opencode agents, auto-loaded from `.opencode/agents/`. |
 | `skills/` | Symlink farm: `<name> -> ../../skills/<name>` for every shipped skill. opencode scans `.opencode/skills/`, never the repo-root `skills/`, so these tracked links are what makes footnote's skills discoverable on a fresh clone (and in any worktree - the links are relative). |
-| `commands/{target,think,review,fix,pr}.md` | The five advertised verbs as opencode slash commands (`/target "add OAuth login"`). Each stub loads the matching skill and passes `$ARGUMENTS` through. `/target` is also what the stop-hook bridge's `/target --resume` re-drive resolves against. |
 | `tests/fno.test.ts` | `bun test` unit coverage for the pure helpers + task tool. |
+
+The repository used to carry its own `.opencode/commands/` directory: five bare-named stubs (`target`, `think`, `review`, `fix`, `pr`). They existed in no other project and disagreed with every renderer. `/fno:target` was asked for, and `target` was what existed. The global install now generates the correct `fno:<verb>.md` names everywhere, this repository included.
 
 ## What it does (and what opencode does natively)
 
-The plugin only supplies what opencode can't infer on its own:
+The plugin only supplies what opencode cannot infer on its own:
 
-- **`config` hook** — registers footnote's existing `agents/*.md` (translated to
-  opencode's agent shape) so `task({ subagent_type: "fno:archer" })` resolves.
+- **`config` hook** — captures, read-only, the agent names opencode already
+  merged (footnote's installer writes them as agent files), so
+  `task({ subagent_type: "fno:archer" })` validates against the real set.
 - **`experimental.chat.system.transform`** — injects the orchestrator identity.
 - **`task` / `task_result` tools** — delegation. `task` creates a child session
   and returns its result synchronously (via a blocking `session.prompt`), or a
@@ -35,28 +37,31 @@ discovers skills through the `.opencode/skills/` farm (its scan paths are
 own `skill` tool. That's why there is no custom skill tool, no build toolchain,
 and no vendored agent framework here.
 
-## Activation is opt-in
+## Activation
 
-The plugin auto-loads but stays **inert** until you opt in, so opening this repo
-in opencode while another orchestration plugin is still active never collides on
-the `task` tool. Activate for a session:
+The plugin is **on by default**. The opt-in gate existed so the `task` tool
+could not collide with another orchestration plugin; the global install now
+switches that plugin (oh-my-openagent) off with your consent at
+`fno config plugin install opencode`, so the reason is gone. Disable for a
+session:
 
 ```bash
-FNO_OPENCODE=1 opencode
+FNO_OPENCODE=0 opencode
 ```
 
-With `FNO_OPENCODE` unset, the plugin registers nothing.
+## Global install (every project)
 
-## Full cutover (make fno the sole orchestration plugin)
+The command, agent and skill catalogs come from one supported install, not from this repository: `fno config plugin install opencode` writes generated `fno:<verb>` commands, `fno:<name>` agents, the skill trees, and the stop bridge into `~/.config/opencode/` (or `$OPENCODE_CONFIG_DIR`), records every path in a manifest, and refuses to overwrite a file footnote did not write.
 
-When you're ready to make fno the sole orchestration plugin, edit your global
-`~/.config/opencode/opencode.json` and drop any other orchestration plugin entry
-from the `plugin` array. footnote's plugin auto-loads from this repo's
-`.opencode/plugins/` for sessions in this project; for other projects, add a
-`file:` entry pointing at `plugins/fno.ts` or publish the plugin to npm. Once no
-other orchestration plugin is loaded you can also run without the `FNO_OPENCODE`
-gate if you edit `isActivated` to default on. This is a local-machine change and
-is deliberately not automated.
+Uninstall is `fno-agents plugin-install opencode --uninstall`. Only manifest paths whose bytes still match are removed. Anything you edited is kept and named. A partial uninstall exits 3.
+
+`fno doctor` reports what is installed versus what the catalogs actually load, by name.
+
+## The installer is the cutover
+
+`fno config plugin install opencode` IS the cutover: it installs footnote's commands, agents, skills and bridge for every project, finds oh-my-openagent and stranger plugin specs in every config file opencode reads, prints what it found, and (with one consented yes) disables those entries with timestamped backups and printed undo lines. See docs/guide/opencode.md for the walkthrough.
+
+footnote's plugin here auto-loads from this repo's `.opencode/plugins/` for sessions in this project; every other project is covered by the global bridge.
 
 ## Model routing
 

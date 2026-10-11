@@ -4,13 +4,9 @@ The HOLD itself is not here. It is the registry flag (schema v14) that
 :func:`fno.agents.dispatch._delivery_policy_refusal` already enforces before
 any transport call on every injector lane. This module owns only the two
 things that flag cannot express on its own: WHEN the hold ends, and whether
-it ends at all.
-
-That split is deliberate. Putting an expiry on the registry row would mean a
-schema bump and a new field threaded through the Rust ``RegistryEntry`` at
-nine construction sites, for one timestamp. So the clock is a sidecar and the
-flag stays the sole enforcement authority: a reader asking "is mail held"
-reads the flag, a reader asking "until when" reads the sidecar.
+it ends at all. The split is deliberate: the clock is a sidecar so the flag
+stays the sole enforcement authority without a schema bump threaded through
+the Rust ``RegistryEntry`` at nine construction sites.
 
 Three sidecar states, and only one of them ever expires:
 
@@ -28,19 +24,21 @@ Three sidecar states, and only one of them ever expires:
 from __future__ import annotations
 
 import json
-import math
-import os
-import tempfile
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    pass
 
 from fno import paths
 
 DEFAULT_MINUTES = 5
 CLOCK_IDLE = "idle"
 CLOCK_WALL = "wall"
+CONVERSATION_SOURCE = "conversation"  # the Rust conversation arm's mark
 
 
 @dataclass(frozen=True)
@@ -52,6 +50,7 @@ class Hold:
     window_s: Optional[int]
     clock_kind: str = CLOCK_IDLE
     ceiling: Optional[datetime] = None
+    source: Optional[str] = None
 
 
 def hold_dir() -> Path:
@@ -68,6 +67,46 @@ def hold_path(handle: str) -> Path:
     return hold_dir() / f"{handle}.json"
 
 
+def _hold_transport(argv: list[str]) -> str:
+    """One mail-hold write through the native door (the receipts pattern:
+    Python keeps transports, the clock assembly lives in Rust). A door
+    failure raises VerbUnavailable - the verb is the single writer, so there
+    is no Python fallback to drift from it."""
+    from fno.rust_binary import VerbUnavailable, resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+    proc = subprocess.run(
+        [str(binary), "mail-hold", *argv],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise VerbUnavailable(
+            (proc.stderr or "fno-agents mail-hold failed").strip()[:200]
+        )
+    return proc.stdout.rstrip("\n")
+
+
+def _hold_query(argv: list[str]) -> Optional[dict]:
+    """The verb's one-line JSON state, or None when it printed nothing
+    (no clock, a permanent policy, or a lapsed one)."""
+    stdout = _hold_transport(argv)
+    return json.loads(stdout) if stdout else None
+
+
+def _describe(target) -> Optional[dict]:
+    """One describe read over the candidate sweep (first clock wins), or None
+    when the door is down - the read posture: a clock read never raises into
+    a caller."""
+    try:
+        return _hold_query(["--describe", *candidate_keys(target)])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
+        return None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -80,198 +119,110 @@ def _parse(stamp: str) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
+def _hold_from_state(handle: str, state: dict) -> Hold:
+    """The Hold a ``--read``/``--read-first`` state dict describes.
+
+    ``handle`` is the candidate the caller asked about: the verb's JSON does
+    not echo which key carried the clock, and no reader consumes the field.
+    """
+    until = state.get("until")
+    ceiling = state.get("ceiling")
+    source = state.get("source")
+    window = state.get("window_s")
+    return Hold(
+        handle=handle,
+        until=_parse(until) if isinstance(until, str) else None,
+        window_s=window if isinstance(window, int) else None,
+        clock_kind=state.get("clock_kind", CLOCK_IDLE),
+        ceiling=_parse(ceiling) if isinstance(ceiling, str) else None,
+        source=source if isinstance(source, str) else None,
+    )
+
+
 def read(handle: str) -> Optional[Hold]:
     """This handle's clock, or None when there is no readable one.
 
-    A corrupt or unparseable file reads as None, the same as an absent one.
-    Both mean "no clock", and neither is evidence that a hold is running.
+    A corrupt or unparseable file reads as None, the same as an absent one:
+    the verb answers an empty stdout for both. Both mean "no clock", and
+    neither is evidence that a hold is running.
 
-    Never raises. The catch is deliberately broad because resolving the
-    directory runs the whole path resolver, which loads settings and can fail
-    in ways a file read cannot - a narrow ``(OSError, ValueError)`` here let an
-    ``AttributeError`` from the resolver escape into ``fno agents mail notify-self``,
-    which runs on every ``UserPromptSubmit``. Busy mode must never be able to
-    break the turn-boundary render: an unreadable clock means the mail flows.
+    Never raises. The catch is deliberately broad because this read runs on
+    the status path, where a missing binary or a failed transport must
+    degrade to "no clock", never break the verb answering.
     """
     try:
-        raw = json.loads(hold_path(handle).read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 - see above; a clock read never breaks a caller
+        state = _hold_query(["--read", handle])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
         return None
-    if not isinstance(raw, dict):
-        return None
-    until_raw = raw.get("until")
-    until = _parse(until_raw) if isinstance(until_raw, str) else None
-    if isinstance(until_raw, str) and until is None:
-        return None
-    window = raw.get("window_s")
-    clock_kind = raw.get("clock_kind", CLOCK_IDLE)
-    if clock_kind not in (CLOCK_IDLE, CLOCK_WALL):
-        return None
-    ceiling_raw = raw.get("ceiling")
-    ceiling = _parse(ceiling_raw) if isinstance(ceiling_raw, str) else None
-    if isinstance(ceiling_raw, str) and ceiling is None:
-        return None
-    return Hold(
-        handle=handle,
-        until=until,
-        window_s=window if isinstance(window, int) else None,
-        clock_kind=clock_kind,
-        ceiling=ceiling,
-    )
-
-
-def _write(hold: Hold) -> Hold:
-    """Atomic replace, so a reader never catches a half-written clock."""
-    directory = hold_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(
-        {
-            "until": hold.until.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.until else None,
-            "window_s": hold.window_s,
-            "clock_kind": hold.clock_kind,
-            "ceiling": hold.ceiling.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.ceiling else None,
-        }
-    )
-    fd, tmp = tempfile.mkstemp(dir=str(directory), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle_file:
-            handle_file.write(payload + "\n")
-        os.replace(tmp, hold_path(hold.handle))
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return hold
+    return _hold_from_state(handle, state) if state else None
 
 
 def arm(handle: str, minutes: int = DEFAULT_MINUTES) -> Hold:
     """Start (or restart) a timed hold of ``minutes`` for ``handle``."""
     window_s = max(1, int(minutes * 60))
+    _hold_transport(["--arm", handle, "--kind", CLOCK_IDLE, "--minutes", str(minutes)])
     now = _now()
-    return _write(
-        Hold(
-            handle=handle,
-            until=now + timedelta(seconds=window_s),
-            window_s=window_s,
-            clock_kind=CLOCK_IDLE,
-            ceiling=now + timedelta(seconds=window_s * 2),
-        )
+    return Hold(
+        handle=handle,
+        until=now + timedelta(seconds=window_s),
+        window_s=window_s,
+        clock_kind=CLOCK_IDLE,
+        ceiling=now + timedelta(seconds=window_s * 2),
     )
 
 
 def arm_wall(handle: str, minutes: int) -> Hold:
     """Start a fixed wall-clock hold that never re-arms on activity."""
     window_s = max(1, int(minutes * 60))
-    return _write(
-        Hold(
-            handle=handle,
-            until=_now() + timedelta(seconds=window_s),
-            window_s=window_s,
-            clock_kind=CLOCK_WALL,
-            ceiling=None,
-        )
+    _hold_transport(["--arm", handle, "--kind", CLOCK_WALL, "--minutes", str(minutes)])
+    return Hold(
+        handle=handle,
+        until=_now() + timedelta(seconds=window_s),
+        window_s=window_s,
+        clock_kind=CLOCK_WALL,
+        ceiling=None,
     )
 
 
 def arm_permanent(handle: str) -> Hold:
     """Record a policy that never expires (the hand-stamped ``bus-only``).
 
-    Not needed for enforcement - an absent clock already never lapses. This is
-    for the RENDER: it lets the DND column distinguish a deliberate permanent
-    policy from a row nobody has looked at, on rows written from here on.
+    The verb has no permanent arm, so the marker is the ABSENCE of a clock
+    file plus the registry ``bus-only`` flag: an absent clock never lapses,
+    and the gate refuses a stamped row with no clock outright. The returned
+    Hold is the in-memory representation only - ``read`` of the cleared file
+    answers None - so the DND column's "held" comes from the flag plus that
+    absence, not from a clock file.
     """
-    return _write(Hold(handle=handle, until=None, window_s=None))
+    _hold_transport(["--clear", handle])
+    return Hold(handle=handle, until=None, window_s=None)
 
 
 def clear(handle: str) -> None:
     """Remove the clock. Absent is success, not an error."""
-    try:
-        hold_path(handle).unlink()
-    except OSError:
-        pass
-
-
-def extend(handle: str) -> Optional[Hold]:
-    """Re-arm an idle hold, or return a live wall hold unchanged.
-
-    Returns None when there is no live timed hold to extend (no clock, a
-    permanent policy, or one already lapsed). The caller is ``fno agents mail
-    notify-self``, which fires on every ``UserPromptSubmit``. Wall-clock holds
-    return their existing deadline so the policy stays live without moving it.
-    """
-    hold = read(handle)
-    if hold is None or hold.until is None or hold.window_s is None:
-        return None
-    now = _now()
-    if hold.until <= now:
-        return None
-    if hold.clock_kind == CLOCK_WALL:
-        return hold
-    ceiling = hold.ceiling or (hold.until + timedelta(seconds=hold.window_s))
-    if ceiling <= now:
-        return None
-    return _write(
-        Hold(
-            handle=handle,
-            until=min(now + timedelta(seconds=hold.window_s), ceiling),
-            window_s=hold.window_s,
-            clock_kind=CLOCK_IDLE,
-            ceiling=ceiling,
-        )
-    )
+    _hold_transport(["--clear", handle])
 
 
 def lapsed(handle) -> bool:
     """True when a TIMED hold for ``handle`` has run out. Only ever timed.
 
-    An absent or unreadable clock reads as NOT lapsed, which leaves the flag
-    exactly as it behaved before busy mode existed. The alternative was tried
-    and is wrong: lifting a flag that has no clock silently revokes the
-    delivery policy of every row stamped by ``fno agents register
-    --delivery-policy bus-only`` before this file existed, and a row so stamped
-    has no clock by construction. That is a shipped no-paste guarantee broken
-    on rows nobody touched.
-
-    The fear that argument answers - a hold whose timer died holding mail
-    forever - does not describe this design. Held mail is durable on the bus.
-    It surfaces at the recipient's next SessionStart or turn boundary, and
-    ``fno agents mail notify-self`` tidies the stale flag when it gets there. So a
-    lost clock costs a stall bounded by the operator's next prompt, never a
-    lost message. Auto-expire stays a safety property by having two carriers
-    that do not depend on this file surviving: the detached release timer, and
-    that turn-boundary tidy.
+    An absent or unreadable clock reads as NOT lapsed. Lifting a flag that has
+    no clock silently revokes the delivery policy of every row stamped by
+    ``fno agents register --delivery-policy bus-only``, which has no clock by
+    construction - a shipped no-paste guarantee broken on rows nobody touched.
+    The fear that argument answers, a hold whose timer died holding mail
+    forever, does not describe this design: held mail is durable on the bus
+    and surfaces at the next SessionStart or turn boundary, so a lost clock
+    costs a stall bounded by the operator's next prompt, never a lost message.
+    Auto-expire stays real through carriers that do not depend on this file
+    surviving: the detached release timer, and the Rust verb's
+    turn-boundary tidy of lapsed clocks.
 
     Pure read. It never mutates the registry, so it cannot deadlock a caller
     that already holds the registry lock and cannot raise into the gate.
     """
-    hold = read_any(handle)
-    if hold is None or hold.until is None:
-        return False
-    return hold.until <= _now()
-
-
-def tidy_lapsed(handle: str) -> bool:
-    """Clear a timed hold that has run out, flag and clock together.
-
-    The delivery gate deliberately stays a pure read, so nothing on the send
-    path clears a stale ``bus-only`` flag. This is where it gets cleared: a
-    turn boundary, where the registry lock is free and a write is safe.
-
-    Only a TIMED hold is tidied. A clock reading ``until: null`` is a
-    deliberate permanent policy, and an absent clock cannot be told apart from
-    a row that never had one, so neither is touched here.
-    """
-    clock = read(handle)
-    if clock is None or clock.until is None or clock.until > _now():
-        return False
-    clear(handle)
-    # Report what the WRITE did, not that the attempt was made. `set_policy`
-    # returns False for a registry it could not read or a row it never found,
-    # and returning True over that is an instrument reporting success on its
-    # own no-op path. The caller learns nothing, and the flag is still set.
-    return set_policy(handle, None)
+    state = _describe(handle)
+    return bool(state and state.get("lapsed"))
 
 
 def candidate_keys(target) -> tuple:
@@ -298,12 +249,17 @@ def candidate_keys(target) -> tuple:
 
 
 def read_any(target) -> Optional[Hold]:
-    """The clock for ``target`` under whichever of its keys carries one."""
-    for key in candidate_keys(target):
-        clock = read(key)
-        if clock is not None:
-            return clock
-    return None
+    """The clock for ``target`` under whichever of its keys carries one.
+
+    One door read over the whole candidate sweep: the sweep itself stays in
+    Python because it needs the registry entry, the FIND moves to the verb.
+    """
+    keys = candidate_keys(target)
+    try:
+        state = _hold_query(["--read-first", *keys])
+    except Exception:  # noqa: BLE001 - a clock read never breaks a caller
+        return None
+    return _hold_from_state(keys[0], state) if state else None
 
 
 def dnd_label(handle) -> Optional[str]:
@@ -320,9 +276,15 @@ def dnd_label(handle) -> Optional[str]:
     has no end to show. A duration whenever there is one, because a hold with
     no visible end is what the operator asked to avoid.
     """
-    if lapsed(handle):
+    state = _describe(handle)
+    if state is None:
+        # Door down: the same degrade the in-process read had - the column
+        # claims "held" rather than claiming mail flows while the flag stands.
+        return "held"
+    if state.get("lapsed"):
         return None
-    return remaining_label(handle) or "held"
+    auto = state.get("source") == CONVERSATION_SOURCE
+    return (state.get("remaining") or "held") + (" (auto)" if auto else "")
 
 
 def remaining_label(handle) -> Optional[str]:
@@ -332,41 +294,50 @@ def remaining_label(handle) -> Optional[str]:
     answers the question the column asks. This one answers only "how long is
     left", and returns None for a row that is held with no end recorded.
     """
-    hold = read_any(handle)
-    if hold is None:
+    state = _describe(handle)
+    return state.get("remaining") if state else None
+
+
+def gate_answer_in_process(token: str) -> Optional[str]:
+    """C15 own pass and lapsed-clock rule, for when no gate binary resolves."""
+    from fno.agents import dispatch
+    from fno.agents.self_stamp import resolve_self_session_id
+    own = resolve_self_session_id()
+    if (own and own.casefold() == token.casefold()) or lapsed(token):
         return None
-    if hold.until is None:
-        return "held"
-    seconds = (hold.until - _now()).total_seconds()
-    if seconds <= 0:
-        return None
-    if seconds < 60:
-        return f"~{int(seconds)}s"
-    return f"~{math.ceil(seconds / 60)}m"
+    return dispatch.BUS_ONLY_POLICY
 
 
 def bounce_reason(recipient) -> Optional[str]:
     """The busy-mode receipt a sender reads, or None when no hold is running.
 
-    A refusal that says nothing is the defect this replaces. A sender that gets
-    silence cannot tell a hold from a dead bus, so it re-sends, which is how one
-    held message becomes five. The generic ``bus-only`` receipt is no better
-    here: it promises the recipient's next turn boundary, and a busy-mode hold
-    exists precisely because that turn boundary is not coming.
-
-    So the reason names the recipient, the state, and when the message actually
-    lands. Returns None for a permanent hand-stamped policy, which really does
-    surface at a turn boundary and already has an accurate receipt.
+    One-call port of the receipt body to the Rust hold gate (``mail_hold.rs``
+    ``gate``, law d-b6cc1a2a): the gate owns the C16 receipt shapes - the
+    conversation receipt, the wall and grace "held until about HH:MM", and
+    the idle "or later" - in the recipient's local time. ``None`` keeps the
+    caller's existing text: a hand-stamped hold with no clock really does
+    surface at a turn boundary. Never raises.
     """
-    hold = read_any(recipient)
-    label = remaining_label(recipient)
-    if label is None or label == "held":
+    from fno import rust_binary
+
+    # A row cannot ride the token door (str(row) matches no gate key).
+    row_like = hasattr(recipient, "harness_session_id") or hasattr(recipient, "name")
+    binary = rust_binary.resolve_installed_binary()
+    if row_like or binary is None:
+        hold = read_any(recipient)
+        if hold is None or hold.until is None or hold.until <= _now():
+            return None
+        return clock_description(hold)
+    try:
+        proc = subprocess.run(
+            [str(binary), "mail-hold", "--gate", "--session", str(recipient)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return json.loads(proc.stdout).get("receipt")
+    except Exception:  # noqa: BLE001 - a receipt read never breaks the send path
         return None
-    clock = clock_description(hold)
-    return (
-        f"held: {recipient} is in do-not-disturb, {clock}, lifts in "
-        f"{label.lstrip('~')} and delivers itself then"
-    )
 
 
 def clock_description(hold: Optional[Hold]) -> str:
@@ -384,19 +355,24 @@ def addresses(entry) -> tuple:
     """Every token a hold clock for ``entry`` could be filed under.
 
     ONE matching rule, shared by the resolver, the policy write, and the
-    delivery gate's expiry check. The canonical handle is in here because every
-    WRITER keys by it: ``fno agents mail hold`` arms at ``canonical_handle(session_id)``
-    and the release and the turn-boundary tidy read the same key. For a claude
-    row that also happens to be ``short_id``, which is how the omission stayed
-    invisible. A codex ``short_id`` is a daemon worker key and its
-    ``harness_session_id`` is the full id, so neither is the first-eight the
-    clock sits under, and a gate reading only those three looked for a codex
-    hold in a place nothing ever writes.
+    delivery gate's expiry check. Writers key the full session identity key,
+    which is collision-free where the first-eight is not: codex UUIDv7 ids in
+    one 65.536-second window share their first eight. The first-eight token
+    stays in the sweep for clocks written before that migration.
     """
-    from fno.harness_identity import canonical_handle
+    from fno.harness_identity import canonical_handle, session_identity_key
 
     session_id = getattr(entry, "harness_session_id", None)
-    tokens = [
+    # The identity key leads: a live clock under the new key must outrank a
+    # legacy alias file, or a lapsed pre-migration clock lifts a hold the new
+    # clock still enforces.
+    tokens: list = []
+    if session_id:
+        try:
+            tokens.append(session_identity_key(session_id))
+        except Exception:  # noqa: BLE001 - a malformed id contributes no address
+            pass
+    tokens += [
         getattr(entry, "name", None),
         getattr(entry, "short_id", None),
         session_id,
@@ -438,19 +414,14 @@ def set_policy(handle: str, policy: Optional[str]) -> bool:
     """Stamp ``delivery_policy`` on the registry row addressed by ``handle``.
 
     Returns whether the DESIRED STATE now holds, not whether a row was edited.
-    So a handle with no registry row returns True: no row carries a policy, so
-    the caller's "clear it" is already satisfied and there is nothing to strand.
-    False means only that the registry could not be read or written, which is
-    the one case where a flag may still be set behind the caller's back.
-
-    The distinction is load-bearing for :func:`release`, which drops the clock
-    on True. Collapsing "no such row" and "registry unreadable" into one False
-    kept the clock forever for every handle that has no row, which is every
-    sandbox and every handle whose session already exited.
-
+    A handle with no registry row returns True: no row carries a policy, so the
+    caller's "clear it" is already satisfied and there is nothing to strand.
+    False means only that the registry could not be read or written. The
+    distinction is load-bearing for :func:`release`, which drops the clock on
+    True: collapsing "no such row" and "registry unreadable" into one False
+    kept the clock forever for every handle whose session already exited.
     Separate from ``register_existing_session`` because that verb resolves the
-    AMBIENT session, and the release path runs in a detached timer process with
-    no ambient identity of its own.
+    AMBIENT session, and the release path runs in a detached timer process.
     """
     from fno.agents.registry import update_registry
 
@@ -468,87 +439,57 @@ def set_policy(handle: str, policy: Optional[str]) -> bool:
     return True
 
 
-def dedupe(messages: list) -> list[tuple[object, int, list[str]]]:
-    """Collapse identical bodies from one sender into one entry with a count.
+def render_digest(
+    messages: list, held_for_s: int, harness: str | None = None
+) -> str:
+    """Render held mail through the Rust header and release formatter."""
+    from fno.rust_binary import find_dev_binary, resolve_binary
 
-    Returns ``(representative, count, every_id)`` per survivor, oldest first.
-    Every id travels with its survivor because the cursor must still be
-    advanced past a suppressed duplicate - a message that is not rendered is
-    consumed, never left behind to resurface on the next drain.
-
-    A worker that gets no answer re-sends, so a ten minute hold turns one
-    report into five. The dedupe is needed even without a retry: a
-    duplicate-delivery rate of 4.1 percent was measured on this bus on
-    2026-08-19, with identical body md5 AND identical message id.
-    """
-    import hashlib
-
-    order: list[tuple[str, str]] = []
-    groups: dict[tuple[str, str], list] = {}
-    for message in messages:
-        body = getattr(message, "body", "") or ""
-        digest = hashlib.md5(body.encode("utf-8", "replace")).hexdigest()
-        key = (getattr(message, "from_", "") or "", digest)
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(message)
-    out = []
-    for key in order:
-        members = groups[key]
-        out.append((members[0], len(members), [getattr(m, "id", "") for m in members]))
-    return out
-
-
-def render_digest(handle: str, survivors: list, held_for_s: int) -> str:
-    """The one text the release injects. Mirrors the notify-self render."""
-    total = sum(count for _, count, _ in survivors)
-    minutes = max(1, math.ceil(held_for_s / 60)) if held_for_s else 0
-    lines = [
-        f"[fno agents mail] busy mode ended after ~{minutes}m. "
-        f"{total} message(s) held for {handle}:"
-    ]
-    for message, count, _ids in survivors:
-        suffix = f"  (x{count} identical, deduped)" if count > 1 else ""
-        lines.append(
-            f"\n--- from {getattr(message, 'from_', '?')} "
-            f"({getattr(message, 'ts', '?')})  id:{getattr(message, 'id', '?')} "
-            f"---{suffix}"
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        raise RuntimeError(
+            "fno-agents binary not found; run `fno doctor update` or set FNO_AGENTS_BIN"
         )
-        lines.append((getattr(message, "body", "") or "").rstrip("\n"))
-    lines.append('\n[fno agents mail] to answer one: fno agents mail reply --to <id> --body "..."')
-    return "\n".join(lines)
+    payload = {
+        "held_for_s": held_for_s,
+        "harness": harness,
+        "messages": [
+            {
+                "sender": getattr(message, "from_", "?") or "?",
+                "sent_at": getattr(message, "ts", "") or "",
+                "id": getattr(message, "id", "?") or "?",
+                "body": getattr(message, "body", "") or "",
+            }
+            for message in messages
+        ],
+    }
+    proc = subprocess.run(
+        [str(binary), "mail-hold", "--render-digest"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "held-mail rendering failed")
+    return proc.stdout
 
 
 def release(handle: str, *, held_for_s: int = 0) -> dict:
     """End the hold and deliver what it held, with no operator input.
 
-    THE DRAIN TRIGGER THAT IS NOT THE OPERATOR. Mail otherwise drains at
-    exactly two moments, ``inject-mail-drain-session-start.sh`` (SessionStart)
-    and ``inject-mail-notify.sh`` (UserPromptSubmit), and both need the
-    operator to type. A hold with only those two triggers converts an
-    interruption into a stall, which is worse than the interruption.
-
-    Order is load-bearing. The flag is cleared FIRST, and the registry row is
-    re-read only after that, because every lane consults
-    ``_delivery_policy_refusal`` on the object it is handed. Release with the
-    flag still set, or with a row captured before it was cleared, and the
-    delivery is refused by the very gate that held the mail.
-
-    Delivery goes through ``_deliver_live``, the lane DISPATCHER, so a codex,
-    gemini or mux-hosted operator gets the same drain trigger a claude one
-    does. Wiring it to the claude injector alone made this a producer on one of
-    N lanes: the hold lifted on time and delivered nothing, which is the stall
-    this feature exists to prevent wearing the costume of a working one.
-
-    A missed inject does NOT advance the cursor. The mail stays on the bus and
-    the recipient's next turn boundary surfaces it, so a dead daemon degrades
-    to today's behavior rather than to a loss.
-
-    Always emits ``mail_hold_released``, including when nothing was held. A
-    release path that fires only on a non-empty digest cannot tell a working
-    expiry from a dead timer, which is the same absence-is-not-evidence trap
-    this whole feature exists to avoid.
+    THE DRAIN TRIGGER THAT IS NOT THE OPERATOR. Mail otherwise drains only at
+    SessionStart and UserPromptSubmit, and both need the operator to type. The
+    flag is cleared FIRST and the registry row re-read after, because every
+    lane consults ``_delivery_policy_refusal`` on the object it is handed:
+    release with the flag still set and the delivery is refused by the very
+    gate that held the mail. Delivery goes through ``_deliver_live``, the lane
+    DISPATCHER, so every harness gets the same drain trigger. A missed inject
+    does NOT advance the cursor: the mail stays on the bus and the recipient's
+    next turn boundary surfaces it, a degrade, never a loss. Always emits
+    ``mail_hold_released``, including when nothing was held - a release path
+    that fires only on a non-empty digest cannot tell a working expiry from a
+    dead timer.
     """
     from fno.agents import events
     from fno.bus.cursor import advance_cursor, scan_unread
@@ -559,8 +500,7 @@ def release(handle: str, *, held_for_s: int = 0) -> dict:
     # The old order discarded set_policy's result and cleared the clock either
     # way, which turned a partial failure into a worse state than the failure:
     # a bus-only row with no clock never lapses, so a hold that failed to lift
-    # became PERMANENT, and no automatic path clears it - `tidy_lapsed` needs a
-    # clock it no longer has.
+    # became PERMANENT, with no automatic path left that could clear it.
     #
     # Keeping the clock on a failed write also lets this delivery through. The
     # gate reads a bus-only row with a LAPSED clock as not-holding, so the
@@ -569,46 +509,78 @@ def release(handle: str, *, held_for_s: int = 0) -> dict:
     if policy_cleared:
         clear(handle)
 
-    try:
-        messages = scan_unread(handle, warn=False)
-    except Exception:  # noqa: BLE001 - a bus read failure is not a delivery failure
-        messages = []
-    survivors = dedupe(messages)
+    # The entry is resolved HERE, after the flag was cleared above, because
+    # every lane under this call re-checks the delivery policy on the object
+    # it is handed. Its session id names the MAILBOX forms: the name lane
+    # files durable mail under the canonical first-eight and the collision
+    # escape under the full identity key, neither of which is the clock key
+    # on codex.
+    entry = resolve_entry(handle)
+    from fno.harness_identity import canonical_handle, session_identity_key
+
+    forms = [handle]
+    sid = getattr(entry, "harness_session_id", "") if entry is not None else ""
+    if sid:
+        # Order-preserving dedupe: on a claude row the canonical form IS the
+        # handle, and one mailbox must not drain twice.
+        forms = list(dict.fromkeys([session_identity_key(sid), canonical_handle(sid), handle]))
+    form_mail: list = []
+    messages: list = []
+    seen_ids: set = set()
+    for form in forms:
+        try:
+            got = scan_unread(form, warn=False)
+        except Exception:  # noqa: BLE001 - a bus read failure is not a delivery failure
+            got = []
+        form_mail.append((form, got))
+        for message in got:
+            if getattr(message, "id", "") not in seen_ids:
+                seen_ids.add(getattr(message, "id", ""))
+                messages.append(message)
     held_count = len(messages)
-    deduped_count = held_count - len(survivors)
+    deduped_count = 0
 
     outcome = "empty"
     miss_reason: list = []
-    if survivors:
+    if messages:
         from fno.agents.dispatch import _deliver_live
+        from fno.inbox.store import generate_msg_id
+        from fno.mail.envelope import wrap_fno_mail
 
-        digest = render_digest(handle, survivors, held_for_s)
-        # Route through the LANE DISPATCHER, not the claude injector. Delivering
-        # via `_mail_inject_claude` alone made the release a producer on one of
-        # N lanes: a codex or gemini operator, or a mux-hosted pane, armed a
-        # hold that lifted on time and then delivered nothing, so their mail
-        # waited for them to type. That is the stall busy mode exists to
-        # prevent, wearing the costume of a working feature.
-        #
-        # The entry is resolved HERE, after the flag was cleared above, because
-        # every lane under this call re-checks the delivery policy on the object
-        # it is handed.
-        entry = resolve_entry(handle)
+        # Route through the LANE DISPATCHER, not the claude injector: wired to
+        # one injector this was a producer on one of N lanes, a hold that
+        # lifted on time and delivered nothing.
         delivered = False
         if entry is None:
             miss_reason.append("no-registry-row")
         else:
             try:
-                delivered = _deliver_live(
-                    entry, digest, "fno-mail-hold", reason_out=miss_reason
+                digest = render_digest(
+                    messages, held_for_s, getattr(entry, "harness", None)
                 )
-            except Exception:  # noqa: BLE001 - report the miss, never crash the timer
+                framed = wrap_fno_mail(
+                    digest,
+                    from_="fno-mail-hold",
+                    id=generate_msg_id(),
+                    to=getattr(entry, "name", None),
+                    to_session=getattr(entry, "harness_session_id", None),
+                    held_release=True,
+                )
+                delivered = _deliver_live(entry, framed, "fno-mail-hold", reason_out=miss_reason)
+            except Exception as exc:  # noqa: BLE001 - report the miss, never crash the timer
                 delivered = False
-                miss_reason.append("deliver-raised")
+                detail = " ".join(str(exc).split())[:160]
+                miss_reason.append(
+                    f"deliver-raised:{type(exc).__name__}"
+                    + (f": {detail}" if detail else "")
+                )
         if delivered:
             outcome = "delivered"
+            for form, got in form_mail:
+                for message in got:
+                    advance_cursor(form, getattr(message, "id", ""))
             for message in messages:
-                advance_cursor(handle, getattr(message, "id", ""))
+                _emit_drain_marker(message.id, handle, handle, message.from_, "printed")
         else:
             outcome = "inject-missed"
 
@@ -639,3 +611,31 @@ def release(handle: str, *, held_for_s: int = 0) -> dict:
         # the row still refuses is success on a no-op path.
         "policy_cleared": policy_cleared,
     }
+
+
+def _emit_drain_marker(
+    msg_id: str,
+    recipient: str,
+    address_form: str,
+    sender: "str | None",
+    reason: str = "printed",
+) -> None:
+    """Best-effort ``agent_mail_drained`` receipt, one per drained message id (W1.1).
+
+    Lets a sender join ``events.jsonl`` on ``msg_id`` to a terminal 'drained'
+    state; ``reason`` distinguishes printed from skipped-duplicate (W2).
+    Swallowed on any failure: a missing receipt degrades to the cursor fallback.
+    """
+    from fno.agents import events
+
+    try:
+        events.emit(
+            events.KIND_AGENT_MAIL_DRAINED,
+            msg_id=msg_id,
+            recipient=recipient,
+            address_form=address_form,
+            sender=sender or "",
+            reason=reason,
+        )
+    except (OSError, ValueError, TypeError):
+        pass

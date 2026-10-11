@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from fno.events.store_client import read_committed_lines
 from typer.testing import CliRunner
 
 from fno.events.cli import cli as event_cli
@@ -68,8 +70,8 @@ def test_ac1_hp_canonical_envelope_target_source(runner: CliRunner, tmp_path: Pa
     )
 
     assert result.exit_code == 0, f"stderr={result.stderr!r} stdout={result.stdout!r}"
-    assert events.exists()
-    lines = events.read_text().splitlines()
+    assert read_committed_lines(events)
+    lines = read_committed_lines(events)
     assert len(lines) == 1
     event = json.loads(lines[0])
 
@@ -84,7 +86,12 @@ def test_ac1_hp_canonical_envelope_target_source(runner: CliRunner, tmp_path: Pa
 
 
 def test_ac1_hp_explicit_source_overrides_autodetect(runner: CliRunner, tmp_path: Path) -> None:
-    """AC1-HP: --source overrides auto-detection."""
+    """AC1-HP: --source overrides auto-detection.
+
+    lead_checkin declares [loop, daemon, hook], never target, so this also
+    proves the override reaches a source auto-detection could never produce
+    on its own (a state file is present, which would auto-detect 'target').
+    """
     state = _write_state(tmp_path)
     events = _events_path(tmp_path)
 
@@ -92,21 +99,25 @@ def test_ac1_hp_explicit_source_overrides_autodetect(runner: CliRunner, tmp_path
         event_cli,
         [
             "emit",
-            "--type", "child_promise",
-            "--data", json.dumps({"session_id": "ses-x", "nonce": "n" * 16}),
-            "--source", "megawalk",
+            "--type", "lead_checkin",
+            "--data", json.dumps({"scope": "x-a792", "change": "override test"}),
+            "--source", "daemon",
             "--state", str(state),
             "--events", str(events),
         ],
     )
 
-    assert result.exit_code == 0
-    event = json.loads(events.read_text().splitlines()[0])
-    assert event["source"] == "megawalk"
+    assert result.exit_code == 0, result.stderr
+    event = json.loads(read_committed_lines(events)[0])
+    assert event["source"] == "daemon"
 
 
-def test_ac1_hp_no_state_file_defaults_to_test(runner: CliRunner, tmp_path: Path) -> None:
-    """AC1-HP: missing state file -> default source is 'test' (no auto-attribution)."""
+def test_ac1_hp_no_state_file_and_no_source_is_refused(runner: CliRunner, tmp_path: Path) -> None:
+    """AC1-HP: missing state file and no --source -> refused, no row written.
+
+    The old behavior silently defaulted to 'test'; the fix requires the
+    caller to name a producer instead of guessing one.
+    """
     events = _events_path(tmp_path)
     nonexistent_state = tmp_path / ".fno" / "target-state.md"
     # parent dir is created by events.jsonl write, but state file itself must not exist
@@ -116,16 +127,16 @@ def test_ac1_hp_no_state_file_defaults_to_test(runner: CliRunner, tmp_path: Path
         event_cli,
         [
             "emit",
-            "--type", "child_promise",
-            "--data", json.dumps({"session_id": "ses-y", "nonce": "n" * 16}),
+            "--type", "lead_checkin",
+            "--data", json.dumps({"scope": "x-a792", "change": "no source"}),
             "--state", str(nonexistent_state),
             "--events", str(events),
         ],
     )
 
-    assert result.exit_code == 0
-    event = json.loads(events.read_text().splitlines()[0])
-    assert event["source"] == "test"
+    assert result.exit_code != 0
+    assert not read_committed_lines(events)
+    assert "lead_checkin declares: daemon, hook, loop" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -173,7 +184,7 @@ def test_context_snapshot_generic_emit_rejects_invalid_identity(
     )
 
     assert result.exit_code == 1
-    assert not events.exists()
+    assert not read_committed_lines(events)
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +210,7 @@ def test_ac1_err_unknown_event_type_rejected(runner: CliRunner, tmp_path: Path) 
 
     assert result.exit_code != 0
     assert "unknown event type" in result.stderr.lower() or "not_a_real_event" in result.stderr
-    assert not events.exists() or events.read_text() == ""
+    assert not read_committed_lines(events)
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +239,7 @@ def test_ac1_ui_payload_alias_emits_deprecation_warning(runner: CliRunner, tmp_p
     assert "--payload" in result.stderr
     assert "--data" in result.stderr
     # Event is still emitted with canonical envelope.
-    event = json.loads(events.read_text().splitlines()[0])
+    event = json.loads(read_committed_lines(events)[0])
     assert set(event.keys()) == {"ts", "type", "source", "data"}
     assert event["data"]["session_id"] == "ses-z"
 
@@ -276,7 +287,7 @@ def test_ac1_edge_child_promise_minimum_data(runner: CliRunner, tmp_path: Path) 
     )
 
     assert result.exit_code == 0, f"stderr={result.stderr!r}"
-    event = json.loads(events.read_text().splitlines()[0])
+    event = json.loads(read_committed_lines(events)[0])
     assert event["type"] == "child_promise"
     assert event["data"] == {"session_id": "ses-abc", "nonce": "f" * 32}
 
@@ -350,19 +361,21 @@ def test_pr270_gemini_default_paths_anchor_to_repo_root(
     )
     assert result.exit_code == 0, f"stderr={result.stderr!r} stdout={result.output!r}"
 
-    # The event must land in <repo_root>/.fno/events.jsonl, NOT in the
-    # subdir's own .fno/.
-    anchored_events = repo_root / ".fno" / "events.jsonl"
+    # The event must land in the REPO's one journal (the space journal, keyed
+    # on the canonical root), NOT in the subdir's own .fno/.
+    from fno.paths import project_log
+
+    anchored_events = project_log("events.jsonl", project_root=repo_root)
     subdir_events = subdir / ".fno" / "events.jsonl"
-    assert anchored_events.exists(), (
-        f"event should land in repo root .fno, not subdir; "
+    assert read_committed_lines(anchored_events), (
+        f"event should land in the repo's journal, not a subdir's; "
         f"anchored={anchored_events!r} subdir={subdir_events!r}"
     )
-    assert not subdir_events.exists(), (
+    assert not read_committed_lines(subdir_events), (
         "event leaked to subdir .fno; defaults are not anchored"
     )
     # And source auto-detection found the repo-root state file -> "target".
-    event = json.loads(anchored_events.read_text().splitlines()[0])
+    event = json.loads(read_committed_lines(anchored_events)[0])
     assert event["source"] == "target"
 
 
@@ -391,7 +404,7 @@ def test_pr270_codex_non_json_success_prints_ts_when_no_nonce(
     out = result.output.strip()
     assert out, "non-JSON success path must not print an empty string"
     # The token is the event's ts, which is also written to events.jsonl.
-    event = json.loads(events.read_text().splitlines()[0])
+    event = json.loads(read_committed_lines(events)[0])
     assert out == event["ts"]
 
 
@@ -420,7 +433,7 @@ def test_ac1_fr_missing_required_data_field(runner: CliRunner, tmp_path: Path) -
     assert result.exit_code != 0
     assert ("nonce" in result.stderr.lower() or "session_id" in result.stderr.lower()
             or "required" in result.stderr.lower())
-    assert not events.exists() or events.read_text() == ""
+    assert not read_committed_lines(events)
 
 
 def test_ac1_fr_invalid_json_in_data_rejected(runner: CliRunner, tmp_path: Path) -> None:
@@ -441,7 +454,7 @@ def test_ac1_fr_invalid_json_in_data_rejected(runner: CliRunner, tmp_path: Path)
 
     assert result.exit_code != 0
     assert "json" in result.stderr.lower() or "invalid" in result.stderr.lower()
-    assert not events.exists() or events.read_text() == ""
+    assert not read_committed_lines(events)
 
 
 def test_verification_receipt_is_refused_by_generic_emitter(
@@ -464,7 +477,7 @@ def test_verification_receipt_is_refused_by_generic_emitter(
 
     assert result.exit_code == 1
     assert "preflight-owned" in result.output
-    assert not (tmp_path / "events.jsonl").exists()
+    assert not read_committed_lines(tmp_path / "events.jsonl")
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +515,7 @@ def test_global_targets_the_resolved_global_journal(
     )
 
     assert result.exit_code == 0, result.output
-    rows = [json.loads(line) for line in global_journal.read_text().splitlines()]
+    rows = [json.loads(line) for line in read_committed_lines(global_journal)]
     assert len(rows) == 1
     assert rows[0]["type"] == "phase_transition"
 
@@ -532,8 +545,8 @@ def test_global_conflicts_with_events_and_writes_nowhere(
 
     assert result.exit_code == 1
     assert "not both" in result.stderr
-    assert not global_journal.exists()
-    assert not pinned.exists()
+    assert not read_committed_lines(global_journal)
+    assert not read_committed_lines(pinned)
 
 
 # ---------------------------------------------------------------------------
@@ -566,11 +579,12 @@ def test_attestation_stamps_attester_and_witness_from_the_emitting_process(
         [
             "emit", "--type", "review_attestation",
             "--data", json.dumps(_attestation_data()),
+            "--source", "test",
             "--events", str(events),
         ],
     )
     assert result.exit_code == 0, result.stderr
-    data = json.loads(events.read_text().splitlines()[0])["data"]
+    data = json.loads(read_committed_lines(events)[0])["data"]
     assert data["attester_session_id"] == "sess-A"
     assert data["attester_witness"] == "process"
 
@@ -590,11 +604,12 @@ def test_attestation_env_only_witness_is_recorded_not_refused(
         [
             "emit", "--type", "review_attestation",
             "--data", json.dumps(_attestation_data()),
+            "--source", "test",
             "--events", str(events),
         ],
     )
     assert result.exit_code == 0, result.stderr
-    data = json.loads(events.read_text().splitlines()[0])["data"]
+    data = json.loads(read_committed_lines(events)[0])["data"]
     assert data["attester_session_id"] == "sess-A"
     assert data["attester_witness"] == "env_only"
 
@@ -620,7 +635,7 @@ def test_attestation_refuses_a_supplied_attester_that_disagrees(
     )
     assert result.exit_code == 1
     assert "sess-forged" in result.stderr and "sess-true" in result.stderr
-    assert not events.exists()
+    assert not read_committed_lines(events)
 
 
 def test_attestation_refuses_the_ancestry_override_shape(
@@ -650,7 +665,165 @@ def test_attestation_refuses_the_ancestry_override_shape(
     )
     assert result.exit_code == 1
     assert "sess-true" in result.stderr and "sess-forged" in result.stderr
-    assert not events.exists()
+    assert not read_committed_lines(events)
+
+
+# ---------------------------------------------------------------------------
+# model stamping: the caller gets no vote on review_attestation model either
+# ---------------------------------------------------------------------------
+
+
+def test_review_attestation_model_is_stamped_from_transcript(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No caller-supplied model -> the emit chokepoint stamps what the session's
+    own transcript says answered, via the provenance leaf."""
+    import fno.provenance.observed as observed
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {
+            "kind": "observed", "model": "claude-opus-5", "samples": 3,
+        },
+    )
+    events = _events_path(tmp_path)
+
+    result = runner.invoke(
+        event_cli,
+        [
+            "emit", "--type", "review_attestation",
+            "--data", json.dumps(_attestation_data()),
+            "--source", "test",
+            "--events", str(events),
+        ],
+    )
+    assert result.exit_code == 0, result.stderr
+    data = json.loads(read_committed_lines(events)[0])["data"]
+    assert data["model"] == "claude-opus-5"
+
+
+def test_review_attestation_unknown_model_drops_the_callers_claim(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unresolvable transcript means NOT OBSERVABLE: the caller's env claim
+    is dropped, never laundered into the record. Empty is the schema's contract
+    for that, so the event carries NO model key."""
+    import fno.provenance.observed as observed
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {"kind": "no-transcript"},
+    )
+    events = _events_path(tmp_path)
+    payload = {**_attestation_data(), "model": "glm-5.2[1m]"}
+
+    result = runner.invoke(
+        event_cli,
+        [
+            "emit", "--type", "review_attestation",
+            "--data", json.dumps(payload),
+            "--source", "test",
+            "--events", str(events),
+        ],
+    )
+    assert result.exit_code == 0, result.stderr
+    data = json.loads(read_committed_lines(events)[0])["data"]
+    assert "model" not in data
+
+
+def test_review_attestation_refuses_a_supplied_model_that_disagrees(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A --data model that disagrees with the transcript is REFUSED naming both,
+    never silently dropped - the positive marker that the caller gets no vote.
+    Assert the non-zero exit AND that no event line was appended, not merely
+    that stderr matched."""
+    import fno.provenance.observed as observed
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {
+            "kind": "observed", "model": "claude-opus-5", "samples": 3,
+        },
+    )
+    events = _events_path(tmp_path)
+    payload = {**_attestation_data(), "model": "glm-5.2[1m]"}
+
+    result = runner.invoke(
+        event_cli,
+        [
+            "emit", "--type", "review_attestation",
+            "--data", json.dumps(payload),
+            "--events", str(events),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "glm-5.2[1m]" in result.stderr and "claude-opus-5" in result.stderr
+    assert not read_committed_lines(events)
+
+
+# ---------------------------------------------------------------------------
+# the shared model stamp: one implementation both review_attestation writers
+# call (the emit chokepoint and classify --attest), tested directly
+# ---------------------------------------------------------------------------
+
+
+def test_model_stamp_helper_stamps_observed_over_no_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fno.provenance.observed as observed
+    from fno.events.cli import stamp_review_attestation_model
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {
+            "kind": "observed", "model": "claude-opus-5", "samples": 3,
+        },
+    )
+    data: dict = {"verdict": "pass"}
+    stamp_review_attestation_model(data, "claude", "sess-A")
+    assert data["model"] == "claude-opus-5"
+
+
+def test_model_stamp_helper_drops_claim_when_unobservable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fno.provenance.observed as observed
+    from fno.events.cli import stamp_review_attestation_model
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {"kind": "no-transcript"},
+    )
+    data: dict = {"verdict": "pass", "model": "glm-5.2[1m]"}
+    stamp_review_attestation_model(data, "claude", "sess-A")
+    assert "model" not in data
+
+
+def test_model_stamp_helper_refuses_a_disagreeing_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import typer
+
+    import fno.provenance.observed as observed
+    from fno.events.cli import stamp_review_attestation_model
+
+    monkeypatch.setattr(
+        observed,
+        "observed_model_for_session",
+        lambda harness, session_id, cwd: {
+            "kind": "observed", "model": "claude-opus-5", "samples": 3,
+        },
+    )
+    data: dict = {"verdict": "pass", "model": "glm-5.2[1m]"}
+    with pytest.raises(typer.Exit) as excinfo:
+        stamp_review_attestation_model(data, "claude", "sess-A")
+    assert excinfo.value.exit_code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -694,15 +867,16 @@ def test_hand_emitted_review_coverage_reaches_both_logs(
             "emit",
             "--type", "review_coverage",
             "--data", json.dumps(_coverage_payload()),
+            "--source", "hook",
             "--events", str(worktree_log),
         ],
     )
     assert result.exit_code == 0, result.stderr
 
-    project_rows = [json.loads(ln) for ln in worktree_log.read_text().splitlines()]
+    project_rows = [json.loads(ln) for ln in read_committed_lines(worktree_log)]
     assert len(project_rows) == 1
     assert project_rows[0]["type"] == "review_coverage"
-    global_rows = [json.loads(ln) for ln in global_journal.read_text().splitlines()]
+    global_rows = [json.loads(ln) for ln in read_committed_lines(global_journal)]
     assert len(global_rows) == 1
     # The mirrored copy carries the repo scoping a cross-project reader needs;
     # the project copy needs none.
@@ -727,9 +901,10 @@ def test_mirror_does_not_double_when_the_project_log_is_the_global_one(
             "emit",
             "--type", "review_coverage",
             "--data", json.dumps(_coverage_payload()),
+            "--source", "hook",
             "--global",
         ],
     )
     assert result.exit_code == 0, result.stderr
-    rows = [json.loads(ln) for ln in global_journal.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in read_committed_lines(global_journal)]
     assert len(rows) == 1

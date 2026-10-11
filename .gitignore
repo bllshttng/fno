@@ -10,6 +10,14 @@
 .claude/scheduled_tasks.json
 .claude/worktrees/
 
+# Backstop only. A worktree belongs at .claude/worktrees/<name> above or at
+# ~/.fno/worktrees/<name>; /worktrees/ is on the forbidden list in
+# .claude/rules/worktrees.md and setup-worktree.sh now refuses to build one
+# there. This line keeps anything that still lands here off `git status`, so a
+# stray tree cannot read as work in progress. Anchored: cli/tests and the docs
+# both discuss worktrees/ paths that must stay tracked.
+/worktrees/
+
 # Top-level scratch plans are personal/working specs (the canonical plans live
 # in the Obsidian vault under internal/). Keep them out of the public tree so
 # they cannot leak machine paths or private project names. Anchored to root so
@@ -58,6 +66,10 @@ __pycache__/
 # Cache
 .cache/
 
+# Written by Claude Code when it loads the buddy mod from `claude --plugin-dir .`
+/.claude-plugin/types/
+/tsconfig.json
+
 # Other provider configs (local, not distributed).
 # NB: .codex-plugin/ is intentionally NOT here - it's the public Codex plugin
 # manifest (parity with .claude-plugin/), so it must ship.
@@ -74,9 +86,13 @@ __pycache__/
 # since git cannot re-include a path under an ignored directory. A `foo/` rule
 # matches directories only, so the slash form left every linked worktree dirty 
 # and preflight refusing (same defect as the .claude/* link below). 
-# .agents/.codex/.codex-plugin keep their glob form on purpose: each
-# holds tracked files, so link_dir hits its non-empty-real-dir refusal and they
-# are never symlinks - and .codex-plugin must stay shippable besides.
+# .agents/.codex/.codex-plugin keep their glob form on purpose: at the REPO
+# ROOT each holds tracked files, so link_dir hits its non-empty-real-dir
+# refusal and stays a real dir - and .codex-plugin must stay shippable
+# besides. In subprojects (cli/) the same paths hold nothing tracked and DO
+# become symlinks, which no gitignore pattern can express without eating the
+# re-includes above; the reapable guard discounts those `??` lines by reading
+# each symlink's target instead.
 .gemini
 
 # Private/local scripts and docs (environment-specific, not for distribution)
@@ -90,9 +106,11 @@ internal
 .fno/feels/observations.archive/
 .fno/feels/.usage-data-watermark
 
-# CLI package build artifacts
+# CLI package build artifacts. NO trailing slash on .venv: a worktree links
+# the canonical venv as a SYMLINK, and git ignores symlinks only when the
+# pattern carries none (a linked worktree would otherwise show it untracked).
 cli/dist/
-cli/.venv/
+cli/.venv
 
 # managed by link-skills.py. NO trailing slash: setup-worktree.sh links these
 # as SYMLINKS into the canonical checkout, and a trailing-slash pattern matches
@@ -135,3 +153,46 @@ peer-review.diff
 # Tool-local session state (.omo runner); same accidental-commit shape as
 # the peer-review scratch diffs above.
 .omo/
+
+# Generated code-intelligence indexes. Checkout-local and rebuildable, never
+# a commit candidate. graphify-out/ is unanchored: nested runs land under
+# cli/, crates/, docs/ and skills/ too. No trailing slash on .codegraph:
+# older installs link it as a symlink, which git treats as a file. Untracked
+# it is not merely junk: one such directory under crates/ makes the rust
+# build report every component as "built from a dirty crates/ tree", which
+# blocks the verified deploy.
+graphify-out/
+.codegraph
+
+# Per-project skill rosters, written into this checkout by multi-harness skill
+# installers: skillteam links them at ~/.agents/skill-store, and `npx skills
+# add` copies real files. Nothing here is tracked. Left untracked they cost
+# twice. The flush nudge in hooks/context-nudge.sh counts them as this
+# session's unsaved work and urges a commit of files the session never wrote,
+# and every copy is one more tree a recursive search walks. Root-anchored:
+# both installers write to the checkout root. No trailing slash: a roster can
+# be a symlink, which git treats as a file and a `foo/` rule would miss.
+/.agent
+/.codebuddy
+/.continue
+/.cursor
+/.github/prompts
+/.hermes
+/.kiro
+/.openclaw
+/.pi
+/.qoder
+/.roo
+/.trae
+/.windsurf
+# Named, not shaped: .opencode/skills holds this repo's own tracked skills, so
+# only the foreign install can be ignored here.
+/.opencode/skills/ui-ux-pro-max
+
+# Session transcripts dumped at the repo root, named by the harness as
+# YYYY-MM-DD-HHMMSS-<slug>.txt. The repo tracks no root-level .txt, so the
+# dated glob is narrow enough that it cannot hide an intentional one.
+/20??-??-??-*.txt
+
+# claude plugin eval writes one timestamped run per invocation here.
+/evals/claude-plugin/results/

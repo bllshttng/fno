@@ -26,10 +26,14 @@ question on the mux lane: both get "the row recording a pane IS the path."
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tomllib
 from functools import cache
 from pathlib import Path
+
+import pytest
 
 REPO_CLI = Path(__file__).resolve().parents[1]
 
@@ -48,6 +52,12 @@ def _run(args: list[str], env_extra: dict[str, str], tmp_path: Path):
         "PYTHONPATH": str(REPO_CLI / "src"),
         **env_extra,
     }
+    # The style gate rides the fno-agents binary; a sandboxed subprocess keeps
+    # the caller's pin so CI's smoke-provided binary stays resolvable.
+    for key in ("FNO_AGENTS_FRONT", "FNO_AGENTS_BIN"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     proc = subprocess.run(
         [sys.executable, "-m", "fno.cli", "agents", "mail", "send", *args],
         capture_output=True, text=True, env=env, cwd=str(tmp_path), timeout=120,
@@ -56,25 +66,38 @@ def _run(args: list[str], env_extra: dict[str, str], tmp_path: Path):
 
 
 def _write_registry(tmp_path: Path, rows: list[dict]) -> None:
+    # The version comes off the projected schema copy, never a literal: the
+    # Rust gate back-fills per-version row shapes, so a stale literal silently
+    # drops newer columns (delivery_policy arrived at v14) and the hold
+    # disappears.
+    text = (REPO_CLI / "src" / "fno" / "agents" / "registry_schema.toml").read_text()
+    version = tomllib.loads(text)["version"]
     (tmp_path / ".fno" / "agents").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".fno" / "agents" / "registry.json").write_text(
-        json.dumps({"schema_version": 13, "agents": rows})
+        json.dumps({"schema_version": version, "agents": rows})
     )
 
 
 def _row(**over) -> dict:
+    # name, cwd, status and created_at are the reader's required fields: one
+    # row missing any of them fails the typed decode, the row-count invariant
+    # refuses the WHOLE registry, and the hold gate fails open on an empty one.
     base = {
         "name": "worker", "harness": "claude", "cwd": "/tmp",
         "log_path": "/tmp/w", "status": "live", "short_id": "w",
         "harness_session_id": "sid-worker",
-        "crown_level": None, "crown_scope": None, "crown_grantor": None,
+        "created_at": "2026-01-01T00:00:00Z",
+        "role_level": None, "role_scope": None, "role_grantor": None,
     }
     base.update(over)
     return base
 
 
 SELF_SID = "sid-me"
-MUX = {"session": "fno", "pane_id": "%1"}
+# pane_id is an integer on the wire: the Rust registry reader parses it as
+# u64, and a string here makes the WHOLE registry unreadable to the hold gate,
+# which then fails open (no row, no hold).
+MUX = {"session": "fno", "pane_id": 1}
 
 
 @cache
@@ -99,6 +122,21 @@ def _self_env() -> dict[str, str]:
     return {marker: SELF_SID}
 
 
+def _gate_path() -> dict[str, str] | None:
+    """PATH carrying THIS checkout's ``fno-agents`` build, or None when the
+    checkout has no build. None matters: without the gate binary the bus-only
+    check fails closed to DND, which turns the held-leg into a false pass and
+    the expired-leg into a false fail, so the caller skips instead."""
+    repo = REPO_CLI.parent
+    for dev_dir in (
+        repo / "crates" / "fno-agents" / "target" / "release",
+        repo / "crates" / "fno-agents" / "target" / "debug",
+    ):
+        if (dev_dir / "fno-agents").is_file():
+            return {"PATH": f"{dev_dir}:/usr/bin:/bin"}
+    return None
+
+
 def test_self_on_unguarded_mux_lane_is_injectable(tmp_path):
     """x-1904: the de-veto makes a self-directed mux pane a path again.
 
@@ -116,8 +154,16 @@ def test_self_on_unguarded_mux_lane_is_injectable(tmp_path):
     assert out.startswith("injectable: mux-pane"), out
 
 
-def test_self_compact_becomes_injectable_after_wall_hold_expiry(tmp_path):
-    """A live wall hold blocks compact, then expiry restores the same lane."""
+def test_a_live_self_hold_does_not_block_the_own_raw_lane(tmp_path):
+    """C15 own-send pass: a session's own raw writes never sit behind ITS hold.
+
+    The gate passes the caller's own sends unconditionally, so a held SELF
+    still reads injectable here -- the refusal the old wall-hold test asserted
+    belonged to a peer, not to the session that armed the hold.
+    """
+    gate = _gate_path()
+    if gate is None:
+        pytest.skip("no checkout fno-agents build; the own-send pass is the Rust gate's")
     _write_registry(tmp_path, [_row(name="me", harness_session_id=SELF_SID, mux=MUX,
                                     delivery_policy="bus-only")])
     hold_dir = tmp_path / ".fno" / "mail-hold"
@@ -130,18 +176,44 @@ def test_self_compact_becomes_injectable_after_wall_hold_expiry(tmp_path):
         })
     )
 
-    out, code = _run(["/compact", "--to-self", "--raw", "--check"], _self_env(), tmp_path)
+    out, code = _run(["/compact", "--to-self", "--raw", "--check"],
+                     {**_self_env(), **gate}, tmp_path)
+    assert code == 0, out
+    assert out.startswith("injectable: mux-pane"), out
+
+
+def test_a_held_peer_lane_restores_after_the_wall_hold_expires(tmp_path):
+    """A live wall hold blocks a peer's raw send; expiry restores the lane."""
+    gate = _gate_path()
+    if gate is None:
+        pytest.skip("no checkout fno-agents build; the hold clock is the Rust gate's")
+    _write_registry(tmp_path, [_row(name="me", harness_session_id=SELF_SID),
+                               _row(name="peer", harness_session_id="sid-peer", mux=MUX,
+                                    delivery_policy="bus-only")])
+    hold_dir = tmp_path / ".fno" / "mail-hold"
+    hold_dir.mkdir(parents=True, exist_ok=True)
+    (hold_dir / f"{'sid-peer'[:8]}.json").write_text(
+        json.dumps({
+            "until": "2099-01-01T00:00:00Z",
+            "window_s": 480,
+            "clock_kind": "wall",
+        })
+    )
+
+    out, code = _run(["peer", "/code-review", "--raw", "--check"],
+                     {**_self_env(), **gate}, tmp_path)
     assert code == 1, out
     assert "bus-only" in out, out
 
-    (hold_dir / f"{SELF_SID[:8]}.json").write_text(
+    (hold_dir / f"{'sid-peer'[:8]}.json").write_text(
         json.dumps({
             "until": "2000-01-01T00:00:00Z",
             "window_s": 480,
             "clock_kind": "wall",
         })
     )
-    out, code = _run(["/compact", "--to-self", "--raw", "--check"], _self_env(), tmp_path)
+    out, code = _run(["peer", "/code-review", "--raw", "--check"],
+                     {**_self_env(), **gate}, tmp_path)
     assert code == 0, out
     assert out.startswith("injectable: mux-pane"), out
 
@@ -174,13 +246,12 @@ def test_no_registry_row_is_not_injectable(tmp_path):
     assert out.startswith("not-injectable:"), out
 
 
-def test_non_keystroke_lane_is_not_injectable(tmp_path):
-    """A codex app-server peer has no prompt line.
+def test_non_keystroke_lane_check_follows_the_transport(tmp_path):
+    """A codex app-server peer answers from its real transport.
 
-    A non-review payload can never fire there. A review verb routes to
-    review/start, so its check answer follows the transport: with no
-    deployed binary the answer stays not-injectable rather than
-    promising the RPC path.
+    A non-review payload rides turn/start, so with no deployed binary the
+    check refuses on the transport rather than promising the path. A review
+    verb routes to review/start and follows the same transport rule.
     """
     _write_registry(
         tmp_path,
@@ -193,7 +264,8 @@ def test_non_keystroke_lane_is_not_injectable(tmp_path):
         tmp_path,
     )
     assert code == 1, out
-    assert "no prompt line" in out, out
+    assert "not-injectable:" in out, out
+    assert "turn/start has no transport" in out, out
     out, code = _run(
         ["cx", "/review", "--raw", "--check"],
         _self_env(),
@@ -217,11 +289,13 @@ def test_malformed_payload_is_a_usage_error_not_a_verdict(tmp_path):
 
     Reporting ``not-injectable`` here would assert exactly the kind of unestablished
     claim ``--check`` exists to prevent: a caller gating advice would tell a session
-    with a perfectly good path to go ask its operator.
+    with a perfectly good path to go ask its operator. A multi-line payload is the
+    standing malformed shape (a non-command payload became a usage refusal under
+    law d-f6570dc9).
     """
     _write_registry(tmp_path, [_row(name="me", harness_session_id=SELF_SID)])
     out, code = _run(
-        ["me", "not-a-slash-verb", "--raw", "--check"],
+        ["me", "one line\nsecond line", "--raw", "--check"],
         _self_env(),
         tmp_path,
     )

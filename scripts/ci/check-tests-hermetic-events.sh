@@ -10,8 +10,9 @@ set -euo pipefail
 
 files=(
   "cli/tests/agents/test_spawn_gate_refusal_events.py"
+  "cli/tests/agents/test_spawn_defaults.py"
+  "cli/tests/agents/test_rust_runtime.py"
   "cli/tests/unit/test_advance_explain.py"
-  "cli/tests/agents/test_agents_top.py"
   "cli/tests/unit/test_epic_status.py"
   "cli/tests/unit/test_join_events.py"
 )

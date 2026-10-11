@@ -17,10 +17,9 @@ FIXTURE = Path(__file__).parent / "fixtures" / "gate_escape_spawn_cap_parity.jso
 
 
 def _events(p: Path) -> list[dict]:
-    p = Path(p)
-    if not p.exists():
-        return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(Path(p))
 
 
 def _escapes(p: Path, reason: str = "spawn-cap") -> list[dict]:
@@ -68,12 +67,12 @@ def test_distinct_dedup_keys_count_separately(tmp_path):
 def test_fail_open_on_unwritable_log(tmp_path, monkeypatch):
     """AC1-FR: an append failure never raises; a durable failure line is logged."""
     ev = tmp_path / "events.jsonl"
-    import fno.events as events_mod
+    import fno.events.store_client as store_client_mod
 
     def _boom(*a, **k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(events_mod, "append_event", _boom)
+    monkeypatch.setattr(store_client_mod, "emit_envelope", _boom)
     out = ge.emit_gate_escape("spawn-cap", dedup_key="k", events_path=ev)
     assert out is None
     assert _escapes(ev) == []
@@ -129,15 +128,5 @@ def test_run_gate_bypass_under_pytest_emits_nothing(tmp_path, monkeypatch):
     spawn_gate.run_gate("t", "bg")  # PYTEST_CURRENT_TEST set -> guard blocks the emit
     assert _escapes(ev) == []
 
-
-def test_maybe_emit_fires_when_guard_says_yes(tmp_path, monkeypatch):
-    """The gate wiring DOES emit when should_emit_spawn_cap is true. pytest
-    always sets PYTEST_CURRENT_TEST, so the positive path is proven by forcing
-    the guard true (the guard logic itself is covered by the parity fixture)."""
-    ev = tmp_path / "events.jsonl"
-    monkeypatch.setattr(ge, "canonical_events_path", lambda *a, **k: ev)
-    monkeypatch.setattr(ge, "should_emit_spawn_cap", lambda *a, **k: True)
-    from fno.agents import spawn_gate
-
-    spawn_gate._maybe_emit_spawn_cap_escape()
-    assert len(_escapes(ev)) == 1
+# The Python emit helper is gone: the Rust gate emits the same event on its
+# bypass path, pinned against the shared fixture by the Rust test.

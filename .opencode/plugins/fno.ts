@@ -1,24 +1,21 @@
-// footnote's self-contained opencode orchestration plugin.
+// footnote's repo-local opencode orchestration plugin.
 //
-// Gives footnote native opencode orchestration with no external dependency.
-// Built on opencode's plugin API:
-// a config hook (register footnote's agents), a system-prompt transform
-// (inject the orchestrator identity), and a `task` delegation tool. opencode's
-// NATIVE machinery does the rest — it auto-loads `.opencode/agents/*.md` and
-// discovers `skills/**/SKILL.md`, so this plugin only supplies what opencode
-// can't infer: footnote's identity, its existing agents, and delegation.
+// After the global install (footnote's bridge hosts hooks.json, the
+// installer writes the agents, and oh-my-openagent is switched off), only
+// what is specific to THIS repository remains: the task/task_result
+// delegation tools, the orchestrator prompt injection, and the agent set
+// they may name. Everything global moved to
+// ~/.config/opencode/plugins/footnote.js (installed by
+// fno config plugin install opencode).
 //
-// No build step: opencode auto-scans `.opencode/plugins/*.{ts,js}` and loads
-// this .ts directly. See .opencode/README.md for the dogfood/cutover contract.
+// No build step: opencode auto-scans .opencode/plugins/*.{ts,js} and loads
+// this .ts directly.
 
 import { tool, type ToolDefinition } from "@opencode-ai/plugin"
 import type { Plugin, PluginInput } from "@opencode-ai/plugin"
 import { readFileSync, readdirSync, existsSync } from "node:fs"
 import { join, basename } from "node:path"
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 // subagent_type -> workflow category, when `category` is omitted.
 const AGENT_INFERENCE: Record<string, string> = {
@@ -35,18 +32,6 @@ const AGENT_INFERENCE: Record<string, string> = {
   "code-reviewer": "review",
 }
 
-// category -> preferred model as "providerID/modelID". Best-effort: a model is
-// only forced when the provider registry actually has it (see resolveModel);
-// otherwise the child session uses opencode's default. Env-specific model names
-// are intentionally NOT hardcoded blindly — a missing model must degrade, not
-// break delegation (AC5-ERR).
-const CATEGORY_MODEL: Record<string, string> = {
-  // Left empty by default: routing rides each agent's own `model:` field plus
-  // opencode's default. Populate per-environment, e.g.
-  //   ship: "anthropic/claude-haiku-4-5",
-  //   plan: "anthropic/claude-opus-4-6",
-}
-
 const MAX_DEPTH = 3
 const MAX_CONCURRENCY = 5
 const SYNC_TIMEOUT_MS = 120_000
@@ -61,132 +46,30 @@ export function inferCategory(subagentType?: string): string | undefined {
   return AGENT_INFERENCE[subagentType]
 }
 
-/**
- * Minimal frontmatter reader: extracts scalar `key: value` pairs from the
- * leading `---` block and returns the body. Deliberately scalar-only — the
- * only fields this plugin needs are `description` and `model`; complex YAML
- * (tool arrays, nested skills) is ignored, not parsed. A full YAML dependency
- * would be over-engineering for three fields.
- */
-export function parseFrontmatter(raw: string): { data: Record<string, string>; body: string } {
-  const m = raw.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?([\s\S]*)$/)
-  if (!m) return { data: {}, body: raw }
-  const data: Record<string, string> = {}
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/)
-    if (!kv) continue // skips list items, nested keys, blanks
-    let value = kv[2].trim()
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-    if (value === "" || value.startsWith("[") || value.startsWith("{")) continue
-    data[kv[1]] = value
-  }
-  return { data, body: m[2].trimStart() }
-}
 
-/** opencode AgentConfig-shaped object. `model` is a "provider/model" string. */
-export type AgentDef = {
-  description?: string
-  mode: "subagent"
-  prompt: string
-  model?: string
-}
 
-/**
- * Translate a footnote (Claude Code format) agent markdown into an opencode
- * agent definition. Bare CC short model names (sonnet/haiku/opus) are dropped
- * so the child falls back to opencode's default — forcing an unmapped name
- * would fail agent resolution. A "provider/model" string is passed through.
- */
-export function toOpencodeAgent(data: Record<string, string>, body: string): AgentDef {
-  const def: AgentDef = { mode: "subagent", prompt: body }
-  if (data.description) def.description = data.description
-  if (data.model && data.model.includes("/")) def.model = data.model
-  return def
-}
-
-/** Extract the assistant's text from a session.prompt response's parts. */
 export function extractAssistantText(parts: Array<{ type?: string; text?: string }> | undefined): string {
   if (!parts) return ""
   return parts
-    .filter((p) => p.type === "text" || p.type === "reasoning")
+    .filter((p) => p.type === "text")
     .map((p) => p.text ?? "")
     .filter(Boolean)
     .join("\n")
     .trim()
 }
 
-/**
- * Resolve a "providerID/modelID" for a category, but only if the model exists
- * in the available set. Returns undefined to let opencode use its default.
- */
-export function resolveModel(
-  category: string | undefined,
-  available: Set<string>,
-): { providerID: string; modelID: string } | undefined {
-  if (!category) return undefined
-  const spec = CATEGORY_MODEL[category]
-  if (!spec) return undefined
-  const slash = spec.indexOf("/")
-  if (slash < 0) return undefined
-  const providerID = spec.slice(0, slash)
-  const modelID = spec.slice(slash + 1)
-  if (!available.has(`${providerID}/${modelID}`)) return undefined
-  return { providerID, modelID }
-}
-
-/**
- * Fold a provider.list() response into the available-model set (in place).
- * The SDK response body nests the providers under `data.all` (alongside
- * `default`/`connected`), NOT directly under `data` - iterating `data` itself
- * would throw on the object and the fire-and-forget .catch would silently
- * swallow it, leaving the set empty.
- */
-export function collectModels(
-  providers: { data?: { all?: Array<{ id: string; models?: Record<string, unknown> }> } } | undefined,
-  into: Set<string>,
-): Set<string> {
-  for (const p of providers?.data?.all ?? []) {
-    if (!p?.id) continue // skip malformed entries (no "undefined/model" pollution)
-    for (const modelID of Object.keys(p.models ?? {})) into.add(`${p.id}/${modelID}`)
-  }
-  return into
-}
-
 // ---------------------------------------------------------------------------
 // Agent loading
 // ---------------------------------------------------------------------------
 
-/** Read + translate every `agents/*.md` under the project into opencode defs. */
-export function loadFootnoteAgents(projectDir: string): Record<string, AgentDef> {
-  const dir = join(projectDir, "agents")
-  const out: Record<string, AgentDef> = {}
-  if (!existsSync(dir)) return out
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith(".md")) continue
-    const name = basename(file, ".md")
-    try {
-      const { data, body } = parseFrontmatter(readFileSync(join(dir, file), "utf8"))
-      // footnote agents are addressed as `fno:<name>` in the pipeline.
-      out[`fno:${name}`] = toOpencodeAgent(data, body)
-    } catch {
-      // A malformed agent file must not abort registration of the rest.
-    }
-  }
-  return out
-}
+/** Read + translate every `agents/*.md` under the project. Returns the
+ * registerable defs and, separately, the named refusals the config hook
 
-// ---------------------------------------------------------------------------
-// Session-delegation client surface (the slice of the opencode SDK we use)
-// ---------------------------------------------------------------------------
 
 type SessionClient = {
   session: {
     create(o: { body: Record<string, unknown>; query?: { directory?: string } }): Promise<{ data?: { id: string }; error?: unknown }>
+    list(o?: { query?: { directory?: string } }): Promise<{ data?: Array<{ id?: string; parentID?: string }>; error?: unknown }>
     get(o: { path: { id: string } }): Promise<{ data?: { parentID?: string }; error?: unknown }>
     prompt(o: { path: { id: string }; body: Record<string, unknown> }): Promise<{ data?: { parts?: Array<{ type?: string; text?: string }> }; error?: unknown }>
     promptAsync(o: { path: { id: string }; body: Record<string, unknown> }): Promise<{ error?: unknown }>
@@ -215,15 +98,140 @@ async function sessionDepth(client: SessionClient, sessionId: string): Promise<n
   return depth
 }
 
-// module-level guard: only SYNC delegations (which hold this turn) are counted.
-let inFlightSync = 0
+// Per-parent delegation reservations (Change 3). The reservation is inserted
+// synchronously under a nonce BEFORE the depth walk and before session.create,
+// so two concurrent callers can never both read a pre-increment count; it is
+// rekeyed to the child id once create returns. Background children hold a
+// reservation like any other child and release it when task_result reads a
+// terminal state. In-memory only and deliberately not authority: admission
+// reconciles against the live child set on every fire, so a plugin reload
+// cannot leak capacity - and an unreadable count refuses as `capacity
+// unknown`, never as headroom.
+const reservations = new Map<string, Map<string, unknown>>()
+let nonceCounter = 0
+
+function reserve(parentId: string): string {
+  const token = `nonce-${Date.now()}-${nonceCounter++}`
+  let slot = reservations.get(parentId)
+  if (!slot) {
+    slot = new Map()
+    reservations.set(parentId, slot)
+  }
+  slot.set(token, true)
+  return token
+}
+
+function rekeyReservation(parentId: string, token: string, childId: string): void {
+  const slot = reservations.get(parentId)
+  if (!slot || !slot.has(token)) return
+  slot.delete(token)
+  slot.set(childId, true)
+}
+
+function releaseReservation(key: string): void {
+  for (const slot of reservations.values()) slot.delete(key)
+}
+
+/** Live children of one parent, straight from the server: a child is live
+ * while its latest assistant state is pending or running. A finished child
+ * stays a session row forever, so counting rows would fill the cap
+ * permanently. Returns `null` when any reconciliation read fails - an
+ * unreadable count is never read as headroom. */
+async function liveChildren(client: SessionClient, parentId: string): Promise<Set<string> | null> {
+  const res = await client.session
+    .list({})
+    .catch(() => null)
+  const rows = (res as { data?: Array<{ id?: string; parentID?: string }> } | null)?.data
+  if (!Array.isArray(rows)) return null
+  const live = new Set<string>()
+  for (const row of rows) {
+    if (!row?.id || row.parentID !== parentId) continue
+    const id = row.id
+    const m = await client.session
+      .messages({ path: { id } })
+      .catch(() => null)
+    if (m === null || (m as { error?: unknown }).error) return null
+    const state = buildTaskResult(id, (m as { data?: ChildMessage[] }).data).state
+    if (state === "pending" || state === "running") live.add(id)
+  }
+  return live
+}
+
+/** Reservations the live set does not already account for: pending nonces and
+ * children created after the list was read. */
+function pendingReservations(parentId: string, ownToken: string, liveIds: Set<string>): number {
+  let n = 0
+  for (const key of reservations.get(parentId)?.keys() ?? []) {
+    if (key !== ownToken && !liveIds.has(key)) n += 1
+  }
+  return n
+}
 
 type TaskDeps = {
   client: SessionClient
   directory: string
   knownAgents: () => Set<string>
-  availableModels: () => Set<string>
   timeoutMs?: number
+}
+
+// ---------------------------------------------------------------------------
+// Typed delegation results (Change 4)
+// ---------------------------------------------------------------------------
+
+export type TaskResultState = "pending" | "running" | "completed" | "failed" | "aborted" | "blocked"
+
+/** The one delegation envelope both the synchronous and background paths
+ * return. `result` is present only on `completed`; `provider_id`/`model_id`
+ * are the child's own readback when the child message carries them. */
+export type TaskResult = {
+  state: TaskResultState
+  child_session_id: string
+  provider_id?: string
+  model_id?: string
+  result?: string
+}
+
+type AssistantInfo = {
+  role?: string
+  time?: { created?: number; completed?: number }
+  error?: { name?: string }
+  providerID?: string
+  modelID?: string
+}
+
+/** Terminal is `time.completed` present with `error` absent; a present error
+ * maps to failed, or aborted for MessageAbortedError. Never guesses. */
+export function classifyAssistant(
+  info: AssistantInfo | undefined,
+): "completed" | "failed" | "aborted" | "running" {
+  if (info?.error) return info.error.name === "MessageAbortedError" ? "aborted" : "failed"
+  if (typeof info?.time?.completed === "number") return "completed"
+  return "running"
+}
+
+type ChildMessage = { info?: AssistantInfo; parts?: Array<{ type?: string; text?: string }> }
+
+/** Build the delegation envelope from a child session's messages. Reasoning
+ * alone never yields a deliverable (AC5-*). */
+export function buildTaskResult(taskId: string, messages: ChildMessage[] | undefined): TaskResult {
+  const list = Array.isArray(messages) ? messages : []
+  const assistant = list.filter((m) => m?.info?.role === "assistant")
+  if (assistant.length === 0) return { state: "pending", child_session_id: taskId }
+  const last = assistant[assistant.length - 1]
+  const cls = classifyAssistant(last.info)
+  const info = last.info ?? {}
+  if (cls === "running") return { state: "running", child_session_id: taskId }
+  const readback: TaskResult =
+    info.providerID || info.modelID
+      ? {
+          state: cls,
+          child_session_id: taskId,
+          ...(info.providerID ? { provider_id: info.providerID } : {}),
+          ...(info.modelID ? { model_id: info.modelID } : {}),
+        }
+      : { state: cls, child_session_id: taskId }
+  if (cls === "completed") readback.result = extractAssistantText(last.parts)
+  return readback
 }
 
 /** Build the `task` delegation tool. */
@@ -256,17 +264,31 @@ export function createTaskTool(deps: TaskDeps): ToolDefinition {
         return `error: unknown agent "${args.subagent_type}". Available: ${available}`
       }
 
+      // Reserve synchronously, BEFORE any await: two concurrent callers can
+      // never both read a pre-increment count (AC4-HP).
+      const parentKey = context.sessionID
+      const nonce = reserve(parentKey)
+      let resKey = nonce
+      const release = () => releaseReservation(resKey)
+
+      // Reconcile against the live child set before admitting.
+      const live = await liveChildren(deps.client, parentKey)
+      if (live === null) {
+        release()
+        return "error: capacity unknown (cannot read the live child set); no child created."
+      }
+      const total = live.size + pendingReservations(parentKey, nonce, live)
+      if (total >= MAX_CONCURRENCY) {
+        release()
+        return `error: concurrency limit reached (cap ${MAX_CONCURRENCY}, ${total} child delegations in flight). Wait for a slot.`
+      }
+
       const depth = await sessionDepth(deps.client, context.sessionID)
       if (depth >= MAX_DEPTH) {
+        release()
         return `error: delegation depth limit reached (${MAX_DEPTH}). This session is already ${depth} level(s) deep.`
       }
 
-      const background = args.run_in_background === true
-      if (!background && inFlightSync >= MAX_CONCURRENCY) {
-        return `error: concurrency limit reached (${MAX_CONCURRENCY} synchronous delegations in flight). Wait for a slot.`
-      }
-
-      const model = resolveModel(category, deps.availableModels())
       const title = `${args.description ?? agent} (@${agent})`
 
       const created = await deps.client.session
@@ -274,31 +296,37 @@ export function createTaskTool(deps: TaskDeps): ToolDefinition {
           body: {
             parentID: context.sessionID,
             title,
-            ...(model ? { model: { id: model.modelID, providerID: model.providerID } } : {}),
           },
           query: { directory: deps.directory },
         })
         .catch((err) => ({ error: err, data: undefined }))
       const childId = created?.data?.id
       if (created?.error || !childId) {
+        release()
         return `error: failed to create child session: ${String(created?.error ?? "no session id")}`
       }
+      rekeyReservation(parentKey, nonce, childId)
+      resKey = childId
 
       const body = {
         agent,
         parts: [{ type: "text", text: args.prompt }],
-        ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
       }
 
+      const background = args.run_in_background === true
       if (background) {
         const res = await deps.client.session
           .promptAsync({ path: { id: childId }, body })
           .catch((err) => ({ error: err }))
-        if (res?.error) return `error: failed to launch background task: ${String(res.error)}`
+        if (res?.error) {
+          release()
+          return `error: failed to launch background task: ${String(res.error)}`
+        }
+        // The background child keeps its reservation until task_result reads
+        // a terminal state (or the child is gone at the next reconcile).
         return `task_id: ${childId}\nBackground task launched (@${agent}). Fetch the result later with task_result({ task_id: "${childId}" }).`
       }
 
-      inFlightSync += 1
       try {
         const res = await withTimeout(
           deps.client.session.prompt({ path: { id: childId }, body }),
@@ -306,14 +334,26 @@ export function createTaskTool(deps: TaskDeps): ToolDefinition {
           () => deps.client.session.abort({ path: { id: childId } }),
         ).catch((err) => ({ error: err, data: undefined }))
         if (res === TIMEOUT) {
-          return `error: child session timed out after ${timeoutMs}ms and was aborted.`
+          return JSON.stringify({
+            state: "aborted" as TaskResultState,
+            child_session_id: childId,
+          })
         }
-        if (res?.error) return `error: child session failed: ${String(res.error)}`
-        const text = extractAssistantText(res?.data?.parts)
-        if (!text) return "error: child session produced no output."
-        return text
+        if (res?.error) {
+          return JSON.stringify({ state: "failed" as TaskResultState, child_session_id: childId })
+        }
+        const envelope = res?.data?.info
+          ? buildTaskResult(childId, [{ info: res.data.info, parts: res.data.parts }])
+          : extractAssistantText(res?.data?.parts)
+            ? ({
+                state: "completed",
+                child_session_id: childId,
+                result: extractAssistantText(res?.data?.parts),
+              } as TaskResult)
+            : ({ state: "running", child_session_id: childId } as TaskResult)
+        return JSON.stringify(envelope)
       } finally {
-        inFlightSync -= 1
+        release()
       }
     },
   })
@@ -330,15 +370,16 @@ export function createTaskResultTool(deps: Pick<TaskDeps, "client">): ToolDefini
       const res = await deps.client.session
         .messages({ path: { id: args.task_id } })
         .catch((err) => ({ error: err, data: undefined }))
-      if (res?.error) return `error: failed to read task ${args.task_id}: ${String(res.error)}`
-      const messages = res?.data ?? []
-      const assistant = messages.filter((m) => m.info?.role === "assistant")
-      if (assistant.length === 0) return `pending: task ${args.task_id} has not produced output yet.`
-      for (let i = assistant.length - 1; i >= 0; i--) {
-        const text = extractAssistantText(assistant[i].parts)
-        if (text) return text
+      if (res?.error) {
+        return JSON.stringify({ state: "unknown" as TaskResultState, child_session_id: args.task_id })
       }
-      return `pending: task ${args.task_id} is running (no assistant text yet).`
+      const envelope = buildTaskResult(args.task_id, res?.data)
+      // A terminal read releases the background child's reservation (AC4-HP:
+      // release happens on every outcome, incl. a terminal task_result).
+      if (envelope.state !== "pending" && envelope.state !== "running") {
+        releaseReservation(args.task_id)
+      }
+      return JSON.stringify(envelope)
     },
   })
 }
@@ -381,6 +422,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => void):
   }
 }
 
+
 // ---------------------------------------------------------------------------
 // Plugin wiring
 // ---------------------------------------------------------------------------
@@ -395,71 +437,54 @@ function loadOrchestratorPrompt(projectDir: string): string {
   }
 }
 
+// One body for each side effect both plugin arms share; the V1 and V2 hooks
+// only differ in where the result lands.
+
+/** The canon-doc pointer text for one session, or "" when none. Compaction
+
+
+// ---------------------------------------------------------------------------
+// Activation + wiring
+// ---------------------------------------------------------------------------
+
 /**
- * Activation gate. The plugin auto-loads (opencode scans `.opencode/plugins/`),
- * but stays INERT unless explicitly opted in — so merely opening this repo in
- * opencode while another orchestration plugin is still globally active never
- * collides on the `task` tool. Dogfood with `FNO_OPENCODE=1 opencode`; flip the
- * global cutover on your own schedule. See .opencode/README.md.
+ * Activation gate. The global install replaced oh-my-openagent (its mirror
+ * is what the FNO_OPENCODE opt-in used to guard against), so the plugin is
+ * on unless explicitly disabled with FNO_OPENCODE=0|false.
  */
 export function isActivated(env: Record<string, string | undefined> = process.env): boolean {
   const v = env.FNO_OPENCODE
-  return v === "1" || v === "true"
+  return v !== "0" && v !== "false"
 }
 
-const plugin: Plugin = async (input: PluginInput) => {
-  if (!isActivated()) return {} // inert until opted in
-  const client = input.client as unknown as SessionClient
+const plugin = async (input) => {
+  if (!isActivated()) return {} // off by explicit env only
+  const client = input.client
   const projectDir = input.directory
 
   const orchestratorPrompt = loadOrchestratorPrompt(projectDir)
-  const footnoteAgents = loadFootnoteAgents(projectDir)
 
-  // Available models, populated fire-and-forget for best-effort category
-  // routing (AC5-ERR). NEVER await a client.* SDK call in plugin init: plugins
-  // load inside opencode's bootstrap, which serves no request until every
-  // plugin returns, so an awaited provider.list() reenters a server that cannot
-  // answer yet and deadlocks startup. The set fills in place once the response
-  // lands; a task() firing before then degrades to the default model.
-  const available = new Set<string>()
-  try {
-    ;(input.client as unknown as {
-      provider: { list(): Promise<{ data?: { all?: Array<{ id: string; models?: Record<string, unknown> }> } }> }
-    }).provider
-      .list()
-      .then((providers) => collectModels(providers, available))
-      .catch(() => {}) // async rejection: unhandled in plugin scope can crash the host
-  } catch {
-    // synchronous throw (malformed client at init) -> no registry read; the try
-    // wraps only the call issuance, NOT an await, so it never blocks bootstrap.
-  }
-
-  // Registered-agent set: footnote's translated agents plus the native
-  // `.opencode/agents/*.md` (explore/oracle/librarian) opencode auto-loads.
-  const nativeAgents = new Set<string>()
+  // The agent set the task tool may name: whatever opencode already merged
+  // (captured read-only here - the installer writes the agent files) plus
+  // this repo's .opencode/agents/*.md.
+  const mergedAgents = new Set()
+  const nativeAgents = new Set()
   const nativeDir = join(projectDir, ".opencode", "agents")
   if (existsSync(nativeDir)) {
     for (const f of readdirSync(nativeDir)) if (f.endsWith(".md")) nativeAgents.add(basename(f, ".md"))
   }
-  const knownAgents = () => new Set<string>([...Object.keys(footnoteAgents), ...nativeAgents])
+  const knownAgents = () => new Set([...mergedAgents, ...nativeAgents])
 
-  const taskTool = createTaskTool({
-    client,
-    directory: projectDir,
-    knownAgents,
-    availableModels: () => available,
-  })
+  const taskTool = createTaskTool({ client, directory: projectDir, knownAgents })
   const taskResultTool = createTaskResultTool({ client })
 
   return {
-    async config(config: Record<string, unknown>) {
-      const agent = (config.agent ?? {}) as Record<string, unknown>
-      for (const [name, def] of Object.entries(footnoteAgents)) {
-        if (!(name in agent)) agent[name] = def
-      }
-      config.agent = agent
+    async config(config) {
+      // Read-only: record the agent names opencode merged (footnote's own
+      // installed agents among them) so delegation can validate names.
+      for (const name of Object.keys((config.agent ?? {}))) mergedAgents.add(name)
     },
-    async "experimental.chat.system.transform"(_input: unknown, output: { system: string[] }) {
+    async "experimental.chat.system.transform"(input, output) {
       output.system.unshift(orchestratorPrompt)
     },
     tool: {
@@ -469,4 +494,55 @@ const plugin: Plugin = async (input: PluginInput) => {
   }
 }
 
-export default { id: "fno", server: plugin }
+// ---------------------------------------------------------------------------
+// The opencode 2 arm. A V2 plugin is a plain { id, setup } object: V2's
+// define(plugin) is the identity function, so no package import is needed
+// and the file stays loadable on 1.14.50, which has no V2 package installed.
+// The context type is structural, like SessionClient.
+// ---------------------------------------------------------------------------
+
+/** The slice of the opencode 2 plugin context this plugin uses. */
+type V2SystemPart = { type: "text"; text: string }
+
+type V2Context = {
+  directory?: string
+  session: {
+    hook(
+      name: "context",
+      handler: (e: { system: V2SystemPart[]; sessionID?: string; session?: { id?: string } }) => void | Promise<void>,
+    ): void
+  }
+}
+
+/** The opencode 2 entrypoint: the orchestrator prompt only. Global hooks
+ * belong to the installed bridge. opencode 1.18+ also calls setup with a
+ * plugin-authoring context (agent, catalog, command, ...) that carries no
+ * hook seams and uses no return value; the V1 server arm is the live one
+ * there, so a context without the seams registers nothing. */
+export function setupV2(ctx: V2Context): () => void {
+  const hasV2Seams =
+    ctx &&
+    ctx.tool &&
+    typeof ctx.tool.hook === "function" &&
+    ctx.session &&
+    typeof ctx.session.hook === "function"
+  if (!hasV2Seams) return () => {}
+  if (!isActivated()) return () => {}
+  const projectDir = ctx.directory ?? process.cwd()
+
+  const orchestratorPrompt = loadOrchestratorPrompt(projectDir)
+
+  // Admission reads the live child set through session.list, which the
+  // opencode 2 plugin session API does not expose. A tool that always
+  // refused as capacity unknown helps nobody, so neither is offered.
+  console.error(
+    "[footnote] opencode 2: task delegation is unavailable; it needs a live child count that the OpenCode 2 plugin session API does not expose",
+  )
+
+  ctx.session.hook("context", async (event) => {
+    event.system.push({ type: "text", text: orchestratorPrompt })
+  })
+  return () => {}
+}
+
+export default { id: "fno", server: plugin, setup: setupV2 }

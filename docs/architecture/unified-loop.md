@@ -1,9 +1,10 @@
 # Unified Loop Runtime
 
-**Epic:** step 5, control-plane collapse
-**Group 1 shipped:** runtime + target driver + exec shim
-**Group 2 shipped:** megawalk driver
-**Group 3:** planned - see "What lands later" below
+- **Epic:** step 5, control-plane collapse
+- **Group 1 shipped:** runtime + target driver + exec shim
+- **Group 2 shipped:** megawalk driver (driver arm removed 2026-08-03, see "The megawalk driver" below)
+- **Group 3:** planned - see "What lands later" below
+
 **Sibling doc:** [control-plane-loop.md](control-plane-loop.md) - the stop-hook decision verb INSIDE a session
 
 ## Scope
@@ -22,7 +23,7 @@ pub fn run_loop(
     dispatcher: &dyn Dispatcher,
     budget:     &LoopBudget,
     journal:    &Journal,
-    cancel:     &dyn Fn() -> bool,
+    cancel:     &dyn Fn() -> Option<Cancelled>,
 ) -> Result<LoopOutcome, LoopError>
 ```
 
@@ -54,6 +55,10 @@ outer loop:
 
 `LoopOutcome` carries the walk-level `TerminationReason`, total `iterations_used`, and a `Vec<UnitResult>` (per-unit evidence + close outcome). For the degenerate single-unit (target) walk, the headline reason shown to the caller is the unit's own evidence reason, not the walk-level `NoWork` that follows it - `NoWork` is plumbing there, not news.
 
+### The scoreboard reads the merge, not the terminal
+
+When its PR merged (`graph.json` `merge_status: merged`, written only from merge evidence), `fno whoami scoreboard` counts the node as shipped - never from the session's `termination_reason`. The terminal is what a session believed. The merge is what happened. The two disagreed by 2x before 2026-09-03: a PR that merges after the session stops is a `reconcile-backstop` row, not a `Done*` terminal. The terminal count prints beside the merge count for one release (`by session terminal alone:`), then drops. The Stop-cause distribution keeps reading "how sessions ended". Ledger rows record `started` and `completed` in aware UTC (`+00:00` suffix) from 2026-09-03. Earlier rows carry a naive-local `completed`. Readers normalize through the fold's `_parse_ts`, not a backfill.
+
 ---
 
 ## The three seams
@@ -76,7 +81,7 @@ pub trait Queue {
 
 **Target Queue (group 1):** degenerate - one unit read from `.fno/target-state.md`. `close()` is inert: the session's own stop hook already emitted the `termination` event; the manifest is immutable. As of step 6 the session's terminal side-effects (ledger session-record, and on a ship the plan stamp/graduate + handoff artifact) are written by `fno-agents finalize`, which the shim invokes at the terminal-allow boundary BEFORE the worker process exits. A failed `DoneDelivery` finalize keeps the hook alive for an idempotent retry; legacy finalize failures remain best-effort. The outer loop only observes the terminal after the hook permits exit, so `TargetQueue::close` stays inert exactly as designed - placing the writes in `close` would miss attended interactive `/target` runs, which have no outer loop at all.
 
-**Megawalk Queue (group 2):** shells `fno backlog next --json` and `fno backlog done`. It NEVER reads `graph.json` directly (locked decision / grilled 7). Selection logic (epics-first, project scoping, rank, `make_selection_sort_key`) stays inside `fno backlog next` - one place, no duplication.
+**Megawalk Queue (group 2):** shells `fno backlog next` and `fno backlog done`. It NEVER reads `graph.json` directly (locked decision / grilled 7). Selection logic (epics-first, project scoping, rank, `make_selection_sort_key`) stays inside `fno backlog next` - one place, no duplication.
 
 ### Dispatcher
 
@@ -121,7 +126,7 @@ Worktrees symlink that path to the canonical checkout's journal, and a write fai
 
 An unobservable walk that continues spending compute is worse than stopping.
 
-**Global mirror (`~/.fno/events.jsonl`) is best-effort.** A write failure is logged to stderr and never propagated. The project journal is the record; the global mirror is convenience for cross-project tooling.
+**Global mirror (`~/.fno/events.jsonl`) is best-effort.** A write failure is logged to stderr and never propagated. The store beside each journal is the record (event-log-storage.md). A mirror row is convenience for cross-project tooling, never the record.
 
 The method is named `append` (not `emit` or `emit_fields`) deliberately - see "Two-tier event model" below.
 
@@ -153,7 +158,9 @@ Envelope shape for all loop-runtime events:
 |---|---|---|
 | `loop_check` | hook | every stop-hook fire |
 | `termination` | hook | session allows exit (TerminationReason) |
-| `loop_check_watch_idle` | hook | a `<watching>` Claude session idles non-terminally on a verified async wait (CI pending / bot review outstanding); the fire returns `allow` with `termination_reason: null` and extends the claim lease, so the session parks until its harness-tracked watcher fires instead of re-blocking every tick. Claude-only: a `FNO_DRIVER_LIB` loop-run child exits on allow, and codex/gemini have no self-wake on background-task exit (their daemon-consumer waker ships separately), so both keep today's block behavior. |
+| `loop_check_watch_idle` | hook | a `<watching>` Claude session idles non-terminally on its tag (reason `ci`, `review`, `merge_slot` or `local`; `pr` is null when the tag names no PR); the idle reads no PR state. The fire returns `allow` with `termination_reason: null` and extends the claim lease, so the session parks until its harness-tracked watcher fires instead of re-blocking every tick. Claude-only: a `FNO_DRIVER_LIB` loop-run child exits on allow, and codex/gemini have no self-wake on background-task exit (their daemon-consumer waker ships separately), so both keep today's block behavior. |
+
+The lease is what makes the idle safe, so a session that cannot take one never idles. When the node is already claimed, `fno do target init` writes no `target_claim_key`. The manifest is write-once, so that session can NEVER renew, and its `<watching>` tag is refused on every stop. The refusal says so, and it drops the arm-and-tag hint. A message that prescribes the ritual it just refused sent one session to arm three watchers and idle none. Read that refusal as "spend each wake on real work", never as a transient failure to retry.
 | `loop_check_gh_error` | hook | gh read fails during `done()` |
 | `loop_advisory_mode` | hook | advisory-mode session |
 | `loop_check_binary_missing` | hook | `fno-agents` binary not found |
@@ -188,51 +195,58 @@ After `next()` returns the unit and `close()` is called, subsequent `next()` cal
 
 **Resume guard (AC1-FR):** a pre-existing `termination` event for the manifest's `session_key` on the first `next()` call closes the unit without dispatch. This handles the case where the loop process was killed after the session completed but before the walk recorded the close. The close pass consumes one iteration. A budget counts work, not dispatches. A queue that re-derives the same unit must not spin for free. No duplicate dispatch occurs.
 
-**Cancel:** the cancel closure checks `SIGINT_RECEIVED` (atomic bool set by a signal handler) OR the existence of `.fno/.target-cancelled`. Either trips `Interrupted`.
+**Cancel:** the target cancel closure checks `SIGINT_RECEIVED` (atomic bool set by a signal handler) or `.fno/.target-cancelled`; a lead closure checks its canonical `.fno/leads/<scope>.cancelled` sidecar. Either trips `Interrupted`, and a sentinel refusal records its cause, absolute path, age, and clear command.
 
-## The board-empty walk (king driver)
+## The board-empty walk (lead driver)
 
-A target driver asks whether its one deliverable shipped. A king has no PR, so pointing the target driver at one can never reach a clean terminal state. `done_probes` are additive only. A plan can add conjuncts and can never silence the PR, CI, and review conjuncts underneath. The run burns to `NoProgress` or `Budget` while looking like it is working. The king driver asks the king's question instead, which is whether the board is clean.
+A target driver asks whether its one deliverable shipped. A lead has no PR, so pointing the target driver at one can never reach a clean terminal state. `done_probes` are additive only. A plan can add conjuncts and can never silence the PR, CI, and review conjuncts underneath. The run burns to `NoProgress` or `Budget` while looking like it is working. The lead driver asks the lead's question instead, which is whether the board is clean.
 
-`fno inbox board --json` reads seven queues through verbs that already exist and computes nothing they already answer. Every queue carries the literal shell command that produced it, so board emptiness is reproducible by a third party rather than asserted. The `undispatched` queue has an independent source. `fno backlog undispatched --json` scans graph entries and the complete node-claim snapshot. It does not reuse the ranked dispatch selector, so a selector omission is nameable rather than an empty queue.
+`fno inbox board --json` reads fourteen queues through verbs that already exist and computes nothing they already answer. Every queue carries the literal shell command that produced it, so board emptiness is reproducible by a third party rather than asserted. `undispatched` is planned work awaiting a worker. `unplanned` is unplanned work awaiting a blueprint. They use different verbs and are disjoint on `plan_path`. The `undispatched` queue has an independent source. `fno backlog undispatched --json` scans graph entries and the complete node-claim snapshot. It does not reuse the ranked dispatch selector, so a selector omission is nameable rather than an empty queue.
 
-| Queue | Read | King can shrink it |
+| Queue | Read | Lead can shrink it |
 |---|---|---|
 | `operator_lane` | `cat ~/.fno/my-priorities.md` | yes, by filing a node or parking with a reason |
 | `undispatched` | `fno backlog undispatched --json` | yes, by spawning a worker |
+| `unplanned` | `fno backlog ready --json -A` | yes, by blueprinting it |
 | `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents peek <holder>` | yes, by one wake per node |
-| `mergeable_pr` | `gh pr list` | only under `config.king.autonomous_merge` |
+| `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
+| `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> --add-pr <n>`); the resume gate reads that same binding and refuses a relaunch over the new holder |
+| `stranded_tree` | `git worktree list --porcelain` + `git status --porcelain` + `git rev-list --count HEAD --not --remotes` | no, the remedy is dispatch, which `undispatched` and `unheld_progress` already drive and which now resumes in the tree |
+| `mergeable_pr` | `gh pr list` + `fno do pr status` (ready verdict; a not-ready row renders its `ready_blockers` and is not actionable) | only when gate-ready and under `config.lead.autonomous_merge` |
 | `stale_claim` | `fno agents claim list -J --include-stale` | yes, by `fno agents claim reap` |
 | `operator_question` | `fno inbox outstanding --json` | no, a human answers it |
+| `fleet_task` | `questions.jsonl` fleet_task rows, folded by `crates/fno-agents/src/fleet_task.rs` | yes, by running the row's command; the row closes when its condition clears or its node closes |
 | `unreachable_worker` | `fno agents needs --json` | not yet |
+
+`stalled_holder`, `unheld_progress`, and `undriven_pr` are three queues over ONE predicate, `_node_driver`, which answers who is driving a node: `active`, `stalled`, `promoted`, or `none`. `promoted` is a live role driving the epic it tenures over, which never holds a claim or a PR of its own; without it the serving epic would read unheld and hold the lead open on a row no verb can clear. They cannot disagree, because none computes its own answer. The reason there are three queues at all is sourcing. `stalled_holder` starts from the claim list, so it can only reach a worker still holding its lock. `undriven_pr` starts from open PRs bound back to their node, so it catches the worker that exited cleanly and released. Measured 2026-09-03: 7 of 12 open PRs sat undriven that way while the board named none of them. `unheld_progress` starts from the graph, so it catches the node the status stamp left `in_progress` after its claim went free or stale and no PR exists; the stamp is never revoked when a worker dies, so status alone can never carry it. Measured 2026-09-05: one such row sat invisible to every queue for 25 minutes while a lead watched a clean board. `undriven_pr` and `unheld_progress` are report-only toward the node. They never close or defer anything, and a node the operator already deferred or blocked is skipped, not nagged back up.
 
 The split in that last column is what makes the loop converge. A queue only a human can clear holds the loop open forever, so it is reported and never counted toward done. The rule survives a broken verb. An unreadable report-only queue is loud (the board exits non-zero) and still uncounted. A human-gated queue never gates `NoWork`, and a failed reader behind it does not weaken that.
 
 **Staffed is an activity reading, never a status word.** The roster's wire vocabulary collapses four real states into three words. A worker consuming tokens, a worker parked at its prompt, and a worker whose model refused all render alike. A board reading that word drops every stalled node out of its queue. It then terminates `NoWork` while claims are held and nothing moves, which is worse than no loop. The discriminator is membership in `_ACTIVE_STATES` plus a fresh activity age. The set is imported rather than copied, so a later vocabulary fix reaches the board without an edit here.
 
-**Progress is a positive marker, never board size.** A king's board refills while it works. Dispatching a worker and merging a PR both create future work, so the actionable count can rise on the very fire that clears a row. Progress is therefore a row IDENTITY present on the previous fire and absent now, recorded as `actionable_ids` on each `king_loop_check`. That is external truth, read back off the board, and it needs no producer. A `king_action` naming an unseen `target_id` also counts, so a real producer works the day one lands, but nothing depends on one existing. Re-emitting the same `target_id` is not progress. That matters because a `stalled_holder` row can survive the only action a king has for it. The action is a wake, and it can fail, because the holder's model is the thing that refused. Three dry fires then terminate the loop `NoProgress` with a reason naming what stayed unshrunk. That is the truthful terminal for a stalled board.
+**Progress is a positive marker, never board size.** A lead's board refills while it works. Dispatching a worker and merging a PR both create future work, so the actionable count can rise on the very fire that clears a row. Progress is therefore a row IDENTITY present on the previous fire and absent now, recorded as `actionable_ids` on each `lead_loop_check`. That is external truth, read back off the board, and it needs no producer. A `lead_action` naming an unseen `target_id` also counts, so a real producer works the day one lands, but nothing depends on one existing. Re-emitting the same `target_id` is not progress. That matters because a `stalled_holder` row can survive the only action a lead has for it. The action is a wake, and it can fail, because the holder's model is the thing that refused. Three dry fires then terminate the loop `NoProgress` with a reason naming what stayed unshrunk. That is the truthful terminal for a stalled board.
 
 **One arm was cut and rebuilt. The second is the walk.**
 
-- *In-session:* `hooks/target-stop-hook.sh` adds `.fno/king-state.md` as a second candidate after its target search comes up empty and forwards `--driver king`. When both are present the target manifest wins: a session holding one is a worker whatever else sits beside it. A king terminal skips `finalize`, which stamps a plan and graduates a node that a king does not have. `hooks/agy-target-stop-hook.sh` cannot gate a king, because the loop is claude-only in v1. It names the manifest and refuses rather than allowing the stop. A guard on one of two reachable paths is decorative.
-- *Cross-session:* `fno-agents loop run --driver king --scope <scope>` respawns a king while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the king's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the reign in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agents/src/loop_king.rs`.
+- *In-session:* `hooks/target-stop-hook.sh` adds `.fno/lead-state.md` as a second candidate after its target search comes up empty and forwards `--driver lead`. When both are present the target manifest wins: a session holding one is a worker whatever else sits beside it. A lead terminal skips `finalize`, which stamps a plan and graduates a node that a lead does not have. `hooks/footnote-agy-target-stop-hook.sh` cannot gate a lead, because the loop is claude-only in v1. It names the manifest and refuses rather than allowing the stop. A guard on one of two reachable paths is decorative.
+- *Cross-session:* `fno-agents loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agents/src/loop_lead.rs`.
 
-**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the king giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agents king escalate --stalled <rows>`. The verb records one question in the operator queue. `king_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
+**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agents org escalate --stalled <rows>`. The verb records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
 
-The dedupe key is a hash of the sorted stalled row set. It is not the session and not the fire. A later king meeting the same stalled board must not file a second question. A board that CHANGED is a different ask and gets its own question. Rows are queue-qualified, as in `undispatched:<id>`. The same node in two queues is two rows, and clearing one of them is real progress. An unreadable board escalates over an empty set. The question text names that case, so the operator never has to tell "no rows" from "could not see". A failed escalation is named on stderr and folded into the termination message. It never blocks the terminal. The king stops either way, and a terminal that refused to finish because the ask failed is strictly worse.
+The dedupe key is a hash of the sorted stalled row set. It is not the session and not the fire. A later lead meeting the same stalled board must not file a second question. A board that CHANGED is a different ask and gets its own question. Rows are queue-qualified, as in `undispatched:<id>`. The same node in two queues is two rows, and clearing one of them is real progress. An unreadable board escalates over an empty set. The question text names that case, so the operator never has to tell "no rows" from "could not see". A failed escalation is named on stderr and folded into the termination message. It never blocks the terminal. The lead stops either way, and a terminal that refused to finish because the ask failed is strictly worse.
 
-**What a clean `NoWork` terminal means, and the edge it leaves open.** It means the king EXITS. The walk arm respawns a king only while the walk itself runs and the board is non-empty. A king that exited on a clean board and whose board then REFILLED was, for a long time, nobody's edge. The `loop_king.rs` module docstring once handed that edge to the fleet watchdog. That was a mis-attribution. The watchdog wakes on `classify_tail == "stalled"`. That means a session gone silent while still owing its next move. A cleanly-exited king is neither. Neither component was buggy in isolation. The belief was the defect.
+**What a clean `NoWork` terminal means, and the edge it leaves open.** It means the lead EXITS. The walk arm respawns a lead only while the walk itself runs and the board is non-empty. A lead that exited on a clean board and whose board then REFILLED was, for a long time, nobody's edge. The `loop_lead.rs` module docstring once handed that edge to the fleet watchdog. That was a mis-attribution. The watchdog wakes on `classify_tail == "stalled"`. That means a session gone silent while still owing its next move. A cleanly-exited lead is neither. Neither component was buggy in isolation. The belief was the defect.
 
-**The waker: the `king_wake` phase of `fno pr-watch tick`.** A loop that terminated is not running. Nothing inside it can observe a refill or an arriving message. The waker is therefore a separate, always-present observer. The pr-watch tick already is one: a global LaunchAgent on a 600s `StartInterval`, already phased, already hosting the fleet watchdog lane. Per crowned scope from the court, gated by `config.king.wake_enabled` (default false):
+**The waker: the `lead_wake` phase of `fno pr-watch tick`.** A loop that terminated is not running. Nothing inside it can observe a refill or an arriving message. The waker is therefore a separate, always-present observer. The pr-watch tick already is one: a global LaunchAgent on a 600s `StartInterval`, already phased, already hosting the fleet watchdog lane. The wake runs for each titled scope from the org and is gated by `config.lead.wake_enabled` (default false). A rowless role is dropped and named by scope in the tick row's note. The wake never roots or wakes it. Its steps are:
 
 1. *Liveness, fail closed.* Transcript truth via `resolve_session_truth`, never a registry state word. Only `done` and `unknown`/`not-found` count as absence. `stalled` belongs to the watchdog. `unknown`/`no-records` and `resolver-error` are instrument failures, not absences.
-2. *Triggers, best first.* Mail: undrained bus rows addressed to the holder or to any project in the scope. Both holder spellings are scanned, the registry name and the reply-handle short id. Measured on the live bus, replies carry the short id. A name-only scan reads a permanent zero. Board change: a sha256 over the scope's `(id, status, _kanban_column, priority)` rows, compared against a `.fno/kings/<scope>.wake.json` sidecar. A first observation stores and wakes nothing. Backstop: a timer re-check, kept so a missed event cannot strand a scope forever. It approximates the two event triggers. The 1800s interval is a policy choice, not a measurement.
-3. *Gate, bill, dispatch.* Every trigger passes `admit_wake`. It decides and bills the rolling 24h ledger under one lock, so two overlapping ticks cannot both dispatch. Ceiling 32 wakes per scope per window, about 1.5x the worst measured day. Debounce 15m: a king woken inside it is still working under its own in-session arm. The bill lands BEFORE the dispatch. A crash between them costs one slot of 32. The reverse costs an unbounded respawn storm. The dispatch is `loop run --driver king --scope <scope> --wake --wake-reason <reason> --wake-holder <stale row>`, detached. A mail wake adds `--wake-address <matched inbox>`. The woken session is fresh and cannot derive the dead holder's address itself. The holder names the registry row the wake already outranked by transcript. A wake neither spends nor is refused by the failure-retry `respawn_count` budget. A `ceiling` refusal raises one marker-deduped operator question. That refusal is exactly the silent stranding this phase exists to end.
-4. *The wake drains what woke it.* The walk's continue prompt carries the reason. A mail-woken king is told to run `fno agents mail unread` BEFORE its first board read. The waking message is not a board row. No board read will surface it. A respawn that never reads the mail reproduces the original failure with more processes.
+2. *Triggers, best first.* An answered escalation: the question journal (not the mail bus - the answer's delivery mail addresses the holder's full session id, which no mailbox scan covers) holds a closed-with-answer question whose asker is the holder, closed after the sidecar's `answered_cursor`. The answer is the wake prompt, the cursor seeds at the lead's birth (`created_at`), one answer delivers per tick, and it skips only the debounce, never the ceiling. Mail: undrained bus rows addressed to the holder or to any project in the scope. Both holder spellings are scanned, the registry name and the reply-handle short id. Measured on the live bus, replies carry the short id. A name-only scan reads a permanent zero. Board change: a sha256 over the scope's `(id, status, _kanban_column, priority)` rows, compared against a `.fno/leads/<scope>.wake.json` sidecar; the sidecar stores the rows beside the hash so the wake prompt can carry the added/changed/removed diff (`--wake-detail`) instead of a whole-board re-read. A first observation stores and wakes nothing. Backstop: a timer re-check, kept so a missed event cannot strand a scope forever. It approximates the two event triggers. The 1800s interval is a policy choice, not a measurement.
+3. *Gate, bill, dispatch.* Every trigger passes `admit_wake`. It decides and bills the rolling 24h ledger under one lock, so two overlapping ticks cannot both dispatch. Ceiling 32 wakes per scope per window, about 1.5x the worst measured day. Debounce 15m: a lead woken inside it is still working under its own in-session arm. The bill lands BEFORE the dispatch. A crash between them costs one slot of 32. The reverse costs an unbounded respawn storm. The dispatch is `loop run --driver lead --scope <scope> --wake --wake-reason <reason> --wake-holder <stale row>`, detached. A mail wake adds `--wake-address <matched inbox>`; a board or answer wake adds `--wake-detail <diff or answer>`, capped at 2000 chars. The woken session is fresh and cannot derive the dead holder's address itself. The holder names the registry row the wake already outranked by transcript. An ordinary wake neither spends nor is refused by the failure-retry `respawn_count` budget. A holder whose session is GONE (`unknown`/`not-found`, not parked `done`) is replaced, not woken: the dispatch adds `--wake-successor`, bills `respawn_count` like any walk respawn, refuses at the respawn ceiling before billing the wake ledger, and journals `lead_spawned_successor`. A `ceiling` refusal raises one marker-deduped operator question. That refusal is exactly the silent stranding this phase exists to end.
+4. *The wake drains what woke it.* The walk's continue prompt carries the reason. A mail-woken lead is told to run `fno agents mail unread` BEFORE its first board read. The waking message is not a board row. No board read will surface it. A respawn that never reads the mail reproduces the original failure with more processes.
 
-**The `RunAtLoad` caveat.** The pr-watcher LaunchAgent has `RunAtLoad: false` by design. The operator runs `launchctl load` themselves. A machine that never loaded it has no waker at all. Turning `king.wake_enabled` on does not change that. An operator who enables the key and sees no wakes must check `fno do pr watch status` first.
+**The `RunAtLoad` caveat.** The pr-watcher LaunchAgent has `RunAtLoad: false` by design. The operator runs `launchctl load` themselves. A machine that never loaded it has no waker at all. Turning `lead.wake_enabled` on does not change that. An operator who enables the key and sees no wakes must check `fno do pr watch status` first.
 
-Gated by `config.king.enabled` (default false), visible as the `king loop` row in `fno agents autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
+Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agents autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
 
 ### `done_probes`: the operational-evidence conjunct
 
@@ -307,6 +321,8 @@ The verdict is published where GitHub can see it as two contexts on the PR head.
 
 `apply-merge-ruleset.sh` makes only `fno/review-coverage` and `stacked-base-guard` required on the default branch. The bypass list is empty, so every client path is refused by GitHub itself rather than by advice. The diagnostic context remains outside the required ruleset so an instrument outage cannot be rendered as a code verdict.
 
+Branch protection is absent on main. The file budget is outside the ruleset: no required check names it. A raw `gh pr merge` lands a head that grew an over-budget file with no gate seeing it. `fno do pr merge` is the gate for growth: the preflight verification event it trusts runs `scripts/ci/check-file-budget.sh` from main's copy against the merge base. When main itself grows past the budget, the `guards` push run alarms instead. The platform-native closure is a separate operator decision. It makes the budget check required, or adds a merge queue that re-runs CI on the queue's merge commit with main's workflow. Either one changes how `fno do pr merge` lands a PR.
+
 One source also has to mean one *location*.
 
 Every worktree resolves its local journal from the worktree root, and setup symlinks that file to the canonical checkout's journal. An isolated reviewer, author, merge, and reconcile all observe the same repository evidence.
@@ -326,7 +342,7 @@ Authoring guidance (freshness over bare existence) lives in `skills/blueprint/SK
 
 Coverage answers whether anyone reviewed the PR. It says nothing about whether merging it puts the code anywhere.
 A stacked PR names another feature branch as its base, and when that base lands on main without the stacked PR being retargeted, GitHub merges it into the dead base, reports MERGED, and the commits never reach main.
-Specimen: PR #800 merged into `feature/bg-crown` at 2026-08-10T19:42:32Z, an hour after PR #789 landed that same branch on main; its merge commit `9b665db4` is the tip of `origin/feature/bg-crown` and is not an ancestor of `origin/main`.
+Specimen: PR #800 merged into `feature/bg-role` at 2026-08-10T19:42:32Z, an hour after PR #789 landed that same branch on main; its merge commit `9b665db4` is the tip of `origin/feature/bg-role` and is not an ancestor of `origin/main`.
 Why the base was never retargeted is unexplained, so the guard asserts nothing about GitHub's retarget behavior and reads observable facts instead.
 
 `cli/src/fno/pr/_base_lineage.py` is the one predicate: for a base that is not the default branch, it refuses if a MERGED PR already carried that base, or if the base tip is already an ancestor of the default branch.
@@ -419,7 +435,7 @@ All checks run before any dispatch. A failed preflight never starts the walk.
 | Check | Error path |
 |---|---|
 | Manifest exists (`.fno/target-state.md`) | exit 1, "run /target first to initialize" |
-| `--driver` is in whitelist (`claude-code`, `hermes`, `openclaw`; megawalk uses its own verb) | exit 2, whitelist names stated |
+| `--driver` is in whitelist (`claude-code`, `hermes`, `openclaw`, `opencode`) | exit 2, whitelist names stated |
 | Driver lib file exists (`scripts/lib/driver-<name>.sh`) | exit 2, path stated |
 | Lib defines `driver_invoke` (bash probe) | exit 2, "driver_invoke missing" |
 | Driver binary is on PATH | exit 77, binary name stated |
@@ -438,7 +454,7 @@ The legacy `scripts/run-target-loop.sh` was 466 lines. The code it contained is 
 |---|---|
 | `<promise>` grep in session output | typed `termination` event from `loop-check` verb; loop never reads stdout |
 | Model-fallback chain (`sed`/`grep` state machine over model names) | intentionally NOT ported; loop-check budget/backstop + driver-level retries cover the failure modes; strangler flag parity only. The rate-limit/model-fallback class is deliberately not ported as an output-grep detector (locked decision: retry and backoff policies belong over typed events, not detectors); retry/backoff policy is the per-unit dispatch cap and consecutive-failure pause in the megawalk walk policy (group 2). |
-| Restart-signal file polling | cancel closure checks `SIGINT_RECEIVED` + `.target-cancelled` sentinel |
+| Restart-signal file polling | target closure checks `SIGINT_RECEIVED` + `.target-cancelled`; lead closure checks its scoped `.cancelled` sidecar |
 | Multi-plan grep over session output | plan identity in manifest (`plan_path`), not parsed from stdout |
 | Phase re-read / phase tracking | deleted by step-1 wedge; no phase state remains |
 | Fingerprint / consecutive-fire counting | inside `fno-agents loop-check` (already Rust since the wedge) |
@@ -448,7 +464,9 @@ Model-fallback is a deliberate drop, not an oversight. The loop contract is type
 
 ---
 
-## The megawalk driver (group 2)
+## The megawalk driver (group 2, removed)
+
+> **Removed 2026-08-03.** The `--driver megawalk` arm and `loop_megawalk.rs` are deleted ([path-census.md](path-census.md)). So are the `/megawalk` skill and the `fno megawalk` verbs. The backlog walk today runs through `/fno:target <node>` per node and `/fno:target bg --all-ready` for the ready board. Merge-triggered `fno backlog advance` and the active-backlog daemon ([active-backlog-dispatcher.md](active-backlog-dispatcher.md)) cover the rest. The sections below are the design record.
 
 ### MegawalkQueue
 
@@ -508,18 +526,18 @@ Two new event kinds join the loop stream. Schema in `events-schema.yaml` only; N
 | `walk_paused` | Walk policy triggered a pause | `policy` ("consecutive_failures" or "p0_failed"), `detail` (unit ids involved) |
 | `node_closed` | Unit close recorded | `unit_id`, `session_id`, `reason`, `close` ("closed", "parked", "refused", or "awaiting-merge"), `detail` |
 
-**Legacy event migration.** The Python walker emitted ~29 kinds into `megawalk-events.jsonl` (deleted in task 2.4). Representative mappings: `node_complete` -> `node_closed{close:closed}`, `walker_paused` -> `walk_paused`, `consecutive_failures_paused` -> `walk_paused{policy:consecutive_failures}`, `backlog_empty` -> `loop_terminated{reason:NoWork}`. The full prune ledger is the comment block in `loop_megawalk.rs`. `megawalk-events.jsonl` as a write target is dead; the prune ledger records each legacy kind's fate for auditors.
+**Legacy event migration.** The Python walker emitted ~29 kinds into `megawalk-events.jsonl` (deleted in task 2.4). Representative mappings: `node_complete` -> `node_closed{close:closed}`, `walker_paused` -> `walk_paused`, `consecutive_failures_paused` -> `walk_paused{policy:consecutive_failures}`, `backlog_empty` -> `loop_terminated{reason:NoWork}`. The full prune ledger was the comment block in `loop_megawalk.rs` (removed with the driver, removal trail in [path-census.md](path-census.md)). `megawalk-events.jsonl` as a write target is dead. The prune ledger records each legacy kind's fate for auditors.
 
-### Front door
+### Front door (removed)
 
-`/megawalk` (the Claude Code skill) launches `fno-agents loop run --driver megawalk` in the background and streams `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) renders the canonical journal at ~1Hz via a Rich TUI. There is no separate `megawalk-events.jsonl`; the single `events.jsonl` is the authoritative walk record.
+The `/megawalk` skill launched `fno-agents loop run --driver megawalk` in the background and streamed `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) rendered the canonical journal at ~1Hz via a Rich TUI. Both are gone with the driver. There is no separate `megawalk-events.jsonl`. The single `events.jsonl` remains the authoritative loop record.
 
 ---
 
 ## The megatron driver (removed)
 
-The megatron fleet-orchestration driver (`loop_megatron.rs`, `cli/src/fno/megatron/`, the `/megatron` skill, and the `--driver megatron` arm) was removed in the cutlist. `-C` spawn-into-project plus auto-worktree now covers multi-repo work, and a multi-repo feature is modeled as one backlog node per project linked by `blocked_by`, each shipping its own PR. The unified loop now exposes two drivers: `target` and `megawalk`.
+The megatron fleet-orchestration driver (`loop_megatron.rs`, `cli/src/fno/megatron/`, the `/megatron` skill, and the `--driver megatron` arm) was removed in the cutlist. `-C` spawn-into-project plus auto-worktree now covers multi-repo work. A multi-repo feature is one backlog node per project linked by `blocked_by`, each shipping its own PR. The megawalk arm is also removed (above). The unified loop's live driver is `target`. The `lead` and `term` walk arms joined later in their own loop files.
 
 ### Batch-queue deprecation (task 3.2)
 
-The `/batch-queue` command surface was removed (it was deprecated in the step-5 collapse, then dropped in the OSS-launch cleanup). The backlog subsumes it: `fno backlog intake` + `rank`/`blocked_by` + `/megawalk` express "run these plans in order" with claims and gh-cross-checked closes that the batch queue never had. The exit-12 `fno loop` stub was removed in the same change (zero callers; the group-2 grep and this group's re-grep both confirmed).
+The `/batch-queue` command surface was removed (it was deprecated in the step-5 collapse, then dropped in the OSS-launch cleanup). The backlog subsumes it: `fno backlog intake` + `rank`/`blocked_by` + `/fno:target bg --all-ready` express "run these plans in order" with claims and gh-cross-checked closes that the batch queue never had. The exit-12 `fno loop` stub was removed in the same change (zero callers, confirmed by two greps).

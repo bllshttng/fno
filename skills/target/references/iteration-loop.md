@@ -117,24 +117,27 @@ Use only mechanical inputs. Do not hide subjective judgment inside the weights.
 
 ## Async-wait idling (the `<watching>` contract)
 
-When your only outstanding work is an async external check - CI still running, or a bot review not yet posted - with nothing to do until it settles, do NOT keep waking every stop tick to re-check. Each wake is a full model invocation that produces zero progress. Instead, idle the session to ZERO invocations until the watched state changes:
+When your only outstanding work is a wait, do NOT keep waking every stop tick to re-check. Each wake is a full model invocation that produces zero progress. Instead, idle the session to ZERO invocations until the watched state changes. The wait can be CI still running, a bot review not yet posted, or a local run you started. A local run is a test suite, a build, a review fork:
 
 1. **Arm a harness-tracked watcher with a hard timeout.** Use a background task the harness re-invokes the model on when it exits - background `Bash` (`run_in_background`) or a `Monitor` - whose command embeds a hard timeout, e.g.:
 
    ```bash
-   fno do pr wait <PR> --until settled --timeout 30m
+   fno do pr wait <PR> --until settled --timeout 15m
    ```
 
-   The verb is the heartbeat. It ends on its own after the bound (default 30m), so a wedged read still wakes the session. Its exit code is the status verb's own alphabet: 0 green, 1 red, 2 still-unsettled at the bound. Every tick rides the coalescing cache: N waiters on one PR cost one network read per TTL. A rate-limit backoff window is ridden out, not hammered. The gh-call count prints at exit. The verb exits on the POSITIVE settled marker internally, never an absence test. An absence test reads a rate-limited read as settled. The verb does not. Spell the bound in `--timeout`, never `timeout(1)`. That is GNU coreutils, and a stock macOS ships neither it nor `gtimeout`. A command naming it dies with `command not found` before the read runs, so the watcher no-ops. Detaching the task itself (`nohup`, `disown`, a trailing `&`) is FORBIDDEN - it exits without re-invoking anyone, so the session idles forever. The CI read inside is REST, so this spends none of the per-user GraphQL quota every session on the machine shares. Do NOT reach for `gh pr checks --watch` or a `gh pr view` poll: `hooks/git-protection.py` DENIES both, so that recipe cannot run at all. Never hand-roll a `while/sleep/grep` replacement: every such loop is an uncoordinated poll against the shared quota, the exact fleet condition the verb exists to prevent.
+   The verb is the heartbeat. It ends on its own after the bound (default 15m), so a wedged read still wakes the session. Its exit code is the status verb's own alphabet: 0 green, 1 red, 2 still-unsettled at the bound. Every tick rides the coalescing cache: N waiters on one PR cost one network read per TTL. A rate-limit backoff window is ridden out, not hammered. The gh-call count prints at exit. The verb exits on the POSITIVE settled marker internally, never an absence test. An absence test reads a rate-limited read as settled. The verb does not. Spell the bound in `--timeout`, never `timeout(1)`. That is GNU coreutils, and a stock macOS ships neither it nor `gtimeout`. A command naming it dies with `command not found` before the read runs, so the watcher no-ops. Detaching the task itself (`nohup`, `disown`, a trailing `&`) is FORBIDDEN - it exits without re-invoking anyone, so the session idles forever. The CI read inside is REST, so this spends none of the per-user GraphQL quota every session on the machine shares. Do NOT reach for `gh pr checks --watch` or a `gh pr view` poll: `hooks/git-protection.py` DENIES both, so that recipe cannot run at all. Never hand-roll a `while/sleep/grep` replacement: every such loop is an uncoordinated poll against the shared quota, the exact fleet condition the verb exists to prevent.
+
+   For a local Bash run, make the run itself the watcher. Start it as a background task with a command-level bound. For example, `bash -c 'source scripts/lib/with-timeout.sh; with_timeout 1800 command ...'`. Native verbs with their own `--timeout` are already bounded. Codex must use a bounded foreground command or a goal-backed wait with `clock.sleep`. The `exec_command.yield_time_ms` value controls only how long the tool call waits. It does not stop the command.
 
 2. **End your turn with the tag, and nothing else.** After arming the watcher, close the turn with:
 
    ```
-   <watching reason="ci" pr="<PR>" timeout="30m">
+   <watching reason="ci" pr="<PR>" timeout="15m">
+   <watching reason="local" task_id="<task-id>" timeout="15m">
    ```
 
-   `reason` is `ci` or `review`; the attributes are advisory (used for the event and the claim-lease math). loop-check verifies against external truth that the only blocker is the async class (PR open, HEAD pushed, no unaddressed findings), extends your node claim to cover the window, and idles the session non-terminally. If any real blocker exists (CI red, unpushed HEAD, an unaddressed finding) the tag is ignored and you are told the real reason.
+   `reason` is `ci`, `review`, `merge_slot`, or `local` (a run on this machine: a test suite, a build, a review fork). `pr` is a real PR number. Leave it out for a local run, never `pr="0"`. For local runs include the harness `task_id` so expiry mail identifies the task to inspect. The attributes feed the idle event and the claim-lease math. If the daemon wake route is unavailable or the claim lease cannot renew, loop-check ignores the tag and reports the blocker.
 
 3. **On wake, re-check and either proceed or re-arm.** The harness re-invokes you when the watcher exits (settle, timeout, or kill). If the state settled, proceed. If the timeout fired and it is still pending, re-arm the watcher and re-emit `<watching>` - one cheap turn per ~30 min instead of one per ~90 s.
 
-**Residual-turn austerity.** The few turns that remain (the initial arm-and-tag, a timeout re-arm) must be near-empty: the tag plus at most one short line. No status recap, no "waiting for it to settle" narration, no restating what you armed. The transcript is the operator's review artifact; the wait machinery's job is to be invisible in it.
+**Residual-turn austerity.** The few turns that remain (the initial arm-and-tag, a timeout re-arm) must be near-empty: the tag plus at most one short line. No status recap, no "waiting for it to settle" narration, no restating what you armed. The transcript is the user's review artifact. The wait machinery's job is to be invisible in it.

@@ -31,7 +31,16 @@ import pytest
         ("assistant", "still grinding on the parser", None, "working"),  # can't prove stalled
         # a content signal beats the mtime fallback even when old
         ("assistant", "<promise>done</promise>", 99999, "done"),
-        ("assistant", "anything ending in a question?", 99999, "your-move"),
+        # x-c1a3: a tag describes a TURN, and a turn stops being news once the
+        # transcript has been silent past stalled_after_s. Only <promise> is a
+        # turn OUTCOME and survives any age; watching/questions decay to stalled.
+        ("assistant", '<watching reason="ci" pr="5" timeout="30m">', 3 * 3600, "stalled"),
+        ("assistant", "anything ending in a question?", 99999, "stalled"),
+        ("assistant", "proceed with the merge? (Y/n)", 3 * 3600, "stalled"),
+        ("assistant", '<help reason="stuck" evidence="x">need a decision</help>', 99999, "stalled"),
+        # an unknowable age is never evidence of staleness: the news survives
+        ("assistant", '<watching reason="ci" pr="5" timeout="30m">', None, "watching"),
+        ("assistant", "anything ending in a question?", None, "your-move"),
         # watching outranks promise when both appear (runtime parks watching)
         ("assistant", "<promise>done</promise> but also <watching pr=1>", 10, "watching"),
         # exact-marker discipline: a lookalike word is NOT a promise
@@ -39,6 +48,70 @@ import pytest
         # trailing USER turn clears a stale assistant signal -> worker's move
         ("user", "<promise>done</promise> (quoted by the operator)", 10, "working"),
         ("user", "here is your answer", 99999, "stalled"),
+        # x-1182: a trailing option prompt is your-move immediately, not a
+        # two-hour mtime wait. This is the exact tail that stalled a worker
+        # for 50 minutes and read "working" the whole time.
+        (
+            "assistant",
+            "Canonical main is protected. Create a dedicated worktree "
+            "for x-884f and continue there? [Y/n]",
+            3000,  # 50 minutes, well under STALLED_AFTER_S (2h)
+            "your-move",
+        ),
+        ("assistant", "run the migration now? [y/N]", 10, "your-move"),
+        ("assistant", "overwrite the file? (y/N)", 10, "your-move"),
+        ("assistant", "proceed with the merge? (Y/n)", 10, "your-move"),
+        ("assistant", "pick a target: [1/2/3]", 10, "your-move"),
+        # mid-body mention is prose about a prompt, not a prompt -- must not
+        # fire the option-prompt grammar
+        (
+            "assistant",
+            "the worker asked [Y/n] and then kept going with more analysis",
+            99999,
+            "stalled",
+        ),
+        # a trailing user turn clears an option-prompt signal exactly as it
+        # already clears "?" and <help> (the operator answered)
+        ("user", "continue? [Y/n]", 99999, "stalled"),
+        # a turn that IS a harness API error is a death signal at any age --
+        # two workers held claims 45 minutes while every reader called them
+        # working, keyed on an error tail read as activity.
+        (
+            "assistant",
+            "API Error: The response stopped arriving. The response above may be incomplete.",
+            45 * 60,
+            "stalled",
+        ),
+        # another measured spelling of the family (429 quota, 238 of 416)
+        ("assistant", "API Error: Request rejected (429)", 10, "stalled"),
+        # the node's named negative control: a correctly watching session with
+        # the SAME silence still reads live
+        ("assistant", '<watching reason="ci" pr="1822" timeout="30m">', 45 * 60, "watching"),
+        # anchoring, not substring: prose ABOUT an error is a live worker
+        # (this node's own worker reads "api error" in every turn and must
+        # never trip the arm)
+        (
+            "assistant",
+            "I saw an API Error: rate limit exceeded in the log, so I retried",
+            45 * 60,
+            "working",
+        ),
+        (
+            "assistant",
+            "the plan documents the API Error tail classifier and its false-positive bound",
+            45 * 60,
+            "working",
+        ),
+        # content arms apply to assistant turns only: a trailing user turn
+        # carrying error text means the operator pasted/quoted it
+        ("user", "API Error: The response stopped arriving.", 10, "working"),
+        # watching outranks the error arm when both appear in one turn
+        (
+            "assistant",
+            '<watching pr=5> API Error: connection closed mid-response',
+            10,
+            "watching",
+        ),
     ],
 )
 def test_classify_tail_precedence(role, text, age, expected):
@@ -125,15 +198,190 @@ def _resolver(session):
     return r
 
 
+def test_observed_title_rides_the_truth_payload(tmp_path):
+    """A Ctrl+R rename appends an agent-name record and fires no hook, so the
+    tail reader is the only detector; the title is SERVED beside the label
+    (``harness_title``) and never written into it."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    sid = "11aa78de-2222-3333-4444-555566667777"
+    p = tmp_path / f"{sid}.jsonl"
+    p.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "user", "message": {
+                    "role": "user", "content": [{"type": "text", "text": "go"}]}}),
+                json.dumps({"type": "agent-name", "agentName": "renamed-in-view"}),
+                json.dumps({"type": "assistant", "message": {
+                    "role": "assistant", "model": "glm",
+                    "content": [{"type": "text", "text": "on it"}]}}),
+            ]
+        )
+        + "\n"
+    )
+    session = SimpleNamespace(
+        agent="claude", session_id=sid, cwd="/w", short_id=sid[:8], transcript_path=str(p)
+    )
+    result = resolve_session_truth("w1", resolve=_resolver(session), projects_root=tmp_path)
+    assert result["harness_title"] == "renamed-in-view"
+
+
+def test_resolve_without_a_title_reports_absence(tmp_path):
+    """No agent-name record -> ``harness_title`` is None: absence renders as
+    absence, never as the fno label or a fabricated default."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    sid = "99fe1ba0-1111-2222-3333-444455556666"
+    p = tmp_path / f"{sid}.jsonl"
+    p.write_text(
+        json.dumps({"type": "user", "message": {
+            "role": "user", "content": [{"type": "text", "text": "go"}]}}) + "\n"
+    )
+    session = SimpleNamespace(
+        agent="claude", session_id=sid, cwd="/w", short_id=sid[:8], transcript_path=str(p)
+    )
+    result = resolve_session_truth("w1", resolve=_resolver(session), projects_root=tmp_path)
+    assert result["harness_title"] is None
+
+
+def test_observed_title_takes_the_newest_record_from_the_last_block(tmp_path, monkeypatch):
+    """AC1-HP: the walk stops at the newest agent-name record; the older one
+    is never parsed and the 3 MiB body is never read."""
+    from fno.agents import session_truth
+    from fno.agents.session_truth import observed_title
+
+    p = tmp_path / "big.jsonl"
+    filler = json.dumps({"type": "user"}) + "\n"
+    p.write_text(
+        json.dumps({"type": "agent-name", "agentName": "old-name"}) + "\n"
+        + filler * (3 * 1024 * 1024 // len(filler))
+        + json.dumps({"type": "agent-name", "agentName": "new-name"}) + "\n"
+        + filler * 3
+    )
+    loads = []
+    real_loads = session_truth.json.loads
+    monkeypatch.setattr(
+        session_truth.json, "loads",
+        lambda s, *a, **k: loads.append(s) or real_loads(s, *a, **k),
+    )
+    reads = []
+    real_open = open
+
+    def counting_open(path, mode="r", *args, **kwargs):
+        fh = real_open(path, mode, *args, **kwargs)
+
+        class CountingBytes:
+            def __enter__(self):
+                fh.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return fh.__exit__(*exc)
+
+            def __getattr__(self, name):
+                return getattr(fh, name)
+
+            def read(self, *args):
+                data = fh.read(*args)
+                reads.append(len(data))
+                return data
+
+            def readline(self, *args):
+                data = fh.readline(*args)
+                reads.append(len(data))
+                return data
+
+            def __iter__(self):
+                for line in fh:
+                    reads.append(len(line))
+                    yield line
+
+        return CountingBytes()
+
+    monkeypatch.setattr(session_truth, "open", counting_open, raising=False)
+    assert observed_title("claude", p) == "new-name"
+    assert sum(reads) < 2 * 1024 * 1024
+    assert len(loads) == 1
+
+
+def test_observed_title_finds_a_record_at_the_head_of_a_long_transcript(tmp_path):
+    """AC1-EDGE: the only agent-name record is the file's first line, far
+    above the first block; the walk goes all the way back for it."""
+    from fno.agents.session_truth import observed_title
+
+    p = tmp_path / "head.jsonl"
+    filler = json.dumps({"type": "user"}) + "\n"
+    p.write_text(
+        json.dumps({"type": "agent-name", "agentName": "head-name"}) + "\n"
+        + filler * (5 * 1024 * 1024 // len(filler) // 2)
+    )
+    assert observed_title("claude", p) == "head-name"
+
+
+def test_observed_title_skips_a_torn_newest_record(tmp_path):
+    """AC1-ERR: a newest agent-name line torn mid-record fails to parse and
+    is skipped; the walk answers with the older complete record."""
+    from fno.agents.session_truth import observed_title
+
+    p = tmp_path / "torn.jsonl"
+    p.write_text(
+        json.dumps({"type": "agent-name", "agentName": "old-name"}) + "\n"
+        + '{"type":"agent-name","agentName":"new' + "\n"
+    )
+    assert observed_title("claude", p) == "old-name"
+
+
+def test_observed_title_on_an_unreadable_path_is_none(tmp_path):
+    """AC1-ERR: a directory cannot be opened; the read reports None and
+    raises nothing."""
+    from fno.agents.session_truth import observed_title
+
+    assert observed_title("claude", tmp_path) is None
+
+
+def test_lines_newest_first_matches_a_reversed_split(tmp_path):
+    """AC2-HP: the walk yields the file's lines last line first at every
+    block size, across boundaries, an oversized line and a multi-byte char."""
+    from fno.agents.session_truth import _lines_newest_first
+
+    body = b"alpha\n" + b"x" * 200 + b"\ncaf\xc3\xa9\nlast"
+    p = tmp_path / "walk.jsonl"
+    for trailing in (b"\n", b""):
+        content = body + trailing
+        p.write_bytes(content)
+        expected = list(reversed(content.split(b"\n")))
+        for block in range(1, 65):
+            with p.open("rb") as fh:
+                assert list(_lines_newest_first(fh, block)) == expected, (
+                    f"block={block} trailing={trailing!r}"
+                )
+
+
+def test_lines_newest_first_on_an_empty_file_yields_nothing(tmp_path):
+    """AC2-EDGE: an empty file yields no lines and the title read is None."""
+    from fno.agents.session_truth import _lines_newest_first, observed_title
+
+    p = tmp_path / "empty.jsonl"
+    p.write_bytes(b"")
+    with p.open("rb") as fh:
+        assert list(_lines_newest_first(fh)) == []
+    assert observed_title("claude", p) is None
+
+
 def test_resolve_reads_worktree_transcript_your_move(tmp_path):
     """AC2-HP + integrates the resolver fix: session dispatched with canonical
     cwd, live transcript in the worktree dir, last turn ends in a question."""
+    import os
+
     from fno.agents.session_truth import resolve_session_truth
 
     canonical = "/Users/bb16/code/footnote/footnote"
     worktree = "/Users/bb16/code/footnote/footnote/.claude/worktrees/x-a472"
     sid = "4ec8a08b-9fe7-4550-8e40-00c7fd4e600a"
-    _write_claude_transcript(tmp_path, worktree, sid, ["Should I rebase onto main?"])
+    path = _write_claude_transcript(tmp_path, worktree, sid, ["Should I rebase onto main?"])
+    # Fresh relative to now_s: expiry (x-c1a3) means a question tail only reads
+    # your-move while the transcript is recent.
+    os.utime(path, (2_000_000_000 - 60, 2_000_000_000 - 60))
 
     session = SimpleNamespace(agent="claude", session_id=sid, cwd=canonical, short_id=sid[:8])
     result = resolve_session_truth(
@@ -302,6 +550,24 @@ def test_render_states():
     assert "unknown" in unk and "not-found" in unk and "w1" in unk
 
 
+def test_truth_line_reads_exited_for_a_resumable_exit_and_dead_without_a_session():
+    from fno.agents.cli import _truth_line
+
+    result = {"handle": "lead-4d9b-delivery", "state": "working", "reason": None,
+              "last_activity_age_s": 600, "last_activity_basis": "last-entry",
+              "observed_model": {"kind": "observed", "model": "gpt-6-astra", "samples": 2},
+              "session_id": "01a09bcd", "suggestions": []}
+    exited = _truth_line(result, "pane-gone")
+    assert exited.startswith("truth lead-4d9b-delivery: exited")
+    assert "resumable" in exited
+    assert "working" not in exited and "active" not in exited
+    assert exited.endswith("[unreachable: pane-gone]")
+    assert _truth_line(result, "exit-recorded").startswith("truth lead-4d9b-delivery: exited")
+    orphan = {**result, "session_id": None}
+    assert _truth_line(orphan, "pane-gone").startswith("truth lead-4d9b-delivery: dead")
+    assert _truth_line(result, None).startswith("truth lead-4d9b-delivery: working")
+
+
 def test_resolver_crash_is_distinct_from_a_routine_miss(tmp_path):
     """A crashing resolver must not share not-found's reason.
 
@@ -373,7 +639,7 @@ def test_resolve_degrades_out_of_range_epoch_to_absent_stamp(tmp_path, monkeypat
     monkeypatch.setattr(
         session_truth,
         "_transcript_age_s",
-        lambda *a, **k: (1_700_000_000_000.0, 0.0),
+        lambda *a, **k: (1_700_000_000_000.0, 0.0, "mtime"),
     )
 
     session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
@@ -407,6 +673,7 @@ def test_transcript_age_degrades_out_of_range_epoch_as_a_pair(monkeypatch, tmp_p
     )
 
     assert session_truth._transcript_age_s("opencode", "s", "/c", None, None, None) == (
+        None,
         None,
         None,
     )
@@ -501,6 +768,9 @@ def test_truth_verb_json_carries_the_last_event_pair(tmp_path, monkeypatch):
     payload = json.loads(result.stdout)
     assert payload["last_message"] == "on the pytest run now"
     assert payload["last_event_at"]  # absolute ISO8601, present on the wire
+    # The wire names the instrument too: this fixture carries no timestamps,
+    # so the reading rode the labelled mtime fallback.
+    assert payload["last_activity_basis"] == "mtime"
 
 
 # ---------------------------------------------------------------------------
@@ -1048,6 +1318,70 @@ def test_truth_batch_reads_the_registry_once_for_every_handle(monkeypatch):
     }
 
 
+def test_truth_batch_isolates_a_raising_registry_falsifier(monkeypatch):
+    """One malformed row must not discard truth for the other handles."""
+    from fno.agents import cli as agents_cli
+
+    rows = [
+        SimpleNamespace(name="bad", harness_session_id="sid-bad", short_id="bad1"),
+        SimpleNamespace(name="good", harness_session_id="sid-good", short_id="good1"),
+    ]
+
+    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
+
+    def falsifier(row):
+        if row.name == "bad":
+            raise ValueError("broken row")
+        return "gone:good"
+
+    monkeypatch.setattr("fno.agents.reachability.registry_falsifier", falsifier)
+
+    assert agents_cli._registry_falsifiers(["bad", "good"]) == {
+        "bad": None,
+        "good": "gone:good",
+    }
+
+
+def test_truth_batch_reports_falsifier_error_on_only_the_bad_row(monkeypatch):
+    from typer.testing import CliRunner
+
+    from fno.agents import cli as agents_cli
+    from fno.agents import session_truth
+    from fno.cli import app
+
+    rows = [
+        SimpleNamespace(name="bad", harness_session_id="sid-bad", short_id="bad1"),
+        SimpleNamespace(name="good", harness_session_id="sid-good", short_id="good1"),
+    ]
+    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
+
+    def falsifier(row):
+        if row.name == "bad":
+            raise ValueError("broken row")
+        return None
+
+    monkeypatch.setattr("fno.agents.reachability.registry_falsifier", falsifier)
+    monkeypatch.setattr(
+        session_truth,
+        "resolve_session_truth",
+        lambda handle, **_kwargs: {
+            "handle": handle,
+            "state": "unknown",
+            "reason": "not-found",
+            "last_activity_age_s": None,
+            "observed_model": None,
+        },
+    )
+    monkeypatch.setattr(agents_cli, "_batch_resolver", lambda: lambda handle: (None, []))
+
+    result = CliRunner().invoke(app, ["agents", "truth", "--handles", "bad,good", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["bad"]["falsifier_error"] == "ValueError"
+    assert payload["good"]["falsifier_error"] is None
+
+
 def test_resolve_session_truth_peer_mail_does_not_clear_question(tmp_path):
     """Trailing peer mail turns must not clear assistant question/help state."""
     from fno.agents.session_truth import resolve_session_truth
@@ -1066,3 +1400,423 @@ def test_resolve_session_truth_peer_mail_does_not_clear_question(tmp_path):
     assert truth["state"] == "your-move"
     assert "<fno_mail" in truth["last_message"]
 
+
+# ---------------------------------------------------------------------------
+# last_activity_basis: the age names its instrument (x-54cf)
+#
+# The file mtime OVERSTATES liveness, never understates it: trailing
+# untimestamped records (last-prompt, cost state) keep touching the file while
+# the conversation is silent - measured never negative, median +20 minutes,
+# maximum +240 hours over 311 claude transcripts. The age now comes from the
+# newest timestamped entry in the tail the classifier already read, and every
+# fallback names itself.
+# ---------------------------------------------------------------------------
+
+def _write_skewed_transcript(
+    projects_root: Path, cwd: str, sid: str, now_s: float, entry_age_s: float
+) -> Path:
+    """Newest timestamped entry ``entry_age_s`` old, mtime fresh.
+
+    Produced the way production produces the skew: dated turns, then an
+    untimestamped trailing record that touches the file and dates nothing,
+    then a fresh utime.
+    """
+    import os
+    from datetime import datetime, timezone
+
+    slug = cwd.replace("/", "-").replace(".", "-")
+    d = projects_root / slug
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{sid}.jsonl"
+    stamp = datetime.fromtimestamp(now_s - entry_age_s, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    lines = [
+        json.dumps({"type": "user", "timestamp": stamp, "message": {
+            "role": "user", "content": [{"type": "text", "text": "go"}]}}),
+        json.dumps({"type": "assistant", "timestamp": stamp, "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "grinding on"}]}}),
+        # The record class that lies to mtime: it freshens the file stat and
+        # carries no timestamp the conversation can be aged by.
+        json.dumps({"type": "last-prompt"}),
+    ]
+    path.write_text("\n".join(lines) + "\n")
+    os.utime(path, (now_s, now_s))
+    return path
+
+
+def test_skew_reports_the_entry_age_not_the_file_age(tmp_path):
+    """mtime reads 0s, the newest entry reads 1h: the entry wins and the
+    reading names its instrument."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-54cf-0000-0000-000000000001"
+    now_s = 2_000_000_000.0
+    _write_skewed_transcript(tmp_path, cwd, sid, now_s, entry_age_s=3600)
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path, now_s=now_s
+    )
+
+    assert abs(result["last_activity_age_s"] - 3600) <= 5
+    assert result["last_activity_basis"] == "last-entry"
+    assert result["state"] == "working"  # 1h is inside the 2h stalled window
+
+
+def test_positive_control_a_fresh_entry_reads_fresh_in_the_same_run(tmp_path):
+    """Same reader, 10s-old entry, same run: the age tracks the input. A
+    reader that returns a plausible number for every input proves nothing."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-54cf-0000-0000-000000000002"
+    now_s = 2_000_000_000.0
+    _write_skewed_transcript(tmp_path, cwd, sid, now_s, entry_age_s=10)
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path, now_s=now_s
+    )
+
+    assert result["last_activity_age_s"] < 60
+    assert result["last_activity_basis"] == "last-entry"
+
+
+def test_a_tail_without_timestamps_falls_back_and_names_mtime(tmp_path):
+    import os
+
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "abcdef12-54cf-0000-0000-000000000003"
+    path = _write_claude_transcript(tmp_path, cwd, sid, ["pre-timestamp turn"])
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path, now_s=1_700_000_100.0
+    )
+
+    # The one reading that can still overstate liveness is labelled as such.
+    assert result["last_activity_age_s"] == 100
+    assert result["last_activity_basis"] == "mtime"
+    assert result["last_event_at"] == "2023-11-14T22:13:20Z"
+
+
+def test_an_unrenderable_tail_stamp_falls_to_the_fallback_as_one_pair(tmp_path, monkeypatch):
+    """A tail epoch that cannot render as a stamp never becomes the epoch:
+    the age and the stamp degrade together to the labelled fallback, the same
+    paired discipline _transcript_age_s applies to its own reads."""
+    import os
+
+    from fno.agents import session_truth
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "abcdef12-54cf-0000-0000-000000000009"
+    path = _write_claude_transcript(tmp_path, cwd, sid, ["turn"])
+    os.utime(path, (1_700_000_000, 1_700_000_000))
+
+    real = session_truth._record_stamp_epoch
+
+    def huge(_ts):
+        return 1.0e12  # beyond datetime's range: renders as neither stamp nor age
+
+    monkeypatch.setattr(session_truth, "_record_stamp_epoch", huge)
+    # Keep the parser honest for the control: the real parser could never
+    # produce this value (its ISO input caps at year 9999), which is why the
+    # guard is exercised through the seam.
+    assert real("2026-09-09T20:00:00Z") is not None
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path, now_s=1_700_000_100.0
+    )
+
+    assert result["last_activity_age_s"] == 100
+    assert result["last_activity_basis"] == "mtime"
+    assert result["last_event_at"] == "2023-11-14T22:13:20Z"
+
+
+def test_newest_entry_epoch_reads_the_whole_file_when_asked(tmp_path):
+    """tail_bytes=None is the adopt stamp's shape: the window can never be
+    narrower than the tail truth's own read covers, or one transcript ages by
+    two instruments."""
+    from datetime import datetime, timezone
+
+    from fno.agents.session_truth import newest_entry_epoch
+
+    path = tmp_path / "t.jsonl"
+    stamp = "2026-01-01T01:00:00Z"
+    filler = json.dumps({"type": "progress"})  # untimestamped, dates nothing
+    count = 300 * 1024 // (len(filler) + 1) + 10
+    lines = [json.dumps({"type": "assistant", "timestamp": stamp, "message": {}})]
+    lines.extend([filler] * count)
+    path.write_text("\n".join(lines) + "\n")
+    assert path.stat().st_size > 256 * 1024
+    # The bounded window sees only untimestamped records -> None.
+    assert newest_entry_epoch(path) is None
+    expected = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc).timestamp()
+    assert newest_entry_epoch(path, tail_bytes=None) == expected
+
+
+def test_opencode_age_names_the_db_basis(tmp_path, monkeypatch):
+    """opencode keeps the MAX(time_updated) reading and its own basis name."""
+    from fno.agents import session_truth
+
+    monkeypatch.setattr(
+        session_truth, "_opencode_activity_epoch", lambda sid, p: 1_700_000_000.0
+    )
+
+    class _RT:
+        resolved = True
+        kind = "opencode-db"
+        transcript_path = str(tmp_path / "store.db")
+
+    monkeypatch.setattr(
+        "fno.provenance.resolver.resolve_transcript", lambda *a, **k: _RT()
+    )
+
+    epoch, age, basis = session_truth._transcript_age_s(
+        "opencode", "s", "/c", None, None, 1_700_000_100.0
+    )
+    assert (epoch, age, basis) == (1_700_000_000.0, 100.0, "opencode-db")
+
+
+def test_claude_record_carries_its_timestamp():
+    """The claude parser keeps the record's timestamp the way the codex parser
+    already does, so the age can come from the tail instead of a stat."""
+    from fno.agents.peek import _parse_claude_record
+
+    rec = {
+        "type": "assistant",
+        "timestamp": "2026-09-09T20:00:00Z",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]},
+    }
+    assert _parse_claude_record(rec).timestamp == "2026-09-09T20:00:00Z"
+    del rec["timestamp"]
+    assert _parse_claude_record(rec).timestamp is None
+
+
+def test_newest_entry_epoch_reads_the_newest_timestamped_line(tmp_path):
+    from datetime import datetime, timezone
+
+    from fno.agents.session_truth import newest_entry_epoch
+
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+                            "message": {}}),
+                json.dumps({"type": "assistant", "timestamp": "2026-01-01T01:00:00Z",
+                            "message": {}}),
+                # Untimestamped trailing record and a torn line: neither dates
+                # anything, neither breaks the read.
+                json.dumps({"type": "last-prompt"}),
+                '{"type":"assist',
+            ]
+        )
+        + "\n"
+    )
+    expected = datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc).timestamp()
+    assert newest_entry_epoch(path) == expected
+
+
+def test_newest_entry_epoch_none_without_timestamps_or_file(tmp_path):
+    from fno.agents.session_truth import newest_entry_epoch
+
+    bare = tmp_path / "bare.jsonl"
+    bare.write_text(json.dumps({"type": "last-prompt"}) + "\n")
+    assert newest_entry_epoch(bare) is None
+    assert newest_entry_epoch(tmp_path / "absent.jsonl") is None
+
+
+def test_render_truth_names_the_basis():
+    from fno.agents.session_truth import render_truth
+
+    line = render_truth(
+        {"handle": "w1", "state": "stalled", "reason": None,
+         "last_activity_age_s": 48 * 3600, "last_activity_basis": "last-entry",
+         "session_id": "s", "suggestions": []}
+    )
+    assert line.endswith("by last-entry)")
+    assert "2d" in line
+
+
+# ---------------------------------------------------------------------------
+# provider_refusal: the quota refusal the last assistant turn carries (x-e594)
+#
+# Ten workers died on usage-limit 429s and every one read `quiet` or `writing`,
+# because the renderers never consulted the refusal text already on the row.
+# The truth reading is where the taxonomy is applied once, and both status
+# lanes consume the field from here.
+# ---------------------------------------------------------------------------
+
+_QUOTA_BODY = (
+    "API Error: Request rejected (429) · [1308][Usage limit reached for 5 hour. "
+    "Your limit will reset at 2026-09-11 19:37:55]"
+)
+
+
+def test_ac1_quota_refusal_rides_the_truth_payload(tmp_path):
+    """AC1-HP: the measured corpse's tail - last assistant record is the
+    usage-limit 429 - classifies to provider_4xx_quota on the reading."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-e594-0000-0000-000000000001"
+    _write_claude_transcript(tmp_path, cwd, sid, ["on it", _QUOTA_BODY])
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path
+    )
+    assert result["provider_refusal"] == "provider_4xx_quota"
+
+
+@pytest.mark.parametrize(
+    "turns",
+    [
+        # the same text in a USER turn: a mailed or pasted refusal is prose
+        # about a cap, never the worker's own refusal
+        ["on it", _QUOTA_BODY, ("user", _QUOTA_BODY)],
+        # the quota words start after the 120-char lead: prose about a cap
+        # deeper in a turn is not a refusal to classify on
+        ["on it", "word " * 40 + _QUOTA_BODY],
+        # a finished worker is an outcome, not a refusal
+        ["<promise>MISSION COMPLETE: shipped</promise>"],
+    ],
+)
+def test_ac2_non_qualifying_tails_leave_provider_refusal_null(tmp_path, turns):
+    """AC2-ERR: role, lead-window and done each keep the field null."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-e594-0000-0000-000000000002"
+    _write_claude_transcript(tmp_path, cwd, sid, turns)
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path
+    )
+    assert result["provider_refusal"] is None
+
+
+def test_ac2_unknown_paths_carry_provider_refusal_none(tmp_path):
+    """AC2-ERR: every unknown path emits the key as None, so a Rust probe
+    parsing an older body and a fresh one agree on the absent case."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    def miss(_handle):
+        return None, []
+
+    result = resolve_session_truth("nope", resolve=miss, projects_root=tmp_path)
+    assert result["provider_refusal"] is None
+
+
+def test_a_raising_refusal_classifier_never_breaks_the_liveness_read(tmp_path, monkeypatch):
+    """`resolve_session_truth` is documented never to raise, and every liveness
+    surface reads it. So the refusal classification is a reporting field that
+    must fail to None rather than take the whole read down with it - the same
+    rule `observed_model` states for itself."""
+    import fno.recovery as recovery
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-e594-0000-0000-0000000000ff"
+    _write_claude_transcript(tmp_path, cwd, sid, ["still going"])
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+
+    def boom(*_a, **_k):
+        raise RuntimeError("taxonomy blew up")
+
+    monkeypatch.setattr(recovery, "classify_worker_refusal", boom)
+
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path
+    )
+    assert result["provider_refusal"] is None
+    assert result["state"] != "unknown"
+
+
+# ---------------------------------------------------------------------------
+# an API-error tail is a death signal, and the reason says which
+# ---------------------------------------------------------------------------
+
+def test_ac5_error_tail_resolves_stalled_with_reason(tmp_path):
+    """AC5-HP: through the resolve path, the errored session reads stalled and
+    the reason names the error arm -- "stalled" alone would read as "silent"
+    and send a debugger hunting for a timeout that does not exist."""
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-e594-0000-0000-000000000250"
+    _write_claude_transcript(
+        tmp_path,
+        cwd,
+        sid,
+        ["API Error: The response stopped arriving. The response above may be incomplete."],
+    )
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path
+    )
+    assert result["state"] == "stalled"
+    assert result["reason"] == "api-error-tail"
+
+
+def test_ac6_plain_silence_keeps_reason_null(tmp_path):
+    """AC6-EDGE: stalled from plain silence carries reason None -- the reason
+    marks the error path only and never becomes a second name for silence."""
+    import os
+    import time as _time
+
+    from fno.agents.session_truth import resolve_session_truth
+
+    cwd = "/Users/bb16/code/footnote/footnote"
+    sid = "0badc0de-e594-0000-0000-000000000251"
+    path = _write_claude_transcript(tmp_path, cwd, sid, ["still grinding on the parser"])
+    # Age the mtime past STALLED_AFTER_S so this is the silence arm, not freshness
+    old = _time.time() - 3 * 3600
+    os.utime(path, (old, old))
+
+    session = SimpleNamespace(agent="claude", session_id=sid, cwd=cwd, short_id=sid[:8])
+    result = resolve_session_truth(
+        "w1", resolve=_resolver(session), projects_root=tmp_path
+    )
+    assert result["state"] == "stalled"
+    assert result["reason"] is None
+
+
+def test_ac7_tool_use_then_error_text_does_not_fire(tmp_path):
+    """AC7-EDGE: a turn that did tool work and then errored flattens to
+    ``[tool_use: name] API Error: ...`` -- the error text is off position 0,
+    so the anchor does not fire and the tail reads working. Pins the anchor
+    against a future _extract_text refactor that moves the error text."""
+    import json as _json
+
+    from fno.agents.peek import _parse_claude_record
+    from fno.agents.session_truth import classify_tail
+
+    rec = _json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}},
+                    {
+                        "type": "text",
+                        "text": "API Error: The response stopped arriving.",
+                    },
+                ],
+            },
+        }
+    )
+    record = _parse_claude_record(_json.loads(rec))
+    assert record is not None
+    assert classify_tail(record.role, record.text, 45 * 60) == "working"

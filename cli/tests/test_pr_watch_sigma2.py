@@ -141,7 +141,6 @@ class TestEmitEventAnchoredPath:
         # Clear any cached settings
         try:
             from fno.config import load_settings
-            load_settings.cache_clear()
         except Exception:
             pass
 
@@ -171,52 +170,17 @@ class TestEmitEventAnchoredPath:
         # Reset cache after HOME change
         try:
             from fno.config import load_settings
-            load_settings.cache_clear()
         except Exception:
             pass
         monkeypatch.setenv("HOME", str(fake_home))
+
+        from tests._event_rows import event_rows
 
         anchored_events = fake_home / ".fno" / "events.jsonl"
-        assert anchored_events.exists(), (
-            f"event not found at state_dir path {anchored_events}"
-        )
-        lines = anchored_events.read_text().strip().splitlines()
+        lines = event_rows(anchored_events)
         assert len(lines) == 1
-        ev = json.loads(lines[0])
+        ev = lines[0]
         assert ev["type"] == "pr_watch_tick"
-
-    def test_emit_event_same_path_as_the_liveness_watermark(self, tmp_path, monkeypatch):
-        """_emit_event default path must be the SAME path the liveness
-        watermark reads from.
-
-        status's watermark scan defaults to state_dir()/events.jsonl.
-        The daemon's _emit_event must write to the same location.
-        """
-        fake_home = tmp_path / "home"
-        fake_home.mkdir()
-        (fake_home / ".fno").mkdir()
-        monkeypatch.setenv("HOME", str(fake_home))
-        try:
-            from fno.config import load_settings
-            load_settings.cache_clear()
-        except Exception:
-            pass
-
-        from fno.pr_watch.cli import _emit_event
-        _emit_event(
-            "pr_watch_tick",
-            {"open_prs": 0, "acted": 0, "swept_count": 0, "swept": {},
-             "dropped_count": 0, "dropped": {}},
-        )
-
-        # Now verify the watermark scan (with no explicit path) finds that event
-        from fno.pr_watch._install import _tick_watermarks
-        ts = _tick_watermarks(None)["last_tick"]  # None = default state_dir() path
-        assert ts is not None, (
-            "the watermark scan could not find the event written by _emit_event; "
-            "they must resolve to the same path"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Fix #1b — plist WorkingDirectory = $HOME
@@ -284,7 +248,6 @@ class TestCliTickIntegration:
         monkeypatch.setenv("HOME", str(fake_home))
         try:
             from fno.config import load_settings
-            load_settings.cache_clear()
         except Exception:
             pass
 
@@ -298,7 +261,7 @@ class TestCliTickIntegration:
         (repo_dir / ".git").mkdir()
 
         graph = {
-            "nodes": [
+            "entries": [
                 {
                     "id": "x-test1234",
                     "title": "test node",
@@ -366,11 +329,15 @@ class TestCliTickIntegration:
 
         # Assert a pr_watch_tick event landed in state_dir()/events.jsonl
         events_path = fno_dir / "events.jsonl"
-        assert events_path.exists(), (
-            f"No events.jsonl found at {events_path}. "
+        from fno.events.store_client import store_db_path
+
+        assert store_db_path(events_path).exists(), (
+            f"No event store found at {events_path}. "
             "The real _emit_event wrote to a cwd-relative path instead (bug #1 not fixed)."
         )
-        events = [json.loads(line) for line in events_path.read_text().strip().splitlines() if line.strip()]
+        from tests._event_rows import event_rows
+
+        events = event_rows(events_path)
         tick_events = [e for e in events if e.get("type") == "pr_watch_tick"]
         assert len(tick_events) >= 1, (
             f"No pr_watch_tick event in {events_path}. Events found: {events}"
@@ -509,9 +476,10 @@ class TestPrObservationMergedFieldRemoved:
         import dataclasses
 
         # Verify the construction in _discover.py doesn't still pass merged=
-        # by checking the field set is as expected
+        # by checking the field set is as expected (is_draft rides the same
+        # gh pr view call; the flip leg reads OPEN + is_draft).
         field_names = {f.name for f in dataclasses.fields(PrObservation)}
-        expected = {"pr_number", "state", "latest_review_ts", "opened_at", "merge_sha"}
+        expected = {"pr_number", "state", "latest_review_ts", "opened_at", "merge_sha", "is_draft"}
         assert "merged" not in field_names, "merged bool must stay removed"
         assert field_names == expected, (
             f"PrObservation fields mismatch. Expected {expected}, got {field_names}"
@@ -638,3 +606,111 @@ class TestClosedPrEvictionAtOrchestrator:
         assert WatermarkStore(path=store_path).get("owner/repo#5") is None
         receipt = next(e["data"] for e in deps["events"] if e["type"] == "pr_watch_tick")
         assert receipt["dropped"] == {"closed": {"owner/repo": [5]}}
+
+
+# ---------------------------------------------------------------------------
+# Control-plane arm rows (x-1b88): the tick command writes one row per arm
+# ---------------------------------------------------------------------------
+
+
+class TestControlPlaneArmRows:
+    """Drives the REAL cli.tick() command with every phase unarmed and asserts
+    the three pr-watch-hosted arm rows land in the anchored journal, each
+    saying why it did nothing."""
+
+    def test_tick_writes_watchdog_lead_wake_and_merge_arm_rows(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        fake_home = tmp_path / "home"
+        fno_dir = fake_home / ".fno"
+        fno_dir.mkdir(parents=True)
+        monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("PR_WATCH_FIRE_CMD", "true")
+        # Fleet-tail cadence: the watchdog phase runs on the interval
+        # bucket's slot 2. Pin the bucket or a single-tick invocation runs
+        # the phase on only one tick in three and the arm row reads
+        # off_cadence instead of the lane verdict this test asserts.
+        monkeypatch.setattr("time.time", lambda: 1201.0)
+        try:
+            from fno.config import load_settings
+        except Exception:
+            pass
+
+        def ns(**kw):
+            return SimpleNamespace(**kw)
+
+        settings = ns(
+            pr_watch=ns(
+                enabled=False,
+                interval_seconds=600,
+                tick_timeout_seconds=None,
+                max_age_days=14,
+                retries=2,
+                graphql_min_remaining=200,
+                model="m",
+            ),
+            review=ns(github_apps=[], required_bots=[]),
+            autonomy=ns(enabled=False),
+            recovery=ns(enabled=False, watchdog=ns(enabled=False, mode="report")),
+            lead=ns(wake_enabled=False, wake_debounce_seconds=900),
+            auto_heal=ns(enabled=False),
+        )
+
+        with patch("fno.pr_watch.cli.load_settings", return_value=settings), \
+             patch("fno.pr_watch.cli.claim_status", return_value={"state": "free"}), \
+             patch("fno.claims.acquire_claim"), \
+             patch("fno.claims.release_claim"):
+            from fno.pr_watch.cli import tick
+            tick()
+
+        from tests._event_rows import event_rows as _event_rows
+        rows = [
+            r
+            for r in _event_rows(fno_dir / "events.jsonl")
+            if r.get("type") == "control_plane_tick"
+        ]
+        by_arm = {r["data"]["arm"]: r["data"] for r in rows}
+        assert by_arm["watchdog"]["skip_reason"] == "watchdog_off"
+        assert by_arm["watchdog"]["scheduler"] == "launchd:sh.fno.pr-watcher"
+        assert by_arm["lead_wake"]["skip_reason"] == "wake_disabled"
+        assert by_arm["lead_wake"]["interval_s"] == 900
+        assert by_arm["pr_watch_merge"]["skip_reason"] == "disabled"
+        assert by_arm["pr_watch_merge"]["interval_s"] == 600
+        detail = by_arm["pr_watch_merge"]["detail"]
+        # The merge row speaks its own grammar now: the lead_wake verdict,
+        # then the skip. A clean skip still names no phase.
+        assert detail.startswith("merge kw=")
+        assert detail.endswith("pr_watch disabled")
+        assert "phase" not in detail, (
+            f"a clean skip must not name a phase. Got: {detail}"
+        )
+        from fno.events import validate
+        for data in by_arm.values():
+            validate(
+                {
+                    "ts": "2026-09-05T00:00:00Z",
+                    "type": "control_plane_tick",
+                    "source": "daemon",
+                    "data": data,
+                }
+            )
+
+
+def test_tick_end_bits_names_the_phase_only_when_the_tick_broke():
+    from fno.pr_watch._install import tick_end_bits
+
+    timeout = tick_end_bits(
+        {"outcome": "timeout", "phase": "lead_wake", "duration_s": 480.0}
+    )
+    assert "phase: lead_wake" in timeout, f"timeout bits: {timeout}"
+    assert "480.0s" in timeout, f"timeout bits: {timeout}"
+
+    degraded = tick_end_bits(
+        {"outcome": "degraded", "phase": "catchup", "sweep_failures": 2,
+         "duration_s": 31.2}
+    )
+    assert "2 sweep failures" in degraded, f"degraded bits: {degraded}"
+    assert not any(b.startswith("phase:") for b in degraded), (
+        f"a degraded tick must not name a phase. Got: {degraded}"
+    )

@@ -1,23 +1,12 @@
 """SessionStart entry point: bind the current session to its registry row.
 
-Invoked by ``hooks/register-session-start.sh`` as
-``python3 -m fno.agents.register_session --harness claude ...``. Two modes,
-selected by ``--agent-self``:
-
-- without it, REGISTER an operator-started session (it has no row yet);
-- with it, RESTAMP a footnote-spawned worker's existing row, named by
-  ``FNO_AGENT_SELF``, onto the session id its harness is actually using. The
-  id footnote passed at spawn is not durable, and registration keys its upsert
-  on that same id, so a re-minted worker routed through registration would
-  gain a second row rather than have its first corrected.
-
-Fail-soft by contract (US7 AC7-ERR): any failure emits a
-``session_register_failed`` / ``session_restamp_failed`` warning event and
-still exits 0, so the hook never blocks session start even when the registry
-is locked or unwritable. On success it emits ``session_registered`` /
-``session_id_restamped`` and prints a one-line stderr note (hook stdout is
-reserved for the session preamble).
+Two modes via ``--agent-self``: absent, register an operator-started session;
+present, restamp a spawned worker's row onto the session id its harness is
+using now. Fail-soft by contract (US7 AC7-ERR): any failure emits a warning
+event and still exits 0. Full contract:
+docs/architecture/unfinished-work-and-row-registration.md.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,7 +20,8 @@ if TYPE_CHECKING:
     from fno.agents.reachability import Reachability
 
 from fno.agents import events
-from fno.agents.registry import register_existing_session, restamp_harness_session_id
+from fno.agents.mux_server import mux_server_env
+from fno.agents.registry import heal_mux_ref, register_existing_session, restamp_harness_session_id
 from fno.agents.spawn_defaults import resolve_lane_vendor
 
 #: How long a spawned worker waits for its own row to appear before giving up.
@@ -91,6 +81,8 @@ def _reading_for_entry(entry: Any) -> Optional["Reachability"]:
             truth_state=truth.get("state"),
             age_s=truth.get("last_activity_age_s"),
             falsifier=registry_falsifier(entry),
+            last_activity_basis=truth.get("last_activity_basis"),
+            observed_model=truth.get("observed_model"),
         )
     except Exception:
         return None
@@ -130,6 +122,37 @@ def _predecessor_observation(
     """Return the sampled predecessor ID and transcript reachability."""
     recorded, reading = _predecessor_reading(name, harness)
     return recorded, _verdict_bool(reading)
+
+
+def _heal_own_mux_ref(agent_self: str, harness: str, session_id: str) -> None:
+    """x-aaaa W2: heal this worker's row to its pane. Pair from FNO_SERVER/FNO_SESSION
+    (FNO_SERVER first) with FNO_PANE (pane-only; non-numeric/negative
+    ignored). Failure emits session_pane_rebound_failed, success emits only on
+    a verified write. Silent resolver: a session-start hook never prints.
+    """
+    session = mux_server_env().strip()
+    pane_raw = (os.environ.get("FNO_PANE") or "").strip()
+    if not session or not pane_raw:
+        return
+    try:
+        pane = int(pane_raw)
+    except ValueError:
+        pane = -1
+    if pane < 0:
+        return
+    try:
+        moved = heal_mux_ref(
+            name=agent_self, harness=harness, mux_session=session, pane_id=pane,
+            session_id=session_id,
+        )
+    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
+        events.emit("session_pane_rebound_failed", provider=harness,
+                    name=agent_self, session=f"{session}:{pane}", error=str(exc))
+        print(f"register_session: warning: {exc}", file=sys.stderr)
+        return
+    if moved is not None:
+        events.emit("session_pane_rebound", provider=harness, name=agent_self,
+                    old=moved[0], new=moved[1])
 
 
 def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -> int:
@@ -214,6 +237,8 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
                         outcome,
                         reading,
                     )
+                    # x-aaaa W2: heal post-observation so a branched session heals its own row.
+                    _heal_own_mux_ref(agent_self, harness, session_id)
                     return 0
             else:
                 expected_predecessor_session_id, predecessor_reachable = (
@@ -266,6 +291,8 @@ def _restamp(agent_self: str, harness: str, session_id: str, source: str = "") -
             f"register_session: restamped {entry.name} -> {session_id}",
             file=sys.stderr,
         )
+    # x-aaaa W2: the non-claude lineage path heals after its restamp too.
+    _heal_own_mux_ref(agent_self, harness, session_id)
     return 0
 
 
@@ -527,7 +554,7 @@ def _report_observation(
         print(
             f"register_session: warning: {name} already records two session "
             f"ids ({primary}, {related}); not recording a third "
-            f"({session_id})",
+            f"({session_id}); mint it a row with: fno agents adopt {session_id}",
             file=sys.stderr,
         )
         return
@@ -545,9 +572,24 @@ def _report_observation(
     )
 
 
+def _heal_row_cwd(*, agent_self: str, harness: str, cwd: str) -> None:
+    """x-bbbb task 0.1: the worker stamps the cwd it actually runs in."""
+    from fno.agents.registry import heal_own_cwd
+
+    try:
+        moved = heal_own_cwd(name=agent_self, harness=harness, cwd=cwd)
+    except Exception as exc:  # fail-open: never block session start (AC7-ERR)
+        events.emit("session_cwd_heal_failed", provider=harness, name=agent_self, error=str(exc))
+        return
+    if moved is not None:
+        events.emit(
+            "session_cwd_healed", provider=harness, name=agent_self, old=moved[0], new=moved[1]
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="register_session")
-    # --harness is canonical; --provider is the axis-rename alias (x-bab1), kept
+    # --harness is canonical; --provider is the axis-rename alias, kept
     # so the fail-soft SessionStart hook keeps working across the cutover.
     parser.add_argument("--harness", dest="harness",
                         help="Harness/CLI identity to register (claude | codex | gemini).")
@@ -580,9 +622,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if args.agent_self:
-        return _restamp(
+        rc = _restamp(
             args.agent_self, args.harness, args.session_id, source=args.source
         )
+        _heal_row_cwd(agent_self=args.agent_self, harness=args.harness, cwd=args.cwd)
+        return rc
 
     try:
         vendor = resolve_lane_vendor([args.harness], env=os.environ, harness=args.harness)
@@ -594,7 +638,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             name=args.name or None,
             log_path=args.log_path,
             origin="operator",
-            # x-98ab: the row describes THIS session, so its own exported
+            # the row describes THIS session, so its own exported
             # FNO_NODE (a node-driven pane carries one) is the right source.
             node=(os.environ.get("FNO_NODE") or "").strip() or None,
         )
@@ -616,6 +660,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         session_id=args.session_id,
         cwd=entry.cwd,
     )
+    # The default legible alias is minted by the daemon sweep (see
+    # session_names_fold.rs), so every row gains one within a tick.
     print(f"register_session: registered {entry.name} ({entry.harness})", file=sys.stderr)
     return 0
 

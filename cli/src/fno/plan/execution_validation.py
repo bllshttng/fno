@@ -1,9 +1,8 @@
 """Semantic validation for executable single-doc plans."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from dataclasses import dataclass
-import posixpath
+from collections import Counter
+from dataclasses import dataclass, field as dataclass_field
 import re
 import shlex
 
@@ -14,7 +13,7 @@ from fno.plan.brief import (
     validate_task_edges,
 )
 from fno.plan.criteria import CriteriaParseError, compile_criteria
-from fno.plan.schema import created_after_gate
+from fno.plan.schema import created_after_gate, waves_gate_error
 
 
 @dataclass(frozen=True)
@@ -25,7 +24,21 @@ class ExecutionViolation:
 
 @dataclass(frozen=True)
 class ExecutionValidationResult:
+    """Violations refuse the plan; warnings name a smell and let it through.
+
+    ``warnings`` defaults to empty, so every existing construction site and
+    every caller reading only ``.violations`` is unchanged. The channel exists
+    because a signal worth emitting is not always worth refusing on: the
+    total-chain check below fires on 4 plans in a fortnight, where a refusal
+    on any multi-file plan without waves would fire on 172 and teach authors
+    to route around the validator.
+    """
+
     violations: list[ExecutionViolation]
+    # Imported under an alias: `_violation` below takes a parameter named
+    # `field`, so the bare dataclasses name would read as two different things
+    # in one module.
+    warnings: list[ExecutionViolation] = dataclass_field(default_factory=list)
 
 
 _QUICK_REQUIRED_SECTIONS = ("Context", "Changes", "Files to Modify", "Verification")
@@ -78,6 +91,100 @@ _SHELL_SEGMENT_RE = re.compile(r"(?:&&|\|\||[;|])")
 
 def _violation(field: str, message: str) -> ExecutionViolation:
     return ExecutionViolation(field=field, message=message)
+
+
+def _total_chain_warning(tasks: list) -> ExecutionViolation | None:
+    """Warn when every task declares one blocker and the graph is a total order.
+
+    Per-task ``blocked_by`` shipped as a precision tool and became an authoring
+    reflex. Twenty plans have used it and twelve lose parallelism to it: four
+    measure width 1 where they would measure 2 or 3 with the declarations
+    removed, and eight are narrowed, costing 13 joiner slots in a fortnight.
+    The specimen chains 1.1 -> 1.2 -> 1.3 -> 2.1 -> 3.1 -> 3.2 across all six
+    tasks and every wave boundary; strip the six lines and nothing else and it
+    measures width 3, while the second task's own notes describe an
+    independent measurement and name no artifact of the first that it consumes.
+
+    A declared blocker wins outright over wave inheritance, so a reflex chain
+    is not merely redundant with the waves - it overrides them.
+
+    WARN, never refuse. This shape fires on 4 plans in a fortnight. A refusal
+    on any multi-file plan without waves would fire on 172 and teach authors to
+    skip the validator, which costs more than the chains do. The message asks
+    for the artifact each edge consumes, because that is the question whose
+    answer either justifies the edge or deletes it.
+    """
+    edges: dict[str, str] = {}
+    ids: list[str] = []
+    unblocked: list[str] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            return None
+        tid = str(task.get("id", "")).strip()
+        if not tid:
+            return None
+        ids.append(tid)
+        # An absent key inherits the previous wave and is the shape this check
+        # exists to preserve, so only an EXPLICIT declaration counts.
+        # `parse_execution_strategy` normalizes `blocked_by` to a list either
+        # way and records the presence of the key separately, so testing the
+        # value's type reads an undeclared task as an empty list and counts it
+        # as the chain head - a "total order" whose first edge nobody authored.
+        # `blocked_by_declared` is the only honest absence marker.
+        if not task.get("blocked_by_declared", "blocked_by" in task):
+            return None
+        declared = task.get("blocked_by")
+        if not isinstance(declared, list):
+            return None
+        # The head of a real chain declares `blocked_by: []` (the live specimen
+        # does exactly that), so an empty list is the chain's start, not a
+        # disqualifier - demanding one blocker from every task rejects the very
+        # head that makes the order total.
+        if not declared:
+            unblocked.append(tid)
+            continue
+        if len(declared) != 1:
+            return None
+        blocker = str(declared[0]).strip()
+        if not blocker:
+            return None
+        edges[tid] = blocker
+    # Two tasks and one edge is a pair, not a reflex; the signal starts where a
+    # chain spans a wave boundary it could not have inherited.
+    if len(ids) < 3 or len(set(ids)) != len(ids):
+        return None
+    # Exactly one head, and every other task on a single-blocker edge.
+    if len(unblocked) != 1 or len(edges) != len(ids) - 1:
+        return None
+    known = set(ids)
+    if any(blocker not in known for blocker in edges.values()):
+        return None
+    # A total order starts at the one head and, following the edges, visits
+    # every task exactly once.
+    heads = unblocked
+    reverse: dict[str, str] = {}
+    for tid, blocker in edges.items():
+        if blocker in reverse:
+            return None  # a fan-out: two tasks share one blocker, not a chain
+        reverse[blocker] = tid
+    order = [heads[0]]
+    while order[-1] in reverse:
+        nxt = reverse[order[-1]]
+        if nxt in order:
+            return None  # a cycle; validate_task_edges already refuses it
+        order.append(nxt)
+    if len(order) != len(ids):
+        return None
+    return _violation(
+        "tasks.blocked_by",
+        "every task declares exactly one blocker and the chain is total ("
+        + " -> ".join(order)
+        + "), so this plan measures width 1 and `fno backlog join` has nothing "
+        "to hand a second worker. A declared blocker wins outright over wave "
+        "inheritance, so these lines override the waves rather than restate "
+        "them. Name the artifact each edge consumes; delete the edges whose "
+        "artifact you cannot name.",
+    )
 
 
 def _is_placeholder_verify(value: str) -> bool:
@@ -280,6 +387,82 @@ def _validate_compiled_acceptance(
                         f"references {ref_str!r}, which resolves to no compiled criterion",
                     )
                 )
+    out.extend(_validate_acceptance_evidence(doc, codes))
+    return out
+
+
+_EVIDENCE_REF_RE = re.compile(r"^(done_probes|close_probes)\[(\d+)\]$")
+
+
+def _validate_acceptance_evidence(
+    doc: PlanDoc, codes: set[str]
+) -> list[ExecutionViolation]:
+    """Validate `acceptance_evidence` bindings against compiled criteria.
+
+    Unknown AC ids and malformed or out-of-range probe references refuse by
+    name. `required` must arm the session terminal: a required plan with no
+    done_probes binding is a session gate that could never pass. A criterion
+    with no binding stays unmeasured - an unarmed label, never an invented
+    execution.
+    """
+    out: list[ExecutionViolation] = []
+    decl = doc.frontmatter.get("acceptance_evidence")
+    if decl is None:
+        return out
+    if not isinstance(decl, dict):
+        out.append(_violation("acceptance_evidence", "must be a mapping"))
+        return out
+    required = bool(decl.get("required", False))
+    bindings = decl.get("bindings", {})
+    if not isinstance(bindings, dict):
+        out.append(
+            _violation("acceptance_evidence", "`bindings` must be a map of AC id to probe reference")
+        )
+        return out
+    probe_lists: dict[str, list[str]] = {}
+    for key in ("done_probes", "close_probes"):
+        raw = doc.frontmatter.get(key)
+        items = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+        probe_lists[key] = [str(p) for p in items if str(p).strip()]
+    binds_done = False
+    for ac, probe_ref in bindings.items():
+        ac_str = str(ac).strip()
+        ref_str = str(probe_ref).strip()
+        if ac_str not in codes:
+            out.append(
+                _violation(
+                    "acceptance_evidence",
+                    f"binds {ac_str!r}, which resolves to no compiled criterion",
+                )
+            )
+            continue
+        m = _EVIDENCE_REF_RE.fullmatch(ref_str)
+        if not m:
+            out.append(
+                _violation(
+                    "acceptance_evidence",
+                    f"binds {ac_str!r} to {ref_str!r}: expected `done_probes[n]` or `close_probes[n]`",
+                )
+            )
+            continue
+        key, index = m.group(1), int(m.group(2))
+        if index >= len(probe_lists[key]):
+            out.append(
+                _violation(
+                    "acceptance_evidence",
+                    f"binds {ac_str!r} to {ref_str}, but {key} declares {len(probe_lists[key])} probe(s): the bound probe is missing",
+                )
+            )
+            continue
+        if key == "done_probes":
+            binds_done = True
+    if required and not binds_done:
+        out.append(
+            _violation(
+                "acceptance_evidence",
+                "asserts required evidence but has no done_probes binding: the session terminal could never pass",
+            )
+        )
     return out
 
 
@@ -298,9 +481,47 @@ def validate_execution(
     unstamped historical plan keeps the permissive legacy read (AC3-COMPAT).
     """
     strategy_text = doc.get_section("Execution Strategy")
+    is_quick = doc.frontmatter.get("kind") == "quick-plan"
+    # The quick BODY checks - required sections, template placeholders left in
+    # place, a concrete file path, a runnable verification - are orthogonal to
+    # the Execution Strategy and must run for EVERY quick plan.
+    #
+    # They used to run only in the strategy-absent branch below, which was
+    # sound while `quick` skipped the section. This PR makes every quick plan
+    # carry one, which silently turned that branch into dead code and took the
+    # body checks with it: an unfilled epic-child scaffold went from 3
+    # violations to 0, so a child whose Changes / Files to Modify /
+    # Verification were still seeded HTML comments validated clean. A gate that
+    # a feature quietly switches off is worse than one that was never written.
+    quick_violations = list(_validate_quick(doc).violations) if is_quick else []
+
     if strategy_text is None:
-        if doc.frontmatter.get("kind") == "quick-plan":
-            return _validate_quick(doc)
+        if is_quick:
+            # The one escape hatch, now date-keyed. `quick` was told to skip
+            # the section on the assertion that a quick plan is single-task,
+            # and nothing checked it: 200 of 232 flat quick-plans in a
+            # fortnight carried more than one numbered change, so every one of
+            # them measured width 0 and `fno backlog join` could not tell a
+            # genuinely single-task plan from one that never declared its
+            # parallelism. Pre-gate plans keep the hatch; backfilling their
+            # topology would fabricate waves nobody authored.
+            # AUTHORING scope, so undatable frontmatter DEFERS rather than
+            # refusing - the same split `plan/cli.py` applies one line above
+            # when it calls `difficulty_gate_error(..., undatable_refuses=False)`
+            # in this very branch's caller. validate-plan.sh dates those plans
+            # itself from the filename, and refusing here would preempt its
+            # dating: a `status: ready` quick-plan with no `created:` key would
+            # be refused for a date the validator was about to supply.
+            gate_error = waves_gate_error(
+                doc.frontmatter,
+                has_execution_strategy=False,
+                undatable_refuses=False,
+            )
+            if gate_error:
+                return ExecutionValidationResult(
+                    [*quick_violations, _violation("Execution Strategy", gate_error)]
+                )
+            return ExecutionValidationResult(quick_violations)
         return ExecutionValidationResult(
             [_violation("Execution Strategy", "missing ## Execution Strategy section")]
         )
@@ -309,9 +530,11 @@ def validate_execution(
         strategy = parse_execution_strategy(strategy_text)
     except (BriefParseError, TypeError, ValueError) as exc:
         return ExecutionValidationResult(
-            [_violation("Execution Strategy", str(exc))]
+            [*quick_violations, _violation("Execution Strategy", str(exc))]
         )
-    violations: list[ExecutionViolation] = []
+    # Seeded, not started empty: a quick plan that now CARRIES a strategy still
+    # owes its body checks, and this is the path it takes.
+    violations: list[ExecutionViolation] = list(quick_violations)
     mode = str(strategy.get("execution_mode", "")).strip()
     if mode not in _EXECUTION_MODES:
         violations.append(
@@ -373,6 +596,11 @@ def validate_execution(
     for edge_error in validate_task_edges(strategy):
         violations.append(_violation("tasks.blocked_by", edge_error))
 
+    warnings: list[ExecutionViolation] = []
+    chain_warning = _total_chain_warning(tasks)
+    if chain_warning is not None:
+        warnings.append(chain_warning)
+
     # compiled-v1: every task acceptance reference must resolve to exactly one
     # compiled criterion (AC5-ERR). Unstamped plans skip this (AC3-COMPAT).
     contract = acceptance_contract
@@ -385,7 +613,7 @@ def validate_execution(
     waves = strategy.get("waves", [])
     if not isinstance(waves, list) or not waves:
         violations.append(_violation("waves", "Execution Strategy must declare at least one wave"))
-        return ExecutionValidationResult(violations)
+        return ExecutionValidationResult(violations, warnings=warnings)
 
     wave_ids = [
         str(wave.get("wave"))
@@ -490,25 +718,6 @@ def validate_execution(
                             )
                         )
 
-        if wave_mode == "parallel":
-            owners: dict[str, list[str]] = defaultdict(list)
-            for ref in refs:
-                task = tasks_by_id.get(ref)
-                if not task:
-                    continue
-                for path in task.get("surface", []):
-                    normalized = posixpath.normpath(str(path).strip())
-                    if normalized:
-                        owners[normalized].append(ref)
-            for path, owner_ids in sorted(owners.items()):
-                if len(owner_ids) > 1:
-                    violations.append(
-                        _violation(
-                            f"waves.{label}.surface",
-                            f"parallel tasks share surface '{path}': {', '.join(owner_ids)}",
-                        )
-                    )
-
     for task_id, count in sorted(Counter(referenced_tasks).items()):
         if task_id in tasks_by_id and count > 1:
             violations.append(
@@ -536,4 +745,4 @@ def validate_execution(
     if any(_has_cycle(wave_id) for wave_id in sorted(dependency_graph)):
         violations.append(_violation("waves.depends_on", "wave dependency cycle detected"))
 
-    return ExecutionValidationResult(violations)
+    return ExecutionValidationResult(violations, warnings=warnings)

@@ -1,58 +1,43 @@
 #!/usr/bin/env bash
-# SessionStart hook: surface the PRIOR `fno backlog reconcile` sweep as a
-# system reminder, then kick off a fresh throttled reconcile in the background.
+# fno hook: SessionStart - reconcile session start
+# SessionStart hook: kick off a fresh throttled reconcile in the background.
 #
 # Hook contract: stdout is appended to the session prompt; exit 0 = no error.
 # This hook NEVER blocks session start — the reconcile itself is detached (see
-# scripts/lib/reconcile-throttle.sh). The render step is a cheap file read of
-# the last sweep's result, so the reminder is always one sweep behind, which is
-# the point: session start stays instant.
+# scripts/lib/reconcile-throttle.sh). The sweep's warnings no longer render
+# here: the notice_route daemon arm routes them to the owning lead,
+# so session start stays instant and the warnings reach one owner instead of
+# every session.
 set -euo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 REPO_ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# HOME-as-repo guard (law d-8ddaba56): when the cwd is $HOME outside git, the
+# pwd fallback makes <repo>/.fno IS the state root, and the sweep would write
+# result stamps at the top level of the state root. Skip the repo-space work:
+# the sweep belongs to a checkout, and the state root is not one.
+_git_toplevel="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+_state_dir_phys="$(cd "${FNO_HOME:-$HOME/.fno}" 2>/dev/null && pwd -P || true)"
+_repo_fno_phys="$(cd "$REPO_ROOT/.fno" 2>/dev/null && pwd -P || true)"
+if [[ -z "$_git_toplevel" ]] \
+    || [[ -n "$_state_dir_phys" && "$_repo_fno_phys" == "$_state_dir_phys" ]]; then
+    exit 0
+fi
+
 # shellcheck source=scripts/lib/reconcile-throttle.sh
 source "$HOOK_DIR/../scripts/lib/reconcile-throttle.sh" 2>/dev/null || exit 0
 
-RESULT="$REPO_ROOT/.fno/.reconcile-result.json"
-
-# 1. Render the prior sweep's result, exactly once. Only surface when the sweep
-#    actually closed a drifted node — an empty sweep is silent to avoid noise.
-#    Consume-after-show (mv to .shown) so the same result is never re-surfaced
-#    across multiple sessions; the next sweep overwrites RESULT with fresh data.
-if [[ -f "$RESULT" ]] && command -v jq >/dev/null 2>&1; then
-    closed_n=$(jq '.closed | length' "$RESULT" 2>/dev/null || echo 0)
-    if [[ "$closed_n" =~ ^[0-9]+$ ]] && (( closed_n > 0 )); then
-        nodes=$(jq -r '.closed[].node_id' "$RESULT" 2>/dev/null | paste -sd, - 2>/dev/null)
-        echo "reconcile: last sweep closed ${closed_n} drifted node(s) whose PR merged outside the ship gate (${nodes}). Retro sentinels were written; the background harvest files follow-ups from them (or run \`fno backlog retro run\` now)."
-    fi
-    # Canonical-sync catch-up outcome, surfaced independently of closed nodes:
-    # the sweep that matters most is the one that found no drift yet could not
-    # bring the canonical current, and reading only `.closed` discarded it. The
-    # jq select keeps this quiet for the states needing no action.
-    # `// empty` and the `|| true` are both load-bearing, and this is the SECOND
-    # instance of the trap the find-advisory below documents. A result file
-    # written before `sync_catchup` existed has no such key, so `null | test(...)`
-    # is a jq TYPE ERROR (exit 5), not an empty match - and a bare `cu=$(...)`
-    # assignment propagates that under `set -e`. The hook then died here, BEFORE
-    # the consume-after-show mv and before reconcile_maybe_fire: every session
-    # re-surfaced the same stale reminder and no reconcile ever fired again. A
-    # cosmetic line must never be able to kill the trigger below it.
-    cu=$(jq -r '.sync_catchup // empty | select(.outcome | test("failed|unknown|error|marked|skipped")) | "\(.outcome)\(if .detail != "" then " (" + .detail + ")" else "" end)"' "$RESULT" 2>/dev/null || true)
-    [[ -n "$cu" ]] && echo "reconcile: canonical-sync catch-up ${cu}. The canonical checkout may be behind; run \`fno doctor\` for the outcome-keyed report."
-    # Promise-gate held-open nodes (condition D, plus #794's probes/ship-count):
-    # a node the sweep refused to close lands in .promise_unmet. Surfacing only
-    # .closed left these held open with no named cause - the silent-gate shape
-    # this repo fixes at the source, so the bucket is surfaced here too, before
-    # the consume-after-show move hides the result.
-    unmet_n=$(jq '.promise_unmet | length' "$RESULT" 2>/dev/null || echo 0)
-    if [[ "$unmet_n" =~ ^[0-9]+$ ]] && (( unmet_n > 0 )); then
-        nodes=$(jq -r '.promise_unmet[].node_id' "$RESULT" 2>/dev/null | paste -sd, - 2>/dev/null)
-        echo "reconcile: last sweep held ${unmet_n} node(s) open on the promise gate (${nodes}). Run \`fno backlog reconcile\` for the per-node cause (unharvested carve-out / failed close_probe / short ship count); resolve, or close with --force --reason."
-    fi
-    mv -f "$RESULT" "$RESULT.shown" 2>/dev/null || true
-fi
+# The reconcile render block is gone: the promise-gate,
+# canonical-sync and orphan-plan warnings are lead-scope context, and the
+# notice_route daemon arm routes them to the owning lead as one deduped
+# mail, renaming each consumed result file to `.shown` itself. This hook
+# keeps only the trigger duty: the pr-watch heal (1c) and the throttled
+# reconcile fire below.
 
 # 1b. Advisory: surface retro-pending sentinels still awaiting harvest. This is
 #     the recovery-visibility line for a web-UI merge - the detached job in step
@@ -77,13 +62,20 @@ fi
 # 1c. Self-heal: a dead pr-watch daemon (enabled but not ticking) once ran
 #     silent for 18h. On `dead` we now fire `fno do pr watch heal` (enabled-gated,
 #     claim single-flighted, detached so session start never waits on launchctl)
-#     instead of only advising. Best-effort; never blocks session start.
+#     instead of only advising. A `wedged` verdict (ticking, every tick failing)
+#     also takes heal: it re-renders through refresh_watcher and defers while a
+#     tick holds the claim, so the cure cannot kill a live tick .
+#     Best-effort; never blocks session start.
 if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     if pw_json="$(fno do pr watch status --json 2>/dev/null || true)" && [[ -n "$pw_json" ]]; then
         pw_verdict="$(printf '%s' "$pw_json" | jq -r '.verdict // empty' 2>/dev/null || true)"
         if [[ "$pw_verdict" == "dead" ]]; then
             pw_detail="$(printf '%s' "$pw_json" | jq -r '.detail // ""' 2>/dev/null || true)"
             echo "pr-watch: dead (${pw_detail}); self-heal started (fno do pr watch heal)"
+            (fno do pr watch heal >/dev/null 2>&1 &)
+        elif [[ "$pw_verdict" == "wedged" ]]; then
+            pw_detail="$(printf '%s' "$pw_json" | jq -r '.detail // ""' 2>/dev/null || true)"
+            echo "pr-watch: wedged (${pw_detail}); self-heal started (fno do pr watch heal)"
             (fno do pr watch heal >/dev/null 2>&1 &)
         fi
     fi

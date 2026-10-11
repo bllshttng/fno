@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Collection, Literal, Optional, TypedDict, Union
+from typing import Collection, Iterator, Literal, Optional, TypedDict, Union
 
 from fno.graph._constants import (
     LEDGER_JSON, PRIORITY_ORDER, is_wellformed_node_id, mint_node_id, _rank_band,
@@ -22,6 +22,7 @@ from fno.graph.depends import (
     _derive_title,
 )
 from fno.graph.statuses import VALID_STATUSES
+from fno.graph._reconcile import node_is_open
 
 
 # Source-field vocabulary for nodes intaked from a plan. Both spellings
@@ -60,6 +61,13 @@ _IntakeResult = Union[_IntakeAlready, _IntakeReady, _IntakeClaim]
 
 # -- Graph navigation helpers --
 
+def _dashless_variant(node_id: str) -> str:
+    """The dash-less spelling of a node id (`x-bbbb` -> `xbbbb`): the minter
+    briefly minted dash-less ids, and the graph confirms the id, not the shape.
+    """
+    return node_id.replace("-", "", 1) if "-" in node_id else node_id
+
+
 def _find_node(entries: list[dict], node_id: str) -> dict | None:
     # 'ab-' (3) + 8 hex = 11. Anything shorter that starts with 'ab-' is a
     # partial ab-id; route through the fuzzy resolver so callers like
@@ -87,7 +95,14 @@ def _find_node(entries: list[dict], node_id: str) -> dict | None:
                 f"{candidate_ids}\n"
             )
         return None
-    return next((e for e in entries if e.get("id") == node_id), None)
+    for e in entries:
+        if e.get("id") == node_id:
+            return e
+    # The dash-less twin, exact-match only: the graph confirms the id, not
+    # the spelling. Exact spelling wins first.
+    return next(
+        (e for e in entries if e.get("id") == _dashless_variant(node_id)), None
+    )
 
 
 def _find_dependents(entries: list[dict], node_id: str) -> list[str]:
@@ -140,7 +155,7 @@ def _would_exceed_epic_depth(
     entries: list[dict], node: dict, parent_node: dict
 ) -> bool:
     """True iff parenting ``node`` under ``parent_node`` breaks the epic-nesting
-    cap (x-6c2b wave 3: mission -> epic -> leaf, two epic levels).
+    cap (wave 3: mission -> epic -> leaf, two epic levels).
 
     Fires only when BOTH are epics and either direction would make a third epic
     level: (a) the parent already has an epic ancestor (it is a nested epic, not
@@ -186,7 +201,7 @@ def descendants_of(entries: list[dict], parent_id: str) -> set[str]:
     reachable below ``parent_id``. The parent itself is never included.
 
     Powers the ``--parent <epic-id>`` epic-scope filter on ``fno backlog
-    next``/``ready`` (C2, ab-facfaade): candidates are restricted to this
+    next``/``ready`` (C2): candidates are restricted to this
     set so a walk drains one epic's subtree feature-by-feature.
 
     Cycle-safe: a ``seen`` set bounds the BFS so a malformed graph with a
@@ -397,27 +412,19 @@ def make_selection_sort_key(
 
     Returns the one key function for sorting board cards and ready candidates.
     ``swimlane=True`` prepends the project lane used by renderers; the remaining
-    suffix is byte-identical to selection precedence: curated ``rank`` first,
-    then epics-first, then flat priority.
-    The key always includes the same ``_rank_band`` term, so a ``fno backlog
-    rank --top`` node is *worked* next, not merely floated on the board.
-    A ranked node (band 0, ascending rank) outranks every
-    unranked node, so an explicit rank overrides the epics-first heuristic;
-    with no ranks set every node shares the ``(1, 0.0)`` band and ordering is
-    byte-for-byte today's epics-first behavior. A node is an "epic child"
-    when its ``parent`` resolves to another node in ``entries``; such
-    children always outrank loose nodes regardless of raw priority, so a
-    walk stays focused on one epic before starting loose work. Among epic
-    children the order is: in-progress epics first (an epic with a done or
-    claimed child), then higher-priority epics, then the epic's own
-    ``created_at`` (keeps one epic's children grouped), then the child's
-    own priority and ``created_at``. Loose nodes fall back to flat
-    priority then ``created_at`` (matching ``_graph_sort_key_fn``).
+    suffix is byte-identical to selection precedence. The term order and what
+    each term means are in ``docs/architecture/backlog-board-ordering.md``. The
+    invariants a caller relies on:
 
-    The key is precomputed against ``entries`` once so sorting stays O(N
-    log N): epic lookup, child grouping, and in-progress detection are all
-    table lookups. A ``parent`` that names a missing node is treated as a
-    loose node (never crashes on a malformed graph).
+    - An operator's pin (band 0) outranks every unranked node, but only among
+      the peers it ordered: its lane for a loose node, its live epic's children
+      for a child. A pinned child is not the project's next node.
+    - With no rank and no encounter anywhere, ordering is byte-for-byte the
+      epics-first behavior that predates both terms.
+    - An "epic child" is a node whose ``parent`` resolves in ``entries``. A
+      ``parent`` naming a missing node is a loose node, never a crash.
+    - Everything is precomputed against ``entries`` once, so sorting stays
+      O(N log N): every per-node lookup below is a table read.
     """
     id_to_entry: dict[str, dict] = {
         e["id"]: e
@@ -427,6 +434,35 @@ def make_selection_sort_key(
     # Once per sort, not once per comparison: the key below runs O(n log n)
     # times and this answer does not change while it does.
     child_progress_epics = _epics_with_child_progress(id_to_entry)
+    # Fan-out: how many OPEN nodes wait on each id. Within a band the
+    # node more work hangs on goes first, AFTER the priority terms: a decision
+    # outranks a measurement (a p2 blocking three must not jump a p1 blocking none).
+    dependents: dict[str, int] = {}
+    for e in entries:
+        if not isinstance(e, dict) or not node_is_open(e):
+            continue
+        for bid in e.get("blocked_by") or []:
+            if isinstance(bid, str):
+                dependents[bid] = dependents.get(bid, 0) + 1
+
+    def _fanout(node_id: object) -> int:
+        return -dependents.get(node_id, 0) if isinstance(node_id, str) else 0
+    # Evidence, read once per sort: zero for every unvoted row, so a graph with
+    # no encounters keeps its exact previous order.
+    from datetime import datetime, timezone
+
+    from fno.graph.demand import importance_score
+
+    effective_priority = make_effective_priority(entries)
+    scored_at = datetime.now(timezone.utc)
+
+    def _score(node: dict) -> float:
+        # Degrade like _rank_band and orphan_ids: a hand-edited `encounters: 3`
+        # raising here would take down the whole locked_mutate_graph write.
+        try:
+            return -importance_score(node, effective_priority(node), scored_at)
+        except Exception:  # noqa: BLE001 - ordering signal; never break selection
+            return 0.0
     # Board == work order: `next` must demote orphans exactly where the board
     # does, or the board shows one order and the walker works another. Computed
     # here (not passed by every caller) so no call site can forget it; fails
@@ -444,12 +480,15 @@ def make_selection_sort_key(
         return PRIORITY_ORDER[_priority_name(e)]
 
     def key(node: object) -> tuple:
-        # Curated rank leads: the SAME `_rank_band` the board uses,
-        # prepended so a `rank --top` node (band 0, ascending rank) is selected
-        # ahead of ALL unranked nodes (band 1) - including in-progress epic
-        # children, so an explicit rank overrides the epics-first heuristic
-        # (Locked Decision 1). Unranked nodes all share the `(1, 0.0)` band, so
-        # the existing epics-first key below decides their order byte-for-byte.
+        # Curated rank leads: the SAME `_rank_band` the board uses, prepended
+        # so a `rank --top` LOOSE node (band 0, ascending rank) is selected
+        # ahead of all unranked nodes (band 1), overriding the epics-first
+        # heuristic (Locked Decision 1). For a live-epic child the leading
+        # band is the EPIC's own: the group's position is decided by the
+        # epic, and the child's rank (the `band` term below) orders it only
+        # among its siblings under that epic - it can never float the group.
+        # Unranked nodes all share the `(1, 0.0)` band, so the epics-first
+        # key below decides their order byte-for-byte.
         if not isinstance(node, dict):
             node = {}
         lane = (_lane_order_key(_project_key(node)),) if swimlane else ()
@@ -463,25 +502,29 @@ def make_selection_sort_key(
         if epic is not None:
             in_progress_rank = 0 if pid in epic_in_progress else 1
             return lane + (
-                band,                    # curated rank band (ranked first)
+                _rank_band(epic),        # EPIC's rank band decides group position
                 0,                       # epic-children tier (before loose)
                 in_progress_rank,        # in-progress epics first
                 _prio(epic),             # highest-priority epic first
                 _sort_text(epic.get("created_at")),  # group one epic together
+                band,                    # child rank: orders only within its epic
                 child_prio,
-                child_orphan,        # in-band: after priority, before created_at
+                _fanout(node_id),    # in-band: after priority, before orphan
+                child_orphan,
+                _score(node),        # evidence, below every judgement above it
                 child_created,
             )
         # Loose node: tier 1. Middle fields mirror the child fields so the
         # tuple stays comparable; tier already separates loose from epic
         # children, so loose nodes only ever compare among themselves and
-        # resolve on flat (priority, created_at).
-        # Decision fields lead: priority, then orphan-last, then created_at.
-        # The trailing pair only pads the tuple to the epic branch's arity;
-        # tier (index 1) already separates the two, so it is never compared.
+        # resolve on flat (priority, fan-out, created_at).
+        # Decision fields lead: priority, then fan-out, then orphan-last,
+        # then created_at. The trailing triple only pads the tuple to the
+        # epic branch's arity; tier (index 1) already separates the two, so
+        # it is never compared.
         return lane + (
-            band, 1, 0, child_prio, child_orphan, child_created,
-            child_prio, child_created,
+            band, 1, 0, child_prio, _fanout(node_id), child_orphan, _score(node),
+            child_created, child_prio, _fanout(node_id), child_created,
         )
 
     return key
@@ -494,7 +537,7 @@ def _git_repo_root() -> str | None:
     # `git worktree list` record that is a real working tree, robust across
     # normal / bare / separate-git-dir layouts (skips a bare repo and a
     # separate-git-dir gitdir mis-report rather than recording either as the
-    # backlog cwd). See paths.resolve_canonical_worktree (ab-91a004af).
+    # backlog cwd). See paths.resolve_canonical_worktree.
     canonical = _paths.resolve_canonical_worktree()
     if canonical is not None:
         return os.path.normpath(str(canonical))
@@ -536,7 +579,7 @@ def _settings_candidate_paths() -> list[Path]:
     essential: the ``work.workspaces`` project->path map lives only there, and
     inside a repo ``config_file()`` resolves to the project-local settings, so
     without the global entry the map is never consulted and project detection
-    returns None for every node filed from inside a project (ab-95e8efec).
+    returns None for every node filed from inside a project.
 
     De-duplicated by normalized path so an outside-a-repo run (where
     ``config_file()`` is already the global file) does not read + warn on the
@@ -556,7 +599,7 @@ def _settings_candidate_paths() -> list[Path]:
     out: list[Path] = []
     seen: set[str] = set()
     # config.toml-first: each settings.yaml location also yields its config.toml
-    # sibling as a higher-priority candidate (flat hard cut, x-8526).
+    # sibling as a higher-priority candidate (flat hard cut).
     for path in config_read_candidates([
         Path(".fno/settings.yaml"),
         _paths.config_file(),
@@ -572,6 +615,49 @@ def _settings_candidate_paths() -> list[Path]:
         seen.add(key)
         out.append(path)
     return out
+
+
+def _iter_settings_projects() -> "Iterator[tuple[object, object]]":
+    """Yield ``(name, raw_path)`` for every ``work`` project entry, in file
+    then declaration order: multi-workspace first, then legacy flat.
+
+    The single schema walk behind the work-map readers (detection, reverse
+    lookup, known-names, the maintain workspace map) so all four consume one
+    shape and cannot drift. Values are yielded untyped; each consumer applies
+    its own guards. Best-effort: a missing or unparseable file contributes
+    nothing.
+    """
+    # Function-local: keep graph-module load free of config_io's pydantic/yaml.
+    from fno.config_io import read_config_flat
+
+    for path in _settings_candidate_paths():
+        if not path.exists():
+            continue
+        # read_config_flat parses config.toml (or a legacy settings.yaml) and
+        # returns the FLAT dict; work is top-level.
+        work = read_config_flat(path).get("work")
+        if not isinstance(work, dict):
+            continue
+
+        workspaces = work.get("workspaces")
+        if isinstance(workspaces, dict):
+            for ws in workspaces.values():
+                if not isinstance(ws, dict):
+                    continue
+                projects = ws.get("projects")
+                if not isinstance(projects, list):
+                    continue
+                for proj in projects:
+                    if not isinstance(proj, dict):
+                        continue
+                    yield proj.get("name"), proj.get("path")
+
+        flat_projects = work.get("projects")
+        if isinstance(flat_projects, dict):
+            for name, cfg in flat_projects.items():
+                if not isinstance(cfg, dict):
+                    continue
+                yield name, cfg.get("path")
 
 
 def detect_project_from_settings(cwd_path: str | None = None) -> str | None:
@@ -606,49 +692,12 @@ def detect_project_from_settings(cwd_path: str | None = None) -> str | None:
     # stored as ~ / absolute, so a relative target would never match.
     target = os.path.abspath(os.path.expanduser(cwd_path)) if cwd_path else os.getcwd()
 
-    # Function-local: keep graph-module load free of config_io's pydantic/yaml.
-    from fno.config_io import read_config_flat
-
-    for path in _settings_candidate_paths():
-        if not path.exists():
+    for name, raw_path in _iter_settings_projects():
+        if not name or not raw_path:
             continue
-        # read_config_flat parses config.toml (or a legacy settings.yaml) and
-        # returns the FLAT dict; work is top-level. A missing/unparseable file
-        # contributes nothing (best-effort, per the silent-failure contract).
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                projects = ws.get("projects")
-                if not isinstance(projects, list):
-                    continue
-                for p in projects:
-                    if not isinstance(p, dict):
-                        continue
-                    raw_path = p.get("path")
-                    name = p.get("name")
-                    if not raw_path or not name:
-                        continue
-                    proj_path = os.path.normpath(os.path.expanduser(str(raw_path)))
-                    if proj_path == target:
-                        return str(name)
-
-        flat_projects = work.get("projects")
-        if isinstance(flat_projects, dict):
-            for name, cfg in flat_projects.items():
-                if not isinstance(cfg, dict):
-                    continue
-                raw_path = cfg.get("path")
-                if not raw_path:
-                    continue
-                proj_path = os.path.normpath(os.path.expanduser(str(raw_path)))
-                if proj_path == target:
-                    return str(name)
+        proj_path = os.path.normpath(os.path.expanduser(str(raw_path)))
+        if proj_path == target:
+            return str(name)
 
     return None
 
@@ -689,47 +738,11 @@ def project_root_from_settings(project: str | None) -> str | None:
     if not project:
         return None
 
-    # Function-local: keep graph-module load free of config_io's pydantic/yaml.
-    from fno.config_io import read_config_flat
-
-    for path in _settings_candidate_paths():
-        if not path.exists():
+    for name, raw_path in _iter_settings_projects():
+        if not name or not raw_path:
             continue
-        # read_config_flat parses config.toml (or a legacy settings.yaml) and
-        # returns the FLAT dict; work is top-level. A missing/unparseable file
-        # contributes nothing (best-effort, same as the forward reader).
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                projects = ws.get("projects")
-                if not isinstance(projects, list):
-                    continue
-                for p in projects:
-                    if not isinstance(p, dict):
-                        continue
-                    name = p.get("name")
-                    raw_path = p.get("path")
-                    if not name or not raw_path:
-                        continue
-                    if name == project:
-                        return os.path.abspath(os.path.expanduser(str(raw_path)))
-
-        flat_projects = work.get("projects")
-        if isinstance(flat_projects, dict):
-            for name, cfg in flat_projects.items():
-                if not isinstance(cfg, dict):
-                    continue
-                raw_path = cfg.get("path")
-                if not raw_path:
-                    continue
-                if name == project:
-                    return os.path.abspath(os.path.expanduser(str(raw_path)))
+        if name == project:
+            return os.path.abspath(os.path.expanduser(str(raw_path)))
 
     return None
 
@@ -854,33 +867,9 @@ def _list_known_projects() -> set[str]:
     """
 
     known: set[str] = set()
-    # Function-local: keep graph-module load free of config_io's pydantic/yaml.
-    from fno.config_io import read_config_flat
-
-    for path in _settings_candidate_paths():
-        if not path.exists():
-            continue
-        # config.toml (or legacy settings.yaml) -> flat dict; work is top-level.
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                projects = ws.get("projects")
-                if isinstance(projects, list):
-                    for proj in projects:
-                        if isinstance(proj, dict) and isinstance(proj.get("name"), str):
-                            known.add(proj["name"])
-
-        flat_projects = work.get("projects")
-        if isinstance(flat_projects, dict):
-            for name in flat_projects.keys():
-                if isinstance(name, str):
-                    known.add(name)
+    for name, _raw in _iter_settings_projects():
+        if isinstance(name, str):
+            known.add(name)
 
     return known
 
@@ -916,7 +905,7 @@ def detect_project(entries: list[dict]) -> str | None:
             continue
         # expanduser BEFORE normpath so historical entries stored with
         # tilde-form paths (e.g. "~/code/me/chingu") match the absolute
-        # repo_root. The writer side (cmd_add/cmd_idea) stores absolute
+        # repo_root. The writer side (the native create path) stores absolute
         # paths since PR #167, but pre-#167 entries and any direct edits
         # use ~. Without expanduser, the comparison silently never matches
         # and detect_project falls through to the global-scope fallback.
@@ -998,10 +987,11 @@ def _validate_cli_deps(cli_deps: list[str], entries: list[dict]) -> None:
 # -- Ledger lookup --
 
 def _lookup_ledger_entry(plan_path: str) -> dict | None:
-    if not LEDGER_JSON.exists():
+    ledger = LEDGER_JSON
+    if ledger is None or not ledger.exists():
         return None
     try:
-        data = json.loads(LEDGER_JSON.read_text())
+        data = json.loads(ledger.read_text())
     except (json.JSONDecodeError, OSError) as e:
         print(
             f"Warning: could not read {LEDGER_JSON}: {e} - "
@@ -1085,12 +1075,13 @@ def _resolve_claim(
             f"invalid claims value: {raw!r} (expected a <prefix>-<4..8 hex> node id)"
         )
 
-    for e in entries:
-        if e.get("id") == raw:
-            source: Literal["cli", "frontmatter"] = (
-                "cli" if cli_claim else "frontmatter"
-            )
-            return (e, source)
+    # Exact spelling first, then its dash-less twin (`x-bbbb` -> `xbbbb`):
+    # the graph confirms the id, not the spelling.
+    source: Literal["cli", "frontmatter"] = "cli" if cli_claim else "frontmatter"
+    for wanted in dict.fromkeys((raw, _dashless_variant(raw))):
+        for e in entries:
+            if e.get("id") == wanted:
+                return (e, source)
 
     raise ValueError(
         f"claims target {raw} not found on graph - "
@@ -1142,12 +1133,10 @@ def _warn_similar_nodes(
         pr_tok = f"  PR#{pr}" if isinstance(pr, int) and not isinstance(pr, bool) else ""
         lines.append(f'  {cid}  {status:<10}{score:.2f}{pr_tok}  "{title}"')
     top_id = candidates[0][0]
-    top_cand = by_id.get(top_id, {})
-    # The intake paths can re-file with --claims to consolidate, but only against
-    # an idea-state node (intake refuses to claim a non-idea node upstream); a
-    # missing status is malformed, not idea-state, so for any other top state the
-    # receipt informs only.
-    if intake_hint and top_cand.get("status") == "idea":
+    # The intake paths can re-file with --claims to consolidate against the
+    # top candidate, in any node state; idea/add cannot, so they get the
+    # supersede/update remedy only.
+    if intake_hint:
         lines.append(
             "consolidate: `fno backlog supersede` / `fno backlog update`, or "
             f"re-file with --claims {top_id}"
@@ -1174,21 +1163,15 @@ def _prepare_intake(
     cli_project: str | None = None,
     cli_claim: str | None = None,
 ) -> _IntakeResult:
-    # Claim resolution runs FIRST so a claim on an existing idea node beats
-    # the plan_path-equality match. _resolve_claim raises ValueError on bad
-    # input; the caller surfaces those as non-zero exits via Typer.
+    _refuse_filename_claim_mismatch(plan_path, cli_claim)
+    # Claim resolution runs FIRST so a claim on an existing node (any state)
+    # beats the plan_path-equality match. _resolve_claim raises ValueError on
+    # bad input; the caller surfaces those as non-zero exits via Typer.
     claim_node, claim_source = _resolve_claim(cli_claim, plan_path, entries)
-    if claim_node is not None:
-        node_status = claim_node.get("status")
-        if node_status not in ("idea", None):
-            raise ValueError(
-                f'node {claim_node.get("id")} is in state {node_status!r}; '
-                f"refuse to claim a non-idea node"
-            )
 
     existing = _match_plan_in_graph(entries, plan_path, roadmap_id)
     if existing is None:
-        # plan == PR == node (x-04b9): a plan file is one delivery unit regardless
+        # plan == PR == node: a plan file is one delivery unit regardless
         # of which roadmap tracks it. _match_plan_in_graph only catches the
         # same-roadmap "already intaked" case; a plan owned under a different
         # roadmap still arms two concurrent dispatches, so refuse it here on the
@@ -1321,6 +1304,39 @@ def _prepare_intake(
         "status": "ready",
         "node_spec": node_spec,
     }
+
+
+def _refuse_filename_claim_mismatch(plan_path: str, cli_claim: str | None) -> None:
+    """Refuse identity disagreement across filename, frontmatter, and CLI claim."""
+    from fno.paths import plan_filename_node_id
+
+    declared = {
+        claim
+        for claim in plan_claims(plan_path)
+        if is_wellformed_node_id(claim)
+    }
+    from fno.graph._constants import LEGACY_PREFIX, node_id_prefix
+
+    prefixes = {LEGACY_PREFIX, node_id_prefix(), *(c.split("-", 1)[0] for c in declared)}
+    if cli_claim and is_wellformed_node_id(cli_claim):
+        prefixes.add(cli_claim.split("-", 1)[0])
+    filename_node = plan_filename_node_id(plan_path, prefixes=prefixes)
+    if filename_node is None:
+        return
+
+    if len(declared) == 1:
+        frontmatter_node = next(iter(declared))
+        if filename_node != frontmatter_node:
+            raise ValueError(
+                f"plan {plan_path} filename names {filename_node}, but frontmatter "
+                f"claims {frontmatter_node}; rename the file or correct the claim"
+            )
+
+    if cli_claim and is_wellformed_node_id(cli_claim) and filename_node != cli_claim:
+        raise ValueError(
+            f"plan {plan_path} filename names {filename_node}, but --claims names "
+            f"{cli_claim}; rename the file or pass the matching claim"
+        )
 
 
 def _refuse_surfaceless_intake(paths: list[str], *, allow_no_surface: bool) -> None:
@@ -1545,7 +1561,7 @@ def _build_intake_node(spec: dict, entries: list[dict]) -> dict:
 
     raw_difficulty = fm.get("difficulty")
     if raw_difficulty is None and fm.get("model_tier") is not None:
-        # The compat read died with the field (x-baef); a plan still spelling
+        # The compat read died with the field; a plan still spelling
         # the band as model_tier must hear it lost, not lose it silently.
         sys.stderr.write(
             f"warning: {spec['plan_path']}: frontmatter model_tier is retired "
@@ -1572,6 +1588,16 @@ def _build_intake_node(spec: dict, entries: list[dict]) -> dict:
     except ValueError as exc:
         raise ValueError(f"{spec['plan_path']}: {exc}") from exc
 
+    # Request origin: intake keeps the plan's references as evidence,
+    # never claims a requester the plan did not declare.
+    from fno.graph.node_builder import stamp_request_origin
+
+    plan_sources = fm.get("sources") or []
+    origin, origin_evidence = stamp_request_origin(
+        source_kind=None, birth_channel="intake",
+        origin_evidence=("; ".join(map(str, plan_sources)) if plan_sources else f"plan:{spec['plan_path']}")[:300],
+    )
+
     node = {
         "id": mint_node_id({e.get("id") for e in entries if e.get("id")}),
         "parent": None,
@@ -1588,7 +1614,7 @@ def _build_intake_node(spec: dict, entries: list[dict]) -> dict:
         "domain": "code",
         "blocked_by": spec["deps"],
         "session_id": None,
-        "claimed_at": None,
+        "locked_at": None,
         "completed_at": None,
         "has_brief": False,
         "roadmap_id": spec["roadmap_id"],
@@ -1609,6 +1635,8 @@ def _build_intake_node(spec: dict, entries: list[dict]) -> dict:
         "completion_note": None,
         "points": spec.get("points"),
         "source": "intake",
+        "request_origin": origin,
+        "origin_evidence": origin_evidence,
         "created_at": datetime.now(timezone.utc).isoformat(),
         # Mission context: only present when the plan was spawned by megatron.
         # Preserved verbatim so megawalk.extract_mission_env can read them.
@@ -1622,7 +1650,7 @@ def _build_intake_node(spec: dict, entries: list[dict]) -> dict:
     # to the plan projector, which then deletes a band the doc authored later.
     if difficulty is not None:
         node["difficulty"] = difficulty
-        # The one append shape every difficulty writer uses (x-baef): a
+        # The one append shape every difficulty writer uses: a
         # hand-rolled birth entry here would drift from the helper the
         # claim, update, and migration lanes all share.
         append_difficulty_history(

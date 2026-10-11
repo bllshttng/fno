@@ -1,10 +1,10 @@
 """Type definitions for the fno graph module.
 
-Contains Status/Priority enums and the Entry pydantic model.
+Contains Status/Priority enums and the typed ``Node`` model (the Linear
+surface).
 """
 from __future__ import annotations
 
-import datetime as _dt
 import math
 from enum import Enum
 from typing import Optional, Self
@@ -52,21 +52,26 @@ class Priority(str, Enum):
     p3 = "p3"
 
 
-# Lifecycle phases stamped into a node's append-only `sessions` list (x-b6e4).
-# `review` joined at x-4342 (operator ruling 2026-08-23): a spawned reviewer
+# Lifecycle phases stamped into a node's append-only `sessions` list.
+# `review` joined at (operator ruling 2026-08-23): a spawned reviewer
 # session that never holds the claim crossed no stamping chokepoint, so its
 # provenance row had no honest label. The single source of truth for phase
 # validation in store.append_session_record and the `session add` CLI.
-SESSION_PHASES: frozenset[str] = frozenset({"think", "blueprint", "do", "review", "ship"})
+SESSION_PHASES: frozenset[str] = frozenset({"think", "blueprint", "execute", "review", "ship"})
+
+# One-release input alias: "do" names this phase no more (2026-09-25 ruling).
+# Normalize on input; remove to make --phase do refuse naming execute.
+PHASE_INPUT_ALIASES: dict[str, str] = {"do": "execute"}
+
+
+def normalize_phase(value: str) -> str:
+    """Map a retired phase spelling to its live name before validation."""
+    return PHASE_INPUT_ALIASES.get(value, value)
 
 
 # Re-export the canonical PRIORITY_ORDER from _constants so this module
 # stays in sync without a parallel literal.
 from fno.graph._constants import PRIORITY_ORDER  # noqa: E402,F401
-
-
-def _ts_now() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _derive_status(data: dict) -> str:
@@ -79,14 +84,9 @@ def _derive_status(data: dict) -> str:
     if data.get("completed_at"):
         return "done"
     if data.get("superseded_by"):
-        # One authority for the pending shape. recompute_statuses and the
-        # readiness overlay both answer `blocked` here, and this function's
-        # contract is to mirror them; answering in_progress made the same row
-        # read two ways depending on which path last touched it.
-        from fno.graph.statuses import pending_supersession_reason
-
-        if pending_supersession_reason(data):
-            return "blocked"
+        # The superseded_by edge is the terminal fact: supersession
+        # evidence lives in the record and the reconcile receipts, never in
+        # status. Mirrors recompute_statuses answering superseded here.
         return "superseded"
     if data.get("deferred_at"):
         return "deferred"
@@ -114,7 +114,95 @@ def _derive_status(data: dict) -> str:
     return _rung_to_graph_status()[plan_rung(data)]
 
 
-class Entry(BaseModel):
+class RelationType(str, Enum):
+    """The named relation kinds (Linear-aligned; mirrors the Rust enum)."""
+
+    blocks = "blocks"
+    related = "related"
+    supersedes = "supersedes"
+
+
+class SessionRecord(BaseModel):
+    """One lifecycle-provenance row (graph.json ``sessions[]``)."""
+
+    model_config = {"extra": "allow"}
+
+    phase: str
+    harness: str
+    session_id: str
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    ended_by: Optional[str] = None
+
+
+class Comment(BaseModel):
+    """One progress-notes row (wire keys ts -> created_at, text -> body)."""
+
+    model_config = {"extra": "allow", "populate_by_name": True}
+
+    created_at: Optional[str] = Field(default=None, alias="ts")
+    body: Optional[str] = Field(default=None, alias="text")
+    kind: Optional[str] = None
+    title: Optional[str] = None
+
+
+class NodeClaim(BaseModel):
+    """Typed view over a node's flat lock fields (Linear-aligned)."""
+
+    locked_by: Optional[str] = None
+    harness: Optional[str] = None
+    harness_session: Optional[str] = None
+    locked_at: Optional[str] = None
+
+
+class Dispatch(BaseModel):
+    """Typed view over a node's flat dispatch fields (Linear-aligned)."""
+
+    verb: Optional[str] = None
+    brief: Optional[str] = None
+    model: Optional[str] = None
+
+
+class PullRequest(BaseModel):
+    """The primary or a follow-up PR attached to a node (Linear-aligned)."""
+
+    number: Optional[int] = None
+    url: Optional[str] = None
+    merge_status: Optional[str] = None
+    note: Optional[str] = None
+
+
+class NodeFilter(BaseModel):
+    """The typed API's node filter; unset fields match everything."""
+
+    id_in: Optional[list[str]] = None
+    project: Optional[str] = None
+    status_in: Optional[list[str]] = None
+    state_type: Optional[str] = None
+    parent: Optional[str] = None
+    label: Optional[str] = None
+    claimed: Optional[bool] = None
+    session_id: Optional[str] = None
+
+
+class NodeUpdateInput(BaseModel):
+    title: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    project: Optional[str] = None
+    parent: Optional[str] = None
+    plan_path: Optional[str] = None
+    description: Optional[str] = None
+    estimate: Optional[str] = None
+
+
+class CommentCreateInput(BaseModel):
+    body: str
+    kind: Optional[str] = None
+    title: Optional[str] = None
+
+
+class Node(BaseModel):
     """A single feature graph node, matching the graph.json schema exactly."""
 
     id: str
@@ -125,7 +213,7 @@ class Entry(BaseModel):
     # model_dump round-trips it and old graph.json entries (no children key)
     # parse without migration.
     children: list[dict] = Field(default_factory=list)
-    # Title-derived human handle (ab-f82e8083). Additive: leads display, but
+    # Title-derived human handle. Additive: leads display, but
     # `id` stays the canonical key. Assigned once when a node is first persisted
     # (store.ensure_slugs) and immutable thereafter; null until backfilled.
     slug: Optional[str] = None
@@ -150,7 +238,7 @@ class Entry(BaseModel):
     locked_by_harness: Optional[str] = None
     locked_by_harness_session: Optional[str] = None
     session_id: Optional[str] = None
-    claimed_at: Optional[str] = None
+    locked_at: Optional[str] = None
     ownership_defect: Optional[dict[str, str]] = None
     completed_at: Optional[str] = None
     # Defer state. Mutually exclusive with completed_at by cascade
@@ -174,7 +262,7 @@ class Entry(BaseModel):
     details: Optional[str] = None
     cost_usd: Optional[float] = None
     cost_sessions: list[dict] = Field(default_factory=list)
-    # Delivery-unit containment (x-e957). Set when `decompose ... adopt:` folds
+    # Delivery-unit containment. Set when `decompose ... adopt:` folds
     # an existing node into a group child: this node's work ships inside the
     # named node's PR, so it is not separately dispatchable and not separately
     # costed. `plan == PR == node` holds for the delivery unit; a contained node
@@ -184,7 +272,7 @@ class Entry(BaseModel):
     # nodes serializes byte-identically (the `dep`/`stub_against` pattern).
     contained_in: Optional[str] = None
     size: Optional[str] = None
-    # Optional per-node model pin (x-571f). A dispatcher appends `--model <m>`
+    # Optional per-node model pin. A dispatcher appends `--model <m>`
     # to the worker spawn it builds; null = provider default (no behavior
     # change). Validated as a single non-whitespace token at write time; the
     # no-whitespace rule protects MODEL_FLAG shell word-splitting in the loop
@@ -208,7 +296,7 @@ class Entry(BaseModel):
     # so old graph.json entries parse without migration.
     additional_prs: list[dict] = Field(default_factory=list)
     merge_status: Optional[str] = None
-    # Causal links (W4 telemetry, x-f063): survival math needs a fix node to
+    # Causal links (W4 telemetry): survival math needs a fix node to
     # point back at what it fixes and a reverted ship to stop counting as a
     # survival. Writers: `backlog update --caused-by/--fixes-pr/--reverted`
     # (manual), retro-harvest node creation (auto caused_by), reconcile's
@@ -228,7 +316,7 @@ class Entry(BaseModel):
     # compatibility; this record carries the proof state.
     supersession: Optional[dict] = None
 
-    # Parent-edge provenance (x-30f6). Declared first-class (typed, default
+    # Parent-edge provenance. Declared first-class (typed, default
     # None) so model_dump round-trips them and they validate as strings. The
     # store applies the same defaults on the raw-dict read path; the older
     # source_* fields stay extras (extra="allow") and are intentionally not
@@ -249,24 +337,37 @@ class Entry(BaseModel):
     spawned_by_harness: Optional[str] = None
     spawned_by_cwd: Optional[str] = None
 
-    # Append-only lifecycle provenance (x-b6e4): one {phase, harness, session_id,
+    # Request origin: birth-time, never rewritten later.
+    request_origin: Optional[str] = None
+    origin_evidence: Optional[str] = None
+
+    # Append-only lifecycle provenance: one {phase, harness, session_id,
     # effort, at} record per phase boundary a session crossed. Unique per
     # (phase, harness, session_id); the same session may appear across phases and
     # a takeover appends another entry for the same phase. Written only through
     # store.append_session_record. Empty on legacy nodes.
-    sessions: list[dict] = Field(default_factory=list)
+    sessions: list[SessionRecord] = Field(default_factory=list)
+
+    # The status the STORE holds, planted by _check_status_drift from the
+    # wire's `status` key. `status` above stays the single-entry derived
+    # view; wedge verbs (requeue, hold, dispatch) read this one.
+    persisted_status: Optional[str] = None
+
+    # Archive residency stamp. Non-null means the node answers only
+    # include_archived reads; null/absent is live.
+    archived_at: Optional[str] = None
 
     model_config = {"extra": "allow"}
 
     @field_validator("rank", mode="before")
     @classmethod
     def _validate_rank(cls, v: object) -> Optional[float]:
-        """Reject bool / inf / NaN ranks at the model boundary (ab-6603350c).
+        """Reject bool / inf / NaN ranks at the model boundary.
 
         Live render/verb paths already guard these (``_rank_band`` finite-check
         + bool exclusion, ``_is_ranked`` bool exclusion) and the raw-dict path
         dominates, so this is defensive hardening for the cases that *do*
-        construct an ``Entry``: a non-finite or bool rank fails loudly here
+        construct a ``Node``: a non-finite or bool rank fails loudly here
         rather than silently degrading to "unranked" downstream. ``None``
         (unranked) and ordinary finite numbers pass through. Runs in
         ``before`` mode so a bool is caught before pydantic coerces it to 1.0.
@@ -286,11 +387,13 @@ class Entry(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _check_status_drift(cls, data: object) -> object:
-        """Drop persisted status; emit graph_status_drift event if it differs
-        from the computed value so forensic audit can track legacy graph.json.
+        """Drop the persisted status; keep it beside the derived one.
 
-        Best-effort: event emit failures are swallowed so deserialization
-        never crashes on a telemetry error.
+        The store settles drift itself: every write op re-derives status, so a
+        persisted row disagrees with the derivation only until its next write.
+        The graph_status_drift journal event is retired - its read-side emitter
+        fired on every deserialize, so the journal cost scaled with reads, not
+        with drift (2,241 rows for 23 ids in 35 minutes, measured 2026-09-15).
         """
         if not isinstance(data, dict):
             return data
@@ -300,41 +403,12 @@ class Entry(BaseModel):
         legacy = data.pop("_status", None)
         if persisted is None:
             persisted = legacy
-        if persisted is None:
-            return data
-
-        computed = _derive_status(data)
-        if persisted != computed:
-            # Fix 1 (Locked Decision #2): suppress the known single-entry-vs-cascade
-            # approximation gap. recompute_statuses resolves nodes whose blocked_by
-            # siblings are all completed to "ready"/"in_progress" and writes that to disk.
-            # On reload, _derive_status still sees a non-empty blocked_by list and
-            # returns "blocked" -- a single-entry approximation, not a real drift.
-            # Emitting graph_status_drift here would be a false positive; the cascade
-            # in recompute_statuses is authoritative for that case.
-            if computed == "blocked" and persisted in {"ready", "design", "in_progress", "idea"}:
-                return data
-
-            try:
-                from fno.events import append_event  # local import avoids circularity
-
-                event = {
-                    "ts": _ts_now(),
-                    "type": "graph_status_drift",
-                    "source": "migration",
-                    "data": {
-                        "entry_id": data.get("id", ""),
-                        "persisted": persisted,
-                        "computed": computed,
-                    },
-                }
-                append_event(event)
-            except (OSError, ImportError):
-                # Fix 4: narrowed from broad except Exception. OSError covers transient
-                # filesystem failures writing events.jsonl; ImportError covers installs
-                # where the fno.events module is absent. Real bugs (ValidationError,
-                # SchemaUnavailableError, KeyError, AttributeError) must propagate loudly.
-                pass
+        # The store's own status is kept beside the derived one: the Rust
+        # typed model carries the stored status, and verbs that settle wedges
+        # (requeue, hold) must read what the store holds, never the
+        # single-entry approximation this model computes on `status`.
+        if persisted is not None:
+            data["persisted_status"] = persisted
         return data
 
     @model_validator(mode="after")
@@ -349,8 +423,7 @@ class Entry(BaseModel):
 
         Precedence (mirrors recompute_statuses single-entry portion):
           completed_at set    -> "done"
-          verified superseded_by set -> "superseded"
-          pending supersession      -> "blocked"
+          superseded_by set   -> "superseded"
           deferred_at set     -> "deferred"
           pr_number set       -> "in_review"
           non-empty blocked_by -> "blocked"
@@ -370,9 +443,76 @@ class Entry(BaseModel):
             "pr_number": self.pr_number,
             "blocked_by": self.blocked_by,
             # locked_by-first; fall back to the legacy session_id mirror in case
-            # this Entry was built from a pre-rename node not yet normalized.
+            # this row was built from a pre-rename node not yet normalized.
             "locked_by": self.locked_by or self.session_id,
             "plan_path": self.plan_path,
             # Needed to resolve a repo-relative plan_path for the design probe.
             "cwd": self.cwd,
         })
+
+    # Linear-aligned typed views over the flat wire fields. Plain
+    # properties, not computed_field: model_dump stays wire-shaped, which
+    # keeps the store round-trip byte-stable.
+
+    @property
+    def description(self) -> Optional[str]:
+        return self.details
+
+    @property
+    def estimate(self) -> Optional[str]:
+        return self.size
+
+    @property
+    def labels(self) -> list[str]:
+        return list(getattr(self, "tags", None) or [])
+
+    @property
+    def comments(self) -> list[Comment]:
+        return [Comment.model_validate(row) for row in getattr(self, "progress_notes", None) or []]
+
+    @property
+    def claim(self) -> NodeClaim:
+        return NodeClaim(
+            locked_by=self.locked_by,
+            harness=self.locked_by_harness,
+            harness_session=self.locked_by_harness_session,
+            locked_at=self.locked_at,
+        )
+
+    @property
+    def dispatch(self) -> Dispatch:
+        return Dispatch(verb=self.dispatch_verb, brief=self.dispatch_brief, model=self.model)
+
+    @property
+    def pull_requests(self) -> list[PullRequest]:
+        prs: list[PullRequest] = []
+        if self.pr_number is not None:
+            prs.append(PullRequest(number=self.pr_number, url=self.pr_url, merge_status=self.merge_status))
+        for row in self.additional_prs or []:
+            prs.append(PullRequest.model_validate(row))
+        return prs
+
+
+# The legacy name stays importable until task 17.1 deletes the adapters.
+
+class PageInfo(BaseModel):
+    """Cursor pagination envelope (Linear-aligned)."""
+
+    has_next_page: bool = False
+    has_previous_page: bool = False
+    end_cursor: Optional[str] = None
+
+
+class NodeConnection(BaseModel):
+    """One page of typed nodes plus the resume cursor."""
+
+    nodes: list[Node] = Field(default_factory=list)
+    page_info: PageInfo = Field(default_factory=PageInfo)
+
+
+class NodePayload(BaseModel):
+    """A named mutation's reply: did it land, the row, the store version."""
+
+    success: bool
+    node: Optional[Node] = None
+    version: int = 0

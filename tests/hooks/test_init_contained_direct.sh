@@ -115,6 +115,10 @@ fi
 exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
+  # State-path stub: pins init's manifest location to the scenario space dir.
+  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod +x "${_dir}/bin/fno-agents"
+  mkdir -p "${_dir}/space"
 }
 
 run_init() {
@@ -123,6 +127,7 @@ run_init() {
     "${_SCRUB_ENV[@]}" \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
+    FNO_TEST_SPACE="${_dir}/space" \
     TARGET_START=1 \
     TARGET_INPUT="x-261c" \
     TARGET_SESSION_ID="contained-direct-worker" \
@@ -147,7 +152,7 @@ _SCRUB_ENV=(-u CLAUDE_CODE_SESSION_ID -u CLAUDECODE_SESSION_ID -u CODEX_THREAD_I
 # blocks a shell redirect that mentions the manifest filename, and these
 # assertions only ever READ it.
 _STATE_BASENAME="target-state""."'md'
-manifest_of() { printf '%s\n' "$1/.fno/${_STATE_BASENAME}"; }
+manifest_of() { printf '%s\n' "$1/space/${_STATE_BASENAME}"; }
 
 # ── PRE-claim refusal: nothing claimed, nothing written ──
 log "pre-claim: gate exits 9 => exit 2, no manifest, no claim"
@@ -298,7 +303,7 @@ printf -- '---\nstatus: ready\n---\n# plan\n' > "$PLAN_FILE"
 mkdir -p "$TMP_PLAN/home/.fno"
 # The contained child is FIRST, which is the entry order adoption produces and
 # exactly what the old first-match resolver got wrong.
-cat > "$TMP_PLAN/home/.fno/graph.json" <<GRAPH
+cat <<GRAPH | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$TMP_PLAN/home/.fno/graph.json"
 {"entries": [
   {"id": "x-261c", "plan_path": "$PLAN_FILE", "contained_in": "x-6320"},
   {"id": "x-6320", "plan_path": "$PLAN_FILE"}
@@ -309,6 +314,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_PLAN}/bin:${PATH}" \
   HOME="${TMP_PLAN}/home" \
+  FNO_TEST_SPACE="${TMP_PLAN}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \
   TARGET_PLAN_PATH="$PLAN_FILE" \
@@ -377,7 +383,7 @@ _ALL_TMPS+=("$TMP_AMB")
 AMB_PLAN="$TMP_AMB/amb-plan.md"
 printf -- '---\nstatus: ready\n---\n# plan\n' > "$AMB_PLAN"
 mkdir -p "$TMP_AMB/home/.fno"
-cat > "$TMP_AMB/home/.fno/graph.json" <<GRAPH
+cat <<GRAPH | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$TMP_AMB/home/.fno/graph.json"
 {"entries": [
   {"id": "x-aaaa", "plan_path": "$AMB_PLAN"},
   {"id": "x-bbbb", "plan_path": "$AMB_PLAN"}
@@ -388,6 +394,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_AMB}/bin:${PATH}" \
   HOME="${TMP_AMB}/home" \
+  FNO_TEST_SPACE="${TMP_AMB}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \
   TARGET_PLAN_PATH="$AMB_PLAN" \

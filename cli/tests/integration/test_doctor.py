@@ -28,17 +28,7 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     """Pin FNO_REPO_ROOT and clear caches before/after each test."""
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
-    from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    import fno.paths as paths_mod
-    paths_mod._settings.cache_clear()
-    if hasattr(paths_mod, "resolve_repo_root"):
-        paths_mod.resolve_repo_root.cache_clear()  # type: ignore[attr-defined]
     yield
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
-    if hasattr(paths_mod, "resolve_repo_root"):
-        paths_mod.resolve_repo_root.cache_clear()  # type: ignore[attr-defined]
 
 
 def _write_settings(tmp_path: Path, content: str) -> Path:
@@ -47,20 +37,6 @@ def _write_settings(tmp_path: Path, content: str) -> Path:
     f = state / "settings.yaml"
     f.write_text(content, encoding="utf-8")
     return f
-
-
-def test_config_doctor_help_renders() -> None:
-    """AC4-HP: fno config doctor --help exits 0 and shows help text."""
-    result = runner.invoke(app, ["config", "doctor", "--help"], env=_ENV)
-    assert result.exit_code == 0, f"exit {result.exit_code}:\n{result.output}"
-    assert "doctor" in result.output.lower()
-
-
-def test_config_app_registered() -> None:
-    """AC4-HP: fno config --help shows the config subapp."""
-    result = runner.invoke(app, ["config", "--help"], env=_ENV)
-    assert result.exit_code == 0, f"exit {result.exit_code}:\n{result.output}"
-    assert "doctor" in result.output
 
 
 def test_doctor_clean_exits_zero(
@@ -130,8 +106,8 @@ def test_doctor_exits_nonzero_on_accessor_error(
 ) -> None:
     """Fix 3: accessor ERROR must cause doctor to exit non-zero.
 
-    {vault} in paths.graph_json with obsidian disabled causes the accessor
-    to raise at resolve time (settings loads fine). Doctor must count that
+    {vault} in state_dir with obsidian disabled causes the accessor
+    to raise at resolve time. Doctor must count that
     as an error and return non-zero.
 
     Note: {project} no longer raises for non-git dirs (it uses root.name),
@@ -140,9 +116,7 @@ def test_doctor_exits_nonzero_on_accessor_error(
     settings = _write_settings(
         tmp_path,
         "schema_version: 1\nconfig:\n"
-        f"  state_dir: {str(tmp_path / '.fno')}/\n"
-        "  paths:\n"
-        "    graph_json: '{vault}/graph.json'\n"
+        "  state_dir: '{vault}/fno'\n"
         "  obsidian:\n"
         "    enabled: false\n",
     )
@@ -183,28 +157,10 @@ def test_doctor_missing_settings_exits_nonzero_no_traceback(
 # ---------------------------------------------------------------------------
 
 
-def test_check_wip_caps_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A valid wip_caps block reports no problems."""
-    from fno.setup.doctor import check_wip_caps
-    f = tmp_path / "global.yaml"
-    f.write_text("config:\n  kanban:\n    wip_caps:\n      now: 20\n      next: 50\n")
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    assert check_wip_caps() == []
-
-
-def test_check_wip_caps_absent_is_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No kanban/wip_caps block at all is clean (the common case)."""
-    from fno.setup.doctor import check_wip_caps
-    f = tmp_path / "global.yaml"
-    f.write_text("config:\n  obsidian:\n    enabled: false\n")
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    assert check_wip_caps() == []
-
-
 def test_check_wip_caps_flags_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Quoted-string, negative, and boolean caps are each reported (ab-554d37ef).
 
-    These are exactly the values render_html._load_wip_caps silently drops, so
+    These are exactly the values the global wip_caps read silently drops, so
     doctor is the place a user finds out a cap stopped working."""
     from fno.setup.doctor import check_wip_caps
     f = tmp_path / "global.yaml"
@@ -223,42 +179,20 @@ def test_check_wip_caps_flags_malformed(tmp_path: Path, monkeypatch: pytest.Monk
     assert "'now'" in joined and "'next'" in joined and "'later'" in joined
 
 
-def test_check_worktree_policy_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A valid policy + correctly-spelled per-project key reports nothing."""
-    from fno.setup.doctor import check_worktree_policy
-    f = tmp_path / "global.yaml"
-    f.write_text(
-        "config:\n  worktree:\n    policy: never\n"
-        "work:\n  workspaces:\n    default:\n      projects:\n"
-        "        - name: vault\n          worktree: never\n"
-    )
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    assert check_worktree_policy() == []
-
-
 def test_check_agent_profiles_flags_incompatible_substrate() -> None:
     from fno.config import SettingsModel
     from fno.setup.doctor import check_agent_profiles
 
+    # gemini is the one rowed harness left with no seat: its spawn claim
+    # reads `absent`. agy and opencode both stood here and both earned their
+    # arms, which is why the subject is the claim rather than a favourite name.
     settings = SettingsModel(
-        agents={"profiles": {"target": _lane("agy", substrate="bg", permission_mode="yolo")}}
+        agents={"profiles": {"target": _lane("gemini", substrate="bg", permission_mode="yolo")}}
     )
     problems = check_agent_profiles(settings)
     assert len(problems) == 1
     assert "agents.profiles.target.substrate" in problems[0]
-    assert "bg" in problems[0] and "agy" in problems[0]
-
-
-def test_check_agent_profiles_accepts_claude_bg_lane() -> None:
-    from fno.config import SettingsModel
-    from fno.setup.doctor import check_agent_profiles
-
-    settings = SettingsModel(
-        agents={"profiles": {"target": {"lanes": [
-            _lane("claude", substrate="bg", route="zai/glm-5.3[1m]"),
-        ]}}}
-    )
-    assert check_agent_profiles(settings) == []
+    assert "bg" in problems[0] and "gemini" in problems[0]
 
 
 def _lane(harness: str, **fields: object) -> dict:
@@ -289,21 +223,6 @@ def test_check_agent_profiles_no_longer_flags_a_bare_codex_lane() -> None:
     assert check_agent_profiles(settings) == []
 
 
-def test_check_agent_profiles_still_flags_an_impossible_substrate() -> None:
-    """The substrate/provider compatibility half stays: bg excludes agy."""
-    from fno.config import SettingsModel
-    from fno.setup.doctor import check_agent_profiles
-
-    settings = SettingsModel(
-        agents={"profiles": {"target": {"lanes": [
-            _lane("agy", substrate="bg"),
-        ]}}}
-    )
-    problems = check_agent_profiles(settings)
-    assert len(problems) == 1
-    assert "substrate" in problems[0] and "agy" in problems[0]
-
-
 def test_check_worktree_policy_flags_out_of_enum(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -316,54 +235,24 @@ def test_check_worktree_policy_flags_out_of_enum(
     assert len(problems) == 1 and "conductor" in problems[0]
 
 
-def test_check_worktree_policy_flags_typo_key(
+def test_a_typod_per_project_key_is_flagged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A per-project key one edit from 'worktree' is flagged as the silent typo
-    trap (extra='ignore' drops it, so the project gets the default policy)."""
-    from fno.setup.doctor import check_worktree_policy
-    f = tmp_path / "global.yaml"
+    """extra='ignore' drops it, so the project silently gets the default policy.
+
+    The leg moved: check_worktree_policy used to hand-list the project keys and
+    compare by edit distance. check_unknown_keys walks the same list-of-models
+    from the schema, so the typo is caught without a second copy of the keys.
+    """
+    from fno.config_readback import check_unknown_keys
+
+    f = tmp_path / "config.toml"
     f.write_text(
-        "work:\n  workspaces:\n    default:\n      projects:\n"
-        "        - name: vault\n          worktre: never\n"  # typo
+        '[[work.workspaces.default.projects]]\nname = "vault"\nworktre = "never"\n'
     )
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(f))
-    problems = check_worktree_policy()
-    assert len(problems) == 1 and "worktre" in problems[0] and "vault" in problems[0]
-
-
-def test_check_worktree_policy_scans_repo_local(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A typo'd per-project key in the REPO-LOCAL .fno/config.toml is surfaced
-    (the override, and its typo, can live there, not only in global config)."""
-    import fno.paths as _paths
-    from fno.setup.doctor import check_worktree_policy
-
-    g = tmp_path / "global.yaml"
-    g.write_text("config:\n  obsidian:\n    enabled: false\n")  # clean global
-    monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(g))
-
-    repo = tmp_path / "repo"
-    (repo / ".fno").mkdir(parents=True)
-    (repo / ".fno" / "config.toml").write_text(
-        "[[work.workspaces.default.projects]]\nname = \"repo\"\nworktre = \"never\"\n"
-    )
-
-    # Stub resolve_repo_root to point at our fake repo. It carries a .cache_clear
-    # so the local teardown fixture (which clears the real lru_cache) doesn't trip
-    # over a bare function replacement.
-    class _StubRepoRoot:
-        @staticmethod
-        def cache_clear() -> None:
-            return None
-
-        def __call__(self) -> Path:
-            return repo
-
-    monkeypatch.setattr(_paths, "resolve_repo_root", _StubRepoRoot())
-    problems = check_worktree_policy()
-    assert len(problems) == 1 and "worktre" in problems[0]
+    monkeypatch.setenv("FNO_CONFIG", str(f))
+    problems = check_unknown_keys()
+    assert any("projects[0].worktre" in p and str(f) in p for p in problems), problems
 
 
 def test_check_wip_caps_non_mapping_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

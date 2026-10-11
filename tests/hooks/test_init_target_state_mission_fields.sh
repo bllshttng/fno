@@ -39,6 +39,10 @@ trap 'rm -rf "$TMP1" "${TMP2:-}"' EXIT
 cd "$TMP1"
 git init -q
 mkdir -p .fno
+# State-path stub: pins init's manifest location to the scenario space dir.
+mkdir -p bin space
+cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
+chmod 755 bin/fno-agents
 
 TARGET_START=1 \
 TARGET_INPUT="mission fields happy path" \
@@ -46,10 +50,12 @@ TARGET_MISSION_ID="ab-test1234" \
 TARGET_MISSION_WAVE="2" \
 TARGET_MISSION_SLUG="2026-05-13-test-slug" \
 TARGET_MISSION_FROM_MSG_ID="msg-abc-foo" \
+PATH="$TMP1/bin:$PATH" \
+FNO_TEST_SPACE="$TMP1/space" \
   bash "$INIT" >/dev/null 2>&1 \
   || fail "AC1-HP: init exited non-zero with mission vars set"
 
-STATE1="$TMP1/.fno/target-state.md"
+STATE1="$TMP1/space/target-state.md"
 [[ -f "$STATE1" ]] || fail "AC1-HP: state file not created"
 
 # mission_id: should be "ab-test1234" (quoted in YAML since it's a string)
@@ -112,6 +118,10 @@ TMP2=$(mktemp -d -t init-mission-fields-unset.XXXXXX)
 cd "$TMP2"
 git init -q
 mkdir -p .fno
+# Same stub pin as AC1-HP.
+mkdir -p bin space
+cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
+chmod 755 bin/fno-agents
 
 # Explicitly unset any TARGET_MISSION_* that might be in environment
 env -u TARGET_MISSION_ID \
@@ -120,10 +130,12 @@ env -u TARGET_MISSION_ID \
     -u TARGET_MISSION_FROM_MSG_ID \
     TARGET_START=1 \
     TARGET_INPUT="mission fields defaults" \
+    PATH="$TMP2/bin:$PATH" \
+    FNO_TEST_SPACE="$TMP2/space" \
     bash "$INIT" >/dev/null 2>&1 \
   || fail "AC2-ERR: init exited non-zero with no mission vars"
 
-STATE2="$TMP2/.fno/target-state.md"
+STATE2="$TMP2/space/target-state.md"
 [[ -f "$STATE2" ]] || fail "AC2-ERR: state file not created"
 
 # All five mission fields must be null

@@ -9,12 +9,14 @@ mod common;
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{
-    connect_with_retry, spawn_server, FakeClient, Scratch, ServerProc, ServerTermination,
+    connect_with_retry, connect_with_retry_for, spawn_server, FakeClient, Scratch, ServerProc,
+    ServerTermination,
 };
 use fno::proto::{Command, PanePlacement};
+use fno::tree::Dir;
 
 /// Same module-local serialization gate as `persistence.rs`: these tests own
 /// real PTYs + Unix sockets, and parallel runs contend for the runner's CPU.
@@ -45,6 +47,110 @@ fn restart(scratch: &Scratch, incumbent: ServerProc) -> Restarted {
     }
 }
 
+fn kill_server(
+    scratch: &Scratch,
+    mut incumbent: ServerProc,
+    client: &mut FakeClient,
+) -> ServerTermination {
+    let out = scratch
+        .command()
+        .args(["mux", "kill-server", "main"])
+        .output()
+        .expect("kill-server runs");
+    assert!(
+        out.status.success(),
+        "kill-server failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    client.wait_killed(10, |c| c.byes.iter().any(|r| r.contains("killed")));
+    let pid = incumbent.0.id();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = incumbent.0.try_wait().expect("owned server status") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "server must exit after kill-server"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        !scratch.main_sock().exists(),
+        "kill-server must unlink the server socket"
+    );
+    ServerTermination { pid, status }
+}
+
+fn drive_named_three_pane_layout(client: &mut FakeClient, scratch: &Scratch) {
+    client.wait_layout(10, "squads appear", |l| !l.squads.is_empty());
+    client.cmd(Command::NewSquad {
+        name: "w".into(),
+        origin: Some(scratch.home_cwd()),
+    });
+    client.wait_layout(10, "workspace w appears", |l| {
+        l.squads.iter().any(|s| s.name == "w")
+    });
+    client.cmd(Command::SplitDir(Dir::Right));
+    client.wait_layout(10, "first split lands", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.tabs.len() == 1 && s.panes == 2)
+    });
+    let tab = client
+        .layout
+        .as_ref()
+        .and_then(|l| l.squads.iter().find(|s| s.name == "w"))
+        .and_then(|s| s.tabs.first())
+        .expect("workspace w has a tab")
+        .id;
+    client.cmd(Command::RenameTab {
+        tab,
+        name: "edit".into(),
+    });
+    client.wait_layout(10, "tab rename lands", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.tabs.len() == 1 && s.tabs[0].name == "edit")
+    });
+    client.cmd(Command::SplitDir(Dir::Right));
+    client.wait_layout(10, "second split lands", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.tabs.len() == 1 && s.tabs[0].name == "edit" && s.panes == 3)
+    });
+}
+
+fn assert_stored_three_pane_layout(scratch: &Scratch) {
+    let path = scratch.0.join("iso-agents/squads.json");
+    let raw = std::fs::read(&path)
+        .unwrap_or_else(|e| panic!("read captured layout at {}: {e}", path.display()));
+    let store: serde_json::Value = serde_json::from_slice(&raw).expect("captured layout is JSON");
+    let squad = store["squads"]
+        .as_array()
+        .and_then(|squads| squads.iter().find(|s| s["name"] == "w"))
+        .expect("captured store has squad w");
+    let trees = squad["tab_trees"]
+        .as_array()
+        .expect("squad w has captured tab trees");
+    assert_eq!(trees.len(), 1, "squad w must store exactly one tab");
+    assert_eq!(trees[0]["tab_name"], "edit", "stored tab name");
+    assert_eq!(
+        trees[0]["slots"].as_array().map(Vec::len),
+        Some(3),
+        "stored tree must contain all three pane slots"
+    );
+}
+
+fn assert_restored_three_pane_layout(client: &mut FakeClient) {
+    client.wait_layout(15, "workspace w restores exactly", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.tabs.len() == 1 && s.tabs[0].name == "edit" && s.panes == 3)
+    });
+}
+
 #[test]
 fn old_server_reaped_before_rebind_probe() {
     let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
@@ -56,7 +162,11 @@ fn old_server_reaped_before_rebind_probe() {
     // 3s grace never elapses, `forced` still reads false, and the probe reports
     // a graceful stop that never happened. Every other test in this file waits
     // here first.
-    let _up = connect_with_retry(&scratch.main_sock());
+    let _up = connect_with_retry_for(
+        &scratch.main_sock(),
+        Duration::from_secs(30),
+        "incumbent startup",
+    );
     let termination = incumbent.terminate_and_wait();
 
     let mut replacement = spawn_server(&scratch.main_sock(), &[]);
@@ -84,8 +194,12 @@ fn old_server_reaped_before_rebind_probe() {
         "replacement exited instead of rebinding {}",
         scratch.main_sock().display()
     );
-    // Panics on its own 10s budget if the replacement never accepts.
-    let _accepted = connect_with_retry(&scratch.main_sock());
+    // Panics on its own 30s budget if the replacement never accepts.
+    let _accepted = connect_with_retry_for(
+        &scratch.main_sock(),
+        Duration::from_secs(30),
+        "replacement rebind",
+    );
 
     println!(
         "old_server_reaped_before_rebind old_pid={} new_pid={} socket={} status={:?}",
@@ -106,7 +220,7 @@ fn squad_id(c: &FakeClient, name: &str) -> u64 {
 }
 
 #[test]
-fn symptom_rename_survives_restart() {
+fn symptom_rename_and_removal_survive_restart() {
     let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = Scratch::new("rename");
     let server = spawn_server(&scratch.main_sock(), &[]);
@@ -128,6 +242,18 @@ fn symptom_rename_survives_restart() {
     c.wait_layout(10, "rename lands", |l| {
         l.squads.iter().any(|s| s.name == "w2") && !l.squads.iter().any(|s| s.name == "w1")
     });
+    c.cmd(Command::NewSquad {
+        name: "gone".into(),
+        origin: Some(scratch.home_cwd()),
+    });
+    c.wait_layout(10, "workspace gone appears", |l| {
+        l.squads.iter().any(|s| s.name == "gone")
+    });
+    let gone_id = squad_id(&c, "gone");
+    c.cmd(Command::RemoveSquad(gone_id));
+    c.wait_layout(10, "workspace gone is removed", |l| {
+        !l.squads.iter().any(|s| s.name == "gone")
+    });
     c.detach();
 
     let mut r = restart(&scratch, server);
@@ -137,6 +263,8 @@ fn symptom_rename_survives_restart() {
     r.client.wait_layout(15, "renamed workspace restores", |l| {
         l.squads.iter().any(|s| s.name == "w2")
     });
+    // Keep the same resurrection window as the removed-workspace proof.
+    r.client.pump(Duration::from_secs(3));
     let names: Vec<&str> = r
         .client
         .layout
@@ -153,6 +281,10 @@ fn symptom_rename_survives_restart() {
     assert!(
         !names.contains(&"w1"),
         "the pre-rename name resurrected alongside the rename: {names:?}"
+    );
+    assert!(
+        !names.contains(&"gone"),
+        "the removed workspace resurrected at restart: {names:?}"
     );
 }
 
@@ -173,7 +305,7 @@ fn symptom_hand_split_survives_restart() {
     });
     // A hand split (the prefix-key mutation), the exact topology the template
     // lane never captures: two panes in ONE tab.
-    c.cmd(Command::SplitH);
+    c.cmd(Command::SplitDir(Dir::Right));
     c.wait_layout(10, "split lands", |l| {
         l.squads
             .iter()
@@ -218,46 +350,254 @@ fn symptom_hand_split_survives_restart() {
 }
 
 #[test]
-fn symptom_removed_workspace_stays_removed() {
+fn symptom_kill_server_restores_the_exact_layout() {
     let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
-    let scratch = Scratch::new("removed");
+    let scratch = Scratch::new("kill-exact-layout");
     let server = spawn_server(&scratch.main_sock(), &[]);
-    let mut c = attach_client(&scratch);
-    c.wait_layout(10, "squads appear", |l| !l.squads.is_empty());
-
-    c.cmd(Command::NewSquad {
-        name: "w".into(),
-        origin: Some(scratch.home_cwd()),
+    let mut client = attach_client(&scratch);
+    drive_named_three_pane_layout(&mut client, &scratch);
+    let workspace = squad_id(&client, "w");
+    client.cmd(Command::SelectSquad(workspace));
+    client.wait_layout(10, "workspace w is selected before capture", |l| {
+        l.active_squad == workspace
     });
-    c.wait_layout(10, "workspace w appears", |l| {
-        l.squads.iter().any(|s| s.name == "w")
-    });
-    let sid = squad_id(&c, "w");
-    c.cmd(Command::RemoveSquad(sid));
-    c.wait_layout(10, "workspace w removed", |l| {
-        !l.squads.iter().any(|s| s.name == "w")
-    });
-    c.detach();
-
-    let mut r = restart(&scratch, server);
-    r.client
-        .wait_layout(10, "squads appear", |l| !l.squads.is_empty());
-    // Give a would-be resurrection the same window the other repros give the
-    // legitimate restore, so this never passes by reading too early.
-    r.client.pump(Duration::from_secs(3));
-    let names: Vec<&str> = r
-        .client
+    let focused_pane = client
         .layout
         .as_ref()
-        .unwrap()
-        .squads
-        .iter()
-        .map(|s| s.name.as_str())
-        .collect();
-    assert!(
-        !names.contains(&"w"),
-        "a removed workspace resurrected at restart: {names:?}"
+        .and_then(|l| l.panes.last())
+        .map(|(pane, _)| *pane)
+        .expect("workspace w has a pane");
+    let first_pane = client
+        .layout
+        .as_ref()
+        .and_then(|l| l.panes.first())
+        .map(|(pane, _)| *pane)
+        .expect("workspace w has a first pane");
+    assert_ne!(
+        focused_pane, first_pane,
+        "focus probe uses a non-first pane"
     );
+    client.cmd(Command::FocusPane(focused_pane));
+    client.wait_layout(10, "last pane is focused before capture", |l| {
+        l.focus == focused_pane
+    });
+
+    let tab = client
+        .layout
+        .as_ref()
+        .and_then(|l| l.squads.iter().find(|s| s.name == "w"))
+        .and_then(|s| s.tabs.first())
+        .expect("workspace w has a tab")
+        .id;
+    client.cmd(Command::RenameTab {
+        tab,
+        name: "edit".into(),
+    });
+    client.pump(Duration::from_millis(500));
+    assert_stored_three_pane_layout(&scratch);
+    // Let any topology write from the no-op rename settle before the mtime baseline.
+    client.pump(Duration::from_secs(3));
+    assert_stored_three_pane_layout(&scratch);
+    let store_path = scratch.0.join("iso-agents/squads.json");
+    let before = std::fs::metadata(&store_path)
+        .and_then(|m| m.modified())
+        .expect("captured layout has an mtime before kill");
+    std::thread::sleep(Duration::from_millis(1100));
+    let before_layout = client.layout.as_ref().expect("layout before kill").clone();
+
+    let _old = kill_server(&scratch, server, &mut client);
+    let after = std::fs::metadata(&store_path)
+        .and_then(|m| m.modified())
+        .expect("captured layout has an mtime after kill");
+    assert!(
+        after > before,
+        "clean topology must still be rewritten at teardown: before={before:?} after={after:?}"
+    );
+    assert_stored_three_pane_layout(&scratch);
+    let _replacement = spawn_server(&scratch.main_sock(), &[]);
+    let mut restored = attach_client(&scratch);
+    assert_restored_three_pane_layout(&mut restored);
+    let restored_workspace = squad_id(&restored, "w");
+    restored.cmd(Command::SelectSquad(restored_workspace));
+    restored.wait_layout(10, "workspace w is selected after restart", |l| {
+        l.active_squad == restored_workspace
+    });
+    let after_layout = restored.layout.as_ref().expect("layout after restart");
+    assert_eq!(
+        after_layout.panes, before_layout.panes,
+        "all three pane rectangles survive the restart"
+    );
+    assert_eq!(
+        after_layout.focus, before_layout.focus,
+        "focused pane survives the restart"
+    );
+}
+
+#[test]
+fn symptom_worker_tab_position_and_pane_id_survive_tab_removal_and_restart() {
+    let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let scratch = Scratch::new("worker-position");
+    let server = spawn_server(&scratch.main_sock(), &[]);
+    let mut client = attach_client(&scratch);
+    drive_named_three_pane_layout(&mut client, &scratch);
+
+    // The worker lane on the real user path: `pane run --worker` spawns the
+    // pane through a keeper (the same out-of-process path every worker pane
+    // takes) and records the squad member the store persists. An omitted
+    // split mints the pane its own tab, so the worker tab is the SECOND one.
+    let out = scratch
+        .command()
+        .args([
+            "mux",
+            "pane",
+            "run",
+            "--squad",
+            "w",
+            "--worker",
+            "t-e2e-crew",
+            "--",
+            "sleep",
+            "300",
+        ])
+        .output()
+        .expect("pane run spawns the worker");
+    assert!(
+        out.status.success(),
+        "worker spawn failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    client.wait_layout(10, "worker tab appears", |l| {
+        l.squads.iter().any(|s| s.name == "w" && s.tabs.len() == 2)
+    });
+    let squad_tabs = |client: &FakeClient| -> Vec<(u64, String)> {
+        client
+            .layout
+            .as_ref()
+            .unwrap()
+            .squads
+            .iter()
+            .find(|s| s.name == "w")
+            .unwrap()
+            .tabs
+            .iter()
+            .map(|t| (t.id, t.name.clone()))
+            .collect()
+    };
+    let crew = squad_tabs(&client)[1].0;
+    client.cmd(Command::RenameTab {
+        tab: crew,
+        name: "crew".into(),
+    });
+
+    // The persisted shape must hold the worker member with its birth pane id
+    // before anything is removed: that id is the identity the final assertion
+    // joins, read from the store rather than guessed.
+    let read_store = |scratch: &Scratch| -> serde_json::Value {
+        let path = scratch.0.join("iso-agents/squads.json");
+        let raw = std::fs::read(&path).unwrap_or_default();
+        serde_json::from_slice(&raw).unwrap_or(serde_json::Value::Null)
+    };
+    let squad_of = |doc: &serde_json::Value| -> serde_json::Value {
+        doc["squads"]
+            .as_array()
+            .and_then(|ss| ss.iter().find(|s| s["name"] == "w"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    };
+    let worker_member = |squad: &serde_json::Value| -> Option<serde_json::Value> {
+        squad["members"]
+            .as_array()
+            .and_then(|ms| ms.iter().find(|m| m["worker"] == "t-e2e-crew"))
+            .cloned()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let pre_kill_pane_id = loop {
+        let squad = squad_of(&read_store(&scratch));
+        let member = worker_member(&squad);
+        let trees = squad["tab_trees"].as_array().map(|t| t.len());
+        let named = squad["tab_trees"][1]["tab_name"] == "crew";
+        if let (Some(m), Some(2)) = (&member, trees) {
+            if named && m["pane_id"].is_u64() {
+                break m["pane_id"].as_u64().unwrap();
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "store never captured the worker member with its birth pane id; last squad: {squad}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+
+    // Remove the FIRST tab, so the worker's captured index shifts to 0, and
+    // wait for the capture to record the post-removal order.
+    let first = squad_tabs(&client)[0].0;
+    client.cmd(Command::SelectTab(first));
+    client.cmd(Command::CloseTab);
+    client.wait_layout(10, "first tab closes", |l| {
+        l.squads.iter().any(|s| s.name == "w" && s.tabs.len() == 1)
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let squad = squad_of(&read_store(&scratch));
+        let trees = squad["tab_trees"].as_array().map(|t| t.len());
+        if trees == Some(1) && squad["tab_trees"][0]["tab_name"] == "crew" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "store never captured the post-removal tab order; last squad: {squad}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _old = kill_server(&scratch, server, &mut client);
+    let _replacement = spawn_server(&scratch.main_sock(), &[]);
+    let mut restored = attach_client(&scratch);
+
+    // Positive markers, never absences: the worker tab comes back NAMED at
+    // POSITION 0 holding its pane - not appended after a rebuilt shell tab,
+    // not shell-substituted.
+    restored.wait_layout(20, "worker tab restores at its captured position", |l| {
+        l.squads
+            .iter()
+            .any(|s| s.name == "w" && s.tabs.len() == 1 && s.tabs[0].name == "crew" && s.panes == 1)
+    });
+    let restored_workspace = squad_id(&restored, "w");
+
+    // The pane id is the identity that outlives the server: readopt
+    // re-adopts the surviving keeper child at its birth id, so the live
+    // listing must name the worker at exactly the id the pre-kill store
+    // recorded. A shell substitute carries no worker name, so this read
+    // fails loudly when the seating regressed.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let row = loop {
+        let ls = scratch
+            .command()
+            .args(["mux", "pane", "ls"])
+            .output()
+            .expect("pane ls runs");
+        let out = String::from_utf8_lossy(&ls.stdout).into_owned();
+        if let Some(row) = out.lines().find(|l| l.contains("name=t-e2e-crew")) {
+            break row.to_string();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane ls never names the worker after the restart; output: {out}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert!(
+        row.split_whitespace().next() == Some(pre_kill_pane_id.to_string()).as_deref(),
+        "the worker's pane ls row must lead with its surviving pane id {pre_kill_pane_id}: {row}"
+    );
+    let workspace_cell = format!("squad={restored_workspace}");
+    assert!(
+        row.split_whitespace()
+            .any(|field| field == workspace_cell.as_str()),
+        "pane remains in workspace w ({workspace_cell}): {row}"
+    );
+    assert!(row.contains("tab=crew"), "pane remains in tab crew: {row}");
 }
 
 #[test]
@@ -358,10 +698,9 @@ fn symptom_stale_live_row_does_not_respawn_a_dead_worker() {
     c.detach();
 }
 
-/// The dedicated thread pane is never a persisted member, so restart must not
-/// rebuild it. A pane binds a session to geometry, a thread binds a session
-/// to a row, and a rebuilt thread pane would re-bind a thread to a rectangle
-/// across a restart - the one property the substrate exists to avoid.
+/// The dedicated thread pane is never a persisted worker member. Restart may
+/// rebuild a shell for captured topology, but must not respawn the thread's
+/// attach process and bind it to a rectangle again.
 #[test]
 fn symptom_restore_rebuilds_no_thread_pane() {
     let _g = PTY_GATE.lock().unwrap_or_else(|e| e.into_inner());

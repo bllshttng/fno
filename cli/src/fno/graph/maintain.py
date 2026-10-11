@@ -1,28 +1,16 @@
-"""Backlog + kanban hygiene sweep for ``fno backlog maintain`` (ab-9c144a4c).
+"""Backlog + kanban hygiene sweep for ``fno backlog maintain``.
 
 Legs that keep ``graph.json`` and the kanban board clean by composing
-detection logic over the entries list. The CLI command in ``cli.py`` orchestrates
-them; this module holds the pure, IO-light detectors so each leg is unit-testable
-without a live graph.
+detection logic over the entries list. The CLI command in ``cli.py``
+orchestrates them; this module holds the pure, IO-light detectors so each leg
+is unit-testable without a live graph.
 
-Three legs are DETERMINISTIC and apply under ``--apply``:
-
-  1. re-scope  - correct ``project``/``cwd`` drift (project-null, wrong project,
-                 or a worktree-path cwd) against the settings workspace map.
-                 Only ``project``/``cwd`` are ever changed, never priority/status.
-  2. leak-prune - remove nodes whose ``cwd`` is under a temp dir (pytest leaks).
-  2b. pr-url    - backfill a derived ``pr_url`` onto rows carrying a
-                 ``pr_number`` with none, keyed off each node's own ``cwd``.
-
-Three legs are JUDGMENT calls and ALWAYS propose-only (never mutate, regardless
-of ``--apply``):
-
-  3. dedup  - surface near-duplicate idea titles for human merge/supersede.
-  4. drain  - propose a reversible ``defer`` for stale ideas (older than N days).
-  5. cap    - report a Now column over its WIP cap; propose triage demotions.
-
-A final report leg appends a summary to health-history; that lives in the CLI
-command since it owns the write target.
+Deterministic legs (apply under ``--apply``): re-scope (only ``project``/
+``cwd`` ever change), leak-prune (temp-dir cwds), pr-url backfill. Judgment
+legs (ALWAYS propose-only): dedup, drain (reversible defer for stale ideas),
+cap (Now over its WIP cap). ``run_pass`` orchestrates the legs, the pass
+budget, and the health-history report; the typer command in ``graph/cli.py``
+is a shell over it.
 """
 from __future__ import annotations
 
@@ -30,11 +18,52 @@ import hashlib
 import json
 import os
 import re
+import time
+from collections import namedtuple
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from fno.llm import llm_call
+
+
+# --- pass budget ------------------------------------------------------------
+
+# Total leg count for the partial receipt ("12/14 legs completed").
+MAINTAIN_LEG_TOTAL = 14
+
+
+class BudgetExceeded(Exception):
+    """Raised at a leg boundary when the pass is out of wall-clock time."""
+
+    def __init__(self, leg: str, elapsed: float) -> None:
+        super().__init__(f"budget exceeded in leg '{leg}' after {elapsed:.1f}s")
+        self.leg = leg
+        self.elapsed = elapsed
+
+
+class Budget:
+    """Wall-clock budget for one maintain pass, checked between legs; the one
+    leg with an unbounded tail (the validity LLM call) also takes
+    :meth:`remaining` as its subprocess timeout."""
+
+    def __init__(self, seconds: Optional[float]) -> None:
+        self._start = time.monotonic()
+        self._deadline = (
+            self._start + seconds if seconds is not None and seconds > 0 else None
+        )
+
+    def enter(self, leg: str) -> None:
+        """Raise :class:`BudgetExceeded` when the pass is past its deadline."""
+        if self._deadline is not None and time.monotonic() > self._deadline:
+            raise BudgetExceeded(leg, time.monotonic() - self._start)
+
+    def remaining(self) -> Optional[float]:
+        """Seconds left, floored at 0; ``None`` when the pass is unbounded."""
+        if self._deadline is None:
+            return None
+        return max(0.0, self._deadline - time.monotonic())
 
 
 # ---------------------------------------------------------------------------
@@ -54,41 +83,12 @@ def load_workspaces() -> dict[str, str]:
     # redirect-aware, de-duped) so this map cannot drift from
     # detect_project_from_settings, and so paths route through fno.paths
     # rather than a hardcoded ~/.fno (the no-hardcoded-paths guard).
-    from fno.config_io import read_config_flat
-    from fno.graph._intake import _settings_candidate_paths
+    from fno.graph._intake import _iter_settings_projects
 
     out: dict[str, str] = {}
-    for path in _settings_candidate_paths():
-        if not path.exists():
-            continue
-        # read_config_flat parses config.toml (or a legacy settings.yaml) and
-        # returns the FLAT dict, so `work` is top-level.
-        work = read_config_flat(path).get("work")
-        if not isinstance(work, dict):
-            continue
-        workspaces = work.get("workspaces")
-        if isinstance(workspaces, dict):
-            for ws in workspaces.values():
-                if not isinstance(ws, dict):
-                    continue
-                projects = ws.get("projects")
-                if not isinstance(projects, list):
-                    continue
-                for proj in projects:
-                    if not isinstance(proj, dict):
-                        continue
-                    name = proj.get("name")
-                    raw = proj.get("path")
-                    if isinstance(name, str) and isinstance(raw, str):
-                        out[name] = os.path.normpath(os.path.expanduser(raw))
-        flat_projects = work.get("projects")
-        if isinstance(flat_projects, dict):
-            for name, cfg in flat_projects.items():
-                if not isinstance(cfg, dict):
-                    continue
-                raw = cfg.get("path")
-                if isinstance(name, str) and isinstance(raw, str):
-                    out[name] = os.path.normpath(os.path.expanduser(raw))
+    for name, raw in _iter_settings_projects():
+        if isinstance(name, str) and isinstance(raw, str):
+            out[name] = os.path.normpath(os.path.expanduser(raw))
     return out
 
 
@@ -115,7 +115,7 @@ class RescopeFix:
 # it does not map directly to a canonical workspace path). Three layouts are
 # recognized; the caller guards the result with ``hint in workspaces``, so a
 # segment that is not a known project simply declines (never mis-scopes):
-#   - harness-native (the worktrees_base default, x-33e9):
+#   - harness-native (the worktrees_base default):
 #       ``<repo>/.claude/worktrees/<name>``        -> ``<repo>``
 #   - conductor back-compat (use_conductor_canonical / worktrees_base = conductor):
 #       ``.../conductor/workspaces/<repo>/<name>``  -> ``<repo>``
@@ -404,7 +404,7 @@ def detect_rollup_candidates(
 class SharedPlanCostViolation:
     """A plan_path held by more than one node that ALL carry ``cost_usd``.
 
-    ``plan == PR == node`` (x-04b9): one plan should cost once. Two nodes sharing
+    ``plan == PR == node`` : one plan should cost once. Two nodes sharing
     a plan that both carry cost triple the dollars, points, and sessions at the
     flat project sum. Change 1.1 stops new bindings; this leg finds the instances
     already in the graph - the check that would have caught the 2026-07-28
@@ -420,7 +420,7 @@ def detect_shared_plan_cost_violations(entries: list[dict]) -> list[SharedPlanCo
     """Plans whose cost is claimed by more than one node.
 
     A plan held by two nodes where only one carries ``cost_usd`` is the LEGAL
-    contained shape (one delivery unit plus contained children, x-e957) and is
+    contained shape (one delivery unit plus contained children) and is
     NOT reported - only the double-count is the violation. Never mutates.
     """
     from fno.graph.store import normalize_plan_path
@@ -429,8 +429,13 @@ def detect_shared_plan_cost_violations(entries: list[dict]) -> list[SharedPlanCo
     for e in entries:
         if not isinstance(e, dict):
             continue
+        # Test cost first: normalize_plan_path is a keeper round trip, so
+        # normalizing before the cheap guard paid it for every node and
+        # discarded the answer for the few without a cost.
+        if e.get("cost_usd") is None:
+            continue
         plan = normalize_plan_path(e.get("plan_path"))
-        if plan is None or e.get("cost_usd") is None:
+        if plan is None:
             continue
         nid = e.get("id")
         if not isinstance(nid, str):
@@ -443,6 +448,343 @@ def detect_shared_plan_cost_violations(entries: list[dict]) -> list[SharedPlanCo
     ]
     violations.sort(key=lambda v: v.plan_path)
     return violations
+
+
+# ---------------------------------------------------------------------------
+# Leg 2c: mis-harnessed session twins (deterministic repair)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MisharnessedTwin:
+    """A sessions[] row whose harness its own session id contradicts, while a
+    shape-correct twin with the same (session_id, phase) exists on the node."""
+
+    node_id: str
+    session_id: str
+    phase: str
+    bad_harness: str
+    keep_harness: str
+
+
+def detect_misharnessed_twins(entries: list[dict]) -> list[MisharnessedTwin]:
+    """Rows stamped under a harness their id's shape contradicts, where the
+    node also carries the shape-correct twin for the same (session_id, phase).
+
+    These are phantom rows minted before the store refused wrong-shape
+    harnesses: a codex UUIDv7 id under ``harness: claude`` reads as a second,
+    distinct session to every keyed resolver. Dropped only when the correct
+    twin exists, so the provenance itself never leaves the graph.
+    """
+    from fno.harness_identity import harness_of_session_id
+
+    out: list[MisharnessedTwin] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        nid = e.get("id")
+        rows = e.get("sessions")
+        if not isinstance(nid, str) or not isinstance(rows, list):
+            continue
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            sid = r.get("session_id")
+            phase = r.get("phase")
+            harness = r.get("harness")
+            if not (
+                isinstance(sid, str) and sid
+                and isinstance(phase, str) and phase
+                and isinstance(harness, str) and harness
+            ):
+                continue
+            groups.setdefault((sid, phase), []).append(r)
+        for (sid, phase), group in groups.items():
+            shape = harness_of_session_id(sid)
+            if shape is None or len(group) < 2:
+                continue
+            if not any(r.get("harness") == shape for r in group):
+                continue
+            for r in group:
+                if r.get("harness") != shape:
+                    out.append(
+                        MisharnessedTwin(
+                            node_id=nid,
+                            session_id=sid,
+                            phase=phase,
+                            bad_harness=r.get("harness", "?"),
+                            keep_harness=shape,
+                        )
+                    )
+    out.sort(key=lambda t: (t.node_id, t.session_id, t.phase, t.bad_harness))
+    return out
+
+
+def apply_twin_drops(
+    ents: list[dict],
+    drops: list[MisharnessedTwin],
+    current_claimed: set[str],
+) -> tuple[list[dict], list[str], list[str]]:
+    """Drop each detected twin inside the caller's locked mutation.
+
+    Re-checked under the lock so a row settled since the scan (the wrong twin
+    gained the shape-correct harness, or the correct twin left) never drops
+    provenance. Returns ``(applied records, claimed node ids, warnings)``.
+    """
+    applied: list[dict] = []
+    skipped: list[str] = []
+    warnings: list[str] = []
+    for drop in drops:
+        if drop.node_id in current_claimed:
+            skipped.append(drop.node_id)
+            continue
+        try:
+            n = next(
+                (
+                    e
+                    for e in ents
+                    if isinstance(e, dict) and e.get("id") == drop.node_id
+                ),
+                None,
+            )
+            if not isinstance(n, dict):
+                continue
+            rows = n.get("sessions")
+            if not isinstance(rows, list):
+                continue
+            keep = [
+                r
+                for r in rows
+                if not (
+                    isinstance(r, dict)
+                    and r.get("session_id") == drop.session_id
+                    and r.get("phase") == drop.phase
+                    and r.get("harness") == drop.bad_harness
+                    and any(
+                        isinstance(o, dict)
+                        and o.get("session_id") == drop.session_id
+                        and o.get("phase") == drop.phase
+                        and o.get("harness") == drop.keep_harness
+                        for o in rows
+                    )
+                )
+            ]
+            if len(keep) != len(rows):
+                n["sessions"] = keep
+                applied.append(
+                    {
+                        "node_id": drop.node_id,
+                        "session_id": drop.session_id,
+                        "phase": drop.phase,
+                        "dropped_harness": drop.bad_harness,
+                        "kept_harness": drop.keep_harness,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+            warnings.append(f"twin drop on {drop.node_id} failed: {exc}")
+    return applied, skipped, warnings
+
+
+def twin_payload(
+    drops: list[MisharnessedTwin], applied: list[dict], apply: bool
+) -> dict:
+    """The ``session_twins`` block of the maintain ``--json`` payload."""
+    return {
+        "applied": applied if apply else [],
+        "candidates": [
+            {
+                "node_id": t.node_id,
+                "session_id": t.session_id,
+                "phase": t.phase,
+                "dropped_harness": t.bad_harness,
+                "kept_harness": t.keep_harness,
+            }
+            for t in drops
+        ],
+    }
+
+
+def twin_lines(
+    drops: list[MisharnessedTwin], applied: list[dict], apply: bool
+) -> list[str]:
+    """Human-report lines, one per drop (or per candidate under dry-run)."""
+    if apply:
+        return [
+            f"  dropped twin {d['node_id']} ({d['session_id']}, phase "
+            f"{d['phase']}): harness {d['dropped_harness']} contradicts the "
+            f"id shape, {d['kept_harness']} twin kept"
+            for d in applied
+        ]
+    return [
+        f"  would drop twin {t.node_id} ({t.session_id}, phase {t.phase}): "
+        f"harness {t.bad_harness} contradicts the id shape, "
+        f"{t.keep_harness} twin kept"
+        for t in drops
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Leg 2d: mis-harnessed stamps with no twin (deterministic repair)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HarnessShapeFix:
+    """A sessions[] row whose harness its own session id contradicts, with no
+    shape-correct twin to drop it against. The row is the node's only record of
+    the session, so the harness field is corrected, never the row deleted."""
+
+    node_id: str
+    session_id: str
+    phase: str
+    wrong_harness: str
+    right_harness: str
+
+
+def detect_harness_shape_fixes(entries: list[dict]) -> list[HarnessShapeFix]:
+    """Rows stamped under a harness their id's shape contradicts, where the node
+    carries NO shape-correct twin for the same (session_id, phase).
+
+    The twin lever drops a wrong row beside its correct twin; this lever
+    repairs the only row, because deleting it would erase the node's record
+    that the session ran here at all. Correcting the harness re-keys the row
+    onto the identity every resolver already uses, so the phantom second
+    session disappears.
+    """
+    from fno.harness_identity import harness_of_session_id
+
+    out: list[HarnessShapeFix] = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        nid = e.get("id")
+        rows = e.get("sessions")
+        if not isinstance(nid, str) or not isinstance(rows, list):
+            continue
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            sid = r.get("session_id")
+            phase = r.get("phase")
+            harness = r.get("harness")
+            if not (
+                isinstance(sid, str) and sid
+                and isinstance(phase, str) and phase
+                and isinstance(harness, str) and harness
+            ):
+                continue
+            groups.setdefault((sid, phase), []).append(r)
+        for (sid, phase), group in groups.items():
+            shape = harness_of_session_id(sid)
+            if shape is None:
+                continue
+            if any(r.get("harness") == shape for r in group):
+                continue  # the twin lever owns the wrong rows beside a correct one
+            for r in group:
+                if r.get("harness") != shape:
+                    out.append(
+                        HarnessShapeFix(
+                            node_id=nid,
+                            session_id=sid,
+                            phase=phase,
+                            wrong_harness=r.get("harness", "?"),
+                            right_harness=shape,
+                        )
+                    )
+    out.sort(key=lambda f: (f.node_id, f.session_id, f.phase, f.wrong_harness))
+    return out
+
+
+def apply_harness_shape_fixes(
+    ents: list[dict],
+    fixes: list[HarnessShapeFix],
+    current_claimed: set[str],
+) -> tuple[list[dict], list[str], list[str]]:
+    """Correct each detected harness inside the caller's locked mutation.
+
+    Re-checked under the lock so a row settled since the scan (dropped as a
+    twin, gone, or already correct) is never rewritten. Returns ``(applied
+    records, claimed node ids, warnings)``.
+    """
+    applied: list[dict] = []
+    skipped: list[str] = []
+    warnings: list[str] = []
+    for fix in fixes:
+        if fix.node_id in current_claimed:
+            skipped.append(fix.node_id)
+            continue
+        try:
+            n = next(
+                (
+                    e
+                    for e in ents
+                    if isinstance(e, dict) and e.get("id") == fix.node_id
+                ),
+                None,
+            )
+            rows = n.get("sessions") if isinstance(n, dict) else None
+            if not isinstance(rows, list):
+                continue
+            touched = False
+            for r in rows:
+                if (
+                    isinstance(r, dict)
+                    and r.get("session_id") == fix.session_id
+                    and r.get("phase") == fix.phase
+                    and r.get("harness") == fix.wrong_harness
+                ):
+                    r["harness"] = fix.right_harness
+                    touched = True
+            if touched:
+                applied.append(
+                    {
+                        "node_id": fix.node_id,
+                        "session_id": fix.session_id,
+                        "phase": fix.phase,
+                        "was_harness": fix.wrong_harness,
+                        "now_harness": fix.right_harness,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+            warnings.append(f"harness fix on {fix.node_id} failed: {exc}")
+    return applied, skipped, warnings
+
+
+def shape_fix_payload(
+    fixes: list[HarnessShapeFix], applied: list[dict], apply: bool
+) -> dict:
+    """The ``session_harness_fixes`` block of the maintain ``--json`` payload."""
+    return {
+        "applied": applied if apply else [],
+        "candidates": [
+            {
+                "node_id": f.node_id,
+                "session_id": f.session_id,
+                "phase": f.phase,
+                "was_harness": f.wrong_harness,
+                "now_harness": f.right_harness,
+            }
+            for f in fixes
+        ],
+    }
+
+
+def shape_fix_lines(
+    fixes: list[HarnessShapeFix], applied: list[dict], apply: bool
+) -> list[str]:
+    """Human-report lines, one per fix (or per candidate under dry-run)."""
+    if apply:
+        return [
+            f"  fixed harness {d['node_id']} ({d['session_id']}, phase "
+            f"{d['phase']}): {d['was_harness']} -> {d['now_harness']} "
+            "(the id's own shape)"
+            for d in applied
+        ]
+    return [
+        f"  would fix harness {f.node_id} ({f.session_id}, phase {f.phase}): "
+        f"{f.wrong_harness} -> {f.right_harness} (the id's own shape)"
+        for f in fixes
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -478,9 +820,13 @@ def node_has_movement(entry: dict, now: datetime, staleness_days: int) -> bool:
 
     Movement is ANY of: a live/past session lifecycle entry (``sessions``), an
     (in-flight or historical) PR (``pr_number``), a lock (``locked_by`` /
-    ``claimed_at``), or a plan file edited within the window (mtime fresher than
-    ``staleness_days``). A node with a movement signal is NEVER quarantined - the
-    quarantine is only for genuinely-abandoned ready work.
+    ``locked_at``), an encounter, or a plan file edited within the window (mtime
+    fresher than ``staleness_days``). A node with a movement signal is NEVER
+    quarantined - the quarantine is only for genuinely-abandoned ready work.
+
+    An encounter inside the window is somebody saying this node cost them time
+    recently. Unwindowed it would be a permanent exemption any agent could
+    switch on with no undo, so the drain reads the vote's own ``created_at``.
 
     The plan-file mtime probe is best-effort: a missing/unreadable plan is simply
     "no freshness signal from the plan" (not movement), never an error.
@@ -489,7 +835,11 @@ def node_has_movement(entry: dict, now: datetime, staleness_days: int) -> bool:
         return True
     if entry.get("pr_number"):
         return True
-    if entry.get("locked_by") or entry.get("claimed_at"):
+    if entry.get("locked_by") or entry.get("locked_at"):
+        return True
+    from fno.graph.demand import recent_encounter
+
+    if recent_encounter(entry, now, staleness_days):
         return True
     # Resolve the freshness probe the way the node itself would (fragment
     # stripped, `~` expanded, relative resolved against the node's own `cwd`,
@@ -554,7 +904,7 @@ def is_stale_ready(entry: dict, now: datetime, staleness_days: int) -> bool:
     if entry.get("contained_in"):
         # Contained work is delivered inside another node's PR, so it can never
         # acquire a movement signal - no PR, session, or claim of its own, by
-        # design (x-e957). Without this it is quarantine-eligible the moment it
+        # design. Without this it is quarantine-eligible the moment it
         # is old enough, and `maintain --apply` auto-defers it with the
         # misleading reason "stale-quarantine". The adopt back-fill makes that
         # immediate rather than eventual: it stamps containment onto legacy
@@ -614,7 +964,7 @@ def detect_stale_ideas(
     status/priority/rank/parent/blocked_by/size - actually changed), falling
     back to ``created_at`` for a node that has never had a post-creation
     curation change. ``touched_at`` is only ever written at or after
-    ``created_at``, so the fallback is a max without needing one (x-7dcb): a
+    ``created_at``, so the fallback is a max without needing one : a
     deliberate undefer hours ago resets the clock even though the node was
     created weeks earlier, so it reads as fresh instead of stale.
 
@@ -660,7 +1010,7 @@ class SuspectRevert:
 
 def detect_suspect_reverts(entries: list[dict], events: Optional[list[dict]] = None) -> list[SuspectRevert]:
     """Nodes the stale-ideas drain deferred despite evidence a human curated
-    them (x-7dcb retro sweep).
+    them (retro sweep).
 
     Read-only: surfaces, never mutates and never emits an undefer command.
     Reverting a human decision is the defect this node fixes; reverting it a
@@ -678,7 +1028,7 @@ def detect_suspect_reverts(entries: list[dict], events: Optional[list[dict]] = N
     if events is None:
         from fno.graph.failure import read_events
 
-        events = read_events()
+        events = read_events(types=["node_undeferred"])
     # Earliest node_undeferred ts per node id; a later reversal is still
     # evidence, but the earliest one is the one closest to the drain that
     # (per the incident) fired hours afterward.
@@ -770,10 +1120,41 @@ def now_overflow(
 AUTO_DEFER_BLAST_CAP = 10
 
 
+def _now_wip_cap() -> int:
+    """The Now column's WIP cap from the GLOBAL config (config.toml-first).
+
+    Reads ``config.kanban.wip_caps`` directly via ``read_global_block``, the
+    same walk the old board renderer used: a malformed or absent block
+    degrades to the 20 default rather than raising into the maintain pass.
+    """
+    try:
+        from fno.config_io import read_global_block
+
+        kanban = read_global_block("kanban") or {}
+        raw = kanban.get("wip_caps") or {}
+        now = raw.get("now") if isinstance(raw, dict) else None
+        if isinstance(now, int) and not isinstance(now, bool) and now > 0:
+            return now
+    except Exception:
+        pass
+    return 20
+
+
 @dataclass
 class FailureDefer:
     node_id: str
     streak: int
+    error: str = ""
+
+    def reason(self) -> str:
+        """The deferred_reason: sentinel first (the prefix is load-bearing),
+        streak, then the truncated spawn error the drains died on."""
+        from fno.graph.failure import AUTO_FAILURE_SENTINEL
+
+        base = f"{AUTO_FAILURE_SENTINEL} {self.streak} consecutive failed attempts"
+        if self.error:
+            return f"{base}: {self.error[:200]}"
+        return base
 
 
 def detect_failure_defers(
@@ -782,14 +1163,12 @@ def detect_failure_defers(
     """Ready nodes whose consecutive-failure streak is ``>= threshold``.
 
     Mirrors ``detect_temp_leaks`` / ``detect_rescope_fixes``: a pure detector
-    that returns candidates (the CLI applies them under one lock). Candidates
-    are nodes ``fno backlog next`` would still pick (``status`` ready, not
-    already deferred) - the ones that burn an iteration on every walk. A node
-    below threshold, or at exactly ``N-1``, is excluded (Boundaries). The streak
-    is derived from the walker's events via ``failure.consecutive_failures``
-    (Locked Decision #4); a malformed row is skipped rather than aborting.
+    returning candidates the CLI applies under one lock - the nodes ``fno
+    backlog next`` would still pick, the ones that burn an iteration on every
+    walk. Below threshold, or at exactly ``N-1``, is excluded (Boundaries);
+    a malformed row is skipped rather than aborting.
     """
-    from fno.graph.failure import consecutive_failures
+    from fno.graph.failure import consecutive_failures, last_advance_failed_error
 
     if threshold < 1:
         return []
@@ -806,7 +1185,13 @@ def detect_failure_defers(
             continue
         streak = consecutive_failures(nid, events)
         if streak >= threshold:
-            out.append(FailureDefer(node_id=nid, streak=streak))
+            out.append(
+                FailureDefer(
+                    node_id=nid,
+                    streak=streak,
+                    error=last_advance_failed_error(nid, events),
+                )
+            )
     return out
 
 
@@ -1156,7 +1541,7 @@ def collect_evidence(
                 packet.items[f"git:{sym}"] = f"{count} matches"
 
     # retro-only enrichment: fetch the originating review comment + merged file
-    # region so the classifier can judge "already satisfied" (the x-fdff shape a
+    # region so the classifier can judge "already satisfied" (the shape a
     # base packet cannot catch). Merged LAST so ``_cap_packet`` drops these before
     # any base item (AC4-EDGE). Only ``pr:``/``git:`` keys are accepted; anything
     # else is rejected, not merged (AC1-HP injection boundary). Absent/empty/raising
@@ -1197,14 +1582,9 @@ def _cap_packet(packet: EvidencePacket) -> None:
 def _apply_aggregate_budget(
     packets: list[EvidencePacket],
 ) -> tuple[list[EvidencePacket], int]:
-    """Keep the oldest-first prefix of ``packets`` whose combined serialized size
-    stays within ``AGGREGATE_MAX_BYTES``; return ``(kept, dropped_count)``.
-
-    Order is preserved (candidates arrive oldest-first), so the dropped tail is
-    the freshest of the batch and re-enters the next sweep unwatermarked. At
-    least one packet is always kept so a single oversized packet still gets a
-    turn rather than starving forever.
-    """
+    """Oldest-first prefix of ``packets`` within ``AGGREGATE_MAX_BYTES``; the
+    dropped tail re-enters the next sweep unwatermarked, and at least one
+    packet always survives so a single oversized one is never starved."""
     kept: list[EvidencePacket] = []
     total = 0
     for p in packets:
@@ -1224,23 +1604,18 @@ VALIDITY_MIN_CONFIDENCE = 0.6
 
 _VALIDITY_SCHEMA = {
     "type": "object",
-    "properties": {
-        "results": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "node_id": {"type": "string"},
-                    "classification": {"type": "string", "enum": list(VALIDITY_CLASSES)},
-                    "confidence": {"type": "number"},
-                    "rationale": {"type": "string"},
-                    "evidence_ids": {"type": "array", "items": {"type": "string"}},
-                    "target": {"type": "string"},
-                },
-                "required": ["node_id", "classification", "confidence", "rationale"],
-            },
-        }
-    },
+    "properties": {"results": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "node_id": {"type": "string"},
+            "classification": {"type": "string", "enum": list(VALIDITY_CLASSES)},
+            "confidence": {"type": "number"},
+            "rationale": {"type": "string"},
+            "evidence_ids": {"type": "array", "items": {"type": "string"}},
+            "target": {"type": "string"},
+        },
+        "required": ["node_id", "classification", "confidence", "rationale"],
+    }}},
     "required": ["results"],
 }
 
@@ -1270,7 +1645,9 @@ _VALIDITY_PROMPT = (
 
 
 def _run_validity_analysis(
-    packets: list[EvidencePacket], model: Optional[str] = None
+    packets: list[EvidencePacket],
+    model: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> dict[str, dict]:
     """Run ONE tool-less schema-constrained analysis over all packets.
 
@@ -1279,7 +1656,8 @@ def _run_validity_analysis(
     any dispatch/parse failure so the caller writes an evidence-only degraded
     deck instead of a partial one (AC2-ERR). Tests use ``FNO_LLM_STUB`` to print
     the results JSON; a real ``claude -p`` is refused under
-    pytest/CI.
+    pytest/CI. ``timeout`` bounds the subprocess; ``None`` falls back to
+    ``VALIDITY_RUN_TIMEOUT_S`` (the pass budget hands in whatever is left).
     """
     context = {"packets": [p.to_json() for p in packets]}
     prompt = f"{_VALIDITY_PROMPT}\n\nCONTEXT:\n{json.dumps(context)}"
@@ -1288,7 +1666,7 @@ def _run_validity_analysis(
         schema=_VALIDITY_SCHEMA,
         system_prompt="You classify backlog ideas. Respond with JSON only.",
         model=model,
-        timeout=VALIDITY_RUN_TIMEOUT_S,
+        timeout=timeout if timeout is not None else VALIDITY_RUN_TIMEOUT_S,
         check=True,
     )
     data = json.loads(result.stdout)
@@ -1635,6 +2013,7 @@ def run_validity_sweep(
     analyze: Optional[Callable[[list["EvidencePacket"]], dict[str, dict]]] = None,
     reread: Optional[Callable[[], list[dict]]] = None,
     deck_id: Optional[str] = None,
+    run_timeout: Optional[float] = None,
 ) -> ValiditySweepResult:
     """Select -> evidence -> analyze -> revalidate-state -> write immutable deck.
 
@@ -1649,7 +2028,10 @@ def run_validity_sweep(
     if now is None:
         now = datetime.now(timezone.utc)
     if analyze is None:
-        analyze = _run_validity_analysis
+        def analyze(packets: list[EvidencePacket]) -> dict[str, dict]:
+            # The default analyzer is the one leg that can overrun the pass
+            # budget on its own, so it inherits whatever time is left.
+            return _run_validity_analysis(packets, timeout=run_timeout)
     days, size, warnings = clamp_validity_bounds(validity_days, batch_size)
     seen = frozenset() if recheck else read_watermarked_fingerprints(out_dir)
     candidates = select_validity_candidates(
@@ -1667,10 +2049,8 @@ def run_validity_sweep(
         )
         for c in candidates
     ]
-    # Enforce the aggregate prompt budget (Locked Decision #7): each packet is
-    # <=32 KiB, but 25 large ones would blow past AGGREGATE_MAX_BYTES. Drop the
-    # oldest-first tail that overflows; dropped packets are never analyzed, so
-    # they are not watermarked and the next sweep picks them up. Never silent.
+    # Aggregate prompt budget (Locked Decision #7): drop the overflowing tail;
+    # dropped packets are never analyzed (never watermarked), never silently.
     packets, dropped = _apply_aggregate_budget(packets)
     if dropped:
         warnings.append(
@@ -1687,10 +2067,8 @@ def run_validity_sweep(
         degraded = True
         rows = evidence_only_rows(packets)
 
-    # AC4-EDGE: re-read AFTER analysis (which can take seconds) and void any row
-    # whose node left idea-state or changed premise while the analyzer ran - a
-    # pre-analysis snapshot would miss a mid-analysis change and still watermark
-    # the old state.
+    # AC4-EDGE: re-read AFTER analysis and void any row whose node left
+    # idea-state or changed premise while the analyzer ran.
     if reread is not None:
         try:
             fresh_entries = reread()
@@ -1730,3 +2108,914 @@ def run_validity_sweep(
         stale=sum(1 for r in rows if r.stale),
         warnings=warnings,
     )
+
+
+AbandonedDoRow = namedtuple("AbandonedDoRow", "node harness session_id verdict reason ended_epoch")
+
+
+def do_row_session_gone(harness, session_id, cwd, *, quiet_after_s, now_s):
+    """Proof of session death from transcript truth; False holds with a named reason. Never raises."""
+    try:
+        from fno.provenance.observed import FILE_BACKED_HARNESSES, resolve_transcript_path
+        from fno.agents.watchdog import finished_with_the_tree, tail_facts
+
+        if harness not in FILE_BACKED_HARNESSES:
+            return False, "harness not file-backed", None
+
+        facts = tail_facts(session_id, cwd, agent=harness)
+        if facts is None:
+            if resolve_transcript_path(harness, session_id, cwd) is None:
+                return False, "transcript unresolved", None
+            return False, "transcript unreadable", None
+        if not finished_with_the_tree(facts, now_s, quiet_after_s):
+            return False, "transcript active", None
+        quiet_m = max(0, int((now_s - facts.last_event_epoch) // 60))
+        return True, f"transcript quiet {quiet_m}m, tail not engaged", facts.last_event_epoch
+    except Exception:  # noqa: BLE001 - a proof must never break the sweep
+        return False, "transcript unreadable", None
+
+
+def detect_abandoned_do_rows(
+    entries, *, live_claimed, live_worked, prover, now_s, quiet_after_s
+):
+    """Stamp every non-terminal, unclaimed open-do-row node gone or held; vetoes outrank the prover."""
+    from fno.graph.statuses import TERMINAL_RUNGS, is_open_do_row
+
+    out: list[AbandonedDoRow] = []
+    for e in entries:
+        nid = e.get("id") if isinstance(e, dict) else None
+        if (not isinstance(nid, str) or not nid or e.get("locked_by")
+                or e.get("status") in TERMINAL_RUNGS or e.get("superseded_by")):
+            continue
+        for row in e.get("sessions") or []:
+            if not is_open_do_row(row):
+                continue
+            harness, sid = row.get("harness"), row.get("session_id")
+            if nid in live_claimed or live_worked.get(nid):
+                why = ("live claim" if nid in live_claimed
+                       else f"reachable worker on node {', '.join(live_worked[nid])}")
+                out.append(AbandonedDoRow(nid, harness, sid, "held", why, None))
+            else:
+                idle = do_row_idle_s(e, row, now_s)
+                gone = idle is not None and idle > quiet_after_s
+                reason, epoch = (f"row idle {idle // 3600}h, no reachable worker on the node", None) if gone else (f"row idle {'?' if idle is None else idle // 3600}h, inside the {int(quiet_after_s // 3600)}h bound", None)
+                out.append(AbandonedDoRow(nid, harness, sid, "gone" if gone else "held", reason, epoch))
+    return out
+
+
+def do_row_idle_s(entry, row, now_s) -> Optional[int]:
+    return int(now_s - max(stamps)) if (stamps := [s.timestamp() for s in map(_parse_ts, [row.get("started_at")] + [n.get("ts") for n in entry.get("progress_notes") or [] if isinstance(n, dict) and n.get("source_session_id") == row.get("session_id")]) if s]) else None
+
+def abandoned_do_rows(entries, claimed, *, strict=True):
+    from fno.config import load_settings
+    from fno.claims.roster import classify_workers, read_roster
+    from fno.graph.statuses import is_open_do_row
+    now_s, bound = datetime.now(timezone.utc).timestamp(), load_settings().backlog.maintain.abandoned_do_row_hours * 3600
+    reading = read_roster(require_live_probe=False) if any((do_row_idle_s(e, r, now_s) or 0) > bound for e in entries for r in e.get("sessions") or [] if is_open_do_row(r)) else None
+    if reading is not None and not reading.consulted:
+        if not strict:
+            return [AbandonedDoRow(e.get("id"), r.get("harness"), r.get("session_id"), "held", f"roster unread ({reading.reason})", None) for e in entries for r in e.get("sessions") or [] if is_open_do_row(r)]
+        raise RuntimeError(f"roster unread ({reading.reason})")
+    return detect_abandoned_do_rows(entries, live_claimed=claimed, live_worked={n: [str(w.get("name")) for w in classify_workers(ws)[0]] for n, ws in (reading.workers_by_node if reading else {}).items()}, prover=do_row_session_gone, now_s=now_s, quiet_after_s=bound)
+def abandoned_leg(entries, claimed, graph_path, apply):
+    """Detect + reap + render for cmd_maintain; returns ``(lines, warning)``."""
+    try:
+        rows = abandoned_do_rows(entries, claimed)
+    except Exception as exc:  # noqa: BLE001 - one leg must not kill the sweep
+        return [], f"abandoned-do-row leg skipped: {exc}"
+
+    reaped, reaped_rows, truncated = {}, 0, 0
+    if apply:
+        gone = [r for r in rows if r.verdict == "gone"]
+        truncated = max(0, len(gone) - AUTO_DEFER_BLAST_CAP)
+        from fno.graph.store import reap_open_session_record
+
+        for cand in gone[:AUTO_DEFER_BLAST_CAP]:
+            try:
+                ended_at = None
+                if cand.ended_epoch is not None:
+                    ended_at = datetime.fromtimestamp(
+                        cand.ended_epoch, tz=timezone.utc
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                rep = reap_open_session_record(
+                    graph_path, cand.node, phase="execute",
+                    harness=cand.harness, session_id=cand.session_id,
+                    ended_at=ended_at,
+                )
+                reaped[cand.node] = {"row_removed": bool(rep.get("row_removed")),
+                                     "row_closed": bool(rep.get("row_closed")),
+                                     "status_after": rep.get("status_after")}
+                reaped_rows += 1
+            except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+                reaped[cand.node] = {"error": str(exc)}
+
+    lines = [f"abandoned-do-rows reaped {reaped_rows} of {len(rows)} candidate(s)"
+             if apply else f"abandoned-do-row candidates {len(rows)}"]
+    for r in rows:
+        tag = f"{r.harness} {str(r.session_id)[:8]}"
+        rep = reaped.get(r.node)
+        if rep and "error" in rep:
+            lines.append(f"  warning: do-row reap of {r.node} failed: {rep['error']}")
+        elif rep:
+            lines.append(f"  settled do row {r.node} ({tag}): row_closed "
+                         f"{str(rep.get('row_closed', False)).lower()}, status_after "
+                         f"{rep['status_after']} ({r.reason})")
+        else:
+            verb = "would reap" if r.verdict == "gone" else "held"
+            lines.append(f"  {verb} do row {r.node} ({tag}): {r.reason}")
+    if truncated:
+        lines.append(f"  NOTE: abandoned-do-row blast cap hit - {truncated} gone "
+                     f"row(s) not reaped (cap {AUTO_DEFER_BLAST_CAP}); re-run to continue")
+    return lines, None
+
+# --- pass orchestration + evidence sources (moved from graph/cli.py);
+# tracker-owned machinery: these reads are the maintain verb's engine ---
+
+def _validity_rg_search(symbol: str) -> Optional[int]:
+    """Bounded git-grep file count for ``symbol``, or ``None`` when the source
+    is unavailable (recorded as unavailable, never a spurious zero).
+    5 s cap (Locked Decision #7)."""
+    import subprocess
+
+    from fno.paths import resolve_repo_root
+
+    try:
+        root = str(resolve_repo_root())
+    except Exception:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "grep", "-l", "--fixed-strings", "-e", symbol],
+            capture_output=True,
+            text=True,
+            timeout=EVIDENCE_SOURCE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    # git grep exits 1 with no output when there are no matches (not an error).
+    if proc.returncode not in (0, 1):
+        return None
+    return sum(1 for line in proc.stdout.splitlines() if line.strip())
+
+
+# Retro enrichment bounds (Discretion #1/#2): bounded region + truncated hunk.
+_RETRO_REGION_WINDOW = 8
+_RETRO_REGION_MAX_BYTES = 1200
+_RETRO_HUNK_MAX_BYTES = 400
+
+
+def _fetch_retro_comment(
+    source_pr: int,
+    finding_hash: str,
+    root: str,
+    *,
+    repo: Optional[str] = None,
+) -> Optional[dict]:
+    """Fetch PR ``source_pr``'s inline comments and return the one whose body
+    hash-joins ``finding_hash`` (the canonical ``content_hash`` ``land`` wrote;
+    the function-local import keeps the graph -> retro edge one-way), or
+    ``None`` on any failure. The gh path templates a numeric PR slot."""
+    import subprocess
+
+    from fno.retro.dedup import content_hash  # function-local: no graph->retro cycle
+
+    path = (
+        f"repos/{repo}/pulls/{source_pr}/comments"
+        if repo
+        else f"repos/:owner/:repo/pulls/{source_pr}/comments"
+    )
+    try:
+        proc = subprocess.run(
+            ["gh", "api", path, "--paginate", "--slurp"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=EVIDENCE_SOURCE_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        raw = json.loads(proc.stdout) if proc.stdout.strip() else []
+    except (json.JSONDecodeError, ValueError):
+        return None
+    # --slurp wraps pages as [[page1...],[page2...]]; flatten defensively.
+    flat: list[dict] = []
+    if isinstance(raw, list):
+        for elem in raw:
+            if isinstance(elem, list):
+                flat.extend(x for x in elem if isinstance(x, dict))
+            elif isinstance(elem, dict):
+                flat.append(elem)
+    for c in flat:
+        if content_hash(str(c.get("body", ""))) == finding_hash:
+            return c
+    return None
+
+
+def _summarize_review_comment(path: object, line: object, diff_hunk: object) -> str:
+    """One-line, bounded summary of the originating ask: cited path/line plus a
+    truncated diff_hunk (the shape of the ask, not the whole hunk - Discretion #2)."""
+    loc = f"{path}:{line}" if line else str(path)
+    hunk = str(diff_hunk or "").strip()
+    if len(hunk) > _RETRO_HUNK_MAX_BYTES:
+        hunk = hunk[:_RETRO_HUNK_MAX_BYTES] + "…[truncated]"
+    return f"reviewer asked at {loc}; diff_hunk: {hunk}" if hunk else f"reviewer asked at {loc}"
+
+
+def _read_merged_region(root: str, path: str, line: object) -> str:
+    """Bounded excerpt of ``path`` around ``line`` in the live merged tree:
+    ``git show HEAD:<path>`` (Locked Decision #3), falling back to a path-safe
+    read gated by ``contained_path_exists`` (CWE-22); "" if neither resolves,
+    and the line clamps to the file's bounds."""
+    import subprocess
+
+    # CWE-22: `path` originates from a GitHub comment - reject a non-str or a
+    # parent-escaping / absolute path BEFORE any read (defense in depth).
+    if not isinstance(root, str) or not isinstance(path, str):
+        return ""
+    norm = os.path.normpath(path)
+    if os.path.isabs(norm) or norm == ".." or norm.startswith(".." + os.sep):
+        return ""
+
+    content: Optional[str] = None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", root, "show", f"HEAD:{path}"],
+            capture_output=True,
+            text=True,
+            timeout=EVIDENCE_SOURCE_TIMEOUT_S,
+        )
+        if proc.returncode == 0:
+            content = proc.stdout
+    except (OSError, subprocess.SubprocessError):
+        content = None
+    if content is None:
+        if not contained_path_exists(root, path):
+            return ""
+        try:
+            with open(os.path.join(root, path), encoding="utf-8", errors="replace") as fh:
+                content = fh.read()
+        except OSError:
+            return ""
+    file_lines = content.splitlines()
+    if not file_lines:
+        return ""
+    anchor = line if isinstance(line, int) and line >= 1 else 1
+    anchor = min(anchor, len(file_lines))  # clamp EOF
+    lo = max(0, anchor - 1 - _RETRO_REGION_WINDOW)
+    hi = min(len(file_lines), anchor + _RETRO_REGION_WINDOW)
+    excerpt = "\n".join(file_lines[lo:hi])
+    return excerpt[:_RETRO_REGION_MAX_BYTES]
+
+
+def _validity_retro_source(node: dict) -> dict[str, str]:
+    """Per-retro-node enrichment seam (Locked Decision #1): the originating
+    review comment + the cited file's merged region as allowlisted `pr:`/`git:`
+    items, or ``{}`` on any failure (fail open). Tests inject a stub."""
+    parsed = parse_retro_trailer(node.get("details"))
+    if parsed is None:
+        return {}
+    source_pr, finding_hash = parsed
+    if source_pr is None:  # postmortem-sourced: no fetchable PR comment
+        return {}
+    root = node.get("cwd")
+    if not isinstance(root, str) or not os.path.isdir(root):
+        return {}
+    root_p = os.path.abspath(os.path.expanduser(root))
+    comment = _fetch_retro_comment(source_pr, finding_hash, root_p)
+    if comment is None:
+        return {}
+    items: dict[str, str] = {}
+    path = comment.get("path")
+    line = comment.get("line") or comment.get("original_line")  # outdated diff -> original_line
+    items["pr:review-comment"] = _summarize_review_comment(path, line, comment.get("diff_hunk"))
+    # Ordered after the ask so a cap drops the merged region first (Discretion #4).
+    if isinstance(path, str) and path:
+        region = _read_merged_region(root_p, path, line)
+        if region:
+            items[f"git:merged-region:{path}"] = region
+    return items
+
+
+def run_pass(
+    *,
+    apply: bool,
+    json_out: bool,
+    recheck: bool,
+    no_validity: bool,
+    suspect_reverts: bool,
+    graph_path: Callable[[], Path],
+    live_claimed: Callable[..., set[str]],
+    require_live_claimed: Callable[[str], set[str]],
+) -> None:
+    """Run the whole maintain pass: detect legs, apply, validity, report.
+
+    Budgeted and testable headless; graph/cli.py keeps only the typer shell
+    (the detectors and their orchestration answer the same question).
+    """
+    import typer
+
+    from fno.graph.store import read_graph_strict, commit_rows_via_store
+    from fno.graph.statuses import recompute_statuses
+    from fno.graph._intake import _find_node
+    from fno.graph.render import make_kanban_column
+
+    # Read once; derive status so the judgment legs see accurate states.
+    entries = recompute_statuses(read_graph_strict(graph_path()))
+
+    if suspect_reverts:
+        # Short-circuit: a read-only retro sweep, not another leg.
+        reverts = detect_suspect_reverts(entries)
+        typer.echo(
+            f"reversals: {len(reverts)} of the drained pile carry evidence of a human decision"
+        )
+        for r in reverts:
+            title = r.title[:60]
+            typer.echo(f"  {r.node_id}  {r.priority}  {r.deferred_at[:10]}  {r.signal}  {title}")
+        typer.echo(
+            "(read-only: no node was changed. Rule on these yourself with `fno backlog undefer <id>...`)"
+        )
+        return
+
+    # Apply legs must never touch a node a live target session is driving.
+    claimed = (
+        require_live_claimed("backlog maintain --apply")
+        if apply
+        else live_claimed()
+    )
+
+    # --- detect (all read-only), each leg behind the wall-clock budget; an
+    # overrun exits 4 with a partial receipt, never a silent timeout.
+    try:
+        from fno.config import load_settings
+
+        _maintain_cfg = load_settings().backlog.maintain
+        staleness_days = _maintain_cfg.staleness_days
+        max_failed_attempts = _maintain_cfg.max_failed_attempts
+        budget_seconds = _maintain_cfg.budget_seconds
+    except Exception:
+        staleness_days = 30
+        max_failed_attempts = 3
+        budget_seconds = 300
+    budget = Budget(budget_seconds)
+    pass_started = time.monotonic()
+    legs_done: list[tuple[str, str]] = []
+
+    def _record_history(rep: dict) -> None:
+        try:
+            from fno.health_monitor import append_history
+
+            append_history(rep, [])
+        except Exception as exc:  # noqa: BLE001 - report leg is non-fatal
+            typer.echo(f"warning: maintain health-history append failed: {exc}", err=True)
+
+    def _budget_died(exc: "BudgetExceeded") -> None:
+        """Land a ``complete: false`` history row, print the partial receipt, exit 4."""
+        duration_s = round(time.monotonic() - pass_started, 1)
+        _record_history(
+            {
+                "scope": "maintain",
+                "applied": apply,
+                "complete": False,
+                "incomplete_leg": exc.leg,
+                "duration_s": duration_s,
+            }
+        )
+        # The receipt divides only by legs this run could have completed.
+        leg_total = MAINTAIN_LEG_TOTAL - (1 if no_validity else 0)
+        typer.echo(
+            f"budget exceeded in leg '{exc.leg}' after {duration_s}s; "
+            f"{len(legs_done)}/{leg_total} legs completed; "
+            f"results partial",
+            err=True,
+        )
+        if json_out:
+            payload = {
+                "complete": False,
+                "incomplete_leg": exc.leg,
+                "duration_s": duration_s,
+                "legs_completed": dict(legs_done),
+            }
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            for name, detail in legs_done:
+                typer.echo(f"  {name}: {detail}")
+            typer.echo("results partial: the remaining legs never ran; re-run to finish")
+        raise typer.Exit(code=4)
+
+    def _enter_leg(leg: str) -> None:
+        try:
+            budget.enter(leg)
+        except BudgetExceeded as exc:
+            _budget_died(exc)
+
+    def _leg(name: str, fn: Callable[[], Any]) -> Any:
+        """Enter one detect leg behind the budget and book its outcome."""
+        _enter_leg(name)
+        result = fn() or []
+        legs_done.append((name, str(len(result))))
+        return result
+
+    def _rollup() -> list:
+        try:
+            return detect_rollup_candidates(entries)
+        except Exception:  # noqa: BLE001 - advisory leg; maintain must not break
+            return []
+
+    workspaces = load_workspaces()
+    rescope_fixes = _leg("rescope", lambda: detect_rescope_fixes(entries, workspaces))
+    prune_ids = _leg("temp-leaks", lambda: detect_temp_leaks(entries))
+    pr_url_fixes = _leg("pr-url", lambda: detect_url_less_prs(entries))
+    pr_url_writable = [f for f in pr_url_fixes if f.pr_url]
+    pr_url_unresolvable = [f for f in pr_url_fixes if not f.pr_url]
+    twin_drops = _leg("session-twins", lambda: detect_misharnessed_twins(entries))
+    shape_fixes = _leg("harness-shape", lambda: detect_harness_shape_fixes(entries))
+    dup_groups = _leg("dedup", lambda: detect_dup_groups(entries))
+    plan_cost_violations = _leg("shared-plan-cost",
+                                lambda: detect_shared_plan_cost_violations(entries))
+    # Rollup is propose-only in v1 even under --apply: a bulk reparent has no
+    # human reading a receipt the way intake's one-at-a-time auto-link does.
+    rollup_cands = _leg("rollup", _rollup)
+    stale = _leg("stale-ideas", lambda: detect_stale_ideas(entries, staleness_days))
+
+    # G1 stale-ready quarantine: propose-only mirror of the failure-defer leg
+    # over READY rows abandoned past backlog.staleness_days (default 21). Same
+    # blast cap, so a mass-quarantine can never defer half the board.
+    _enter_leg("stale-ready")
+    try:
+        from fno.config import load_settings
+
+        ready_staleness_days = load_settings().backlog.staleness_days
+    except Exception:
+        ready_staleness_days = 21
+    stale_ready_cands = detect_stale_ready(entries, ready_staleness_days)
+    stale_ready_truncated = 0
+    if len(stale_ready_cands) > AUTO_DEFER_BLAST_CAP:
+        stale_ready_cands = sorted(stale_ready_cands, key=lambda s: (-s.age_days, s.node_id))
+        stale_ready_truncated = len(stale_ready_cands) - AUTO_DEFER_BLAST_CAP
+        stale_ready_cands = stale_ready_cands[: AUTO_DEFER_BLAST_CAP]
+    legs_done.append(("stale-ready", str(len(stale_ready_cands))))
+
+    now_cap = _now_wip_cap()
+    overflow = _leg("now-cap",
+                    lambda: now_overflow(entries, now_cap, make_kanban_column(entries)))
+
+    # Leg 7: auto-defer failure-prone nodes (#34). Derive the streak from the
+    # walker's existing node_failed/node_closed events (Locked Decision #4).
+    _enter_leg("failure-defers")
+    from fno.graph import failure as _failure
+
+    events = _failure.read_events(types=list(_failure.FAILURE_EVENT_TYPES))
+    defer_cands = detect_failure_defers(entries, events, max_failed_attempts)
+    # Blast-radius guard: cap per-run auto-defers (ALWAYS logged, no silent
+    # cap) so a provider outage cannot defer half the board.
+    defer_truncated = 0
+    if len(defer_cands) > AUTO_DEFER_BLAST_CAP:
+        defer_cands = sorted(defer_cands, key=lambda d: (-d.streak, d.node_id))
+        defer_truncated = len(defer_cands) - AUTO_DEFER_BLAST_CAP
+        defer_cands = defer_cands[: AUTO_DEFER_BLAST_CAP]
+    legs_done.append(("failure-defers", str(len(defer_cands))))
+
+    _enter_leg("abandoned")
+    ab_lines, ab_warn = abandoned_leg(entries, claimed, graph_path(), apply)
+    if ab_warn:
+        typer.echo(f"warning: {ab_warn}", err=True)
+    legs_done.append(("abandoned", str(len(ab_lines))))
+
+    # --- apply (deterministic legs only) ---
+    applied_rescope: list[str] = []
+    applied_prune: list[str] = []
+    applied_defers: list[dict] = []
+    applied_stale_ready: list[dict] = []
+    applied_pr_urls: list[dict] = []
+    applied_twin_drops: list[dict] = []
+    applied_shape_fixes: list[dict] = []
+    skipped_claimed: list[str] = []
+
+    _enter_leg("apply")
+    if apply and (rescope_fixes or prune_ids or defer_cands or stale_ready_cands or pr_url_writable or twin_drops or shape_fixes):
+        # One locked mutation: the board renders once; one failed item never strands the rest.
+        def mutator(ents):
+            current_claimed = claimed | require_live_claimed("backlog maintain --apply")
+            applied_rescope.clear()
+            applied_prune.clear()
+            applied_defers.clear()
+            applied_stale_ready.clear()
+            applied_pr_urls.clear()
+            skipped_claimed.clear()
+            prune_set: set[str] = set()
+            for fix in rescope_fixes:
+                if fix.node_id in current_claimed:
+                    skipped_claimed.append(fix.node_id)
+                    continue
+                try:
+                    n = _find_node(ents, fix.node_id)
+                    if not n:
+                        continue
+                    # Only project/cwd are ever touched - never priority/status.
+                    n["project"] = fix.new_project
+                    n["cwd"] = fix.new_cwd
+                    applied_rescope.append(fix.node_id)
+                except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+                    typer.echo(f"warning: re-scope of {fix.node_id} failed: {exc}", err=True)
+            for nid in prune_ids:
+                if nid in current_claimed:
+                    skipped_claimed.append(nid)
+                    continue
+                prune_set.add(nid)
+                applied_prune.append(nid)
+            if prune_set:
+                # Mirror `remove`: drop the node AND clean dangling blocked_by refs.
+                for e in ents:
+                    blocked = e.get("blocked_by")
+                    if blocked:
+                        e["blocked_by"] = [b for b in blocked if b not in prune_set]
+                ents = [e for e in ents if e.get("id") not in prune_set]
+            # Leg 2b: backfill a pr_url onto url-less rows, in-lock (a present url outranks).
+            for fix in pr_url_writable:
+                if fix.node_id in current_claimed:
+                    skipped_claimed.append(fix.node_id)
+                    continue
+                try:
+                    n = _find_node(ents, fix.node_id)
+                    if not n or n.get("pr_url") or n.get("pr_number") != fix.pr_number:
+                        continue
+                    n["pr_url"] = fix.pr_url
+                    applied_pr_urls.append({"node_id": fix.node_id, "pr_url": fix.pr_url})
+                except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+                    typer.echo(f"warning: pr_url backfill of {fix.node_id} failed: {exc}", err=True)
+            # Leg 2c: drop the mis-harnessed session twin (re-checked in-lock).
+            applied_twin_drops, twin_skipped, twin_warn = apply_twin_drops(
+                ents, twin_drops, current_claimed
+            )
+            skipped_claimed.extend(twin_skipped)
+            # Leg 2d: correct a wrong harness the twin leg left (no twin to drop).
+            applied_shape_fixes, fix_skipped, fix_warn = apply_harness_shape_fixes(
+                ents, shape_fixes, current_claimed
+            )
+            skipped_claimed.extend(fix_skipped)
+            for _w in [*twin_warn, *fix_warn]:
+                typer.echo(f"warning: {_w}", err=True)
+            # Leg 7 auto-defer, re-checked INSIDE the lock so a node that
+            # raced is not touched.
+            defer_claimed = current_claimed
+            for cand in defer_cands:
+                if cand.node_id in defer_claimed:
+                    skipped_claimed.append(cand.node_id)
+                    continue
+                try:
+                    n = _find_node(ents, cand.node_id)
+                    if not n:
+                        continue
+                    if n.get("completed_at") or n.get("deferred_at"):
+                        continue  # raced to done/deferred; leave it
+                    reason = cand.reason()
+                    n["completed_at"] = None
+                    n["deferred_at"] = datetime.now(timezone.utc).isoformat()
+                    n["deferred_reason"] = reason
+                    # Sentinel vocabulary, not an expired drift: pop any kind.
+                    n.pop("deferred_kind", None)
+                    applied_defers.append(
+                        {"node_id": cand.node_id, "streak": cand.streak, "reason": reason}
+                    )
+                except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+                    typer.echo(f"warning: auto-defer of {cand.node_id} failed: {exc}", err=True)
+            # G1 stale-ready quarantine: the reversible defer for a ready node
+            # past its threshold; same in-lock re-sample race rule as above.
+            sr_claimed = current_claimed
+            for cand in stale_ready_cands:
+                if cand.node_id in sr_claimed:
+                    skipped_claimed.append(cand.node_id)
+                    continue
+                try:
+                    n = _find_node(ents, cand.node_id)
+                    if not n:
+                        continue
+                    if n.get("completed_at") or n.get("deferred_at"):
+                        continue  # raced to done/deferred; leave it
+                    # Re-run the predicate under the lock: a candidate that
+                    # gained a movement signal since the scan is no longer
+                    # stale (deferring it would sink active work).
+                    if not is_stale_ready(n, datetime.now(timezone.utc), ready_staleness_days):
+                        continue
+                    n["completed_at"] = None
+                    n["deferred_at"] = datetime.now(timezone.utc).isoformat()
+                    n["deferred_reason"] = STALE_QUARANTINE_REASON
+                    n["deferred_kind"] = "expired"
+                    applied_stale_ready.append({
+                        "node_id": cand.node_id,
+                        "age_days": cand.age_days,
+                        "reason": STALE_QUARANTINE_REASON,
+                    })
+                except Exception as exc:  # noqa: BLE001 - one bad row must not abort
+                    typer.echo(f"warning: stale-ready defer of {cand.node_id} failed: {exc}", err=True)
+            return ents
+
+        commit_rows_via_store(graph_path(), mutator)
+
+    # --- leg 8: validity sweep (proposal-only, never mutates) - reviews the
+    # oldest stale ideas into an immutable deck; watermarked ideas never
+    # re-enter, so later runs find 0 eligible and skip the analyzer call.
+    validity_result = None
+    _enter_leg("validity")
+    if not no_validity:
+        try:
+            from fno.config import load_settings
+
+            _vcfg = load_settings().backlog.maintain
+            v_days, v_batch = _vcfg.validity_days, _vcfg.validity_batch_size
+        except Exception:
+            v_days, v_batch = VALIDITY_DAYS_DEFAULT, VALIDITY_BATCH_DEFAULT
+
+        from fno import paths as _paths
+
+        try:
+            _deck_dir = _paths.state_dir() / "validity-decks"
+        except Exception:
+            _deck_dir = None
+
+        if _deck_dir is not None:
+
+            def _exists_factory(node):
+                root = node.get("cwd")
+                if not isinstance(root, str) or not os.path.isdir(root):
+                    return None  # repo unavailable -> path evidence recorded unavailable
+                root_p = os.path.abspath(os.path.expanduser(root))
+                # `rel` is extracted from untrusted node text; contained_path_exists
+                # rejects an absolute or `../` escape from the repo root (CWE-22).
+                return lambda rel: contained_path_exists(root_p, rel)
+
+            # Re-read seam: the sweep calls this AFTER the analyzer returns, so a
+            # node that raced to claimed/done/deferred DURING analysis voids its
+            # recommendation (AC4-EDGE).
+            def _reread():
+                return recompute_statuses(read_graph_strict(graph_path()))
+
+            validity_result = run_validity_sweep(
+                entries,
+                validity_days=v_days,
+                batch_size=v_batch,
+                out_dir=_deck_dir,
+                claimed_ids=frozenset(
+                    claimed
+                    | (
+                        require_live_claimed("backlog maintain --apply")
+                        if apply
+                        else live_claimed()
+                    )
+                ),
+                recheck=recheck,
+                exists_factory=_exists_factory,
+                search=_validity_rg_search,
+                retro_source=_validity_retro_source,
+                reread=_reread,
+                run_timeout=budget.remaining(),
+            )
+            if validity_result.error and not json_out:
+                typer.echo(f"validity: {validity_result.error}", err=True)
+                raise typer.Exit(code=1)
+            if validity_result is not None:
+                legs_done.append(("validity", f"{validity_result.eligible} eligible"))
+
+    # --- report leg: append a summary to health-history (best-effort) ---
+    report = {
+        "scope": "maintain",
+        "applied": apply,
+        "complete": True,
+        "duration_s": round(time.monotonic() - pass_started, 1),
+        "rescoped": len(applied_rescope) if apply else len(rescope_fixes),
+        "pruned": len(applied_prune) if apply else len(prune_ids),
+        "pr_url_backfilled": len(applied_pr_urls) if apply else len(pr_url_writable),
+        "pr_url_unresolvable": len(pr_url_unresolvable),
+        "dedup_groups": len(dup_groups),
+        "shared_plan_cost_violations": len(plan_cost_violations),
+        "rollup_candidates": len(rollup_cands),
+        "stale_ideas": len(stale),
+        "now_overflow": list(overflow) if overflow else None,
+        "skipped_claimed": len(skipped_claimed),
+        "auto_deferred": len(applied_defers) if apply else len(defer_cands),
+        # Node + reason lists: a silent auto-defer is a design bug.
+        "auto_deferred_nodes": applied_defers if apply
+        else [{"node_id": c.node_id, "streak": c.streak} for c in defer_cands],
+        "auto_defer_truncated": defer_truncated,
+        "stale_ready": len(applied_stale_ready) if apply else len(stale_ready_cands),
+        "stale_ready_nodes": applied_stale_ready if apply
+        else [{"node_id": c.node_id, "age_days": c.age_days} for c in stale_ready_cands],
+        "stale_ready_truncated": stale_ready_truncated,
+        "incomplete_leg": None,
+    }
+    _record_history(report)
+
+    if json_out:
+        payload = {
+            "applied": apply,
+            "rescope": {
+                "applied": applied_rescope if apply else [],
+                "candidates": [
+                    {"node_id": f.node_id, "new_project": f.new_project, "new_cwd": f.new_cwd}
+                    for f in rescope_fixes
+                ],
+            },
+            "prune": {
+                "applied": applied_prune if apply else [],
+                "candidates": prune_ids,
+            },
+            "pr_url_backfill": {
+                "applied": applied_pr_urls if apply else [],
+                "candidates": [
+                    {"node_id": f.node_id, "pr_number": f.pr_number, "pr_url": f.pr_url}
+                    for f in pr_url_writable
+                ],
+                "unresolvable": [
+                    {"node_id": f.node_id, "pr_number": f.pr_number, "cwd": f.cwd} for f in pr_url_unresolvable
+                ],
+            },
+            "dedup_groups": dup_groups,
+            "shared_plan_cost_violations": [
+                {"plan_path": v.plan_path, "nodes": v.nodes} for v in plan_cost_violations
+            ],
+            "rollup_candidates": [
+                {"node_id": n, "epic_id": e, "score": sc} for n, e, sc in rollup_cands
+            ],
+            "stale_ideas": [{"node_id": s.node_id, "age_days": s.age_days} for s in stale],
+            "now_overflow": list(overflow) if overflow else None,
+            "skipped_claimed": skipped_claimed,
+            "auto_defer": {
+                "applied": applied_defers if apply else [],
+                "candidates": [{"node_id": c.node_id, "streak": c.streak} for c in defer_cands],
+                "truncated": defer_truncated,
+            },
+            "stale_ready": {
+                "applied": applied_stale_ready if apply else [],
+                "candidates": [{"node_id": c.node_id, "age_days": c.age_days} for c in stale_ready_cands],
+                "truncated": stale_ready_truncated,
+            },
+            "session_twins": twin_payload(twin_drops, applied_twin_drops, apply),
+            "session_harness_fixes": shape_fix_payload(
+                shape_fixes, applied_shape_fixes, apply),
+            "complete": True,
+            "duration_s": round(time.monotonic() - pass_started, 1),
+        }
+        if validity_result is not None:
+            payload["validity"] = {
+                "eligible": validity_result.eligible,
+                "counts": validity_result.counts,
+                "deck": validity_result.deck_md,
+                "degraded": validity_result.degraded,
+                "stale": validity_result.stale,
+                "error": validity_result.error,
+            }
+        typer.echo(json.dumps(payload, indent=2))
+        if validity_result is not None and validity_result.error:
+            raise typer.Exit(code=1)
+        return
+
+    # --- human per-leg summary: every category prints its count, zero
+    # included - a silent category reads as "nothing to do" (AC1-UI).
+    if apply:
+        # "written N of M", never a bare N: the in-lock loop skips raced rows.
+        typer.echo(
+            f"pr-url written {len(applied_pr_urls)} of {len(pr_url_writable)} | "
+            f"pr-url unresolvable {len(pr_url_unresolvable)}"
+        )
+    else:
+        typer.echo(
+            f"pr-url proposed {len(pr_url_writable)} | "
+            f"pr-url unresolvable {len(pr_url_unresolvable)}"
+        )
+    for f in pr_url_unresolvable:
+        typer.echo(f"  unresolvable pr_url {f.node_id} (PR #{f.pr_number}, cwd={f.cwd or 'unset'})")
+
+    if apply:
+        typer.echo(
+            f"re-scoped {len(applied_rescope)} | pruned {len(applied_prune)} | "
+            f"auto-deferred {len(applied_defers)} | "
+            f"stale-ready-deferred {len(applied_stale_ready)} | "
+            f"dedup-groups {len(dup_groups)} | rollup-candidates "
+            f"{len(rollup_cands)} | stale-ideas {len(stale)} | "
+            f"now-overflow {'yes' if overflow else 'no'} | "
+            f"skipped-claimed {len(skipped_claimed)}"
+        )
+    else:
+        typer.echo(
+            f"re-scope candidates {len(rescope_fixes)} | prune candidates "
+            f"{len(prune_ids)} | auto-defer candidates {len(defer_cands)} | "
+            f"stale-ready candidates {len(stale_ready_cands)} | "
+            f"dedup-groups {len(dup_groups)} | rollup-candidates "
+            f"{len(rollup_cands)} | stale-ideas "
+            f"{len(stale)} | now-overflow {'yes' if overflow else 'no'}  "
+            f"(run with --apply to apply the deterministic legs)"
+        )
+
+    for rf in rescope_fixes:
+        verb = "re-scoped" if (apply and rf.node_id in applied_rescope) else "would re-scope"
+        typer.echo(f"  {verb} {rf.node_id} -> project={rf.new_project} cwd={rf.new_cwd}")
+    for nid in prune_ids:
+        verb = "pruned" if (apply and nid in applied_prune) else "would prune (temp-cwd leak)"
+        typer.echo(f"  {verb} {nid}")
+    if apply:
+        for d in applied_defers:
+            typer.echo(
+                f"  auto-deferred {d['node_id']} ({d['streak']} consecutive "
+                f"failures): {d['reason']}"
+            )
+    else:
+        for c in defer_cands:
+            typer.echo(
+                f"  would auto-defer {c.node_id} ({c.streak} consecutive failures, "
+                f">= {max_failed_attempts}): fno backlog undefer {c.node_id} to recover"
+            )
+    if defer_truncated:
+        typer.echo(
+            f"  NOTE: auto-defer blast cap hit - {defer_truncated} further "
+            f"candidate(s) NOT deferred this run "
+            f"(cap {AUTO_DEFER_BLAST_CAP}); re-run to continue"
+        )
+    if apply:
+        for d in applied_stale_ready:
+            typer.echo(
+                f"  stale-ready deferred {d['node_id']} ({d['age_days']}d unmoved): {d['reason']}"
+            )
+    else:
+        for sc in stale_ready_cands:
+            typer.echo(
+                f"  would quarantine stale-ready {sc.node_id} ({sc.age_days}d "
+                f"unmoved, >{ready_staleness_days}d): fno backlog undefer "
+                f"{sc.node_id} to recover"
+            )
+    if stale_ready_truncated:
+        typer.echo(
+            f"  NOTE: stale-ready blast cap hit - {stale_ready_truncated} further "
+            f"candidate(s) NOT quarantined this run "
+            f"(cap {AUTO_DEFER_BLAST_CAP}); re-run to continue"
+        )
+    for group in dup_groups:
+        typer.echo(f"  near-duplicate ideas (merge/supersede by hand): {', '.join(group)}")
+    for v in plan_cost_violations:
+        typer.echo(
+            f"  shared-plan cost double-count {v.plan_path}: {', '.join(v.nodes)} "
+            f"all carry cost_usd (a plan is one PR is one node; one node is the "
+            f"delivery unit, the rest are contained). Read-only: pick the unit "
+            f"and `fno backlog update <other> --plan-path null` by hand."
+        )
+    for _tl in twin_lines(twin_drops, applied_twin_drops, apply):
+        typer.echo(_tl)
+    for _fl in shape_fix_lines(shape_fixes, applied_shape_fixes, apply):
+        typer.echo(_fl)
+    if ab_lines:
+        typer.echo("\n".join(ab_lines))
+    for nid, epic_id, score in rollup_cands:
+        typer.echo(
+            f"  rollup candidate {nid} -> {epic_id} ({score:.2f}): "
+            f"fno backlog update {nid} --parent {epic_id}"
+        )
+    # Bounded stale-idea receipt: the per-candidate echo swamped the report on
+    # a mature graph. Summary + 10 oldest + one drain command instead;
+    # --no-validity skips the analyzer call that made an earlier `maintain -J` hang.
+    if stale:
+        ages = sorted(s.age_days for s in stale)
+        oldest = sorted(stale, key=lambda s: s.age_days, reverse=True)[:10]
+        typer.echo(
+            f"  stale ideas: {len(stale)} (age {ages[0]}-{ages[-1]}d) - drain in one locked write:"
+        )
+        for s in oldest:
+            typer.echo(f"    {s.node_id} ({s.age_days}d)")
+        if len(stale) > 10:
+            typer.echo(f"    (showing 10 of {len(stale)} oldest)")
+        typer.echo(
+            f"    fno backlog maintain --no-validity -J "
+            f"| jq -r '.stale_ideas[].node_id' "
+            f"| xargs fno backlog defer -R 'stale >{staleness_days}d, drained by maintain' "
+            f"--kind expired"
+        )
+    else:
+        typer.echo("  stale ideas: 0")
+    if overflow:
+        count, cap = overflow
+        typer.echo(
+            f"  Now over WIP cap ({count} > {cap}): run `fno backlog triage propose` "
+            f"to demote lower-priority work (never auto-reprioritized)"
+        )
+    if skipped_claimed:
+        typer.echo(
+            f"  skipped {len(skipped_claimed)} live-claimed node(s): {', '.join(skipped_claimed)}"
+        )
+
+    if validity_result is not None:
+        for w in validity_result.warnings:
+            typer.echo(f"  validity config: {w}", err=True)
+        if validity_result.eligible == 0:
+            typer.echo("validity: 0 eligible ideas")
+        else:
+            counts = validity_result.counts
+            tag = " (DEGRADED: analyzer unavailable)" if validity_result.degraded else ""
+            stale_note = f", {validity_result.stale} stale" if validity_result.stale else ""
+            typer.echo(
+                f"validity: reviewed {validity_result.eligible} ideas{tag} -> "
+                f"promote {counts.get('promote', 0)} | keep {counts.get('keep', 0)} | "
+                f"supersede {counts.get('supersede', 0)} | needs-human "
+                f"{counts.get('needs-human', 0)}{stale_note}"
+            )
+            typer.echo(f"  deck: {validity_result.deck_md}")

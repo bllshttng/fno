@@ -4,16 +4,22 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 from fno.paths import github_cli_proxy_dir, graphql_quota_lock
 from fno.pr._proc import Result, run
-from fno.setup.github_cli import PROXY_DEPTH_ENV, PROXY_EXEC_LINE
+from fno.rust_binary import VerbUnavailable
+from fno.setup.github_cli import PROXY_DEPTH_ENV, PROXY_EXEC_LINE, PROXY_IMPORT_LINE
 
 GRAPHQL_RESERVE = 200
 REFUSED = 75
+_PROBE_TTL_S = 60.0  # healthy probe answers are reused this long
+_TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN")
 _PROXY_DIR_ENV = "FNO_GH_PROXY_DIR"
 
 
@@ -33,13 +39,45 @@ def quota_lock_path() -> Path:
     return graphql_quota_lock()
 
 
+def _open_locked_path(lock_path: Path):
+    while True:
+        handle = lock_path.open("a+")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                opened = os.fstat(handle.fileno())
+                current = lock_path.stat()
+                same_inode = (opened.st_dev, opened.st_ino) == (
+                    current.st_dev,
+                    current.st_ino,
+                )
+            except OSError:
+                same_inode = False
+            if same_inode:
+                return handle
+            fcntl.flock(handle, fcntl.LOCK_UN)
+        except BaseException:
+            handle.close()
+            raise
+        handle.close()
+
+
+@contextmanager
+def _locked_path(lock_path: Path):
+    handle = _open_locked_path(lock_path)
+    try:
+        yield handle
+    finally:
+        handle.close()
+
+
 _SHIM_SCAN_BYTES = 65536
 
 
 def _is_proxy_shim(path: Path) -> bool:
     """Is this ``gh`` our own broker shim, judged by content rather than location?
 
-    ``github_cli_proxy_dir()`` is TMPDIR-derived, so directory identity only
+    ``fallback_proxy_dir()`` is TMPDIR-derived, so directory identity only
     recognizes a shim written by a process sharing our TMPDIR. A background job
     or a launchd agent inherits the shim on PATH but computes a different
     directory, and so fails to recognize it. The shim is a two-line script, but
@@ -49,7 +87,8 @@ def _is_proxy_shim(path: Path) -> bool:
     compiled ``gh`` binary. The match is anchored to the exec line
     ``ensure_proxy`` writes (``PROXY_EXEC_LINE``) rather than a bare substring,
     so a real ``gh`` that merely mentions the proxy name in a comment is not
-    mistaken for the shim.
+    mistaken for the shim. ``PROXY_IMPORT_LINE`` anchors the second shape, a
+    console script, which carries no exec line at all.
     """
     try:
         with path.open("rb") as handle:
@@ -57,7 +96,7 @@ def _is_proxy_shim(path: Path) -> bool:
     except OSError:
         return False
     text = head.decode("utf-8", errors="ignore")
-    return any(line.strip() == PROXY_EXEC_LINE for line in text.splitlines())
+    return any(line.strip() in (PROXY_EXEC_LINE, PROXY_IMPORT_LINE) for line in text.splitlines())
 
 
 def _proxy_dirs() -> set[str]:
@@ -202,6 +241,25 @@ def _quota(payload: str) -> tuple[Optional[int], Optional[int]]:
     return remaining, reset
 
 
+def _probe_quota(cache, gh, cwd, runner, env, timeout):
+    """Live `rate_limit` probe or a fresh healthy cached answer; cache=None never reads or writes."""
+    if cache is not None:
+        try:
+            row = json.loads(cache.read_text())
+            if time.time() - row["ts"] < _PROBE_TTL_S and row["remaining"] > GRAPHQL_RESERVE:
+                return row["remaining"], row["reset"]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    probe = runner([gh, "api", "rate_limit"], cwd=cwd, timeout=min(30, timeout), env=env)
+    remaining, reset = _quota(probe.stdout) if probe.ok else (None, None)
+    if cache is not None and remaining is not None and remaining > GRAPHQL_RESERVE and reset is not None:
+        try:
+            cache.write_text(json.dumps({"ts": time.time(), "remaining": remaining, "reset": reset}))
+        except OSError:
+            pass
+    return remaining, reset
+
+
 def _pr_number(args: Sequence[str]) -> str:
     for index, arg in enumerate(args):
         if arg in {"view", "checks"} and index + 1 < len(args) and args[index + 1].isdigit():
@@ -245,7 +303,7 @@ def _malformed_argv_refusal(first: str) -> str:
     Everything after ``--`` becomes gh's argv, command words first. Flags with
     no command word make gh print its root command list, which reads as
     unrelated output rather than an error, so the caller cannot tell the route
-    failed (a king lost a merge-precondition read this way).
+    failed (a lead lost a merge-precondition read this way).
     """
     return (
         "graphql-exec passes everything after -- to gh as its full argv, "
@@ -279,6 +337,110 @@ def _refusal(args: Sequence[str], *, reset: Optional[int], unavailable: bool = F
     )
 
 
+def _gh_budget(payload: dict) -> dict:
+    # The budget ops ride the existing fleet-incident action as an argument
+    # (law d-fe66560a allows no new client action); the door is unchanged.
+    # Call-time import: a module-top capture can permanently hold a test's
+    # monkeypatched verb_call stub, leaking it into every later reader.
+    from fno.rust_binary import verb_call
+
+    return verb_call("fleet-incident", payload, timeout=5)
+
+
+def _reader_signalled(exc: VerbUnavailable) -> bool:
+    """Whether the budget reader died from a signal (OOM killer, kernel).
+
+    verb_call attaches the child's exit code on a clean non-zero failure; a
+    signalled reader comes back negative from subprocess, or 137 through a
+    shell. A signalled reader means the machine is killing processes - exactly
+    when a flood of gh calls hurts. A clean exit (missing ledger, bad install)
+    is a config state and keeps admitting.
+    """
+    rc = getattr(exc, "returncode", None)
+    return rc is not None and (rc < 0 or rc == 137)
+
+
+def admit(argv: Sequence[str]) -> Optional[str]:
+    """Ask the machine-wide budget before one real gh call leaves.
+
+    Returns None when admitted; a str is the refusal line the caller prints
+    (and exits 75 on). A budget that cannot answer admits: it protects the
+    fleet, it is not a stop - the operator's breaker is `fno agents incident`.
+    The one exception is a reader the kernel signalled (exit -9, 137): the
+    machine is in distress, so refuse instead of admitting a gh-call flood,
+    and name the exit code - "ledger unavailable" alone reads as a missing
+    ledger when the real story is the OOM killer.
+
+    A caller with no worker identity is the user's own typed verb, and no
+    budget holds it: the reserve protects the fleet from its own fan-out,
+    never from the human at the terminal.
+    """
+    if not (os.environ.get("FNO_AGENT_SELF") or "").strip():
+        return None
+    try:
+        answer = _gh_budget({"op": "admit", "argv": [str(a) for a in argv]})
+    except VerbUnavailable as exc:
+        if _reader_signalled(exc):
+            rc = exc.returncode
+            return (
+                f"gh budget: budget reader exited {rc} (signalled); refusing while "
+                "the machine kills processes - retry when it recovers, "
+                "breaker is `fno agents incident`"
+            )
+        print(f"gh budget: ledger unavailable, admitting: {exc}", file=sys.stderr)
+        return None
+    if answer.get("verdict") == "refused":
+        return answer.get("refusal") or "gh budget: fleet GitHub rate limit held locally"
+    return None
+
+
+def record_refusal(stderr: str) -> None:
+    """Record GitHub's refusal in the fleet ledger, opening its backoff.
+
+    Only stderr carrying HTTP 403/429 qualifies: the local `gh budget:`
+    refusal line deliberately says "rate limit" without either marker, so a
+    refusal this fleet manufactured can never be recorded as GitHub's. The
+    caller also gates on the live probe (never record a drained primary
+    bucket) before reaching here.
+    """
+    if "HTTP 403" not in stderr and "HTTP 429" not in stderr:
+        return
+    try:
+        _gh_budget({"op": "refused"})
+    except VerbUnavailable as exc:
+        print(f"gh budget: refusal not recorded: {exc}", file=sys.stderr)
+
+
+# The most recent fleet-budget status answer: set only when backoff_live ran,
+# so a --refresh read (which never asks) prints no budget text.
+LAST_BUDGET: Optional[dict] = None
+
+
+def budget_note() -> str:
+    """`, fleet budget X of Y points in the last 60s`, or "" when the ledger
+    never answered this process (the ledger number, not core-remaining,
+    answers "is the machine being refused")."""
+    answer = LAST_BUDGET
+    if not isinstance(answer, dict):
+        return ""
+    points, cap = answer.get("points_60s"), answer.get("cap")
+    if isinstance(points, int) and isinstance(cap, int):
+        return f", fleet budget {points} of {cap} points in the last 60s"
+    return ""
+
+
+def backoff_live() -> bool:
+    """Whether the fleet ledger holds a live GitHub-refusal backoff."""
+    global LAST_BUDGET
+    try:
+        answer = _gh_budget({"op": "status"})
+    except VerbUnavailable:
+        LAST_BUDGET = None
+        return False
+    LAST_BUDGET = answer if isinstance(answer, dict) else None
+    return answer.get("backoff_remaining_s", 0) > 0
+
+
 def execute_graphql(
     purpose: str,
     gh_args: Sequence[str],
@@ -286,6 +448,7 @@ def execute_graphql(
     runner: Callable = run,
     real_gh: Optional[str] = None,
     lock_path: Optional[Path] = None,
+    probe_cache: Optional[Path] = None,
     cwd: Optional[str] = None,
     timeout: float = 120,
 ) -> Result:
@@ -320,23 +483,33 @@ def execute_graphql(
     if not gh:
         return Result(127, "", "gh not found on PATH")
     lock = lock_path or quota_lock_path()
+    cache = (None if any(v in os.environ for v in _TOKEN_ENV)
+             else (probe_cache or lock.with_name("github-quota-probe.json")))
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with lock.open("a+") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+    with _locked_path(lock) as handle:
         try:
             try:
                 env = delegate_environment()
             except ProxyIdentityError as exc:
                 return Result(2, "", proxy_identity_refusal(exc))
-            probe = runner(
-                [gh, "api", "rate_limit"], cwd=cwd, timeout=min(30, timeout), env=env
-            )
-            remaining, reset = _quota(probe.stdout) if probe.ok else (None, None)
+            remaining, reset = _probe_quota(cache, gh, cwd, runner, env, timeout)
             if purpose == "discretionary":
                 if remaining is None:
                     return Result(REFUSED, "", _refusal(gh_args, reset=None, unavailable=True))
                 if remaining <= GRAPHQL_RESERVE:
                     return Result(REFUSED, "", _refusal(gh_args, reset=reset))
-            return runner([gh, *gh_args], cwd=cwd, timeout=timeout, env=env)
+            budget_refusal = admit(gh_args)
+            if budget_refusal:
+                return Result(REFUSED, "", budget_refusal)
+            result = runner([gh, *gh_args], cwd=cwd, timeout=timeout, env=env)
+            if (
+                result.returncode != 0
+                and "rate limit" in (result.stderr or "").lower()
+                and (remaining is None or remaining > 0)
+            ):
+                # Fail toward backoff, and never record a drained primary
+                # bucket - the same posture as refusal_is_secondary.
+                record_refusal(result.stderr)
+            return result
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)

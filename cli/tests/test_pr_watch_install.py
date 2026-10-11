@@ -15,6 +15,13 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_bounce_receipts(tmp_path, monkeypatch):
+    """Bounce receipts and pr_watch_bounce events land in a tmp state dir,
+    never the developer's ~/.fno."""
+    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path / "state")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -31,7 +38,6 @@ def tmp_home(tmp_path, monkeypatch):
     # Clear load_settings cache so config reads fresh from the tmp HOME
     try:
         from fno.config import load_settings
-        load_settings.cache_clear()
     except Exception:
         pass
     yield home
@@ -77,114 +83,26 @@ def test_ac3hp_render_plist_contains_required_keys(tmp_home, plist_kwargs):
 
     assert "sh.fno.pr-watcher" in rendered
     assert "fno" in rendered
-    assert "pr-watch" in rendered
-    assert "tick" in rendered
+    # AC4-HP: the argv carries the current verb spelling; the retired
+    # pr-watch token must not appear as a bare argv string.
+    assert (
+        "<string>do</string>\n"
+        "    <string>pr</string>\n"
+        "    <string>watch</string>\n"
+        "    <string>tick</string>"
+    ) in rendered
+    assert "<string>pr-watch</string>" not in rendered
     assert "<false/>" in rendered  # RunAtLoad false
-
-
-def test_ac3hp_install_prints_plist_before_writing(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """install() prints the full plist text before writing (confirmed path)."""
-    m = _install()
-
-    # Simulate user confirmation
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-    )
-
-    captured = capsys.readouterr()
-    # Plist content must appear in stdout
-    assert "sh.fno.pr-watcher" in captured.out
-    assert "<false/>" in captured.out  # RunAtLoad=false
-
-
-def test_ac3hp_install_writes_file_on_confirm(
-    tmp_home, tmp_launch_agents, monkeypatch
-):
-    """install() writes the plist file when user confirms."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-    )
-
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    assert plist_path.exists(), "plist file should be written after confirm"
-    content = plist_path.read_text()
-    assert "sh.fno.pr-watcher" in content
-
-
-def test_ac3hp_dry_run_prints_plist_writes_nothing(
-    tmp_home, tmp_launch_agents, capsys
-):
-    """--dry-run prints the plist and writes nothing."""
-    m = _install()
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=True,
-    )
-
-    captured = capsys.readouterr()
-    assert "sh.fno.pr-watcher" in captured.out
-
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    assert not plist_path.exists(), "dry-run must not write the plist file"
-
-
-# ---------------------------------------------------------------------------
-# AC3-ERR: confirm=no -> no file, non-zero exit, message "not installed"
-# ---------------------------------------------------------------------------
-
-
-def test_ac3err_decline_writes_nothing(tmp_home, tmp_launch_agents, monkeypatch):
-    """Declining the confirm prompt writes no file and exits with SystemExit."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: False)
-
-    with pytest.raises(SystemExit) as exc_info:
-        m.install(
-            launch_agents_dir=tmp_launch_agents,
-            fno_binary="/usr/local/bin/fno",
-            install_path="/usr/bin:/bin",
-            dry_run=False,
-        )
-
-    assert exc_info.value.code != 0
-
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    assert not plist_path.exists(), "declined install must not write the plist"
-
-
-def test_ac3err_decline_message_contains_not_installed(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """Declining shows a message containing 'not installed'."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: False)
-
-    with pytest.raises(SystemExit):
-        m.install(
-            launch_agents_dir=tmp_launch_agents,
-            fno_binary="/usr/local/bin/fno",
-            install_path="/usr/bin:/bin",
-            dry_run=False,
-        )
-
-    captured = capsys.readouterr()
-    assert "not installed" in (captured.out + captured.err).lower()
+    # AC7-HP: both launchd log paths end under the logs/ subfolder, never
+    # at the top level of the state root.
+    assert "/logs/pr-watcher.out.log" in rendered
+    assert "/logs/pr-watcher.err.log" in rendered
+    assert "/.fno/pr-watcher.out.log" not in rendered
+    assert "/.fno/pr-watcher.err.log" not in rendered
+    # ProcessType Standard (x-c79d): the positive read is the control for the
+    # negative one below.
+    assert "<key>ProcessType</key>\n  <string>Standard</string>" in rendered
+    assert "<string>Background</string>" not in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +161,9 @@ def test_ac3fr_uninstall_removes_plist_preserves_watermark(
     plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
     plist_path.write_text("<plist/>")
 
-    # Pre-seed a watermark store in the tmp HOME's .fno dir
-    state_file = tmp_home / ".fno" / "pr-watcher-state.json"
+    # Pre-seed a watermark store in the tmp HOME's .fno state dir
+    state_file = tmp_home / ".fno" / "state" / "pr-watcher-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state_file.write_text(json.dumps({"some/repo#1": {"parked": None}}))
 
     # Stub launchctl so we don't call the real one
@@ -258,410 +177,6 @@ def test_ac3fr_uninstall_removes_plist_preserves_watermark(
     assert "some/repo#1" in data
 
 
-# ---------------------------------------------------------------------------
-# AC3-UI: status reports last tick, open-PR count, parked PRs
-# ---------------------------------------------------------------------------
-
-
-def test_ac3ui_status_reports_last_tick_and_parked(tmp_home, tmp_launch_agents, capsys, monkeypatch):
-    """status() reports last tick time, open-PR count, and parked PRs."""
-    m = _install()
-
-    # Seed a fake events.jsonl with a pr_watch_tick entry
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    events_file.write_text(
-        json.dumps({
-            "type": "pr_watch_tick",
-            "ts": "2026-06-14T01:00:00Z",
-            "data": {"open_prs": 2, "acted": 1},
-        }) + "\n"
-    )
-
-    # Seed a watermark store with one parked PR
-    state_file = tmp_home / ".fno" / "pr-watcher-state.json"
-    state_file.write_text(
-        json.dumps({
-            "owner/repo#42": {
-                "parked": "retries-exhausted",
-                "last_seen_state": "OPEN",
-                "merge_dispatched": False,
-                "last_review_ts": None,
-                "retries": 3,
-            },
-            "owner/repo#43": {
-                "parked": None,
-                "last_seen_state": "OPEN",
-                "merge_dispatched": False,
-                "last_review_ts": None,
-                "retries": 0,
-            },
-        })
-    )
-
-    # Stub launchctl list so we don't run the real binary
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-
-    m.status(
-        launch_agents_dir=tmp_launch_agents,
-        events_path=events_file,
-        state_path=state_file,
-    )
-
-    captured = capsys.readouterr()
-    out = captured.out
-    assert "2026-06-14T01:00:00Z" in out, "last tick time should appear"
-    assert "2" in out, "open-PR count should appear"
-    assert "owner/repo#42" in out or "42" in out, "parked PR should appear"
-
-
-def test_status_open_count_reads_observed_state_not_graph(tmp_path):
-    """The operator count comes from the cache that the tick just swept."""
-    from fno.pr_watch._install import _observed_open_pr_count
-
-    state_file = tmp_path / "pr-watcher-state.json"
-    state_file.write_text(json.dumps({
-        "owner/one#1": {"last_seen_state": "OPEN"},
-        "owner/two#2": {"last_seen_state": "UNKNOWN"},
-        "owner/three#3": {"last_seen_state": "CLOSED"},
-    }))
-
-    assert _observed_open_pr_count(state_file) == 1
-
-
-def test_parked_prs_includes_pending_delivery_failures(tmp_path):
-    from fno.pr_watch._install import _parked_prs
-
-    state_file = tmp_path / "pr-watcher-state.json"
-    state_file.write_text("{}")
-    delivery_file = tmp_path / "pr-watcher-state-delivery.json"
-    delivery_file.write_text(json.dumps({
-        "owner/repo#7": {"retries": 3, "parked": "retries-exhausted"}
-    }))
-
-    assert _parked_prs(state_file) == {
-        "owner/repo#7 [delivery]": "retries-exhausted"
-    }
-
-
-def test_status_json_emits_liveness_verdict(monkeypatch):
-    """`pr-watch status --json` emits the liveness verdict for hooks to parse."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch._install as m
-
-    monkeypatch.setattr(
-        m, "liveness_report_live",
-        lambda **_kw: {"enabled": True, "verdict": "dead", "detail": "no tick",
-                       "fix": "fno do pr watch install", "loaded": True, "last_tick": None},
-    )
-    result = CliRunner().invoke(app, ["pr-watch", "status", "--json"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout.strip())
-    assert payload["verdict"] == "dead" and payload["enabled"] is True
-
-
-# ---------------------------------------------------------------------------
-# x-c12c wave 1: status prints a verdict, not a fact (AC10/AC11)
-# ---------------------------------------------------------------------------
-
-
-def _write_tick_events(events_file, *, tick_ts, attempt_ts=None, end=None, tick_data=None):
-    lines = []
-    if attempt_ts:
-        lines.append({"type": "pr_watch_tick_attempt", "ts": attempt_ts,
-                      "data": {"pid": 111, "phase": "entry"}})
-    if tick_ts:
-        lines.append({"type": "pr_watch_tick", "ts": tick_ts,
-                      "data": tick_data or {
-                          "open_prs": 0, "acted": 0, "swept_count": 0, "swept": {},
-                          "dropped_count": 0, "dropped": {},
-                      }})
-    if end:
-        lines.append({"type": "pr_watch_tick_end", "ts": tick_ts, "data": end})
-    events_file.parent.mkdir(parents=True, exist_ok=True)
-    events_file.write_text("".join(json.dumps(ln) + "\n" for ln in lines))
-
-
-def test_status_prints_healthy_verdict_and_both_watermarks(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """AC10-HP: a live cadence reads `Verdict: healthy (...)` plus the
-    attempt/outcome watermarks, in the exact label shape the done_probes grep."""
-    import time as _time
-    from datetime import datetime, timezone
-    import fno.pr_watch._install as m
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / m._PLIST_FILENAME
-    plist_path.write_text("<plist/>")
-    # Plist older than the tick: the fresh-install grace must not fire.
-    old = _time.time() - 60
-    import os as _os
-    _os.utime(plist_path, (old, old))
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    _write_tick_events(
-        events_file, tick_ts=now, attempt_ts=now,
-        end={"outcome": "ok", "duration_s": 14.2, "phase": "catchup", "pid": 111},
-    )
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-    import re
-    assert re.search(r"^Verdict: +healthy \(", out, re.M), out
-    assert re.search(r"^Last tick outcome: +ok \(14\.2s\)", out, re.M), out
-    assert re.search(r"^Last attempt: ", out, re.M), out
-
-
-def test_status_prints_completed_tick_marker_for_valid_receipt(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """AC5-HP: status exposes a positive, count-consistent completed marker."""
-    import os as _os
-    import re
-    from datetime import datetime, timezone
-    import fno.pr_watch._install as m
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / m._PLIST_FILENAME
-    plist_path.write_text("<plist/>")
-    old = _os.path.getmtime(plist_path) - 60
-    _os.utime(plist_path, (old, old))
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    _write_tick_events(
-        events_file,
-        tick_ts=now,
-        tick_data={
-            "open_prs": 2,
-            "acted": 0,
-            "swept_count": 2,
-            "swept": {"owner/repo": [41, 42]},
-        },
-    )
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-    assert re.search(rf"^Completed tick: +{re.escape(now)} swept=2$", out, re.M), out
-
-
-def test_status_accepts_chunked_completed_tick_receipt(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """Chunked receipts remain positive when the summary carries no inline map."""
-    import fno.pr_watch._install as m
-    from datetime import datetime, timezone
-    import re
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist_path.write_text("plist")
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    events_file.write_text("\n".join([
-        json.dumps({
-            "type": "pr_watch_sweep_chunk",
-            "ts": now,
-            "data": {
-                "receipt_id": "chunked",
-                "chunk_index": 1,
-                "chunk_count": 1,
-                "item_count": 2,
-                "items": [
-                    {"action": "swept", "key": "owner/repo#41"},
-                    {"action": "swept", "key": "owner/repo#42"},
-                ],
-            },
-        }),
-        json.dumps({
-            "type": "pr_watch_tick",
-            "ts": now,
-            "data": {
-                "swept_count": 2,
-                "swept": {},
-                "receipt_id": "chunked",
-                "receipt_chunks": 1,
-            },
-        }),
-    ]) + "\n")
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-
-    assert re.search(rf"^Completed tick: +{re.escape(now)} swept=2$", out, re.M), out
-
-
-def test_status_preserves_latest_positive_marker_after_quiet_tick(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """An invalid later receipt cannot erase an earlier positive marker."""
-    import fno.pr_watch._install as m
-    from datetime import datetime, timezone, timedelta
-    import re
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist_path.write_text("plist")
-    now = datetime.now(timezone.utc)
-    first = now - timedelta(seconds=5)
-    first_text = first.strftime("%Y-%m-%dT%H:%M:%SZ")
-    second_text = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    events_file.write_text("\n".join([
-        json.dumps({
-            "type": "pr_watch_tick",
-            "ts": first_text,
-            "data": {"swept_count": 1, "swept": {"owner/repo": [41]}},
-        }),
-        json.dumps({
-            "type": "pr_watch_tick",
-            "ts": second_text,
-            "data": {"swept_count": 0, "swept": {}},
-        }),
-    ]) + "\n")
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-
-    assert re.search(rf"^Completed tick: +{re.escape(first_text)} swept=1$", out, re.M), out
-
-
-@pytest.mark.parametrize(
-    "tick_data",
-    [
-        {"swept_count": 0, "swept": {}},
-        {"swept_count": 1, "swept": {}},
-        {"swept_count": 2, "swept": {"owner/repo": [41]}},
-        {"swept_count": 1, "swept": {"owner/repo": [41, 42]}},
-    ],
-)
-def test_status_rejects_invalid_completed_tick_receipts(
-    tick_data, tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """AC5-ERR: zero, empty, or inconsistent receipts cannot claim completion."""
-    import os as _os
-    import re
-    from datetime import datetime, timezone
-    import fno.pr_watch._install as m
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / m._PLIST_FILENAME
-    plist_path.write_text("<plist/>")
-    old = _os.path.getmtime(plist_path) - 60
-    _os.utime(plist_path, (old, old))
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    _write_tick_events(events_file, tick_ts=now, tick_data=tick_data)
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-    assert not re.search(r"^Completed tick: +20[0-9]{2}-.* swept=[1-9][0-9]*$", out, re.M), out
-
-
-def test_status_prints_dead_verdict_with_fix_command(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """AC10-HP: a stale cadence reads `dead` with the detail and the fix verb."""
-    import time as _time
-    from datetime import datetime, timezone, timedelta
-    import fno.pr_watch._install as m
-
-    (tmp_home / ".fno" / "config.toml").write_text("[pr_watch]\nenabled = true\n")
-    plist_path = tmp_launch_agents / m._PLIST_FILENAME
-    plist_path.write_text("<plist/>")
-    stale = _time.time() - 7200
-    import os as _os
-    _os.utime(plist_path, (stale, stale))
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-
-    old_ts = (datetime.now(timezone.utc) - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    # Attempts advancing while Last tick stands still: the exact fault profile.
-    _write_tick_events(
-        events_file, tick_ts=old_ts, attempt_ts=now,
-        end={"outcome": "timeout", "duration_s": 480.0, "phase": "sweep", "pid": 111},
-    )
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=events_file)
-    out = capsys.readouterr().out
-    import re
-    assert re.search(r"^Verdict: +dead \(last tick \d+s ago", out, re.M), out
-    assert re.search(r"^Fix: +fno do pr watch install", out, re.M), out
-    assert "timeout" in out
-
-
-def test_status_prints_disabled_verdict_by_default(
-    tmp_home, tmp_launch_agents, capsys, monkeypatch
-):
-    """AC10-EDGE: the third verdict, disabled, is named rather than implied."""
-    import fno.pr_watch._install as m
-
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-    m.status(launch_agents_dir=tmp_launch_agents)
-    out = capsys.readouterr().out
-    assert "Verdict:      disabled (" in out, out
-
-
-class _SpyEventsPath:
-    """Count read_text calls: the one-pass scan proof (AC11)."""
-
-    def __init__(self, path):
-        self._path = path
-        self.reads = 0
-
-    def exists(self):
-        return self._path.exists()
-
-    def read_text(self, *a, **kw):
-        self.reads += 1
-        return self._path.read_text(*a, **kw)
-
-
-def test_tick_watermarks_single_pass(tmp_path):
-    """AC11-EDGE: all three watermarks come from ONE read of events.jsonl."""
-    from fno.pr_watch._install import _tick_watermarks
-
-    events_file = tmp_path / "events.jsonl"
-    _write_tick_events(
-        events_file, tick_ts="2026-08-17T06:12:01Z", attempt_ts="2026-08-17T06:12:00Z",
-        end={"outcome": "ok", "duration_s": 1.0, "phase": "catchup", "sweep_failures": 0},
-    )
-    spy = _SpyEventsPath(events_file)
-
-    marks = _tick_watermarks(spy)
-
-    assert marks["last_tick"] == "2026-08-17T06:12:01Z"
-    assert marks["last_attempt"] == "2026-08-17T06:12:00Z"
-    assert marks["last_end"]["outcome"] == "ok"
-    assert spy.reads == 1
-
-
-def test_status_reads_the_event_log_once(tmp_home, tmp_launch_agents, capsys, monkeypatch):
-    """AC11-EDGE at the status boundary: the verdict reuses the marks already
-    read; a second scan would double the read count."""
-    from datetime import datetime, timezone
-    import fno.pr_watch._install as m
-
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-    events_file = tmp_home / ".fno" / "events.jsonl"
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _write_tick_events(events_file, tick_ts=now, attempt_ts=now)
-    spy = _SpyEventsPath(events_file)
-
-    m.status(launch_agents_dir=tmp_launch_agents, events_path=spy)
-    capsys.readouterr()
-    assert spy.reads == 1, "status must derive verdict and watermarks from one pass"
-
-
 def _settings_with_pr_watch(enabled: bool):
     class _PW:
         def __init__(self):
@@ -672,36 +187,33 @@ def _settings_with_pr_watch(enabled: bool):
     return _S()
 
 
-def test_refresh_verb_noop_when_disabled(monkeypatch):
-    """`pr-watch refresh` is a no-op (never touches launchd) when disabled."""
+def test_refresh_leaf_forwards_to_the_binary(monkeypatch, tmp_path):
+    """The refresh leaf is a forward: the binary handshake carries the verb,
+    the caller name, and the plist binary path; rc propagates. The verb
+    contract itself (defer, bounce, disabled skip) is pinned by the Rust
+    parity goldens."""
     from typer.testing import CliRunner
     from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(False))
-    import fno.pr_watch._install as m
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: pytest.fail("must not refresh when disabled"))
+    import fno.rust_binary as rb
+
+    monkeypatch.setattr(rb, "resolve_binary", lambda: "/x/fno-agents")
+    spawn: list = []
+    import subprocess
+
+    real_run = subprocess.run
+
+    def _fake_run(argv, **kw):
+        if argv[:3] == ["/x/fno-agents", "pr-watch", "refresh"]:
+            spawn.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="pr-watch refresh: ok\n", stderr="")
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
 
     result = CliRunner().invoke(app, ["pr-watch", "refresh"])
     assert result.exit_code == 0
-    assert "disabled" in result.stdout
-
-
-def test_refresh_verb_refreshes_when_enabled(monkeypatch):
-    """`pr-watch refresh` calls refresh_watcher when enabled and reports the msg."""
-    from typer.testing import CliRunner
-    from fno.cli import app
-    import fno.pr_watch.cli as cli_mod
-    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
-    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
-    import fno.pr_watch._install as m
-    calls: list = []
-    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced x; awaiting first tick", 0))
-
-    result = CliRunner().invoke(app, ["pr-watch", "refresh"])
-    assert result.exit_code == 0
-    assert len(calls) == 1
-    assert calls[0]["fno_binary"] == "/x/fno-py"
-    assert "pr-watch refresh:" in result.stdout
+    assert spawn and spawn[0][1:3] == ["pr-watch", "refresh"]
+    assert "--caller" in spawn[0] and "refresh" in spawn[0]
 
 
 # ---------------------------------------------------------------------------
@@ -709,20 +221,73 @@ def test_refresh_verb_refreshes_when_enabled(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _patch_heal_claims(monkeypatch, *, held=False):
-    """Stub the claim single-flight so tests never touch the real claims root."""
-    import fno.claims as claims
+def _patch_heal_claims(monkeypatch, *, held=False, probe=None, probe_raises=False):
+    """Stub the flight-gate single-flight and the liveness probe so tests never
+    touch the real claims root, event log or launchctl. The probe is the
+    binary-backed helper on the cli module; its verdict shape is the verb's."""
+    import fno.backlog.single_flight as sf
+    import fno.pr_watch.cli as cli_mod
 
     acquired: list = []
 
-    def _acquire(key, holder, **kw):
-        if held:
-            raise claims.ClaimHeldByOther("other-holder", pid=999, host="h", key=key)
-        acquired.append(key)
+    if probe_raises:
+        def _raise():
+            raise RuntimeError("probe unavailable")
+        monkeypatch.setattr(cli_mod, "_liveness_via_binary", _raise)
+    else:
+        if probe is None:
+            probe = {"bounce_pending": False}
+        monkeypatch.setattr(cli_mod, "_liveness_via_binary", lambda: probe)
 
-    monkeypatch.setattr(claims, "acquire_claim", _acquire)
-    monkeypatch.setattr(claims, "release_claim", lambda *a, **kw: None)
+    def _acquire(key, **kw):
+        acquired.append(key)
+        return sf.Flight(key=key, holder="pr-watch-heal:other", held=held)
+
+    monkeypatch.setattr(sf, "acquire_flight", _acquire)
+    # The fake's release must not reach the real binary and claims root.
+    monkeypatch.setattr(sf.Flight, "release", lambda self: None)
     return acquired
+
+
+def test_heal_verb_skips_while_a_bounce_awaits_its_tick(monkeypatch):
+    """A bounce inside the healthy-pending grace is not a wedge to cure:
+    healing again re-arms the grace over the same fault. Skip quietly."""
+    from typer.testing import CliRunner
+    from fno.cli import app
+    import fno.pr_watch.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
+    _patch_heal_claims(
+        monkeypatch,
+        probe={"verdict": "wedged", "bounce_pending": True,
+               "detail": "bounced 49s ago over 16 consecutive broken ticks"},
+    )
+    import fno.pr_watch._install as m
+    monkeypatch.setattr(
+        m, "refresh_watcher", lambda **kw: pytest.fail("a pending bounce must not heal")
+    )
+
+    result = CliRunner().invoke(app, ["pr-watch", "heal"])
+    assert result.exit_code == 0
+    assert "bounce is pending" in result.stdout
+    assert "fno do pr watch refresh" in result.stdout
+
+
+def test_heal_verb_heals_when_the_probe_raises(monkeypatch):
+    """A probe that cannot read never blocks a cure."""
+    from typer.testing import CliRunner
+    from fno.cli import app
+    import fno.pr_watch.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
+    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
+    _patch_heal_claims(monkeypatch, probe_raises=True)
+    import fno.pr_watch._install as m
+    calls: list = []
+    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced", 0))
+
+    result = CliRunner().invoke(app, ["pr-watch", "heal"])
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0]["caller"] == "heal"
 
 
 def test_heal_verb_never_installs_when_disabled(monkeypatch):
@@ -755,6 +320,25 @@ def test_heal_verb_bounces_when_enabled(monkeypatch):
     assert result.exit_code == 0
     assert len(calls) == 1
     assert "pr-watch heal:" in result.stdout
+
+
+def test_heal_verb_defers_while_tick_is_in_flight(monkeypatch):
+    """AC4-HP at the verb: the SessionStart heal passes defer_when_ticking so
+    the bounce cannot kill a live tick, and names itself to the receipt."""
+    from typer.testing import CliRunner
+    from fno.cli import app
+    import fno.pr_watch.cli as cli_mod
+    monkeypatch.setattr(cli_mod, "load_settings", lambda: _settings_with_pr_watch(True))
+    monkeypatch.setattr(cli_mod, "_resolve_fno_binary", lambda: "/x/fno-py")
+    _patch_heal_claims(monkeypatch)
+    import fno.pr_watch._install as m
+    calls: list = []
+    monkeypatch.setattr(m, "refresh_watcher", lambda **kw: calls.append(kw) or ("bounced; awaiting first tick", 0))
+
+    result = CliRunner().invoke(app, ["pr-watch", "heal"])
+    assert result.exit_code == 0
+    assert calls[0]["defer_when_ticking"] is True
+    assert calls[0]["caller"] == "heal"
 
 
 def test_heal_verb_single_flight_skips_when_held(monkeypatch):
@@ -841,127 +425,6 @@ def test_config_pr_watch_null_degrades_to_defaults():
     assert cb.pr_watch.enabled is False
 
 
-# ---------------------------------------------------------------------------
-# x-e106 AC1-HP: install activates (launchctl load) unless --no-activate
-# ---------------------------------------------------------------------------
-
-
-def test_install_activates_by_default(tmp_home, tmp_launch_agents, capsys, monkeypatch):
-    """install(activate=True) bounces the agent and reports activation."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        m, "_run_launchctl_timed", lambda *a, **kw: (calls.append(a) or 0, False)
-    )
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-        activate=True,
-    )
-
-    verbs = [a[0] for a in calls]
-    assert verbs == ["bootout", "bootstrap", "kickstart"], f"got {verbs}"
-    assert "Activated" in capsys.readouterr().out
-
-
-def test_install_no_activate_skips_load(tmp_home, tmp_launch_agents, capsys, monkeypatch):
-    """install(activate=False) writes the plist but does NOT launchctl load."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-    calls: list[tuple] = []
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: calls.append(a) or 0)
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-        activate=False,
-    )
-
-    assert not any(a and a[0] == "load" for a in calls), "--no-activate must skip load"
-    out = capsys.readouterr().out
-    assert "To activate" in out
-
-
-def test_install_reload_bounces_when_loaded(tmp_home, tmp_launch_agents, monkeypatch):
-    """A re-install boots the (possibly wedged) agent out before re-bootstrapping."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        m, "_run_launchctl_timed", lambda *a, **kw: (calls.append(a) or 0, False)
-    )
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-        activate=True,
-    )
-
-    verbs = [a[0] for a in calls]
-    assert verbs == ["bootout", "bootstrap", "kickstart"], f"got {verbs}"
-
-
-def test_ensure_activated_rerenders_existing_plist(tmp_home, tmp_launch_agents, monkeypatch):
-    """Re-enable of an existing plist re-renders it (config drift + fresh mtime)."""
-    import os
-    import time as _time
-
-    m = _install()
-    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
-    plist.write_text("<plist/>")  # stale stub content
-    old = _time.time() - 10_000
-    os.utime(plist, (old, old))
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: 0)
-
-    m.ensure_activated(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-    )
-
-    content = plist.read_text()
-    assert "sh.fno.pr-watcher" in content, "existing plist should be re-rendered, not left stale"
-    assert plist.stat().st_mtime > old + 100, "re-render refreshes the plist mtime"
-
-
-def test_install_activation_failure_is_loud(tmp_home, tmp_launch_agents, capsys, monkeypatch):
-    """A failing bounce prints a loud WARNING but still writes the plist (AC1-ERR)."""
-    m = _install()
-    monkeypatch.setattr("typer.confirm", lambda *a, **kw: True)
-
-    # bootout ok, bootstrap fails (rc=1) -> bounce reports failure, plist stays.
-    def _fail_bootstrap(*a, **kw):
-        return (0 if a[0] == "bootout" else 1, False)
-
-    monkeypatch.setattr(m, "_run_launchctl_timed", _fail_bootstrap)
-
-    m.install(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-        dry_run=False,
-        activate=True,
-    )
-
-    out = capsys.readouterr().out
-    assert "WARNING" in out and "activation failed" in out
-    assert (tmp_launch_agents / "sh.fno.pr-watcher.plist").exists()
-
-
-# ---------------------------------------------------------------------------
-# x-8c3b: bounce (bootout -> bootstrap -> kickstart) cures a wedged launchd job
-# ---------------------------------------------------------------------------
-
-
 def _record_runner(calls, *, rc_by_verb=None, timeout_verb=None):
     """A _run_launchctl_timed stub that records calls and can inject rc/timeout."""
     rc_by_verb = rc_by_verb or {}
@@ -978,6 +441,7 @@ def _record_runner(calls, *, rc_by_verb=None, timeout_verb=None):
 
 def test_bounce_order_is_bootout_bootstrap_kickstart(tmp_launch_agents):
     m = _install()
+    calls: list[tuple] = []
     calls: list[tuple] = []
     msg, rc = m.bounce(
         plist_path=tmp_launch_agents / "x.plist", uid=501,
@@ -1066,6 +530,150 @@ def test_bounce_bootout_hang_is_fatal(tmp_launch_agents):
     assert [c[0] for c in calls] == ["bootout"]  # stops at the hang
 
 
+def test_bounce_records_caller_sidecar_and_event(tmp_launch_agents):
+    """A real-watcher bounce writes pr-watch-bounce.json naming its caller and
+    emits pr_watch_bounce, so a killed tick can name the cure that killed it."""
+    import time as _time
+
+    import fno.paths
+
+    m = _install()
+    calls: list[tuple] = []
+    msg, rc = m.bounce(
+        plist_path=tmp_launch_agents / "x.plist", uid=501,
+        run=_record_runner(calls), caller="heal",
+    )
+    assert rc == 0
+    state_root = Path(fno.paths.state_dir())
+    sidecar = json.loads(
+        (state_root / "state" / "pr-watch-bounce.json").read_text()
+    )
+    assert sidecar["caller"] == "heal"
+    assert sidecar["pid"] == os.getpid()
+    assert sidecar["ppid"] == os.getppid()
+    assert isinstance(sidecar["parent"], str)
+    assert sidecar["deferred"] is False
+    assert _time.time() - sidecar["ts"] < 60
+    from tests._event_rows import event_rows
+
+    events = event_rows(state_root / "events.jsonl")
+    bounces = [e for e in events if e["type"] == "pr_watch_bounce"]
+    assert len(bounces) == 1
+    assert bounces[0]["data"]["caller"] == "heal"
+    assert bounces[0]["data"]["deferred"] is False
+
+
+def test_bounce_defer_emits_event_but_no_sidecar(tmp_launch_agents, monkeypatch):
+    """A deferred bounce is countable (pr_watch_bounce, deferred true) but
+    writes no sidecar: there is no kill to join it to."""
+    import fno.paths
+
+    m = _install()
+    monkeypatch.setattr(m, "_tick_in_flight", lambda: 4242)
+    calls: list[tuple] = []
+    msg, rc = m.bounce(
+        plist_path=tmp_launch_agents / "x.plist", uid=501,
+        run=_record_runner(calls), defer_when_ticking=True, caller="refresh",
+    )
+    assert (msg, rc) == ("tick in flight (pid 4242); bounce deferred", 0)
+    assert calls == []
+    state_root = Path(fno.paths.state_dir())
+    assert not (state_root / "state" / "pr-watch-bounce.json").exists()
+    assert not (state_root / "pr-watch-bounce.json").exists()
+    from tests._event_rows import event_rows
+
+    events = event_rows(state_root / "events.jsonl")
+    bounces = [e for e in events if e["type"] == "pr_watch_bounce"]
+    assert len(bounces) == 1
+    assert bounces[0]["data"]["deferred"] is True
+    assert bounces[0]["data"]["caller"] == "refresh"
+
+
+def test_bounce_foreign_label_writes_nothing(tmp_launch_agents):
+    """AC3-EDGE: groom installs its own agent through bounce with a foreign
+    label (kickstart=False); no sidecar and no pr_watch_bounce event land."""
+    import fno.paths
+
+    m = _install()
+    calls: list[tuple] = []
+    msg, rc = m.bounce(
+        plist_path=tmp_launch_agents / "groom.plist", uid=501,
+        label="sh.fno.groom", kickstart=False,
+        run=_record_runner(calls),
+    )
+    assert rc == 0
+    state_root = Path(fno.paths.state_dir())
+    assert not (state_root / "state" / "pr-watch-bounce.json").exists()
+    assert not (state_root / "pr-watch-bounce.json").exists()
+    events_path = state_root / "events.jsonl"
+    assert not events_path.exists() or "pr_watch_bounce" not in events_path.read_text()
+
+
+def test_bounce_defers_while_tick_claim_is_young(tmp_launch_agents, monkeypatch):
+    """AC4-HP: a tick mid-flight (live claim under one interval) makes
+    the heal defer - no launchctl step runs, and the deferral is named."""
+    m = _install()
+    monkeypatch.setattr(m, "_tick_in_flight", lambda: 4242)
+    calls: list[tuple] = []
+    msg, rc = m.bounce(
+        plist_path=tmp_launch_agents / "x.plist", uid=501,
+        run=_record_runner(calls),
+        defer_when_ticking=True,
+    )
+    assert (msg, rc) == ("tick in flight (pid 4242); bounce deferred", 0)
+    assert calls == []
+
+
+def test_bounce_proceeds_when_tick_claim_is_old(tmp_launch_agents, monkeypatch):
+    """AC5-EDGE: a live claim older than one interval is a hung tick,
+    so the bounce runs its bootout/bootstrap/kickstart cure as today."""
+    m = _install()
+    monkeypatch.setattr(m, "_tick_in_flight", lambda: None)
+    calls: list[tuple] = []
+    msg, rc = m.bounce(
+        plist_path=tmp_launch_agents / "x.plist", uid=501,
+        run=_record_runner(calls),
+        defer_when_ticking=True,
+    )
+    assert rc == 0
+    assert [c[0] for c in calls] == ["bootout", "bootstrap", "kickstart"]
+
+
+def test_tick_in_flight_asks_launchd(monkeypatch):
+    """launchd owns the in-flight answer: a listed PID younger than one
+    StartInterval defers the cure; an old tick, a missing PID line, or an
+    unread launchctl (OSError, timeout) never blocks it."""
+    import subprocess as _subprocess
+
+    m = _install()
+
+    def _world(pid_line: str, etime: str):
+        return lambda argv: pid_line if argv[0] == "launchctl" else etime
+
+    def probe(pid_line: str, etime: str):
+        return m._tick_in_flight(run=_world(pid_line, etime))
+
+    assert probe('"PID" = 8574;', "02:02") == 8574  # 122s old: in flight
+    assert probe('"PID" = 8574;', "09:59") == 8574  # 599s: still young
+    assert probe('"PID" = 8574;', "10:01") is None  # 601s: hung tick, bounces
+    assert probe('"PID" = 8574;', "1-02:03:04") is None
+    assert probe('"PID" = 8574;', "garbage") is None
+    assert probe("", "02:02") is None  # job not loaded
+
+    def _raise(exc):
+        def _run(*_a, **_kw):
+            raise exc
+
+        return _run
+
+    monkeypatch.setattr(m.subprocess, "run", _raise(OSError("no launchctl")))
+    assert m._tick_in_flight() is None
+    monkeypatch.setattr(
+        m.subprocess, "run", _raise(_subprocess.TimeoutExpired("launchctl", 10))
+    )
+    assert m._tick_in_flight() is None
+
+
 def test_refresh_watcher_rerenders_then_bounces(tmp_launch_agents):
     """refresh_watcher rewrites the plist onto the given binary, then bounces."""
     m = _install()
@@ -1079,7 +687,6 @@ def test_refresh_watcher_rerenders_then_bounces(tmp_launch_agents):
         msg, rc = m.refresh_watcher(
             launch_agents_dir=tmp_launch_agents,
             fno_binary="/fresh/bin/fno-py",
-            install_path="/usr/bin:/bin",
         )
     finally:
         mod._run_launchctl_timed = orig
@@ -1099,7 +706,6 @@ def test_refresh_watcher_write_failure_is_error(tmp_path, monkeypatch):
     msg, rc = m.refresh_watcher(
         launch_agents_dir=blocker / "LaunchAgents",
         fno_binary="/x/fno-py",
-        install_path="/usr/bin:/bin",
     )
     assert rc == 1 and "failed to write plist" in msg
 
@@ -1129,52 +735,8 @@ def test_heal_watcher_bounces_when_plist_present(tmp_launch_agents):
 
 
 # ---------------------------------------------------------------------------
-# x-e106: ensure_activated + unload_only (config-set coupling primitives)
+# x-e106: unload_only (the config-set disable coupling primitive)
 # ---------------------------------------------------------------------------
-
-
-def test_ensure_activated_noop_when_loaded(tmp_home, tmp_launch_agents, monkeypatch):
-    """ensure_activated is a no-op when the agent is already loaded."""
-    m = _install()
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: True)
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: pytest.fail("must not load"))
-
-    assert m.ensure_activated(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-    ) == "already-running"
-
-
-def test_ensure_activated_installs_and_loads(tmp_home, tmp_launch_agents, monkeypatch):
-    """ensure_activated writes the plist and loads it when absent."""
-    m = _install()
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-    loaded: list[tuple] = []
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: loaded.append(a) or 0)
-
-    outcome = m.ensure_activated(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-    )
-
-    assert outcome == "activated"
-    assert (tmp_launch_agents / "sh.fno.pr-watcher.plist").exists()
-    assert loaded and loaded[0][0] == "load"
-
-
-def test_ensure_activated_reports_load_failure(tmp_home, tmp_launch_agents, monkeypatch):
-    """A launchctl failure returns 'load-failed' (never raises); AC1-ERR upstream."""
-    m = _install()
-    monkeypatch.setattr(m, "_launchctl_is_loaded", lambda: False)
-    monkeypatch.setattr(m, "_run_launchctl", lambda *a: 1)
-
-    assert m.ensure_activated(
-        launch_agents_dir=tmp_launch_agents,
-        fno_binary="/usr/local/bin/fno",
-        install_path="/usr/bin:/bin",
-    ) == "load-failed"
 
 
 def test_unload_only_missing_plist_is_noop(tmp_home, tmp_launch_agents):
@@ -1200,70 +762,158 @@ def test_unload_only_unloads_loaded_agent(tmp_home, tmp_launch_agents, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def _live(**over):
-    """liveness_report with sane defaults, overridden per test."""
-    m = _install()
-    base = dict(
-        enabled=True,
-        interval_seconds=600,
-        loaded=True,
-        last_tick_ts="2026-06-14T01:00:00Z",
-        plist_exists=True,
-        plist_mtime=0.0,
-        now=0.0,
+# ---------------------------------------------------------------------------
+# The Heal: readout line (status, install, refresh)
+# ---------------------------------------------------------------------------
+
+
+def test_armed_status_with_no_binary_degrades_to_a_line_that_says_so(
+    tmp_home, monkeypatch
+):
+    """An armed machine whose binary is missing is reported, never silence."""
+    from types import SimpleNamespace
+
+    import fno.pr_watch._install as m
+
+    monkeypatch.setattr(
+        "fno.config.load_settings",
+        lambda: SimpleNamespace(auto_heal=SimpleNamespace(enabled=True)),
     )
-    base.update(over)
-    return m.liveness_report(**base)
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+
+    line = m.heal_status_line()
+    assert line.startswith("Heal: armed; readout unavailable"), line
 
 
-def test_liveness_disabled_is_silent():
-    assert _live(enabled=False)["verdict"] == "disabled"
+# ---------------------------------------------------------------------------
+# An unchanged refresh must not re-register the agent
+# (launchd posts a macOS background-activity notice on every re-registration)
+# ---------------------------------------------------------------------------
 
 
-def test_liveness_healthy_recent_tick():
-    # tick at now (age 0) < 2x interval -> healthy
-    now = _install()._parse_ts("2026-06-14T01:00:00Z")
-    assert _live(now=now)["verdict"] == "healthy"
+def test_default_agent_path_ignores_the_caller_environment(tmp_home, monkeypatch):
+    """Two callers with different PATHs derive the same launchd PATH."""
+    m = _install()
+    monkeypatch.setenv(
+        "PATH", "/var/run/com.apple.security.cryptexd/codex.system/usr/bin"
+    )
+    codex_view = m.default_agent_path("/Users/x/.local/bin/fno-py")
+    monkeypatch.setenv("PATH", "/Users/claude/only/bin")
+    claude_view = m.default_agent_path("/Users/x/.local/bin/fno-py")
+
+    assert codex_view == claude_view
+    assert "/opt/homebrew/bin" in codex_view and "/usr/bin" in codex_view
 
 
-def test_liveness_dead_stale_tick():
-    # tick is 3600s old, 2x interval is 1200s -> dead (AC1-UI)
-    tick = _install()._parse_ts("2026-06-14T01:00:00Z")
-    v = _live(now=tick + 3600)
-    assert v["verdict"] == "dead"
-    assert "do pr watch install" in v["fix"]
+@pytest.mark.parametrize("use_cargo_home", [False, True])
+def test_default_agent_path_carries_cargo_bin(tmp_home, monkeypatch, use_cargo_home):
+    """The launchd PATH carries the cargo bin dir holding fno-agents.
+
+    The watcher tick shells out to fno-agents/fno-agents-worker, which live in
+    the cargo bin dir; a PATH without it fails every tick at binary lookup.
+    """
+    m = _install()
+    root = tmp_home / ("cargo-home" if use_cargo_home else ".cargo")
+    (root / "bin").mkdir(parents=True)
+    if use_cargo_home:
+        monkeypatch.setenv("CARGO_HOME", str(root))
+    else:
+        monkeypatch.delenv("CARGO_HOME", raising=False)
+    entries = m.default_agent_path("/Users/x/.local/bin/fno-py").split(":")
+
+    assert str(root / "bin") in entries
 
 
-def test_liveness_dead_not_loaded():
-    assert _live(loaded=False)["verdict"] == "dead"
+def test_rendered_watcher_path_contains_cargo_bin(tmp_home, tmp_launch_agents, monkeypatch):
+    """The rendered plist's PATH itself carries the cargo bin dir."""
+    import plistlib
+
+    m = _install()
+    cargo_bin = tmp_home / ".cargo" / "bin"
+    cargo_bin.mkdir(parents=True)
+    monkeypatch.delenv("CARGO_HOME", raising=False)
+    rendered = m.render_plist(
+        launch_agents_dir=tmp_launch_agents,
+        fno_binary=str(tmp_home / ".local" / "bin" / "fno-py"),
+    )
+    env = plistlib.loads(rendered.encode())["EnvironmentVariables"]
+
+    assert str(cargo_bin) in env["PATH"].split(":")
 
 
-def test_liveness_dead_no_plist():
-    assert _live(plist_exists=False)["verdict"] == "dead"
+def test_refresh_unchanged_skips_write_and_bounce(tmp_home, tmp_launch_agents, monkeypatch):
+    m = _install()
+    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
+    plist.write_text(
+        m.render_plist(
+            launch_agents_dir=tmp_launch_agents,
+            fno_binary="/usr/local/bin/fno",
+            interval=600,
+        )
+    )
+    bounces: list = []
+    monkeypatch.setattr(m, "bounce", lambda **kw: bounces.append(kw) or ("bounced", 0))
+
+    msg, rc = m.refresh_watcher(
+        launch_agents_dir=tmp_launch_agents,
+        fno_binary="/usr/local/bin/fno",
+        interval=600,
+    )
+
+    assert rc == 0 and "unchanged" in msg
+    assert bounces == [], "an unchanged refresh must not re-register the agent"
 
 
-def test_liveness_fresh_install_no_tick_is_pending():
-    # No tick yet, plist installed just now (< 2x interval) -> healthy-pending
-    v = _live(last_tick_ts=None, plist_mtime=100.0, now=200.0)
-    assert v["verdict"] == "healthy-pending"
+def test_refresh_changed_reregisters(tmp_home, tmp_launch_agents, monkeypatch):
+    m = _install()
+    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
+    plist.write_text("<plist>stale</plist>")
+    bounces: list = []
+    monkeypatch.setattr(m, "bounce", lambda **kw: bounces.append(kw) or ("bounced", 0))
+
+    msg, rc = m.refresh_watcher(
+        launch_agents_dir=tmp_launch_agents,
+        fno_binary="/usr/local/bin/fno",
+        interval=600,
+    )
+
+    assert rc == 0 and len(bounces) == 1
+    assert "stale" not in plist.read_text()
 
 
-def test_liveness_no_tick_old_install_is_dead():
-    # No tick and plist installed long ago (> 2x interval) -> dead (AC1-FR class)
-    v = _live(last_tick_ts=None, plist_mtime=0.0, now=5000.0)
-    assert v["verdict"] == "dead"
+def test_refresh_force_bounce_reregisters_an_unchanged_plist(
+    tmp_home, tmp_launch_agents, monkeypatch
+):
+    """A dead/wedged verdict needs the re-bootstrap even with identical bytes."""
+    m = _install()
+    plist = tmp_launch_agents / "sh.fno.pr-watcher.plist"
+    plist.write_text(
+        m.render_plist(
+            launch_agents_dir=tmp_launch_agents,
+            fno_binary="/usr/local/bin/fno",
+            interval=600,
+        )
+    )
+    bounces: list = []
+    monkeypatch.setattr(m, "bounce", lambda **kw: bounces.append(kw) or ("bounced", 0))
+
+    msg, rc = m.refresh_watcher(
+        launch_agents_dir=tmp_launch_agents,
+        fno_binary="/usr/local/bin/fno",
+        interval=600,
+        force_bounce=True,
+    )
+
+    assert rc == 0 and len(bounces) == 1
 
 
-def test_liveness_reenabled_plist_newer_than_old_tick_is_pending():
-    # Re-enable case: an OLD tick exists, but the plist was re-rendered just now
-    # (newer than the tick, within grace) -> healthy-pending, not a false dead.
-    tick = _install()._parse_ts("2026-06-14T01:00:00Z")
-    v = _live(last_tick_ts="2026-06-14T01:00:00Z", plist_mtime=tick + 5000, now=tick + 5100)
-    assert v["verdict"] == "healthy-pending"
+# ---------------------------------------------------------------------------
+# An arm the tick cuts must read unhealthy, not healthy.
+# ---------------------------------------------------------------------------
 
-
-def test_liveness_old_tick_and_old_plist_still_dead():
-    # Old tick AND old plist (not freshly reinstalled) -> genuinely dead.
-    tick = _install()._parse_ts("2026-06-14T01:00:00Z")
-    v = _live(last_tick_ts="2026-06-14T01:00:00Z", plist_mtime=tick, now=tick + 5000)
-    assert v["verdict"] == "dead"
+_MERGE_CUT_ROW = {
+    "ts": "2026-06-14T01:00:00Z",
+    "skip_reason": "timeout",
+    "detail": "deadline exceeded in phase merge at 240s at merge:execute",
+    "acted": 0,
+}

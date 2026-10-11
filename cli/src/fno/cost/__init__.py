@@ -320,21 +320,10 @@ def _update_graph_node(graph_path: Path, node_id: str, session_id: str, cost_usd
     A hand-rolled writer here took a DIFFERENT lockfile than the canonical one
     (which resolves symlinks first, and footnote's worktree setup symlinks
     `.fno/`), so the two writers did not mutually exclude; it also rewrote a
-    legacy root-list graph.json as an empty `{"entries": []}` and left the
-    sha256 sidecar stale, which made the next reader raise and every later cost
-    attribution silently skip.
+    legacy root-list graph.json as an empty `{"entries": []}`, which every
+    later cost attribution then read as a blank board.
     """
-    from fno.graph.store import locked_mutate_graph
-
-    if not graph_path.exists():
-        # The likeliest cause is a worktree whose `.fno/` symlink was never
-        # healed by setup-worktree.sh, so say it rather than skipping in silence.
-        print(
-            f"cost._update_graph_node: no graph at {graph_path}; "
-            "cost not attributed",
-            file=sys.stderr,
-        )
-        return False
+    from fno.graph.store import commit_rows_via_store
 
     found = False
 
@@ -348,7 +337,7 @@ def _update_graph_node(graph_path: Path, node_id: str, session_id: str, cost_usd
         return entries
 
     try:
-        locked_mutate_graph(graph_path, mutator)
+        commit_rows_via_store(graph_path, mutator)
     except SystemExit:
         # locked_mutate_graph exits on an unreadable graph. That is right for a
         # backlog command and wrong here: a corrupt graph must not take down the
@@ -415,7 +404,7 @@ def compute_per_turn_attribution(
 ) -> dict[str, dict[str, int]]:
     """Read the per-turn attribution sidecar and return a per-provider rollup.
 
-    Phase 02 of provider rotation failover (ab-9728b70b). Cost callers
+    Phase 02 of provider rotation failover. Cost callers
     that previously assumed one provider per session can now ask "how
     many turns did each provider produce in this session?" without
     importing turn_attribution directly.

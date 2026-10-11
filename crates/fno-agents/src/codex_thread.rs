@@ -17,7 +17,7 @@
 //! # The rule this module must keep
 //!
 //! fno never renders a harness interface. Viewing a thread is codex's own
-//! declared attach form (`codex resume <id> --remote unix://`, x-296f)
+//! declared attach form (`codex resume <id> --remote unix://`)
 //! EXEC'd in a pane; the frames read here drive
 //! turns and never paint a screen. A future change that reads frames to draw
 //! something has rebuilt the layer this lane deleted, and the process tree is
@@ -29,6 +29,7 @@ use crate::codex_inject::{
     AppServerStream, ReviewDelivery, ReviewTarget,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -47,6 +48,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// burst of notification frames with quiet gaps while the model thinks, so
 /// this deadline is the ONLY bound on the wait for `turn/completed`.
 const TURN_TIMEOUT: Duration = Duration::from_secs(600);
+/// Manual compaction runs a provider turn. Share that whole-turn bound and
+/// require the same-thread completion receipt before reporting success.
+const COMPACTION_TIMEOUT: Duration = TURN_TIMEOUT;
 /// How long the daemon's `ask` waits on a submitter's reply before answering
 /// `in_flight`. Comfortably under the client's 120s `RESPONSE_DEADLINE`
 /// (crates/fno-agents/src/bin/client.rs) so a bounded receipt, not a silent
@@ -87,6 +91,31 @@ pub fn interrupt_total_bound() -> Duration {
 const COMPLETED_PARK_CAP: usize = 8;
 const THREAD_CHANNEL_CAP: usize = 32;
 
+/// What the driver's own turn state says, fired at the transitions the actor
+/// already observes. The daemon maps these onto inside-leg reports:
+/// the ack and every refresh write `working`, the completion writes `done`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadTurnPhase {
+    /// A turn was accepted (or is still driving at a keepalive tick).
+    Working,
+    /// The turn routed `turn/completed`; the thread is at its prompt.
+    Done,
+}
+
+/// Keepalive cadence for the `working` report: half the reader TTL, the same
+/// convention the claude inside-leg hook uses (`hooks/inside-leg-report.sh`).
+/// Env-overridable so tests can exercise the refresh without sleeping 45s.
+pub fn thread_turn_refresh() -> Duration {
+    std::env::var("FNO_THREAD_TURN_REFRESH_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map_or(
+            Duration::from_millis(crate::state::THREAD_TURN_TTL_MS / 2),
+            Duration::from_millis,
+        )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadStartError {
     InvalidResponse,
@@ -126,7 +155,53 @@ pub struct TurnResult {
     pub turn_id: String,
     pub status: String,
     pub text: String,
+    pub error: Option<Value>,
     pub raw: Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    #[serde(rename = "complete")]
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeGoal {
+    pub thread_id: String,
+    pub objective: String,
+    pub status: GoalStatus,
+    pub usage: GoalUsage,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalUsage {
+    pub token_budget: Option<i64>,
+    pub tokens_used: i64,
+    pub time_used_seconds: i64,
+}
+
+impl GoalUsage {
+    pub fn preserves(&self, previous: &Self) -> bool {
+        self.token_budget == previous.token_budget
+            && self.tokens_used >= previous.tokens_used
+            && self.time_used_seconds >= previous.time_used_seconds
+    }
+
+    pub fn receipt_value(&self) -> Value {
+        json!({
+            "token_budget": self.token_budget,
+            "tokens_used": self.tokens_used,
+            "time_used_seconds": self.time_used_seconds,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,6 +225,31 @@ pub fn thread_start_request_json(cwd: &str, approval_policy: &str) -> String {
     .to_string()
 }
 
+/// Build the `thread/archive` request (task 3): the history-preserving
+/// active-surface removal. The stored conversation survives; `thread/resume`
+/// searches the archived store, and `thread/unarchive` (the matching builder
+/// below) puts the same id back before a resume that needs it live.
+pub fn thread_archive_request_json(id: u64) -> String {
+    json!({
+        "id": id,
+        "method": "thread/archive",
+        "params": {}
+    })
+    .to_string()
+}
+
+/// Build the `thread/unarchive` request for a named thread id.
+pub fn thread_unarchive_request_json(id: u64, thread_id: &str) -> String {
+    json!({
+        "id": id,
+        "method": "thread/unarchive",
+        "params": {
+            "threadId": thread_id,
+        }
+    })
+    .to_string()
+}
+
 /// Build the `thread/resume` request. The full thread id and cwd are both
 /// required so recovery cannot silently move a worker onto the canonical repo.
 pub fn thread_resume_request_json(thread_id: &str, cwd: &str, approval_policy: &str) -> String {
@@ -158,12 +258,275 @@ pub fn thread_resume_request_json(thread_id: &str, cwd: &str, approval_policy: &
         "method": "thread/resume",
         "params": {
             "threadId": thread_id,
+            "excludeTurns": true,
             "cwd": cwd,
             "sandbox": "workspace-write",
             "approvalPolicy": approval_policy,
         }
     })
     .to_string()
+}
+
+/// Resume one exact thread for provider control without changing its model,
+/// sandbox, approval policy, or thread config.
+pub(crate) fn thread_resume_control_request_json(id: u64, thread_id: &str, cwd: &Path) -> String {
+    json!({
+        "id": id,
+        "method": "thread/resume",
+        "params": {
+            "threadId": thread_id,
+            "excludeTurns": true,
+            "cwd": cwd,
+        }
+    })
+    .to_string()
+}
+
+/// Build the typed native compaction action. The caller must prove completion
+/// from the same thread's `contextCompaction` lifecycle item; this frame is
+/// only the submit half of that transaction.
+pub fn thread_compact_start_request_json(id: u64, thread_id: &str) -> String {
+    json!({
+        "id": id,
+        "method": "thread/compact/start",
+        "params": { "threadId": thread_id }
+    })
+    .to_string()
+}
+
+enum CompactionLifecycle {
+    Started(String, String),
+    Completed(String, String, Value),
+    ContextCompacted(Value),
+}
+
+fn parse_compaction_lifecycle(value: &Value, thread_id: &str) -> Option<CompactionLifecycle> {
+    let method = value.get("method").and_then(Value::as_str)?;
+    if method == "thread/compacted" {
+        let params = value.get("params")?;
+        if params.get("threadId").and_then(Value::as_str) != Some(thread_id) {
+            return None;
+        }
+        let turn_id = params
+            .get("turnId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())?;
+        return Some(CompactionLifecycle::ContextCompacted(json!({
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "type": "contextCompaction",
+            "status": "completed",
+        })));
+    }
+    if !matches!(method, "item/started" | "item/completed") {
+        return None;
+    }
+    let params = value.get("params").unwrap_or(value);
+    if params
+        .get("threadId")
+        .or_else(|| value.get("threadId"))
+        .and_then(Value::as_str)
+        != Some(thread_id)
+    {
+        return None;
+    }
+    let turn_id = params
+        .get("turnId")
+        .or_else(|| value.get("turnId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())?
+        .to_string();
+    let item = params.get("item").or_else(|| value.get("item"))?;
+    if item.get("type").and_then(Value::as_str) != Some("contextCompaction") {
+        return None;
+    }
+    let item_id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())?
+        .to_string();
+    let completed_at_ms = if method == "item/completed" {
+        Some(params.get("completedAtMs").and_then(Value::as_u64)?)
+    } else {
+        None
+    };
+    match method {
+        "item/started" => Some(CompactionLifecycle::Started(turn_id, item_id)),
+        "item/completed" => Some(CompactionLifecycle::Completed(
+            turn_id,
+            item_id.clone(),
+            json!({
+                "threadId": thread_id,
+                "turnId": params.get("turnId").or_else(|| value.get("turnId")),
+                "itemId": item_id,
+                "type": "contextCompaction",
+                "status": "completed",
+                "completedAtMs": completed_at_ms,
+            }),
+        )),
+        _ => None,
+    }
+}
+
+/// Read the native goal for one exact full thread id.
+pub fn thread_goal_get_request_json(id: u64, thread_id: &str) -> String {
+    json!({
+        "id": id,
+        "method": "thread/goal/get",
+        "params": { "threadId": thread_id }
+    })
+    .to_string()
+}
+
+/// Set or pause a native goal without exposing a clear operation. The
+/// controller preserves the objective and usage across a pause.
+pub fn thread_goal_set_request_json(
+    id: u64,
+    thread_id: &str,
+    objective: &str,
+    status: &str,
+) -> String {
+    json!({
+        "id": id,
+        "method": "thread/goal/set",
+        "params": {
+            "threadId": thread_id,
+            "objective": objective,
+            "status": status,
+        },
+    })
+    .to_string()
+}
+
+pub fn lead_objective(scope: &str) -> String {
+    format!("$fno:lead {}", scope.trim())
+}
+
+/// Whether `objective` is the lead objective for `scope` in the current
+/// or the pre-rename spelling: a live codex goal keeps the objective
+/// string it was created with, and the reader cannot rewrite it.
+pub fn is_lead_objective(objective: &str, scope: &str) -> bool {
+    objective == lead_objective(scope) || objective == format!("$fno:lead {}", scope.trim())
+}
+
+pub fn parse_goal_response(raw: &str) -> Result<Option<NativeGoal>, ThreadDriverError> {
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|_| ThreadDriverError::Protocol("invalid thread/goal response".into()))?;
+    parse_goal_value(&value)
+}
+
+pub fn parse_goal_value(value: &Value) -> Result<Option<NativeGoal>, ThreadDriverError> {
+    if let Some(error) = value.get("error") {
+        return Err(ThreadDriverError::Protocol(server_error(error)));
+    }
+    let goal = value.pointer("/result/goal").or_else(|| value.get("goal"));
+    let Some(goal) = goal else {
+        return Ok(None);
+    };
+    if goal.is_null() {
+        return Ok(None);
+    }
+    let object = goal.as_object().ok_or_else(|| {
+        ThreadDriverError::Protocol("thread/goal response carried a non-object goal".into())
+    })?;
+    let thread_id = object
+        .get("threadId")
+        .or_else(|| object.get("thread_id"))
+        .and_then(Value::as_str)
+        .filter(|thread_id| !thread_id.trim().is_empty())
+        .ok_or_else(|| ThreadDriverError::Protocol("thread/goal response has no thread id".into()))?
+        .to_string();
+    let objective = object
+        .get("objective")
+        .or_else(|| object.get("goal"))
+        .and_then(Value::as_str)
+        .filter(|objective| !objective.trim().is_empty())
+        .ok_or_else(|| ThreadDriverError::Protocol("thread/goal response has no objective".into()))?
+        .to_string();
+    let status = match object
+        .get("status")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ThreadDriverError::Protocol("thread/goal response has no status".into()))?
+    {
+        "active" => GoalStatus::Active,
+        "paused" => GoalStatus::Paused,
+        "blocked" => GoalStatus::Blocked,
+        "usageLimited" | "usage_limited" => GoalStatus::UsageLimited,
+        "budgetLimited" | "budget_limited" => GoalStatus::BudgetLimited,
+        "complete" | "completed" | "done" => GoalStatus::Completed,
+        other => {
+            return Err(ThreadDriverError::Protocol(format!(
+                "thread/goal response has unknown status {other:?}"
+            )))
+        }
+    };
+    let token_budget_value = object
+        .get("tokenBudget")
+        .or_else(|| object.get("token_budget"))
+        .ok_or_else(|| {
+            ThreadDriverError::Protocol("thread/goal response has no token budget".into())
+        })?;
+    let token_budget = if token_budget_value.is_null() {
+        None
+    } else {
+        Some(
+            token_budget_value
+                .as_i64()
+                .filter(|value| *value >= 0)
+                .ok_or_else(|| {
+                    ThreadDriverError::Protocol("thread/goal token budget is invalid".into())
+                })?,
+        )
+    };
+    let tokens_used = object
+        .get("tokensUsed")
+        .or_else(|| object.get("tokens_used"))
+        .and_then(Value::as_i64)
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| {
+            ThreadDriverError::Protocol("thread/goal response has no valid tokens used".into())
+        })?;
+    let time_used_seconds = object
+        .get("timeUsedSeconds")
+        .or_else(|| object.get("time_used_seconds"))
+        .and_then(Value::as_i64)
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| {
+            ThreadDriverError::Protocol("thread/goal response has no valid time used".into())
+        })?;
+    Ok(Some(NativeGoal {
+        thread_id,
+        objective,
+        status,
+        usage: GoalUsage {
+            token_budget,
+            tokens_used,
+            time_used_seconds,
+        },
+    }))
+}
+
+pub fn ensure_lead_goal(
+    current: Option<&NativeGoal>,
+    scope: &str,
+    continuation_owner: &str,
+) -> Result<GoalStatus, ThreadDriverError> {
+    let expected = lead_objective(scope);
+    if let Some(goal) = current {
+        if !is_lead_objective(&goal.objective, scope) {
+            return Err(ThreadDriverError::Protocol(format!(
+                "refusing native goal {:?}; expected {:?}; continuation owner {}",
+                goal.objective, expected, continuation_owner
+            )));
+        }
+        if !matches!(goal.status, GoalStatus::Active | GoalStatus::Paused) {
+            return Err(ThreadDriverError::Protocol(format!(
+                "refusing to reactivate native goal with status {:?}",
+                goal.status
+            )));
+        }
+    }
+    Ok(GoalStatus::Active)
 }
 
 /// Build a `turn/start` request for the held driver.
@@ -177,10 +540,19 @@ pub fn turn_start_request_json_with_effort(
     text: &str,
     effort: Option<&str>,
 ) -> String {
-    turn_start_request_json_full(id, thread_id, text, effort, &[], None)
+    // No resolved posture and the bounded default request: the minimal frame.
+    turn_start_request_json_full(
+        id,
+        thread_id,
+        text,
+        effort,
+        &[],
+        None,
+        &CodexPosture::bounded(),
+    )
 }
 
-/// `turn/start` with the optional state-root grant (x-f22f).
+/// `turn/start` with the optional state-root grant.
 ///
 /// `turn/start` is the carrier, and that is a MEASUREMENT rather than a
 /// reading of the protocol docs. Against the live app-server on 2026-08-28,
@@ -197,23 +569,55 @@ pub fn turn_start_request_json_with_effort(
 /// posture, which would silently drop the grant with a slower fuse. Sending it
 /// per turn makes resume carry it for free.
 ///
-/// Only `writableRoots` is set. `networkAccess` and the tmp exclusions are left
-/// off so they keep the defaults the scalar posture already resolved to
-/// (network off): this change grants directories and must not widen anything
-/// else. The roots are ADDITIVE to the workspace - a bounded thread reports
+/// The turn's policy echoes the resolved posture with `writableRoots` widened
+/// and `networkAccess` forced on. The keeper socket and `gh` egress share one
+/// seatbelt switch, so a thread worker without network cannot claim a node
+/// even with every directory granted (measured 2026-09-14, live app-server).
+/// The roots are ADDITIVE to the workspace - a bounded thread reports
 /// `writableRoots: []` and can still write its own cwd - so naming the state
 /// root does not take the worktree away.
 ///
-/// The thread's resolved posture with `state_dirs` added to its writable roots.
-///
-/// Additive and order-stable: the posture's own roots come first and a root it
-/// already names is not repeated, so the turn widens the policy and narrows
-/// nothing.
-fn sandbox_policy_with_roots(resolved: Option<&Value>, state_dirs: &[String]) -> Value {
-    let mut policy = resolved.cloned().unwrap_or_else(
-        || json!({"type": "workspaceWrite", "writableRoots": Vec::<String>::new()}),
-    );
-    let mut roots: Vec<String> = policy
+/// Widen a RESOLVED workspaceWrite posture with `state_dirs` and network
+/// access. Additive and order-stable: the posture's own roots come first and
+/// a root it already names is not repeated, so the turn widens the policy and
+/// narrows nothing. Every other resolved posture is echoed unchanged by
+/// [`turn_policy`]; this builder only ever sees the workspaceWrite echo,
+/// because roots mean nothing under a wider posture and naming them on a
+/// narrower one would be a widening of its own.
+pub(crate) fn sandbox_policy_with_roots(resolved: &Value, state_dirs: &[String]) -> Value {
+    let mut policy = resolved.clone();
+    let mut roots: Vec<String> = posture_roots(&policy);
+    for dir in state_dirs {
+        if !roots.iter().any(|root| root == dir) {
+            roots.push(dir.clone());
+        }
+    }
+    policy["writableRoots"] = json!(roots);
+    policy["networkAccess"] = json!(true);
+    policy
+}
+
+/// Join the typed `--add-dir` ahead of the seam-published state-root grant on
+/// a daemon-bound codex thread spawn. The operator's own grant leads, the same
+/// precedence the argv lanes give it. Kept here with the thread's other
+/// state-root joins so the ordering contract stays unit-testable.
+pub fn attach_codex_thread_state_dirs(params: &mut Value) {
+    let mut roots = crate::claude_ask::state_dirs_from_env();
+    if let Some(add_dir) = params
+        .get("add_dir")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        roots.insert(0, add_dir.to_string());
+    }
+    if !roots.is_empty() {
+        params["state_dirs"] = Value::from(roots);
+    }
+}
+
+/// The `writableRoots` a policy object already carries, as owned strings.
+fn posture_roots(policy: &Value) -> Vec<String> {
+    policy
         .get("writableRoots")
         .and_then(Value::as_array)
         .map(|existing| {
@@ -223,28 +627,88 @@ fn sandbox_policy_with_roots(resolved: Option<&Value>, state_dirs: &[String]) ->
                 .map(str::to_string)
                 .collect()
         })
-        .unwrap_or_default();
-    for dir in state_dirs {
-        if !roots.iter().any(|root| root == dir) {
-            roots.push(dir.clone());
+        .unwrap_or_default()
+}
+
+/// The `turn/start` sandboxPolicy: the thread's RESOLVED posture echoed with
+/// its roots widened, or - when the server named no sandbox at all - the
+/// recorded REQUEST built into a policy, marked `requested` so no reader can
+/// mistake a replayed request for a server answer. The return pairs the
+/// policy with its source (`resolved` / `requested`); `None` sends no policy
+/// key at all, which keeps a bounded request with no roots on today's exact
+/// frame.
+///
+/// This is where the old frame narrowed a full-access thread: the resolved
+/// posture was filtered to `workspaceWrite` and a missing one was fabricated
+/// as `workspaceWrite` from nothing whenever any root existed, so a
+/// `dangerFullAccess` thread received a `workspaceWrite` policy on every
+/// single turn. The echo is now unfiltered, and the from-request build never
+/// invents a posture name - it builds the posture the request named.
+pub(crate) fn turn_policy(
+    resolved: Option<&Value>,
+    requested: &CodexPosture,
+    state_dirs: &[String],
+) -> Option<(Value, &'static str)> {
+    if let Some(resolved) = resolved {
+        return Some(match resolved.get("type").and_then(Value::as_str) {
+            Some("workspaceWrite") => (sandbox_policy_with_roots(resolved, state_dirs), "resolved"),
+            // Full access and read-only echo unchanged: roots mean nothing
+            // under full access, and adding roots (or network) to read-only
+            // would be a widening of its own.
+            _ => (resolved.clone(), "resolved"),
+            // The server's own value, whatever it names: never a hand-built
+            // substitute for an unknown posture.
+        });
+    }
+    if requested.is_full_access() {
+        return Some((
+            json!({"type": requested.sandbox.as_policy_type()}),
+            "requested",
+        ));
+    }
+    if state_dirs.is_empty() {
+        return None;
+    }
+    let policy = json!({
+        "type": requested.sandbox.as_policy_type(),
+        "writableRoots": state_dirs,
+        "networkAccess": true,
+    });
+    Some((policy, "requested"))
+}
+
+/// The roots the thread lane carries onto every `turn/start`: the caller's
+/// state dirs, the repo's git common dir, and the uv cache, resolved by the
+/// same resolvers the exec lane grants with. Both postures carry them. A
+/// `yolo` thread asks for `danger-full-access` on `thread/start`, but the
+/// server keeps its workspaceWrite default, and withholding the policy does
+/// not lift a sandbox - it keeps whatever the server already had, `.git`
+/// read-only included.
+///
+/// Fail-open like the exec lane's grant: an unresolvable root is skipped, so
+/// resolution can never break the spawn.
+fn granted_roots(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
+    let mut roots = state_dirs.to_vec();
+    if let Some(git_dir) = crate::provider::git_common_dir(cwd) {
+        if !roots.iter().any(|root| root == &git_dir) {
+            roots.push(git_dir);
         }
     }
-    policy["writableRoots"] = json!(roots);
-    policy
+    for root in crate::provider::codex_cache_roots() {
+        if !roots.iter().any(|existing| existing == &root) {
+            roots.push(root);
+        }
+    }
+    roots
 }
 
 /// `turn/start` takes a whole `sandboxPolicy` object, never a `writableRoots`
 /// delta, so the policy is built FROM the thread's own resolved posture
-/// (`resolved`) with only the roots widened. Hand-building the object instead
-/// replaces every sibling field - `networkAccess`, the tmp exclusions, roots
-/// the posture already carried - with the server's defaults, which would let a
-/// directory grant silently change the worker's network access.
-///
-/// With no resolved posture to echo, it falls back to the minimal object. The
-/// scalar posture this replaces measured `networkAccess: false`, the same as
-/// the default, so the fallback matches on the measured configuration.
-///
-/// Empty `state_dirs` builds today's frame byte-for-byte.
+/// (`resolved`), or from the recorded REQUEST when the server named no
+/// sandbox ([`turn_policy`]). The source is carried BESIDE the policy on the
+/// row (`turn_policy_source`), not inside the frame: the app-server owns the
+/// params' shape, and a non-protocol key would be a second vocabulary for one
+/// fact.
 pub fn turn_start_request_json_full(
     id: u64,
     thread_id: &str,
@@ -252,6 +716,7 @@ pub fn turn_start_request_json_full(
     effort: Option<&str>,
     state_dirs: &[String],
     resolved: Option<&Value>,
+    requested: &CodexPosture,
 ) -> String {
     let mut params = json!({
         "threadId": thread_id,
@@ -260,8 +725,8 @@ pub fn turn_start_request_json_full(
     if let Some(effort) = effort.filter(|effort| !effort.is_empty()) {
         params["effort"] = json!(effort);
     }
-    if !state_dirs.is_empty() {
-        params["sandboxPolicy"] = sandbox_policy_with_roots(resolved, state_dirs);
+    if let Some((policy, _source)) = turn_policy(resolved, requested, state_dirs) {
+        params["sandboxPolicy"] = policy;
     }
     json!({
         "id": id,
@@ -314,9 +779,32 @@ pub fn parse_resolved_sandbox(raw: &str) -> Option<Value> {
     serde_json::from_str::<Value>(raw)
         .ok()?
         .pointer("/result/sandbox")
-        .filter(|sandbox| sandbox.get("type").and_then(Value::as_str) == Some("workspaceWrite"))
         .cloned()
 }
+
+pub use crate::codex_posture::{resolve_thread_posture, CodexPosture};
+
+/// The posture name the server reported, read WITHOUT the workspaceWrite
+/// filter [`parse_resolved_sandbox`] applies.
+///
+/// That filter answers `None` for two different worlds - a full-access thread
+/// and a response that carried no `sandbox` at all - which is fine where it is
+/// used (there is nothing to echo either way) and wrong for a RECORD. A row
+/// that omits the posture leaves the reader inferring which world it was, and
+/// this lane already cost one investigation a day on exactly that ambiguity.
+/// So the record gets the name the server used, or [`SANDBOX_POSTURE_UNKNOWN`].
+pub fn parse_resolved_sandbox_type(raw: &str) -> Option<String> {
+    serde_json::from_str::<Value>(raw)
+        .ok()?
+        .pointer("/result/sandbox/type")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// Recorded when `thread/start` reported no sandbox at all. An explicit value,
+/// never an absent key: absence is not evidence.
+pub const SANDBOX_POSTURE_UNKNOWN: &str = "unknown";
 
 pub fn parse_thread_start_response(raw: &str) -> Result<(String, String), ThreadStartError> {
     let value: Value = serde_json::from_str(raw).map_err(|_| ThreadStartError::InvalidResponse)?;
@@ -387,6 +875,11 @@ pub fn parse_turn_completed_value(value: &Value) -> Option<TurnResult> {
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())?
         .to_string();
+    let error = turn
+        .get("error")
+        .filter(|error| !error.is_null())
+        .or_else(|| params.get("error").filter(|error| !error.is_null()))
+        .cloned();
     let status = turn
         .get("status")
         .or_else(|| params.get("status"))
@@ -405,8 +898,13 @@ pub fn parse_turn_completed_value(value: &Value) -> Option<TurnResult> {
         .join("");
     Some(TurnResult {
         turn_id,
-        status,
+        status: if error.is_some() {
+            "failed".into()
+        } else {
+            status
+        },
         text,
+        error,
         raw: value.clone(),
     })
 }
@@ -420,10 +918,12 @@ pub struct CodexThread {
     /// actor's read pump; the legacy read paths below then refuse rather than
     /// spin.
     stream: Option<AppServerStream>,
-    /// The shared app-server daemon's pid, recorded at connect. This is the
-    /// registry row's `pid` for a codex thread worker, which is what makes
-    /// "this worker's app-server is the shared daemon's" readable from the
-    /// row instead of only from a process walk.
+    /// The shared app-server daemon's pid, recorded at connect. This is NOT
+    /// the registry row's `pid`: the row carries `pid: None` for a codex
+    /// thread worker (codex_thread_entry.rs - one always-alive shared pid on
+    /// every thread row broke `derive_liveness` and gc). The daemon pid travels
+    /// into [`CodexThreadActor`]; ownership is provable from the control
+    /// socket and `thread/loaded/list`, not from a row pid.
     daemon_pid: Option<u32>,
     pending: VecDeque<Value>,
     /// `turn/completed` notifications parsed once at push, keyed by turn id
@@ -438,7 +938,7 @@ pub struct CodexThread {
     cwd: PathBuf,
     effort: Option<String>,
     /// The fno state roots this thread is granted, spent on every `turn/start`
-    /// (x-f22f). Per THREAD, never per daemon: the daemon is shared and owns
+    ///. Per THREAD, never per daemon: the daemon is shared and owns
     /// every thread on the box, so a grant applied at daemon scope would widen
     /// every other worker's sandbox at once. Empty for a yolo thread, which is
     /// already `danger-full-access` and would be NARROWED by a workspaceWrite
@@ -448,6 +948,14 @@ pub struct CodexThread {
     /// every per-turn override so the grant widens the roots and changes
     /// nothing else. `None` when the thread is not `workspaceWrite`.
     resolved_sandbox: Option<Value>,
+    /// The posture the spawn (or resume) REQUESTED, spelled onto the per-turn
+    /// policy when the server resolved nothing. Per THREAD, set once at
+    /// `thread/start` or `thread/resume`.
+    requested: CodexPosture,
+    /// The posture name the server reported, unfiltered, for the registry row.
+    /// `None` only until `thread/start` answers; recorded as
+    /// [`SANDBOX_POSTURE_UNKNOWN`] when the response named no sandbox.
+    resolved_sandbox_type: Option<String>,
     current_turn_id: Option<String>,
 }
 
@@ -471,27 +979,40 @@ impl CodexThread {
     pub async fn start(
         cwd: impl Into<PathBuf>,
         model: Option<&str>,
-        yolo: bool,
+        posture: &CodexPosture,
         effort: Option<&str>,
     ) -> Result<Self, ThreadDriverError> {
-        Self::start_with_state_dirs(cwd, model, yolo, effort, &[]).await
+        Self::start_with_state_dirs(cwd, model, posture, effort, &[], None).await
     }
 
-    /// [`CodexThread::start`] plus the state-root grant this thread carries on
-    /// every turn (x-f22f). `yolo` drops the roots: that posture is already
-    /// `danger-full-access`, so a workspaceWrite policy would narrow it.
+    /// [`CodexThread::start`] plus the roots this thread carries on every turn
+    /// ([`granted_roots`]). Both postures carry them; only the `thread/start`
+    /// scalar differs.
     pub async fn start_with_state_dirs(
         cwd: impl Into<PathBuf>,
         model: Option<&str>,
-        yolo: bool,
+        posture: &CodexPosture,
         effort: Option<&str>,
         state_dirs: &[String],
+        config: Option<&serde_json::Map<String, Value>>,
     ) -> Result<Self, ThreadDriverError> {
         let cwd = cwd.into();
         // `launch` completes the app-server handshake as part of connecting,
         // so the driver is protocol-ready the moment it exists.
         let mut driver = Self::launch(cwd.clone()).await?;
-        let request = thread_start_request_with_options(1, &cwd, model, yolo, "never");
+        // Project assignment: the thread rolls up under its repo's
+        // ChatGPT Project instead of a cwd-keyed bucket. Resolution is
+        // fail-open and bounded; a None below drops the key and the request
+        // stays byte-identical to the unassigned form.
+        let project_id = crate::codex_inject::ensure_project_for_cwd(&cwd).await;
+        let request = thread_start_request_with_options(
+            1,
+            &cwd,
+            model,
+            posture,
+            project_id.as_deref(),
+            config,
+        );
         let response = driver.request(1, request).await?;
         let (thread_id, rollout_path) = parse_thread_start_response(&response)
             .map_err(|error| ThreadDriverError::Protocol(error.to_string()))?;
@@ -500,23 +1021,77 @@ impl CodexThread {
         driver.effort = effort
             .filter(|effort| !effort.is_empty())
             .map(str::to_string);
-        driver.state_dirs = if yolo {
-            Vec::new()
-        } else {
-            state_dirs.to_vec()
-        };
+        driver.state_dirs = granted_roots(&cwd, state_dirs);
+        driver.requested = posture.clone();
         driver.resolved_sandbox = parse_resolved_sandbox(&response);
+        driver.resolved_sandbox_type = parse_resolved_sandbox_type(&response);
         Ok(driver)
     }
 
+    /// Resume an existing thread by its app-server id.
+    ///
+    /// The state-root grant cannot be reconstructed on this path, and
+    /// the loss is announced rather than taken quietly. The roots reach a
+    /// spawn from the Python seam's `FNO_WORKER_ADD_DIRS`, which the long-lived
+    /// shared daemon does not have, and Rust deliberately runs no second copy
+    /// of the resolver (`writable_dirs.published_worker_writable_dirs`: one
+    /// published value, two readers). Reading the daemon's own env instead
+    /// would grant whatever shell started it, which is wrong in a more
+    /// dangerous direction.
+    ///
+    /// In practice the grant usually survives: a turn-level `sandboxPolicy`
+    /// becomes the thread's default server-side, so a thread still loaded by
+    /// the codex app-server keeps it across an `fno-agents-daemon` restart. It
+    /// is lost only when the app-server itself restarted and reloaded the
+    /// thread from its rollout. That worker is then mute again, so the caller
+    /// gets an event instead of silence. The durable fix is a granted-roots
+    /// receipt on the registry row, which belongs to the sibling node that
+    /// owns that schema.
+    ///
+    /// Emitted only for a thread that COULD have lost something. A yolo thread
+    /// is `danger-full-access` and needs no grant, and a resume that succeeds
+    /// says nothing on its own, so the event fires after the resume and only
+    /// for a bounded thread. An unconditional emit on every cache miss reports
+    /// a loss that never happened, which is the kind of telemetry an operator
+    /// learns to ignore.
     pub async fn resume(
         cwd: impl Into<PathBuf>,
         thread_id: &str,
         model: Option<&str>,
-        yolo: bool,
+        posture: &CodexPosture,
         effort: Option<&str>,
+        config: Option<&serde_json::Map<String, Value>>,
     ) -> Result<Self, ThreadDriverError> {
-        Self::resume_with_state_dirs(cwd, thread_id, model, yolo, effort, &[]).await
+        Self::resume_with_state_dirs(cwd, thread_id, model, posture, effort, &[], config).await
+    }
+
+    /// Resume one exact thread for provider actions without overriding its
+    /// existing permission or model settings.
+    pub(crate) async fn resume_for_control(
+        cwd: impl Into<PathBuf>,
+        thread_id: &str,
+    ) -> Result<Self, ThreadDriverError> {
+        if thread_id.trim().is_empty() {
+            return Err(ThreadDriverError::Protocol(
+                "harness_session_id is required for codex resume".into(),
+            ));
+        }
+        let cwd = cwd.into();
+        let mut driver = Self::launch(cwd.clone()).await?;
+        let request = thread_resume_control_request_json(1, thread_id, &cwd);
+        let response = driver.request(1, request).await?;
+        let (confirmed_id, rollout_path) = parse_thread_start_response(&response)
+            .map_err(|error| ThreadDriverError::Protocol(error.to_string()))?;
+        if confirmed_id != thread_id {
+            return Err(ThreadDriverError::Protocol(format!(
+                "thread/resume returned {confirmed_id}, expected {thread_id}"
+            )));
+        }
+        driver.thread_id = confirmed_id;
+        driver.rollout_path = PathBuf::from(rollout_path);
+        driver.resolved_sandbox = parse_resolved_sandbox(&response);
+        driver.resolved_sandbox_type = parse_resolved_sandbox_type(&response);
+        Ok(driver)
     }
 
     /// [`CodexThread::resume`] plus the state-root grant. A resumed thread
@@ -526,9 +1101,10 @@ impl CodexThread {
         cwd: impl Into<PathBuf>,
         thread_id: &str,
         model: Option<&str>,
-        yolo: bool,
+        posture: &CodexPosture,
         effort: Option<&str>,
         state_dirs: &[String],
+        config: Option<&serde_json::Map<String, Value>>,
     ) -> Result<Self, ThreadDriverError> {
         if thread_id.trim().is_empty() {
             return Err(ThreadDriverError::Protocol(
@@ -539,7 +1115,8 @@ impl CodexThread {
         // `launch` completes the app-server handshake as part of connecting,
         // so the driver is protocol-ready the moment it exists.
         let mut driver = Self::launch(cwd.clone()).await?;
-        let request = thread_resume_request_with_options(1, thread_id, &cwd, model, yolo, "never");
+        let request =
+            thread_resume_request_with_options(1, thread_id, &cwd, model, posture, config);
         let response = driver.request(1, request).await?;
         let (confirmed_id, rollout_path) = parse_thread_start_response(&response)
             .map_err(|error| ThreadDriverError::Protocol(error.to_string()))?;
@@ -553,12 +1130,10 @@ impl CodexThread {
         driver.effort = effort
             .filter(|effort| !effort.is_empty())
             .map(str::to_string);
-        driver.state_dirs = if yolo {
-            Vec::new()
-        } else {
-            state_dirs.to_vec()
-        };
+        driver.state_dirs = granted_roots(&cwd, state_dirs);
+        driver.requested = posture.clone();
         driver.resolved_sandbox = parse_resolved_sandbox(&response);
+        driver.resolved_sandbox_type = parse_resolved_sandbox_type(&response);
         Ok(driver)
     }
 
@@ -604,7 +1179,9 @@ impl CodexThread {
             cwd,
             effort: None,
             state_dirs: Vec::new(),
+            requested: CodexPosture::bounded(),
             resolved_sandbox: None,
+            resolved_sandbox_type: None,
             current_turn_id: None,
         })
     }
@@ -717,6 +1294,7 @@ impl CodexThread {
             self.effort.as_deref(),
             &self.state_dirs,
             self.resolved_sandbox.as_ref(),
+            &self.requested,
         );
         let response = self.request(request_id, request).await?;
         let turn_id = parse_turn_start_response(&response)?;
@@ -746,6 +1324,7 @@ impl CodexThread {
             self.effort.as_deref(),
             &self.state_dirs,
             self.resolved_sandbox.as_ref(),
+            &self.requested,
         );
         self.write_frame(&request).await?;
         Ok(request_id)
@@ -824,6 +1403,297 @@ impl CodexThread {
         }
     }
 
+    /// Archive this thread history-preservingly (task 3): the codex
+    /// app-server's `thread/archive` removes the thread from the ACTIVE
+    /// surface while the stored conversation survives and `thread/resume`
+    /// (which searches active and archived stores) still opens it. An error
+    /// is returned, never swallowed: the caller records a partial outcome
+    /// and retries rather than claiming retirement.
+    pub async fn archive(&mut self) -> Result<(), ThreadDriverError> {
+        let request = thread_archive_request_json(1);
+        let _answer = self.request(1, request).await?;
+        // The archive answer is a submit receipt, not a completion promise:
+        // accept the ack shape and let the caller's own loaded-list check
+        // prove the effect.
+        Ok(())
+    }
+
+    pub async fn compact(&mut self) -> Result<Value, ThreadDriverError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let id_value = Value::from(id);
+        self.write_frame(&thread_compact_start_request_json(id, &self.thread_id))
+            .await?;
+        let deadline = Instant::now() + COMPACTION_TIMEOUT;
+        let mut acknowledged = false;
+        let mut started_items = Vec::new();
+        let mut completed_items = HashMap::new();
+        loop {
+            if acknowledged {
+                if let Some(receipt) = started_items
+                    .iter()
+                    .find_map(|item_id| completed_items.remove(item_id))
+                {
+                    return crate::context_window::verify_compaction_receipt(
+                        &receipt,
+                        &self.thread_id,
+                    )
+                    .map_err(|error| {
+                        ThreadDriverError::Protocol(format!(
+                            "unverified compaction receipt: {error:?}"
+                        ))
+                    });
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ThreadDriverError::Timeout);
+            }
+            let value = self.read_value(remaining).await?;
+            if value.get("id") == Some(&id_value) {
+                provider_response(value)?;
+                acknowledged = true;
+                continue;
+            }
+            match parse_compaction_lifecycle(&value, &self.thread_id) {
+                Some(CompactionLifecycle::Started(turn_id, item_id)) => {
+                    started_items.push((turn_id, item_id));
+                }
+                Some(CompactionLifecycle::Completed(turn_id, item_id, receipt)) => {
+                    completed_items.insert((turn_id, item_id), receipt);
+                }
+                Some(CompactionLifecycle::ContextCompacted(receipt)) => {
+                    return crate::context_window::verify_compaction_receipt(
+                        &receipt,
+                        &self.thread_id,
+                    )
+                    .map_err(|error| {
+                        ThreadDriverError::Protocol(format!(
+                            "unverified compaction receipt: {error:?}"
+                        ))
+                    });
+                }
+                None => park_frame(&mut self.pending, &mut self.completed_turns, value),
+            }
+        }
+    }
+
+    pub async fn goal_get(&mut self) -> Result<Value, ThreadDriverError> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.request_value(id, thread_goal_get_request_json(id, &self.thread_id))
+            .await
+            .and_then(provider_response)
+    }
+
+    pub async fn goal_set(
+        &mut self,
+        objective: &str,
+        status: &str,
+    ) -> Result<Value, ThreadDriverError> {
+        if objective.trim().is_empty() || !matches!(status, "active" | "paused") {
+            return Err(ThreadDriverError::Protocol(
+                "goal set needs a non-empty objective and active|paused status".into(),
+            ));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.request_value(
+            id,
+            thread_goal_set_request_json(id, &self.thread_id, objective, status),
+        )
+        .await
+        .and_then(provider_response)
+    }
+
+    pub async fn goal_get_typed(&mut self) -> Result<Option<NativeGoal>, ThreadDriverError> {
+        let value = self.goal_get().await?;
+        let goal = parse_goal_value(&value)?;
+        if goal
+            .as_ref()
+            .is_some_and(|goal| goal.thread_id != self.thread_id)
+        {
+            return Err(ThreadDriverError::Protocol(
+                "thread/goal/get returned a different thread id".into(),
+            ));
+        }
+        Ok(goal)
+    }
+
+    /// Read one live provider goal without resuming or changing the thread.
+    /// Stop hooks use this short direct query to distinguish an active native
+    /// continuation from a missing or unreadable goal.
+    pub(crate) async fn read_goal_for_stop(
+        thread_id: &str,
+        timeout: Duration,
+    ) -> Result<Option<NativeGoal>, ThreadDriverError> {
+        if thread_id.trim().is_empty() || timeout.is_zero() {
+            return Err(ThreadDriverError::Protocol(
+                "Stop goal read needs an exact thread id and positive timeout".into(),
+            ));
+        }
+        let deadline = Instant::now() + timeout;
+        let socket = crate::codex_inject::codex_app_server_socket_path();
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let (mut sink, mut stream) =
+            tokio::time::timeout(remaining, crate::codex_inject::connect_app_server(&socket))
+                .await
+                .map_err(|_| ThreadDriverError::Timeout)?
+                .map_err(|error| {
+                    ThreadDriverError::Protocol(format!(
+                        "Codex goal connection unavailable: {error}"
+                    ))
+                })?;
+        let id = Value::from(1);
+        let request = thread_goal_get_request_json(1, thread_id);
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        tokio::time::timeout(remaining, sink.send(Message::Text(request.into())))
+            .await
+            .map_err(|_| ThreadDriverError::Timeout)?
+            .map_err(|error| {
+                ThreadDriverError::Protocol(format!("Codex goal request write failed: {error}"))
+            })?;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ThreadDriverError::Timeout);
+            }
+            let frame = tokio::time::timeout(remaining, stream.next())
+                .await
+                .map_err(|_| ThreadDriverError::Timeout)?;
+            match frame {
+                Some(Ok(Message::Text(text))) => {
+                    let value: Value = serde_json::from_str(text.trim()).map_err(|_| {
+                        ThreadDriverError::Protocol("Codex goal response is not JSON".into())
+                    })?;
+                    if value.get("id") != Some(&id) {
+                        continue;
+                    }
+                    let value = provider_response(value)?;
+                    if let Some(goal) = value
+                        .pointer("/result/goal")
+                        .or_else(|| value.get("goal"))
+                        .filter(|goal| !goal.is_null())
+                    {
+                        let returned_thread = goal
+                            .get("threadId")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                ThreadDriverError::Protocol(
+                                    "Codex goal response has no thread id".into(),
+                                )
+                            })?;
+                        if returned_thread != thread_id {
+                            return Err(ThreadDriverError::Protocol(format!(
+                                "Codex goal response returned {returned_thread}, expected {thread_id}"
+                            )));
+                        }
+                    }
+                    return parse_goal_value(&value);
+                }
+                Some(Ok(_)) => continue,
+                Some(Err(error)) => {
+                    return Err(ThreadDriverError::Protocol(format!(
+                        "Codex goal response read failed: {error}"
+                    )))
+                }
+                None => {
+                    return Err(ThreadDriverError::Protocol(
+                        "Codex app-server closed before the goal response".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    pub async fn goal_set_typed(
+        &mut self,
+        objective: &str,
+        status: GoalStatus,
+    ) -> Result<NativeGoal, ThreadDriverError> {
+        let status_wire = match status {
+            GoalStatus::Active => "active",
+            GoalStatus::Paused => "paused",
+            GoalStatus::Blocked => "blocked",
+            GoalStatus::UsageLimited => "usageLimited",
+            GoalStatus::BudgetLimited => "budgetLimited",
+            GoalStatus::Completed => "complete",
+        };
+        if objective.trim().is_empty() || !matches!(status, GoalStatus::Active | GoalStatus::Paused)
+        {
+            return Err(ThreadDriverError::Protocol(
+                "typed goal set needs a non-empty active or paused objective".into(),
+            ));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let value = self
+            .request_value(
+                id,
+                thread_goal_set_request_json(id, &self.thread_id, objective, status_wire),
+            )
+            .await
+            .and_then(provider_response)?;
+        let goal = parse_goal_value(&value)?.ok_or_else(|| {
+            ThreadDriverError::Protocol("thread/goal/set returned no typed goal".into())
+        })?;
+        if goal.thread_id != self.thread_id {
+            return Err(ThreadDriverError::Protocol(
+                "thread/goal/set returned a different thread id".into(),
+            ));
+        }
+        Ok(goal)
+    }
+
+    pub async fn ensure_lead_goal_typed(
+        &mut self,
+        scope: &str,
+        continuation_owner: &str,
+    ) -> Result<NativeGoal, ThreadDriverError> {
+        let current = self.goal_get_typed().await?;
+        ensure_lead_goal(current.as_ref(), scope, continuation_owner)?;
+        let objective = lead_objective(scope);
+        match current {
+            // An Active goal already carrying the lead spelling is done. One
+            // still carrying the pre-rename spelling migrates in place, so
+            // every goal this ensure returns reads the new words.
+            Some(goal) if goal.status == GoalStatus::Active && goal.objective == objective => {
+                Ok(goal)
+            }
+            Some(goal) if goal.status == GoalStatus::Active => {
+                let migrated = self.goal_set_typed(&objective, GoalStatus::Active).await?;
+                if !migrated.usage.preserves(&goal.usage) {
+                    return Err(ThreadDriverError::Protocol(
+                        "thread/goal/set did not preserve goal usage".into(),
+                    ));
+                }
+                Ok(migrated)
+            }
+            Some(goal) if goal.status == GoalStatus::Paused => {
+                let resumed = self.goal_set_typed(&objective, GoalStatus::Active).await?;
+                if !resumed.usage.preserves(&goal.usage) {
+                    return Err(ThreadDriverError::Protocol(
+                        "thread/goal/set did not preserve goal usage".into(),
+                    ));
+                }
+                Ok(resumed)
+            }
+            Some(goal) => Err(ThreadDriverError::Protocol(format!(
+                "refusing to reactivate native goal with status {:?}",
+                goal.status
+            ))),
+            None => self.goal_set_typed(&objective, GoalStatus::Active).await,
+        }
+    }
+
+    /// Unarchive this thread id so `thread/resume` finds it in the same
+    /// live store it left. History-preserving in both directions.
+    pub async fn unarchive(&mut self, thread_id: &str) -> Result<(), ThreadDriverError> {
+        let request = thread_unarchive_request_json(1, thread_id);
+        let _answer = self.request(1, request).await?;
+        Ok(())
+    }
+
     pub async fn steer(
         &mut self,
         expected_turn_id: &str,
@@ -892,10 +1762,47 @@ impl CodexThread {
         &self.cwd
     }
 
+    /// The posture the server RESOLVED for this thread, for the registry row.
+    /// Distinct from the posture the spawn REQUESTED: a `yolo` thread asks for
+    /// `danger-full-access` and the app-server can still keep its
+    /// workspaceWrite default, so the two disagree and the row must not report
+    /// the request as if it were the outcome.
+    pub fn resolved_sandbox_posture(&self) -> &str {
+        self.resolved_sandbox_type
+            .as_deref()
+            .unwrap_or(SANDBOX_POSTURE_UNKNOWN)
+    }
+
+    /// The writable roots this thread carries onto every `turn/start`.
+    pub fn granted_writable_roots(&self) -> &[String] {
+        &self.state_dirs
+    }
+
+    /// The posture this thread's start or resume REQUESTED. One source for the
+    /// registry row and the per-turn policy replay: the entry builder reads it
+    /// instead of taking a parallel copy of the same answer.
+    pub fn requested_posture(&self) -> &CodexPosture {
+        &self.requested
+    }
+
+    /// Where the CURRENT turn's sandboxPolicy comes from: `resolved` when the
+    /// server reported a posture the turn echoes, `requested` when the server
+    /// named no sandbox and the row's own request is replayed instead. Two
+    /// different worlds behind one policy object, named so a record can tell
+    /// them apart.
+    pub fn turn_policy_source(&self) -> &'static str {
+        if self.resolved_sandbox.is_some() {
+            "resolved"
+        } else {
+            "requested"
+        }
+    }
+
     /// The pid of the app-server SERVING this thread, which is the shared
-    /// daemon. The registry row records it, so the ownership claim ("a codex
+    /// daemon. The registry row does NOT record it (thread rows carry
+    /// `pid: None`; codex_thread_entry.rs), so the ownership claim ("a codex
     /// thread worker's app-server is the shared daemon's") is provable from
-    /// the row against `lsof` on the control socket, with no inference from a
+    /// the control socket and `thread/loaded/list`, with no inference from a
     /// process count.
     pub fn pid(&self) -> Option<u32> {
         self.daemon_pid
@@ -920,9 +1827,16 @@ impl CodexThread {
     /// `on_turn_done` fires once per completed turn, from the actor task, for
     /// every submitter class (ask, seed, mail steer) - the daemon uses it for
     /// the `agent_ask_done` event and the `last_message_at` bump.
+    ///
+    /// `on_turn_phase` fires at the driver's own turn transitions:
+    /// [`ThreadTurnPhase::Working`] at the ack and on every keepalive tick
+    /// that lands while a turn drives, [`ThreadTurnPhase::Done`] at the
+    /// completion. The daemon maps these onto the row's inside-leg report, so
+    /// a thread row's status comes from its driver with no pane attached.
     pub fn into_actor(
         mut self,
         on_turn_done: Arc<dyn Fn(TurnReceipt) + Send + Sync>,
+        on_turn_phase: Arc<dyn Fn(ThreadTurnPhase) + Send + Sync>,
     ) -> CodexThreadActor {
         let pid = self.pid();
         let (cmd_tx, cmd_rx) = mpsc::channel(THREAD_CHANNEL_CAP);
@@ -941,6 +1855,7 @@ impl CodexThread {
             cmd_rx,
             Arc::clone(&shared),
             on_turn_done,
+            on_turn_phase,
         ));
         CodexThreadActor {
             tx: cmd_tx,
@@ -981,6 +1896,7 @@ pub struct TurnReceipt {
     pub turn_id: String,
     pub status: String,
     pub text: String,
+    pub error: Option<Value>,
 }
 
 impl From<TurnResult> for TurnReceipt {
@@ -989,6 +1905,7 @@ impl From<TurnResult> for TurnReceipt {
             turn_id: result.turn_id,
             status: result.status,
             text: result.text,
+            error: result.error,
         }
     }
 }
@@ -1121,6 +2038,21 @@ impl CodexThreadActor {
             .await
             .map_err(|_| "codex thread actor is gone".to_string())
     }
+
+    /// A handle whose actor task is already dead: the shape a daemon
+    /// restart leaves behind in `ctx.codex_threads`. Test-only.
+    #[cfg(test)]
+    pub(crate) fn with_dead_actor() -> Self {
+        let (tx, rx) = mpsc::channel(THREAD_CHANNEL_CAP);
+        drop(rx);
+        Self {
+            tx,
+            pid: None,
+            shared: Arc::new(ActorShared {
+                turn_id: std::sync::Mutex::new(None),
+            }),
+        }
+    }
 }
 
 /// Sequential frame pump from the daemon connection's read half into the
@@ -1159,8 +2091,11 @@ struct ActorCtx {
     /// (capped) when their waiter is gone, claimable by `await_turn_end`.
     completed: HashMap<String, TurnReceipt>,
     driving: Option<Driving>,
+    retry: Option<(tokio::time::Instant, Driving)>,
+    failures: u32,
     shared: Arc<ActorShared>,
     on_turn_done: Arc<dyn Fn(TurnReceipt) + Send + Sync>,
+    on_turn_phase: Arc<dyn Fn(ThreadTurnPhase) + Send + Sync>,
 }
 
 async fn actor_task(
@@ -1169,17 +2104,46 @@ async fn actor_task(
     mut cmds: mpsc::Receiver<ThreadCommand>,
     shared: Arc<ActorShared>,
     on_turn_done: Arc<dyn Fn(TurnReceipt) + Send + Sync>,
+    on_turn_phase: Arc<dyn Fn(ThreadTurnPhase) + Send + Sync>,
 ) {
     let mut ctx = ActorCtx {
         driver,
         pending: HashMap::new(),
         completed: HashMap::new(),
         driving: None,
+        retry: None,
+        failures: 0,
         shared,
         on_turn_done,
+        on_turn_phase,
     };
+    // The driver-status keepalive lives as a select arm, NOT a
+    // separate task: a separate task would hold a `cmd_tx` clone forever, and
+    // `cmds.recv()` would then never answer None - the "every handle dropped"
+    // exit the arm below promises would be unreachable. A turn drives while
+    // the actor sits at this loop (the completion routes through the frame
+    // arm), so the tick is observable exactly while it matters; only the
+    // bounded interrupt-settle wait pauses it.
+    let mut next_keepalive = tokio::time::Instant::now() + thread_turn_refresh();
     loop {
+        let retry_at = ctx.retry.as_ref().map(|(at, _)| *at);
         tokio::select! {
+            _ = async {
+                match retry_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => ctx.retry_turn(&mut frames).await,
+            _ = tokio::time::sleep_until(next_keepalive) => {
+                next_keepalive = tokio::time::Instant::now() + thread_turn_refresh();
+                if ctx.driving.is_some() || ctx.retry.is_some() {
+                    // Rewrite `working` while a turn drives so a turn longer
+                    // than the report's ttl never ages to Unmeasured. The
+                    // check runs in the actor loop, so a tick landing after
+                    // the completion fires nothing.
+                    (ctx.on_turn_phase)(ThreadTurnPhase::Working);
+                }
+            }
             cmd = cmds.recv() => {
                 match cmd {
                     None => {
@@ -1255,9 +2219,17 @@ impl ActorCtx {
         };
         self.driver.note_turn_completed(&turn_id);
         self.shared.set_turn_id(None);
+        if receipt.status == "failed" || receipt.error.is_some() {
+            (self.on_turn_done)(receipt);
+            (self.on_turn_phase)(ThreadTurnPhase::Working);
+            self.schedule_retry(driving);
+            return;
+        }
+        self.failures = 0;
         for waiter in driving.waiters {
             let _ = waiter.send(Ok(receipt.clone()));
         }
+        (self.on_turn_phase)(ThreadTurnPhase::Done);
         (self.on_turn_done)(receipt);
     }
 
@@ -1274,10 +2246,42 @@ impl ActorCtx {
     }
 
     fn fail_waiters(&mut self, message: &str) {
-        if let Some(driving) = self.driving.take() {
+        let retry = self.retry.take().map(|(_, driving)| driving);
+        if let Some(driving) = self.driving.take().or(retry) {
             self.shared.set_turn_id(None);
             for waiter in driving.waiters {
-                let _ = waiter.send(Err(message.to_string()));
+                // The error names the turn and reads as a RESTART of the
+                // daemon-owned thread, never as a failed turn: the thread
+                // and its transcript survive, and a sender that believed
+                // the turn itself failed would report a lie upstream.
+                let _ = waiter.send(Err(format!(
+                    "{message} (turn {turn}; the daemon-owned thread and its transcript survive)",
+                    turn = driving.turn_id,
+                )));
+            }
+        }
+    }
+
+    fn schedule_retry(&mut self, driving: Driving) {
+        self.failures = self.failures.saturating_add(1);
+        let delay = Duration::from_secs((5u64 << self.failures.min(7).saturating_sub(1)).min(300));
+        self.retry = Some((tokio::time::Instant::now() + delay, driving));
+    }
+
+    async fn retry_turn(&mut self, frames: &mut mpsc::Receiver<Value>) {
+        let Some((_, previous)) = self.retry.take() else {
+            return;
+        };
+        let (reply, _discard) = oneshot::channel();
+        self.start_turn(
+            "The previous turn ended on a backend error. Continue the assigned work from the last completed step; preserve existing changes.".into(),
+            reply, None, frames,
+        ).await;
+        if let Some(driving) = self.driving.as_mut() {
+            driving.waiters = previous.waiters;
+        } else {
+            for waiter in previous.waiters {
+                let _ = waiter.send(Err("codex recovery was not confirmed; the unfinished thread remains available to the watchdog".into()));
             }
         }
     }
@@ -1488,6 +2492,7 @@ impl ActorCtx {
         accept: Option<AcceptTx>,
         frames: &mut mpsc::Receiver<Value>,
     ) {
+        let retry = self.retry.take();
         let sent = self.driver.send_turn_start(&body).await;
         let response = match sent {
             Ok(id) => self.await_response(id, frames).await,
@@ -1506,8 +2511,21 @@ impl ActorCtx {
                     turn_id,
                     waiters: vec![reply],
                 });
+                if let Some((_, previous)) = retry {
+                    self.driving
+                        .as_mut()
+                        .expect("accepted turn")
+                        .waiters
+                        .extend(previous.waiters);
+                }
+                (self.on_turn_phase)(ThreadTurnPhase::Working);
             }
             Err(error) => {
+                if let Some((_, previous)) = retry {
+                    for waiter in previous.waiters {
+                        let _ = waiter.send(Err(error.clone()));
+                    }
+                }
                 if let Some(accept) = accept {
                     let _ = accept.send(Err(error.clone()));
                 }
@@ -1517,6 +2535,10 @@ impl ActorCtx {
     }
 
     async fn handle_interrupt(&mut self, frames: &mut mpsc::Receiver<Value>) -> InterruptOutcome {
+        if self.retry.is_some() {
+            self.fail_waiters("codex turn retry interrupted");
+            return InterruptOutcome::NoTurnInFlight;
+        }
         let Some(turn_id) = self.driving.as_ref().map(|driving| driving.turn_id.clone()) else {
             return InterruptOutcome::NoTurnInFlight;
         };
@@ -1543,6 +2565,7 @@ impl ActorCtx {
                             turn_id: turn_id.clone(),
                             status: "interrupted".into(),
                             text: String::new(),
+                            error: None,
                         });
                         InterruptOutcome::Interrupted(receipt)
                     }
@@ -1557,6 +2580,7 @@ impl ActorCtx {
                         turn_id: turn_id.clone(),
                         status: "completed".into(),
                         text: String::new(),
+                        error: None,
                     });
                     InterruptOutcome::Interrupted(receipt)
                 } else {
@@ -1567,20 +2591,98 @@ impl ActorCtx {
     }
 }
 
+/// What a fenced-token list carries onto the codex thread lane.
+pub struct HarnessCarry {
+    /// `-c`/`--config key=value` pairs. Keys stay dotted strings (the
+    /// app-server owns their meaning); values parse as TOML like the codex
+    /// CLI, and a non-TOML value stays a string.
+    pub config: serde_json::Map<String, Value>,
+    /// `--add-dir` roots, appended to the state-root grant.
+    pub add_dirs: Vec<String>,
+}
+
+/// Parse the fenced `--` tokens a spawn routed to this lane. Only the
+/// spellings the codex CLI itself takes are accepted: `-c`/`--config
+/// key=value` and `--add-dir <dir>`, two-token or `=`-joined on the long
+/// forms. Anything else is a front-door contract break - the spawn front
+/// door demotes a flag this lane cannot carry to the pane, so a stray token
+/// here is a router bug - and is refused by name rather than dropped
+/// silently.
+pub fn parse_harness_args(tokens: &[String]) -> Result<HarnessCarry, String> {
+    fn toml_value(raw: &str) -> Value {
+        // `toml::from_str` reads a DOCUMENT, so a bare value like `true`
+        // needs a key to hang off; the wrap is local to this parse.
+        toml::from_str::<toml::Table>(&format!("v = {raw}"))
+            .ok()
+            .and_then(|table| table.get("v").cloned())
+            .and_then(|parsed| serde_json::to_value(parsed).ok())
+            .unwrap_or_else(|| json!(raw))
+    }
+    let mut carry = HarnessCarry {
+        config: serde_json::Map::new(),
+        add_dirs: Vec::new(),
+    };
+    let mut values = tokens.iter();
+    while let Some(token) = values.next() {
+        let (flag, inline): (&str, Option<&str>) = match token.split_once('=') {
+            Some((flag, rest)) if flag == "--config" || flag == "--add-dir" => (flag, Some(rest)),
+            _ => (token.as_str(), None),
+        };
+        match (flag, inline) {
+            ("--add-dir", Some(dir)) => carry.add_dirs.push(dir.to_string()),
+            ("--add-dir", None) => match values.next() {
+                Some(dir) => carry.add_dirs.push(dir.clone()),
+                None => return Err("--add-dir arrives with no directory".into()),
+            },
+            ("-c", None) | ("--config", None) => {
+                let Some(pair) = values.next() else {
+                    return Err(format!("config flag {flag} arrives with no key=value pair"));
+                };
+                let Some((key, raw)) = pair.split_once('=') else {
+                    return Err(format!("config value {pair:?} is not key=value"));
+                };
+                carry.config.insert(key.to_string(), toml_value(raw));
+            }
+            ("--config", Some(rest)) => {
+                let Some((key, raw)) = rest.split_once('=') else {
+                    return Err(format!("config value {rest:?} is not key=value"));
+                };
+                carry.config.insert(key.to_string(), toml_value(raw));
+            }
+            _ => {
+                return Err(format!(
+                    "harness token {token:?} is not one the codex thread lane carries \
+                     (-c/--config key=value, --add-dir dir); the spawn front door owns \
+                     the -- fence and should have routed it to the pane"
+                ));
+            }
+        }
+    }
+    Ok(carry)
+}
+
 fn thread_start_request_with_options(
     id: u64,
     cwd: &Path,
     model: Option<&str>,
-    yolo: bool,
-    approval_policy: &str,
+    posture: &CodexPosture,
+    project_id: Option<&str>,
+    config: Option<&serde_json::Map<String, Value>>,
 ) -> String {
     let mut params = json!({
         "cwd": cwd,
-        "sandbox": if yolo { "danger-full-access" } else { "workspace-write" },
-        "approvalPolicy": approval_policy,
+        "sandbox": posture.sandbox.as_scalar(),
+        "approvalPolicy": posture.approval.as_str(),
     });
     if let Some(model) = model.filter(|model| !model.is_empty()) {
         params["model"] = json!(model);
+    }
+    if let Some(project_id) = project_id.filter(|id| !id.is_empty()) {
+        params["projectId"] = json!(project_id);
+    }
+    // Absent or empty keeps the frame byte-identical to the pre-config form.
+    if let Some(config) = config.filter(|config| !config.is_empty()) {
+        params["config"] = Value::Object(config.clone());
     }
     json!({"id": id, "method": "thread/start", "params": params}).to_string()
 }
@@ -1590,19 +2692,30 @@ fn thread_resume_request_with_options(
     thread_id: &str,
     cwd: &Path,
     model: Option<&str>,
-    yolo: bool,
-    approval_policy: &str,
+    posture: &CodexPosture,
+    config: Option<&serde_json::Map<String, Value>>,
 ) -> String {
     let mut params = json!({
         "threadId": thread_id,
+        "excludeTurns": true,
         "cwd": cwd,
-        "sandbox": if yolo { "danger-full-access" } else { "workspace-write" },
-        "approvalPolicy": approval_policy,
+        "sandbox": posture.sandbox.as_scalar(),
+        "approvalPolicy": posture.approval.as_str(),
     });
     if let Some(model) = model.filter(|model| !model.is_empty()) {
         params["model"] = json!(model);
     }
+    if let Some(config) = config.filter(|config| !config.is_empty()) {
+        params["config"] = Value::Object(config.clone());
+    }
     json!({"id": id, "method": "thread/resume", "params": params}).to_string()
+}
+
+fn provider_response(value: Value) -> Result<Value, ThreadDriverError> {
+    if let Some(error) = value.get("error") {
+        return Err(ThreadDriverError::Protocol(server_error(error)));
+    }
+    Ok(value)
 }
 
 fn server_error(error: &Value) -> String {
@@ -1632,6 +2745,195 @@ mod tests {
     }
 
     #[test]
+    fn compaction_lifecycle_parser_reads_thread_and_item_identity() {
+        let started = serde_json::json!({
+            "method": "item/started",
+            "params": {
+                "threadId": "thread-a",
+                "turnId": "turn-a",
+                "item": { "id": "compact-1", "type": "contextCompaction" }
+            }
+        });
+        assert!(matches!(
+            parse_compaction_lifecycle(&started, "thread-a"),
+            Some(CompactionLifecycle::Started(turn_id, item_id))
+                if turn_id == "turn-a" && item_id == "compact-1"
+        ));
+        let completed = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-a",
+                "turnId": "turn-a",
+                "completedAtMs": 1_790_000_000_000_i64,
+                "item": { "id": "compact-1", "type": "contextCompaction" }
+            }
+        });
+        let Some(CompactionLifecycle::Completed(turn_id, item_id, receipt)) =
+            parse_compaction_lifecycle(&completed, "thread-a")
+        else {
+            panic!("item/completed proves lifecycle completion without item.status");
+        };
+        assert_eq!(
+            (turn_id.as_str(), item_id.as_str()),
+            ("turn-a", "compact-1")
+        );
+        assert_eq!(receipt["threadId"], "thread-a");
+        assert_eq!(receipt["turnId"], "turn-a");
+        assert_eq!(receipt["itemId"], "compact-1");
+        assert_eq!(receipt["status"], "completed");
+        assert_eq!(receipt["completedAtMs"], 1_790_000_000_000_u64);
+        crate::context_window::verify_compaction_receipt(&receipt, "thread-a").unwrap();
+        assert!(parse_compaction_lifecycle(&completed, "thread-b").is_none());
+        let completed_without_start = serde_json::json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-a",
+                "turnId": "turn-a",
+                "completedAtMs": 1_790_000_000_000_i64,
+                "item": { "id": "compact-2", "type": "contextCompaction" }
+            }
+        });
+        assert!(matches!(
+            parse_compaction_lifecycle(&completed_without_start, "thread-a"),
+            Some(CompactionLifecycle::Completed(turn_id, item_id, _))
+                if turn_id == "turn-a" && item_id == "compact-2"
+        ));
+    }
+
+    #[test]
+    fn compacted_notification_is_a_same_thread_completion_receipt() {
+        let event = serde_json::json!({
+            "method": "thread/compacted",
+            "params": {"threadId": "thread-a", "turnId": "turn-1"}
+        });
+        let Some(CompactionLifecycle::ContextCompacted(receipt)) =
+            parse_compaction_lifecycle(&event, "thread-a")
+        else {
+            panic!("Codex compaction notification should prove completion");
+        };
+
+        assert_eq!(
+            crate::context_window::verify_compaction_receipt(&receipt, "thread-a").unwrap()
+                ["turnId"],
+            "turn-1"
+        );
+        assert!(parse_compaction_lifecycle(&event, "thread-b").is_none());
+    }
+
+    #[test]
+    fn control_resume_does_not_override_existing_thread_policy() {
+        let value: Value = serde_json::from_str(&thread_resume_control_request_json(
+            7,
+            "thread-full-id",
+            Path::new("/worktrees/feature"),
+        ))
+        .unwrap();
+        assert_eq!(value["method"], "thread/resume");
+        assert_eq!(value["params"]["threadId"], "thread-full-id");
+        assert_eq!(value["params"]["cwd"], "/worktrees/feature");
+        assert!(value["params"].get("sandbox").is_none());
+        assert!(value["params"].get("approvalPolicy").is_none());
+        assert!(value["params"].get("model").is_none());
+        assert!(value["params"].get("config").is_none());
+    }
+
+    #[test]
+    fn native_provider_actions_pin_the_full_thread_id() {
+        let compact: Value = serde_json::from_str(&thread_compact_start_request_json(
+            7,
+            "00000000-0000-4000-8000-000000000001",
+        ))
+        .unwrap();
+        assert_eq!(compact["method"], "thread/compact/start");
+        assert_eq!(
+            compact["params"]["threadId"],
+            "00000000-0000-4000-8000-000000000001"
+        );
+
+        let goal: Value = serde_json::from_str(&thread_goal_set_request_json(
+            8,
+            "thread-full",
+            "$fno:lead x-0000",
+            "active",
+        ))
+        .unwrap();
+        assert_eq!(goal["method"], "thread/goal/set");
+        assert_eq!(goal["params"]["status"], "active");
+        assert_eq!(goal["params"]["objective"], "$fno:lead x-0000");
+        assert!(goal["params"].get("continuationOwner").is_none());
+    }
+
+    #[test]
+    fn native_goal_parser_requires_positive_status_and_keeps_provider_limits() {
+        let goal = parse_goal_value(&json!({
+            "result": { "goal": {
+                "threadId": "thread-full",
+                "objective": "$fno:lead x-0000",
+                "status": "budgetLimited",
+                "tokenBudget": 50_000,
+                "tokensUsed": 12_345,
+                "timeUsedSeconds": 67
+            }}
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(goal.thread_id, "thread-full");
+        assert_eq!(goal.status, GoalStatus::BudgetLimited);
+        assert_eq!(goal.usage.token_budget, Some(50_000));
+        assert_eq!(goal.usage.tokens_used, 12_345);
+        assert_eq!(goal.usage.time_used_seconds, 67);
+
+        assert!(parse_goal_value(&json!({
+            "result": { "goal": {
+                "threadId": "thread-full",
+                "objective": "$fno:lead x-0000"
+            }}
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn goal_usage_readback_rejects_a_reset_and_allows_monotone_time() {
+        let before = GoalUsage {
+            token_budget: Some(50_000),
+            tokens_used: 12_345,
+            time_used_seconds: 67,
+        };
+        let after = GoalUsage {
+            token_budget: Some(50_000),
+            tokens_used: 12_345,
+            time_used_seconds: 68,
+        };
+        assert!(after.preserves(&before));
+        assert!(!GoalUsage::default().preserves(&before));
+        assert!(!GoalUsage {
+            token_budget: Some(40_000),
+            ..after
+        }
+        .preserves(&before));
+    }
+
+    #[test]
+    fn ensure_goal_never_reopens_a_provider_limited_or_completed_goal() {
+        let limited = NativeGoal {
+            thread_id: "thread-full".into(),
+            objective: "$fno:lead x-0000".into(),
+            status: GoalStatus::BudgetLimited,
+            usage: GoalUsage {
+                token_budget: Some(50_000),
+                tokens_used: 12_345,
+                time_used_seconds: 67,
+            },
+        };
+        assert!(ensure_lead_goal(Some(&limited), "x-0000", "lead:x-0000").is_err());
+        let completed = NativeGoal {
+            status: GoalStatus::Completed,
+            ..limited
+        };
+        assert!(ensure_lead_goal(Some(&completed), "x-0000", "lead:x-0000").is_err());
+    }
+
+    #[test]
     fn steer_requires_expected_turn_id() {
         let value: Value = serde_json::from_str(&turn_steer_request_json(
             7, "thread-1", "turn-1", "continue",
@@ -1640,30 +2942,162 @@ mod tests {
         assert_eq!(value["params"]["expectedTurnId"], "turn-1");
     }
 
+    /// A spawn that spells its posture as `permission_mode` reaches the same
+    /// frame a `yolo` bool reaches. Asserted THROUGH the frame rather than on
+    /// the resolver's answer alone: the typed posture is an implementation
+    /// detail and the wire field is what the app-server reads.
+    #[test]
+    fn permission_mode_yolo_reaches_a_full_access_frame() {
+        let yolo = resolve_thread_posture(None, Some("yolo")).expect("yolo maps");
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &yolo,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(frame["params"]["sandbox"], "danger-full-access");
+        assert_eq!(frame["params"]["approvalPolicy"], "never");
+
+        // The explicit pair form resolves off its halves, not its name.
+        let paired =
+            resolve_thread_posture(None, Some("danger-full-access:never")).expect("pair maps");
+        let frame: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &paired,
+            None,
+            None,
+        ))
+        .unwrap();
+        assert_eq!(frame["params"]["sandbox"], "danger-full-access");
+        assert_eq!(frame["params"]["approvalPolicy"], "never");
+    }
+
     /// AC11: the resume request carries the recorded posture, so a daemon
-    /// restart cannot silently demote a yolo worker to workspace-write.
+    /// restart cannot silently demote a yolo worker to workspace-write. The
+    /// read-only spelling proves the halves are typed, not a bool.
     #[test]
     fn thread_resume_carries_the_recorded_sandbox_posture() {
+        let full = CodexPosture::full_access();
         let full: Value = serde_json::from_str(&thread_resume_request_with_options(
             1,
             "thread-p",
             std::path::Path::new("/tmp/w"),
             None,
-            true,
-            "never",
+            &full,
+            None,
         ))
         .unwrap();
         assert_eq!(full["params"]["sandbox"], "danger-full-access");
-        let bounded: Value = serde_json::from_str(&thread_resume_request_with_options(
+        assert_eq!(full["params"]["approvalPolicy"], "never");
+        let read_only = CodexPosture::from_record(Some("read-only:on-request"), None);
+        let read_only: Value = serde_json::from_str(&thread_resume_request_with_options(
             1,
             "thread-p",
             std::path::Path::new("/tmp/w"),
             None,
-            false,
-            "never",
+            &read_only,
+            None,
         ))
         .unwrap();
-        assert_eq!(bounded["params"]["sandbox"], "workspace-write");
+        assert_eq!(read_only["params"]["sandbox"], "read-only");
+        assert_eq!(read_only["params"]["approvalPolicy"], "on-request");
+    }
+
+    /// An empty config map is the absent form: the key is omitted so the
+    /// frame stays byte-identical to the pre-config shape (AC2-EDGE).
+    #[test]
+    fn thread_requests_omit_an_empty_config_map() {
+        let empty = serde_json::Map::new();
+        let start: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            None,
+            Some(&empty),
+        ))
+        .unwrap();
+        let resume: Value = serde_json::from_str(&thread_resume_request_with_options(
+            1,
+            "thread-p",
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            Some(&empty),
+        ))
+        .unwrap();
+        assert!(start["params"].get("config").is_none());
+        assert!(resume["params"].get("config").is_none());
+
+        let mut config = serde_json::Map::new();
+        config.insert(
+            "sandbox_workspace_write.network_access".to_string(),
+            json!(true),
+        );
+        let start: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            None,
+            Some(&config),
+        ))
+        .unwrap();
+        assert_eq!(
+            start["params"]["config"]["sandbox_workspace_write.network_access"],
+            json!(true),
+            "a populated map rides thread/start verbatim"
+        );
+    }
+
+    /// The fenced-token parser: TOML-typed values, string fallback, and the
+    /// by-name refusal that names the front door.
+    #[test]
+    fn harness_args_parse_into_config_and_add_dirs() {
+        let tokens: Vec<String> = [
+            "-c",
+            "sandbox_workspace_write.network_access=true",
+            "--add-dir",
+            "/tmp/x",
+            "--config=model_reasoning_effort=high",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let carry = parse_harness_args(&tokens).unwrap();
+        assert_eq!(
+            carry.config["sandbox_workspace_write.network_access"],
+            json!(true),
+            "a TOML boolean parses as a boolean"
+        );
+        assert_eq!(
+            carry.config["model_reasoning_effort"],
+            json!("high"),
+            "a non-TOML scalar stays a string, as the codex CLI reads it"
+        );
+        assert_eq!(carry.add_dirs, vec!["/tmp/x".to_string()]);
+
+        let error = parse_harness_args(&["-p".to_string(), "profile".to_string()])
+            .err()
+            .expect("an unrouted token refuses");
+        assert!(error.contains("-p"), "the refusal names the token: {error}");
+        assert!(
+            error.contains("front door"),
+            "the refusal names the router, not a silent drop: {error}"
+        );
+
+        let error = parse_harness_args(&["--add-dir".to_string()])
+            .err()
+            .expect("a dangling flag refuses");
+        assert!(
+            error.contains("--add-dir"),
+            "the refusal names the flag: {error}"
+        );
     }
 
     #[test]
@@ -1685,7 +3119,13 @@ mod tests {
     fn turn_start_carries_the_state_root_grant() {
         let roots = vec!["/Users/x/.fno".to_string()];
         let value: Value = serde_json::from_str(&turn_start_request_json_full(
-            7, "thread-1", "go", None, &roots, None,
+            7,
+            "thread-1",
+            "go",
+            None,
+            &roots,
+            None,
+            &CodexPosture::bounded(),
         ))
         .unwrap();
         assert_eq!(value["params"]["sandboxPolicy"]["type"], "workspaceWrite");
@@ -1693,11 +3133,152 @@ mod tests {
             value["params"]["sandboxPolicy"]["writableRoots"],
             json!(["/Users/x/.fno"])
         );
-        // Nothing else widens. The scalar posture already resolved network
-        // access off, and this change grants directories only.
-        assert!(value["params"]["sandboxPolicy"]
-            .get("networkAccess")
-            .is_none());
+        // Network rides with the grant: the keeper socket and gh egress share
+        // one seatbelt switch, so a directory grant without network still
+        // cannot claim a node.
+        assert_eq!(value["params"]["sandboxPolicy"]["networkAccess"], true);
+    }
+
+    /// The turn replaces the WHOLE policy, so a bounded thread whose server
+    /// posture reads network off would keep starving: its `false` would stand.
+    /// The force-on must overwrite exactly that field and echo the rest.
+    #[test]
+    fn turn_start_forces_network_on_a_network_off_posture() {
+        let resolved = json!({
+            "type": "workspaceWrite",
+            "writableRoots": ["/repo/already-granted"],
+            "networkAccess": false,
+            "excludeSlashTmp": false,
+            "excludeTmpdirEnvVar": true,
+        });
+        let roots = vec!["/Users/x/.fno".to_string()];
+        let value: Value = serde_json::from_str(&turn_start_request_json_full(
+            7,
+            "thread-1",
+            "go",
+            None,
+            &roots,
+            Some(&resolved),
+            &CodexPosture::bounded(),
+        ))
+        .unwrap();
+        let policy = &value["params"]["sandboxPolicy"];
+        assert_eq!(policy["networkAccess"], true);
+        assert_eq!(
+            policy["writableRoots"],
+            json!(["/repo/already-granted", "/Users/x/.fno"])
+        );
+        assert_eq!(policy["excludeSlashTmp"], false);
+        assert_eq!(policy["excludeTmpdirEnvVar"], true);
+    }
+
+    /// A resolved bounded posture carries the policy on its own, roots or
+    /// none: network is part of what a bounded worker needs, and a non-repo
+    /// cwd with no published state dirs grants no roots at all.
+    #[test]
+    fn turn_start_sends_the_policy_for_a_resolved_posture_with_no_roots() {
+        let resolved = json!({
+            "type": "workspaceWrite",
+            "writableRoots": [],
+            "networkAccess": false,
+        });
+        let value: Value = serde_json::from_str(&turn_start_request_json_full(
+            7,
+            "thread-1",
+            "go",
+            None,
+            &[],
+            Some(&resolved),
+            &CodexPosture::bounded(),
+        ))
+        .unwrap();
+        let policy = &value["params"]["sandboxPolicy"];
+        assert_eq!(policy["type"], "workspaceWrite");
+        assert_eq!(policy["networkAccess"], true);
+        assert_eq!(policy["writableRoots"], json!([]));
+    }
+
+    #[test]
+    fn linked_worktree_grant_uses_the_repository_common_dir() {
+        let canonical = tempfile::tempdir().unwrap();
+        let run = |args: &[&str], cwd: &Path| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git command failed: {args:?}");
+        };
+        run(&["init", "--quiet"], canonical.path());
+        run(
+            &["config", "user.email", "test@example.com"],
+            canonical.path(),
+        );
+        run(&["config", "user.name", "Test"], canonical.path());
+        std::fs::write(canonical.path().join("README"), "base\n").unwrap();
+        run(&["add", "README"], canonical.path());
+        run(&["commit", "--quiet", "-m", "base"], canonical.path());
+        let linked = canonical.path().join("linked");
+        run(
+            &[
+                "worktree", "add", "--quiet", "-b", "linked", "linked", "HEAD",
+            ],
+            canonical.path(),
+        );
+        assert!(linked.join(".git").is_file());
+
+        let common = crate::provider::git_common_dir(&linked).unwrap();
+        let linked_git = linked.join(".git").to_string_lossy().into_owned();
+        let roots = granted_roots(&linked, &[]);
+        let value: Value = serde_json::from_str(&turn_start_request_json_full(
+            7,
+            "thread-linked",
+            "go",
+            None,
+            &roots,
+            None,
+            &CodexPosture::bounded(),
+        ))
+        .unwrap();
+        let wired = value["params"]["sandboxPolicy"]["writableRoots"]
+            .as_array()
+            .unwrap();
+        assert!(wired
+            .iter()
+            .any(|root| root.as_str() == Some(common.as_str())));
+        assert!(!wired
+            .iter()
+            .any(|root| root.as_str() == Some(linked_git.as_str())));
+    }
+
+    /// AC4-HP/AC4-ERR (thread lane): every `turn/start` carries the uv cache
+    /// alongside the state dirs and the git common dir, and a missing cache
+    /// path grants nothing. UV_CACHE_DIR is authoritative, so pointing it at
+    /// a nonexistent path isolates the verdict from the host's real cache.
+    #[test]
+    fn granted_roots_carry_the_uv_cache_only_when_it_exists() {
+        let guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let cache = tempfile::tempdir().unwrap();
+        let want = std::fs::canonicalize(cache.path()).unwrap();
+        let prev = std::env::var_os("UV_CACHE_DIR");
+
+        unsafe { std::env::set_var("UV_CACHE_DIR", cache.path()) };
+        let roots = granted_roots(Path::new("/nonexistent-fno-cwd-probe"), &[]);
+        assert!(roots
+            .iter()
+            .any(|root| *root == want.to_string_lossy().into_owned()));
+
+        unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
+        let roots = granted_roots(Path::new("/nonexistent-fno-cwd-probe"), &[]);
+        assert!(roots.is_empty());
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
+            None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
+        }
+        drop(guard);
     }
 
     /// An ungranted spawn must build TODAY's frame, byte for byte. A new
@@ -1705,7 +3286,15 @@ mod tests {
     #[test]
     fn turn_start_without_roots_is_byte_identical_to_today() {
         let with_helper = turn_start_request_json_with_effort(7, "thread-1", "go", Some("high"));
-        let with_empty = turn_start_request_json_full(7, "thread-1", "go", Some("high"), &[], None);
+        let with_empty = turn_start_request_json_full(
+            7,
+            "thread-1",
+            "go",
+            Some("high"),
+            &[],
+            None,
+            &CodexPosture::bounded(),
+        );
         assert_eq!(with_helper, with_empty);
         let value: Value = serde_json::from_str(&with_empty).unwrap();
         assert!(value["params"].get("sandboxPolicy").is_none());
@@ -1733,6 +3322,7 @@ mod tests {
             None,
             &roots,
             Some(&resolved),
+            &CodexPosture::bounded(),
         ))
         .unwrap();
         let policy = &value["params"]["sandboxPolicy"];
@@ -1761,6 +3351,7 @@ mod tests {
             None,
             &roots,
             Some(&resolved),
+            &CodexPosture::bounded(),
         ))
         .unwrap();
         assert_eq!(
@@ -1769,11 +3360,12 @@ mod tests {
         );
     }
 
-    /// The resolved posture is read from the thread/start response, and only
-    /// for a workspaceWrite thread: a full-access thread must not be handed a
-    /// workspaceWrite object to echo.
+    /// The resolved posture is read UNFILTERED from the thread/start
+    /// response (AC2-HP): a full-access thread is echoed what the server
+    /// resolved, never handed a fabricated workspaceWrite object; read-only
+    /// reads as itself (AC2-EDGE). Only a response with NO sandbox is None.
     #[test]
-    fn resolved_sandbox_is_read_only_for_a_bounded_thread() {
+    fn resolved_sandbox_is_read_unfiltered() {
         let bounded =
             r#"{"id":1,"result":{"sandbox":{"type":"workspaceWrite","writableRoots":[]}}}"#;
         assert_eq!(
@@ -1781,8 +3373,44 @@ mod tests {
             "workspaceWrite"
         );
         let full = r#"{"id":1,"result":{"sandbox":{"type":"dangerFullAccess"}}}"#;
-        assert!(parse_resolved_sandbox(full).is_none());
+        assert_eq!(
+            parse_resolved_sandbox(full).unwrap()["type"],
+            "dangerFullAccess"
+        );
+        assert_eq!(
+            parse_resolved_sandbox(r#"{"id":1,"result":{"sandbox":{"type":"readOnly"}}}"#).unwrap()
+                ["type"],
+            "readOnly"
+        );
         assert!(parse_resolved_sandbox(r#"{"id":1,"result":{}}"#).is_none());
+    }
+
+    /// The RECORD's read is unfiltered, and that is the whole difference from
+    /// `parse_resolved_sandbox` above. That one answers `None` for a
+    /// full-access thread AND for a response naming no sandbox, which is fine
+    /// where it is used (nothing to echo either way) and useless in a row: the
+    /// reader cannot tell which world produced the blank. Asserting the
+    /// full-access spelling POSITIVELY is the point - a test that only checked
+    /// the workspaceWrite arm would pass against the filtered reader too.
+    #[test]
+    fn resolved_sandbox_type_is_read_unfiltered_for_the_record() {
+        let bounded =
+            r#"{"id":1,"result":{"sandbox":{"type":"workspaceWrite","writableRoots":[]}}}"#;
+        assert_eq!(
+            parse_resolved_sandbox_type(bounded).as_deref(),
+            Some("workspaceWrite")
+        );
+        let full = r#"{"id":1,"result":{"sandbox":{"type":"dangerFullAccess"}}}"#;
+        assert_eq!(
+            parse_resolved_sandbox_type(full).as_deref(),
+            Some("dangerFullAccess")
+        );
+        // Only a response that named NO sandbox is genuinely unknown.
+        assert_eq!(parse_resolved_sandbox_type(r#"{"id":1,"result":{}}"#), None);
+        assert_eq!(
+            parse_resolved_sandbox_type(r#"{"id":1,"result":{"sandbox":{"type":""}}}"#),
+            None
+        );
     }
 
     /// `thread/start` keeps the SCALAR field and its exact spelling. The
@@ -1795,12 +3423,47 @@ mod tests {
             1,
             std::path::Path::new("/tmp/w"),
             None,
-            false,
-            "never",
+            &CodexPosture::bounded(),
+            None,
+            None,
         ))
         .unwrap();
         assert_eq!(value["params"]["sandbox"], "workspace-write");
         assert!(value["params"].get("sandboxPolicy").is_none());
+    }
+
+    /// The assigned form carries `params.projectId`: the thread lane's
+    /// whole side of the assignment contract is one conditional key on the map
+    /// it already builds for `model`.
+    #[test]
+    fn thread_start_carries_the_resolved_project_id() {
+        let value: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            Some("proj-1"),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(value["params"]["projectId"], "proj-1");
+    }
+
+    /// No resolvable project -> NO key at all, never an empty string: the
+    /// protocol reads an explicit empty projectId as a CLEAR, so an absent
+    /// resolution must omit the field the way today's request does.
+    #[test]
+    fn thread_start_without_a_project_omits_the_key_entirely() {
+        let value: Value = serde_json::from_str(&thread_start_request_with_options(
+            1,
+            std::path::Path::new("/tmp/w"),
+            None,
+            &CodexPosture::bounded(),
+            None,
+            None,
+        ))
+        .unwrap();
+        assert!(value["params"].get("projectId").is_none());
     }
 
     #[test]
@@ -1811,6 +3474,20 @@ mod tests {
         .unwrap();
         assert_eq!(result.turn_id, "turn-1");
         assert_eq!(result.text, "recalled TOKEN");
+
+        let failed = parse_turn_completed_value(&serde_json::json!({
+            "method": "turn/completed",
+            "params": {
+                "turn": {"id": "turn-2", "status": "completed", "error": null},
+                "error": {"message": "workspace routing discovery timed out"}
+            }
+        }))
+        .unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(
+            failed.error,
+            Some(serde_json::json!({"message": "workspace routing discovery timed out"}))
+        );
     }
 
     /// AC18: completed turns are parsed ONCE at push and claimed from a map.

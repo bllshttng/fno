@@ -115,51 +115,6 @@ def test_resolve_session_pid_falls_back_on_miss():
     )
 
 
-class _FakeProc:
-    def __init__(self, rss, children=()):
-        self._rss = rss
-        self._children = children
-
-    def memory_info(self):
-        return SimpleNamespace(rss=self._rss)
-
-    def children(self, recursive=True):
-        assert recursive, "cost is the TREE; a False here re-opens the undercount"
-        return self._children
-
-
-class _FakePsutil:
-    class Error(Exception):
-        pass
-
-    @staticmethod
-    def Process(pid):  # noqa: N802 - mirrors the real API surface
-        # The session process plus the per-session MCP servers it forks.
-        return _FakeProc(300 * 1024 * 1024, [_FakeProc(80 * 1024 * 1024)])
-
-    @staticmethod
-    def ZombieProcessError(*a, **kw):  # an alias callers may catch
-        return _FakePsutil.Error()
-
-
-def test_tree_rss_sums_children_recursive():
-    from fno.agents.session_procs import tree_rss_mb
-
-    assert tree_rss_mb(37355, _psutil=_FakePsutil) == 380
-
-
-def test_tree_rss_none_for_dead_pid():
-    from fno.agents.session_procs import tree_rss_mb
-
-    class _DeadPsutil:
-        @staticmethod
-        def Process(pid):
-            raise _FakePsutil.Error("gone")
-
-    assert tree_rss_mb(999, _psutil=_DeadPsutil) is None
-    assert tree_rss_mb(None, _psutil=_FakePsutil) is None
-
-
 # ---------------------------------------------------------------------------
 # the joins: census rows and roster discovery carry the resolved pid
 # ---------------------------------------------------------------------------
@@ -196,41 +151,6 @@ def test_census_bg_row_resolves_to_session_pid(tmp_path, monkeypatch):
     assert w.session_pid == 37355  # the process that IS the session
 
 
-def test_top_prices_tree_rss_off_the_resolved_pid(tmp_path, monkeypatch):
-    import fno.agents.session_procs as sp
-    from fno.agents.registry import AgentEntry
-
-    daemon = tmp_path / "daemon"
-    daemon.mkdir()
-    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(daemon))
-    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
-    monkeypatch.setattr(sp, "bg_socket_pid_map", lambda root=None: {"55f9847a": 37355})
-    monkeypatch.setattr(
-        "fno.agents.top.tree_rss_mb", lambda pid, _psutil=None: 380 if pid == 37355 else None
-    )
-    rows = [
-        AgentEntry(
-            name="t-xb57a-glm",
-            harness="claude",
-            cwd="/tmp",
-            log_path="/tmp/l",
-            status="live",
-            pid=os.getpid(),  # live host pid; the socket map resolves the session
-            short_id="55f9847a",
-        )
-    ]
-    monkeypatch.setattr("fno.agents.registry.load_registry", lambda: rows)
-    from typer.testing import CliRunner
-
-    from fno.agents.cli import agents_app
-
-    result = CliRunner().invoke(agents_app, ["top", "--json"])
-    assert result.exit_code == 0, result.output
-    row = next(w for w in json.loads(result.output)["workers"] if w["name"] == "t-xb57a-glm")
-    assert row["pid"] == 37355  # the column shows the session, not its host
-    assert row["rss_mb"] == 380  # and prices its tree
-
-
 def test_roster_sessions_overlays_session_pid(tmp_path, monkeypatch):
     import fno.agents.session_procs as sp
     from fno.agents.harnesses._claude_session_registry import roster_sessions
@@ -250,3 +170,58 @@ def test_roster_sessions_overlays_session_pid(tmp_path, monkeypatch):
     # A join miss keeps the recorded pid (an interactive session has no socket).
     monkeypatch.setattr(sp, "bg_socket_pid_map", lambda root=None: {})
     assert roster_sessions()[0]["pid"] == 5
+
+
+def test_codex_rollout_pid_map_joins_session_meta_to_holder(monkeypatch):
+    """x-9958 Task 3: thread id -> pid through the rollout fd. Only codex-named
+    processes are probed; the id comes from the rollout's session_meta record,
+    never the filename, and one unreadable process never fails the walk."""
+    import sys
+    from types import SimpleNamespace
+
+    from fno.agents import discover
+    from fno.agents import session_procs as sp
+
+    holder = SimpleNamespace(
+        pid=907,
+        info={"name": "codex"},
+        open_files=lambda: [
+            SimpleNamespace(path="/x/sessions/rollout-t1.jsonl"),
+            SimpleNamespace(path="/x/sessions/notes.txt"),
+        ],
+    )
+
+    def deny():
+        raise AssertionError("non-codex process probed")
+
+    bystander = SimpleNamespace(pid=1, info={"name": "launchd"}, open_files=deny)
+    failing = SimpleNamespace(
+        pid=908,
+        info={"name": "codex"},
+        open_files=lambda: (_ for _ in ()).throw(RuntimeError("denied")),
+    )
+    fake = SimpleNamespace(
+        Error=RuntimeError,
+        process_iter=lambda keys: iter([holder, bystander, failing]),
+    )
+    monkeypatch.setitem(sys.modules, "psutil", fake)
+    monkeypatch.setattr(
+        discover,
+        "_codex_session_meta",
+        lambda path: {"id": "tid-907"} if path.name.startswith("rollout-t1") else {},
+    )
+
+    assert sp.codex_rollout_pid_map({"tid-907", "tid-404"}) == {"tid-907": 907}
+
+
+def test_codex_rollout_pid_map_degrades_to_empty(monkeypatch):
+    """x-9958 Task 3: best-effort by design - no wanted ids asks nothing, and a
+    psutil-less host answers {} which callers read as unknown, never as no
+    sessions."""
+    import sys
+
+    from fno.agents import session_procs as sp
+
+    assert sp.codex_rollout_pid_map(set()) == {}
+    monkeypatch.setitem(sys.modules, "psutil", None)  # `import psutil` raises
+    assert sp.codex_rollout_pid_map({"tid-1"}) == {}

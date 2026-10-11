@@ -10,6 +10,7 @@ absence, and each refusal test carries a positive control proving the same
 instrument succeeds on the healthy path.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
@@ -20,7 +21,6 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.claims.core import claim_status
-from fno.claims.io import claim_path, encode_key
 from fno.claims.tasks import task_key
 
 runner = CliRunner()
@@ -71,38 +71,49 @@ def tmp_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, claims_root: Path
     """A two-node scratch graph: one with a bound plan, one without."""
     plan = _plan_with(tmp_path)
     g = tmp_path / "graph.json"
-    g.write_text(
-        json.dumps(
+    seed_graph(g, json.dumps(
             {
                 "entries": [
                     {
                         "id": "x-t1",
                         "slug": "task-rows",
-                        "status": "ready",
                         "title": "rows",
+                        "type": "feature",
+                        "priority": "p2",
+                        "status": "ready",
                         "plan_path": str(plan),
                     },
-                    {"id": "x-t2", "slug": "no-plan", "status": "ready", "title": "np"},
+                    {"id": "x-t2", "slug": "no-plan", "title": "np",
+                     "type": "feature", "priority": "p2", "status": "ready"},
                 ]
             }
         )
-        + "\n",
-        encoding="utf-8",
-    )
+        + "\n")
     import fno.graph._constants as gc
     import fno.graph.store as gs
 
     monkeypatch.setattr(gc, "GRAPH_JSON", g)
     monkeypatch.setattr(gs, "GRAPH_JSON", g)
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
-    monkeypatch.setattr("fno.paths.graph_archive_json", lambda: tmp_path / "ga.json")
     return g
 
 
+def _claimed(key: str, root: Path) -> bool:
+    return claim_status(key, root=root)["state"] != "free"
+
+
 def _node_row(graph: Path, node_id: str, task_id: str) -> dict:
-    entries = json.loads(graph.read_text(encoding="utf-8"))["entries"]
+    from fno.graph.store import read_graph_strict
+
+    entries = read_graph_strict(graph)
     node = next(e for e in entries if e.get("id") == node_id)
     return next(r for r in node["tasks"] if r["id"] == task_id)
+
+
+def _store_state(graph: Path):
+    from fno.graph.store import read_graph_strict, store_export_status
+
+    return read_graph_strict(graph), store_export_status(graph)
 
 
 def _live_pid() -> int:
@@ -145,7 +156,7 @@ def test_task_list_materializes_pending_rows(tmp_graph: Path):
     # Positive persistence marker: the rows are in the graph file, not just
     # the echoed payload.
     row = _node_row(tmp_graph, "x-t1", "1.1")
-    assert row["status"] == "pending" and row["owner"] is None
+    assert row["status"] == "pending" and row.get("owner") is None
 
 
 def test_task_list_no_plan_refuses_and_writes_nothing(
@@ -165,12 +176,12 @@ def test_task_list_no_plan_refuses_and_writes_nothing(
     """
     from fno.graph import cli as graph_cli
 
-    before = tmp_graph.read_text(encoding="utf-8")
+    before = _store_state(tmp_graph)
     result = runner.invoke(graph_cli.task_app, ["list", "x-t2"])
     assert result.exit_code == graph_cli.TASK_NO_GRAIN_EXIT
     assert result.exit_code != 2, "2 halts the wave"
     assert "no plan bound to x-t2" in result.output
-    assert tmp_graph.read_text(encoding="utf-8") == before
+    assert _store_state(tmp_graph) == before
 
     ok = runner.invoke(graph_cli.task_app, ["list", "x-t1", "--json"])
     assert ok.exit_code == 0, ok.output
@@ -180,8 +191,6 @@ def test_task_list_no_plan_refuses_and_writes_nothing(
 def test_unknown_task_id_exits_2_naming_plan_ids(
     tmp_graph: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    from fno.graph import cli as graph_cli
-
     result = _task_update(
         monkeypatch, _live_pid(), "x-t1", "9.9", "--status", "in_progress",
         "--owner", SID_A,
@@ -199,7 +208,7 @@ def test_in_progress_claims_and_second_claimant_refused_by_name(
 ):
     """AC2-HP + AC2-ERR: transition writes row + lockfile; peer exit 3 names A."""
     key = task_key("x-t1", "1.1")
-    lock = claim_path(key, root=claims_root)
+    lock = key
 
     got = _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
@@ -207,7 +216,7 @@ def test_in_progress_claims_and_second_claimant_refused_by_name(
     )
     assert got.exit_code == 0, got.output
     # Positive markers: the exact task key's lockfile exists and carries A.
-    assert lock.exists(), f"claim lockfile for {key} must exist"
+    assert _claimed(lock, claims_root), f"claim lockfile for {key} must exist"
     status = claim_status(key, root=claims_root)
     assert status["holder"] == SID_A
     assert status["state"] in ("live", "suspect")
@@ -253,24 +262,103 @@ def test_in_progress_without_session_id_exits_4(
     assert "fno agents spawn" in result.output
 
 
-def test_unprovable_pid_refuses_rather_than_degrading(
+def test_pidless_thread_claim_uses_two_hour_lease(
     tmp_graph: Path, claims_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A pid-less acquire would anchor to the dying CLI process and leave the
-    claim instantly stealable; the verb refuses (exit 4) and writes nothing."""
+    """AC1-HP: a thread claim records missing pid under the bounded lease."""
+    from fno.claims.tasks import TASK_CLAIM_TTL_MS
+
     result = _task_update(
         monkeypatch, None, "x-t1", "1.1", "--status", "in_progress", "--owner", SID_A,
     )
-    assert result.exit_code == 4
-    assert "FNO_SESSION_PID" in result.output
-    # Positive absence proof: the healthy pid on the SAME path creates the
-    # lockfile, so the instrument ran and the refusal was the pid guard.
-    ok = _task_update(
-        monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
-        "--owner", SID_A,
+    assert result.exit_code == 0, result.output
+
+    key = task_key("x-t1", "1.1")
+    lock = key
+    assert _claimed(lock, claims_root), f"claim lockfile for {key} must exist"
+    claim = claim_status(key, root=claims_root)
+    assert claim["pid"] is None
+    assert claim["pid_unavailable"] is True
+    assert claim["expires_at"] == claim["acquired_at"] + TASK_CLAIM_TTL_MS
+    row = _node_row(tmp_graph, "x-t1", "1.1")
+    assert row["status"] == "in_progress" and row["owner"] == SID_A
+
+
+def test_pidless_task_claim_refuses_peer_by_name(
+    tmp_graph: Path, claims_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC2-ERR: a live peer cannot take the thread holder's leased claim."""
+    key = task_key("x-t1", "1.1")
+    first = _task_update(
+        monkeypatch, None, "x-t1", "1.1", "--status", "in_progress", "--owner", SID_A,
     )
-    assert ok.exit_code == 0, ok.output
-    assert claim_path(task_key("x-t1", "1.1"), root=claims_root).exists()
+    assert first.exit_code == 0, first.output
+
+    refused = _task_update(
+        monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
+        "--owner", SID_B,
+    )
+    assert refused.exit_code == 3
+    assert SID_A in refused.output, "refusal names the holder"
+    assert _node_row(tmp_graph, "x-t1", "1.1")["owner"] == SID_A
+    assert claim_status(key, root=claims_root)["holder"] == SID_A
+
+
+def test_task_claim_with_pid_keeps_immediate_liveness(
+    claims_root: Path, tmp_graph: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC3-EDGE: a resolved worker pid still creates a no-TTL claim."""
+    pid = _live_pid()
+    result = _task_update(
+        monkeypatch, pid, "x-t1", "1.1", "--status", "in_progress", "--owner", SID_A,
+    )
+    assert result.exit_code == 0, result.output
+
+    claim = claim_status(task_key("x-t1", "1.1"), root=claims_root)
+    assert claim["pid"] == pid
+    assert claim["pid_unavailable"] is False
+    assert claim["expires_at"] is None
+
+
+def test_reoffering_done_task_keeps_suspect_pidless_claim(
+    tmp_graph: Path, claims_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """AC4-EDGE: refusing shipped work must preserve our suspect claim."""
+    from fno.harness_identity import AMBIENT_IDENTITY_ENV
+
+    for marker in AMBIENT_IDENTITY_ENV:
+        monkeypatch.delenv(marker, raising=False)
+
+    key = task_key("x-t1", "1.1")
+    lock = key
+    first = _task_update(
+        monkeypatch, None, "x-t1", "1.1", "--status", "in_progress", "--owner", SID_A,
+    )
+    assert first.exit_code == 0, first.output
+    claim = claim_status(key, root=claims_root)
+    assert claim["state"] == "suspect"
+    assert claim.get("session_id") in (None, "")
+
+    def _mark_done(entries):
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("id") == "x-t1":
+                for task in entry.get("tasks") or []:
+                    if isinstance(task, dict) and task.get("id") == "1.1":
+                        task["status"] = "done"
+                        break
+                break
+        return entries
+
+    from fno.graph.store import commit_rows_via_store
+
+    commit_rows_via_store(tmp_graph, _mark_done)
+
+    refused = _task_update(
+        monkeypatch, None, "x-t1", "1.1", "--status", "in_progress", "--owner", SID_A,
+    )
+    assert refused.exit_code == 3
+    assert "re-offering shipped work is refused" in refused.output
+    assert _claimed(lock, claims_root), "the holder's existing claim survives the row refusal"
 
 
 def test_claim_contention_exits_3_within_the_waves_contract(
@@ -299,15 +387,17 @@ def test_unreadable_plan_is_a_named_refusal(
     FileNotFoundError traceback; the graph is untouched."""
     from fno.graph import cli as graph_cli
 
-    entries = json.loads(tmp_graph.read_text(encoding="utf-8"))["entries"]
+    from fno.graph.store import read_graph_strict
+
+    entries = read_graph_strict(tmp_graph)
     entries[0]["plan_path"] = str(tmp_path / "gone.md")
-    tmp_graph.write_text(json.dumps({"entries": entries}), encoding="utf-8")
-    before = tmp_graph.read_text(encoding="utf-8")
+    seed_graph(tmp_graph, json.dumps({"entries": entries}))
+    before = _store_state(tmp_graph)
 
     result = runner.invoke(graph_cli.task_app, ["list", "x-t1"])
     assert result.exit_code == 1
     assert "not readable" in result.output and "gone.md" in result.output
-    assert tmp_graph.read_text(encoding="utf-8") == before
+    assert _store_state(tmp_graph) == before
 
 
 def test_second_list_read_is_read_only(
@@ -319,12 +409,12 @@ def test_second_list_read_is_read_only(
 
     first = runner.invoke(graph_cli.task_app, ["list", "x-t1", "--json"])
     assert first.exit_code == 0, first.output
-    settled = tmp_graph.read_text(encoding="utf-8")
+    settled = _store_state(tmp_graph)
 
     second = runner.invoke(graph_cli.task_app, ["list", "x-t1", "--json"])
     assert second.exit_code == 0, second.output
     assert json.loads(second.output) == json.loads(first.output)
-    assert tmp_graph.read_text(encoding="utf-8") == settled
+    assert _store_state(tmp_graph) == settled
 
 
 # -- AC3: dead-pid recovery --
@@ -333,7 +423,7 @@ def test_second_list_read_is_read_only(
 def test_dead_holder_is_archived_and_reclaimed(
     tmp_graph: Path, claims_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """AC3-HP: a dead-pid claim is swept to .expired/ and B takes the task."""
+    """AC3-HP: a dead-pid claim is reclaimed and B takes the task."""
     key = task_key("x-t1", "1.1")
     dead = _dead_pid()
 
@@ -348,12 +438,9 @@ def test_dead_holder_is_archived_and_reclaimed(
         "--owner", SID_B,
     )
     assert taken.exit_code == 0, taken.output
-    # Positive markers: B owns row + live claim, and A's corpse is archived.
+    # Positive markers: B owns row + live claim.
     assert _node_row(tmp_graph, "x-t1", "1.1")["owner"] == SID_B
     assert claim_status(key, root=claims_root)["holder"] == SID_B
-    expired_dir = claim_path(key, root=claims_root).parent / ".expired"
-    archived = list(expired_dir.glob(f"{encode_key(key)}.*.lock"))
-    assert archived, f"the dead claim must be archived under {expired_dir}"
 
 
 # -- completion and give-back --
@@ -375,7 +462,7 @@ def test_done_releases_the_claim(
     assert _node_row(tmp_graph, "x-t1", "1.1")["status"] == "done"
     # Positive verdict from the instrument: state reads free, file gone.
     assert claim_status(key, root=claims_root)["state"] == "free"
-    assert not claim_path(key, root=claims_root).exists()
+    assert not _claimed(key, claims_root)
 
 
 def test_pending_give_back_is_holder_only(
@@ -400,7 +487,7 @@ def test_pending_give_back_is_holder_only(
     )
     assert holder.exit_code == 0, holder.output
     row = _node_row(tmp_graph, "x-t1", "1.1")
-    assert row["status"] == "pending" and row["owner"] is None
+    assert row["status"] == "pending" and row.get("owner") is None
     assert "claimed_at" not in row
     assert claim_status(key, root=claims_root)["state"] == "free"
 
@@ -454,7 +541,7 @@ def test_done_by_non_holder_refused(
 def test_exited_graph_write_releases_the_claim(
     tmp_graph: Path, claims_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """locked_mutate_graph sys.exit()s (does not raise) on a corrupt graph;
+    """commit_rows_via_store sys.exit()s (does not raise) on a corrupt graph;
     the transition must release the claim on that path too, or it stays held
     by the long-lived session pid until the whole session dies."""
     import fno.graph.store as store
@@ -462,7 +549,7 @@ def test_exited_graph_write_releases_the_claim(
     def _wedge(*a, **k):
         raise SystemExit(1)
 
-    monkeypatch.setattr(store, "locked_mutate_graph", _wedge)
+    monkeypatch.setattr(store, "commit_rows_via_store", _wedge)
     result = _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
@@ -484,9 +571,11 @@ def test_malformed_plan_is_a_named_refusal(
         "## Execution Strategy\n\n```yaml\ntasks: [oops\n```\n",
         encoding="utf-8",
     )
-    entries = json.loads(tmp_graph.read_text(encoding="utf-8"))["entries"]
+    from fno.graph.store import read_graph_strict
+
+    entries = read_graph_strict(tmp_graph)
     entries[0]["plan_path"] = str(plan)
-    tmp_graph.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    seed_graph(tmp_graph, json.dumps({"entries": entries}))
 
     result = runner.invoke(graph_cli.task_app, ["list", "x-t1"])
     assert result.exit_code == 1
@@ -511,16 +600,18 @@ def test_idless_plan_poll_never_takes_the_lock(
     plan.write_text(
         "---\ntitle: empty\nstatus: ready\n---\n\n# empty\n", encoding="utf-8"
     )
-    entries = json.loads(tmp_graph.read_text(encoding="utf-8"))["entries"]
+    from fno.graph.store import read_graph_strict
+
+    entries = read_graph_strict(tmp_graph)
     entries[0]["plan_path"] = str(plan)
-    tmp_graph.write_text(json.dumps({"entries": entries}), encoding="utf-8")
-    before = tmp_graph.read_text(encoding="utf-8")
+    seed_graph(tmp_graph, json.dumps({"entries": entries}))
+    before = _store_state(tmp_graph)
 
     result = runner.invoke(graph_cli.task_app, ["list", "x-t1"])
     assert result.exit_code == graph_cli.TASK_NO_GRAIN_EXIT
     assert result.exit_code != 2, "2 halts the wave"
     assert "no tasks declared" in result.output
-    assert tmp_graph.read_text(encoding="utf-8") == before
+    assert _store_state(tmp_graph) == before
 
 
 def test_overlong_task_key_refused_at_validation(
@@ -539,7 +630,7 @@ def test_overlong_task_key_refused_at_validation(
         ),
         encoding="utf-8",
     )
-    bad_lock = claim_path(task_key("x-t1", huge_id), root=claims_root)
+    bad_lock = task_key("x-t1", huge_id)
 
     refused = _task_update(
         monkeypatch, _live_pid(), "x-t1", huge_id, "--status", "in_progress",
@@ -547,14 +638,14 @@ def test_overlong_task_key_refused_at_validation(
     )
     assert refused.exit_code == 2
     assert "exceeds" in refused.output
-    assert not bad_lock.exists(), "a refused key must leave no lockfile"
+    assert not _claimed(bad_lock, claims_root), "a refused key must leave no lockfile"
 
     ok = _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
     )
     assert ok.exit_code == 0, ok.output
-    assert claim_path(task_key("x-t1", "1.1"), root=claims_root).exists(), (
+    assert _claimed(task_key("x-t1", "1.1"), claims_root), (
         "positive control: the same verb creates the healthy key's lockfile"
     )
 
@@ -564,11 +655,13 @@ def test_overlong_task_key_refused_at_validation(
 
 def _rebind_plan(graph: Path, node_id: str, plan_path: str) -> None:
     """Rewrite one node's stored plan_path, leaving the rest of the graph."""
-    data = json.loads(graph.read_text(encoding="utf-8"))
-    for e in data["entries"]:
+    from fno.graph.store import read_graph_strict
+
+    data = read_graph_strict(graph)
+    for e in data:
         if e.get("id") == node_id:
             e["plan_path"] = plan_path
-    graph.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    seed_graph(graph, data)
 
 
 def test_tilde_plan_path_resolves(
@@ -648,7 +741,7 @@ def test_unreadable_graph_does_not_collide_with_held(tmp_graph: Path):
     that does not exist."""
     from fno.graph import cli as graph_cli
 
-    tmp_graph.write_text("{ not json", encoding="utf-8")
+    tmp_graph.with_suffix(".db").write_bytes(b"not sqlite")
     result = runner.invoke(graph_cli.task_app, ["list", "x-t1", "--json"])
     assert result.exit_code == graph_cli.TASK_GRAPH_UNREADABLE_EXIT
     assert result.exit_code != 3, "3 means a peer holds the task"
@@ -678,7 +771,7 @@ def test_malformed_rows_survive_materialization(tmp_path: Path):
 
     The returned list is written back over entry["tasks"], so filtering the
     unreadable row out of it DELETES it from graph.json. read_graph and
-    locked_mutate_graph both keep what they cannot migrate.
+    commit_rows_via_store both keep what they cannot migrate.
     """
     from fno.graph.tasks import ensure_task_rows
 
@@ -701,29 +794,33 @@ def test_reclaiming_a_done_row_keeps_a_claim_you_already_held(
     Otherwise a holder whose row went done out of band is left running the
     task with nobody holding it, and a peer claims the same task.
     """
-    lock = claim_path(task_key("x-t1", "1.1"), root=claims_root)
+    lock = task_key("x-t1", "1.1")
     assert _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
     ).exit_code == 0
-    assert lock.exists()
+    assert _claimed(lock, claims_root)
 
     # The row goes done underneath the live holder (a peer reconcile, an
     # operator), leaving the claim in place.
-    data = json.loads(tmp_graph.read_text(encoding="utf-8"))
-    for e in data["entries"]:
-        if e.get("id") == "x-t1":
-            for r in e["tasks"]:
-                if r["id"] == "1.1":
-                    r["status"] = "done"
-    tmp_graph.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    from fno.graph.store import commit_rows_via_store
+
+    def _mark_done(entries):
+        for e in entries:
+            if e.get("id") == "x-t1":
+                for r in e["tasks"]:
+                    if r["id"] == "1.1":
+                        r["status"] = "done"
+        return entries
+
+    commit_rows_via_store(tmp_graph, _mark_done)
 
     refused = _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
     )
     assert refused.exit_code == 3
-    assert lock.exists(), "the claim this call did not take must survive its refusal"
+    assert _claimed(lock, claims_root), "the claim this call did not take must survive its refusal"
     assert claim_status(task_key("x-t1", "1.1"), root=claims_root)["holder"] == SID_A
 
 
@@ -740,27 +837,31 @@ def test_a_stale_self_claim_is_not_one_you_hold(
     claim, and the refusal path then declines to release it. The task reads
     peer-held for the rest of the run.
     """
-    lock = claim_path(task_key("x-t1", "1.1"), root=claims_root)
+    lock = task_key("x-t1", "1.1")
     assert _task_update(
         monkeypatch, _dead_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
     ).exit_code == 0
     assert claim_status(task_key("x-t1", "1.1"), root=claims_root)["state"] == "stale"
 
-    data = json.loads(tmp_graph.read_text(encoding="utf-8"))
-    for e in data["entries"]:
-        if e.get("id") == "x-t1":
-            for r in e["tasks"]:
-                if r["id"] == "1.1":
-                    r["status"] = "done"
-    tmp_graph.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    from fno.graph.store import commit_rows_via_store
+
+    def _mark_done(entries):
+        for e in entries:
+            if e.get("id") == "x-t1":
+                for r in e["tasks"]:
+                    if r["id"] == "1.1":
+                        r["status"] = "done"
+        return entries
+
+    commit_rows_via_store(tmp_graph, _mark_done)
 
     refused = _task_update(
         monkeypatch, _live_pid(), "x-t1", "1.1", "--status", "in_progress",
         "--owner", SID_A,
     )
     assert refused.exit_code == 3
-    assert not lock.exists(), (
+    assert not _claimed(lock, claims_root), (
         "the claim this call DID take must be released by its own refusal"
     )
 
@@ -837,7 +938,7 @@ def test_owner_cannot_take_a_live_claim(
     """
     other = subprocess.Popen(["/bin/sleep", "30"])
     try:
-        lock = claim_path(task_key("x-t1", "1.1"), root=claims_root)
+        lock = task_key("x-t1", "1.1")
         assert _task_update(
             monkeypatch, other.pid, "x-t1", "1.1", "--status", "in_progress",
             "--owner", SID_A,
@@ -851,7 +952,7 @@ def test_owner_cannot_take_a_live_claim(
         assert refused.exit_code == 4
         assert "held LIVE" in refused.output
         assert "identity is shared" in refused.output
-        assert lock.exists(), "a live worker's claim must survive the refusal"
+        assert _claimed(lock, claims_root), "a live worker's claim must survive the refusal"
         assert _node_row(tmp_graph, "x-t1", "1.1")["status"] == "in_progress"
     finally:
         other.kill()
@@ -931,7 +1032,7 @@ def test_manifest_only_identity_refused_as_a_shared_anchor(
     )
     assert refused.exit_code == 4
     assert "shared" in refused.output
-    assert not claim_path(task_key("x-t1", "1.1"), root=claims_root).exists(), (
+    assert not _claimed(task_key("x-t1", "1.1"), claims_root), (
         "a refused shared anchor leaves no lockfile"
     )
 
@@ -1060,7 +1161,7 @@ def test_takeover_give_back_over_a_gone_owner_row(
     )
     assert given.exit_code == 0, given.output
     row = _node_row(tmp_graph, "x-t1", "1.2")
-    assert row["status"] == "pending" and row["owner"] is None
+    assert row["status"] == "pending" and row.get("owner") is None
 
     # Refusal strings advertise the NEW escape, never the old --owner one.
     assert _task_update(
@@ -1074,4 +1175,3 @@ def test_takeover_give_back_over_a_gone_owner_row(
     assert non_holder.exit_code == 3
     assert "--takeover" in non_holder.output
     assert "re-run with --owner" not in non_holder.output
-

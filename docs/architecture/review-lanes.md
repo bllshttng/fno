@@ -1,18 +1,18 @@
-# Native review lanes
+# Review lanes
 
-How a diff gets reviewed: the fno-owned review lane by default, with each trigger lane's constraints below. Harness-native review verbs (Claude `/code-review`, codex `/review`) remain operator-chosen alternates. This doc is the operational counterpart to [coordination](coordination.md), which covers who owns work. For the cross-model peer lane see [cross-model-review](cross-model-review.md), a different surface.
+How a diff gets reviewed: workers use the fno-owned review lane inline in the session that built the diff. Harness-native review verbs remain low-level operator interfaces, not a worker fallback. This doc is the operational counterpart to [coordination](coordination.md), which covers who owns work. For the cross-model peer lane see [cross-model-review](cross-model-review.md), a different surface.
 
 ## The lane menu (after the panel retirement)
 
 | Mode | What it is | Gate weight | Harness availability |
 |---|---|---|---|
 | `/fno:review` (default, optional level) | the owned lane: inline finder angles, dedup, three-state verify (CONFIRMED/PLAUSIBLE/REFUTED), cite-or-drop, carry-forward, one `code-review` attestation | full: the emit satisfies the reviewers gate | every harness (it runs inline as ordinary tool calls) |
-| `/fno:review prove-it` | runtime evidence at the changed code's real surface, validator refuses an unprobed PASS | a PASS satisfies a declared `done_probe`; a FAIL blocks | every harness |
+| `/fno:review prove-it` | runtime evidence at the changed code's real surface, validator refuses an unprobed PASS and an unproven claim | a PASS satisfies a declared `done_probe`; a FAIL blocks | every harness |
 | `/fno:review cleanup` | apply-or-skip terminus, four angles once, skips recorded | none: no attestation, no threads | every harness |
 | `/fno:review peer` | cross-model second opinion | verdict-gated attestation with `--attest`, or a posted review with `--post` | needs a second provider |
 | `/fno:review research` | advisory research-verify panel over a doc deliverable | advisory only | needs the Task tool |
 | `/fno:review declare` | self-cert attestation, the bottom of the trust spectrum | clears an empty `reviewers` gate only | every harness |
-| native verbs (`/code-review`, `/review`) | the harness's own review | full via `hooks/code-review-attest.sh` | per harness |
+| native verbs (`/code-review`, `/review`) | low-level operator interface; not worker self-review | full via `hooks/code-review-attest.sh` | per harness |
 | `sigma` | RETIRED | - | refuses everywhere, names the lane |
 
 The retirement measurement sits here so nobody rebuilds the panel from first principles. PR 1170 walked six rounds and produced 84 findings, of which 8 were real. Six readers of one diff yield six sets of objections, not six times the defects. One inline adversarial reviewer caught all 8 real defects in three rounds. The six specialist hunters remain individually invocable as agents. Only the six-at-once panel is gone.
@@ -43,7 +43,9 @@ One boundary stays, stated rather than papered over. A native subagent is a harn
 
 Why it is not a mailed cap. It was tried, and it caught nothing. On 2026-08-22 four zai workers were mailed a one-subagent cap by hand. Three replied, and all three said their review had already run. Every message was delivered and none was late on the bus. One of the three had already spent eight subagents on a single PR. None of the eight returned, so the account paid for the panel and got zero findings. A worker reaches its review on its own schedule. No out-of-band message beats it there.
 
-## Lane 1: self-invoke via the Skill tool (primary)
+## Legacy native Skill-tool invocation
+
+This section records the older harness-native path. Workers use `/fno:review` or `$fno:review` inline. If that lane refuses, report the literal refusal and stop. Do not try a native verb or another session.
 
 An in-session agent can launch the native review verb through the Skill
 tool with **bare args**, not by typing the slash command:
@@ -62,8 +64,6 @@ of whatever worktree the session is in.
 A shell `cd` does not move a session, so it does not retarget the fork.
 To aim the review at a specific PR, put the session in that PR's
 worktree with the **EnterWorktree** tool, then launch bare.
-A worker seeded via `fno agents spawn --cwd <worktree>` lands there
-correctly and reviews the right diff without an extra move.
 
 ### The silent fork
 
@@ -85,9 +85,9 @@ A forked review does not appear in `fno agents top --subagents` or in `claude ag
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 
-## Lane 2: raw-inject via `fno agents mail send --raw`
+## Raw-inject transport
 
-The documented operator front door for asking another session (or your own) to fire a raw verb is `fno agents mail send --raw`.
+`fno agents mail send --raw` is a low-level operator transport for explicitly authorized raw verbs. It is not a worker self-review fallback.
 
 It routes by the recipient's live lane. It either fires the requested operation or names why that lane cannot fire it.
 
@@ -95,18 +95,11 @@ On a prompt-line lane it injects the payload UNWRAPPED. No `<fno_mail>` envelope
 
 That sidesteps any model-invocation refusal. The prompt-line injection IS the user-invocation path.
 
-Use it to fire a verb in a live worker, or with `--to-self` to target the current session through the same router.
-
-```bash
-# Into a peer:
-fno agents mail send <peer> '/code-review <level> --comment' --raw
-# At your own prompt line (recipient derived from ambient identity):
-fno agents mail send '/code-review <level> --comment' --to-self --raw
-```
+Worker self-review runs through the inline fno review skill. Do not mail a lead to fire a review command or inject a review verb into another session.
 
 `<level>` is sized from the diff by `level_for_diff` in `cli/src/fno/review_capability.py` (never `ultra`: billed separately, and the builder rejects it). No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
 
-No lane above carries `--fix`. A fix pass writes, which moves HEAD. An attestation is head-pinned, so the round that wrote it also voids it. This matches the spawned-reviewer contract further down. `--fix` stays legal for a caller who asks for it directly, and only the machinery advice drops it.
+No lane above carries `--fix`. A fix pass writes, which moves HEAD. An attestation is head-pinned, so the round that wrote it also voids it. This matches the review contract further down. `--fix` stays legal for a caller who asks for it directly, and only the machinery advice drops it.
 
 ## Lane 2a: what a codex `review/start` actually diffs
 
@@ -182,71 +175,19 @@ Do not conclude the lane is absent from an empty `--help` or an empty Python-tre
 
 ## The target ship loop and findings
 
-The target ship step runs `fno do target request-self-review --pr <n>` after the PR exists. It resolves the PR head and base. It refuses a local-head mismatch. It sends one raw payload naming `HEAD <sha> of PR <n> against origin/<base>`. If a Codex mux pane shows the exact payload beside `tab to queue message`, machinery sends one Tab. The pane must then show the same payload with a queued marker. The receipt is `queued`, and the turn ends at that boundary. If the review is already active, the receipt is `started` and no control key is sent. The worker's own Stop hook reads structured findings from its transcript. It nudges the same context to act on P1/P2 findings. Fixes require a new-head request. It records one nudge per review turn. This act path uses no king, daemon stream, or external reader.
+The target ship step runs the review round before the PR opens. The default round is `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, invoked in the target session itself: no mail, no paste, no turn boundary. Size is medium under 300 changed lines, high above, xhigh for risky surfaces. With no PR yet, `--comment` holds the findings on branch and HEAD in the `review_attestation` journal row. Once the PR opens, `fno do pr publish-review` posts them as one PR comment, and `fno-agents finalize` re-runs that post as a backstop. The inline lane surfaces findings and emits a head-pinned attestation. A rebase with an unchanged code delta carries the attestation. Other HEAD changes require another review. Fixes take a new review while the round budget lasts. The flow uses no lead, daemon stream, or external reader. The ledger is machine-local, so another machine cannot read the attestation.
 
-## Lane 3: king-mediated mail (fallback)
+## Worker self-review
 
-When neither self-invocation nor a raw inject is available - no live
-session to inject into, or a worker's harness lacks the verb - ask a
-king over `fno agents mail send`.
-The king's reply injects as user-shaped text and the worker's own
-harness serves the verb in response, or the king can fire the verb
-into the worker's live session directly via
-`fno agents mail send <worker> '<verb>' --raw` (Lane 2).
-
-With no live king, run the native verb by hand. This fallback is not the target ship act path. Target uses its raw self-request and worker Stop hook. A live king is never a dependency for default code review.
+Workers run the fno review skill inline in the session and worktree that built the diff: `$fno:review <level>` on Codex and `/fno:review <level>` on Claude. If that invocation refuses, report the literal refusal and stop. Do not mail a lead to fire a review verb or spawn a reviewer.
 
 ## Why (wrapped) mail cannot carry a verb
 
-A wrapped `fno agents mail send` cannot carry a verb. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries **instructions** ("review my diff"), not invocations (a sized `/code-review` order). `--raw` (Lane 2) is the deliberate exception. It strips the envelope so the slash parses, and that is the cost the wrapper exists to impose.
+A wrapped `fno agents mail send` cannot carry a verb. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries instructions, while `--raw` is a low-level command transport. Worker self-review uses the inline fno review skill and does not fall back to either mail form.
 
 ## Do not assert a cause for a refusal
 
-A `disable-model-invocation` refusal has been observed, and a
-PR-number argument (`args="medium --fix <n>"`) was refused once.
-**Neither has a confirmed cause.**
-Do not invent a mechanism for a refusal you see, and do not instruct a
-worker to check a flag before invoking.
-
-One proposed cause, an `enabledPlugins.code-review` config gate, was
-**falsified**: a worker launched cleanly with both
-`code-review@claude-code-plugins` and `code-review@claude-plugins-official`
-still `false` at `~/.claude/settings.json`.
-Do not repeat that theory.
-
-In one observed window the "a worker can execute it" premise did not
-hold at all: a main background session and a freshly spawned background
-worker were both refused with the identical `disable-model-invocation`
-text, and the worker retried many times with no findings.
-So the refusal can be environment-wide across session types in a given
-window, not a property of one session's arg shape.
-The refusal text names the escape: it applies to MODEL invocation, and
-`fno agents mail send --raw` (Lane 2) is the user-invocation path that lands the verb
-as user-role text, so it is not subject to that refusal - reach for it
-when self-invocation is refused.
-The one environment-wide window predates the raw-inject lane's verification
-(confirmed separately, the next day) and was not exercised there, so
-treat that window as open; if `fno agents mail send --raw` fails it too, report the
-exact refusal text and surface it to a human rather than burning cycles
-re-invoking.
-
-The standing lesson: every plausible mechanism proposed for this verb's
-refusals has so far been falsified by a worker executing it.
-Guard the value, not a correlate.
-
-The Skill-tool success record (three workers) and a self-initiated
-refusal record sit side by side, and no cause has held up.
-`fno agents mail send --raw` (Lane 2) is the most reliable trigger and the one to
-reach for when self-invocation is refused: it is the user-invocation
-path, so the model-invocation refusal does not apply to it.
-Short of that, the king-mail loop fires often but not always (refused
-twice in one session with an order in hand).
-Treat self-invocation as the lane worth trying first, `fno agents mail send --raw` as
-the reliable fallback, and king-mail as the asynchronous one - not a
-closed either/or.
-The king-mediated path, the per-harness verbs, and the never-substitute-
-silently contract have a deeper treatment in
-[king-for-a-day/references/review.md](../../skills/king-for-a-day/references/review.md).
+Invocation refusals have been observed, but no cause is confirmed. Do not invent a mechanism or ask workers to check speculative flags. If inline fno review refuses, report the exact refusal and stop. Do not retry through raw mail, a native verb, or another session. See [lead/references/review.md](../../skills/lead/references/review.md) for the worker contract.
 
 ## Counting invocations
 
@@ -265,8 +206,8 @@ A correct count unions a `<command-name>` probe with a `tool_use` probe
 for the skill name, and uses the counting session's own id as a
 positive control (it must find at least itself).
 This shape is general to any programmatic skill invocation, not just
-review: counting king-for-a-day reigns by the `<command-name>` marker
-undercounts the same way, since a reign fired through the Skill tool is a
+review: counting one-wave tenures by the `<command-name>` marker
+undercounts the same way, since a lead fired through the Skill tool is a
 `tool_use`, not a typed command.
 
 ## Review freshness: one predicate, both producers
@@ -287,18 +228,23 @@ Addressing a review invalidated the proof the review happened.
 An agent given three findings, fixing them in three commits, owed three re-reviews.
 Across footnote PRs 824-831, PR 828 moved through six heads and PR 830 through five.
 
-Both now call one predicate, `review_freshness(reviewed_sha, head_sha)`. It lives in `crates/fno-agents/src/loopcheck.rs` and returns one of five states:
+Both now call one predicate, `review_freshness(reviewed_sha, head_sha)`. It lives in `crates/fno-agents/src/review_freshness.rs`, moved there from `loopcheck.rs` (over the file budget, shrink-only) and named by its question. It returns one of six states:
 
 - `fresh` - the reviewer read this exact commit.
 - `carried_base_sync` - the PR's own code delta is byte-identical. Any tree difference came from the base moving. A rebase is this shape.
 - `carried_docs_only` - only documentation paths changed since the reviewed commit.
 - `carried_subset` - the code delta only shrank. Every raw line still shipping is byte-identical to one the reviewer read. The vanished lines are paths the base absorbed on the rebase. The grade compares the sorted raw lines the identity keeps beside its hash. The HEAD set contained in the reviewed set is a shrink. A line the reviewer never saw is new unreviewed code.
+- `carried_interdiff(n=<lines>, cap=<bound>)` - the code delta changed, but by fewer than `review.carry_interdiff_lines` lines (default 100, the attestation law d-608344c1's threshold). The measure is the multiset symmetric difference of the two patches against the base, never a head-to-head diff, so base movement contributes nothing. This is the small-change arm: a rebase whose conflict resolution touched three lines carries instead of costing a full round. An unreadable patch read on either side never carries (it is `stale` whatever the identities say), and `0` in config disables the arm.
 - `stale` - everything else, **including every failure path**.
 
 `carried_*` is decided by comparing a **PR code-diff identity** at each commit.
 That identity is the diff from `merge-base(base, sha)` to `sha`, documentation paths dropped, hashed.
 Equal identities mean the code under review is byte-identical, whatever happened to the sha.
 That is what makes a rebase carry and a one-line code fix die.
+
+A carry answers freshness, never the round ledger.
+
+The `--verify-fixes` carveout is the count-side complement. Its hold half lives in `review_invocation_refusal`. When the invocation flags carry `--verify-fixes`, its count half is the `review_round` the emitter stamps: the counter reads the round the pass verified. An undeclared pass counts a fresh round, as it always has.
 
 `reviewed_sha` comes from a different place per producer, and both were already available.
 
@@ -311,7 +257,7 @@ Four separate places ask "has this reviewer reviewed this code".
 
 All four go through the predicate: the coverage count, the attestation scan, the presence check behind `missing_bots`, and `finalize`'s arming check.
 
-The Python merge gate's recheck (`_verdicts_with_current_freshness` in `cli/src/fno/pr/_reviews.py`) is the fifth. It used to answer with ancestry alone, and that cut both ways. It killed every `carried_*` verdict the predicate had minted the moment a rebase rewrote the sha: the operator's daily rebase treadmill. It also read a push-after-review head as fresh, because the reviewed commit remained an ancestor. Its freshness test is now the predicate's own rule with no extra arms. Exact-head equality is fresh. The recheck builds the same code-diff identity `pr_code_diff_identity` builds: `git diff --raw --no-abbrev --no-renames base...sha`, documentation paths dropped. Identity equality carries, with the tree-paths read readable, like the Rust carry's auditability requirement. When the base absorbed paths on the rebase, a strict subset also carries. A push of new unreviewed code, a sibling edit, a reindent, or an unreadable identity is a new review. The base is the PR's own `baseRefName`, remote-qualified. A base that does not resolve, or a base read that fails, leaves the question unanswerable, and both gates expire the verdict. Only a read with no PR number to ask defaults to `origin/main`/`origin/master`. Base, identity, and tree-path reads memoize on sha-keyed module caches. Because the identity is the same construction rather than an approximation, the two gates expire the same changes.
+The Python merge gate's recheck (`_verdicts_with_current_freshness` in `cli/src/fno/pr/_reviews.py`) was the fifth answerer, and it is retired. It mirrored the predicate in a second language: identity construction, cache discipline, decision for decision. That is principle 9's exact shape, one question with two implementations. The divergence was measured, not hypothetical: `fno do pr status` computed a local rounds floor of 3 on a PR where the gate's own row said 1. Python now READS the freshness label the Rust producer wrote at emit time and recomputes nothing; a row whose head no longer matches is the recompute arm's input, and with the `fno-agents` binary absent the freshness answer is `unmeasurable` with the remedy named (`install it or run fno doctor update`), never a Python-side guess. The round budget reads the same way: `rounds_used`, the budget, and exhaustion arrive on the gate's own `review_coverage` row, and one head set is shared across the attestation and GitHub-review axes, so a bot review and a local attestation at one commit are one round (the law's sentence, d-608344c1).
 
 Fix one and leave the others on a bare equality, and the gate stays exactly as tight as before.
 The softening is then purely decorative.
@@ -320,6 +266,14 @@ A `stale` verdict is **recorded, not dropped**.
 `CoverageVerdict::Stale` says a reviewer responded against an older commit.
 
 That is a different fact from `absent`, and it calls for a different response: ask for a re-read, rather than wait for a first read.
+
+### Lost invocations settle into the ledger
+
+Producer reachability has a failure mode the freshness rule cannot see: a review dispatch that was sent, delivered, and never answered.
+The invocation row exists (`review_invocation`, `stage: sent`), the doctor's scan finds it, and until now nothing turned it into coverage evidence - the gate read "no row", indistinguishable from "never asked", and waited.
+The settle sweep (`settle_lost_invocations`, reachable as `fno do review invocations settle` and run by the doctor's report and the target stop hook) closes that: after `review.invocation_ttl_minutes` (default 15) with no answering attestation, one `review_attestation` row is emitted through the single validated builder - verdict `fail`, `output_contract: lost`, the invocation id carried in `data`.
+Coverage then reads `uncovered` with a named reason instead of silence, and the loop that already re-fires on `uncovered` does the re-dispatching; settling makes the loss visible, it does not schedule anything new.
+Idempotent by a positive marker: an invocation with any attestation carrying its id - a real review, a refusal row, or an earlier settle - never settles twice, so a second sweep adds zero rows.
 
 ### CI carry: the same idea, a second implementation, on purpose
 
@@ -346,7 +300,7 @@ When a verdict was rendered is freshness's question. Which PR it was rendered fo
 
 The events journal is shared across every worktree of a repo by design: `setup-worktree.sh` links each worktree's `.fno/events.jsonl` to the canonical file. An unscoped scan therefore reads every branch's attestations into every PR's verdict list. Measured on 2026-08-16: five attestations, five heads, five branches, one file.
 
-The fix is the `branch` field on `review_attestation` plus one predicate, `attestation_in_scope`, applied by both scans (`local_latest_passes` and `unattested_reviewers_scan`) before any freshness call. An attestation naming the PR's head branch is in scope. So is any attestation pinning the PR's exact head sha: a foreign branch cannot share this head sha without being this commit. The spawned-reviewer lane needs that arm. Its worktree carries a branch of its own, so a branch-only match reads the reviewer's exact-HEAD pass as out of scope. An event predating the field counts only on that exact-head arm. The legacy line deliberately does not inherit the carry: an attestation on a moved head cannot be scoped to any PR.
+The fix is the `branch` field on `review_attestation` plus one predicate, `attestation_in_scope`, applied by both scans (`local_latest_passes` and `unattested_reviewers_scan`) before any freshness call. An attestation naming the PR's head branch is in scope. So is any attestation pinning the PR's exact head sha: a foreign branch cannot share this head sha without being this commit. A reviewer working in its own worktree needs that arm. Its worktree carries a branch of its own, so a branch-only match reads the reviewer's exact-HEAD pass as out of scope. An event predating the field counts only on that exact-head arm. The legacy line deliberately does not inherit the carry: an attestation on a moved head cannot be scoped to any PR.
 
 Out-of-scope lines are skipped entirely rather than marked stale: a stale verdict says "ask this reviewer to re-read", which is wrong advice about a reviewer on another branch. The verdict records which rule admitted it (`scope: attested_branch | legacy_head_match`), so a refusal under a moved head can name a pre-branch-field attestation.
 
@@ -364,12 +318,7 @@ It does not deliver relief from the re-review treadmill, and the measurement say
 Of the 22 head-to-head transitions observed across PRs 824-831, **2 carry forward**.
 The other 20 are genuine code change, measured against each PR's true base.
 
-An earlier pass measured 63% and was wrong.
-Merged PRs' three-dot diff against the current `origin/main` is empty, and the hash of the empty string equals itself.
-Twelve transitions were matching an absence against an absence.
-So a carry requires a positive match between two SUCCESSFULLY COMPUTED identities.
-An empty code diff yields no identity at all.
-`freshness_two_absent_identities_never_match` is the standing guard.
+An earlier pass measured 63% and was wrong. Merged PRs' three-dot diff against the current `origin/main` is empty, and the hash of the empty string equals itself. Twelve transitions were matching an absence against an absence. So a carry requires a positive match between two SUCCESSFULLY COMPUTED identities. An empty three-dot diff yields no identity at all. `freshness_two_absent_identities_never_match` is the standing guard.
 
 What the rule does deliver is rebase-invariance.
 It fires at the mandatory pre-merge rebase, where losing an attestation costs most.
@@ -379,16 +328,16 @@ It is not "five re-reviews become one".
 **An unused-import removal still costs a full re-review.**
 `fix(tracker): drop unused json import (ruff F401)` changes a `.py` file.
 That is code under any classifier that does not parse Python, and an AST dependency for one commit shape is not worth it.
-A documentation-only PR never carries an attestation either.
-With no code in the diff there is no identity to match, which is the fail-closed direction.
+
+If a documentation-only PR's own diff is readable and non-empty, the PR has an empty code identity. That identity carries a docs-only advance or a rebase. A move between a docs-only diff and a code-bearing diff never carries, in either direction. A merged PR's three-dot diff is empty, so it still yields no identity, and the 2-of-22 guard above holds.
 
 **`carried_docs_only` inherits `is_documentation_path`, and that classifier calls every `.md` file documentation.** In this repo `skills/*/SKILL.md`, `agents/*.md`, and `AGENTS.md` are behavior, not prose. So a skill rewritten after a review carries the earlier verdict forward as fresh coverage. This is deliberate for now, because it matches the existing payload classifier. A `.md`-only PR already skips review gating entirely, so the carry rule is not what introduced the gap. Narrowing it is a real behavior change and has to move in lockstep with the Python mirror in `_merge._is_documentation_path`.
 
 ### The dispatcher's own ordering matters as much as the carry rule
 
-The carry rule cannot save a review bought by an avoidable rebase. Measured one night: a king ordered about ten rebases on one PR. It requested a review after each one, buying ten reviews of code that changed once. `CarriedBaseSync` existed the whole time. It still cannot help here, because the carry only ever compares the CURRENT head against the LAST reviewed one. It has nothing to say about a review that was requested and completed before the next rebase moved the head again.
+The carry rule cannot save a review bought by an avoidable rebase. Measured one night: a lead ordered about ten rebases on one PR. It requested a review after each one, buying ten reviews of code that changed once. `CarriedBaseSync` existed the whole time. It still cannot help here, because the carry only ever compares the CURRENT head against the LAST reviewed one. It has nothing to say about a review that was requested and completed before the next rebase moved the head again.
 
-Any dispatcher (a king, `/fno:pr check`, a bg loop) that needs both a rebase and a review on the same PR must order them. Batch every pending rebase first, wait for green, THEN request the review once on the final head. A rebase requested after a review is not a smaller version of this mistake. It is the same mistake, since the next review request pays for it again.
+Any dispatcher (a lead, `/fno:ship pr check`, a bg loop) that needs both a rebase and a review on the same PR must order them. Batch every pending rebase first, wait for green, THEN request the review once on the final head. A rebase requested after a review is not a smaller version of this mistake. It is the same mistake, since the next review request pays for it again.
 
 ### Named, not closed: the derivation-latency window
 
@@ -439,21 +388,33 @@ Two consequences are recorded rather than gated.
 
 It is recorded rather than gated because the native final-head review is the DEFAULT path, and refusing its attestation wedges every single-session PR.
 
-The `model` field records what the environment CLAIMED.
+The `model` field records the model that ANSWERED, stamped by the emit chokepoint from the attesting session's own transcript via `observed_model_for_session` (the platform provenance leaf).
 
-The producer refuses to record a claim it can prove false.
+The emitter passes no model of its own.
 
-A non-`claude*` model name with no non-Anthropic base URL cannot be the model that answered.
+The routed-model environment names the model the session ASKED for.
 
-A refused claim stores the literal `unobserved`, never an empty string.
+A non-Anthropic name over an unset base URL silently falls back to the primary model.
 
-So a claim that was made and declined never reads the same as a field nobody set.
+An env read recorded asks as answers.
 
-A claim that is merely unverified still records as given, because nothing in a shell can check it.
+Four sessions in one day produced that wrong record.
 
-That refusal landed separately.
+The caller gets no vote: a `--data` model that disagrees with the transcript refuses the emit, the same rule `attester_session_id` follows.
 
-`tests/hooks/test_attest_model.sh` drives the hook and the emitter over one env matrix, so the two predicates cannot drift.
+An unresolvable transcript means not observable, so the field is absent, never a guess.
+
+Events emitted before this change can carry an env claim or the literal `unobserved`.
+
+Both are legacy values a reader must not treat as an observation.
+
+Even with no attestation ever emitted, `hooks/attest-model.sh` still warns at SessionStart that the ROUTE is misconfigured, a real config bug worth surfacing.
+
+`tests/hooks/test_attest_model.sh` drives that hook's env rule.
+
+The emitter's copy of the rule is gone.
+
+The harness pins one body where it once held two in parity.
 
 ## Attestation origin: whose process rendered the verdict
 
@@ -499,44 +460,36 @@ That is a merge-authority decision, tracked separately.
 **A green PR whose only attestation is `self_attested` is covered. Merge it.**
 `self_attested` is not a hold condition and has never been one.
 
-**The spawned-reviewer lane.** A non-self attestation is producible today: the author spawns its own reviewer citizen, a different session by construction, so its attestation renders `attestation_origin = other_session`.
+**No spawned-reviewer lane (operator law d-384d967c).** Worker self-review runs inline in the builder's session. A different session id alone does not establish independent review. When policy requires a non-self attestation, the configured `peer` lane must cross the harness or model. It is not a handoff to a same-work sibling.
 
-```bash
-fno agents spawn --name <name>-review "/code-review <size> for PR <n> against main" \
-  --harness claude --substrate bg --model opus \
-  --permission-mode bypassPermissions --cwd <an isolated reviewer worktree>
-```
-
-The reviewer worktree must run `scripts/setup/setup-worktree.sh`. That script symlinks its `.fno/events.jsonl` to the repository's canonical journal.
-
-The shared journal lets the reviewer stay isolated from the author's files. Its exact-HEAD attestation is still visible to the author's loop-check.
+What survives from the retired lane is mechanics, not advice. An attestation from ANY session lands in the shared journal. The freshness and branch-scope predicates read it wherever it was emitted. Two worktrees at the same exact HEAD can see each other's attestations. Session identity stays part of the coverage origin, and HEAD movement invalidates the shared evidence.
 
 A `--fix` that touches only documentation now carries rather than invalidates. The freshness rule is therefore not the reason this constraint stands. The tree-corruption specimens are.
 
 NO `--fix` remains the review contract. The author applies findings and re-attests. The reviewer's prior attestation is then stale by design.
 
-Two worktrees at the same exact HEAD can see each other's attestations. Session identity stays part of the coverage origin, and HEAD movement invalidates the shared evidence.
-
 ## The pass condition and the four verdict states
 
 The merge gate's pass condition is disposition-complete at the head, not clean. The attestation chain's ranges must tile `merge_base..head`. Every finding in the chain must be terminal. Terminal means fixed with the fix delta reviewed. It also means non-blocking by the gate's own class re-derivation. It means declined with corroboration the author cannot mint alone. And it means waived by the override label. The producer's own `findings_blocking` count is never the answer. The gate re-derives from the per-finding primitives. A hand-written event claiming zero blocking over a CONFIRMED finding is refused.
 
-`fno do pr coverage-check` answers one of four states. COVERED is exit 0. REFUSED is exit 3, and the refusal names the failing conjunct and the rounds remaining. UNANSWERED is exit 4, a named instrument failure, never a verdict. IMPOSSIBLE is exit 5. The round budget is spent and a HARD finding is still non-terminal: a CONFIRMED correctness or security finding, or a truncated remainder. Re-reviewing cannot clear it. Every other finding open at the cap is filed as a node and the PR merges. The sentence names the two acts that can: a non-author GitHub approval, or the coverage-override label. Every merge surface honors exit 5. The merge verb refuses with its own receipt name. `fno do pr status` renders `review_coverage_impossible`. The git-protection hook's refusal set is `{3, 5}`.
+A rebase replaces every sha on the branch, so a tiling keyed by sha alone resets coverage on every rebase the merge gate forces. When `review_freshness` proves the attestation's pinned head still is the current head by content identity, the producer carries the tile. The proof is git content on both sides, base divided out. Only a whole-range verdict grants the carry: `fresh`, `carried_base_sync`, `carried_docs_only`, `carried_subset`, or `carried_interdiff` at zero lines. `carried_interdiff` above zero still counts as a review under law d-608344c1, and still grants no tile: a tile asserts every shipping line was read. Each carry is named on the row as `{head, freshness}` in `range_tiling.carried`.
+
+`fno do pr coverage-check` answers one of three states. COVERED is exit 0: the chain tiles with no open finding, or the configured rounds are spent. REFUSED is exit 3, and the refusal names the failing conjunct and the rounds remaining. UNANSWERED is exit 4, a named instrument failure, never a verdict. There is no exit 5. At the cap the review phase is complete: open findings stay in the PR conversation and the PR merges on green CI, hard findings included. The operator lever is `config.review.max_rounds`. The git-protection hook's refusal set is `{3}`.
 
 The round budget is `config.review.max_rounds` (default 2). A round is one reviewed HEAD, counted across the whole life of the PR, so two verdicts at one unchanged head are one round. A pass is one round like any other and refunds nothing, though it still satisfies coverage. CI failures, lint failures and rebases are not rounds. A PR merges after one to three reviews and never waits for a clean round. The full statement, with the honest-limits contract, is [review-coverage-termination.md](review-coverage-termination.md). That contract covers what class-gating does and does not close, the CONFIRMED axis, and GitHub's per-identity limit.
 
-The lane also buys cross-model review, which the king-mediated lane cannot: a GLM or codex author spawns a claude reviewer (or vice versa), so "different session" can mean "different model".
-The identity scrub on every spawn substrate is what makes a cross-harness reviewer stamp its own session rather than the author's; without it the lane's headline value, `other_session`, is silently unreachable.
+The configured `peer` lane can provide cross-model review. A GLM or Codex author's review must cross the model or harness to count as independent. A different session alone is not enough.
 
-The king-mediated lane (Lane 3) still cannot produce independence by construction: it fires the review verb at the worker's own prompt line, so the author runs and emits it.
-That lane produces compliance, not independence; the spawned-reviewer lane is what produces the latter.
+The identity scrub on every spawn substrate makes a cross-harness reviewer stamp its own session rather than the author's. Without it, the peer lane's honest `other_session` from a genuinely different reviewer is silently unreachable.
+
+An inline self-review produces self-attested coverage. Only a review that crosses the harness or model produces a non-self attestation.
 
 Two workers held green PRs on 2026-08-07 waiting for a second attestation that no dispatched lane emitted then, and escalated to the operator to merge on their behalf; neither was blocked.
-The spawned-reviewer lane is the path that did not exist for them.
 
-No gate lands with the lane.
+The missing route was the peer lane, not a sibling session.
+
+No gate lands with the origin field.
 Producing a countable non-author attestation and gating on it are separate decisions; `self_attested` stays a recorded origin, never a hold condition.
-"Land, measure, then decide" no longer measures zero percent independent forever, because the lane above is what emits the `other_session` value the sequence was waiting on.
 Whether to hold a green PR on a self-attested-only attestation remains its own decision, tracked on its own.
 
 This records WHOSE process rendered a verdict; the role-routing note in
@@ -568,10 +521,16 @@ Neither layer covers the specimens alone. The probe cannot see the window betwee
 
 | Site | Registers | Why it is the one that matters |
 |---|---|---|
-| `PreToolUse` on the Skill tool (`hooks/review-hold.sh`) | takes it | all three specimens were reviews the worker self-invoked through this tool, which is not footnote code and cannot register on its own |
+| `PreToolUse` on the Skill tool (`hooks/review-hold.sh`) | takes it | all three specimens were reviews the worker self-invoked through this tool, which is not footnote code and cannot register on its own. The hold keys the named PR's head ref, resolved from GitHub, or a named branch; only an invocation with no target reads the cwd |
+| `fno do target request-self-review` | takes it | the requester side, in footnote's own code, for a lead or operator asking another session for a round; the ordinary pipeline review runs in-session through the Skill row above and never passes here. It takes nothing on a refused or unconfirmed send: no review is running. It passes the branch it resolved and takes no hold when the PR read has no head ref |
 | `skills/review/scripts/emit-attestation.sh` | releases it | the positive completion marker: a verdict now exists for this head, so the release and the proof are one event |
-| the TTL | ages it out | the reviewer died. See the receipt rule below |
+| `fno do review classify --attest` | releases it | the Python producer of the same row. It emitted the verdict and left the hold standing for the full TTL |
+| the TTL | ages it out | the review did not attest inside its lease, whether or not its session still runs. See the receipt rule below |
 | a human or an unhooked harness | takes nothing | the named residual gap, covered only by the worktree probe |
+
+The requester site is the answer to PR 1575, merged 2026-09-07 while the only non-author review was still running. Eight findings, one HIGH, were discarded, and a review that finishes after a merge cannot post them. The hold existed and `fno do pr merge` was already fail-closed against it. Nothing took it. A hold nobody takes is identical to a hold that does not exist.
+
+A hold says a review is RUNNING. It counts no round and gates on no origin (laws `d-0fa92eb9`, `d-777e7d1f`).
 
 Registration NEVER blocks a review from starting. The probe still covers a review that runs unheld. A review that refuses to start because a lockfile write failed is strictly worse.
 
@@ -592,13 +551,15 @@ The release never names a holder, and `--holder` is optional on the verb for tha
 
 The hook reads files rather than shelling a third `fno` probe. The two vetoes above it already spend 25s each. The harness hook budget is 60s, and the margin is under 6s. A killed hook emits no verdict at all.
 
-That coarseness is deliberate, in the safe direction. Any review hold in the repo denies. The hook never maps the PR to its branch, because that needs the network call this path exists to avoid. It never judges expiry either. Hybrid liveness can keep a TTL-lapsed hold LIVE, so a TTL-only read here can ALLOW what the guard refuses. A wrong deny costs one command.
+That coarseness is deliberate, in the safe direction. Any review hold in the repo denies. The hook never maps the PR to its branch, because that needs the network call this path exists to avoid. It never judges expiry either. It reads file presence only. The first Python read deletes a lapsed hold, so nothing expired lingers for the hook to misread. A wrong deny costs one command.
 
 ### Failing safe in both directions
 
 A missing hold is never by itself the clear answer. It clears only after the worktree enumeration RAN and answered. Four readings block instead: a corrupted lockfile, an unreadable claims root, a failed `git worktree list`, and a PR whose head branch will not resolve. An unprobed PR is not a clear one.
 
 A hold that outlives a crashed reviewer wedges the merge lane permanently. That is worse than the defect it prevents. So it ages out on `config.review.hold_ttl_minutes`, which defaults to 90. It never ages out silently. The surface that clears past a lapsed hold prints the holder and the expiry, and emits `review_hold_expired`. A lane that clears with no receipt reads exactly like a lane nobody ever held.
+
+A live holder session does not extend the hold: the lease is on the review, not on the session that ran it. A same-holder re-acquire renews it, which is how a genuinely long review keeps its lane.
 
 That same arm DELETES the lockfile, in one breath with the receipt. A lapsed file stops blocking the Python readers, which judge expiry, and keeps blocking the stdlib hook, which cannot. One crashed reviewer otherwise denies every bare `gh pr merge` in the repo, for every PR, until someone notices. The claims reaper does collect it eventually, but it is config-gated, so this path cannot lean on it.
 
@@ -636,3 +597,28 @@ The local `review_coverage` event is the computed verdict. The `fno/review-cover
 ### Zero rows vs a frozen streak: the discriminator
 
 Two symptoms read alike and are different defects. Count `loop_check` rows in the worktree's own `.fno/events.jsonl`. Zero rows means the producer never ran there. A manual `fno-agents review-coverage --cwd <worktree>` settles it. Rows present with `consecutive_unchanged` frozen below `MUTE_PROBE_N` is the streak-gated shape the merge recompute makes moot.
+
+## The bot identity: posting a verdict GitHub can count
+
+Every local review verdict lands in one place: `fno event emit -t review_attestation`. The script `skills/review/scripts/emit-attestation.sh` ends in that call. The same emit now also mirrors the verdict to GitHub under a second identity: `config.review.bot_identity`. A clean pass can then carry `APPROVED`.
+
+GitHub refuses an approving review from the PR author. With one account authoring and reviewing, `reviewDecision` reads empty. No number of review objects changes that.
+
+The mirror is fail-closed inside the producer (`crates/fno-agents/src/publish_review.rs`), which the emit chokepoint and the hidden verb drive through one JSON contract. An unconfigured lane or token skips. A bot that is the PR author refuses. A stale head pin refuses. An unmappable verdict refuses. The result carries the `reviewDecision` GitHub reports back, never the POST receipt. One stderr receipt line prints on every branch: `bot-review: posted ...`, `bot-review: skipped (...)`, `bot-review: refused (...)`. The backfill door is the hidden verb `fno do pr publish-review --pr-number N`. Its verdict defaults to the newest head-pinned attestation for HEAD.
+
+One ordering fact: the first review of a branch runs BEFORE its PR exists, so the emit-time mirror skips with no open PR. The `/fno:ship pr create` flow closes that gap. Its step 2d runs `fno do pr publish-review --pr-number <n>` the moment the PR opens. The verb mirrors only a verdict the local gate already accepted. If a flow bypasses `/pr` and skips the mirror, branch protection makes the miss visible: the PR cannot merge until the approve exists.
+
+### Operator setup, in order
+
+The identity cannot be created by code. Four steps:
+
+1. Create a second GitHub account for the reviewer lane. A public repository costs it no seat.
+2. Add it to the repository as a collaborator with **write** access. Skipping write access is expensive. If the account is read-only, GitHub records and displays its review. That review never counts toward a required-approving-review rule. The setup looks green. When branch protection goes on, it fails.
+3. Mint a fine-grained PAT on that account. Scope it to this repository. Give it pull request read/write permission.
+4. Export it in the environment under the name `config.review.bot_token_env` gives (here: `GH_REVIEW_BOT_TOKEN`). Set `config.review.bot_identity` to the account's login.
+
+Verify live before you rely on it. Run `fno do pr publish-review --pr-number <n>`. Then `gh pr view <n> --json reviewDecision --jq .reviewDecision` must print `APPROVED`. The empty string means the identity is not working.
+
+### Sequencing: after, never with
+
+Branch protection with required approving reviews goes on AFTER this feature lands and is verified live on a real PR. Never turn both on in the same change. If the identity is misconfigured, turning both on at once wedges the repository. No merge path is left to fix it. Required status checks are independent of this and must not wait for it.

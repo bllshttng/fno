@@ -1,6 +1,6 @@
 """Failover controller: swap orchestration + per-phase counter state.
 
-Phase 03 of provider rotation failover (ab-9728b70b). The controller
+Phase 03 of provider rotation failover. The controller
 owns the read-mutate-write of settings.yaml during a swap and the
 per-phase state that bounds swap behavior. v0 ships:
 
@@ -12,7 +12,7 @@ per-phase state that bounds swap behavior. v0 ships:
   callers handle attended (BLOCKED all_providers_exhausted) vs
   unattended (sleep + restart) per Spec 1's locked decision #2.
 
-State persists at ``.fno/failover-state.json`` across calls
+State persists at ``~/.fno/state/failover-state.json`` across calls
 within the same phase. Phase boundaries are detected by the
 ``phase_id`` constructor arg (caller-provided, derived from
 target-state.md's ``session_id`` + ``current_phase``). When the stored
@@ -334,11 +334,15 @@ class FailoverController:
         self,
         *,
         settings_path: Path,
-        state_path: Path,
+        state_path: Path | None = None,
         phase_id: str,
         target_state_path: Path | None = None,
     ) -> None:
         self._settings_path = Path(settings_path)
+        if state_path is None:
+            from fno.paths import state_runtime_file
+
+            state_path = state_runtime_file("failover-state.json")
         self._state_path = Path(state_path)
         self._phase_id = phase_id
         self._target_state_path = target_state_path
@@ -393,7 +397,7 @@ class FailoverController:
             return SwapResult(decision=SwapDecision.NO_SWAP_NEEDED,
                               reason="error_class_not_swap_trigger")
 
-        # Update per-provider backoff state (Plan A, ab-6534a78a). The
+        # Update per-provider backoff state (Plan A). The
         # runtime-state write is supplementary to the swap decision: if
         # classify_error returns a rule, we update; otherwise the
         # existing storm-cap path runs unchanged. update_provider_health
@@ -402,7 +406,7 @@ class FailoverController:
         # introduced by a future refactor must surface in CI rather than
         # be hidden.
         #
-        # Plan A1 (ab-7fe3cdaf): when ``error.model`` is set, the lock
+        # Plan A1: when ``error.model`` is set, the lock
         # is written to ``model_locks[model]`` instead of
         # ``rate_limited_until``. When None (existing call sites),
         # behavior matches Plan A baseline (provider-level lock).
@@ -511,7 +515,7 @@ class FailoverController:
 def record_success(provider_id: str) -> None:
     """Reset per-provider exponential backoff after a successful call.
 
-    Plan A (ab-6534a78a) public API: callers (dispatch_target, the loop
+    Plan A public API: callers (dispatch_target, the loop
     runner, future cooldown-aware code) invoke this when a provider call
     returns 2xx. Calling this is OPTIONAL today - the runtime_state's
     1h TTL covers stale entries - but RECOMMENDED so the backoff_level

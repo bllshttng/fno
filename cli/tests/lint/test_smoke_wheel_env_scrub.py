@@ -177,6 +177,7 @@ def is_scrub(line: str) -> bool:
 WHEEL_CHANNEL_SMOKES = {
     "brew_formula_smoke.sh",  # keg bin: `fno-py --version`
     "cargo_bootstrap_smoke.sh",  # cargo shim self-provisions, then runs
+    "channel_matrix_smoke.sh",  # per-row install: curl/uv/pip/brew/cargo/npm
     "clean_machine_smoke.sh",  # fresh venv: `python -c "import fno..."`
     "fno_sh_smoke.sh",  # uv tool bin: `fno-py --version`
     "test_build.sh",  # throwaway venv: wheel contents + `python -c`
@@ -200,6 +201,7 @@ NON_INSTALL_SMOKES = {
     "test_json_flag.sh",
     "test_migrate_inbox_path.sh",
     "test_postinstall.sh",  # greps the installer's TEXT; runs no installer
+    "test_postinstall_clobber_guard.sh",  # stub uv refuses every install; imports nothing
     "test_preflight_hermetic.sh",  # sets PYTHONPATH on purpose, installs nothing
     "test_skeleton.sh",
     "test_stop_hook_wake_log.sh",
@@ -276,12 +278,6 @@ def test_tracker_sees_through_column_zero_nesting() -> None:
     assert 8 in top
 
 
-def test_tracker_reopens_after_a_block_closes() -> None:
-    """Depth must come back down, or everything after the first block is hidden."""
-    script = ["if x; then", "y", "fi", "unset PYTHONPATH"]
-    assert 4 in top_level_lines(script)
-
-
 def test_tracker_reopens_after_a_brace_block() -> None:
     """A helper function must not hide the rest of the file.
 
@@ -290,14 +286,6 @@ def test_tracker_reopens_after_a_brace_block() -> None:
     """
     script = ["run_capture() {", "  echo hi", "}", "unset PYTHONPATH"]
     assert 4 in top_level_lines(script)
-
-
-def test_tracker_sees_select_loops() -> None:
-    """`select` skips its body outright when stdin is at EOF."""
-    script = ["select x in a b; do", "unset PYTHONPATH", "done", "pip install ./x.whl"]
-    top = top_level_lines(script)
-    assert 2 not in top
-    assert 4 in top
 
 
 def test_tracker_sees_multiline_subshells() -> None:

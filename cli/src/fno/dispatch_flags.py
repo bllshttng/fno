@@ -5,16 +5,14 @@ every layer: the backlog CLI, target, mail, provenance and the agents CLI all
 validate the same two flags. Parking it in the runtime package forced core
 callers into an upward import for what is pure flag validation.
 
-The residual upward edge this module used to carry is closed (x-cec8):
-``fno.harness_identity`` built ``LEGACY_HANDLE_RE`` at import time from
-``fno.agents.harness_map.known_harnesses()``, so importing it eagerly imported
-``fno.agents``. The harness-name set now lives at this layer
-(``fno.harness_names``), so ``fno.harness_identity`` builds the regex from L0
-data with no runtime import; ``fno.harness_identity`` and ``fno.harness_names``
-are both declared in the boundary map at this layer, so the (absent) edge is
-visible to the check rather than hiding in an unmapped blind spot. The runtime
-capability table (``fno.agents.harness_map``) asserts its keys stay in sync with
-the name list, preserving the single-source-of-truth property.
+The residual upward edge this module used to carry is closed : importing
+``fno.harness_identity`` used to import ``fno.agents`` for the name set. The
+set is served at this layer (``fno.harness_names``, the door over the Rust
+roster), the regex builds from L0 data with no runtime import, and reads it
+lazily (an eager build made every import pay a roster subprocess, which broke
+binary-less CI lints). The runtime capability table
+(``fno.agents.harness_map``) keeps its keys in sync with the name list,
+preserving the single-source-of-truth property.
 
 ``resolve_dispatch_harness`` centralizes one precedence so every dispatch verb
 defaults the harness the same way:
@@ -23,7 +21,7 @@ defaults the harness the same way:
 
 Every rung of that chain is on the HARNESS axis: the middle rung reads harness
 markers out of the environment, and the builtin ``claude`` is a CLI binary, not
-a vendor. It resolved a "provider" until x-c55f, which is why an operator could
+a vendor. It resolved a "provider" until, which is why an operator could
 read a harness name out of a provider-shaped field and conclude a route had
 fallen back. See ``docs/architecture/axis-vocabulary.md``.
 
@@ -43,6 +41,7 @@ from __future__ import annotations
 import os
 from typing import Mapping, Optional
 
+from fno.config._dispatch_verbs import canonical_verb_key
 from fno.harness_identity import resolve_harness_identity
 
 # decision_source vocabulary surfaced in the spawn receipt so a dispatch's
@@ -62,9 +61,11 @@ def infer_invoking_harness(env: Optional[Mapping[str, str]] = None) -> Optional[
     """Return the invoking harness name from env markers, or None if unclear.
 
     Inference never guesses: it returns a harness only when markers identify
-    exactly one distinct harness. Multiple markers for that same harness (for
-    example Codex's thread id plus its legacy session id) agree; markers naming
-    different harnesses remain ambiguous and fall through to None.
+    exactly one distinct harness. Multiple markers for that same harness agree
+    when they carry the same id; two DIFFERENT ids of one family (the durable
+    codex thread id against the legacy codex session id) are a disagreement
+    and fall through to None, exactly as markers naming different harnesses
+    do.
     """
     environ = os.environ if env is None else env
     return resolve_harness_identity(environ).harness
@@ -118,7 +119,7 @@ def configured_dispatch_harness(
       ``dispatch.harness``                 deprecated one release; fallback rung
 
     Both dispatch doors read the stage table for this axis: ``resolve_dispatch``
-    (the seam behind dispatch-node.sh and ``fno agents dispatch resolve``) takes
+    (the seam behind the shell dispatchers and the node spawn resolver) takes
     the returned value as its config rung, and ``fno agents spawn`` reads the
     same ``provider`` field through its own profile merge, so a caller cannot
     get two answers for one node.
@@ -136,12 +137,7 @@ def configured_dispatch_harness(
             settings = load_settings()
         except Exception:  # noqa: BLE001 - a bad config must not brick resolution
             return None, None
-    profile_verb = (verb or "target").strip().lstrip("/")
-    if profile_verb.startswith("fno:"):
-        profile_verb = profile_verb[len("fno:"):] or "target"
-    agents = getattr(settings, "agents", None)
-    profiles = getattr(agents, "profiles", None) or {}
-    profile = profiles.get(profile_verb) if profile_verb else None
+    profile, profile_verb = _stage_profile(settings, verb)
     stage = (getattr(profile, "provider", "") or "").strip()
     legacy = (getattr(getattr(settings, "dispatch", None), "harness", "") or "").strip()
     if stage:
@@ -155,6 +151,41 @@ def configured_dispatch_harness(
     if legacy:
         return legacy, None
     return None, None
+
+
+def _stage_profile(settings: object, verb: str) -> tuple[object, str]:
+    """The stage-table profile row for VERB plus its canonical name, one home
+    for every reader. (None, "target") when unset."""
+    profile_verb = canonical_verb_key((verb or "target").strip()).lstrip("/")
+    agents = getattr(settings, "agents", None)
+    profiles = getattr(agents, "profiles", None) or {}
+    return (profiles.get(profile_verb) if profile_verb else None), profile_verb
+
+
+def configured_dispatch_route(
+    settings: object = None,
+    *,
+    verb: str = "target",
+) -> str:
+    """The stage table's vendor route for the dispatch verb, read once.
+
+    ``agents.profiles.<verb>.route`` is the vendor/model lane (e.g.
+    ``zai,glm-5.3-flash[1m]``) beside the ``provider`` harness field
+    :func:`configured_dispatch_harness` reads. The route is what selects a
+    worker's route settings file (endpoint+auth+model as one unit): a dispatch
+    that forwards the harness but not the route sends a routed model to the
+    default endpoint, where it dies on the first inference. Read-only and
+    total: a missing block or field reads as "", never raises.
+    """
+    if settings is None:
+        try:
+            from fno.config import load_settings
+
+            settings = load_settings()
+        except Exception:  # noqa: BLE001 - a bad config must not brick resolution
+            return ""
+    profile, _profile_verb = _stage_profile(settings, verb)
+    return (getattr(profile, "route", "") or "").strip()
 
 
 def reject_empty_model(model: Optional[str]) -> Optional[str]:

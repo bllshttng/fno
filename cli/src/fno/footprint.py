@@ -9,6 +9,7 @@ of an attributable fno process.
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 from typing import NamedTuple
@@ -36,8 +37,110 @@ class Footprint(NamedTuple):
     unparsed_lines: int
     # None on a complete reading. Set when live worker rows could not be
     # attributed to processes: the fleet share above is then an UNDERCOUNT,
-    # which a spawn gate must read as unknown, never as headroom (x-e040).
+    # which a spawn gate must read as unknown, never as headroom.
     attribution_gap: str | None = None
+    # Whole-machine count of processes whose OWN program is a test runner.
+    # Whole-machine on purpose: a test a person started competes for the same
+    # box as a lane.
+    test_process_count: int = 0
+    # The Claude Code background daemon's idle pre-warm pool. Not fleet CPU:
+    # these are not fno processes and fno never bounds or sweeps them. Measured
+    # because they can hold most of the machine, and a load refusal that cannot
+    # name them sends its reader after the wrong cause.
+    spare_pool_process_count: int = 0
+    spare_pool_cpu_cores: float = 0.0
+    spare_pool_rss_gb: float = 0.0
+    # Whole-machine census (AC10), beside the roster-scoped counts.
+    machine_process_count: int = 0
+    runnable_count: int = 0
+    # Masked unparsed-row evidence; unparsed_pids feeds the root arm.
+    unparsed_samples: tuple[UnparsedRow, ...] = ()
+    unparsed_pids: frozenset[int] = frozenset()
+
+
+class UnparsedRow(NamedTuple):
+    row: int
+    pid: int | None
+    reason: str
+    masked: str
+
+
+class Admission(NamedTuple):
+    """The CPU axis's decision, computed once and read by both gates (LD1).
+
+    ``verdict`` is ``admit`` | ``hold`` | ``undecidable`` | ``refuse``;
+    ``axis`` names what decided: the fleet's CPU share or an unreadable
+    instrument. ``reason`` is the full sentence
+    the gates print verbatim. An attribution gap widens the share to an
+    interval: ``share_low`` is the attributed share, ``share_high`` the
+    whole machine's, and ``bound`` records that the verdict read the upper
+    bound.
+    """
+
+    verdict: str
+    axis: str
+    reason: str
+    share_low: float
+    share_high: float
+    bound: str
+    fleet_cores: float
+    machine_cores: float
+    capacity_cores: float
+    ceiling: float
+    gap: str | None = None
+    top_holder: str | None = None
+
+
+#: argv[0] basenames that are a test runner on their own.
+_TEST_RUNNER_NAMES = frozenset({"pytest", "py.test"})
+
+
+def is_test_runner(command: str) -> bool:
+    """True when a process's OWN program is a test runner.
+
+    Matched on argv[0] plus the first non-flag arguments, never the whole
+    command line: a substring scan counts a leaked keeper whose socket path
+    sits under ``pytest-of-<user>``. Decoys pinned in test_footprint.py.
+    """
+    argv = command.split()
+    if not argv:
+        return False
+    program = argv[0].rsplit("/", 1)[-1]
+    rest = argv[1:]
+    if program in _TEST_RUNNER_NAMES:
+        return True
+    if program.startswith("python") and rest[:2] == ["-m", "pytest"]:
+        return True
+    positional = [arg for arg in rest if not arg.startswith("-")]
+    if program == "cargo":
+        return positional[:1] in (["test"], ["nextest"])
+    if program in {"fno", "fno-py"}:
+        return positional[:1] == ["test"] or positional[:2] == ["doctor", "test"]
+    return False
+
+
+#: argv[1] tokens the Claude Code background daemon gives its pre-warm pool.
+#: Both spellings are live: a pool child runs `claude bg-spare ...` while the
+#: app-bundle path runs `claude --bg-pty-host ...`.
+_CLAUDE_SPARE_POOL_ARGS = frozenset(
+    {"bg-spare", "bg-pty-host", "--bg-spare", "--bg-pty-host"}
+)
+
+
+def is_claude_spare_pool(command: str) -> bool:
+    """True for a Claude Code background-daemon pre-warm process.
+
+    These are not fno processes. fno never bounds or sweeps them: a spare is
+    what a new bg session is claimed from, so culling the pool disarms the
+    dispatch path it serves. They are counted only so a refusal can name them.
+
+    Matched on argv[0] plus argv[1], never a substring scan of the whole
+    command line: a claude session whose PROMPT says bg-spare is a session.
+    """
+    argv = command.split()
+    if len(argv) < 2:
+        return False
+    return argv[0].rsplit("/", 1)[-1] == "claude" and argv[1] in _CLAUDE_SPARE_POOL_ARGS
 
 
 class _Process(NamedTuple):
@@ -47,6 +150,53 @@ class _Process(NamedTuple):
     cpu_percent: float
     rss_kb: int
     command: str
+    # ps state letter(s); empty when the snapshot has no state column.
+    state: str = ""
+
+
+#: The `worktrees/<name>` tail a cluster of commands shares - the one line
+#: that explains a spike ("that tree's test suite is running").
+_WORKTREE_RE = re.compile(r"[\w~./-]*worktrees/[\w.-]+")
+
+
+def top_consumers(sustained: list[tuple[float, str]], n: int = 5) -> list[dict]:
+    """Top programs by summed ps ``%cpu``, with the worktree a cluster calls home.
+
+    Aggregates the rows :func:`parse_footprint` already kept - no second ps
+    pass. The name is argv[0]'s basename; ``worktree`` names the tree the
+    most of that program's rows run from, with how many, so "a worker is
+    running its test suite" stays one line instead of a mystery.
+    """
+    programs: dict[str, dict] = {}
+    for cpu_percent, command in sustained:
+        argv = command.split()
+        name = Path(argv[0]).name if argv else command
+        entry = programs.setdefault(
+            name, {"name": name, "procs": 0, "cpu": 0.0, "trees": {}}
+        )
+        entry["procs"] += 1
+        entry["cpu"] += cpu_percent
+        match = _WORKTREE_RE.search(command)
+        if match:
+            entry["trees"][match.group(0)] = entry["trees"].get(match.group(0), 0) + 1
+    ranked = sorted(
+        programs.values(), key=lambda e: (-e["cpu"], -e["procs"], e["name"])
+    )[:n]
+    consumers: list[dict] = []
+    for entry in ranked:
+        tree, tree_procs = (
+            max(entry["trees"].items(), key=lambda kv: kv[1]) if entry["trees"] else (None, 0)
+        )
+        consumers.append(
+            {
+                "name": entry["name"],
+                "procs": entry["procs"],
+                "cpu_pct": round(entry["cpu"], 1),
+                "worktree": tree,
+                "worktree_procs": tree_procs,
+            }
+        )
+    return consumers
 
 
 def _elapsed_seconds(value: str) -> int:
@@ -85,6 +235,60 @@ def _attributed_command(command: str) -> bool:
     return names[0].startswith("python") and "fno-py" in names[1:]
 
 
+# Evidence masking: numeric-shaped tokens print verbatim in
+# evidence; every other token is argv. Raw exception text is barred the same
+# way: on a non-row line the etime field holds argv and its repr is the leak.
+_MASKED_TOKEN_RE = re.compile(r"^[0-9][0-9.:-]{0,15}$")
+_MASKED_ROW_MAX_CHARS = 120
+_MAX_UNPARSED_SAMPLES = 3
+
+
+def _mask_row(line: str) -> str:
+    """Mask a ps row for evidence, capping at 120 chars and naming the tail."""
+    # Reserve room for the tail marker so the sample honors the cap.
+    budget = _MASKED_ROW_MAX_CHARS - len(" <+999999 tokens>")
+    line = "".join(ch if ch.isprintable() else " " for ch in line)
+    pieces: list[str] = []
+    used = 0
+    tail = 0
+    for token in line.split():
+        piece = token if _MASKED_TOKEN_RE.match(token) else f"<tok:{len(token)}>"
+        width = len(piece) + (1 if pieces else 0)
+        if used + width > budget:
+            tail += 1
+        else:
+            pieces.append(piece)
+            used += width
+    if tail:
+        pieces.append(f"<+{tail} tokens>")
+    return " ".join(pieces)
+
+
+def _unparsed_reason(line: str, new_format: bool, new_state_format: bool) -> str:
+    """Name the first failed field, in parse order; a bad ppid reports as pid."""
+    shapes = [(6, True, True)] if new_format and new_state_format else [(5, False, True)]
+    if not new_format:
+        shapes = [(6, True, True)] + shapes + [(4, False, False)]
+    for maxsplit, has_state, has_ppid in shapes:
+        fields = line.split(None, maxsplit)
+        if len(fields) != maxsplit + 1:
+            continue
+        start = (2 if has_ppid else 1) + (1 if has_state else 0)
+        # The parse's own cast order at this shape; state never fails a cast.
+        probes = [("pid", fields[0])] + ([("pid", fields[1])] if has_ppid else []) + [("etime", fields[start]), ("cpu", fields[start + 1]), ("rss", fields[start + 2])]
+        for word, value in probes:
+            try:
+                if word == "etime":
+                    _elapsed_seconds(value)
+                    continue
+                number = int(value) if word in ("pid", "rss") else float(value)
+            except (TypeError, ValueError):
+                return word
+            if number < 0:
+                return word
+    return "field-count"
+
+
 def parse_footprint(
     ps_output: str,
     *,
@@ -93,62 +297,69 @@ def parse_footprint(
     attributed_root_pids: set[int] | frozenset[int] | None = None,
     threshold_excluded_root_pids: set[int] | frozenset[int] | None = None,
 ) -> Footprint:
-    """Parse a file-backed ``ps -Ao pid,ppid,etime,%cpu,rss,command`` snapshot.
+    """Parse a file-backed ``ps -Ao pid,ppid,state,etime,%cpu,rss,command`` snapshot.
 
-    The legacy five-column shape is accepted for callers with old fixtures. It
-    has no parentage, so only directly attributable rows can be counted.
+    The six-column shape without ``state`` and the legacy five-column shape are
+    accepted for old fixtures; without ``state`` the runnable count reads zero.
     """
     processes: dict[int, _Process] = {}
     unparsed_lines = 0
+    samples: list[UnparsedRow] = []
+    salvaged_pids: set[int] = set()
+    row_number = 0
     new_format = False
+    new_state_format = False
 
     for raw_line in ps_output.splitlines():
         line = raw_line.strip()
         if not line:
             continue
         if line.startswith("PID "):
-            new_format = len(line.split()) >= 2 and line.split()[1] == "PPID"
+            header = line.split()
+            new_format = len(header) >= 2 and header[1] == "PPID"
+            # The state header varies by platform: STAT/STATE (BSD, macOS) or S (Linux).
+            new_state_format = len(header) > 2 and header[2] in ("STAT", "STATE", "S")
             continue
+        row_number += 1
         try:
-            fields = line.split(None, 5)
+            # Shapes, newest first: (maxsplit, has_state, has_ppid). The first
+            # that parses wins; an etime's colon never collides with a state.
             if new_format:
-                if len(fields) != 6:
-                    raise ValueError("wrong new-format field count")
-                pid = int(fields[0])
-                ppid = int(fields[1])
-                elapsed = _elapsed_seconds(fields[2])
-                cpu_percent = float(fields[3])
-                rss = int(fields[4])
-                command = fields[5].strip()
+                shapes = [(6, True, True)] if new_state_format else [(5, False, True)]
             else:
-                new_shape = False
-                if len(fields) == 6:
-                    try:
-                        pid = int(fields[0])
-                        ppid = int(fields[1])
-                        elapsed = _elapsed_seconds(fields[2])
-                        cpu_percent = float(fields[3])
-                        rss = int(fields[4])
-                        command = fields[5].strip()
-                        new_shape = True
-                    except (TypeError, ValueError):
-                        new_shape = False
-                if not new_shape:
-                    fields = line.split(None, 4)
-                    if len(fields) != 5:
-                        raise ValueError("wrong field count")
+                shapes = [(6, True, True), (5, False, True), (4, False, False)]
+            state = ""
+            for maxsplit, has_state, has_ppid in shapes:
+                fields = line.split(None, maxsplit)
+                if len(fields) != maxsplit + 1:
+                    continue
+                try:
                     pid = int(fields[0])
-                    ppid = None
-                    elapsed = _elapsed_seconds(fields[1])
-                    cpu_percent = float(fields[2])
-                    rss = int(fields[3])
-                    command = fields[4].strip()
+                    ppid = int(fields[1]) if has_ppid else None
+                    cursor = 2 if has_ppid else 1
+                    if has_state:
+                        state = fields[cursor]
+                        cursor += 1
+                    elapsed = _elapsed_seconds(fields[cursor])
+                    cpu_percent = float(fields[cursor + 1])
+                    rss = int(fields[cursor + 2])
+                    command = fields[cursor + 3].strip()
+                    break
+                except (TypeError, ValueError):
+                    state = ""
+            else:
+                raise ValueError("no shape matched")
             if pid < 0 or (ppid is not None and ppid < 0) or not command or cpu_percent < 0 or rss < 0:
                 raise ValueError("invalid process fields")
         except (TypeError, ValueError):
             unparsed_lines += 1
+            salvaged = int(f) if (f := line.split(None, 1)[0]).isdigit() else None
+            if salvaged is not None:
+                salvaged_pids.add(salvaged)
+            if len(samples) < _MAX_UNPARSED_SAMPLES:
+                samples.append(UnparsedRow(row_number, salvaged, _unparsed_reason(line, new_format, new_state_format), _mask_row(line)))
             continue
-        processes[pid] = _Process(pid, ppid, elapsed, cpu_percent, rss, command)
+        processes[pid] = _Process(pid, ppid, elapsed, cpu_percent, rss, command, state)
 
     excluded = frozenset(excluded_root_pids or ())
     attributed_roots = frozenset(attributed_root_pids or ())
@@ -207,9 +418,19 @@ def parse_footprint(
     rss_kb = 0
     measured_cpu_percent = 0.0
     sustained: list[tuple[float, str]] = []
+    test_process_count = 0
+    spare_pool_count = 0
+    spare_pool_cpu_percent = 0.0
+    spare_pool_rss_kb = 0
     for pid, process in processes.items():
         if not is_excluded(pid):
             measured_cpu_percent += process.cpu_percent
+            if is_test_runner(process.command):
+                test_process_count += 1
+            if is_claude_spare_pool(process.command):
+                spare_pool_count += 1
+                spare_pool_cpu_percent += process.cpu_percent
+                spare_pool_rss_kb += process.rss_kb
         if not is_attributed(pid):
             continue
 
@@ -246,4 +467,14 @@ def parse_footprint(
         measured_cpu_cores=measured_cpu_percent / 100,
         top=sustained,
         unparsed_lines=unparsed_lines,
+        unparsed_samples=tuple(samples),
+        unparsed_pids=frozenset(salvaged_pids),
+        test_process_count=test_process_count,
+        spare_pool_process_count=spare_pool_count,
+        spare_pool_cpu_cores=spare_pool_cpu_percent / 100,
+        spare_pool_rss_gb=spare_pool_rss_kb / (1024 * 1024),
+        machine_process_count=len(processes),
+        runnable_count=sum(
+            1 for process in processes.values() if process.state.startswith("R")
+        ),
     )

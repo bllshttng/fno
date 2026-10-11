@@ -1,12 +1,12 @@
 """fno.agents.discover — discover live hand-started Claude Code sessions.
 
-Group A / P1 of the live-session-comms epic (ab-098967b4). A transport-free
+Group A / P1 of the live-session-comms epic. A transport-free
 read over Claude Code's own per-session registry at
 ``~/.claude/sessions/<pid>.json`` (Locked Decision 3: no MCP /
 register-channel dependency — the registry already exists on disk). Surfaces
 live, un-adopted sessions in ``fno agents list`` so they are addressable by a
 legible handle without a UUID. When that sidecar is absent or repurposed, it
-falls back to the canonical transcript store ``~/.claude/projects`` (x-a1d5).
+falls back to the canonical transcript store ``~/.claude/projects``.
 
 Host-local (Locked Decision 8): PID liveness is per-machine, so only this
 host's sessions are discovered; the lane never claims to see another host's.
@@ -37,7 +37,7 @@ from fno import paths
 from fno.agents.fs_scan import path_exists_strict, scan_files
 from fno.agents.reachability import (
     REACHABLE,
-    WIRE_STATUS,
+    rendered_activity,
     Reachability,
     classify_progress,
     classify_reachability,
@@ -45,11 +45,25 @@ from fno.agents.reachability import (
     registry_falsifier,
 )
 from fno.harness_identity import (
-    canonical_handle,
     session_handle_tier,
     session_identity_key,
 )
 from fno.time_budget import validate_timeout_budget
+
+
+def canonical_handle(session_id: str) -> str:
+    """Lazy delegate to ``fno.harness_identity.canonical_handle``.
+
+    Imported per call, never bound at module import: a test monkeypatching
+    ``harness_identity.canonical_handle`` poisons every module that from-imported
+    the name while the patch was live, and monkeypatch's teardown only reverts
+    the attribute on ``fno.harness_identity`` -- the same regression
+    ``fno.mail.reply_resolve`` documented for ``resolve_harness_identity``.
+    """
+    from fno.harness_identity import canonical_handle as _impl
+
+    return _impl(session_id)
+
 
 # A real per-session registry file is named ``<pid>.json``. The strict guard
 # is load-bearing: a 7000+ entry sessions dir holds ``.sync-conflict-*.json``
@@ -103,7 +117,7 @@ def _is_accreted(alias: str) -> bool:
 # reads the developer's real ~/.claude/sessions.
 SESSIONS_DIR_ENV = "FNO_CLAUDE_SESSIONS_DIR"
 
-# Canonical session store (x-a1d5). The ``<pid>.json`` sidecar above is absent
+# Canonical session store. The ``<pid>.json`` sidecar above is absent
 # or repurposed on some hosts (observed live: a user syncs cleared/compacted
 # ``.md`` exports into ``~/.claude/sessions``), so the sidecar scan finds zero.
 # The canonical store is the transcript jsonl at
@@ -114,16 +128,16 @@ RECENCY_SECONDS_ENV = "FNO_CLAUDE_SESSION_RECENCY_SECONDS"
 _DEFAULT_RECENCY_SECONDS = 600.0
 
 
-def default_sessions_dir() -> Path:
-    """Claude Code's per-session registry directory on this host."""
-    override = os.environ.get(SESSIONS_DIR_ENV)
-    if override:
-        return Path(override)
-    return Path(os.path.expanduser("~")) / ".claude" / "sessions"
+def default_sessions_dirs() -> list[Path]:
+    """Claude Code's per-session registry directories on this host."""
+    if override := os.environ.get(SESSIONS_DIR_ENV):
+        return [Path(override)]
+    from fno.agents.harnesses._claude_session_registry import session_dirs
+    return session_dirs()
 
 
 def default_projects_dir() -> Path:
-    """Claude Code's canonical transcript store on this host (x-a1d5)."""
+    """Claude Code's canonical transcript store on this host."""
     override = os.environ.get(PROJECTS_DIR_ENV)
     if override:
         return Path(override)
@@ -144,8 +158,8 @@ def _recency_seconds() -> float:
 
 
 def default_name_map_path() -> Path:
-    """Persisted hex->legible alias overlay (``~/.fno/session-names.json``)."""
-    return paths.state_dir() / NAME_MAP_FILENAME
+    """Persisted hex->legible alias overlay (``~/.fno/mux/session-names.json``)."""
+    return paths.state_dir() / "mux" / NAME_MAP_FILENAME
 
 
 # Codex's transcript store is a structural mirror of claude's projects store,
@@ -158,7 +172,7 @@ _CODEX_DAEMON_DISCOVERY_TIMEOUT_SECONDS = 12.0
 
 
 def default_codex_sessions_dir() -> Path:
-    """Codex's rollout transcript store on this host (mirror of x-a1d5)."""
+    """Codex's rollout transcript store on this host (mirror of x-aaaa)."""
     override = os.environ.get(CODEX_SESSIONS_DIR_ENV)
     if override:
         return Path(override)
@@ -170,6 +184,11 @@ def default_codex_sessions_dir() -> Path:
 
 def _codex_daemon_threads_raw(*, env: Optional[dict[str, str]] = None) -> Optional[list[dict]]:
     """Raw ``threads`` rows the app-server daemon reports, or None.
+
+    The transport is ``fno-agents list --json --no-discovered --harness codex``:
+    the answer rides the ``codex_loaded`` block of an existing verb instead of
+    its own. ``--no-discovered`` is load-bearing - without it the Rust list
+    shells back into this Python discovery and recurses.
 
     None covers every failure mode (missing/stale binary, unavailable daemon,
     incompatible response, timeout) so a caller can tell "cannot answer" apart
@@ -185,7 +204,7 @@ def _codex_daemon_threads_raw(*, env: Optional[dict[str, str]] = None) -> Option
         return None
     try:
         proc = subprocess.run(
-            [str(binary), "codex-loaded-threads"],
+            [str(binary), "list", "--json", "--no-discovered", "--harness", "codex"],
             capture_output=True,
             text=True,
             timeout=_CODEX_DAEMON_DISCOVERY_TIMEOUT_SECONDS,
@@ -199,9 +218,12 @@ def _codex_daemon_threads_raw(*, env: Optional[dict[str, str]] = None) -> Option
         result = json.loads(proc.stdout.strip())
     except (ValueError, AttributeError):
         return None
-    if not isinstance(result, dict) or result.get("available") is not True:
+    if not isinstance(result, dict):
         return None
-    threads = result.get("threads")
+    loaded = result.get("codex_loaded")
+    if not isinstance(loaded, dict) or loaded.get("available") is not True:
+        return None
+    threads = loaded.get("threads")
     if not isinstance(threads, list):
         return None
     return threads
@@ -926,7 +948,7 @@ def _discover_from_opencode(
 
 
 def _discover_from_roster(*, exclude_session_ids: Iterable[str] = ()) -> list[dict]:
-    """Live claude sessions from the daemon roster (US1, x-605c).
+    """Live claude sessions from the daemon roster (US1).
 
     A ``claude --bg`` worker leaves no pid-sidecar and is dropped from the live
     process scan, so the roster is the ONLY source that surfaces it -- the exact
@@ -942,10 +964,11 @@ def _discover_from_registry(
     registry_path: Optional[Path] = None,
     *,
     exclude_session_ids: Iterable[str] = (),
+    falsify: bool = True,
 ) -> list[dict]:
-    """Registered fno-agent sessions, resolvable by canonical handle (US2, x-605c).
+    """Registered fno-agent sessions, resolvable by canonical handle (US2).
 
-    A spawned worker registered under a name (e.g. ``x-d899-us8-build``) also
+    A spawned worker registered under a name (e.g. ``x-aaaa-us8-build``) also
     answers to its bare ``<short8>`` handle, because its harness session id
     is surfaced as a discover row. The harness -> id mapping is
     ``HARNESS_SESSION_ID_FIELDS`` (the single source of truth also read by the
@@ -967,7 +990,7 @@ def _discover_from_registry(
     except Exception:  # noqa: BLE001 — a torn/version-drifted registry contributes no rows
         return rows
     for e in entries:
-        # Identity is one axis (x-8dfc): gate LIVE discovery on the row's
+        # Identity is one axis: gate LIVE discovery on the row's
         # harness (provider fallback). A known-harness row keeps resolving; an
         # alien harness stays excluded here (no live transport exists for it)
         # while remaining durably mail-routable -- the live/durable split the
@@ -982,7 +1005,7 @@ def _discover_from_registry(
             # short_id MUST be the authoritative jobId -- the stored short and
             # the uuid's first 8 hex can differ, and the jobId is what
             # `fno agents mail send <short>` and mail-inject key on.
-            # Canonical harness_session_id leads (x-ec59): a row whose only
+            # Canonical harness_session_id leads: a row whose only
             # identity is the canonical field (a heal-backfilled bg row) resolves
             # here, where before it fell through to durable-only forever.
             short_val = getattr(e, "short_id", "") or None
@@ -1017,7 +1040,7 @@ def _discover_from_registry(
                 # already condemned (dead pid, exited pane, recorded exit) would
                 # otherwise arrive in the discovered lane with nothing to falsify
                 # on and read reachable off a still-warm transcript.
-                "registry_falsifier": registry_falsifier(e),
+                "registry_falsifier": registry_falsifier(e) if falsify else None,
             }
         )
     return rows
@@ -1062,6 +1085,9 @@ class DiscoveredSession:
     #: set alongside ``truth_state`` from the same truth probe. Feeds
     #: ``classify_progress``; ``None`` before that probe has run.
     observed_model: Optional[dict] = None
+    #: The provider refusal the truth probe classified off the last assistant
+    #: turn. Feeds both renderers; ``None`` before that probe has run.
+    provider_refusal: Optional[str] = None
 
     def _reachability(self) -> Reachability:
         """This session's verdict from the one shared derivation.
@@ -1079,6 +1105,7 @@ class DiscoveredSession:
             # row has no usable pid of its own, and a scanned row has no registry
             # entry, so in practice at most one of these is ever present.
             falsifier=pid_falsifier(self.pid or None) or self.registry_falsifier,
+            observed_model=self.observed_model,
         )
 
     @property
@@ -1131,6 +1158,7 @@ class DiscoveredSession:
             harness=self.agent,
             route_settings_path=None,
             last_activity_age_s=self.last_activity_age_s,
+            provider_refusal=self.provider_refusal,
         )
         return {
             "handle": self.handle,
@@ -1147,12 +1175,18 @@ class DiscoveredSession:
             "pid": self.pid,
             "cwd": self.cwd,
             "project": self.project,
-            "status": WIRE_STATUS[reach.verdict],
+            "status": rendered_activity(
+                truth_state=self.truth_state,
+                age_s=reach.age_s,
+                reachability=reach.verdict,
+                provider_refusal=self.provider_refusal,
+            ),
             # The evidence, not just the word derived from it. Reducing the
             # verdict to a bare `status` here left this lane unable to say
-            # whether a `live` came from a transcript reading or an `orphaned`
-            # from a fired falsifier -- on the one list surface whose rows are
-            # ALL derived, and which the Rust path re-serves verbatim.
+            # whether a `writing` came from a transcript reading or an
+            # `orphaned` from a fired falsifier -- on the one list surface
+            # whose rows are ALL derived, and which the Rust path re-serves
+            # verbatim.
             "reachability": reach.verdict,
             "basis": reach.basis,
             "progress": progress.verdict,
@@ -1160,19 +1194,6 @@ class DiscoveredSession:
             "last_activity_age_s": reach.age_s,
             "agent": self.agent,
         }
-
-
-def _session_handle_matches(
-    token: Optional[str], sessions: Iterable[DiscoveredSession]
-) -> list[DiscoveredSession]:
-    """Every session matching the full, canonical, or legacy identity token."""
-    if not token:
-        return []
-    return [
-        session
-        for session in sessions
-        if session_handle_tier(token, session.session_id) is not None
-    ]
 
 
 def _exact_address_matches(
@@ -1214,7 +1235,10 @@ def discovery_address_matches(
     The sweep takes the resolver-only lane: matching reads identity fields
     alone, so per-session truth classification here is discarded cost.
     """
-    sessions = discover_live_sessions(registry_path=registry_path, classify_truth=False)
+    # Identity only: no falsifier probe per claude row, no project per cwd.
+    sessions = discover_live_sessions(
+        registry_path=registry_path, classify_truth=False, identity_only=True
+    )
     return _exact_address_matches(token, sessions)
 
 
@@ -1261,7 +1285,7 @@ def _read_registry_file(path: Path) -> Optional[dict]:
 
 
 # --------------------------------------------------------------------------
-# Canonical transcript-store discovery (x-a1d5)
+# Canonical transcript-store discovery
 # --------------------------------------------------------------------------
 
 
@@ -1272,10 +1296,6 @@ def _read_registry_file(path: Path) -> Optional[dict]:
 # Whether a given CC version preserves ``_`` is version-specific, so we try both
 # the underscore-collapsing and underscore-preserving forms and use whichever
 # directory actually exists (the common no-underscore path yields one name).
-def _encode_cwd(cwd: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9]", "-", cwd)
-
-
 def _candidate_dir_names(cwd: str) -> list[str]:
     names: list[str] = []
     for pat in (r"[^a-zA-Z0-9]", r"[^a-zA-Z0-9_]"):
@@ -1294,6 +1314,10 @@ def _live_claude_procs(psutil_mod) -> list[tuple[int, str]]:
     scan below to live sessions' dirs only — never the full 454-dir / 13k-file
     store (the plan's no-full-scan contract). Best-effort: any psutil failure
     yields fewer rows, never raises.
+
+    Cmdline is launch-time evidence: it says how a process was started, never
+    what state it is in now; liveness verdicts come from
+    ``fno.agents.session_truth``, not this walk.
     """
     out: list[tuple[int, str]] = []
     try:
@@ -1357,7 +1381,7 @@ def _discover_from_projects(
     psutil_mod,
     exclude_session_ids: Iterable[str] = (),
 ) -> list[dict]:
-    """Fallback discovery from the canonical transcript store (x-a1d5).
+    """Fallback discovery from the canonical transcript store.
 
     The ``<pid>.json`` sidecar is gone, so liveness comes from a running
     ``claude`` process: each live process' cwd maps to a projects subdir, and the
@@ -1397,167 +1421,6 @@ def _discover_from_projects(
             }
         )
     return rows
-
-
-# --------------------------------------------------------------------------
-# Harness-native subagents (sidechain 'limbs') - read-only visibility (x-af92)
-# --------------------------------------------------------------------------
-# A harness-native subagent (Claude's Agent tool; codex/agy/opencode task
-# primitives) is a nested conversation inside its PARENT session's process.
-# It has no pid, no roster entry, no registry row, and no mail handle, so the
-# pid- and registry-keyed census above structurally cannot see it. This reader
-# keys on ``agentId`` instead and is DISPLAY-ONLY: it is never wired into
-# ``census()`` or ``discover_live_sessions``, because a subagent has no mail
-# transport and listing it among addressable sessions would imply
-# addressability the substrate does not support. Full addressability is
-# rejected by design - see docs/architecture/coordination.md.
-#
-# claude-only: the ``<enc-cwd>/<session-id>/subagents/agent-*.jsonl`` layout is
-# claude's. codex/agy/opencode task primitives have their own on-disk shapes,
-# unmeasured here; a future harness reader slots into this seam. A host whose
-# projects store has no ``subagents/`` dirs contributes zero rows silently.
-
-#: A sidechain transcript counts as ``active`` when its mtime is within this
-#: window. mtime cannot prove a binary live/dead state (a thinking subagent has
-#: a stale mtime; a parent that dies mid-fan-out leaves children frozen), so
-#: the verdict is stated against this threshold and the age is rendered, never
-#: presented as a confident alive/dead. Env-overridable, positive only.
-SUBAGENT_LIVE_SECONDS_ENV = "FNO_SUBAGENT_LIVE_SECONDS"
-_DEFAULT_SUBAGENT_LIVE_SECONDS = 600.0
-#: Bound the mtime scan so a host with thousands of historical sidechain
-#: transcripts does not stat+open all of them. Files older than this are pruned
-#: before their first line is read; rows age out of the view entirely past it.
-_SUBAGENT_SCAN_WINDOW_S = 2 * 3600
-
-
-def _subagent_live_seconds() -> float:
-    """Active-verdict liveness window (env-overridable, positive only)."""
-    raw = os.environ.get(SUBAGENT_LIVE_SECONDS_ENV)
-    if raw:
-        try:
-            v = float(raw)
-        except ValueError:
-            v = 0.0
-        if v > 0:
-            return v
-    return _DEFAULT_SUBAGENT_LIVE_SECONDS
-
-
-@dataclass
-class DiscoveredSubagent:
-    """One harness-native subagent surfaced read-only (x-af92).
-
-    Keyed on ``agentId`` (the transcript's first-record field and the filename
-    stem), never a pid: a subagent has no process of its own. ``parent_session_id``
-    names the spawner so an operator can trace a fanned-out row back to its
-    origin. ``age_seconds`` is the honest liveness signal (transcript mtime);
-    ``verdict`` is derived from it against a stated threshold, because mtime
-    alone cannot support a confident live/dead call.
-    """
-
-    agent_id: str
-    parent_session_id: str
-    cwd: str
-    git_branch: Optional[str]
-    transcript_path: str
-    age_seconds: float
-    verdict: str  # "active" within the live threshold, else "idle"
-
-
-def _read_subagent_first(path: Path) -> Optional[dict]:
-    """First JSON record of a sidechain transcript, or None. Never raises.
-
-    A truncated, mid-write, or non-JSON first line is skipped, matching every
-    other transcript reader in this module (AC5-EDGE).
-    """
-    try:
-        with open(path, encoding="utf-8") as fh:
-            first = fh.readline()
-    except OSError:
-        return None
-    try:
-        rec = json.loads(first)
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return rec if isinstance(rec, dict) else None
-
-
-def discover_subagents(
-    *,
-    projects_dir: Optional[Path] = None,
-    live_within_seconds: Optional[float] = None,
-    scan_window_seconds: Optional[float] = None,
-    now: Optional[float] = None,
-) -> tuple[list[DiscoveredSubagent], list[str]]:
-    """Enumerate harness-native subagents (sidechain 'limbs'), read-only.
-
-    Globs ``<projects>/<enc-cwd>/<session-id>/subagents/agent-*.jsonl``, prunes
-    by transcript mtime to the scan window (so a store with thousands of
-    historical sidechains is not stat+opened in full), then reads each
-    survivor's first record for ``agentId`` + the parent ``sessionId`` + ``cwd``
-    + ``gitBranch``. ``agentId`` also falls back to the filename stem, and the
-    parent session id to the directory two levels up, so a record missing a
-    field still resolves.
-
-    Returns ``(rows, warnings)``. Any read failure degrades to zero
-    contribution with at most one warning and never raises: a vanished file is
-    skipped, a malformed first record is skipped, an unreadable projects root
-    yields zero rows plus one warning (AC5-EDGE). An absent store is silent
-    zero, not a warning (AC7-EDGE - that is the claude-only-scope case).
-    """
-    root = projects_dir or default_projects_dir()
-    live_threshold = (
-        live_within_seconds if live_within_seconds is not None else _subagent_live_seconds()
-    )
-    reference = now if now is not None else time.time()
-    scan_cutoff = reference - (scan_window_seconds or _SUBAGENT_SCAN_WINDOW_S)
-
-    warnings: list[str] = []
-    recent: list[tuple[float, Path]] = []
-    try:
-        for path in root.glob("*/*/subagents/agent-*.jsonl"):
-            try:
-                mt = path.stat().st_mtime
-            except OSError:
-                continue  # vanished mid-scan: skip, never abort the sweep
-            if mt >= scan_cutoff:
-                recent.append((mt, path))
-    except OSError as exc:
-        warnings.append(f"subagents: projects store unreadable ({exc}); no rows")
-        return [], warnings
-
-    rows: list[DiscoveredSubagent] = []
-    seen: set[str] = set()
-    for mt, path in sorted(recent, key=lambda t: t[0], reverse=True):
-        rec = _read_subagent_first(path)
-        if rec is None:
-            continue  # malformed/truncated first record: skip, do not abort
-        agent_id = str(rec.get("agentId") or "")
-        if not agent_id:
-            # The filename carries the id too (agent-<id>.jsonl).
-            stem = path.name[: -len(".jsonl")]
-            if stem.startswith("agent-"):
-                agent_id = stem[len("agent-") :]
-        if not agent_id or agent_id in seen:
-            continue
-        parent = str(rec.get("sessionId") or "")
-        if not parent:
-            parent = path.parent.parent.name  # the <session-id> dir
-        branch = rec.get("gitBranch")
-        seen.add(agent_id)
-        age = max(0.0, reference - mt)
-        rows.append(
-            DiscoveredSubagent(
-                agent_id=agent_id,
-                parent_session_id=parent,
-                cwd=str(rec.get("cwd") or ""),
-                git_branch=str(branch) if branch else None,
-                transcript_path=str(path),
-                age_seconds=age,
-                verdict=("active" if age <= live_threshold else "idle"),
-            )
-        )
-    return rows, warnings
 
 
 # --------------------------------------------------------------------------
@@ -1649,7 +1512,7 @@ def resolve_project_for_cwd(cwd: str) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------
-# Friendly-name overlay (~/.fno/session-names.json)
+# Friendly-name overlay (~/.fno/mux/session-names.json)
 # --------------------------------------------------------------------------
 
 
@@ -1747,11 +1610,28 @@ def _resolve_aliases(live: list[dict], name_map_path: Path) -> dict[str, str]:
                     time.sleep(min(_ALIAS_LOCK_POLL_SECONDS, remaining))
             try:
                 stored = _load_name_map(name_map_path)
+                # A row's own legible alias outranks the legacy file.
+                row_aliases: dict[str, str] = {}
+                try:
+                    from fno.agents.registry import load_registry
+                    for entry in load_registry():
+                        cands = [
+                            a
+                            for a in (getattr(entry, "aliases", None) or [])
+                            if a and not _is_accreted(a) and not LEGACY_HANDLE_RE.fullmatch(a)
+                        ]
+                        sid = entry.harness_session_id or entry.short_id
+                        if cands and sid:
+                            row_aliases[sid] = cands[0]
+                except (OSError, ValueError):
+                    row_aliases = {}
                 # Retire any alias whose session is no longer live.
                 pruned = {sid: nm for sid, nm in stored.items() if sid in live_sids}
                 for r in live:
                     sid = r["session_id"]
-                    if (
+                    if sid in row_aliases:
+                        aliases[sid] = row_aliases[sid]
+                    elif (
                         sid in pruned
                         and isinstance(pruned[sid], str)
                         and pruned[sid]
@@ -2113,6 +1993,10 @@ class ReachableSession:
     # directory would fail to revive a recipient that lives in another repo.
     # None means no store recorded one and the caller must fall back.
     cwd: Optional[str] = None
+    # The transcript source matched the file itself, so it hands over the
+    # path; a truth read must not re-derive it through the lossy cwd decode
+    # (a decoded cwd can be None when the project dir no longer exists).
+    transcript_path: Optional[Path] = None
 
 
 class StoreReadError(Exception):
@@ -2142,7 +2026,7 @@ class StoreReadError(Exception):
 # decoded from a transcript directory name is a lossy GUESS, while a registry
 # or roster row records the path verbatim. A verbatim cwd must be able to
 # correct a decoded one even though the decoding source ranks higher overall.
-_Hits = list[tuple[str, str, Optional[str], bool]]
+_Hits = list[tuple[str, str, Optional[str], bool, Optional[Path]]]
 
 
 def _decode_project_dir(name: str) -> Optional[str]:
@@ -2184,19 +2068,26 @@ def _alias_to_session_ids(token: str, name_map_path: Optional[Path]) -> tuple[li
     only addressable by its alias to exit 16 with nothing queued.
     """
     path = name_map_path or default_name_map_path()
+    stored: dict = {}
     try:
-        exists = path_exists_strict(path)
-    except OSError:
-        return [], False
-    if not exists:
-        return [], True
-    try:
-        stored = json.loads(path.read_text(encoding="utf-8"))
+        if path_exists_strict(path):
+            stored = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(stored, dict):
+                return [], False
     except (OSError, ValueError, UnicodeDecodeError):
         return [], False
-    if not isinstance(stored, dict):
-        return [], False
-    return [sid for sid, alias in stored.items() if isinstance(sid, str) and alias == token], True
+    hits = [sid for sid, alias in stored.items() if isinstance(sid, str) and alias == token]
+    # The rows are the primary name store: their aliases resolve past the file.
+    try:
+        from fno.agents.registry import load_registry
+        for entry in load_registry():
+            if token in (getattr(entry, "aliases", None) or []):
+                sid = entry.harness_session_id or entry.short_id
+                if sid and sid not in hits:
+                    hits.append(sid)
+    except (OSError, ValueError):
+        pass
+    return hits, True
 
 
 def _reachable_from_transcripts(token: str, projects_dir: Path) -> tuple[_Hits, bool]:
@@ -2236,7 +2127,9 @@ def _reachable_from_transcripts(token: str, projects_dir: Path) -> tuple[_Hits, 
         sid = path.name[: -len(".jsonl")]
         if _token_matches(token, sid) and sid not in seen:
             seen.add(sid)
-            hits.append((sid, "claude", _decode_project_dir(path.parent.name), False))
+            hits.append(
+                (sid, "claude", _decode_project_dir(path.parent.name), False, path)
+            )
     return hits, True
 
 
@@ -2305,6 +2198,7 @@ def _reachable_from_registry(token: str, registry_path: Optional[Path]) -> tuple
                     harness,
                     cwd if isinstance(cwd, str) and cwd else None,
                     True,
+                    None,
                 )
             )
     return hits, True
@@ -2358,7 +2252,9 @@ def _reachable_from_roster(token: str, daemon_dir: Optional[Path]) -> tuple[_Hit
         if _token_matches(token, sid) and sid not in seen:
             seen.add(sid)
             cwd = row.get("cwd")
-            hits.append((sid, "claude", cwd if isinstance(cwd, str) and cwd else None, True))
+            hits.append(
+                (sid, "claude", cwd if isinstance(cwd, str) and cwd else None, True, None)
+            )
     return hits, True
 
 
@@ -2370,7 +2266,7 @@ def _reachable_from_graph(token: str) -> tuple[_Hits, bool]:
     but never enough to claim liveness.
     """
     try:
-        from fno.graph.load import GraphCorruptionError, load_graph
+        from fno.graph.load import load_graph
     except ImportError:
         return [], False
     try:
@@ -2379,13 +2275,13 @@ def _reachable_from_graph(token: str) -> tuple[_Hits, bool]:
         # Every other load_graph caller takes the filtered default, so no other
         # consumer has to guard against a row it cannot index.
         entries = load_graph(keep_malformed=True)
-    except (OSError, ValueError, GraphCorruptionError):
-        # Corrupt, torn, or hash-mismatched: unreadable, NOT empty. Reporting
-        # empty here would let a graph problem masquerade as "this token names
-        # nothing" and drop the mail.
+    except (OSError, ValueError):
+        # Unparseable or unreadable: NOT empty. Reporting empty here would let
+        # a graph problem masquerade as "this token names nothing" and drop
+        # the mail.
         return [], False
     hits: _Hits = []
-    # Node stamps carry their own harness, so identity is the pair (x-c670).
+    # Node stamps carry their own harness, so identity is the pair.
     seen: set[tuple[str, str]] = set()
     malformed = False
     for node in entries or []:
@@ -2421,6 +2317,7 @@ def _reachable_from_graph(token: str) -> tuple[_Hits, bool]:
                         harness,
                         cwd if isinstance(cwd, str) and cwd else None,
                         True,
+                        None,
                     )
                 )
     return hits, not malformed
@@ -2435,7 +2332,15 @@ def _reachable_from_harness_stores(token: str) -> tuple[_Hits, bool]:
         hits = complete_store_hits(token)
     except AgentResolutionError:
         return [], False
-    return [(hit.session_id, hit.harness, hit.cwd or None, True) for hit in hits], True
+    return [
+        (hit.session_id, hit.harness, hit.cwd or None, True, None) for hit in hits
+    ], True
+
+
+def _report_ambiguity(token: str, found: dict[tuple[str, str], ReachableSession]) -> None:
+    """Name each ambiguous candidate and the store that first supplied it."""
+    named = ", ".join(f"{f.session_id} (source={f.source}, agent={f.agent})" for f in found.values())
+    print(f"resolve_reachable: token {token!r} is ambiguous: {named}", file=sys.stderr)
 
 
 def resolve_reachable(
@@ -2470,11 +2375,17 @@ def resolve_reachable(
     if not token or not token.strip():
         return None, []
 
+    from fno.agents.registry import RegistryVersionError
+
     pdir = projects_dir or default_projects_dir()
     # A friendly <project>-<short8> alias must keep working once its session
     # falls out of the live listing; resolve it to real uuids and match those
     # alongside the raw token.
-    alias_sids, alias_ok = _alias_to_session_ids(token, name_map_path)
+    try:
+        alias_sids, alias_ok = _alias_to_session_ids(token, name_map_path)
+        degraded: list[str] = []
+    except RegistryVersionError:  # torn store: degrade, never a clean miss
+        alias_sids, alias_ok, degraded = [], True, ["registry"]
 
     sources = (
         ("transcript", lambda t: _reachable_from_transcripts(t, pdir)),
@@ -2485,7 +2396,8 @@ def resolve_reachable(
     )
     tokens = [token, *alias_sids]
 
-    degraded: list[str] = [] if alias_ok else ["alias-map"]
+    if not alias_ok:
+        degraded.append("alias-map")
     # Keyed on (harness, normalized id). Harness is load-bearing: an id string
     # is only unique WITHIN a harness, so folding on the id alone merges a
     # claude session with a codex one that happens to share it, and the merged
@@ -2503,12 +2415,16 @@ def resolve_reachable(
                 if source not in degraded:
                     degraded.append(source)
                 continue
-            for sid, agent, cwd, verbatim in hits:
+            for sid, agent, cwd, verbatim, tpath in hits:
                 key = (agent, session_identity_key(sid))
                 prior = found.get(key)
                 if prior is None:
                     found[key] = ReachableSession(
-                        session_id=sid, source=source, agent=agent, cwd=cwd
+                        session_id=sid,
+                        source=source,
+                        agent=agent,
+                        cwd=cwd,
+                        transcript_path=tpath,
                     )
                     cwd_verbatim[key] = verbatim and cwd is not None
                     continue
@@ -2524,10 +2440,12 @@ def resolve_reachable(
                         source=prior.source,
                         agent=prior.agent,
                         cwd=cwd,
+                        transcript_path=prior.transcript_path,
                     )
                     cwd_verbatim[key] = verbatim
 
     if len(found) > 1:
+        _report_ambiguity(token, found)
         return None, sorted(f.session_id for f in found.values())
     if len(found) == 1:
         if degraded:
@@ -2561,6 +2479,7 @@ def discover_live_sessions(
     truth_fn: Optional[Callable[[DiscoveredSession], dict]] = None,
     classify_truth: bool = True,
     resolve_metadata: bool = True,
+    identity_only: bool = False,
 ) -> list[DiscoveredSession]:
     """Enumerate host-local session candidates and attach family-1 truth.
 
@@ -2576,14 +2495,14 @@ def discover_live_sessions(
     only candidates whose :attr:`DiscoveredSession.is_alive` is true.
     ``projects_dir`` / ``project_resolver`` / ``psutil_mod`` are test seams.
     """
-    sdir = sessions_dir or default_sessions_dir()
+    sdirs = [sessions_dir] if sessions_dir else default_sessions_dirs()
     resolver = project_resolver or resolve_project_for_cwd
     psu = psutil_mod or _import_psutil()
     exclude = {s for s in (exclude_short_ids or ()) if s}
     excluded_session_ids = {s for s in (exclude_session_ids or ()) if s}
 
     candidates: list[dict] = []
-    for f in _iter_pid_files(sdir):
+    for f in (f for d in sdirs for f in _iter_pid_files(d)):
         data = _read_registry_file(f)
         if not data:
             continue
@@ -2599,7 +2518,7 @@ def discover_live_sessions(
             except ValueError:
                 continue
         # short_id is a hex mailbox handle, never a friendly name: a --name
-        # like "blueprint-x-ce6e-glm" is not a session id, and admitting it as
+        # like "blueprint-x-bbbb-glm" is not a session id, and admitting it as
         # a handle strands mail on the bus (the drain is handle-keyed, so a
         # name never matches a session's handle). jobId is Claude's own
         # transport key; otherwise derive the canonical address.
@@ -2682,7 +2601,7 @@ def discover_live_sessions(
             continue
         candidates.append(r)
 
-    # Daemon roster + fno-agents registry (US1/US2, x-605c). Unioned ALWAYS,
+    # Daemon roster + fno-agents registry (US1/US2). Unioned ALWAYS,
     # like the codex source: a rostered bg worker (no pid-sidecar) or a named
     # registered session must resolve alongside live disk sessions. Dedup on
     # session_id below folds any overlap. Both readers are lenient -> zero rows
@@ -2692,7 +2611,9 @@ def discover_live_sessions(
         if r["short_id"] in exclude:
             continue
         candidates.append(r)
-    for r in _discover_from_registry(registry_path, exclude_session_ids=excluded_session_ids):
+    for r in _discover_from_registry(
+        registry_path, exclude_session_ids=excluded_session_ids, falsify=not identity_only
+    ):
         if r["short_id"] in exclude:
             continue
         candidates.append(r)
@@ -2717,8 +2638,13 @@ def discover_live_sessions(
     live = list(by_sid.values())
 
     if resolve_metadata:
+        # Each resolve parses every settings file; 299 rows shared 109 cwds.
+        projects: dict[str, Optional[str]] = {}
         for r in live:
-            r["project"] = resolver(r["cwd"]) if r["cwd"] else None
+            cwd = r["cwd"]
+            if cwd and not identity_only and cwd not in projects:
+                projects[cwd] = resolver(cwd)
+            r["project"] = projects.get(cwd)
         aliases = _resolve_aliases(live, name_map_path or default_name_map_path())
     else:
         aliases = {}
@@ -2761,6 +2687,7 @@ def discover_live_sessions(
         age = truth.get("last_activity_age_s")
         session.last_activity_age_s = int(age) if isinstance(age, (int, float)) else None
         session.observed_model = truth.get("observed_model")
+        session.provider_refusal = truth.get("provider_refusal")
     # Stable render order: by handle.
     sessions.sort(key=lambda s: s.handle)
     return sessions

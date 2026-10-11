@@ -1,7 +1,7 @@
 <!-- style-exception: mechanical verb rename preserves pre-existing prose -->
 # Merge-triggered auto-continue
 
-When a backlog node's PR merges, footnote dispatches a fresh background `/target --no-merge` worker for the next now-unblocked node. A merge-gated epic then walks itself group-by-group across merges with no manual re-invocation. The trigger is the **merge event**, not the loop terminal.
+When a backlog node's PR merges, footnote dispatches a fresh background worker for the next now-unblocked node. The worker's verb is derived from the node's lifecycle: a planless low node dispatches `/target --no-merge` directly, a planless medium/high node blueprints first, and a linked plan at `ready` builds. A merge-gated epic then walks itself group-by-group across merges with no manual re-invocation. The trigger is the **merge event**, not the loop terminal.
 
 ## Why
 
@@ -28,7 +28,7 @@ SessionStart hook -> fno backlog reconcile (detached, throttled ~15 min)
    worker builds G2, ships a no-merge PR ... human merges G2 ... repeat for G3
 ```
 
-The terminal path (`/pr merged <pr>`) is the same minus the SessionStart hook.
+The terminal path (`/fno:ship pr merged <pr>`) is the same minus the SessionStart hook.
 
 ## The verb: `fno backlog advance`
 
@@ -38,6 +38,7 @@ The terminal path (`/pr merged <pr>`) is the same minus the SessionStart hook.
 |------|-----------|---------|-------|
 | 1 | not armed | skip | `advance_skipped{disabled}` |
 | 2 | `walker:<root>` claim live | skip (the live walk owns it) | `advance_skipped{walker-live}` |
+| 3 | `fno backlog next` does not answer inside `[auto_continue] select_timeout_s` (default 120), or the store refuses | skip; the heal lane retries | `advance_skipped{select-unmeasured}` |
 | 3 | `fno backlog next` errors | skip (never guess a node) | `advance_skipped{next-error}` |
 | 3 | no ready node | skip | `advance_skipped{no-work}` |
 | 4 | `node:<id>` or `dispatch:<id>` already live | skip (already being worked) | `advance_skipped{already-claimed}` |
@@ -47,6 +48,8 @@ The terminal path (`/pr merged <pr>`) is the same minus the SessionStart hook.
 | 7 | spawned | dispatched | `advance_dispatched{node,short_id}` |
 
 `advance` is strictly **non-fatal**: any failure resolves to `advance_failed` / `advance_skipped` and the host op (reconcile / post-merge) still completes (Locked Decision 7). It never merges anything (Locked Decision 6): it dispatches no-merge workers only; auto-merge stays an independent opt-in.
+
+The selection bound is read by the Rust `fno-agents select-read` verb. Raise it with `[auto_continue] select_timeout_s = 240` in `.fno/config.toml`. Zero, negative, and malformed values use the 120-second default. The post-merge ritual caps the whole advance leg at 180 seconds. A larger selection bound can still hit that outer limit. The heal lane retries from the recorded `select-unmeasured` row.
 
 ## Claim choreography (the LD#11 / AC1-CLAIM problem)
 
@@ -76,7 +79,7 @@ A malformed `config.auto_continue` block (a non-boolean `enabled`, or a scalar w
 ## Triggers
 
 - **`fno backlog reconcile`** (fired detached by the SessionStart hook `hooks/reconcile-session-start.sh`): after it closes each drifted, web/app-merged node, it calls `advance(closed_node_id=<id>, project=<project>)`. This is the dominant path because the operator merges on the web. Non-fatal: a failed advance never fails the reconcile sweep.
-- **`/pr merged`**: after it closes the node + harvests retro, it calls `fno backlog advance`. This covers the case where the node was already closed before `/pr merged` ran (reconcile then no-ops, so its own advance never fires).
+- **`/fno:ship pr merged`**: after it closes the node + harvests retro, it calls `fno backlog advance`. This covers the already-closed case. The node was closed before `/fno:ship pr merged` ran. Reconcile then no-ops, and its own advance never fires.
 
 Both triggers observing one merge dispatch the successor at most once: the `dispatch:<id>` reservation (and the worker's `node:<id>` claim) dedups them (AC1-FR).
 
@@ -84,9 +87,9 @@ Both triggers observing one merge dispatch the successor at most once: the `disp
 
 ## Dispatch mechanics
 
-The worker spawn routes through the shared resolver (`fno.agents.harness_map.resolve_dispatch`, the same one `fno agents dispatch resolve` and `dispatch-node.sh` use), not a hardcoded `/target` f-string. The resolver returns the substrate (`bg` for claude, `headless` for codex/others) and the per-harness-normalized command. `_spawn_worker` spawns exactly that. A node's `dispatch_verb`/`dispatch_brief` route the verb path (`/think <id>`, brief on `TARGET_BRIEF` env). With no verb the builtin `/target` is used.
+The worker spawn routes through the shared resolver (`fno.agents.harness_map.resolve_dispatch`, the same one `resolve_node_spawn` and `dispatch-node.sh`'s spawn door read), not a hardcoded `/target` f-string. The resolver returns the substrate (`bg` for claude, `headless` for codex/others) and the per-harness-normalized command. `_spawn_worker` spawns exactly that. The workflow verb is DERIVED from the node's plan rung and difficulty (`resolve_effective_verb`): difficulty decides at intake (plan rung `none`), the plan's rung decides at re-dispatch. A node's `dispatch_brief` rides `TARGET_BRIEF` env, and a stored `dispatch_verb` outside the target/blueprint family (e.g. `/think`) keeps declared precedence. The full table and the refusal cases live in [backlog-graph-verb-contracts](backlog-graph-verb-contracts.md).
 
-`no-merge` stays a launcher decision, never baked into a node verb. The default builtin bakes it. `config.auto_merge.grant="dispatch"` routes the `/target` verb path instead, omitting the flag and preserving the configured merge posture. The legacy `dispatch.auto_merge` bool reads as the grant for one release. The agent is named `target-<full-node-id>-<slug>`. Its cwd resolves to the node's recorded root (`--cwd`) or canonical main (`--fresh`). Subscription lane only (`fno agents spawn`), never `-p` / API credit.
+`no-merge` stays a launcher decision, never baked into a node verb. A derived `/target` renders through the same rungs as the builtin, whose default bakes the flag. `config.auto_merge.grant="dispatch"` omits it, preserving the configured merge posture. The legacy `dispatch.auto_merge` bool reads as the grant for one release. The agent is named `target-<full-node-id>-<slug>` (a `-blueprint` qualifier states a derived non-target phase). Its cwd resolves to the node's recorded root (`--cwd`) or canonical main (`--fresh`). Subscription lane only (`fno agents spawn`), never `-p` / API credit.
 
 ## Exhaustion failover (`config.dispatch.on_exhaustion`)
 
@@ -106,10 +109,10 @@ Three autonomous entry points consume it, so identical node, config, and quota f
 
 - `backlog advance` (the active backlog and the merge trigger route through it) calls the selector directly.
 - `fno agents dispatch` calls it directly.
-- `skills/target/scripts/dispatch-node.sh` (which backs `/target bg` and blueprint auto-launch) is a shell rung and cannot import Python, so it reaches the same seam through `fno agents dispatch resolve --autonomous`.
+- `skills/target/scripts/dispatch-node.sh` (which backs `/target bg`) is a shell rung and cannot import Python, so it hands the node to `fno agents spawn --node` and the door's own resolver answers the seam.
 
 That flag is the whole reason the shell rung is not a fourth, divergent policy.
-Bare `fno agents dispatch resolve` is pure - it answers "which harness is configured", never "does that harness have quota left" - so a dispatcher that called only the bare verb would sit on a walled account while an idle harness waited.
+A bare harness read is pure - it answers "which harness is configured", never "does that harness have quota left" - so a dispatcher that consulted only the harness would sit on a walled account while an idle harness waited.
 `--autonomous` folds the route decision into the same tuple: on a cutover the returned `harness`, `substrate`, and `command` are already the destination's, and `route_action` / `route_account` / `route_source` / `route_retry_at` carry the verdict.
 The destination's credentials never cross that boundary - only its record id does, which `fno agents spawn --dispatch-account <record>` resolves on the other side.
 That flag exists because `--account` is operator intent and claude-only by contract, while a cutover's whole point is landing on another harness.
@@ -134,11 +137,11 @@ Do not reuse the defer horizon here - it answers the opposite question.
 
 `advance()` selects the project-scoped *next* ready node, so it can only continue a chain *within one project*: `fno backlog next --project <closed.project>` filters foreign nodes out. A multi-repo feature modeled as one node per project linked by `blocked_by` (backend node A in `etl`, frontend node B in `web`, `B blocked_by A`) would stall at the repo boundary - A merges, but B is never dispatched.
 
-`advance_dependents()` (same module) closes that gap by following `blocked_by` **edges** instead of a project-scoped selection. After a node closes, for each now-unblocked **direct** dependent in a **different** project it spawns `/target --no-merge <dep> --cwd <dep work-map root>`. The two paths are deliberately distinct (dispatch-by-edge vs select-next). `advance()` is untouched, so a pure single-project close dispatches nothing new. The same-project continuation keeps using `next`.
+`advance_dependents()` (same module) closes that gap by following `blocked_by` **edges** instead of a project-scoped selection. After a node closes, for each now-unblocked **direct** dependent in a **different** project it spawns the node's derived verb (`/target --no-merge <dep>` on a planless low or ready node, `/blueprint <dep>` on a planless medium/high one) with `--cwd <dep work-map root>`. The two paths are deliberately distinct (dispatch-by-edge vs select-next). `advance()` is untouched, so a pure single-project close dispatches nothing new. The same-project continuation keeps using `next`.
 
 - **Unblocked == ready.** `_direct_dependents` reads the graph fresh (after the close commits under `locked_mutate_graph`), so `recompute_statuses` already reflects the merge: a dependent whose only open blocker was the closed node reads `ready`. The filter is `status == "ready"` + cross-project + direct edge - no hand-written unblock predicate. Plan-less (`idea`) dependents are not auto-dispatched.
 - **Root from the work map, never guessed.** The dependent's `--cwd` is `project_root_from_settings(dep.project)` (exposed standalone as `fno backlog project-root <project>`). An unmapped project is refused by name (`advance_skipped{unmapped-project, detail=<project>}`), never launched against a guessed cwd.
-- **At most one worker.** Reuses the same `dispatch:<id>` TTL reservation + `node:<id>` liveness gate, so a successor seen by both `advance()` and `advance_dependents()` - or by reconcile and the explicit `backlog advance --closed` (both fire in `/pr merged`) - dispatches exactly once. One decision event per dependent; strictly non-fatal.
+- **At most one worker.** Reuses the same `dispatch:<id>` TTL reservation + `node:<id>` liveness gate. A successor seen by both `advance()` and `advance_dependents()` dispatches exactly once. The same holds for reconcile and the explicit `backlog advance --closed` (both fire in `/fno:ship pr merged`). One decision event per dependent, and strictly non-fatal.
 
 Wired alongside `advance()` in `reconcile` and `cmd_advance`. The session-side mirror is **G2** (the `/execute` session-project invariant): a `/execute` wave in a foreign project is spawned (unblocked) or deferred via `fno backlog carveout` (blocked, picked up later by this G1 path on merge), never executed in place. See `skills/execute/references/session-project-invariant.md`.
 
@@ -163,7 +166,7 @@ Four kinds, registered in `cli/src/fno/events/schema.yaml`, source `backlog`:
 - `cli/src/fno/config/__init__.py` - `AutoContinueBlock`.
 - `cli/src/fno/graph/cli.py` - `fno backlog advance` command + the reconcile trigger (both also call `advance_dependents`); `fno backlog project-root` (the unmapped-project detector G2 uses).
 - `skills/execute/references/waves.md`, `skills/execute/references/flat.md`, `skills/execute/references/session-project-invariant.md` - the G2 session-project invariant (spawn/defer/refuse foreign waves).
-- `skills/pr/references/merged.md` - trigger (`skills/megawalk` and its campaign-arm modifier are gone, see "Enable resolution" above).
+- `skills/ship/references/merged.md` - trigger (`skills/megawalk` and its campaign-arm modifier are gone, see "Enable resolution" above).
 - `cli/src/fno/events/schema.yaml` - the three event kinds (+ G1 `cross_project` field and reasons).
 - Tests: `cli/tests/unit/test_auto_continue.py`, `cli/tests/unit/test_advance.py`, `cli/tests/unit/test_project_root_cmd.py`, `cli/tests/integration/test_backlog_reconcile.py`.
 

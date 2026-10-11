@@ -45,7 +45,7 @@ pub enum ClientError {
 }
 
 /// How long a client waits for the daemon's response frame before declaring it
-/// unresponsive (x-3498). An AF_UNIX connect succeeds into the listen backlog
+/// unresponsive. An AF_UNIX connect succeeds into the listen backlog
 /// whether or not anyone ever calls accept, so connect time cannot tell
 /// "saturated" from "serving"; only a bounded read can. The value must sit
 /// ABOVE the daemon's own legitimate worst-case handler budget: a `stop`
@@ -134,7 +134,7 @@ pub fn resolve_daemon_bin() -> PathBuf {
 /// True when no process currently holds the supervisor singleton lock, so
 /// there is no daemon entitled to this socket and starting one is legitimate.
 ///
-/// This is the positive marker a connect probe cannot be (x-ef7f): a busy
+/// This is the positive marker a connect probe cannot be: a busy
 /// holder still holds the lock, while a busy holder answers no connect. We take
 /// the lock only to ask the question and release it immediately -- the daemon
 /// we spawn takes it for real, for its whole lifetime.
@@ -288,13 +288,19 @@ pub async fn ensure_daemon(
     eprintln!("(lazy-starting daemon)");
     // Helper closure-free twin used by both early-exit returns below: the
     // daemon's refusal cause is in daemon.stderr.log, not the exit status.
-    fn daemon_exited_early(status: std::process::ExitStatus, log: &std::path::Path) -> ClientError {
-        const TAIL: usize = 2000;
+    // The log is append-only across every daemon start, so only the bytes
+    // past `from` belong to this child; older runs' notes once buried the
+    // one real cause in a 2000-byte tail.
+    fn daemon_exited_early(
+        status: std::process::ExitStatus,
+        log: &std::path::Path,
+        from: u64,
+    ) -> ClientError {
         let detail = std::fs::read(log)
             .ok()
             .map(|raw| {
-                let start = raw.len().saturating_sub(TAIL);
-                String::from_utf8_lossy(&raw[start..]).trim().to_string()
+                let start = usize::try_from(from).unwrap_or(0).min(raw.len());
+                fold_repeated_lines(&String::from_utf8_lossy(&raw[start..]))
             })
             .filter(|text| !text.is_empty());
         ClientError::DaemonExitedEarly(
@@ -311,13 +317,14 @@ pub async fn ensure_daemon(
     // The daemon outlives this client. Inheriting a caller's captured stdout or
     // stderr keeps `Command::output()` open after the client exits, so a
     // captured spawn/restart waits forever on a pipe the daemon owns. stderr
-    // still must not be discarded: the x-4c87 startup refusal prints its cause
+    // still must not be discarded: the startup refusal prints its cause
     // (registry path + divergence counts) to stderr and exits before binding,
     // and the try_wait branch below reports exactly that. A file keeps both
     // properties: no inherited pipe to hold open, and the diagnostic survives
     // to be read back when the child exits early.
     cmd.stdout(std::process::Stdio::null());
     let stderr_log = home.root().join("daemon.stderr.log");
+    let log_start = std::fs::metadata(&stderr_log).map_or(0, |m| m.len());
     let stderr_sink = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -326,7 +333,7 @@ pub async fn ensure_daemon(
         .unwrap_or(std::process::Stdio::null());
     cmd.stderr(stderr_sink);
     cmd.env("FNO_AGENTS_HOME", home.root());
-    // Name the home in argv too, not just the env (x-cd31): a bare
+    // Name the home in argv too, not just the env: a bare
     // `fno-agents-daemon` row in ps cannot be attributed to the home it
     // serves, which is how 78 of them accumulated unnoticed. The binary
     // refuses a --home that disagrees with the env rather than silently
@@ -352,14 +359,14 @@ pub async fn ensure_daemon(
         if UnixStream::connect(&sock).await.is_ok() {
             return Ok(());
         }
-        // A daemon that REFUSED startup (x-4c87: a divergent registry exits
+        // A daemon that REFUSED startup (: a divergent registry exits
         // nonzero before binding, having printed the path and both counts to
         // inherited stderr) must fail this verb immediately with its real
         // cause, not burn the full socket budget on a socket that will never
         // appear (code-review on PR 924).
         if let Ok(Some(status)) = child.try_wait() {
             if !status.success() {
-                return Err(daemon_exited_early(status, &stderr_log));
+                return Err(daemon_exited_early(status, &stderr_log, log_start));
             }
             // Exit ZERO without a socket is the race loser's designed ending:
             // it found the lock held, deferred to the winner, and stopped. The
@@ -372,7 +379,7 @@ pub async fn ensure_daemon(
             // immediate idle-exit, a mismatched binary). Report it now rather
             // than spend the whole budget on a socket that will never appear.
             if daemon_lock_is_free(home) {
-                return Err(daemon_exited_early(status, &stderr_log));
+                return Err(daemon_exited_early(status, &stderr_log, log_start));
             }
             return wait_for_socket(&sock, start, budget).await;
         }
@@ -387,6 +394,46 @@ pub async fn ensure_daemon(
     // the wait branch above instead of spawning a competitor for it.
     drop(child);
     Err(ClientError::DaemonStartTimeout(budget))
+}
+
+/// Each distinct line once, in first-seen order, a repeat marked `(xN)`; the
+/// last line of the text stays last, because a refusing process prints its
+/// cause last. At most the final 20 distinct lines survive.
+pub fn fold_repeated_lines(text: &str) -> String {
+    let mut rows: Vec<(&str, usize)> = Vec::new();
+    for line in text
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+    {
+        match rows.iter_mut().find(|(seen, _)| *seen == line) {
+            Some((_, n)) => *n += 1,
+            None => rows.push((line, 1)),
+        }
+    }
+    if let Some(last) = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.trim().is_empty())
+        .last()
+    {
+        if let Some(i) = rows.iter().position(|(seen, _)| *seen == last) {
+            let row = rows.remove(i);
+            rows.push(row);
+        }
+    }
+    let skip = rows.len().saturating_sub(20);
+    rows[skip..]
+        .iter()
+        .map(|(line, n)| {
+            if *n > 1 {
+                format!("{line} (x{n})")
+            } else {
+                (*line).to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Send one request to the daemon (lazy-starting it first) and return the
@@ -426,7 +473,7 @@ pub async fn call_if_running(home: &AgentsHome, req: &Request) -> Result<Respons
 }
 
 // ---------------------------------------------------------------------------
-// Binary-version drift detection + restart (ab-1891cdff).
+// Binary-version drift detection + restart.
 // ---------------------------------------------------------------------------
 
 /// Parse the daemon's reported running-exe fingerprint out of an `agent.status`
@@ -481,7 +528,7 @@ pub struct RestartOutcome {
     /// The pid of the freshly-started daemon now serving.
     pub new_pid: u32,
     /// A `--force` run SIGKILLed the holder rather than draining it; the
-    /// transcript must record that a process was killed (x-3498).
+    /// transcript must record that a process was killed.
     pub forced: bool,
     /// Something the operator should hear but that does not fail the verb
     /// (e.g. `--force` declined to signal a recycled pid and restarted
@@ -498,8 +545,8 @@ pub enum RestartError {
     SigtermFailed { pid: u32, reason: String },
     #[error("SIGKILL to daemon pid {pid} failed: {reason}")]
     SigkillFailed { pid: u32, reason: String },
-    #[error("daemon pid {pid} did not exit after SIGTERM within {secs}s; check it manually")]
-    DidNotExit { pid: u32, secs: u64 },
+    #[error("daemon pid {pid} survived SIGKILL; it is still running - check it manually")]
+    DidNotDie { pid: u32 },
     #[error("daemon pid {pid} did not release the supervisor lock after SIGKILL within {secs}s; check it manually")]
     ForceDidNotFree { pid: u32, secs: u64 },
     #[error(
@@ -514,9 +561,21 @@ pub enum RestartError {
     Client(#[from] ClientError),
 }
 
-/// Bounded wait for the old daemon to release the supervisor socket. On a clean
-/// SIGTERM the daemon unlinks its own socket, so a failed connect means cleared.
-const RESTART_SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
+/// The grace a SIGTERM'd daemon gets before the restart escalates to SIGKILL.
+/// 30s because a loaded machine measured `fno agents list` at 11.5-18.7s the
+/// same hour, and restart.py wraps the verb in a 120s subprocess timeout:
+/// 30s grace + 2s kill + FORCE_LOCK_TIMEOUT + a 60s start_fresh fits inside
+/// it.
+const RESTART_SIGTERM_GRACE: Duration = Duration::from_secs(30);
+
+/// The result of [`terminate_confirmed`]. `Survived` is the honest-failure
+/// arm: the caller reports DidNotDie rather than a stop that did not happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Termination {
+    Exited,
+    Escalated,
+    Survived,
+}
 
 /// Bounded wait for a SIGKILLed holder's flock to dissolve. The kernel closes
 /// the descriptors of a SIGKILLed process synchronously enough that this is
@@ -562,31 +621,84 @@ async fn read_daemon_pid(home: &AgentsHome) -> Result<u32, RestartError> {
         .ok_or(RestartError::StatusMissingPid)
 }
 
-/// True once nothing is listening on the supervisor socket (the old daemon
-/// released it), bounded by `RESTART_SOCKET_TIMEOUT`.
-async fn await_socket_clear(home: &AgentsHome) -> bool {
-    let sock = home.supervisor_sock();
-    let start = Instant::now();
-    while start.elapsed() < RESTART_SOCKET_TIMEOUT {
-        if UnixStream::connect(&sock).await.is_err() {
-            return true;
+/// Terminate, escalate, verify (the house pattern `stop_worker_confirmed`
+/// applies to workers, applied here to the daemon itself): SIGTERM, wait out
+/// the grace, SIGKILL only a pid that is still provably ours, and refuse to
+/// claim a stop that did not happen. A pid whose recorded start time no
+/// longer matches at any poll counts as gone: the process we signalled
+/// exited and its pid was recycled; the new occupant is nobody's target.
+async fn terminate_confirmed(
+    pid: u32,
+    recorded_start: Option<u64>,
+    grace: Duration,
+) -> Result<Termination, RestartError> {
+    match send_signal(pid, libc::SIGTERM) {
+        SignalResult::Sent | SignalResult::AlreadyGone => {}
+        SignalResult::Failed(reason) => {
+            return Err(RestartError::SigtermFailed { pid, reason });
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    UnixStream::connect(&sock).await.is_err()
+    if crate::daemon::pid_gone_within(pid, recorded_start, grace).await {
+        return Ok(Termination::Exited);
+    }
+    // Still serving at the bound. Escalate only while the pid is still THIS
+    // daemon (AC1-ERR): a recycled pid is never signalled.
+    if !crate::daemon::pid_is_ours(pid, recorded_start) {
+        return Ok(Termination::Exited);
+    }
+    match send_signal(pid, libc::SIGKILL) {
+        SignalResult::Sent | SignalResult::AlreadyGone => {}
+        SignalResult::Failed(reason) => {
+            return Err(RestartError::SigkillFailed { pid, reason });
+        }
+    }
+    if crate::daemon::pid_gone_within(pid, recorded_start, Duration::from_secs(2)).await {
+        Ok(Termination::Escalated)
+    } else {
+        Ok(Termination::Survived)
+    }
 }
 
-/// True once nothing holds the supervisor singleton lock, bounded by
-/// [`FORCE_LOCK_TIMEOUT`].
-async fn await_lock_free(home: &AgentsHome) -> bool {
+/// Wait for the singleton to become startable again after a confirmed kill,
+/// WITHOUT demanding the lock sit free (bounded by `bound`, [`FORCE_LOCK_TIMEOUT`]
+/// in production). Whatever supervises the daemon can re-bind a fresh one the
+/// moment the old pid dies, and that new holder owns the lock; requiring a
+/// free lock turned that heal into a false FAILED (`ForceDidNotFree`) while a
+/// healthy daemon was already coming up on the new build. So wait on the NEW
+/// daemon instead: `Ok(Some(pid))` adopts a serving daemon whose pid differs
+/// from `old_pid`; `Ok(None)` means the lock freed (start fresh ourselves);
+/// `Err` means the whole bound was spent with the lock held and no new daemon
+/// answering - the real wedge the failure arm exists for.
+///
+/// Each probe is wrapped in a 2s hard bound so a bound holder that accepts but
+/// never answers (a wedged rebinding) costs one tick, not the 120s response
+/// deadline.
+async fn await_lock_free_or_rebound(
+    home: &AgentsHome,
+    old_pid: u32,
+    bound: Duration,
+) -> Result<Option<u32>, RestartError> {
     let start = Instant::now();
-    while start.elapsed() < FORCE_LOCK_TIMEOUT {
-        if daemon_lock_is_free(home) {
-            return true;
+    while start.elapsed() < bound {
+        let serving =
+            match tokio::time::timeout(Duration::from_secs(2), read_daemon_pid(home)).await {
+                Ok(Ok(pid)) => Some(pid),
+                Ok(Err(_)) | Err(_) => None,
+            };
+        if let Some(pid) = serving {
+            if pid != old_pid {
+                return Ok(Some(pid));
+            }
         }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        if daemon_lock_is_free(home) {
+            return Ok(None);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    daemon_lock_is_free(home)
+    Err(RestartError::ForceDidNotFree {
+        pid: old_pid,
+        secs: bound.as_secs(),
+    })
 }
 
 /// Read the lockfile's holder, tolerating the bind window: a daemon takes the
@@ -612,8 +724,46 @@ async fn await_lock_holder(home: &AgentsHome) -> Option<(u32, Option<u64>)> {
 
 /// Lazy-start a fresh daemon and return its pid. Shared by every restart exit.
 async fn start_fresh(home: &AgentsHome, daemon_bin: &Path) -> Result<u32, RestartError> {
-    ensure_daemon(home, daemon_bin).await?;
-    read_daemon_pid(home).await
+    let started = Instant::now();
+    // 60s: a stress-loaded runner measures process spawns at 30s and more,
+    // and the e2e harness backstops at 180s for the same reason. The 120s
+    // restart.py subprocess wrap still fits (30s grace + 2s kill +
+    // FORCE_LOCK_TIMEOUT + 60s).
+    let budget = Duration::from_secs(60);
+    loop {
+        ensure_daemon(home, daemon_bin).await?;
+        match read_daemon_pid(home).await {
+            Ok(pid) => return Ok(pid),
+            Err(error) if restart_transition_error(&error) && started.elapsed() < budget => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn restart_transition_error(error: &RestartError) -> bool {
+    fn transient_io(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected
+        )
+    }
+
+    match error {
+        RestartError::Client(ClientError::DaemonNotRunning) => true,
+        RestartError::Client(ClientError::Io(error)) => transient_io(error),
+        RestartError::Client(ClientError::Protocol(ProtocolError::UnexpectedEof)) => true,
+        RestartError::Client(ClientError::Protocol(ProtocolError::Io(error))) => {
+            transient_io(error)
+        }
+        _ => false,
+    }
 }
 
 /// Restart the daemon: SIGTERM the running one (graceful drain; PTY workers
@@ -628,7 +778,7 @@ async fn start_fresh(home: &AgentsHome, daemon_bin: &Path) -> Result<u32, Restar
 ///   daemon's own start-time check before signalling, so a recycled pid is never
 ///   hit.
 ///
-/// `force` is the break-glass path (x-3498): a daemon that holds the singleton
+/// `force` is the break-glass path: a daemon that holds the singleton
 /// lock without serving cannot be reached by ANY of the steps above -- the
 /// `call_if_running` probe concludes DaemonNotRunning (a wedged listener either
 /// accepts into the backlog or answers ECONNREFUSED) and `start_fresh`'s
@@ -662,11 +812,20 @@ pub async fn restart_daemon(
                             return Err(RestartError::SigkillFailed { pid, reason })
                         }
                     }
-                    if !await_lock_free(home).await {
-                        return Err(RestartError::ForceDidNotFree {
-                            pid,
-                            secs: FORCE_LOCK_TIMEOUT.as_secs(),
-                        });
+                    match await_lock_free_or_rebound(home, pid, FORCE_LOCK_TIMEOUT).await {
+                        Ok(Some(new_pid)) => {
+                            return Ok(RestartOutcome {
+                                old_pid: Some(pid),
+                                new_pid,
+                                forced: true,
+                                note: Some(format!(
+                                    "SIGKILLed pid {pid}; a fresh daemon rebound the singleton \
+                                     before the lock cleared; adopted it"
+                                )),
+                            });
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Err(e),
                     }
                     let new_pid = start_fresh(home, daemon_bin).await?;
                     return Ok(RestartOutcome {
@@ -764,20 +923,55 @@ pub async fn restart_daemon(
         });
     }
 
-    match send_signal(old_pid, libc::SIGTERM) {
-        SignalResult::Sent | SignalResult::AlreadyGone => {}
-        SignalResult::Failed(reason) => {
-            return Err(RestartError::SigtermFailed {
-                pid: old_pid,
-                reason,
-            })
-        }
+    // Terminate, escalate, verify: wait on the PID, not the socket. A socket
+    // that stops answering is an absence check with two failure modes (
+    // the 2026-08-13 double-daemon): a daemon whose select loop starves the
+    // SIGTERM arm keeps serving through the whole bound, and a daemon that
+    // unlinked its socket but is still tearing down reads as gone while the
+    // pid is still ours. `terminate_confirmed` returns Exited (died on TERM or
+    // its pid was recycled), Escalated (SIGKILL needed), or Survived (refuse
+    // to claim a stop that did not happen).
+    let termination = terminate_confirmed(old_pid, recorded_start, RESTART_SIGTERM_GRACE).await?;
+    if termination == Termination::Survived {
+        return Err(RestartError::DidNotDie { pid: old_pid });
     }
-
-    if !await_socket_clear(home).await {
-        return Err(RestartError::DidNotExit {
-            pid: old_pid,
-            secs: RESTART_SOCKET_TIMEOUT.as_secs(),
+    // Both arms wait for the singleton to become startable again before
+    // starting fresh, so start_fresh never binds while the old daemon still
+    // holds it - and a supervisor that re-binds a fresh daemon in that window
+    // is a SUCCESS to adopt, not a wedge to fail on (see the helper).
+    let escalated = termination == Termination::Escalated;
+    match await_lock_free_or_rebound(home, old_pid, FORCE_LOCK_TIMEOUT).await {
+        Ok(Some(new_pid)) => {
+            return Ok(RestartOutcome {
+                old_pid: Some(old_pid),
+                new_pid,
+                forced: escalated,
+                note: Some(if escalated {
+                    format!(
+                        "pid {old_pid} died after escalation to SIGKILL; a fresh daemon \
+                         rebound the singleton before the lock cleared; adopted it"
+                    )
+                } else {
+                    format!(
+                        "pid {old_pid} died; a fresh daemon rebound the singleton before \
+                         the lock cleared; adopted it"
+                    )
+                }),
+            });
+        }
+        Ok(None) => {}
+        Err(e) => return Err(e),
+    }
+    if escalated {
+        let new_pid = start_fresh(home, daemon_bin).await?;
+        return Ok(RestartOutcome {
+            old_pid: Some(old_pid),
+            new_pid,
+            forced: true,
+            note: Some(format!(
+                "pid {old_pid} kept serving {}s after SIGTERM; escalated to SIGKILL",
+                RESTART_SIGTERM_GRACE.as_secs()
+            )),
         });
     }
     // Do NOT unlink the socket here (codex P2, PR #472): once the clear window
@@ -795,6 +989,91 @@ pub async fn restart_daemon(
         forced: false,
         note: None,
     })
+}
+
+#[cfg(test)]
+mod restart_termination_tests {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+
+    /// Spawn a victim that ignores TERM (when `ignore_term`) and dies as an
+    /// ORPHAN: the perl parent forks and exits immediately, so the victim is
+    /// reparented to launchd, which reaps it the moment it dies. A direct
+    /// child of the test would sit as a zombie (its parent, the test, is
+    /// alive), and a zombie still answers kill(pid, 0), so the production
+    /// death probe would read it as alive forever. The old daemon's real
+    /// parent is a long-exited client, so production never sees this; the
+    /// orphan reproduces the launchd-reaped shape the probe expects.
+    /// The pid line is printed by the victim itself AFTER the disposition is
+    /// installed, so reading it races nothing.
+    fn spawn_victim(ignore_term: bool) -> (Child, u32) {
+        // No arg at all for the default-disposition case: an empty-string arg
+        // is still an @ARGV element, and one element is truthy in perl.
+        let mut cmd = Command::new("perl");
+        cmd.arg("-e")
+            .arg("$|=1; my $pid=fork(); die \"fork: $!\" unless defined $pid; if(!$pid){ $SIG{TERM}='IGNORE' if @ARGV; print \"$$\\n\"; sleep 60; exit 0 } exit 0")
+            .stdout(Stdio::piped());
+        if ignore_term {
+            cmd.arg("ignore");
+        }
+        let mut perl = cmd.spawn().expect("spawn victim parent");
+        // One LINE, never read_to_string: the victim inherits the pipe write
+        // end, so EOF arrives only when the victim itself exits.
+        use std::io::BufRead;
+        let mut out = String::new();
+        std::io::BufReader::new(perl.stdout.take().unwrap())
+            .read_line(&mut out)
+            .expect("read victim pid");
+        let pid: u32 = out.trim().parse().expect("victim pid is a number");
+        (perl, pid)
+    }
+
+    fn cleanup(perl: &mut Child, pid: u32) {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+        let _ = perl.wait();
+    }
+
+    #[tokio::test]
+    async fn terminate_confirmed_escalates_when_sigterm_is_ignored() {
+        let (mut midman, pid) = spawn_victim(true);
+        let start = crate::daemon::process_start_time(pid);
+        let t = terminate_confirmed(pid, start, Duration::from_secs(1))
+            .await
+            .unwrap();
+        assert!(matches!(t, Termination::Escalated), "got {t:?}");
+        let waited = midman.wait().is_ok();
+        assert!(
+            waited,
+            "the midman exits once the SIGKILLed victim is reaped"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminate_confirmed_reads_exited_when_the_daemon_dies_on_term() {
+        let (mut midman, pid) = spawn_victim(false);
+        let start = crate::daemon::process_start_time(pid);
+        let t = terminate_confirmed(pid, start, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(matches!(t, Termination::Exited), "got {t:?}");
+        let _ = midman.wait();
+    }
+
+    #[tokio::test]
+    async fn terminate_confirmed_never_escalates_a_pid_whose_start_time_no_longer_matches() {
+        // AC1-ERR: the recorded start time no longer matches at the grace
+        // bound -> the pid was recycled; no SIGKILL for a stranger.
+        let (mut midman, pid) = spawn_victim(true);
+        let t = terminate_confirmed(pid, Some(1), Duration::from_secs(1))
+            .await
+            .unwrap();
+        let untouched = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        cleanup(&mut midman, pid);
+        assert!(matches!(t, Termination::Exited), "got {t:?}");
+        assert!(untouched, "the recycled-pid occupant was never signalled");
+    }
 }
 
 #[cfg(test)]
@@ -866,6 +1145,96 @@ mod response_timeout_tests {
 }
 
 #[cfg(test)]
+mod restart_rebound_tests {
+    use super::*;
+    use crate::protocol::{write_response, Response};
+    use tokio::net::UnixListener;
+
+    fn temp_home(tag: &str) -> (AgentsHome, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("fno-agents-rebound-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        (AgentsHome::at(root.clone()), root)
+    }
+
+    /// Hold the supervisor lock the way a booting daemon would, so
+    /// `daemon_lock_is_free` reads false for the helper's whole bound.
+    fn hold_lock(home: &AgentsHome) -> std::fs::File {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(home.supervisor_lock())
+            .unwrap();
+        file.try_lock().expect("exclusive hold");
+        file
+    }
+
+    /// Serve `agent.status` naming `pid` for the helper's probes; accepts up
+    /// to 8 connects (one per 100ms tick of a 2s bound, plus slop).
+    async fn serve_status(sock: PathBuf, pid: u64) -> tokio::task::JoinHandle<()> {
+        let _ = std::fs::remove_file(&sock);
+        let listener = UnixListener::bind(&sock).unwrap();
+        tokio::spawn(async move {
+            for _ in 0..8 {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let resp = Response::ok(1, json!({"daemon": {"pid": pid}}));
+                let _ = write_response(&mut stream, &resp).await;
+            }
+        })
+    }
+
+    /// The three arms in one contract test (the suite is shrink-only):
+    /// adopt a rebound daemon, fail loud on a held lock with nothing
+    /// answering, and return the start-fresh arm the moment the lock frees.
+    #[tokio::test]
+    async fn rebound_waits_on_the_new_daemon_not_the_lock() {
+        // Adopt: the lock is held and a fresh daemon answers on the socket.
+        let (home, root) = temp_home("adopt");
+        let _lock = hold_lock(&home);
+        let old_pid: u32 = 424242;
+        let new_pid: u32 = 424243;
+        let server = serve_status(home.supervisor_sock(), u64::from(new_pid)).await;
+        let out = super::await_lock_free_or_rebound(&home, old_pid, Duration::from_secs(2)).await;
+        server.abort();
+        match out {
+            Ok(Some(pid)) => assert_eq!(pid, new_pid, "the rebound daemon is adopted"),
+            other => panic!("expected adoption of pid {new_pid}, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        // Wedge: the lock is held and nothing ever answers; the bound spent
+        // is the loud failure, naming the pid.
+        let (home, root) = temp_home("wedge");
+        let _lock = hold_lock(&home);
+        let out =
+            super::await_lock_free_or_rebound(&home, 424242, Duration::from_millis(400)).await;
+        match out {
+            Err(RestartError::ForceDidNotFree { pid, secs }) => {
+                assert_eq!(pid, 424242);
+                assert_eq!(secs, 0, "the bound names itself in the error");
+            }
+            other => panic!("expected ForceDidNotFree, got {other:?}"),
+        }
+        std::fs::remove_dir_all(&root).ok();
+        // Free: the start-fresh arm answers on its first tick, no probe penalty.
+        let (home, root) = temp_home("free");
+        let started = std::time::Instant::now();
+        let out = super::await_lock_free_or_rebound(&home, 424242, Duration::from_secs(2)).await;
+        assert!(
+            matches!(out, Ok(None)),
+            "a free lock is the start-fresh arm, got {out:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the free arm returns on its first tick"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
 mod drift_restart_tests {
     use super::*;
 
@@ -920,7 +1289,7 @@ mod drift_restart_tests {
 
     #[tokio::test]
     async fn read_response_bounded_fails_not_hangs_on_a_silent_peer() {
-        // x-3498 AC: a peer that accepts (here: holds the duplex open) and
+        // AC: a peer that accepts (here: holds the duplex open) and
         // never replies must surface as DaemonUnresponsive WITHIN the deadline,
         // not hang forever. The end-to-end shape (a real wedged daemon) is
         // proven in tests/daemon_e2e.rs; this pins the bound itself, fast.

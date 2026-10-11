@@ -23,6 +23,19 @@ fn pane(scratch: &Scratch, args: &[&str]) -> Output {
         .expect("fno binary runs")
 }
 
+/// Run a pane verb with one explicit environment override inherited by a
+/// client-autospawned server.
+fn pane_with_env(scratch: &Scratch, args: &[&str], key: &str, value: &str) -> Output {
+    scratch
+        .command()
+        .args(["mux", "pane"])
+        .args(args)
+        .env("SHELL", "/bin/sh")
+        .env(key, value)
+        .output()
+        .expect("fno binary runs")
+}
+
 /// Run `fno mux tab <args...>` against `scratch`'s session, headless.
 fn tab(scratch: &Scratch, args: &[&str]) -> Output {
     scratch
@@ -36,6 +49,10 @@ fn tab(scratch: &Scratch, args: &[&str]) -> Output {
 
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn pid_live(pid: i32) -> bool {
+    (unsafe { libc::kill(pid, 0) == 0 }) && !fno::proto::pid_is_zombie(pid)
 }
 
 /// Shut the session's server down (best effort) so a detached server never
@@ -581,7 +598,8 @@ fn defensive_reaper_sweeps_a_pane_when_its_exit_notification_is_lost() {
     );
     let log = std::fs::read_to_string(scratch.0.join("main.log")).unwrap_or_default();
     assert!(
-        log.contains("deliberately dropped exit") && log.contains("last dead pane reaped"),
+        log.contains("deliberately dropped exit")
+            && log.contains("shutting down (last-dead-pane-reaped"),
         "the test must exercise the lost-exit timer path; log: {log}"
     );
 }
@@ -748,10 +766,13 @@ fn sigterm_shutdown_kills_pane_children() {
     // x-48a5: the SIGTERM arm must tear panes down the way CoreMsg::Kill
     // does. The pane holds a child that ignores SIGHUP, so the closing pty
     // master cannot be what kills it - only the server's explicit teardown
-    // can. Pre-fix, the child outlives the server.
+    // can. Pre-fix, the child outlives the server. The child must be a PLAIN
+    // one: a keeper-hosted pane survives the shutdown for re-adoption by
+    // design, so the broken FNO_AGENTS_WORKER_BIN routes the spawn down the
+    // unkept inline fallback this test is about.
     let scratch = Scratch::new("sigterm_panes");
     let dir = scratch.0.to_str().unwrap();
-    let run = pane(
+    let run = pane_with_env(
         &scratch,
         &[
             "run",
@@ -762,6 +783,8 @@ fn sigterm_shutdown_kills_pane_children() {
             "-c",
             "trap '' HUP; exec sleep 300",
         ],
+        "FNO_AGENTS_WORKER_BIN",
+        "/nonexistent/fno-agents-worker",
     );
     assert!(
         run.status.success(),
@@ -795,4 +818,107 @@ fn sigterm_shutdown_kills_pane_children() {
         "pane child {child_pid} outlived the server's SIGTERM"
     );
     drop(scratch);
+}
+
+#[test]
+fn wedged_sigterm_reaps_plain_pane_children() {
+    // This is the real failure shape. The explicit companion marker asks the
+    // shipped server to wedge its core loop after pane registration;
+    // the test waits for that positive marker before sending SIGTERM, so a
+    // healthy-loop teardown cannot satisfy the assertion by accident.
+    let scratch = Scratch::new("wedged_sigterm_reaper");
+    let dir = scratch.0.to_str().unwrap();
+    // The pane must be PLAIN: the emergency SIGTERM path kills plain children
+    // and preserves keeper-hosted ones for re-adoption, so a broken
+    // FNO_AGENTS_WORKER_BIN routes the spawn down the unkept inline fallback.
+    // FNO_E2E_CORE_WEDGE parks the core loop so only that emergency path can
+    // answer the SIGTERM.
+    let run = scratch
+        .command()
+        .args(["mux", "pane", "run", "--cwd", dir, "--"])
+        .args([
+            "/bin/sh",
+            "-c",
+            "echo $$ > child.pid; trap '' HUP; exec sleep 300",
+        ])
+        .env("SHELL", "/bin/sh")
+        .env("FNO_E2E_CORE_WEDGE", "1")
+        .env("FNO_AGENTS_WORKER_BIN", "/nonexistent/fno-agents-worker")
+        .output()
+        .expect("fno binary runs");
+    assert!(
+        run.status.success(),
+        "wedged pane run: stdout={:?} stderr={:?}",
+        stdout(&run),
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let log_path = scratch.0.join("main.log");
+    let marker = "core wedge armed";
+    let marker_deadline = Instant::now() + Duration::from_secs(10);
+    let log = loop {
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if log.contains(marker) {
+            break log;
+        }
+        if Instant::now() >= marker_deadline {
+            panic!("real core-wedge marker never appeared; log: {log}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let child_pid: i32 = {
+        let path = scratch.0.join("child.pid");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(pid) = text.trim().parse() {
+                    break pid;
+                }
+            }
+            if Instant::now() >= deadline {
+                panic!("pane child pid file never became readable; log: {log}");
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    let server_pid = common::sidecar_pid_field(
+        &std::fs::read_to_string(scratch.0.join("main.pid")).expect("server pid sidecar"),
+    )
+    .expect("server pid field");
+
+    assert!(pid_live(child_pid), "child live before SIGTERM");
+    assert!(pid_live(server_pid), "server live at wedge marker");
+
+    assert_eq!(
+        unsafe { libc::kill(server_pid, libc::SIGTERM) },
+        0,
+        "SIGTERM reaches wedged server"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && (pid_live(server_pid) || pid_live(child_pid)) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let server_alive = pid_live(server_pid);
+    let child_alive = pid_live(child_pid);
+    if server_alive || child_alive {
+        unsafe {
+            libc::kill(server_pid, libc::SIGKILL);
+            libc::kill(child_pid, libc::SIGKILL);
+        }
+        panic!(
+            "wedged SIGTERM left processes alive: server={server_alive} child={child_alive}; log: {log}"
+        );
+    }
+    for path in [
+        scratch.main_sock(),
+        fno::proto::version_sidecar_path(&scratch.main_sock()),
+        fno::proto::pid_sidecar_path(&scratch.main_sock()),
+        fno::proto::startup_sidecar_path(&scratch.main_sock()),
+    ] {
+        assert!(
+            !path.exists(),
+            "signal exit left session file {}",
+            path.display()
+        );
+    }
 }

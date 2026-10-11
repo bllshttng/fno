@@ -172,7 +172,7 @@ the relevant section is reached, saving tokens.
 
 When a skill is renamed, create a thin shim that redirects to the canonical name:
 
-```yaml
+```markdown
 ---
 name: operator
 description: "Compatibility alias for fno:operator. Use fno:operator for new sessions."
@@ -368,7 +368,7 @@ description: >
 The primary workflow follows a linear chain:
 
 ```
-think -> plan -> do -> review -> ship
+think -> plan -> execute -> review -> ship
 ```
 
 | Phase | Skill | Purpose |
@@ -377,10 +377,9 @@ think -> plan -> do -> review -> ship
 | **Plan** | `/blueprint` | Create implementation plan with tasks and waves |
 | **Execute** | `/execute` or `/execute waves` or `/target` | Execute the plan |
 | **Review** | `/review sigma` | Review changes against guidelines |
-| **Ship** | `/pr create` | Create PR from commits |
+| **Ship** | `/fno:ship pr create` | Create PR from commits |
 
-Each phase is independent - you can enter at any point. Have a plan already?
-Skip think and plan. Just need a PR? Use `/pr create`.
+Each phase is independent - you can enter at any point. Have a plan already? Skip think and plan. Just need a PR? Use `/fno:ship pr create`.
 
 ### Execution Tiers
 

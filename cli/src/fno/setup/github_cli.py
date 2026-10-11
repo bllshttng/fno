@@ -4,7 +4,9 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import sys
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
@@ -12,6 +14,10 @@ from typing import Callable, Mapping, Optional
 from fno.paths import github_cli_proxy_dir
 
 PROXY_EXEC_LINE = 'exec fno-gh-proxy "$@"'
+# The OTHER shape a shim takes: pip and uv write a console script importing the
+# entry point, with no exec line, so it read as a real binary. On 2026-09-07
+# `~/.local/bin/gh` was one, and every gh read died on the re-entry refusal.
+PROXY_IMPORT_LINE = "from fno.pr.gh_proxy import main"
 _WRAPPER = f"#!/bin/sh\n{PROXY_EXEC_LINE}\n"
 _PROXY_DIR_ENV = "FNO_GH_PROXY_DIR"
 # The proxy stamps this into the env it hands `os.execve`, so its own successor
@@ -55,6 +61,12 @@ def ensure_proxy(
         raise FileNotFoundError("real gh executable not found on PATH")
     root = directory or github_cli_proxy_dir()
     root.mkdir(parents=True, exist_ok=True)
+    link = root / "fno-gh-proxy"
+    helper = shutil.which("fno-gh-proxy") or str(Path(sys.executable).with_name("fno-gh-proxy"))
+    if not link.exists() and os.path.isfile(helper):
+        link.unlink(missing_ok=True)
+        with suppress(FileExistsError):
+            link.symlink_to(helper)
     proxy = root / "gh"
     resolved = resolved.resolve()
     if resolved == proxy.resolve():
@@ -86,7 +98,7 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
     env = dict(base)
     # The identity scrub lives HERE, at the floor every adapter's child env
     # already crosses, not in each adapter: a per-adapter scrub is one the
-    # next adapter declines to call (x-b57a - claude's adapter scrubbed,
+    # next adapter declines to call (- claude's adapter scrubbed,
     # codex's never did, so a codex worker inherited its claude parent's
     # CLAUDE_CODE_SESSION_ID and stamped harness="claude-code" on every mail).
     # Before the no-gh early return: identity is not conditional on gh
@@ -98,8 +110,10 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
     from fno.harness_identity import scrub_ambient_identity
 
     scrub_ambient_identity(env)
+    # A child never inherits its parent's spawn cause.
+    env.pop("FNO_SPAWN_TRIGGER", None)
     # Seed provenance is inherited the same way and for the same reason it must
-    # not be (node x-3a64): these fields name WHO SENT THIS CHILD ITS SEED, so a
+    # not be (node): these fields name WHO SENT THIS CHILD ITS SEED, so a
     # child that inherits them attributes its own first message to whoever
     # seeded its parent - an envelope naming the wrong peer, which is worse than
     # none. Scrubbed at the floor rather than per adapter, so a launcher that
@@ -118,21 +132,33 @@ def worker_environment(base: Mapping[str, str]) -> dict[str, str]:
         return env
     delegate = Path(found)
     try:
-        if delegate.is_file() and _is_wrapper(delegate):
-            env[_PROXY_DIR_ENV] = str(delegate.parent.resolve())
+        inherited_shim = delegate.is_file() and _is_wrapper(delegate)
+    except OSError:
+        inherited_shim = False
+    if inherited_shim:
+        parent = delegate.parent.resolve()
+        keep = bool(requested_dir) or parent != fallback_proxy_dir().resolve()
+        if not keep:
+            # The temp shim is reapable: move the lineage to the durable home,
+            # and keep the temp one only when that home cannot be installed.
+            try:
+                result = ensure_proxy(real_gh=delegate)
+            except Exception:
+                keep = True
+        if keep:
+            env[_PROXY_DIR_ENV] = str(parent)
             env.pop("FNO_REAL_GH", None)
             return env
-    except OSError:
-        pass
-    try:
-        result = ensure_proxy(
-            directory=Path(requested_dir) if requested_dir else None,
-            real_gh=delegate,
-        )
-    except Exception:
-        if requested_dir:
-            raise
-        result = ensure_proxy(directory=fallback_proxy_dir(), real_gh=delegate)
+    else:
+        try:
+            result = ensure_proxy(
+                directory=Path(requested_dir) if requested_dir else None,
+                real_gh=delegate,
+            )
+        except Exception:
+            if requested_dir:
+                raise
+            result = ensure_proxy(directory=fallback_proxy_dir(), real_gh=delegate)
     old_path = env.get("PATH", "")
     env["PATH"] = str(result.proxy.parent) + (os.pathsep + old_path if old_path else "")
     env[_PROXY_DIR_ENV] = str(result.proxy.parent.resolve())

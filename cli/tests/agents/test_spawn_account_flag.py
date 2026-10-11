@@ -44,7 +44,7 @@ def _stub_pane_path(monkeypatch) -> dict:
             pane_id=1, child_pid=None, session_uuid=None,
         )
 
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_pane", fake_pane)
+    monkeypatch.setattr(mux_spawn, "dispatch_spawn_bounded_pane", fake_pane)
     return received
 
 
@@ -66,7 +66,7 @@ def test_account_overlay_threads_to_pane_and_receipt(monkeypatch, runner):
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--account", "readyrule", "--here"]
+        agents_app, ["spawn", "--name", "w1", "hi", "--account", "readyrule", "--here", "--substrate", "pane"]
     )
     assert result.exit_code == 0, result.output
     assert received["account_env"] == {"CLAUDE_CONFIG_DIR": "/x/.claude"}
@@ -100,7 +100,7 @@ def test_dispatch_account_threads_to_pane_and_receipt(monkeypatch, runner):
         agents_app,
         [
             "spawn", "--name", "w1", "hi", "--harness", "claude",
-            "--dispatch-account", "makers", "--here",
+            "--dispatch-account", "makers", "--here", "--substrate", "pane",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -109,6 +109,81 @@ def test_dispatch_account_threads_to_pane_and_receipt(monkeypatch, runner):
         next(ln for ln in result.output.splitlines() if ln.startswith("{"))
     )
     assert receipt["dispatch_account"] == "makers"
+    assert receipt["credential_source"] == "record-derived"
+
+
+def test_proven_credential_carrier_overrides_record_derivation(monkeypatch, runner):
+    """AC4-HP: the outage handoff's canary proved a SPECIFIC env for this
+    account and shipped it through FNO_DISPATCH_ACCOUNT_ENV; the spawn stages
+    that env VERBATIM instead of re-deriving from the record, and the receipt
+    names the provenance and the staged keys (never their values)."""
+    received = _stub_pane_path(monkeypatch)
+    from fno.adapters.providers import dispatch, loader
+
+    monkeypatch.setattr(
+        loader,
+        "load_providers",
+        lambda **_kwargs: SimpleNamespace(
+            by_id={"makers": SimpleNamespace(harness="claude")}
+        ),
+    )
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("a proven carrier must not re-derive from the record")
+
+    monkeypatch.setattr(dispatch, "dispatch_env", boom)
+    monkeypatch.setenv(
+        "FNO_DISPATCH_ACCOUNT_ENV",
+        json.dumps({"CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1"}),
+    )
+
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn", "--name", "w1", "hi", "--harness", "claude",
+            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert received["account_env"] == {
+        "CLAUDE_CONFIG_DIR": "/proved/account", "AUTH_PROVEN": "1",
+    }
+    receipt = json.loads(
+        next(ln for ln in result.output.splitlines() if ln.startswith("{"))
+    )
+    assert receipt["credential_source"] == "canary-proven carrier"
+    assert receipt["credential_env_keys"] == ["AUTH_PROVEN", "CLAUDE_CONFIG_DIR"]
+
+
+def test_proven_credential_carrier_refuses_when_unreadable(monkeypatch, runner):
+    """A corrupt carrier is fail-closed: exit 2, no spawn - the alternative is
+    silently falling back to a re-derivation nothing proved."""
+    received = _stub_pane_path(monkeypatch)
+    from fno.adapters.providers import loader
+
+    monkeypatch.setattr(
+        loader,
+        "load_providers",
+        lambda **_kwargs: SimpleNamespace(
+            by_id={"makers": SimpleNamespace(harness="claude")}
+        ),
+    )
+    monkeypatch.setenv("FNO_DISPATCH_ACCOUNT_ENV", "{not json")
+
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn", "--name", "w1", "hi", "--harness", "claude",
+            "--dispatch-account", "makers", "--here", "--substrate", "pane",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "unreadable" in result.output
+    assert received == {}
 
 
 def test_account_refusal_fails_closed(monkeypatch, runner):
@@ -172,7 +247,7 @@ def test_account_plus_route_composes(monkeypatch, runner):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
          "--account", "readyrule", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
@@ -212,7 +287,7 @@ def test_account_plus_role_composes(monkeypatch, runner):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
          "--account", "readyrule", "--role", "tidy"],
     )
     assert result.exit_code == 0, result.output
@@ -256,7 +331,7 @@ def test_account_plus_route_composes_under_inherited_managed(monkeypatch, runner
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
          "--account", "readyrule", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
@@ -296,7 +371,7 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
          "--account", "readyrule", "--route", "zai,glm-5.2"],
     )
     assert result.exit_code == 0, result.output
@@ -314,7 +389,7 @@ def test_composed_receipt_names_live_credential_and_payer(monkeypatch, runner):
 def test_account_only_receipt_has_no_credential_fields(monkeypatch, runner):
     """AC3-EDGE (x-8552): an --account spawn with no route emits no auth/bills -
     its receipt stays byte-identical to the pre-x-8552 shape."""
-    received = _stub_pane_path(monkeypatch)
+    _stub_pane_path(monkeypatch)
     import fno.agents.account_env as ae
     from fno.agents.account_env import AccountOverlay
 
@@ -327,7 +402,7 @@ def test_account_only_receipt_has_no_credential_fields(monkeypatch, runner):
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--account", "readyrule", "--here"]
+        agents_app, ["spawn", "--name", "w1", "hi", "--account", "readyrule", "--here", "--substrate", "pane"]
     )
     assert result.exit_code == 0, result.output
     receipt = json.loads(
@@ -356,15 +431,37 @@ def test_codex_thread_client_env_seals_our_state_roots(monkeypatch, tmp_path):
     from fno import rust_binary
     from fno.agents import dispatch as dsp
 
-    monkeypatch.setenv("HOME", "/real/home")
+    # The fake home sits under tmp_path so the hermetic guard allows the
+    # state_dir() resolution the seal performs.
+    fake_home = tmp_path / "real-home"
+    monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("FNO_AGENTS_HOME", raising=False)
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
+    # The fabricated HOME is the point: the seal must resolve roots through
+    # it, so the sandbox pin steps aside for this ambient-on-purpose test.
+    monkeypatch.setenv("FNO_TEST_HERMETIC", "0")
     monkeypatch.setattr(rust_binary, "resolve_binary", lambda: tmp_path / "fno-agents")
 
     captured = {}
 
     def fake_run(argv, **kw):
+        # The sealed lane probes the binary's state-root door before relying
+        # on the pin; answer that handshake the way the current binary does.
+        if argv[1] == "state-root":
+            return SimpleNamespace(
+                returncode=0,
+                stdout=kw["env"]["FNO_STATE_DIR"] + "\n",
+                stderr="",
+            )
         captured["env"] = kw.get("env")
+        # The seal's handshake asks the state-root door first; the fake
+        # binary honors the pin, then answers the client call itself.
+        if "state-root" in argv:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=kw["env"]["FNO_STATE_DIR"] + "\n",
+                stderr="",
+            )
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps({"session_id": "0198c0de-1111-7000-8000-00000000000a"}),
@@ -388,8 +485,9 @@ def test_codex_thread_client_env_seals_our_state_roots(monkeypatch, tmp_path):
     # The credential still reaches the launched harness.
     assert env["HOME"] == "/accounts/zai-1/home"
     # The positive markers: our roots name the REAL home, not the account's.
-    assert env["FNO_AGENTS_HOME"] == "/real/home/.fno/agents"
-    assert env["FNO_CLAIMS_ROOT"] == "/real/home"
+    assert env["FNO_AGENTS_HOME"] == str(fake_home / ".fno" / "agents")
+    assert env["FNO_CLAIMS_ROOT"] == str(fake_home)
+    assert env["FNO_STATE_DIR"] == str(fake_home / ".fno")
 
 
 def test_codex_thread_client_env_unsealed_without_a_home_overlay(
@@ -401,7 +499,8 @@ def test_codex_thread_client_env_unsealed_without_a_home_overlay(
     from fno import rust_binary
     from fno.agents import dispatch as dsp
 
-    monkeypatch.setenv("HOME", "/real/home")
+    fake_home = tmp_path / "real-home"
+    monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("FNO_AGENTS_HOME", raising=False)
     monkeypatch.setattr(rust_binary, "resolve_binary", lambda: tmp_path / "fno-agents")
 
@@ -429,7 +528,7 @@ def test_codex_thread_client_env_unsealed_without_a_home_overlay(
     )
 
     env = captured["env"]
-    assert env["HOME"] == "/real/home"
+    assert env["HOME"] == str(fake_home)
     assert "FNO_AGENTS_HOME" not in env
 
 

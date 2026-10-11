@@ -17,11 +17,15 @@ write_match() {
     'fn create(' \
     'provider: Some("anthropic".to_string()),' \
     '#[cfg(test)]' > "$tmp/claude.rs"
+  # claude_adopt.rs keeps the manifest line reader only; the gate reads it
+  # for existence. The mint lives on client_verbs; the route-settings match
+  # lives in the adopt-identity module, so the fixtures mirror the split.
+  printf '%s\n' 'pub fn manifest_field' > "$tmp/adopt.rs"
+  printf '%s\n' 'provider_from_route_settings(Some(&model))' > "$tmp/adopt-identity.rs"
   printf '%s\n' \
-    'pub fn mint_adopted_entry' \
+    'fn mint_synthesized_entry(' \
     'provider: None,' \
-    'pub fn upsert_adopted_row' \
-    'provider_from_route_settings(Some(&model))' > "$tmp/adopt.rs"
+    'enum AdoptError' > "$tmp/client.rs"
   printf '%s\n' \
     'fn dispatch_create(' \
     'provider: Some("openai".to_string()),' \
@@ -29,15 +33,10 @@ write_match() {
   printf '%s\n' \
     'const KNOWN_UNROUTED_PROVIDER: &str = "__uncapped__";' > "$tmp/rust-gate.rs"
   printf '%s\n' \
-    '_HARNESS_DEFAULT_VENDOR = {' \
-    '    "claude": "anthropic",' \
-    '    "codex": "openai",' \
-    '}' \
-    'def resolve_lane_vendor(argv, harness=None):' \
-    '    resolved_harness = harness' \
-    '    lane = _HARNESS_DEFAULT_VENDOR.get(resolved_harness)' \
-    '    if lane:' \
-    '        return lane' > "$tmp/defaults.py"
+    'const HARNESS_DEFAULT_VENDOR: [(&str, &str); 2] = [' \
+    '    ("claude", "anthropic"),' \
+    '    ("codex", "openai"),' \
+    '];' > "$tmp/overlay.rs"
   printf '%s\n' \
     '_KNOWN_UNROUTED_PROVIDER = "__uncapped__"' > "$tmp/python-gate.py"
 }
@@ -46,9 +45,11 @@ check() {
   "$CHECK" \
     --claude-rust "$tmp/claude.rs" \
     --adopt-rust "$tmp/adopt.rs" \
+    --client-rust "$tmp/client.rs" \
+    --adopt-identity-rust "$tmp/adopt-identity.rs" \
     --codex-rust "$tmp/codex.rs" \
     --rust-gate "$tmp/rust-gate.rs" \
-    --python-defaults "$tmp/defaults.py" \
+    --overlay-rust "$tmp/overlay.rs" \
     --python-gate "$tmp/python-gate.py"
 }
 
@@ -92,13 +93,12 @@ fi
 
 # The adopt mint must stamp NO provider: a vendor literal there is the retired
 # wrong-bill guess (adoption observed no route; the provider comes from the
-# route-settings match the fixture carries below the upsert marker).
+# route-settings match living in the adopt-identity fixture).
 write_match
 printf '%s\n' \
-  'pub fn mint_adopted_entry' \
+  'fn mint_synthesized_entry(' \
   'provider: Some("anthropic".into()),' \
-  'pub fn upsert_adopted_row' \
-  'provider_from_route_settings(Some(&model))' > "$tmp/adopt.rs"
+  'enum AdoptError' > "$tmp/client.rs"
 if check >/dev/null 2>&1; then
   echo "FAIL: adopt vendor literal accepted" >&2
   exit 1
@@ -109,10 +109,7 @@ fi
 # The route-match lookup is the only provider source adopt may use; a mint
 # with no provider and no lookup would record none forever.
 write_match
-printf '%s\n' \
-  'pub fn mint_adopted_entry' \
-  'provider: None,' \
-  'pub fn upsert_adopted_row' > "$tmp/adopt.rs"
+printf '%s\n' 'pub(crate) fn persist_manifest_identity(' > "$tmp/adopt-identity.rs"
 if check >/dev/null 2>&1; then
   echo "FAIL: adopt without a route-settings lookup accepted" >&2
   exit 1

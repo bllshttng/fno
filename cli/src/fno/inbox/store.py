@@ -136,12 +136,18 @@ def classify_durable_owner(
     return DurableOwner.DEAD_LETTER
 
 
+def owner_ttl_hours(owner: DurableOwner | str) -> float:
+    """The unread horizon (hours) the sweep enforces; the receipt's drain
+    window quotes this same table. Unknown classes return 0."""
+    key = owner.value if isinstance(owner, DurableOwner) else owner
+    return _OWNER_TTL_HOURS.get(key, 0.0)
+
+
 def ttl_at_for(owner: DurableOwner | str, created: datetime) -> datetime:
     """The ``ttl_at`` horizon for an owner class, measured from ``created``."""
     from datetime import timedelta
 
-    key = owner.value if isinstance(owner, DurableOwner) else owner
-    return created + timedelta(hours=_OWNER_TTL_HOURS.get(key, 0.0))
+    return created + timedelta(hours=owner_ttl_hours(owner))
 
 # Map deprecated kinds -> what to use instead. Reading these tokens from
 # the CLI exits non-zero with a hint pointing at the replacement.
@@ -250,7 +256,7 @@ def inbox_dir_for(project: str) -> Path:
     override_root = _inbox_root()
     if override_root is not None:
         return override_root / project / "inbox"
-    # Production path: consult settings.yaml via path-config (ab-6fe0d039).
+    # Production path: consult settings.yaml via path-config.
     from fno import paths as _paths
     return _paths.inbox_root_for(project)
 
@@ -339,8 +345,8 @@ def _slug_for(body: str, fallback_msg_id: str, max_len: int = 40) -> str:
 # ---------------------------------------------------------------------------
 
 def generate_msg_id() -> str:
-    """Generate a 'msg-XXXXXX' id with 6 hex characters."""
-    return "msg-" + secrets.token_hex(3)
+    """Generate a 'fmail-XXXXXXXXXXXX' id with 12 hex characters."""
+    return "fmail-" + secrets.token_hex(6)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +354,7 @@ def generate_msg_id() -> str:
 # ---------------------------------------------------------------------------
 
 _MSG_HEADER_RE = re.compile(
-    r"^## (msg-[0-9a-zA-Z]+) · (\S+) · from:(\S+)\s*$"
+    r"^## ((?:fmail-|msg-)[0-9a-zA-Z]+) · (\S+) · from:(\S+)\s*$"
 )
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -483,7 +489,7 @@ def _parse_thread_text(text: str, path: Path) -> Optional[ThreadHandle]:
 
 
 def _parse_messages(body_text: str) -> list[ThreadMessage]:
-    """Parse ``## msg-{id} · {ts} · from:{sender}`` blocks out of body text."""
+    """Parse ``## {id} · {ts} · from:{sender}`` blocks (fmail- or msg- ids)."""
     lines = body_text.splitlines()
     messages: list[ThreadMessage] = []
     i = 0
@@ -597,7 +603,7 @@ def find_thread_by_msg_id(recipient: str, msg_id: str) -> Optional[ThreadHandle]
 
 
 # ---------------------------------------------------------------------------
-# Durable write (jsonl-canon) + derived render (ab-cee91152, Move A)
+# Durable write (jsonl-canon) + derived render (Move A)
 # ---------------------------------------------------------------------------
 # LD2: the global JSONL bus log is the durable-first system of record; the
 # per-recipient markdown thread file is a derived, regenerable render. This is
@@ -622,8 +628,8 @@ def _append_to_bus(
     persist_to_memory: bool = False,
     refs: Optional[dict[str, str]] = None,
     render_path: Optional[Path] = None,
-    provider_from: Optional[str] = None,
-    provider_to: Optional[str] = None,
+    from_harness: Optional[str] = None,
+    to_harness: Optional[str] = None,
     from_session: Optional[str] = None,
     from_model: Optional[str] = None,
     to_kind: Optional[str] = None,
@@ -631,10 +637,11 @@ def _append_to_bus(
     ttl_at: Optional[datetime] = None,
     word_count: Optional[int] = None,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> None:
     """Append a versioned envelope to the canonical bus log (the durable write).
 
-    LD2 (ab-cee91152): the JSONL bus log is the durable-first system of record.
+    LD2 : the JSONL bus log is the durable-first system of record.
     A failure here FAILS the caller's send - the message is NOT durably stored,
     so reporting success would be a silent loss. This raises (it does NOT swallow);
     the markdown render is the best-effort, regenerable half.
@@ -669,13 +676,14 @@ def _append_to_bus(
             ts=_format_dt(timestamp),
             in_reply_to=in_reply_to,
             meta=meta,
-            provider_from=provider_from,
-            provider_to=provider_to,
+            from_harness=from_harness,
+            to_harness=to_harness,
             from_session=from_session,
             from_model=from_model,
             to_kind=to_kind,
             word_count=word_count,
             origin=origin,
+            subject=subject,
         )
     )
 
@@ -683,7 +691,7 @@ def _append_to_bus(
 def _write_render_best_effort(target: Path, content: str) -> bool:
     """Write the derived markdown render under the per-path lock. Best-effort.
 
-    LD2 (ab-cee91152): the render is derived from the canonical log, so a write
+    LD2 : the render is derived from the canonical log, so a write
     failure here is logged loudly but never fatal - the durable bus append has
     already landed, and ``rebuild_render`` regenerates the render from the log.
     Returns True on success, False on a logged failure.
@@ -742,6 +750,7 @@ def post_inbox_message(
     msg_id: Optional[str] = None,
     word_count: Optional[int] = None,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> PostResult:
     """Post a project-addressed inbox message (the durable write path).
 
@@ -785,6 +794,7 @@ def post_inbox_message(
             owner=DurableOwner.INBOX_DRAIN.value,
             word_count=word_count,
             origin=origin,
+            subject=subject,
         )
         return PostResult(
             msg_id=handle.thread_id, thread_path=handle.path, appended=False, orphan=True
@@ -798,10 +808,23 @@ def post_inbox_message(
         owner=DurableOwner.INBOX_DRAIN.value,
         word_count=word_count,
         origin=origin,
+        subject=subject,
     )
     return PostResult(
         msg_id=handle.thread_id, thread_path=handle.path, appended=False, orphan=False
     )
+
+
+def _mark_control_pending(recipient: str) -> None:
+    """Stamp the tool-boundary pending flag (best-effort)."""
+    try:
+        from fno import paths
+
+        flag = paths.bus_dir() / "control-pending" / f"{recipient}.flag"
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.touch()
+    except OSError:
+        pass
 
 
 def write_new_thread(
@@ -815,8 +838,8 @@ def write_new_thread(
     replies_to: Optional[str] = None,
     persist_to_memory: bool = False,
     refs: Optional[dict[str, str]] = None,
-    provider_from: Optional[str] = None,
-    provider_to: Optional[str] = None,
+    from_harness: Optional[str] = None,
+    to_harness: Optional[str] = None,
     from_session: Optional[str] = None,
     from_model: Optional[str] = None,
     to_kind: Optional[str] = None,
@@ -824,6 +847,7 @@ def write_new_thread(
     ttl_at: Optional[datetime] = None,
     word_count: Optional[int] = None,
     origin: Optional[str] = None,
+    subject: Optional[str] = None,
 ) -> ThreadHandle:
     """Create a new thread file. Returns the resulting handle.
 
@@ -916,8 +940,8 @@ def write_new_thread(
             persist_to_memory=persist_to_memory,
             refs=refs,
             render_path=target,
-            provider_from=provider_from,
-            provider_to=provider_to,
+            from_harness=from_harness,
+            to_harness=to_harness,
             from_session=from_session,
             from_model=from_model,
             to_kind=to_kind,
@@ -925,6 +949,7 @@ def write_new_thread(
             ttl_at=ttl_at,
             word_count=word_count,
             origin=origin,
+            subject=subject,
         )
     except Exception:
         try:
@@ -935,6 +960,11 @@ def write_new_thread(
 
     # Best-effort: the derived markdown render. A failure is logged, not fatal.
     _write_render_best_effort(target, _format_thread(handle))
+
+    from fno.mail.budget import is_control
+
+    if is_control(body):
+        _mark_control_pending(recipient)
 
     return handle
 
@@ -1021,6 +1051,11 @@ def append_to_thread(
     finally:
         _release_lock(lock)
 
+    from fno.mail.budget import is_control
+
+    if is_control(body):
+        _mark_control_pending(existing.to_project)
+
     return msg_id
 
 
@@ -1056,7 +1091,7 @@ def _unique_render_path(inbox: Path, base: str) -> Path:
 def rebuild_render(recipient: str) -> int:
     """Regenerate ``recipient``'s markdown render from the canonical bus log.
 
-    LD2 / AC1-EDGE (ab-cee91152): the JSONL bus log is the source of truth and
+    LD2 / AC1-EDGE : the JSONL bus log is the source of truth and
     the per-recipient markdown is a derived, throwaway view. This clears the
     recipient's existing render files and rewrites them from the log so a
     deleted or corrupted render is recovered with no message lost. Idempotent:

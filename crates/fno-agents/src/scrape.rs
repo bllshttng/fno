@@ -167,28 +167,148 @@ pub fn decide(
     }
 }
 
-/// The `fno` front-door binary (the Rust mux owner), same resolution as the
-/// active-backlog supervisor and the Python spawn back half: `FNO_BIN`
-/// overrides for tests and non-PATH installs. `var_os` (not `var`) so a path
-/// with non-UTF-8 bytes passes through to `Command` unmangled (gemini MEDIUM).
-fn fno_bin() -> std::ffi::OsString {
-    std::env::var_os("FNO_BIN").unwrap_or_else(|| std::ffi::OsString::from("fno"))
+/// A lib unit test gets only the porcelain it declared: the same rule
+/// `AgentsHome::from_env` applies to `$HOME` (docs/architecture/test-hermeticity.md).
+/// A raw `cargo test` inherits the calling session's identity, and the installed
+/// fno would act on it - its parent push mails that session a false alarm.
+pub(crate) const UNDECLARED_FNO: &str =
+    "/nonexistent/fno-undeclared-in-this-unit-test--set-FNO_BIN";
+
+/// Answer `declared` when set. Otherwise `fno` in every shipped build, and a
+/// path that cannot exec under `cfg!(test)` - every caller treats a spawn
+/// failure as "fno missing, skip", so the refusal costs a test one skipped
+/// shellout, never a production behavior change.
+pub(crate) fn declared_fno<T: From<&'static str>>(declared: Option<T>) -> T {
+    declared.unwrap_or_else(|| {
+        if cfg!(test) {
+            T::from(UNDECLARED_FNO)
+        } else {
+            T::from("fno")
+        }
+    })
 }
 
-/// `fno mux pane ls --session <s> --json` -> pane_id -> OSC title. `None`
-/// when the session is unreachable (no server, skewed binary, bad output) -
-/// the caller treats that as "no panes", which clears verdicts: panes live in
-/// the server process, so an unanswerable server has no live panes to badge.
+/// The `fno` front-door binary (the Rust mux owner), same resolution as the
+/// active-backlog supervisor and the Python spawn back half: `FNO_BIN`
+/// overrides for tests and non-PATH installs, then the sibling of this
+/// binary (every complete install - uv tool venv, pip/uv venv, wheel scripts
+/// dir, Homebrew keg - ships `fno` and `fno-agents` in one bin dir, the same
+/// sibling resolution `fno_py` performs for the python half), then bare
+/// `fno`. `var_os` (not `var`) so a path with non-UTF-8 bytes passes through
+/// to `Command` unmangled (gemini MEDIUM).
+pub fn fno_bin() -> std::ffi::OsString {
+    if let Some(declared) = std::env::var_os("FNO_BIN") {
+        return declared;
+    }
+    if !cfg!(test) {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let sibling = dir.join("fno");
+                if sibling.is_file() {
+                    return sibling.into_os_string();
+                }
+            }
+        }
+    }
+    declared_fno(None)
+}
+
+/// The undeclared-`fno-py` twin of [`UNDECLARED_FNO`]: the same refusal for
+/// the Python half of the porcelain, whose uv-tools and bare-name fallback
+/// legs otherwise still reach the installed CLI from a lib unit test.
+pub(crate) const UNDECLARED_FNO_PY: &str =
+    "/nonexistent/fno-py-undeclared-in-this-unit-test--set-FNO_PY";
+
+/// The `fno-py` Python CLI console script, resolved without relying on PATH
+/// `FNO_PY` overrides for tests and nonstandard installs, then the
+/// script packaged beside this binary (every complete install - uv tool venv,
+/// pip/uv venv, wheel scripts dir, Homebrew keg - ships `fno` and `fno-py` in
+/// one bin dir, the same sibling resolution crates/fno/src/bootstrap.rs
+/// performs for the `fno` shim), then the uv tool venv's bin under its
+/// default tools dir, for a cargo/dev build of this binary with the wheel
+/// installed elsewhere. Bare `fno-py` last, so a genuinely missing install
+/// surfaces a real NotFound instead of a silent no-op. Under `cfg!(test)` an
+/// unset `FNO_PY` refuses through [`UNDECLARED_FNO_PY`], the same
+/// declared-only rule `fno_bin` applies.
+pub fn fno_py() -> std::ffi::OsString {
+    if let Some(p) = std::env::var_os("FNO_PY").filter(|v| !v.is_empty()) {
+        return p;
+    }
+    if cfg!(test) {
+        return std::ffi::OsString::from(UNDECLARED_FNO_PY);
+    }
+    if let Some(p) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| fno_py_beside(&exe))
+    {
+        return p.into_os_string();
+    }
+    if let Some(p) = default_uv_tools_dir().and_then(|base| fno_py_in_tools_dir(&base)) {
+        return p.into_os_string();
+    }
+    std::ffi::OsString::from("fno-py")
+}
+
+/// The executable `fno-py` in `exe`'s directory, if any. `exe` is a parameter
+/// so the leg is testable (bootstrap.rs's `resolve_via_sibling` does the
+/// same); production passes `current_exe`.
+fn fno_py_beside(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let sibling = exe.parent()?.join("fno-py");
+    is_executable_file(&sibling).then_some(sibling)
+}
+
+/// The wheel venv's `fno-py` under a uv tools base dir (`<base>/fno/bin`).
+fn fno_py_in_tools_dir(base: &std::path::Path) -> Option<std::path::PathBuf> {
+    let script = base.join("fno").join("bin").join("fno-py");
+    is_executable_file(&script).then_some(script)
+}
+
+/// uv's DEFAULT tools dir: `$XDG_DATA_HOME/uv` when set, else
+/// `$HOME/.local/share/uv`. ponytail: a stat, not the `uv tool dir`
+/// subprocess bootstrap.rs runs - no PATH dependency on uv, and a customized
+/// tools dir is exactly what the `FNO_PY` override exists for.
+fn default_uv_tools_dir() -> Option<std::path::PathBuf> {
+    let base = match std::env::var_os("XDG_DATA_HOME") {
+        Some(x) if !x.is_empty() => std::path::PathBuf::from(x),
+        _ => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
+    };
+    Some(base.join("uv").join("tools"))
+}
+
+fn is_executable_file(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// One row of `fno mux pane ls --json`: the pane id, its OSC title, and the
+/// registry identity the mux joined to it.
+pub(crate) struct PaneLsRow {
+    pub pane_id: u64,
+    pub title: Option<String>,
+    pub fno_id: Option<String>,
+}
+
+/// `fno mux pane ls --server <s> --json` -> one row per pane. `session: None`
+/// resolves the ambient/default server (the lead-checkin prompt reader reads
+/// the shared fleet server without naming it). `None` comes back when the
+/// server is unreachable (no server, skewed binary, bad output) - the caller
+/// treats that as "no panes", which clears verdicts: panes live in the server
+/// process, so an unanswerable server has no live panes to badge.
 ///
 /// ponytail: no subprocess timeout - the mux CLI bounds its own socket
 /// reads/writes, so a wedged server errors instead of hanging; a hung
 /// FNO_BIN stalls only this sweep thread (the in-flight gate skips further
 /// sweeps rather than piling them up).
-fn mux_pane_ls(bin: &std::ffi::OsStr, session: &str) -> Option<BTreeMap<u64, Option<String>>> {
-    let out = Command::new(bin)
-        .args(["mux", "pane", "ls", "--session", session, "--json"])
-        .output()
-        .ok()?;
+pub(crate) fn mux_pane_ls(bin: &std::ffi::OsStr, session: Option<&str>) -> Option<Vec<PaneLsRow>> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("mux").arg("pane").arg("ls");
+    if let Some(session) = session {
+        cmd.arg("--server").arg(session);
+    }
+    cmd.arg("--json");
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -197,30 +317,34 @@ fn mux_pane_ls(bin: &std::ffi::OsStr, session: &str) -> Option<BTreeMap<u64, Opt
         panes
             .iter()
             .filter_map(|p| {
-                Some((
-                    p.get("pane_id")?.as_u64()?,
-                    p.get("title").and_then(|t| t.as_str()).map(String::from),
-                ))
+                Some(PaneLsRow {
+                    pane_id: p.get("pane_id")?.as_u64()?,
+                    title: p.get("title").and_then(|t| t.as_str()).map(String::from),
+                    fno_id: p
+                        .get("fno_id")
+                        .and_then(|t| t.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(String::from),
+                })
             })
             .collect(),
     )
 }
 
-/// `fno mux pane read <pane> --session <s> --json` -> the pane's rendered
+/// `fno mux pane read <pane> [--server <s>] --json` -> the pane's rendered
 /// grid text. `None` on any failure (dead pane, unreachable server).
-fn mux_pane_read(bin: &std::ffi::OsStr, session: &str, pane: u64) -> Option<String> {
-    let out = Command::new(bin)
-        .args([
-            "mux",
-            "pane",
-            "read",
-            &pane.to_string(),
-            "--session",
-            session,
-            "--json",
-        ])
-        .output()
-        .ok()?;
+pub(crate) fn mux_pane_read(
+    bin: &std::ffi::OsStr,
+    session: Option<&str>,
+    pane: u64,
+) -> Option<String> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("mux").arg("pane").arg("read").arg(pane.to_string());
+    if let Some(session) = session {
+        cmd.arg("--server").arg(session);
+    }
+    cmd.arg("--json");
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -262,7 +386,7 @@ fn write_disposition(e: &state::RegistryEntry, expect_ref: &(String, u64)) -> Wr
 /// IO + subprocesses); the daemon runs it under `spawn_blocking` off the
 /// idle tick, gated so at most one sweep is in flight.
 ///
-/// `notify_on_blocked` (config.mux.notify_on_blocked, x-dd84) fires one OS
+/// `notify_on_blocked` (config.mux.notify_on_blocked) fires one OS
 /// notification when a scraped verdict ENTERS `blocked`; the manifest path has
 /// no `done`, so notify_on_done is not plumbed here.
 pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked: bool) {
@@ -284,7 +408,7 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
     // Per-provider manifest cache (a parse-bad manifest logs once per sweep,
     // not once per pane) and per-session pane listing (one `ls` per session).
     let mut manifests: BTreeMap<String, Option<Manifest>> = BTreeMap::new();
-    let mut sessions: BTreeMap<String, Option<BTreeMap<u64, Option<String>>>> = BTreeMap::new();
+    let mut sessions: BTreeMap<String, Option<Vec<PaneLsRow>>> = BTreeMap::new();
 
     // (name, expected-mux-ref, verdict). The ref is re-verified under the
     // lock so a row removed+recreated (or re-homed to a new pane) with the
@@ -312,11 +436,16 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
         };
         let panes = sessions
             .entry(t.session.clone())
-            .or_insert_with(|| mux_pane_ls(&bin, &t.session));
+            .or_insert_with(|| mux_pane_ls(&bin, Some(&t.session)));
         let evidence = panes
             .as_ref()
-            .and_then(|p| p.get(&t.pane_id))
-            .map(|title| (title.clone(), mux_pane_read(&bin, &t.session, t.pane_id)));
+            .and_then(|p| p.iter().find(|r| r.pane_id == t.pane_id))
+            .map(|row| {
+                (
+                    row.title.clone(),
+                    mux_pane_read(&bin, Some(&t.session), t.pane_id),
+                )
+            });
         let decision = match evidence {
             // Pane absent from the listing, or its read failed: no screen to
             // trust. Clear a stored verdict; a never-badged row stays silent.
@@ -356,7 +485,7 @@ pub fn scrape_sweep(home: &AgentsHome, emitter: &EventEmitter, notify_on_blocked
     if changes.is_empty() {
         return;
     }
-    // Badge-transition notify intents (x-dd84): (agent name, matched rule).
+    // Badge-transition notify intents: (agent name, matched rule).
     // Captured under the flock from prev-vs-new screen_state; fired after the
     // write so a slow notifier can never stall the sweep.
     let mut blocked_notifs: Vec<(String, String)> = Vec::new();
@@ -522,6 +651,9 @@ mod tests {
             harness_session_id: None,
             predecessor_session_ids: Vec::new(),
             forked_from_session_id: None,
+            route_provider_id: None,
+            model_name: None,
+            account_record_id: None,
             cwd: "/tmp/x".into(),
             project_root: String::new(),
             session_id: None,
@@ -546,13 +678,14 @@ mod tests {
             exited_at: None,
             mux: None,
             screen_state: None,
-            crown_level: None,
-            crown_scope: None,
-            crown_grantor: None,
+            role_level: None,
+            role_scope: None,
+            role_grantor: None,
             route_settings_path: None,
             fno_id: None,
             delivery_policy: None,
             sandbox_posture: None,
+            git_grant: None,
             ..Default::default()
         }
     }
@@ -586,6 +719,7 @@ mod tests {
             reason: None,
             received_at: "2020-01-01T00:00:00Z".into(),
             ttl_ms: Some(1),
+            posture: None,
         });
         reg.entries.push(hooked);
         // Not mux-hosted: nothing to read.
@@ -638,6 +772,7 @@ mod tests {
             reason: None,
             received_at: NOW_STAMP.into(),
             ttl_ms: None,
+            posture: None,
         });
         assert_eq!(
             write_disposition(&row, &scraped),
@@ -803,7 +938,7 @@ mod tests {
         std::env::set_var("FNO_AGENTS_HOME", &dir);
         let home = AgentsHome::from_env();
         let mut scraped = entry("scrapee", "codex");
-        scraped.log_path = Some("/tmp/scrapee.log".into()); // x-7bcd: resolvable handle
+        scraped.log_path = Some("/tmp/scrapee.log".into()); // resolvable handle
         scraped.screen_state = Some(rep("idle", "2026-07-02T00:00:00Z", 1));
         state::update_registry(&home.registry_json(), |r| r.entries.push(scraped)).unwrap();
 
@@ -835,7 +970,7 @@ mod tests {
 
         // One hook-less codex pane in session "main".
         let mut row = entry("scrapee", "codex");
-        row.log_path = Some("/tmp/scrapee.log".into()); // x-7bcd: resolvable handle
+        row.log_path = Some("/tmp/scrapee.log".into()); // resolvable handle
         row.mux = Some(state::MuxRef {
             session: "main".into(),
             pane_id: 7,
@@ -846,21 +981,15 @@ mod tests {
         // rewrites between sweeps.
         let ls_path = dir.join("ls.json");
         let read_path = dir.join("read.json");
-        let stub = dir.join("fno-stub.sh");
-        std::fs::write(
-            &stub,
-            format!(
+        let stub = crate::write_exec_stub(
+            &dir,
+            "fno-stub.sh",
+            &format!(
                 "#!/bin/sh\ncase \"$3\" in\nls) cat {} ;;\nread) cat {} ;;\nesac\n",
                 ls_path.display(),
                 read_path.display()
             ),
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        );
         std::env::set_var("FNO_BIN", &stub);
 
         let live_pane =
@@ -944,5 +1073,96 @@ mod tests {
             ),
             Decision::Hold
         );
+    }
+
+    // the fallback must resolve with the wheel bin absent from PATH.
+    // Neither leg consults PATH at all; the temp dir stands in for the uv
+    // tools bin the measured failure could not reach.
+    #[test]
+    fn fno_py_beside_resolves_executable_sibling_without_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = crate::write_exec_stub(dir.path(), "fno-agents", "#!/bin/sh\n");
+        let script = crate::write_exec_stub(dir.path(), "fno-py", "#!/bin/sh\n");
+        assert_eq!(fno_py_beside(&exe).as_deref(), Some(script.as_path()));
+    }
+
+    #[test]
+    fn fno_py_beside_ignores_missing_or_non_executable_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = crate::write_exec_stub(dir.path(), "fno-agents", "#!/bin/sh\n");
+        assert_eq!(fno_py_beside(&exe), None, "no sibling");
+        // The non-executable case stays in-process: mode 0o644 is the point.
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.path().join("fno-py");
+        std::fs::write(&script, b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(fno_py_beside(&exe), None, "sibling not executable");
+    }
+
+    #[test]
+    fn fno_py_in_tools_dir_resolves_wheel_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("fno").join("bin").join("fno-py");
+        std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+        crate::write_exec_stub(script.parent().unwrap(), "fno-py", "#!/bin/sh\n");
+        assert_eq!(
+            fno_py_in_tools_dir(dir.path()).as_deref(),
+            Some(script.as_path())
+        );
+        assert_eq!(
+            fno_py_in_tools_dir(tempfile::tempdir().unwrap().path()),
+            None
+        );
+    }
+
+    #[test]
+    fn an_undeclared_fno_bin_is_refused_under_a_unit_test() {
+        // AC3: unset under cfg!(test) the resolver answers a path that does
+        // not exist and whose text names the remedy; AC2: a declared path
+        // passes through unchanged.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var_os("FNO_BIN");
+        std::env::remove_var("FNO_BIN");
+        let resolved = fno_bin();
+        // The declared leg: the resolver answers the string, it never stats
+        // it, so a tempdir path proves pass-through.
+        let dir = tempfile::tempdir().unwrap();
+        let declared = std::ffi::OsString::from(dir.path().join("fno"));
+        std::env::set_var("FNO_BIN", &declared);
+        let declared_resolved = fno_bin();
+        match prior {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        assert_ne!(resolved, std::ffi::OsString::from("fno"));
+        assert!(!std::path::Path::new(&resolved).exists());
+        assert!(resolved.to_string_lossy().contains("FNO_BIN"));
+        assert_eq!(declared_resolved, declared);
+    }
+
+    #[test]
+    fn an_undeclared_fno_py_is_refused_under_a_unit_test() {
+        // The Python half of the porcelain carries the same declared-only
+        // rule: unset FNO_PY refuses (its uv-tools leg would find the
+        // installed CLI), a declared path passes through.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var_os("FNO_PY");
+        std::env::remove_var("FNO_PY");
+        let resolved = fno_py();
+        let dir = tempfile::tempdir().unwrap();
+        let declared = std::ffi::OsString::from(dir.path().join("fno-py"));
+        std::env::set_var("FNO_PY", &declared);
+        let declared_resolved = fno_py();
+        match prior {
+            Some(v) => std::env::set_var("FNO_PY", v),
+            None => std::env::remove_var("FNO_PY"),
+        }
+        assert!(!std::path::Path::new(&resolved).exists());
+        assert!(resolved.to_string_lossy().contains("FNO_PY"));
+        assert_eq!(declared_resolved, declared);
     }
 }

@@ -27,6 +27,10 @@ _NODE_SEVERITIES = {"critical", "high", "medium"}
 # give, so a p0 mapping made every critical external finding fail to land and
 # re-fail on every harvest. The finding body keeps the severity verbatim.
 _SEVERITY_PRIORITY = {"critical": "p1", "high": "p1", "medium": "p2", "low": "p3"}
+# Severity is the only intrinsic work signal available when retro files a
+# finding. Keep critical/high expensive, preserve medium, and retain low's
+# cheap lane; severity-less deliberate work gets the named medium default.
+_SEVERITY_DIFFICULTY = {"critical": "high", "high": "high", "medium": "medium", "low": "low"}
 
 DEFAULT_PRIORITY = "p3"
 TITLE_CAP = 100
@@ -40,6 +44,10 @@ _MD_TRAIL = re.compile(r"[\*`\s]+$")  # trailing bold/code markers (_MD_LEAD is 
 
 def severity_to_priority(severity: str | None) -> str:
     return _SEVERITY_PRIORITY.get((severity or "").lower(), DEFAULT_PRIORITY)
+
+
+def severity_to_difficulty(severity: str | None) -> str:
+    return _SEVERITY_DIFFICULTY.get((severity or "").lower(), "medium")
 
 
 def severity_to_tier(severity: str | None) -> str:
@@ -186,7 +194,7 @@ _PM_ONEOFF_RE = re.compile(r"cancel|interrupt|abort", re.IGNORECASE)
 # Finalize-format STUCK TerminationReasons (finalize.rs POSTMORTEM_REASONS). NOT
 # benign one-offs even though "Interrupted"/"Aborted" contain the interrupt/abort
 # tokens _PM_ONEOFF_RE matches - they classify by body (wedge -> node, else
-# inbox) so the widened stuck-session corpus (x-42f6) is surfaced, not silently
+# inbox) so the widened stuck-session corpus is surfaced, not silently
 # archived. Exact-match on the whole subkind, so a legacy cancel kind still archives.
 _PM_STUCK_REASONS = frozenset({"noprogress", "budget", "interrupted", "aborted"})
 # Wedge-class: a named, repeatable failure mode worth a backlog node.
@@ -196,7 +204,7 @@ _PM_WEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 # Deterministic backstop for two of the four blocklisted lesson classes from
-# skills/target/references/pre-promise.md (x-8fc0): a negative claim about a
+# skills/target/references/pre-promise.md: a negative claim about a
 # tool ("X is absent/missing/not installed", "X is broken/doesn't work") and
 # a transient/one-off error signature. The other two classes (env-dependent
 # findings stated as durable fact, unresolved-failure-as-validated-workflow)
@@ -228,6 +236,11 @@ def classify_postmortem(item: RawItem, *, body_cap: int = BODY_CAP) -> "tuple[st
     # it falls through to the wedge check / inbox (sigma P3).
     reason = item.subkind or ""
     if reason.lower() not in _PM_STUCK_REASONS and _PM_ONEOFF_RE.search(reason):
+        return DISPOSITION_ARCHIVE, None
+    # A success terminal is a healthy session's receipt, not open work: consume
+    # it. The wedge regex matches pasted assistant prose constantly, so a Done*
+    # reason never reaches it.
+    if reason.lower().startswith("done"):
         return DISPOSITION_ARCHIVE, None
 
     wedge = bool(_PM_WEDGE_RE.search(item.text or ""))

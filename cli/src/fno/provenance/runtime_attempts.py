@@ -1,4 +1,4 @@
-"""Runtime-attempt projection for ``fno backlog provenance`` (x-2ccd wave 3).
+"""Runtime-attempt projection for ``fno backlog provenance`` (wave 3).
 
 A READ-TIME join that answers "which session worked on this node?" by projecting
 active or interrupted target attempts from manifests + claims, alongside the
@@ -200,7 +200,7 @@ def _branch_from_manifest(raw: Optional[dict[str, Any]]) -> Optional[str]:
 
 
 def _default_claim_state(node_id: str) -> dict[str, Any]:
-    """Read the live ``node:<id>`` claim state (global root). Never raises."""
+    """Read the live ``node:<id>`` claim state; the key routes to the global root. Never raises."""
     try:
         from fno.claims import claim_status
 

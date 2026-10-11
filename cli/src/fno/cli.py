@@ -26,6 +26,7 @@ from typing import Any, Optional
 import click
 import typer
 
+from fno import _is_fno_module, _reinstall_hint
 from fno._lazy_group import make_lazy_group_cls
 
 
@@ -44,10 +45,10 @@ from fno._lazy_group import make_lazy_group_cls
 # without importing the module.  When you change a sub-app's help, update
 # the matching entry here too.
 
-# Tier discipline (x-71b6, "In-N-Out menu"): `fno --help` advertises a small
+# Tier discipline ("In-N-Out menu"): `fno --help` advertises a small
 # curated menu; everything else is hidden (invocable, just not listed). The
 # advertised set is `help`, `backlog`, `agents`, `whoami`, `doctor`, `config`
-# (6; `setup` moved under `config` in unit 6 of the x-9d6c reorg, and moved
+# (6; `setup` moved under `config` in unit 6 of the reorg, and moved
 # spellings are excluded from the count by _HonestMenuGroup). `help` /
 # `review` are eager inline commands above and carry `hidden=True` on `review`;
 # `cost` moved under `whoami` and is a hidden lazy entry like its siblings.
@@ -72,22 +73,22 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Inspect every path that can start a session without an operator asking.",
         {"hidden": True},
     ),
-    "king": (
-        "fno.king.cli:king_app",
-        "The king's board and its session manifest.",
+    "lead": (
+        "fno.lead.cli:lead_app",
+        "The lead's board and its session manifest.",
         {"hidden": True},
     ),
     "worker": ("fno.worker.cli:cli", "manage delivery worker phases", {"hidden": True}),
     "event": ("fno.events.cli:cli", "emit and audit events", {"hidden": True}),
     "inbox": (
         "fno.inbox.cli:inbox_app",
-        "What is waiting on a human: approvals, notify, outstanding, king board, decisions, law.",
+        "What is waiting on a human: approvals, notify, outstanding, lead board, decisions, law.",
         {"hidden": True},
     ),
     # Moved to `inbox` (VERB_MOVES). The old top-level registration stays for
     # one release - unreachable via resolve_command (the move intercepts
     # first) so menu-caps sees a hidden, not a phantom, root; the
-    # moved-spellings block no longer renders (x-6233), so the row teaches
+    # moved-spellings block no longer renders, so the row teaches
     # nothing and exists only for the release clock.
     "approvals": (
         "fno.approvals.cli:approvals_app",
@@ -109,7 +110,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         "Durable polled mailbox: send/unread/ack/reply/drain/status.",
         {"hidden": True},
     ),
-    # x-6233: the entries between this comment and `agents` below whose names
+    # the entries between this comment and `agents` below whose names
     # sit in VERB_MOVES are one-release shims kept reachable for muscle
     # memory; their canonical homes are the move destinations.
     "mcp": (
@@ -136,16 +137,6 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     "project": (
         "fno.project:project_app",
         "Isolated per-project fno environments (now `fno config project`).",
-        {"hidden": True},
-    ),
-    "decide": (
-        "fno.decide.cli:shim_app",
-        "Deprecated decision shim; use fno inbox decide / fno inbox decisions.",
-        {"hidden": True},
-    ),
-    "law": (
-        "fno.law:law_app",
-        "Record durable project law in one call (now `fno inbox law`).",
         {"hidden": True},
     ),
     "resume": (
@@ -224,7 +215,7 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
     ),
     "pr-watch": (
         "fno.pr_watch.cli:cli",
-        "PR-state watcher: auto-fire /pr check + /pr merged for open-PR backlog nodes",
+        "PR-state watcher: auto-fire /fno:ship pr check + /fno:ship pr merged for open-PR backlog nodes",
         {"hidden": True},
     ),
     "loops": (
@@ -282,18 +273,13 @@ LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] =
         {"hidden": True},
     ),
     "update": (
-        "fno.update:update_command",
-        "Reinstall fno from its source directory.",
+        "fno.doctor_cli:_update_signpost",
+        "The updater is native: the Rust front door answers `update` and `doctor update`.",
         {"hidden": True},
     ),
     "restart": (
         "fno.restart:restart_command",
         "Restart running fno processes (agents daemon; mux with --mux) onto fresh builds.",
-        {"hidden": True},
-    ),
-    "dispatch": (
-        "fno.dispatch:dispatch_app",
-        "Grab one ready node into a mux pane (mux leader+g shells `dispatch one`).",
         {"hidden": True},
     ),
 }
@@ -306,12 +292,11 @@ COLLAPSE_KEEP: dict[str, set[str]] = {
     "agents": {"ask", "list", "logs", "loop", "loop-check", "needs", "resume", "rm", "spawn"},
     "annotate": {"list"},
     "approvals": set(),
-    "backlog": {"advance", "done", "get", "next", "queued", "reconcile", "update"},
+    "backlog": {"advance", "done", "get", "next", "queued"},
     "bundle": set(),
     "carveout": set(),
     "claim": {"release"},
     "config": {"accounts", "get", "set"},
-    "dispatch": set(),
     "do": set(),
     "doctor": set(),
     "evals": set(),
@@ -508,7 +493,6 @@ def _protect_process_path(ctx: typer.Context) -> None:
     """Put the quota proxy in PATH for subprocesses spawned by this command."""
     from fno.setup.github_cli import (
         PROXY_DEPTH_ENV,
-        fallback_proxy_dir,
         worker_environment,
     )
 
@@ -518,7 +502,9 @@ def _protect_process_path(ctx: typer.Context) -> None:
     keys = ("PATH", "FNO_GH_PROXY_DIR", "FNO_REAL_GH", PROXY_DEPTH_ENV)
     original = {key: os.environ.get(key) for key in keys}
     base = dict(os.environ)
-    base["FNO_GH_PROXY_DIR"] = str(fallback_proxy_dir())
+    # Never honor an inherited dir: a requested dir re-raises on a failed
+    # install, and a parent's temp pin would win PATH over the durable home.
+    base.pop("FNO_GH_PROXY_DIR", None)
     protected = worker_environment(base)
     changed = False
     for key in keys:
@@ -583,7 +569,7 @@ lowercase = per-command value flags. -p is "the primary thing this
 command is about" and differs by family:
 
   fno agents ask                        -H harness    (-c cwd, -t timeout)
-  fno backlog add/idea/update/intake    -p priority   (-c cwd, -d details, -t type/title)
+  fno backlog add/idea/intake           -p priority   (-c cwd, -d details, -t type/title)
   fno backlog next/ready/find           -p project    (find: -s status, -d domain)
   fno backlog capture add               -p priority   (-s source, -w where)
   fno config accounts add               -p priority   (-H harness, -a auth, -s scope)
@@ -618,7 +604,7 @@ SHORTHAND_POINTER = (
 _EAGER_COMMAND_HELP: dict[str, str] = {
     "help": "Show help for the root command or any subcommand.",
     "mux": "Mux pane control and the web console (forwards to the Rust front).",
-    "review": "Run the internal sigma-review panel on the current diff.",
+    "review": "Refuse: sigma is removed; the review lane is bare /fno:review (classify/resolve-level remain).",
     "version": "Show the installed fno version(s) (forwards to the Rust front).",
 }
 
@@ -789,59 +775,13 @@ def help_command(ctx: typer.Context) -> None:
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
-@app.command(
-    hidden=True,
-    help=(
-        "Run the internal sigma-review panel on the current diff.\n\n"
-        "Reads the diff from --diff path or `git diff HEAD~1` by default.\n"
-        "Resolves session_id from --session or target-state.md.\n\n"
-        "Exit codes:\n"
-        "  0   Reviewed (or cached hit)\n"
-        " 11   Review lock busy\n"
-        "130   SIGINT (workers reaped)\n"
-    ),
-)
+@app.command(hidden=True)
 def review(
     ctx: typer.Context,
     session: Optional[str] = typer.Option(
         None, "--session-id", help="session id (overrides state file)"
     ),
-    session_legacy: Optional[str] = typer.Option(
-        None, "--session", hidden=True, help="[DEPRECATED] alias for --session-id."
-    ),
     state: Optional[Path] = typer.Option(None, "--state", help="path to target-state.md"),
-    diff: Optional[Path] = typer.Option(
-        None, "--diff", help="path to diff file (default: git diff HEAD~1)"
-    ),
-    artifacts_dir: Optional[Path] = typer.Option(
-        None, "--artifacts-dir", help="artifacts directory"
-    ),
-    no_cache: bool = typer.Option(False, "--no-cache", help="bypass cache"),
-    print_providers: bool = typer.Option(
-        False,
-        "--print-providers",
-        help="Print the per-agent cross-model provider routing as JSON and exit "
-        "(no panel run). The /review sigma skill consumes this so it dispatches "
-        "the same providers as the fno do review panel.",
-    ),
-    publish_sigma: Optional[Path] = typer.Option(
-        None,
-        "--publish-sigma",
-        help="Publish a completed sigma report to the node-bound durable artifact.",
-    ),
-    inspect_sigma: bool = typer.Option(
-        False,
-        "--inspect-sigma",
-        help="Inspect the current node-bound sigma artifact without running a panel.",
-    ),
-    sigma_last_head: bool = typer.Option(
-        False,
-        "--sigma-last-head",
-        help=(
-            "Print the head the node's current sigma artifact was reviewed at "
-            "and exit. Empty stdout plus a non-zero exit means no prior head."
-        ),
-    ),
     assess_assurance: bool = typer.Option(
         False,
         "--assess-assurance",
@@ -857,74 +797,23 @@ def review(
         "--risk-surface",
         help="Named risk surface for --assess-assurance (repeatable).",
     ),
-    sigma_node: Optional[str] = typer.Option(None, "--sigma-node", hidden=True),
-    sigma_pr: Optional[int] = typer.Option(None, "--sigma-pr", hidden=True),
-    sigma_head: Optional[str] = typer.Option(None, "--sigma-head", hidden=True),
-    sigma_current_head: Optional[str] = typer.Option(None, "--sigma-current-head", hidden=True),
-    sigma_round: Optional[str] = typer.Option(None, "--sigma-round", hidden=True),
-    sigma_scope_base: Optional[str] = typer.Option(None, "--sigma-scope-base", hidden=True),
-    sigma_scope_reason: Optional[str] = typer.Option(None, "--sigma-scope-reason", hidden=True),
-    sigma_project: Optional[str] = typer.Option(None, "--sigma-project", hidden=True),
-    sigma_reviews_root: Optional[Path] = typer.Option(None, "--sigma-reviews-root", hidden=True),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        "-J",
-        help="Output structured JSON to stdout.",
-    ),
 ) -> None:
-    """Run the internal sigma-review panel and write a quality_check artifact."""
+    """The sigma panel is removed; the review lane is bare /fno:review.
+
+    ``fno do review classify`` / ``resolve-level`` still run as subcommands of
+    this group (the lane's emit step depends on them). Every panel surface
+    refuses here: the replacement is named and NO attestation is emitted -
+    a removed producer must never leave a path that still writes gate
+    evidence (AC8-ERR).
+    """
     # Under ``fno do review`` this body is the GROUP's default callback, so a
     # subcommand invocation (``fno do review classify``) reaches this line
-    # first; step aside and let the subcommand run. The root ``fno review``
-    # command never carries a subcommand, so its behavior is unchanged.
+    # first; step aside and let the subcommand run.
     if getattr(ctx, "invoked_subcommand", None):
-        return
-    from fno._flag_aliases import merge_deprecated_alias
-    from fno.worker.review import (
-        ReviewInputError,
-        capture_review_input,
-        review as _review,
-    )
-    from fno.review.locking import ReviewLockBusy
-
-    session = merge_deprecated_alias(
-        session, session_legacy, canonical_flag="--session-id", legacy_flag="--session"
-    )
-
-    ctx.ensure_object(dict)
-    if json_output:
-        ctx.obj["json"] = True
-
-    # --print-providers: resolve the per-agent routing via the SAME path the
-    # panel uses (worker.review.panel_provider_routing -> resolve_panel_providers)
-    # and exit before any diff/panel work. Empty {} means all-claude (cross-model
-    # OFF). This is the seam that lets /review sigma honor config.review.cross_model
-    # without a parallel resolver (US3, no drift).
-    if print_providers:
-        from fno.worker.review import panel_provider_routing, resolve_session_id
-
-        # Resolve the session the SAME way the panel run does (explicit flag,
-        # else target-state.md) so the implementer-provider read - which
-        # `alternate` routing excludes - matches; otherwise the skill could
-        # resolve a different provider than the panel (drift).
-        sid = resolve_session_id(session, state or Path(".fno/target-state.md"))
-        routing = {
-            agent: {
-                "provider": rp.provider,
-                "harness": rp.route.harness if rp.route else rp.provider,
-                "route_provider": rp.route.provider if rp.route else None,
-                "model": rp.route.model if rp.route else None,
-                "degraded": rp.degraded,
-                "reason": rp.reason,
-            }
-            for agent, rp in panel_provider_routing(sid).items()
-        }
-        typer.echo(json.dumps(routing))
         return
 
     if assess_assurance:
-        from fno.worker.review import resolve_session_id, review_assurance
+        from fno.review.policy import resolve_session_id, review_assurance
 
         sid = resolve_session_id(session, state or Path(".fno/target-state.md"))
         verdict = review_assurance(
@@ -935,155 +824,14 @@ def review(
         # an unsatisfied high-assurance policy must not read as a clean pass.
         raise typer.Exit(0 if verdict["satisfied"] else 3)
 
-    if publish_sigma is not None or inspect_sigma or sigma_last_head:
-        from fno.config import load_settings
-        from fno.paths import vault_root
-        from fno.review.artifact import (
-            inspect_sigma_artifact,
-            publish_sigma_artifact,
-            read_sigma_last_head,
-        )
-
-        project = sigma_project or load_settings().project.id
-        root = sigma_reviews_root
-        if root is None:
-            vault = vault_root()
-            root = vault / "internal" if vault is not None else None
-        missing = [
-            name
-            for name, value in (
-                ("--sigma-node", sigma_node),
-                ("--sigma-pr", sigma_pr),
-                ("config.project.id/--sigma-project", project),
-                ("configured vault/--sigma-reviews-root", root),
-            )
-            if value is None
-        ]
-        if publish_sigma is not None or inspect_sigma:
-            missing.extend(
-                name for name, value in (("--sigma-head", sigma_head),) if value is None
-            )
-        if publish_sigma is not None:
-            missing.extend(
-                name
-                for name, value in (
-                    ("--sigma-current-head", sigma_current_head),
-                    ("--sigma-round", sigma_round),
-                )
-                if value is None
-            )
-            if (sigma_scope_base is None) != (sigma_scope_reason is None):
-                missing.append(
-                    "--sigma-scope-base and --sigma-scope-reason (both or neither)"
-                )
-        if missing:
-            typer.echo(f"error: sigma artifact metadata missing: {', '.join(missing)}", err=True)
-            raise typer.Exit(code=2)
-
-        if sigma_last_head and (publish_sigma is not None or inspect_sigma):
-            typer.echo(
-                "error: --sigma-last-head cannot combine with --publish-sigma/--inspect-sigma",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-
-        if sigma_last_head:
-            assert root is not None and project is not None
-            assert sigma_node is not None and sigma_pr is not None
-            last_head = read_sigma_last_head(
-                reviews_root=root,
-                project=project,
-                node=sigma_node,
-                pr_number=sigma_pr,
-            )
-            if last_head.head_sha is None:
-                typer.echo(
-                    f"error: sigma last head unavailable: {last_head.reason}", err=True
-                )
-                raise typer.Exit(code=1)
-            # Bare SHA only: callers consume it as one token of shell input.
-            typer.echo(last_head.head_sha)
-            return
-
-        assert root is not None and project is not None
-        assert sigma_node is not None and sigma_pr is not None and sigma_head is not None
-        if publish_sigma is not None:
-            assert sigma_current_head is not None and sigma_round is not None
-            publish_result = publish_sigma_artifact(
-                publish_sigma,
-                reviews_root=root,
-                project=project,
-                node=sigma_node,
-                pr_number=sigma_pr,
-                reviewed_head=sigma_head,
-                current_head=sigma_current_head,
-                round_id=sigma_round,
-                scope_base=sigma_scope_base,
-                scope_reason=sigma_scope_reason,
-            )
-            payload = {
-                "published": publish_result.published,
-                "reason": publish_result.reason,
-                "path": str(publish_result.current_path),
-                "round_path": str(publish_result.round_path),
-                "head_sha": sigma_head,
-                "finding_count": publish_result.finding_count,
-            }
-        else:
-            inspected = inspect_sigma_artifact(
-                reviews_root=root,
-                project=project,
-                node=sigma_node,
-                pr_number=sigma_pr,
-                head_sha=sigma_head,
-            )
-            payload = {
-                "status": inspected.status,
-                "reason": inspected.reason,
-                "path": str(inspected.path),
-                "head_sha": sigma_head,
-                "finding_count": inspected.finding_count,
-                "review_round": inspected.round_id,
-                "body": inspected.body,
-            }
-        if json_output:
-            typer.echo(json.dumps(payload))
-        else:
-            for key, value in payload.items():
-                if key != "body":
-                    typer.echo(f"{key}: {value}")
-        return
-
-    state_path = state or Path(".fno/target-state.md")
-
-    try:
-        reviewed_head, diff_context = capture_review_input(diff)
-    except ReviewInputError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=2)
-
-    try:
-        review_result = _review(
-            diff_context=diff_context,
-            state_path=state_path,
-            artifacts_dir=artifacts_dir,
-            session_id=session,
-            no_cache=no_cache,
-            git_sha_value=reviewed_head,
-        )
-    except ReviewLockBusy as exc:
-        typer.echo(f"error: review lock busy: {exc}", err=True)
-        raise typer.Exit(code=11)
-
-    use_json = bool(ctx.obj and ctx.obj.get("json", False))
-    if use_json:
-        typer.echo(json.dumps(review_result))
-    else:
-        typer.echo(f"action: {review_result['action']}")
-        typer.echo(f"verdict: {review_result.get('verdict', 'unknown')}")
-        typer.echo(f"findings: {review_result.get('findings', 0)}")
-        if review_result.get("cached"):
-            typer.echo("cached: true")
+    typer.secho(
+        "sigma is removed: the review is bare /fno:review (the fno review lane), "
+        "which runs inline on every harness and emits its own attestation. "
+        "`fno do review classify` and `fno do review resolve-level` remain for "
+        "the lane's emit step.",
+        err=True,
+    )
+    raise typer.Exit(code=2)
 
 
 def _run_rust_front(args: list[str]) -> None:
@@ -1093,12 +841,27 @@ def _run_rust_front(args: list[str]) -> None:
     (d-cf2d6fe1): a user typing `fno mux ...` never reaches Python (the Rust
     binary intercepts), but `fno-py mux ...` must still work and the two
     listings must show real rows rather than footnotes about an absence.
+
+    The hand-off marker breaks the fno -> fno-py -> fno loop: a PATH `fno`
+    that is a shim forwarding to fno-py re-enters here, and without the marker
+    every level spawns another until the machine drowns (2026-10-02: ~9,000
+    `fno-py mux workspace prune` processes, 89 GB resident). One re-entry is a
+    mis-resolution, never a legitimate nesting, so refuse and name it.
     """
+    import os
     import shutil
     import subprocess
 
     from fno._subprocess_util import propagate_returncode
 
+    if os.environ.get("FNO_PY_HANDOFF"):
+        typer.echo(
+            "fno-py: recursive hand-off refused (FNO_PY_HANDOFF is already set): "
+            "the `fno` found on PATH forwards back to fno-py. Run the Rust front "
+            "binary directly, or fix the shim so `fno` resolves to it.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     binary = shutil.which("fno")
     if binary is None:
         typer.echo(
@@ -1107,7 +870,7 @@ def _run_rust_front(args: list[str]) -> None:
             err=True,
         )
         raise typer.Exit(code=127)
-    result = subprocess.run([binary, *args], check=False)
+    result = subprocess.run([binary, *args], check=False, env=dict(os.environ, FNO_PY_HANDOFF="1"))
     raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
@@ -1139,5 +902,36 @@ def version(ctx: typer.Context) -> None:
     _run_rust_front(["version", *ctx.args])
 
 
+def main() -> None:
+    """Console entrypoint: append the reinstall hint to a bare mid-reinstall ImportError.
+
+    The meta-path guard in ``fno/__init__.py`` shapes ModuleNotFoundError, but two
+    shapes reach the operator bare: ``from fno import submodule`` (CPython's
+    ``_handle_fromlist`` replaces our ModuleNotFoundError with ``cannot import
+    name ...``) and a module already in ``sys.modules``, which no finder is ever
+    consulted for. Both arrive here as a plain ImportError whose ``exc.name`` is
+    the module. ModuleNotFoundError is skipped: the finder already stamped its
+    hint. This is not the import layer, so it can read the exception instead of
+    shaping it, and the failure path first-imports nothing (the reason typer's
+    own reporter is disabled in this module).
+    """
+    try:
+        app()
+    except ImportError as exc:
+        if (
+            not isinstance(exc, ModuleNotFoundError)
+            and isinstance(exc.name, str)
+            and _is_fno_module(exc.name)
+        ):
+            exc.msg = f"{exc.msg or ''}{_reinstall_hint(exc.name)}"
+        raise
+    except (RuntimeError, ValueError) as exc:
+        refusal = getattr(exc, "fno_refusal", None)
+        if refusal is None:
+            raise
+        print(f"Error: {refusal}", file=sys.stderr)
+        raise SystemExit(1) from None
+
+
 if __name__ == "__main__":
-    app()
+    main()

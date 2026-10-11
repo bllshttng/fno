@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # check-autonomy-registry.sh - ratchet on every spawn-shaped call site, Python
-# and shell, so a tenth autonomous door cannot be added silently (x-aaaf wave
+# and shell, so a tenth autonomous door cannot be added silently (wave
 # 3.3, AC6-CON).
 #
 # "A guard placed on one of N reachable paths is decorative" is the governing
@@ -107,6 +107,20 @@ REMOVED="$(comm -13 "$FOUND" "$BASE" || true)"
 
 if [[ -z "$ADDED" && -z "$REMOVED" ]]; then
   echo "check-autonomy-registry: ok ($(wc -l < "$BASE" | tr -d ' ') site(s) match the baseline)"
+  # The dispatch-provenance audit: positive completeness marker for the
+  # source/verb vocabulary - every registered path must carry a code, and the
+  # marker line (not an empty grep) is the evidence. The vocabulary lives in
+  # the fno-agents binary, so the audit runs it directly (no typer import); a
+  # lane with no binary names the SKIP instead of failing, and provisioning
+  # the binary there is what makes it run again.
+  PY="$REPO_ROOT/cli/.venv/bin/python"
+  [[ -x "$PY" ]] || PY=python3
+  BINARY="$(PYTHONPATH="$REPO_ROOT/cli/src" "$PY" -c 'from fno import rust_binary; b = rust_binary.resolve_binary(); print(b or "")' 2>/dev/null)"
+  if [[ -z "$BINARY" ]]; then
+    echo "check-autonomy-registry: provenance audit SKIPPED (no fno-agents binary on this lane; build one to run it)" >&2
+    exit 0
+  fi
+  "$BINARY" name-codes --check
   exit 0
 fi
 

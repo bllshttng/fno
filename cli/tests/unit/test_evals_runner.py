@@ -15,6 +15,16 @@ from fno.evals.bank import GradeCheck, TaskSpec
 from fno.evals.grading import grade
 import fno.evals.runner as _runner
 from fno.evals.runner import SpawnResult, evals_enabled, run_task
+from fno.route_resolve import InventoryRow
+
+
+def _rows(path):
+    """Read back written history rows (the fold lives native; tests read JSONL)."""
+    import json as _json
+    if not path.exists():
+        return []
+    return [_json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
 
 
 # --------------------------------------------------------------------------- #
@@ -88,19 +98,16 @@ def test_history_append_and_tolerant_read(tmp_path: Path) -> None:
     hp = tmp_path / "h.jsonl"
     _history.append_row(hp, {"task_id": "a", "pass": True})
     _history.append_row(hp, {"task_id": "b", "pass": False})
-    rows = [r for _, r in _history.iter_rows_tolerant(hp)]
+    rows = _rows(hp)
     assert [r["task_id"] for r in rows] == ["a", "b"]
 
 
-def test_history_partial_final_line_tolerated(tmp_path: Path) -> None:
+def test_history_partial_final_line_tolerated_native(tmp_path: Path) -> None:
+    """The tolerant history READ is native (fno-agents evals-trend read_rows);
+    pinned there. The writer only ever appends whole lines."""
     hp = tmp_path / "h.jsonl"
     _history.append_row(hp, {"task_id": "a", "pass": True})
-    # Simulate an interrupted append: a truncated JSON fragment with no newline.
-    with hp.open("a", encoding="utf-8") as fh:
-        fh.write('{"task_id": "b", "pa')
-    with pytest.warns(UserWarning, match="malformed JSON"):
-        rows = [r for _, r in _history.iter_rows_tolerant(hp)]
-    assert [r["task_id"] for r in rows] == ["a"]  # task 1 survives, no crash
+    assert len(_rows(hp)) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -116,9 +123,10 @@ def test_run_grade_only_task_appends_history_and_removes_worktree(tmp_path: Path
     results = run_task(task, repeat=1, repo_root=root, history_path=hp,
                        spawn=_never_called_spawn)
     assert results[0].passed
-    rows = list(_history.iter_rows(hp))
+    rows = _rows(hp)
     assert len(rows) == 1
     assert rows[0]["pass"] is True and rows[0]["tier"] == "regression"
+    assert rows[0]["variant"] == "baseline"  # default run records the round
     assert rows[0]["bank_rev"]  # HEAD sha recorded
     assert _worktree_count(root) == before  # worktree removed after grading
 
@@ -178,9 +186,7 @@ def test_evals_enabled_defaults_true_matching_prior_ungated_behavior(
 ) -> None:
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", "/dev/null")
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "nonexistent.yaml"))
-    from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     assert evals_enabled() is True
 
 
@@ -197,7 +203,7 @@ def test_spawn_failure_is_graded_fail_not_crash(tmp_path: Path) -> None:
     assert len(results) == 3
     assert all(not r.passed for r in results)
     assert all("provider down" in r.reason for r in results)
-    assert len(list(_history.iter_rows(hp))) == 3  # every run recorded
+    assert len(_rows(hp)) == 3  # every run recorded
 
 
 def test_repeat_k_runs_k_times(tmp_path: Path) -> None:
@@ -212,11 +218,372 @@ def test_repeat_k_runs_k_times(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# variant axis: a scored round names baseline or v<N> and checks out its ref
+# --------------------------------------------------------------------------- #
+
+def _branch(root: Path, name: str, filename: str) -> None:
+    def g(*args: str) -> None:
+        subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True)
+    g("checkout", "-b", name)
+    (root / filename).write_text("x\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", filename)
+    g("checkout", "-")
+
+
+def _git_sha(root: Path, ref: str) -> str:
+    proc = subprocess.run(["git", "rev-parse", ref], cwd=str(root),
+                          capture_output=True, text=True, check=True)
+    return proc.stdout.strip()
+
+
+def test_variant_run_checks_out_variant_ref_and_records_row(tmp_path: Path) -> None:
+    root = _git_repo(tmp_path)
+    _branch(root, "v1-work", "extra.txt")
+    hp = tmp_path / "hist.jsonl"
+    task = _task(grade=[GradeCheck("file-exists", path="extra.txt")])
+    before = _worktree_count(root)
+
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, variant="v1", variant_ref="v1-work")
+    assert results[0].passed
+    assert results[0].variant == "v1"
+    rows = _rows(hp)
+    assert rows[0]["variant"] == "v1"
+    assert rows[0]["bank_rev"] == _git_sha(root, "v1-work")
+    assert _worktree_count(root) == before  # worktree removed after grading
+
+
+def test_variant_bad_name_refuses_before_any_worktree(tmp_path: Path) -> None:
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    before = _worktree_count(root)
+
+    with pytest.raises(ValueError, match=r"baseline\|v<N>"):
+        run_task(_task(), repeat=1, repo_root=root, history_path=hp,
+                 spawn=_never_called_spawn, variant="round2")
+    with pytest.raises(ValueError, match="baseline"):
+        run_task(_task(), repeat=1, repo_root=root, history_path=hp,
+                 spawn=_never_called_spawn, variant="baseline", variant_ref="x")
+    assert len(_rows(hp)) == 0  # nothing recorded
+    assert _worktree_count(root) == before          # no worktree made
+
+
+def test_variant_bad_ref_is_graded_fail_with_ref_name(tmp_path: Path) -> None:
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    results = run_task(_task(), repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, variant="v1", variant_ref="no-such-ref")
+    assert not results[0].passed
+    assert "no-such-ref" in results[0].reason
+
+
+# --------------------------------------------------------------------------- #
+# attempt identity + native verdict (x-ecda AC1-HP, AC1-EDGE)
+# --------------------------------------------------------------------------- #
+
+def test_attempt_row_carries_identity_obs_and_native_verdict(tmp_path, monkeypatch) -> None:
+    """Every attempt persists with a unique identity and structured
+    observations; the native verdict labels the row (here canned)."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    monkeypatch.setattr(_runner, "_native_verdict",
+                        lambda row: {"status": "graded", "retryable": False, "graded": True})
+    task = _task(grade=[GradeCheck("file-exists", path="seed.txt")])
+    results = run_task(task, repeat=2, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn)
+    assert [r.status for r in results] == ["graded", "graded"]
+    rows = _rows(hp)
+    assert len(rows) == 2
+    assert len({r["attempt_id"] for r in rows}) == 2  # unique per attempt
+    assert rows[0]["run_id"] == rows[1]["run_id"]  # same sweep
+    assert all(r["attempt_index"] == 0 for r in rows)
+    assert rows[0]["obs"] == {
+        "fixture_prepared": True, "worker_required": False,
+        "grader_ran": True, "grader_passed": True,
+    }
+    assert rows[0]["status"] == "graded" and rows[0]["retryable"] is False
+
+
+def test_infrastructure_failure_retries_and_persists_both_attempts(tmp_path, monkeypatch) -> None:
+    """AC1-HP: a fixture failure is retryable infrastructure evidence - the
+    retry runs, both attempts stay attributable, neither consumes the slot."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    monkeypatch.setattr(_runner, "_native_verdict",
+                        lambda row: {"status": "infrastructure", "retryable": True})
+    results = run_task(_task(), repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, variant="v1", variant_ref="no-such-ref",
+                       max_retries=1)
+    assert [r.attempt_index for r in results] == [0, 1]
+    rows = _rows(hp)
+    assert len(rows) == 2
+    assert all(r["obs"]["fixture_prepared"] is False for r in rows)
+    assert all(r["status"] == "infrastructure" for r in rows)
+    assert {r["attempt_id"] for r in rows} == {r.attempt_id for r in results}
+
+
+def test_spawn_failure_then_success_retry_then_pass(tmp_path, monkeypatch) -> None:
+    """AC3-EDGE seed: a failed launch retries, then passes; both attempts
+    remain attributable, the retry is not suppressed, the slot counts once."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    calls = {"n": 0}
+    verdicts = {"n": 0}
+
+    def verdict(row: dict) -> dict:
+        verdicts["n"] += 1
+        return {"status": "unavailable", "retryable": True} if verdicts["n"] == 1 else {
+            "status": "graded", "retryable": False, "graded": True}
+
+    monkeypatch.setattr(_runner, "_native_verdict", verdict)
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return SpawnResult(False, "spawn exit 1: provider down")
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True)
+
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+                       max_retries=1)
+    assert [r.status for r in results] == ["unavailable", "graded"]
+    assert [r.attempt_index for r in results] == [0, 1]
+    rows = _rows(hp)
+    assert [r["status"] for r in rows] == ["unavailable", "graded"]
+    assert rows[0]["retryable"] is True
+    assert rows[1]["pass"] is True and rows[1]["attempt_index"] == 1
+
+
+def test_graded_failure_never_retries(tmp_path, monkeypatch) -> None:
+    """A valid task grade (pass or fail) is final: max_retries never repeats it."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    monkeypatch.setattr(_runner, "_native_verdict",
+                        lambda row: {"status": "graded", "retryable": False, "graded": False})
+    task = _task(grade=[GradeCheck("file-exists", path="missing.txt")])
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, max_retries=3)
+    assert len(results) == 1
+    assert results[0].status == "graded" and not results[0].passed
+    assert len(_rows(hp)) == 1
+
+
+def test_unreachable_native_door_persists_unclassified_without_retry(tmp_path, monkeypatch) -> None:
+    """Binary absent: observations still persist (the read side re-asks
+    natively); no verdict means no retry, never a Python-side guess."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    monkeypatch.setattr(_runner, "_native_verdict", lambda row: None)
+    results = run_task(_task(), repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, max_retries=1)
+    assert results[0].status == ""
+    rows = _rows(hp)
+    assert len(rows) == 1
+    assert "status" not in rows[0]
+    assert rows[0]["obs"]["fixture_prepared"] is True
+    assert rows[0]["obs"]["grader_ran"] is True
+
+
+def test_gate_blocked_attempt_never_retries(tmp_path, monkeypatch) -> None:
+    """A gate refusal is deterministic: max_retries must not burn worktree
+    cycles re-attempting it inside the same sweep."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+    monkeypatch.setattr(_runner, "_native_verdict",
+                        lambda row: {"status": "unavailable", "retryable": True})
+    monkeypatch.setattr(_runner, "evals_enabled", lambda: False)
+    task = _task(prompt="x", grade=[GradeCheck("file-exists", path="made.txt")])
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp, max_retries=2)
+    assert len(results) == 1  # no retry
+    assert results[0].status == "unavailable"
+    assert "config.evals.enabled is false" in results[0].reason
+
+
+def test_history_append_attempt_refuses_unattributable_rows(tmp_path) -> None:
+    hp = tmp_path / "h.jsonl"
+    with pytest.raises(ValueError, match="attempt row"):
+        _history.append_attempt(hp, {"task_id": "a", "pass": True})
+    row = {"attempt_id": "x", "run_id": "r", "obs": {"fixture_prepared": True}}
+    _history.append_attempt(hp, row)  # valid identity + evidence: persists
+    assert len(_rows(hp)) == 1
+
+
+# --------------------------------------------------------------------------- #
 # small helpers
 # --------------------------------------------------------------------------- #
 
 def _never_called_spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
     raise AssertionError("grade-only task must not spawn a worker")
+
+
+# --------------------------------------------------------------------------- #
+# lane requested/observed evidence - AC1-HP, AC1-EDGE, AC1-ERR
+# --------------------------------------------------------------------------- #
+
+_LANE = InventoryRow(name="astra-high", harness="codex", model="gpt-6-astra", effort="high")
+
+
+def test_lane_hp_records_requested_and_observed_configuration(tmp_path: Path) -> None:
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True, worker_name="eval-worker-1")
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        assert worker_name == "eval-worker-1"
+        assert attempted and spawned
+        return {"requested_lane": "astra-high", "requested_harness": "codex",
+                "requested_model": "gpt-6-astra", "requested_effort": "high",
+                "observed_harness": "codex", "observed_model": "gpt-6-astra",
+                "observed_model_basis": "verified", "observed_effort": "high",
+                "observed_session_id": "sess-1",
+                "substituted": False, "lane_status": "ok",
+                "usage": None, "usage_source": None}
+
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+             lane=_LANE, experiment_id="cohort-a", observe=observe)
+    row = _rows(hp)[0]
+    assert row["requested_lane"] == "astra-high"
+    assert row["requested_harness"] == "codex"
+    assert row["requested_model"] == "gpt-6-astra"
+    assert row["observed_harness"] == "codex"
+    assert row["observed_model"] == "gpt-6-astra"
+    assert row["observed_session_id"] == "sess-1"
+    assert row["lane_status"] == "ok"
+    assert row["substituted"] is False
+    assert row["experiment_id"] == "cohort-a"
+
+
+def test_lane_edge_substitution_is_labeled_and_excluded(tmp_path: Path) -> None:
+    """AC1-EDGE: capacity serves a different harness -> substituted, not folded
+    into the requested lane's cohort."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True, worker_name="eval-worker-2")
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        return {"requested_lane": "astra-high", "requested_harness": "codex",
+                "requested_model": "gpt-6-astra", "requested_effort": "high",
+                "observed_harness": "claude", "observed_model": "claude-sonnet-5",
+                "observed_model_basis": None, "observed_effort": "medium",
+                "observed_session_id": None,
+                "substituted": True, "lane_status": "substituted",
+                "usage": None, "usage_source": None}
+
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+             lane=_LANE, observe=observe)
+    row = _rows(hp)[0]
+    assert row["substituted"] is True
+    assert row["lane_status"] == "substituted"
+    assert row["requested_harness"] == "codex"
+    assert row["observed_harness"] == "claude"
+
+
+def test_lane_err_unavailable_never_grades_a_substitute_as_requested(tmp_path: Path) -> None:
+    """AC1-ERR: a spawn refusal records unavailable with no observed model -
+    the run is graded a fail, never a pass under the requested lane."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        return SpawnResult(False, "spawn exit 2: account lacks model")
+
+    seen: dict = {}
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        seen.update(attempted=attempted, spawned=spawned)
+        return {"requested_lane": "astra-high", "requested_harness": "codex",
+                "requested_model": "gpt-6-astra", "requested_effort": "high",
+                "observed_harness": None, "observed_model": None,
+                "substituted": False, "lane_status": "unavailable",
+                "usage": None, "usage_source": None}
+
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+                       lane=_LANE, observe=observe)
+    assert not results[0].passed
+    assert seen == {"attempted": True, "spawned": False}, "the door still learns the spawn refused"
+    row = _rows(hp)[0]
+    assert row["lane_status"] == "unavailable"
+    assert row["observed_model"] is None
+    assert row["requested_model"] == "gpt-6-astra"
+
+
+def test_lane_grade_only_task_records_not_applicable_never_unavailable(tmp_path: Path) -> None:
+    """A grade-only task never attempts a worker, so a requested lane must not
+    read as a false capacity denial: unavailable means capacity said no."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    task = _task(grade=[GradeCheck("exit", command="true")])  # no prompt: grade-only
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp,
+                       spawn=_never_called_spawn, lane=_LANE,
+                       observe=lambda lane, w, s, *, attempted, spawned, worker_name:
+                           {"requested_lane": "astra-high", "requested_harness": "codex",
+                            "requested_model": "gpt-6-astra", "requested_effort": "high",
+                            "observed_model": None, "observed_harness": None,
+                            "lane_status": "not-applicable"})
+    assert results[0].passed
+    row = _rows(hp)[0]
+    assert row["lane_status"] == "not-applicable"
+    assert row["requested_lane"] == "astra-high"
+    assert row["observed_model"] is None
+
+
+def test_lane_successful_headless_spawn_with_no_observable_identity_is_unverified(tmp_path, monkeypatch) -> None:
+    """A spawned attempt whose store holds no transcript for the attempt
+    workdir reads unverified, never a false unavailable that reads like the
+    lane refused capacity. An unreachable door reads the same way, never a
+    crash and never a guessed status (AC10-EDGE)."""
+    root = _git_repo(tmp_path)
+    hp = tmp_path / "hist.jsonl"
+
+    def spawn(prompt: str, workdir: Path, timeout_s: int) -> SpawnResult:
+        (workdir / "made.txt").write_text("ok\n", encoding="utf-8")
+        return SpawnResult(True, worker_name="eval-worker-3")
+
+    def observe(lane, workdir, started_wall, *, attempted, spawned, worker_name):
+        # The door's own unverified answer: a spawned attempt whose store holds
+        # no transcript for the attempt workdir.
+        return {"requested_lane": "astra-high", "requested_harness": "codex",
+                "requested_model": "gpt-6-astra", "requested_effort": "high",
+                "observed_model": None, "observed_harness": None,
+                "lane_status": "unverified",
+                "lane_reason": "no claude transcript for this workdir",
+                "usage": None}
+
+    task = _task(prompt="do the thing", grade=[GradeCheck("file-exists", path="made.txt")])
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp, spawn=spawn,
+                       lane=_LANE, observe=observe)
+    assert results[0].passed
+    row = _rows(hp)[0]
+    assert row["lane_status"] == "unverified"
+    assert row["requested_lane"] == "astra-high"
+    assert row["observed_model"] is None
+
+    # Second phase: the door itself unreachable degrades the row the same way.
+    def fake_verb_call(verb, payload, **kwargs):
+        from fno.rust_binary import VerbUnavailable
+
+        raise VerbUnavailable("binary missing")
+
+    monkeypatch.setattr("fno.rust_binary.verb_call", fake_verb_call)
+    hp2 = tmp_path / "hist2.jsonl"
+    results = run_task(task, repeat=1, repo_root=root, history_path=hp2, spawn=spawn, lane=_LANE)
+    assert results[0].passed
+    row = _rows(hp2)[0]
+    assert row["lane_status"] == "unverified"
+    assert row["lane_reason"] == "observe door unavailable"
+    assert row["usage"] is None
 
 
 def _worktree_count(root: Path) -> int:

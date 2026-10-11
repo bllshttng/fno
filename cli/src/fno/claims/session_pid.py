@@ -1,4 +1,11 @@
-"""Resolve a durable session pid for the hybrid liveness pid-arm (ab-cc5553f2).
+"""Resolve the durable session pid (and harness) for the liveness pid-arm.
+
+The ancestor walk itself lives in Rust
+(`spawn_context::session_identity_from_table` / `session_identity_ambient`),
+served natively by `fno agents claim session-pid`. This module is the Python
+shim over that verb: one cached exec per ``from_pid`` per process, so many
+call sites pay one exec, and the pid and the harness can never name different
+processes (AC6: both halves come from one JSON read).
 
 The ``node:<id>`` claim is acquired with ``--ttl`` AND ``--pid <durable>``. The
 durable pid must be the process that lives as long as the *session*, not the
@@ -6,206 +13,149 @@ transient ``fno`` python subprocess that runs ``fno do target init`` (that pid i
 dead ~1s after init returns - the original bug). Every agent harness runs its
 session under a long-lived binary (``claude``, ``codex``, ``gemini``,
 ``opencode``, ``agy``), so the uniform mechanism is a process-tree walk from
-init up the parent chain to the nearest *harness* ancestor.
+init up the parent chain to the nearest *harness* ancestor. The walk refuses
+Claude Code pool machinery (a ``claude bg-spare``, a ``bg-pty-host``, the
+daemon): the spare outlives every session it serves, so a pid answered there
+pins a claim to machinery that never dies. A thread worker therefore degrades
+to no pid; the claim lives by its TTL (the same answer the walk gave a plain
+shell before).
 
-This is degrade-safe by construction: if no harness ancestor is found (e.g.
-plain-shell), the caller records no ``--pid`` (or the transient default) and the
-claim is LIVE via the TTL arm exactly as before. A mis-resolved/transient pid is
-a dead pid that fails ``is_live`` -> STALE on expiry, indistinguishable from a
-missing one. The pid arm only ever *extends* liveness (every matched process is
-an ancestor of the acquiring one, so it dies no later than the session), so it
-is structurally impossible to regress.
+This is degrade-safe by construction: if the verb answers nothing (no harness
+ancestor, a refused spare, the binary unavailable), the caller records no
+``--pid`` and the claim is LIVE via the TTL arm exactly as before. A
+mis-resolved/transient pid is a dead pid that fails ``is_live`` -> STALE on
+expiry, indistinguishable from a missing one.
+
+The ancestor is an ancestor of the acquiring process, so it dies no later than
+that process. It dies no later than the SESSION only when the harness forks one
+binary per session. codex does not: its ancestor is a shared ``codex
+app-server`` that hosts every session on the machine and outlives all of them,
+so a pid answering there proves the multiplexer lives and says nothing about the
+session. :func:`pid_dies_with_session` is the gate that separates the two, and
+the provenance stamp is its one consumer - see ``_resolve_pid_provenance`` in
+``core.py``. Nothing else here may read a live ancestor as a live session.
 """
 from __future__ import annotations
 
-import os
-from typing import Iterator, Optional
+import functools
+import json
+import subprocess
+from typing import Optional
 
-import psutil
-
-# How far up the parent chain to look before giving up. The real chain is
-# short (claude -> ... -> fno -> bash init), but bg/handoff nesting can add a
-# few levels; 25 is generous and bounds a pathological/looping ancestry.
-_MAX_DEPTH = 25
-
-# Harness session binaries whose ancestor anchors the durable pid. Keep in sync
-# with spawn's KNOWN_PROVIDERS (the sibling harness list); no runtime import -
-# claims sits at the bottom of the stack and must not couple to the spawn
-# registry.
-_HARNESS_TOKENS = ("claude", "codex", "gemini", "opencode", "agy")
-# `claude` keeps its proven substring rule (unchanged: its versioned binary
-# hides the name in the exe path, and the shipped x-616b lane depends on it).
-# The rest match by exact path SEGMENT only, never substring: `agy` is a
-# substring of `legacy`, and the ChatGPT desktop app's process tree is full of
-# `Codex Framework.framework` exe paths whose segments are not `codex`.
-_SEGMENT_TOKENS = frozenset(t for t in _HARNESS_TOKENS if t != "claude")
-
-_PSUTIL_ERRORS = (
-    psutil.NoSuchProcess,
-    psutil.AccessDenied,
-    psutil.ZombieProcess,
-    PermissionError,
-)
-_START_ERRORS = (*_PSUTIL_ERRORS, ValueError)
+# Harnesses whose sessions SHARE one host process. For these the nearest harness
+# ancestor is a multiplexer that outlives every session it hosts, so its
+# liveness says nothing about the session's. Membership is proved by
+# MEASUREMENT, never by reading a name: run one session, walk to its harness
+# ancestor, end the session, and check whether that pid is still alive.
+#   codex:    MEASURED 2026-09-03. `codex app-server --remote-control` pid
+#             53566, up 9h20m, still answering for a session dead 5h, keeping a
+#             lease live 3h45m past its TTL. ON the list.
+#   opencode: MEASURED 2026-09-04, opencode 1.14.50. `opencode run` forked pid
+#             26245 whose exe IS the session, and the process table held zero
+#             opencode processes four seconds after it exited (the same probe
+#             printed two rows while it ran, which is the positive control that
+#             it can see them at all). Per-invocation, so OFF the list. Its
+#             `serve`/`attach` lane could share a host, but fno dispatches
+#             opencode one-shot and never through attach; measure again if that
+#             changes.
+# The other harnesses are unmeasured and therefore off the list by default, per
+# the deny-list rule below.
+_SHARED_HOST_HARNESSES = frozenset({"codex"})
 
 
-def _candidate_strings(proc: psutil.Process) -> Iterator[tuple[str, bool]]:
-    """Yield ``(identity_string, is_cmdline)`` for PROC: ``name()``, ``exe()``
-    (``is_cmdline=False``), then the first two ``cmdline()`` entries
-    (``is_cmdline=True``). cmdline is what covers node-shim harnesses (gemini is
-    ``node /.../bin/gemini`` behind a symlink, so name/exe say only ``node``).
-    Each getter's psutil failure is skipped independently - a per-getter error is
-    "no evidence", not a dead chain.
+def pid_dies_with_session(harness: Optional[str]) -> bool:
+    """True when HARNESS forks a process per session, so its pid's death is the
+    session's death.
+
+    False ONLY for a harness measured to share one host process. An unknown or
+    absent harness returns True and keeps today's behavior: the hybrid arm
+    exists to stop a peer stealing the claim of a suspended-but-alive session,
+    and this predicate must never widen that theft to harnesses nobody
+    measured. So the list is a deny-list, and adding to it costs a measurement.
     """
-    for getter in (proc.name, proc.exe):
+    return (harness or "").strip().lower() not in _SHARED_HOST_HARNESSES
+
+
+@functools.lru_cache(maxsize=None)
+def _session_identity(from_pid: Optional[int]) -> tuple[Optional[int], Optional[str]]:
+    """One session-pid read, cached per ``from_pid``. The stamp pair
+    (`FNO_SESSION_PID` / `FNO_SESSION_HARNESS`) is applied Rust-side on the
+    exec. The native front answers first - one ~10 ms exec, where the Python
+    front pays an interpreter spawn no Stop-hook-budget identity caller can
+    afford - and a valid answer from either front is final.
+    """
+    from fno.rust_binary import resolve_binary
+
+    # The rust_binary door locates the binary: pydoor bars a literal exec.
+    native = resolve_binary()
+    fronts = [
+        *([[str(native), "claim", "session-pid", "--json"]] if native else []),
+        ["fno", "agents", "claim", "session-pid", "--json"],
+    ]
+    for cmd in fronts:
+        if from_pid is not None:
+            cmd += ["--from-pid", str(from_pid)]
         try:
-            value = getter()
-        except _PSUTIL_ERRORS:
+            proc = subprocess.run(  # noqa: S603 - a fixed verb, never user input
+                cmd, capture_output=True, text=True, timeout=30, check=False
+            )
+            payload = json.loads(proc.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+            continue  # a spawn or parse miss on one front: try the next
+        if not isinstance(payload, dict):
             continue
-        if value:
-            yield value, False
-    try:
-        argv = proc.cmdline()
-    except _PSUTIL_ERRORS:
-        argv = []
-    for value in argv[:2]:
-        if value:
-            yield value, True
-
-
-def _harness_name_of(proc: psutil.Process) -> Optional[str]:
-    """The harness name PROC runs as, or None when it is not a harness binary.
-
-    ``claude`` matches by substring on name/exe only (its versioned binary hides
-    the name in the exe path, and a ``.claude/`` install segment in a wrapper
-    argv must not match - codex P1, PR #419); the rest match by exact path
-    SEGMENT, never substring (``agy`` is a substring of ``legacy``; the ChatGPT
-    desktop tree is full of non-``codex`` segments). The returned name IS the
-    harness, so a caller can prove which session id this process owns.
-    """
-    for cand, is_cmdline in _candidate_strings(proc):
-        low = cand.lower()
-        # Claude matches by substring on name/exe ONLY (its versioned binary
-        # embeds the name in the exe path and the basename alone may not carry
-        # it), never on a cmdline entry - a dedicated test pins that a wrapper
-        # path on the command line does not prove claude.
-        if not is_cmdline and "claude" in low:
-            return "claude"
-        # Other harnesses match the executable/script BASENAME token (stem drops
-        # one extension, gemini.js -> gemini); intermediate path segments never
-        # count, so /tmp/codex/wrapper.sh does not prove codex.
-        basename = low.rsplit("/", 1)[-1]
-        if basename in _SEGMENT_TOKENS:
-            return basename
-        stem = basename.rsplit(".", 1)[0]
-        if stem in _SEGMENT_TOKENS:
-            return stem
-    return None
-
-
-def _matches_harness(proc: psutil.Process) -> bool:
-    """True iff PROC is a recognized harness session binary."""
-    return _harness_name_of(proc) is not None
+        pid = payload.get("session_pid")
+        harness = payload.get("harness")
+        return (
+            pid if isinstance(pid, int) and pid > 0 else None,
+            harness if isinstance(harness, str) and harness else None,
+        )
+    return (None, None)
 
 
 def resolve_session_pid(from_pid: Optional[int] = None) -> Optional[int]:
     """Return the durable session pid, or None if uncapturable (degrade).
 
-    Resolution order:
+    Resolution order (applied by the native verb this shim execs):
       1. ``FNO_SESSION_PID`` env, if set to a live pid (launcher override).
       2. The nearest harness ancestor of FROM_PID (default: this process's
-         parent - the caller passes its own pid chain up to the session).
+         parent - the caller passes its own pid chain up to the session) that
+         is not Claude Code pool machinery.
 
     Returns None when neither yields a live pid, so the caller degrades to
     TTL-only liveness (today's behavior).
     """
-    env = os.environ.get("FNO_SESSION_PID", "").strip()
-    if env:
-        try:
-            env_pid = int(env)
-            # env_pid > 0: pid_exists(0)/(-1) can be True on some POSIX systems
-            # (kill(0/-1, 0) semantics), and neither is a valid session pid.
-            if env_pid > 0 and psutil.pid_exists(env_pid):
-                return env_pid
-        except (ValueError, OverflowError):
-            pass  # malformed override -> fall through to the walk
-
-    # Only ANCESTORS of the init subprocess are walked, and the genuine session
-    # harness is always the first hit in that chain, so a binary that merely
-    # lives under a `.claude/` path elsewhere cannot yield a wrong pid. First
-    # match wins, so a harness nested under another (a claude worker spawned by
-    # codex) anchors to its nearest session, not the outermost one.
-    start = from_pid if from_pid is not None else os.getppid()
-    try:
-        proc: Optional[psutil.Process] = psutil.Process(start)
-    except _START_ERRORS:
-        # ValueError covers a negative/zero start pid; all degrade to None.
-        return None
-
-    depth = 0
-    while proc is not None and depth < _MAX_DEPTH:
-        if _matches_harness(proc):
-            return proc.pid
-        try:
-            proc = proc.parent()
-        except _PSUTIL_ERRORS:
-            return None
-        depth += 1
-    return None
+    return _session_identity(from_pid)[0]
 
 
 def resolve_session_harness(from_pid: Optional[int] = None) -> Optional[str]:
     """The harness of this process's nearest harness ancestor, or None.
 
-    The companion of :func:`resolve_session_pid`: the same ancestor walk,
-    returning the harness NAME rather than the pid. A process owns the harness
-    of its nearest harness ancestor (a claude worker spawned by codex anchors to
-    claude, not codex), so this is the strong, process-tree proof of which
-    harness an ambient session id belongs to. That distinguishes a marker this
-    process minted from one it merely inherited - the difference between
-    resolving a claude session correctly and laundering a foreign
-    CODEX_THREAD_ID into its identity.
+    The companion of :func:`resolve_session_pid`: one cached verb read answers
+    both halves, so the pid and the harness always name the same process (the
+    refusing walk that answers the pid declines the whole identity; the
+    harness walk behind a pooled spare still proves the harness is claude,
+    which thread-worker identity resolution depends on).
 
-    Honors the launcher-stamped proof pair before walking: ``FNO_SESSION_PID``
-    (the same override :func:`resolve_session_pid` honors) beside
-    ``FNO_SESSION_HARNESS``. The pair is stamped by a caller one fork SHALLOWER
-    - the `fno do target init` CLI - whose own ppid read was still permitted;
-    under the codex sandbox every deeper fork reads PermissionError on its
-    parent's ppid, so the script and the verb it spawns cannot walk at all
-    (x-a0cd, measured: only self's ppid is readable). The pid must be alive,
-    and the name must be a known harness, or the stamp is ignored and the walk
-    decides - a stale or forged pair fails closed to the walk's own answer.
+    Honors the launcher-stamped proof pair before walking (same rules, applied
+    Rust-side): ``FNO_SESSION_PID`` beside ``FNO_SESSION_HARNESS``. The pair is
+    stamped by a caller one fork SHALLOWER - the `fno do target init` CLI -
+    whose own ppid read was still permitted; under the codex sandbox every
+    deeper fork reads PermissionError on its parent's ppid, so the script and
+    the verb it spawns cannot walk at all (measured: only self's ppid is
+    readable). The pid must be alive, and the name must be a known harness, or
+    the stamp is ignored and the walk decides - a stale or forged pair fails
+    closed to the walk's own answer.
 
     Degrades to None when no harness ancestor is found (a plain shell), so a
     caller treats "unproven" and "no ancestor" identically.
     """
-    stamp = (os.environ.get("FNO_SESSION_HARNESS") or "").strip().lower()
-    if stamp and stamp in _HARNESS_TOKENS:
-        env_pid = (os.environ.get("FNO_SESSION_PID") or "").strip()
-        if env_pid:
-            try:
-                stamp_pid = int(env_pid)
-            except ValueError:
-                stamp_pid = 0
-            if stamp_pid > 0 and psutil.pid_exists(stamp_pid):
-                return stamp
-
-    start = from_pid if from_pid is not None else os.getppid()
-    try:
-        proc: Optional[psutil.Process] = psutil.Process(start)
-    except _START_ERRORS:
-        return None
-    depth = 0
-    while proc is not None and depth < _MAX_DEPTH:
-        name = _harness_name_of(proc)
-        if name is not None:
-            return name
-        try:
-            proc = proc.parent()
-        except _PSUTIL_ERRORS:
-            return None
-        depth += 1
-    return None
+    return _session_identity(from_pid)[1]
 
 
-__all__ = ["resolve_session_pid", "resolve_session_harness"]
+__all__ = ["pid_dies_with_session", "resolve_session_pid", "resolve_session_harness"]
+
+
+def _clear_session_identity_cache() -> None:
+    """Test seam: drop the per-process memo so a test can re-exec."""
+    _session_identity.cache_clear()

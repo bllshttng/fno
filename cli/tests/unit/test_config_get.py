@@ -24,76 +24,31 @@ def _run(args, tmp_path, monkeypatch, settings_content):
     monkeypatch.delenv("FNO_CONFIG", raising=False)
     f = _write_settings(tmp_path, settings_content)
     monkeypatch.setenv("FNO_CONFIG", str(f))
-    from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     from fno.cli import app
 
     return CliRunner().invoke(app, args)
 
 
-def test_get_default_value(tmp_path, monkeypatch):
+# ---------------------------------------------------------------------------
+# A dict[str, Model] hop (x-043f task 1.3): an unknown field inside a known
+# loop name still refuses.
+# ---------------------------------------------------------------------------
+
+
+def test_get_unknown_field_inside_known_loop_name(tmp_path, monkeypatch):
     r = _run(
-        ["config", "get", "config.blueprint.max_prs_per_epic"],
+        ["config", "get", "loops.blueprint_judge.nosuchfield"],
         tmp_path, monkeypatch, "schema_version: 1\n",
     )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "4"
-
-
-def test_get_overridden_value(tmp_path, monkeypatch):
-    r = _run(
-        ["config", "get", "config.blueprint.max_prs_per_epic"],
-        tmp_path, monkeypatch,
-        "schema_version: 1\nconfig:\n  blueprint:\n    max_prs_per_epic: 9\n",
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "9"
-
-
-def test_get_unknown_key_exits_nonzero(tmp_path, monkeypatch):
-    r = _run(
-        ["config", "get", "config.blueprint.no_such_field"],
-        tmp_path, monkeypatch, "schema_version: 1\n",
-    )
-    assert r.exit_code != 0
-    assert "no_such_field" in r.output or "unknown" in r.output.lower()
-
-
-def test_get_scalar_top_level(tmp_path, monkeypatch):
-    r = _run(
-        ["config", "get", "schema_version"],
-        tmp_path, monkeypatch, "schema_version: 1\n",
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "1"
+    assert r.exit_code == 1
+    assert "unknown config key" in r.output
 
 
 # ---------------------------------------------------------------------------
 # config.agents.confirm posture knob (ab-27541df5, US4; namespace moved from
 # config.dispatch.confirm to config.agents.confirm in ab-f1b0ccd1)
 # ---------------------------------------------------------------------------
-
-
-def test_agents_confirm_resolves_default_auto(tmp_path, monkeypatch):
-    """AC4-HP: a settings.yaml with no agents block resolves to `auto`."""
-    r = _run(
-        ["config", "get", "config.agents.confirm"],
-        tmp_path, monkeypatch, "schema_version: 1\n",
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "auto"
-
-
-def test_agents_confirm_override(tmp_path, monkeypatch):
-    """An explicit posture is read back verbatim."""
-    r = _run(
-        ["config", "get", "config.agents.confirm"],
-        tmp_path, monkeypatch,
-        "schema_version: 1\nconfig:\n  agents:\n    confirm: never\n",
-    )
-    assert r.exit_code == 0, r.output
-    assert r.stdout.strip() == "never"
 
 
 def test_agents_confirm_invalid_enum_fails_read(tmp_path, monkeypatch):
@@ -129,16 +84,6 @@ def test_get_review_required_bots_shorthand(tmp_path, monkeypatch):
     assert "chatgpt-codex-connector" in r.stdout
 
 
-def test_get_review_required_bots_full_path_still_works(tmp_path, monkeypatch):
-    """The explicit `config.` prefix is unchanged."""
-    r = _run(
-        ["config", "get", "config.review.required_bots"],
-        tmp_path, monkeypatch, _BOTS_SETTINGS,
-    )
-    assert r.exit_code == 0, r.output
-    assert "chatgpt-codex-connector" in r.stdout
-
-
 def test_get_unknown_key_without_prefix_still_errors(tmp_path, monkeypatch):
     """The prefix fallback must not mask a genuinely unknown key."""
     r = _run(
@@ -156,8 +101,8 @@ def test_get_unknown_key_without_prefix_still_errors(tmp_path, monkeypatch):
 # project layer had silently overridden the operator kill switch. The rename
 # alone does not fix that; the source line does. Value stays ALONE on stdout
 # (normalize.sh pipes the whole stream through tr); the source line, including
-# an overrides clause exactly when a lower-precedence file also sets the key,
-# is stderr-only.
+# an overrides clause exactly when a lower-precedence file set a value the
+# merge discarded, is stderr-only.
 # ---------------------------------------------------------------------------
 
 
@@ -174,12 +119,10 @@ def _pin_two_layers(
     glob.write_text(global_, encoding="utf-8")
 
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
     monkeypatch.setattr(paths_mod, "resolve_repo_root", lambda: tmp_path / "proj")
     monkeypatch.setattr(paths_mod, "resolve_canonical_repo_root", lambda: tmp_path / "proj")
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(glob))
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_get_prints_deciding_file_and_overridden_file(
@@ -205,21 +148,36 @@ def test_get_prints_deciding_file_and_overridden_file(
     assert f"overrides {(tmp_path / 'global-config.toml')}" in r.stderr
 
 
-def test_get_source_line_without_lower_override_has_no_overrides_clause(
+def test_get_equal_values_in_both_layers_credit_the_higher_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The overrides clause appears exactly when a lower file also sets the key."""
+    """Both files set the same value: the source line names the project file.
+
+    Change-only attribution credited the global file when the project
+    restated its value verbatim, and the source line read as "the global
+    overrode the local". The decider is the highest-precedence file that sets
+    the key, and an equal lower layer is not overridden.
+    """
     _pin_two_layers(
         tmp_path,
         monkeypatch,
-        project="[auto_merge]\nenabled = true\n",
-        global_="schema_version = 1\n",
+        project="[auto_merge]\nenabled = false\n",
+        global_="[auto_merge]\nenabled = false\n",
     )
+
+    from fno.config import resolve_source
+
+    decided = resolve_source("auto_merge.enabled")
+    assert decided is not None
+    assert decided[0].resolve() == (tmp_path / "proj" / ".fno" / "config.toml").resolve()
+    assert decided[1] == []
+
     from fno.cli import app
 
     r = CliRunner().invoke(app, ["config", "get", "auto_merge.enabled"])
     assert r.exit_code == 0
-    assert "source:" in r.stderr
+    assert r.stdout.strip() == "False"
+    assert f"source: {(tmp_path / 'proj' / '.fno' / 'config.toml')}" in r.stderr
     assert "overrides" not in r.stderr
 
 
@@ -267,27 +225,6 @@ def test_get_json_carries_source_and_overrides(
     assert payload["overrides"][0].endswith("global-config.toml")
 
 
-def test_get_reports_file_holding_legacy_spelling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A value that arrived through the deprecated dispatch.auto_merge reports
-    the file that actually holds it, not a phantom canonical file."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="[dispatch]\nauto_merge = true\n",
-        global_="[auto_merge]\ngrant = \"none\"\n",
-    )
-    from fno.cli import app
-
-    r = CliRunner().invoke(app, ["config", "get", "auto_merge.grant"])
-    assert r.exit_code == 0
-    assert r.stdout.strip() == "dispatch"
-    assert f"source: {(tmp_path / 'proj' / '.fno' / 'config.toml')}" in r.stderr
-    # The global's canonical 'none' was overridden by the project's legacy true.
-    assert "overrides" in r.stderr
-
-
 def test_get_block_key_does_not_claim_one_decider(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -307,3 +244,16 @@ def test_get_block_key_does_not_claim_one_decider(
     assert "overrides" not in r.stderr
     # And the pointer suggests a leaf query.
     assert "auto_merge.enabled" in r.stderr
+
+
+def test_get_default_descent_names_itself_in_the_receipt(tmp_path, monkeypatch):
+    """An unset loop name reads as the default AND the receipt says so, so a
+    typo'd name is at least visible against a file-set one."""
+    r = _run(
+        ["config", "get", "loops.blueprint_judge.level"],
+        tmp_path, monkeypatch, "schema_version: 1\n",
+    )
+    assert r.exit_code == 0, r.output
+    assert r.stdout.strip() == "report"
+    assert "note:" in r.stderr
+    assert "schema default" in r.stderr

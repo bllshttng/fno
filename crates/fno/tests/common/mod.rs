@@ -13,14 +13,20 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+
+// One source, two compilation units: this file is the lib's cfg(test) module
+// (used by src/server_tests.rs) and is included here by path for the
+// integration harness. See the module doc for the units contract.
+#[path = "../../src/test_owner.rs"]
+pub(crate) mod test_owner;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use fno::proto::{
-    write_msg_sync, AgentRow, BlockDir, ClientMsg, Command, Frame, MouseEvent, ServerMsg,
-    SquadMeta, BUILD_VERSION, MAX_MSG_BYTES, PROTO_VERSION,
+    write_msg_sync, AgentRow, BacklogCard, BlockDir, ClientMsg, Command, Frame, MouseEvent,
+    ServerMsg, SquadMeta, BUILD_VERSION, MAX_MSG_BYTES, PROTO_VERSION,
 };
 use fno::tree::Rect;
 use fno::vt::{frame_text, Pane};
@@ -70,6 +76,12 @@ impl Scratch {
             .env("FNO_CLAUDE_DAEMON_DIR", self.0.join("iso-daemon"))
             .env("FNO_GRAPH_JSON", self.0.join("iso-graph.json"))
             .env("FNO_CLAIMS_ROOT", &home)
+            // The FNO_* strip above removed any inherited FNO_BIN; a scratch
+            // Python leg (claims, the event store) resolves its native
+            // writer through it, and a runner with no `fno` on PATH would
+            // answer EventStoreUnavailable. The test's own binary IS a real
+            // fno, so pin it explicitly.
+            .env("FNO_BIN", env!("CARGO_BIN_EXE_fno"))
             .env(
                 "FNO_MUX_ADMISSION_NAMESPACE",
                 self.0.file_name().unwrap_or_default(),
@@ -79,7 +91,25 @@ impl Scratch {
                 self.0.join("iso-cfg").join("settings.json"),
             )
             .env("FNO_E2E", "1")
-            .env("FNO_PROCESS_ADMISSION_MAX", "512");
+            .env("FNO_PROCESS_ADMISSION_MAX", "512")
+            // The events store resolves the native binary via FNO_BIN. A
+            // uv-bootstrapped python CLI inside HOME computes its repo root
+            // from the tools tree, finds no checkout build there, and PATH
+            // here carries no `fno` - the passthrough is the only channel.
+            .env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
+        // A server this command autospawns inherits the env and passes
+        // it to every `fno-agents-worker` keeper it launches, so the keeper's
+        // watchdog reaps it when this test binary exits. Applied after the
+        // FNO_* strip above; a later explicit .env still overrides.
+        cmd.envs(test_owner::self_owner_env());
+        // A verb that delegates to the Python CLI (claims, events) resolves
+        // its native event-store writer through FNO_BIN first. Without this
+        // the installed copy falls back to PATH, which carries no `fno` on a
+        // CI runner, and the write dies with EventStoreUnavailable.
+        cmd.env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
+        if let Some(worker) = store_worker() {
+            cmd.env("FNO_AGENTS_WORKER", worker);
+        }
     }
 
     fn isolate_pty_command(&self, cmd: &mut CommandBuilder) {
@@ -106,6 +136,18 @@ impl Scratch {
         );
         cmd.env("FNO_E2E", "1");
         cmd.env("FNO_PROCESS_ADMISSION_MAX", "512");
+        // Same contract as isolate_command: the autospawned server
+        // inherits this and its keepers reap on this test binary's exit.
+        // CommandBuilder has no batch envs(); apply the pair one call each.
+        for (k, v) in test_owner::self_owner_env() {
+            cmd.env(k, v);
+        }
+        // Same contract as isolate_command: the Python delegate needs the
+        // native writer spelled out, not hoped for on PATH.
+        cmd.env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
+        if let Some(worker) = store_worker() {
+            cmd.env("FNO_AGENTS_WORKER", worker);
+        }
     }
 
     /// The session socket the client will use under `FNO_MUX_DIR`.
@@ -130,6 +172,47 @@ impl Scratch {
 #[allow(dead_code)]
 pub fn sidecar_pid_field(text: &str) -> Option<i32> {
     text.trim().split(':').next()?.parse().ok()
+}
+
+/// A line of pane text with any leading shell prompts removed. A CR nudge
+/// queued while the shell was still starting prints its prompt after the
+/// next command's echo, so real output can render as `$ set-ok`.
+///
+/// ANY leading whitespace-delimited token ending in `$` strips, because a
+/// prompt's shape is the shell's choice (`$`, `$ $ $`, `sh-3.2$`). The
+/// caller's contract: the literal passed to [`screen_has_line`] must not
+/// end in `$`, or its own output row strips as a prompt and the wait can
+/// never see it.
+pub fn strip_prompts(line: &str) -> &str {
+    let mut rest = line.trim();
+    loop {
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        if end == 0 || !rest[..end].ends_with('$') {
+            return rest;
+        }
+        rest = rest[end..].trim_start();
+    }
+}
+
+/// True when any screen row is exactly `want` once leading prompts are
+/// stripped. The one matcher for "did this command's output line render?" -
+/// an exact trim-equality compare misses output wearing a late prompt. A
+/// framed pane wears sideline text, the panel divider and two frame rules on
+/// the same physical row, so every `│`-delimited segment gets its own compare.
+pub fn screen_has_line(screen: &str, want: &str) -> bool {
+    screen.lines().any(|l| line_is_segment(l, want))
+}
+
+/// True when the row's pane-content segment (between the frame rules) is
+/// exactly `want` once leading prompts are stripped.
+pub fn line_is_segment(line: &str, want: &str) -> bool {
+    line.split('│').any(|seg| strip_prompts(seg.trim()) == want)
+}
+
+/// True when the row ends a shell prompt: a `$` at the end of any
+/// `│`-delimited segment (the framed prompt row closes with its border rule).
+pub fn line_ends_with_prompt(line: &str) -> bool {
+    line.split('│').any(|seg| seg.trim_end().ends_with('$'))
 }
 
 impl Drop for Scratch {
@@ -163,6 +246,55 @@ impl Drop for Scratch {
     }
 }
 
+/// Replace the fixture graph through the mux crate's store client.
+pub fn seed_graph(graph: &Path, rows: &[serde_json::Value]) -> Result<(), String> {
+    if let Some(worker) = store_worker() {
+        std::env::set_var("FNO_AGENTS_WORKER", worker);
+    }
+    let snapshot = fno::store_client::call(graph, "begin", serde_json::json!({}))?;
+    let version = snapshot
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "the store returned no snapshot version".to_string())?;
+    fno::store_client::call(
+        graph,
+        "commit",
+        serde_json::json!({"version": version, "entries": rows}),
+    )?;
+    Ok(())
+}
+
+fn store_worker() -> Option<PathBuf> {
+    let worker = std::env::var_os("FNO_AGENTS_WORKER")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            std::env::var_os("FNO_AGENTS_FRONT").and_then(|front| {
+                let path = PathBuf::from(front).parent()?.join("fno-agents-worker");
+                path.is_file().then_some(path)
+            })
+        })
+        // Test executables live under target/debug/deps; the worker is their
+        // sibling, or under the separately rooted fno-agents crate target.
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.parent()?
+                        .parent()
+                        .map(|dir| dir.join("fno-agents-worker"))
+                })
+                .filter(|path| path.is_file())
+        })
+        .or_else(|| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .map(|root| root.join("fno-agents/target/debug/fno-agents-worker"))
+                .filter(|path| path.is_file())
+        });
+    worker
+}
+
 /// The `fno` client running on a real PTY, plus a human-eye view of it.
 pub struct ClientHarness {
     pub child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -183,13 +315,20 @@ pub struct ClientHarness {
 
 impl ClientHarness {
     pub fn spawn(scratch: &Scratch) -> Self {
-        Self::spawn_full(scratch, &[], &[])
+        Self::spawn_sized_full(scratch, 24, 60, &[], &[])
+    }
+
+    /// The sideline-visible size (panel 28 + min content 40 needs >68 cols):
+    /// chrome tests that assert on sideline rows spawn at 24x120.
+    #[allow(dead_code)]
+    pub fn spawn_sized(scratch: &Scratch, rows: u16, cols: u16) -> Self {
+        Self::spawn_sized_full(scratch, rows, cols, &[], &[])
     }
 
     /// Like [`ClientHarness::spawn`] with extra environment on the client
     /// process (the nested-guard cases need `FNO_SESSION` preset).
     pub fn spawn_with(scratch: &Scratch, envs: &[(&str, &str)]) -> Self {
-        Self::spawn_full(scratch, envs, &[])
+        Self::spawn_sized_full(scratch, 24, 60, envs, &[])
     }
 
     /// Like [`ClientHarness::spawn`] but attaching an explicit `--session`.
@@ -199,20 +338,40 @@ impl ClientHarness {
     /// the session outright and bypasses the picker (AC5-FR).
     #[allow(dead_code)]
     pub fn spawn_session(scratch: &Scratch, session: &str) -> Self {
-        Self::spawn_full(scratch, &[], &["--session", session])
+        Self::spawn_sized_full(scratch, 24, 60, &[], &["--session", session])
     }
 
-    fn spawn_full(scratch: &Scratch, envs: &[(&str, &str)], args: &[&str]) -> Self {
-        // 60 columns: below the sideline's auto-hide threshold (panel 28 +
-        // min content 40), so the panel stays hidden and Phase-1-era screen
-        // assertions see bare content lines under the 1-row tab bar. The
+    /// A sized spawn with extra client env - the composer e2e tests pin the
+    /// agent list against scratch-local fake harness bins (a clean CI home
+    /// has none on PATH), which need both the size and the PATH override.
+    #[allow(dead_code)]
+    pub fn spawn_sized_with(
+        scratch: &Scratch,
+        rows: u16,
+        cols: u16,
+        envs: &[(&str, &str)],
+    ) -> Self {
+        Self::spawn_sized_full(scratch, rows, cols, envs, &[])
+    }
+
+    fn spawn_sized_full(
+        scratch: &Scratch,
+        rows: u16,
+        cols: u16,
+        envs: &[(&str, &str)],
+        args: &[&str],
+    ) -> Self {
+        // The default 60 columns sit below the sideline's auto-hide threshold
+        // (panel 28 + min content 40), so the panel stays hidden and Phase-1-era
+        // screen assertions see bare content lines under the 1-row tab bar. The
         // sideline-visible chrome has its own compose unit tests + the
         // layout e2e suite; here it would only salt every line with the
-        // divider column.
+        // divider column. Sizes that show the sideline opt in via
+        // [`ClientHarness::spawn_sized`].
         let pty = native_pty_system()
             .openpty(PtySize {
-                rows: 24,
-                cols: 60,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -260,7 +419,7 @@ impl ClientHarness {
             writer,
             output,
             consumed: 0,
-            pane: Pane::new(24, 60),
+            pane: Pane::new(rows, cols),
             scratch_dir: scratch.0.clone(),
             reader_done: done_rx,
             _master: pty.master,
@@ -289,7 +448,7 @@ impl ClientHarness {
                 if self
                     .screen()
                     .lines()
-                    .any(|line| line.trim() == "fno-input-ready")
+                    .any(|line| line_is_segment(line, "fno-input-ready"))
                 {
                     return;
                 }
@@ -416,8 +575,17 @@ impl ClientHarness {
             s.lines()
                 .rev()
                 .filter(|l| !l.trim().is_empty())
-                .take(2)
-                .any(|l| l.trim_end().ends_with('$'))
+                // A framed pane keeps its bottom edge and the status row below
+                // the prompt, so the prompt is no longer one of the last two
+                // rendered lines.
+                .take(8)
+                .any(|l| {
+                    // A framed pane closes the prompt row with its border
+                    // rule, so strip one trailing rule before looking for `$`.
+                    let l = l.trim_end();
+                    let l = l.strip_suffix('│').unwrap_or(l).trim_end();
+                    l.ends_with('$')
+                })
         };
         let deadline = Instant::now() + Duration::from_secs(secs);
         while Instant::now() < deadline {
@@ -537,6 +705,56 @@ impl Drop for ServerProc {
     }
 }
 
+/// The done-read rides the store keeper, so the spawned servers need a
+/// resolvable worker binary: pin THIS checkout's build (the fno-agents
+/// workspace builds it first in CI), never the installed one.
+fn pin_checkout_worker(cmd: &mut std::process::Command) {
+    for profile in ["debug", "release"] {
+        let worker = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../fno-agents/target/{profile}/fno-agents-worker"));
+        if worker.is_file() {
+            cmd.env("FNO_AGENTS_WORKER", worker);
+            return;
+        }
+    }
+}
+
+/// The sibling keeper binary, built on demand. The keeper-path tests
+/// (`FNO_AGENTS_WORKER_BIN`) and the owner-reap control both need a real
+/// `fno-agents-worker`; CARGO_TARGET_DIR wins so an out-of-tree target dir
+/// that already has the binary is found without a second build.
+pub fn worker_bin() -> PathBuf {
+    static WORKER_BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    WORKER_BIN
+        .get_or_init(|| {
+            let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| {
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agents/target")
+                });
+            let path = target_dir.join("debug/fno-agents-worker");
+            if !path.is_file() {
+                let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+                let manifest =
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agents/Cargo.toml");
+                let status = std::process::Command::new(cargo)
+                    .args(["build", "--manifest-path"])
+                    .arg(manifest)
+                    .args(["--bin", "fno-agents-worker"])
+                    .status()
+                    .expect("cargo builds the keeper worker");
+                assert!(status.success(), "keeper worker build failed: {status}");
+            }
+            assert!(
+                path.is_file(),
+                "keeper worker binary missing: {}",
+                path.display()
+            );
+            path
+        })
+        .clone()
+}
+
 /// Spawn the real server binary headless on `sock`, with `envs` overriding
 /// the inherited environment (SHELL, PATH for the git-stub cases, ...).
 #[allow(dead_code)]
@@ -550,8 +768,22 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
     cmd.args(["--server"])
         .arg(sock)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        .stdout(std::process::Stdio::null());
+    // A server that dies on startup must leave its reason in the scratch:
+    // a null stderr turns "never bound its socket" into an unexplained timeout.
+    let server_log = sock
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("server.log");
+    if let Ok(log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&server_log)
+    {
+        cmd.stderr(log);
+    } else {
+        cmd.stderr(std::process::Stdio::null());
+    }
     // Reap the server if this test process dies without running Drop (SIGKILL,
     // panic=abort, cargo-test timeout) — x-4e30. A test that needs a specific
     // grace (or none) overrides via `envs`, which is applied after.
@@ -588,6 +820,7 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
     // why it reads as a flake, and a clean CI home hides it entirely. The path
     // deliberately does not exist: no graph means an empty lane and no missions.
     cmd.env("FNO_GRAPH_JSON", iso.join("iso-graph.json"));
+    pin_checkout_worker(&mut cmd);
     // Isolated-account rosters are discovered via the provider config
     // (isolated_account_dirs -> $PWD/.fno/config.toml, else this override's
     // sibling config.toml, else ~/.fno/config.toml). Point the override at an
@@ -597,6 +830,12 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
         "FNO_GLOBAL_SETTINGS_PATH",
         iso.join("iso-cfg").join("settings.json"),
     );
+    // The server launches `fno-agents-worker` keepers by inheriting
+    // its env (launch_keeper does not filter), so the owner reaches the keeper
+    // and its watchdog reaps the keeper when this test binary exits. The
+    // `envs` slice below still overrides - the owner-death control test pins
+    // the owner to a surrogate process it can kill.
+    cmd.envs(test_owner::self_owner_env());
     for (k, v) in envs {
         cmd.env(k, v);
     }
@@ -605,14 +844,43 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
 
 #[allow(dead_code)]
 pub fn connect_with_retry(sock: &Path) -> std::os::unix::net::UnixStream {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    connect_with_retry_for(sock, Duration::from_secs(10), "server startup")
+}
+
+/// Wait for a specific server startup phase and include its stderr tail on failure.
+pub fn connect_with_retry_for(
+    sock: &Path,
+    budget: Duration,
+    phase: &str,
+) -> std::os::unix::net::UnixStream {
+    let deadline = Instant::now() + budget;
     loop {
         match std::os::unix::net::UnixStream::connect(sock) {
             Ok(s) => return s,
             Err(_) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => panic!("server never came up at {}: {e}", sock.display()),
+            Err(e) => {
+                let server_log = sock
+                    .parent()
+                    .map(|parent| parent.join("server.log"))
+                    .and_then(|path| std::fs::read_to_string(path).ok())
+                    .map(|log| {
+                        log.lines()
+                            .rev()
+                            .take(40)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_else(|| "(no server log available)".into());
+                panic!(
+                    "server never came up during {phase} within {budget:?} at {}: {e}\nserver stderr (last 40 lines):\n{server_log}",
+                    sock.display()
+                );
+            }
         }
     }
 }
@@ -628,6 +896,9 @@ pub struct LayoutSnap {
     pub area: (u16, u16),
     pub agents: Vec<AgentRow>,
     pub focus_node: Option<String>,
+    /// (x-926c) The backlog cards from the latest `Layout`, so the idle-CPU
+    /// budget test can prove the backlog reader ran before it measures.
+    pub backlog: Vec<BacklogCard>,
 }
 
 /// One absorbed message kind, in arrival order - the seam for asserting the
@@ -669,6 +940,11 @@ pub struct FakeClient {
     pub link_hovers: Vec<(u64, u64, Vec<(u16, u16)>)>,
     /// Every absorbed message's kind, chronologically.
     pub order: Vec<Absorbed>,
+    /// Launcher progress updates, newest last.
+    pub launch_updates: Vec<fno::proto::AgentLaunchUpdate>,
+    /// The wire version off the latest absorbed Layout (v97); `None` while
+    /// none has arrived.
+    pub server_proto: Option<u32>,
     /// Bytes read off the socket that do not yet form a whole message.
     ///
     /// The stream carries length-prefixed frames and the socket has a short read
@@ -713,6 +989,8 @@ impl FakeClient {
             search_results: Vec::new(),
             link_hovers: Vec::new(),
             order: Vec::new(),
+            launch_updates: Vec::new(),
+            server_proto: None,
             carry: Vec::new(),
         }
     }
@@ -720,6 +998,25 @@ impl FakeClient {
     pub fn input(&mut self, bytes: &[u8]) {
         let mut w = self.stream.try_clone().unwrap();
         write_msg_sync(&mut w, &ClientMsg::Input(bytes.to_vec())).unwrap();
+    }
+
+    /// Write `bytes` verbatim as ONE frame (length prefix + body), no typed
+    /// message: the only door for a shape this build cannot name - the
+    /// protocol-skew frames the server's refusal path exists for.
+    pub fn send_raw_frame(&mut self, body: &[u8]) {
+        let mut w = self.stream.try_clone().unwrap();
+        let mut frame = (u32::try_from(body.len()).unwrap()).to_be_bytes().to_vec();
+        frame.extend_from_slice(body);
+        use std::io::Write;
+        w.write_all(&frame).unwrap();
+        w.flush().unwrap();
+    }
+
+    /// Send any typed message (the launcher suites use this for
+    /// `ClientMsg::AgentLaunch`).
+    pub fn raw(&mut self, msg: &ClientMsg) {
+        let mut w = self.stream.try_clone().unwrap();
+        write_msg_sync(&mut w, msg).unwrap();
     }
 
     pub fn cmd(&mut self, cmd: Command) {
@@ -808,8 +1105,11 @@ impl FakeClient {
                 area,
                 agents,
                 focus_node,
-                .. // backlog (x-6f77): the e2e harness asserts nothing on it
+                backlog,
+                proto,
+                .. // the rest of the v36 backlog fields: the harness asserts the card list only
             } => {
+                self.server_proto = proto;
                 self.layout = Some(LayoutSnap {
                     squads,
                     active_squad,
@@ -818,6 +1118,7 @@ impl FakeClient {
                     area,
                     agents,
                     focus_node,
+                    backlog,
                 });
             }
             ServerMsg::ModeSync { bytes } => self.modesyncs.push(bytes),
@@ -858,10 +1159,21 @@ impl FakeClient {
             | ServerMsg::TabClosed { .. }
             // (v60, x-7b5e) Bulk restore answers a one-shot control
             // connection, never an attached client.
-            | ServerMsg::WorkspaceRestored { .. } => {}
+            | ServerMsg::WorkspaceRestored { .. }
+            // (v71) Prune reload: same one-shot control connection shape.
+            | ServerMsg::SquadReloaded { .. }
+            // (v75) Exact-session retirement: same one-shot control shape.
+            | ServerMsg::SessionRetired { .. }
+            | ServerMsg::AgentRowsReceipt { .. } => {}
             // (x-c376) Peek transcript body: a client-interactive reply covered
             // by client unit tests, not the e2e absorber - ignore here.
             ServerMsg::PeekBody { .. } => {}
+            // (v78) Server stats: one-shot control reply, never an attached client.
+            ServerMsg::ServerStats { .. } => {}
+            // (v83) Launcher progress: recorded for the launcher suites.
+            ServerMsg::AgentLaunch(u) => self.launch_updates.push(u),
+            // Addressed reply receipts are consumed by the interactive client.
+            ServerMsg::PaneInputResult(_) => {}
         }
     }
 
@@ -1026,4 +1338,55 @@ impl FakeClient {
     pub fn focus(&self) -> u64 {
         self.layout.as_ref().expect("no Layout yet").focus
     }
+}
+
+/// Whole-process CPU seconds (user + sys) for `pid` - the x-926c budget seam.
+/// Linux reads `/proc/<pid>/stat` (utime + stime over `CLK_TCK`); macOS parses
+/// `ps -o time=`. Callers sample twice and assert on the DELTA, so a
+/// platform-shaped parse error fails loud here rather than flaking the bound.
+#[allow(dead_code)]
+pub fn process_cpu_secs(pid: u32) -> f64 {
+    if cfg!(target_os = "linux") {
+        let stat =
+            std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("procfs stat exists");
+        // comm can hold spaces, so field counting starts after the last ')'.
+        let after = &stat[stat.rfind(')').map(|i| i + 2).unwrap_or(0)..];
+        let fields: Vec<&str> = after.split_whitespace().collect();
+        let utime: u64 = fields[11].parse().expect("utime is an integer");
+        let stime: u64 = fields[12].parse().expect("stime is an integer");
+        let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+        (utime + stime) as f64 / tck
+    } else {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "time=", "-p", &pid.to_string()])
+            .output()
+            .expect("ps runs");
+        let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        parse_ps_cputime(&raw).unwrap_or_else(|| panic!("ps time= output unreadable: {raw:?}"))
+    }
+}
+
+/// macOS `ps -o time=` shape: `[[dd-]hh:]mm:ss.cc`. Every field parses in
+/// base 10 - Rust's `str::parse` has no octal mode, which is exactly the trap
+/// the shell twin of this parser fell into (`08` read as 0 in `$(( 08 ))`;
+/// tests/ci/test_preflight.sh pins that contract).
+fn parse_ps_cputime(raw: &str) -> Option<f64> {
+    let mut rest: &str = raw;
+    let mut days: u64 = 0;
+    if let Some((d, r)) = raw.split_once('-') {
+        days = d.parse::<u64>().ok()?;
+        rest = r;
+    }
+    let mut frac_secs: f64 = 0.0;
+    if let Some((w, f)) = rest.split_once('.') {
+        frac_secs = f.parse::<u64>().ok()? as f64 / 100.0;
+        rest = w;
+    }
+    // `[[dd-]hh:]mm:ss.cc` folds positionally: each field is worth 60x the
+    // field to its right.
+    let mut secs: u64 = 0;
+    for part in rest.split(':') {
+        secs = secs * 60 + part.parse::<u64>().ok()?;
+    }
+    Some((secs + days * 86_400) as f64 + frac_secs)
 }

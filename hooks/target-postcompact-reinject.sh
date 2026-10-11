@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: multi-event - restore target context after compaction
 # Re-inject plan goal + current phase after a context compaction.
 #
 # Carrier (the load-bearing decision, verified against the harness reference):
@@ -13,8 +14,12 @@
 # CLAUDE_PLUGIN_ROOT), not from the event payload, so a lost or empty stdin cannot
 # silently downgrade Claude to a carrier the model never sees. That carrier choice
 # and the payload emission live in scripts/lib/postcompact-carrier.sh, shared with
-# hooks/king-postcompact-reinject.sh.
+# hooks/lead-postcompact-reinject.sh.
 set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 STATE_FILE=".fno/target-state.md"
 FNO_DIR=".fno"
@@ -73,9 +78,9 @@ else
     [[ "$STATUS" == "IN_PROGRESS" ]] || exit 0
 fi
 
-# Extract key state fields. The manifest is inputs-only post-wedge (ab-d0337fbc):
+# Extract key state fields. The manifest is inputs-only post-wedge:
 # no current_phase / iteration / *_passed gate booleans live here anymore
-# (ab-88f0854d removed those dead reads). Progress is external now - git HEAD,
+# (removed those dead reads). Progress is external now - git HEAD,
 # PR/CI, the loop-check verb - surfaced via `fno whoami` / `fno whoami status`.
 GOAL=$(grep '^input:' "$STATE_FILE" 2>/dev/null | head -1 | sed 's/^input: *//' | sed 's/^"//' | sed 's/"$//')
 PLAN_PATH=$(grep '^plan_path:' "$STATE_FILE" 2>/dev/null | head -1 | sed 's/^plan_path: *//' | tr -d '"')
@@ -93,12 +98,89 @@ if [[ -n "$PLAN_PATH" && -d "$PLAN_PATH" ]]; then
     TOTAL_TASKS=$(grep -c '### Task' "$PLAN_PATH"/*.md 2>/dev/null | awk -F: '{s+=$NF}END{print s+0}')
     CONTEXT="${CONTEXT}
 **Plan:** $PLAN_PATH ($TOTAL_TASKS tasks)"
+elif [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
+    # A single-FILE plan used to vanish here: only -d was tested, so compaction
+    # lost the plan path exactly when a flat quick plan was in play.
+    CONTEXT="${CONTEXT}
+**Plan:** $PLAN_PATH (single file)"
+fi
+
+# Task-context binding pointer: the current attempt's bound binding
+# lives under the existing handoff artifact root, one slot per node
+# (task-context-<node>.json); each attempt's binding is immutable through its
+# digest, and receipts embed their own copies. The pointer and its declared
+# constraints ride once; source CONTENTS never ride. A pointer in context is
+# not a read - the stage field stays the only honest observation record.
+BINDING_FILE=""
+if [[ -n "$NODE" ]]; then
+    CANDID=".fno/artifacts/handoff/task-context-${NODE}.json"
+    [[ -f "$CANDID" ]] && BINDING_FILE="$CANDID"
+fi
+if [[ -n "$BINDING_FILE" ]]; then
+    # The verifier decides what may be re-emitted: an edited digest, stage, or
+    # constraint set is a corrupt declared binding and renders NOTHING (the
+    # fields below are the verifier's answer, never the raw file's).
+    VERIFIED="$(python3 - "$BINDING_FILE" <<'PY' 2>/dev/null
+import json, subprocess, sys
+try:
+    with open(sys.argv[1]) as fh:
+        binding = json.load(fh)
+except Exception:
+    sys.exit(0)
+try:
+    out = subprocess.run(
+        ["fno-agents", "task-context-show"],
+        input=json.dumps({"binding": binding}),
+        capture_output=True, text=True, timeout=20,
+    )
+    answer = json.loads(out.stdout)
+except Exception:
+    sys.exit(0)
+if not answer.get("ok"):
+    sys.exit(0)
+print(str(binding.get("binding_digest", "unknown")))
+print(str(binding.get("stage", "unknown")))
+for c in binding.get("required_constraints", [])[:10]:
+    if isinstance(c, str) and c.strip():
+        print("- " + c)
+PY
+)"
+    if [[ -n "$VERIFIED" ]]; then
+        BDIGEST="$(printf '%s\n' "$VERIFIED" | sed -n 1p)"
+        BSTAGE="$(printf '%s\n' "$VERIFIED" | sed -n 2p)"
+        BCONSTRAINTS="$(printf '%s\n' "$VERIFIED" | sed -n '3,$p')"
+        CONTEXT="${CONTEXT}
+**Task context:** $BINDING_FILE (binding_digest $BDIGEST, stage $BSTAGE)"
+        if [[ -n "$BCONSTRAINTS" ]]; then
+            CONTEXT="${CONTEXT}
+**Required constraints:**
+$BCONSTRAINTS"
+        fi
+        CONTEXT="${CONTEXT}
+The binding pointer is not a read; required sources revalidate through the resume receipt context gate."
+    fi
 fi
 
 CONTEXT="${CONTEXT}
 
 Progress is not in the manifest. Run \`fno whoami\` then \`fno whoami status\`
 for live phase + completion state (git HEAD, PR/CI, review)."
+
+# The read-verb lesson rides the post-compact brief: a compaction boundary
+# newer than the taught one re-teaches it once, and the door prints nothing
+# when the session is current. Best-effort - a stale or absent binary
+# teaches nothing and never blocks the brief.
+if [[ -r "$SOURCE_ROOT/hooks/lib/agents-bin.sh" ]]; then
+    # shellcheck source=../hooks/lib/agents-bin.sh
+    source "$SOURCE_ROOT/hooks/lib/agents-bin.sh"
+    TEACH_BIN="$(fno_agents_bin "$SOURCE_ROOT")"
+    if [[ -n "$TEACH_BIN" && -x "$TEACH_BIN" && -n "$CALLER_SESSION_ID" ]]; then
+        TEACH="$("$TEACH_BIN" mail-teach --session "$CALLER_SESSION_ID" --mark 2>/dev/null || true)"
+        [[ -n "$TEACH" ]] && CONTEXT="${CONTEXT}
+
+$TEACH"
+    fi
+fi
 
 postcompact_emit "$CARRIER" "$CONTEXT"
 

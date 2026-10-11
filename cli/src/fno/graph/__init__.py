@@ -1,9 +1,9 @@
 """fno.graph - Feature graph management module.
 
 Public API (re-exported for callers):
-    mutate_graph        alias for locked_mutate_graph
-    recompute_statuses  status derivation
-    render_graph_md     kanban rendering
+    commit_rows_via_store  the raw store write seam
+    recompute_statuses     status derivation
+    render_graph_md        kanban rendering
 """
 from __future__ import annotations
 
@@ -19,13 +19,10 @@ from fno.graph._constants import (  # noqa: F401
 )
 from fno.graph.store import (  # noqa: F401
     GraphCorruptError,
-    _acquire_flock,
     _apply_graph_defaults,
     _read_json,
-    _release_flock,
-    _write_json,
-    locked_mutate_graph,
-    read_graph,
+    commit_rows_via_store,
+    read_graph_strict,
 )
 from fno.graph.statuses import (  # noqa: F401
     is_stale_lock,
@@ -49,4 +46,4 @@ from fno.graph.depends import (  # noqa: F401
 )
 
 # Canonical alias
-mutate_graph = locked_mutate_graph
+mutate_graph = commit_rows_via_store

@@ -1,9 +1,12 @@
-"""x-9844 Fix 3: `spawn --resume` revives an exited same-name claude row in place.
+"""x-9844 Fix 3: `spawn --resume` revives an exited claude row in place.
 
 The name-collision check stops refusing the one case that is a revival: an
 exited claude row whose own recorded ``claude_session_uuid`` equals the
 ``--resume`` target. That row is updated in place (new short_id, same uuid)
-instead of refused or duplicated. Everything else stays fail-closed.
+instead of refused or duplicated. The row is found by name first, then by the
+resumed uuid itself, so a row that answers to another name (an adopted
+short-id-named row) revives under the caller's explicit --name and no stale
+second row is left behind. Everything else stays fail-closed.
 
 Coverage:
   - ``_is_revival`` gate: dead+uuid-match -> True; live / mismatch / no-resume /
@@ -34,6 +37,46 @@ DEAD_UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 OTHER_UUID = "ffffffff-1111-2222-3333-444444444444"
 
 
+@pytest.fixture(autouse=True)
+def _admit_spawn_gate(monkeypatch):
+    """Hermetic spawn gate: this suite tests revival semantics, not admission.
+
+    The gate is a transport over the fno-agents binary, which a clean checkout
+    and the smoke-pytest shard leave unresolved, so every spawn here refused
+    exit 87 before reaching the revival paths under test. Sibling spawn suites
+    stub the same seam; the gate's own behavior is covered in
+    test_spawn_gate_agreement.py. The revival answer rides the same runtime:
+    the stub mirrors the binary's predicate (claude, uuid match, not live,
+    by-name wins) against the seeded registry, driven by each test's own
+    session_is_live stub.
+    """
+    _admitting_gate(monkeypatch)
+
+    def _stub_revival(name, harness, sid):
+        from fno.agents.harnesses import claude as claude_mod
+        from fno.agents.registry import load_registry
+
+        rows = load_registry()
+        named = next((e for e in rows if e.name == name), None)
+        row = named or next(
+            (e for e in rows if e.harness_session_id == sid), None
+        )
+        if row is None:
+            return {"revive": False, "by": None}
+        live = False
+        if row.short_id:
+            live = claude_mod.session_is_live(row.short_id)
+        revive = (
+            harness == "claude"
+            and row.harness == "claude"
+            and row.harness_session_id == sid
+            and not live
+        )
+        return {"revive": revive, "by": "name" if named else "session"}
+
+    monkeypatch.setattr(dispatch, "_revival_answer", _stub_revival)
+
+
 @pytest.fixture
 def workdir_claude(tmp_path, monkeypatch):
     """Isolated fno home with the fake claude on PATH (emits short_id 7c5dcf5d).
@@ -47,7 +90,10 @@ def workdir_claude(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _seed_row(name: str, short_id: str, uuid) -> None:
+def _seed_row(
+    name: str, short_id: str, uuid, node: str | None = None,
+    requested_model: str | None = "claude-opus-5",
+) -> None:
     row = AgentEntry(
         name=name,
         harness="claude",
@@ -55,6 +101,8 @@ def _seed_row(name: str, short_id: str, uuid) -> None:
         log_path="/tmp/rev.log",
         short_id=short_id,
         harness_session_id=uuid,
+        node=node,
+        requested_model=requested_model,
     )
     update_registry(lambda entries: entries + [row])
 
@@ -77,25 +125,6 @@ def _mk(**kw) -> AgentEntry:
     return AgentEntry(**base)
 
 
-def test_is_revival_gate(monkeypatch) -> None:
-    from fno.agents.harnesses import claude as claude_mod
-
-    # Dead supervisor: a --resume that matches the row's own uuid is a revival.
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
-    row = _mk()
-    assert dispatch._is_revival(row, "claude", DEAD_UUID) is True
-    assert dispatch._is_revival(row, "claude", None) is False  # no --resume
-    assert dispatch._is_revival(row, "claude", OTHER_UUID) is False  # uuid mismatch
-    assert dispatch._is_revival(row, "codex", DEAD_UUID) is False  # non-claude spawn
-    assert (
-        dispatch._is_revival(_mk(harness="codex"), "claude", DEAD_UUID) is False
-    )  # non-claude row
-
-    # A live supervisor is a collision, never a revival - even with a uuid match.
-    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: True)
-    assert dispatch._is_revival(row, "claude", DEAD_UUID) is False
-
-
 # ---------------------------------------------------------------------------
 # Integration: the CLI spawn path
 # ---------------------------------------------------------------------------
@@ -115,7 +144,7 @@ def test_spawn_resume_revives_in_place(workdir_claude, monkeypatch) -> None:
     result = CliRunner().invoke(
         agents_app,
         ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "bg", "hi"],
+         "--substrate", "thread", "hi"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
@@ -140,7 +169,7 @@ def test_spawn_resume_uuid_mismatch_is_collision(workdir_claude, monkeypatch) ->
     result = CliRunner().invoke(
         agents_app,
         ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", OTHER_UUID,
-         "--substrate", "bg", "hi"],
+         "--substrate", "thread", "hi"],
         catch_exceptions=False,
     )
     assert result.exit_code == 2, result.output
@@ -159,10 +188,174 @@ def test_spawn_same_name_no_resume_is_collision(workdir_claude, monkeypatch) -> 
 
     result = CliRunner().invoke(
         agents_app,
-        ["spawn", "--name", "rev-agent", "-H", "claude", "--substrate", "bg", "hi"],
+        ["spawn", "--name", "rev-agent", "-H", "claude", "--substrate", "thread", "hi"],
         catch_exceptions=False,
     )
     assert result.exit_code == 2, result.output
+
+
+def test_spawn_resume_onto_another_named_row_renames_it(
+    workdir_claude, monkeypatch
+) -> None:
+    """A --resume to a NEW name onto a session that already has a row revives
+    THAT row under the caller's name: the row and the harness title agree, the
+    node carry survives, and the registry keeps one row for the session (never
+    a stale second row the revival left behind)."""
+    from fno.agents.cli import agents_app
+    from fno.agents.harnesses import claude as claude_mod
+
+    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
+    _seed_row("ac-t-source", "deadbeef", DEAD_UUID, node="x-256c")
+
+    result = CliRunner().invoke(
+        agents_app,
+        ["spawn", "--name", "wake-f8b81903", "-H", "claude", "--resume", DEAD_UUID,
+         "--substrate", "thread", "hi"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    rows = load_registry()
+    row = next((e for e in rows if e.name == "wake-f8b81903"), None)
+    assert row is not None, "the revived row takes the caller's name"
+    assert row.node == "x-256c"  # the join a wake must not lose
+    assert row.harness_session_id == DEAD_UUID  # the uuid stays primary
+    assert not [e for e in rows if e.name == "ac-t-source"], "no stale second row"
+
+
+def test_spawn_resume_fork_explicit_node_wins(workdir_claude, monkeypatch) -> None:
+    """The caller's --node outranks the source-row carry on a resume fork."""
+    from fno.agents.cli import agents_app
+    from fno.agents.harnesses import claude as claude_mod
+
+    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
+    monkeypatch.setattr(
+        claude_mod, "resolve_session_uuid",
+        lambda short_id: "beefface-2222-3333-4444-555555555555",
+    )
+    _seed_row("ac-t-source", "deadbeef", DEAD_UUID, node="x-256c")
+
+    result = CliRunner().invoke(
+        agents_app,
+        ["spawn", "--name", "wake-pinned", "-H", "claude", "--resume", DEAD_UUID,
+         "--node", "x-256d", "--substrate", "thread", "/fix hi"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    row = next((e for e in load_registry() if e.name == "wake-pinned"), None)
+    assert row is not None
+    assert row.node == "x-256d"
+
+
+def test_spawn_resume_fork_carries_provider_and_model_axes(
+    workdir_claude, monkeypatch
+) -> None:
+    """x-50d0: the wake also dropped the provider and model axes - a zai row
+    woke reading anthropic with no requested model, so the session fell back.
+    The fork inherits every axis the caller left unstated."""
+    from fno.agents.cli import agents_app
+    from fno.agents.harnesses import claude as claude_mod
+
+    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
+    monkeypatch.setattr(
+        claude_mod, "resolve_session_uuid",
+        lambda short_id: "beefface-2222-3333-4444-555555555555",
+    )
+    update_registry(
+        lambda entries: entries
+        + [
+            AgentEntry(
+                name="ac-t-source",
+                harness="claude",
+                cwd="/tmp",
+                log_path="/tmp/rev.log",
+                short_id="deadbeef",
+                harness_session_id=DEAD_UUID,
+                node="x-256c",
+                provider="zai",
+                model="glm-5.3-flash[1m]",
+                model_basis="verified",
+                requested_model="glm-5.3-flash[1m]",
+                requested_provider="zai",
+                route_provider_id="zai",
+            )
+        ]
+    )
+
+    result = CliRunner().invoke(
+        agents_app,
+        ["spawn", "--name", "wake-axes", "-H", "claude", "--resume", DEAD_UUID,
+         "--substrate", "thread", "hi"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    forked = next((e for e in load_registry() if e.name == "wake-axes"), None)
+    assert forked is not None
+    assert forked.node == "x-256c"
+    assert forked.provider == "zai"
+    assert forked.model == "glm-5.3-flash[1m]"
+    # The pin answers from the row's request; the fork is verified only when
+    # its own substitution probe observes the model it actually got.
+    assert forked.model_basis == "requested"
+    assert forked.requested_model == "glm-5.3-flash[1m]"
+    assert forked.requested_provider == "zai"
+    assert forked.route_provider_id == "zai"
+
+
+def test_spawn_resume_fork_substitution_names_observed_model(
+    workdir_claude, monkeypatch
+) -> None:
+    """x-50d0: the inherited lineage request feeds the substitution probe, so a
+    fork that really came back on another model reads the OBSERVED model with
+    the requested one kept verbatim - not a None-vs-None non-detection."""
+    from fno.agents.cli import agents_app
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.provenance import observed as observed_mod
+
+    monkeypatch.setattr(claude_mod, "session_is_live", lambda sid: False)
+    monkeypatch.setattr(
+        claude_mod, "resolve_session_uuid",
+        lambda short_id: "beefface-2222-3333-4444-555555555555",
+    )
+    monkeypatch.setattr(
+        observed_mod,
+        "observed_model_for_session",
+        lambda agent, session_id, cwd: {
+            "kind": "observed", "model": "claude-opus-5", "samples": 3,
+        },
+    )
+    update_registry(
+        lambda entries: entries
+        + [
+            AgentEntry(
+                name="ac-t-source",
+                harness="claude",
+                cwd="/tmp",
+                log_path="/tmp/rev.log",
+                short_id="deadbeef",
+                harness_session_id=DEAD_UUID,
+                model="glm-5.3-flash[1m]",
+                model_basis="verified",
+                requested_model="glm-5.3-flash[1m]",
+            )
+        ]
+    )
+
+    result = CliRunner().invoke(
+        agents_app,
+        ["spawn", "--name", "wake-sub", "-H", "claude", "--resume", DEAD_UUID,
+         "--substrate", "thread", "hi"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+
+    forked = next((e for e in load_registry() if e.name == "wake-sub"), None)
+    assert forked is not None
+    assert forked.model == "claude-opus-5"  # the observation wins the row
+    assert forked.model_basis == "verified"
+    assert forked.requested_model == "glm-5.3-flash[1m]"  # the request stays diffable
 
 
 def test_spawn_resume_refused_when_session_claim_held(
@@ -188,7 +381,7 @@ def test_spawn_resume_refused_when_session_claim_held(
     result = CliRunner().invoke(
         agents_app,
         ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "bg", "hi"],
+         "--substrate", "thread", "hi"],
         catch_exceptions=False,
     )
     assert result.exit_code == 11, result.output
@@ -263,7 +456,7 @@ def _spawn_resume() -> object:
     return CliRunner().invoke(
         agents_app,
         ["spawn", "--name", "rev-agent", "-H", "claude", "--resume", DEAD_UUID,
-         "--substrate", "bg", "hi"],
+         "--substrate", "thread", "hi"],
         catch_exceptions=False,
     )
 
@@ -431,15 +624,10 @@ def test_unknown_orphan_guard_survives_the_caller_dying(revive_ready, monkeypatc
 
     # Rewrite the holder's pid to a dead one: the acquiring `fno agents mail send` has
     # exited, which is exactly when the old lifetime stopped guarding anything.
+    from tests._table_seed import update_claim
+
     root = global_claims_root()
-    path = root / "claims" / f"{CLAIM_KEY.replace(':', '_')}.yaml"
-    if not path.exists():  # layout is an implementation detail; find it
-        path = next(p for p in root.rglob("*") if p.is_file() and "session" in p.name)
-    dead_pid = _reap_a_dead_pid()
-    path.write_text(
-        path.read_text().replace(f"pid: {os.getpid()}", f"pid: {dead_pid}"),
-        encoding="utf-8",
-    )
+    update_claim(CLAIM_KEY, root=root, pid=_reap_a_dead_pid())
 
     assert claim_status(CLAIM_KEY, root=root)["state"] == "suspect"
     with pytest.raises(ClaimHeldByOther):
@@ -473,11 +661,26 @@ def test_claim_substrate_fault_fails_closed(revive_ready, monkeypatch):
     assert result.exit_code == 11, result.output
 
 
+def _admitting_gate(monkeypatch) -> None:
+    """An unrouted wake asks the spawn gate; stub it with an admitting guard."""
+
+    class _Guard:
+        def release(self):
+            return None
+
+    monkeypatch.setattr(
+        "fno.agents.spawn_gate.run_gate",
+        lambda *args, **kwargs: _Guard(),
+    )
+
+
 def test_wake_and_deliver_degrades_on_claim_substrate_fault(revive_ready, monkeypatch):
     """The same fault, seen end to end: the wake reports a lane failure so the
     sender writes the durable fallback, instead of raising out of the command."""
     from fno.agents.harnesses import claude as claude_mod
     from fno.claims.io import ClaimCorrupted
+
+    _admitting_gate(monkeypatch)
 
     def _corrupt(**_kw):
         raise ClaimCorrupted("claim file is not valid YAML")
@@ -511,6 +714,8 @@ def test_wake_and_deliver_takes_no_outer_claim(revive_ready, monkeypatch):
     calls: list[dict] = []
     from fno.agents.harnesses import claude as claude_mod
 
+    _admitting_gate(monkeypatch)
+
     real_acquire = claude_mod.acquire_session_writer_claim
 
     def _spy(**kw):
@@ -525,3 +730,55 @@ def test_wake_and_deliver_takes_no_outer_claim(revive_ready, monkeypatch):
     ok, short = dispatch.wake_and_deliver(DEAD_UUID, "wake up")
     assert (ok, short) == (True, "7c5dcf5d")
     assert calls == []  # every acquire now lives inside the create path
+
+
+def test_a_wake_fork_row_names_the_parent_it_was_handed(revive_ready, monkeypatch):
+    """The wake fork stamps the parent triple it was handed, not the sender's
+    ambient session."""
+    from fno.agents.harnesses import claude as claude_mod
+
+    _pin_supervisor(monkeypatch, revive_ready)
+    monkeypatch.setattr(
+        claude_mod,
+        "resolve_session_uuid",
+        lambda short_id: "beefface-2222-3333-4444-555555555555",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sender-s")
+
+    dispatch.dispatch_spawn(
+        name="wake-deadbeef",
+        message="m",
+        harness="claude",
+        cwd=Path("/tmp"),
+        resume_session_id=DEAD_UUID,
+        parent_edge=("k1-parent", "claude", "/k1"),
+    )
+    row = next(e for e in load_registry() if e.name == "wake-deadbeef")
+    assert row.spawned_by_session == "k1-parent"
+    assert row.spawned_by_cwd == "/k1"
+
+
+def test_a_wake_fork_row_without_a_handed_parent_names_the_sender(
+    revive_ready, monkeypatch
+):
+    """Control: no handed triple -> the ambient sender is stamped, as every
+    non-wake spawn sees."""
+    from fno.agents.harnesses import claude as claude_mod
+
+    _pin_supervisor(monkeypatch, revive_ready)
+    monkeypatch.setattr(
+        claude_mod,
+        "resolve_session_uuid",
+        lambda short_id: "beefface-2222-3333-4444-555555555555",
+    )
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sender-s")
+
+    dispatch.dispatch_spawn(
+        name="wake-feedface",
+        message="m",
+        harness="claude",
+        cwd=Path("/tmp"),
+        resume_session_id=DEAD_UUID,
+    )
+    control = next(e for e in load_registry() if e.name == "wake-feedface")
+    assert control.spawned_by_session == "sender-s"

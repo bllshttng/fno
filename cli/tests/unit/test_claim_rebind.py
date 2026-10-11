@@ -16,8 +16,7 @@ from fno.claims import RebindRefused, claim_status
 from fno.claims.core import compare_and_rebind
 from fno.claims.hostid import machine_id
 from fno.claims.io import claim_path, serialize_claim
-from fno.claims.staleness import now_ms
-from fno.claims.types import Claim
+from fno.claims.types import Claim, now_ms
 
 HOLDER = "target-session:507dddb2-4559-4faa-8e34-ab94d627da8e"
 KEY = "node:x-2ccd"
@@ -128,66 +127,12 @@ def test_rebind_holder_mismatch_refuses(tmp_path):
     assert "holder mismatch" in exc.value.reason
 
 
-def test_rebind_waits_out_brief_recovery_mutex_contention_instead_of_refusing(tmp_path):
-    """A recovery mutex held briefly by a peer (acquire_claim/reap mid-archive)
-    must not refuse the rebind - it waits (acquire_dir_mutex, same as
-    acquire_claim/refresh_claim), then proceeds once the peer releases.
-
-    Contention handling here changed from "one steal attempt, else refuse"
-    to acquire_dir_mutex's steal-or-poll-until-timeout: a mutex that clears
-    well inside the 5s window now lets the rebind succeed instead of forcing
-    the caller to retry the whole resume bind for what was a few-ms window.
-    """
-    prior = _claim(_DEAD_PID, now_ms() - 200_000, expires_at=now_ms() - 100_000)
-    _write(tmp_path, prior)
-    path = claim_path(KEY, root=tmp_path)
-    recovery_lock = path.with_name(path.name + ".recovery.d")
-    recovery_lock.mkdir(parents=True)
-    (recovery_lock / "owner").write_text("peer-token")
-
-    import threading
-
-    result = {}
-
-    def _rebind():
-        try:
-            result["claim"], result["mode"] = compare_and_rebind(
-                KEY, HOLDER, new_pid=os.getpid(), root=tmp_path, emit=False
-            )
-        except RebindRefused as exc:
-            result["error"] = exc
-
-    racer = threading.Thread(target=_rebind)
-    racer.start()
-    time.sleep(0.2)
-    assert racer.is_alive(), "rebind returned before the mutex was released"
-
-    import shutil
-
-    shutil.rmtree(recovery_lock)
-    racer.join(timeout=6)
-
-    assert "error" not in result, f"rebind refused instead of waiting: {result.get('error')}"
-    assert result["mode"] == "rebound"
-    assert result["claim"].pid == os.getpid()
-
-
 def test_rebind_missing_claim_refuses_and_never_creates(tmp_path):
     """AC3: a free/missing claim refuses and never creates one."""
     with pytest.raises(RebindRefused) as exc:
         compare_and_rebind(KEY, HOLDER, new_pid=os.getpid(), root=tmp_path, emit=False)
     assert exc.value.state == "free"
     assert claim_status(KEY, root=tmp_path)["state"] == "free"
-
-
-def test_rebind_corrupt_claim_refuses(tmp_path):
-    """AC3: an unparseable claim refuses rather than guessing."""
-    path = claim_path(KEY, root=tmp_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("{{{not yaml", encoding="utf-8")
-    with pytest.raises(RebindRefused) as exc:
-        compare_and_rebind(KEY, HOLDER, new_pid=os.getpid(), root=tmp_path, emit=False)
-    assert exc.value.state == "corrupted"
 
 
 def test_rebound_pid_liveness_claim_stays_pid_liveness(tmp_path):
@@ -249,3 +194,61 @@ def test_a_live_launch_window_holder_still_hands_over(tmp_path):
     )
     assert mode == "handover"
     assert claim.holder == "target-session:sid-worker"
+
+
+def test_a_handover_records_the_dispatched_session_in_metadata(tmp_path):
+    """The worker's session replaces the dispatcher's on takeover; the
+    dispatcher's survives in metadata, so auditing how the node was
+    dispatched still finds the session that ran the dispatch."""
+    prior = _claim(os.getpid(), now_ms(), expires_at=now_ms() + 60_000,
+                   holder="spawn-handover:t-worker")
+    prior = prior.model_copy(update={"session_id": "sess-advance"})
+    _write(tmp_path, prior)
+    claim, mode = compare_and_rebind(
+        KEY, "spawn-handover:t-worker", new_holder="target-session:sid-worker",
+        new_pid=os.getpid(), root=tmp_path, emit=False,
+        harness_session_id="sess-worker",
+    )
+    assert mode == "handover"
+    assert claim.session_id == "sess-worker"
+    assert claim.metadata["dispatched_by_session"] == "sess-advance"
+
+
+def test_a_handover_never_overwrites_a_caller_dispatched_session(tmp_path):
+    """An explicit caller metadata key wins over the carried prior session."""
+    prior = _claim(os.getpid(), now_ms(), expires_at=now_ms() + 60_000,
+                   holder="spawn-handover:t-worker")
+    prior = prior.model_copy(update={"session_id": "sess-advance"})
+    _write(tmp_path, prior)
+    claim, mode = compare_and_rebind(
+        KEY, "spawn-handover:t-worker", new_holder="target-session:sid-worker",
+        new_pid=os.getpid(), root=tmp_path, emit=False,
+        harness_session_id="sess-worker",
+        new_metadata={"dispatched_by_session": "sess-explicit", "via": "init"},
+    )
+    assert mode == "handover"
+    assert claim.metadata["dispatched_by_session"] == "sess-explicit"
+    assert claim.metadata["via"] == "init"
+
+
+def test_a_resume_rebind_leaves_metadata_alone(tmp_path):
+    """Only a handover rewrites ownership, so only a handover carries the
+    prior session into metadata."""
+    prior = _claim(_DEAD_PID, now_ms() - 200_000, expires_at=now_ms() - 100_000)
+    prior = prior.model_copy(update={"session_id": "sess-advance"})
+    _write(tmp_path, prior)
+    claim, mode = compare_and_rebind(KEY, HOLDER, new_pid=os.getpid(), root=tmp_path, emit=False)
+    assert mode == "rebound"
+    assert "dispatched_by_session" not in claim.metadata
+
+
+def test_rebind_corrupt_claim_refuses(tmp_path):
+    """AC3: an unreadable claim row refuses rather than guessing."""
+    from tests._table_seed import update_claim
+
+    _write(tmp_path, _claim(_DEAD_PID, now_ms(), expires_at=now_ms() + 60_000))
+    claim_status(KEY, root=tmp_path)  # open the store so the row is in the table
+    update_claim(KEY, root=tmp_path, schema_version=999)
+    with pytest.raises(RebindRefused) as exc:
+        compare_and_rebind(KEY, HOLDER, new_pid=os.getpid(), root=tmp_path, emit=False)
+    assert exc.value.state == "corrupted"

@@ -113,7 +113,8 @@ def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
     root = repo("")
     line = _done_when_line({}, root)
     assert "self-review required for code" in line
-    assert "--to-self --raw" in line
+    assert "report the literal refusal and stop" in line
+    assert "--to-self --raw" not in line
     # An UNBACKED opt-out in the file is revoked at read time (the merge-gating
     # lifetime rule), so the floor clause stays: a line that dropped it would
     # let a stale `false` silence the gate announcement.
@@ -123,12 +124,10 @@ def test_stock_install_announces_the_self_review_floor(repo, monkeypatch):
     assert "self-review required for code" in line
     # A LIVE claim backs the opt-out: the floor clause is genuinely absent.
     from fno.claims import acquire_claim
-    from fno.claims.io import claims_root_for
 
     acquire_claim(
         "config-optout:review.self_review_required",
         "session-a",
-        root=claims_root_for("config-optout:review.self_review_required"),
     )
     line = _done_when_line({}, root)
     assert "self-review required for code" not in line
@@ -215,7 +214,8 @@ def test_stock_install_announces_a_satisfiable_lane_floor_on_gemini(
     line = _done_when_line({}, repo(""))
     assert "self-review required for code (gemini)" in line
     assert "/fno:review <level>" in line
-    assert "--to-self --raw" in line
+    assert "report the literal refusal and stop" in line
+    assert "--to-self --raw" not in line
     assert "/code-review" not in line
 
 

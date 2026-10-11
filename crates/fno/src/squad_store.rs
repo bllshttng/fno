@@ -1,4 +1,4 @@
-//! Persisted named squads (`~/.fno/squads.json`): the durable half of the
+//! Persisted named squads (`~/.fno/mux/squads.json`): the durable half of the
 //! session-scoped [`crate::squad::Squad`] model.
 //!
 //! Every squad persists (operator decision: any squad created remains across a
@@ -102,7 +102,7 @@ const FLOCK_SLEEP: Duration = Duration::from_millis(20);
 /// plus lifecycle markers for a dead or intentionally detached worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredMember {
-    /// (x-5f7f) `#[serde(default)]` so a worker member can omit it: a
+    /// `#[serde(default)]` so a worker member can omit it: a
     /// non-claude worker pane has no claude jobId, and its identity is the
     /// `worker` registry name instead. Empty for those members; the load
     /// gate accepts either shape.
@@ -110,28 +110,35 @@ pub struct StoredMember {
     pub attach_id: String,
     #[serde(default)]
     pub tombstone: bool,
+    ///  Why the tombstone fired, when one did. A death claim written
+    /// from evidence names the evidence ("registry row exited", "recorded
+    /// pid is gone", a churn arm's pane death); a reader checks the verdict
+    /// instead of inferring it. `#[serde(default, skip_serializing_if)]`
+    /// keeps a pre-store readable and older stores compact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tombstone_reason: Option<String>,
     /// True while the live worker pane is intentionally off every visible
     /// tree. The keeper owns the PTY across mux-server restarts; restore uses
     /// this marker to re-adopt it without placing it back until the operator
     /// attaches/resumes the row. Omitted false keeps older stores compact.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub detached: bool,
-    /// (x-0f9d US4) The name of the tab hosting this member's pane at store
+    /// (US4) The name of the tab hosting this member's pane at store
     /// time, so a chosen tab name survives a mux restart: restore names the
     /// re-derived tab from it. Re-derived fresh on every persist so a rename is
-    /// captured. `#[serde(default)]` keeps a pre-x-0f9d store readable (absent
+    /// captured. `#[serde(default)]` keeps a pre-change store readable (absent
     /// -> `None` -> the tab restores unnamed, exactly as before) and holds
     /// STORE_VERSION at 1 (an additive field never quarantines existing squads).
     #[serde(default)]
     pub tab_name: Option<String>,
-    /// (x-caef) The pane's spawn cwd at store time, re-derived fresh on every
+    /// The pane's spawn cwd at store time, re-derived fresh on every
     /// persist like `tab_name`. Restore spawns `claude attach` here instead of
     /// the squad's `origins[0]` when the directory still exists (a worktree
     /// worker's true home), falling back to `origins[0]` with a notice when it
     /// does not. `#[serde(default)]`, same no-quarantine rule as `tab_name`.
     #[serde(default)]
     pub cwd: Option<String>,
-    /// (x-5f7f) The registry name of a non-claude worker pane - the JOIN key.
+    /// The registry name of a non-claude worker pane - the JOIN key.
     /// Harness, harness session id, cwd and account live on the registry row,
     /// which is the file that already owns them; restore never respawns this
     /// member, it renders idle and resumes through the harness's own form.
@@ -149,6 +156,32 @@ pub struct StoredMember {
     /// Full harness session identity captured alongside `harness`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_session_id: Option<String>,
+    /// The birth pane id, captured at each persist while a pane resolves and
+    /// never cleared: after a restart it is the first join tried in
+    /// `member_pane`, so the member lands back on the same pane number.
+    /// `#[serde(default)]`, same no-quarantine rule as `tab_name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<u64>,
+}
+
+///  The one declared member-to-row join, stated here because the
+/// store holds BOTH identity keys and they disagree member to member: nine of
+/// ten overlapping members join by full `harness_session_id`, the tenth by
+/// `attach_id` against the row's short id. One function, so every caller that
+/// asks "is this member and this row the same session" gets the same answer.
+///
+/// Rule: when both sides carry a full harness session id, that comparison
+/// wins; otherwise the member's attach id against the row's short id. An
+/// id-less member joins nothing.
+pub fn member_joins_row(
+    member: &StoredMember,
+    row_short_id: Option<&str>,
+    row_session_id: Option<&str>,
+) -> bool {
+    if let (Some(ms), Some(rs)) = (member.harness_session_id.as_deref(), row_session_id) {
+        return ms == rs;
+    }
+    !member.attach_id.is_empty() && member.attach_id == row_short_id.unwrap_or("")
 }
 
 /// A durable per-squad identity for an UNNAMED squad, minted the first time it
@@ -166,9 +199,7 @@ pub fn mint_key() -> String {
     format!("t{:x}", now_secs())
 }
 
-/// FNV-1a over bytes: deterministic and dependency-free, the same hash server's
-/// `mission_sid` uses. File-local (this module does not import server.rs); kept
-/// in sync with `crates/fno/src/server.rs::fnv1a`.
+/// FNV-1a over bytes: deterministic and dependency-free.
 fn fnv1a(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for &b in bytes {
@@ -181,7 +212,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// A durable identity for an UNNAMED squad derived from what it represents: its
 /// sorted, deduped origin set (the home squad for a repo has one origin, so it
 /// derives one key forever and every later persist upserts onto a single row
-/// across unbounded restarts - x-e447). Order-independent and set-stable, so a
+/// across unbounded restarts -). Order-independent and set-stable, so a
 /// multi-origin lane derives consistently. The unit separator (`\x1f`, which
 /// cannot occur in a path) keeps `["a","bc"]` and `["ab","c"]` distinct. Returns
 /// 16 hex chars, the shape `mint_key` produces, so it is a drop-in for `key`.
@@ -203,7 +234,7 @@ pub fn origin_key(origins: &[String]) -> String {
 
 /// One persisted squad. Named workspaces key by `name`; an unnamed squad (empty
 /// `name` - a home squad or a project lane) keys by its durable `key`.
-/// Deliberately NOT `Eq`: `tab_trees` carries f32 split weights (x-caef).
+/// Deliberately NOT `Eq`: `tab_trees` carries f32 split weights.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StoredSquad {
     pub name: String,
@@ -219,27 +250,27 @@ pub struct StoredSquad {
     /// A cosmetic `YYYY-MM-DDThh:mm:ssZ` stamp, preserved across upserts.
     #[serde(default)]
     pub created_at: String,
-    /// (x-c4d4) The layout spec of each template-managed, named tab in this
+    /// The layout spec of each template-managed, named tab in this
     /// squad. Restore re-applies these to rebuild the template topology (US8),
     /// instead of the one-tab-per-member fallback. `#[serde(default)]` keeps a
-    /// pre-x-c4d4 store readable without a `STORE_VERSION` bump (an absent field
+    /// pre-change store readable without a `STORE_VERSION` bump (an absent field
     /// loads to `[]`, so no squad is quarantined).
     #[serde(default)]
     pub tab_specs: Vec<StoredTabSpec>,
-    /// (x-caef) Every tab's full topology, in squad tab order. The successor
+    /// Every tab's full topology, in squad tab order. The successor
     /// lane to `tab_specs` for shape; restore rebuilds from these when present
-    /// and falls back to the template/member lanes when absent (a pre-x-caef
+    /// and falls back to the template/member lanes when absent (a pre-change
     /// store loads them as `[]`). `#[serde(default)]`, same no-bump rule.
     #[serde(default)]
     pub tab_trees: Vec<StoredTabTree>,
-    /// (x-caef) The squad's active tab INDEX at capture, clamped at restore.
+    /// The squad's active tab INDEX at capture, clamped at restore.
     /// `#[serde(default)]`, same no-bump rule as `tab_trees`.
     #[serde(default)]
     pub active_tab: Option<usize>,
 }
 
-/// One template-managed tab's persisted layout (x-c4d4). Keyed by `tab_name`,
-/// the durable tab identity (x-0f9d) - an unnamed tab has no stable key and is
+/// One template-managed tab's persisted layout. Keyed by `tab_name`,
+/// the durable tab identity - an unnamed tab has no stable key and is
 /// never persisted. `spec` is the SAME struct `LayoutApply` consumes, so restore
 /// is a plain re-apply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,7 +279,7 @@ pub struct StoredTabSpec {
     pub spec: crate::proto::LayoutSpec,
 }
 
-/// One persisted tab's FULL topology (x-caef): an arbitrary weighted tree
+/// One persisted tab's FULL topology: an arbitrary weighted tree
 /// (`layout get`'s shape, the struct `LayoutTreeSpec` graft already uses),
 /// not one of `LayoutSpec`'s five named templates. Capture is uniform across
 /// every tab of a persisted squad, so a hand split survives a restart exactly
@@ -269,7 +300,7 @@ pub struct StoredTabTree {
     pub focus: Option<String>,
 }
 
-/// The lifecycle state of a tracked EXTERNAL (claude-daemon) row (x-7561). A
+/// The lifecycle state of a tracked EXTERNAL (claude-daemon) row. A
 /// LIVE external row is never persisted (the daemon roster owns it); a record
 /// is born when we act on one. `stopping`/`removing` are in-flight (a spawn is
 /// or was outstanding); `stopped` is the terminal tombstone `x` can rm;
@@ -309,6 +340,8 @@ pub struct ExternalLifecycle {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 struct StoreFile {
     version: u32,
+    #[serde(default)]
+    generations: std::collections::HashMap<String, u64>,
     /// The next pane id reserved across mux-server restarts. Pane ids are
     /// globally monotonic so a registry mux ref cannot silently retarget after
     /// a server restart.
@@ -316,14 +349,14 @@ struct StoreFile {
     next_pane_id: u64,
     #[serde(default)]
     squads: Vec<StoredSquad>,
-    /// (x-7561) Machine-global external-row lifecycle tombstones. A defaulted
+    /// Machine-global external-row lifecycle tombstones. A defaulted
     /// field on the version-1 object: a v1 reader without it stays wire-tolerant
     /// and STORE_VERSION does not bump (which would quarantine existing squads).
     #[serde(default)]
     external_lifecycle: Vec<ExternalLifecycle>,
 }
 
-/// The outcome of a durable compare-and-set gate (x-7561). `Committed` carries
+/// The outcome of a durable compare-and-set gate. `Committed` carries
 /// the new action generation the caller correlates the subprocess result
 /// against; `Refused` is a fail-closed reason (no spawn) that is NOT a
 /// persistence error. An `io::Err` from the CAS helper is a persistence failure
@@ -339,13 +372,28 @@ pub enum LifecycleCas {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Loaded {
     pub squads: Vec<StoredSquad>,
+    pub generations: std::collections::HashMap<String, u64>,
     /// The persisted pane-id floor; zero means no pane has been reserved yet.
     pub next_pane_id: u64,
-    /// (x-7561) The tracked external-row lifecycle tombstones, `attach_id`
+    /// The tracked external-row lifecycle tombstones, `attach_id`
     /// validated exactly like squad members (a malformed id never reaches an
     /// argv). Empty when the store has none.
     pub external_lifecycle: Vec<ExternalLifecycle>,
     pub notice: Option<String>,
+}
+
+pub struct SquadSnapshot {
+    pub name: String,
+    pub key: String,
+    pub origins: Vec<String>,
+    pub members: Vec<StoredMember>,
+    pub tab_trees: Vec<StoredTabTree>,
+    pub active_tab: Option<usize>,
+}
+
+pub struct SnapshotBatch {
+    pub generations: std::collections::HashMap<String, u64>,
+    pub conflicts: Vec<String>,
 }
 
 /// The store file: a sibling of the registry under `FNO_AGENTS_HOME`, else
@@ -361,7 +409,7 @@ pub fn squads_path() -> PathBuf {
         return PathBuf::from(v).join("squads.json");
     }
     #[cfg(not(test))]
-    return crate::proto::mux_sidecar_root().join("squads.json");
+    return crate::proto::mux_sidecar_path("squads.json");
 }
 
 /// A jobId is exactly 8 ascii-hex digits (the `claude attach` gate). File
@@ -371,7 +419,7 @@ pub fn valid_attach_id(id: &str) -> bool {
     id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// A worker name is a registry name, not a path or a shell token (x-5f7f).
+/// A worker name is a registry name, not a path or a shell token.
 /// Same argv-safety posture as [`valid_attach_id`]: file content is untrusted
 /// and a worker name reaches a resume spawn keyed by name, so anything outside
 /// the slug charset (`fno agents spawn` itself refuses other shapes) is
@@ -383,6 +431,27 @@ pub fn valid_worker_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Read the store without any side effect, for read-only verdict callers
+/// (the cascade fold). A missing, empty, corrupt, or version-skewed store
+/// reads as empty and the file stays put: the quarantine is the prune's
+/// own `load()` to perform and name.
+pub fn peek() -> Loaded {
+    let raw = match std::fs::read_to_string(squads_path()) {
+        Ok(raw) => raw,
+        Err(_) => return Loaded::default(),
+    };
+    if raw.trim().is_empty() {
+        return Loaded::default();
+    }
+    match serde_json::from_str::<StoreFile>(&raw) {
+        Ok(f) if f.version == STORE_VERSION => Loaded {
+            squads: f.squads,
+            ..Loaded::default()
+        },
+        _ => Loaded::default(),
+    }
 }
 
 /// Load the store for restore. A missing/empty file is a fresh store (no
@@ -504,12 +573,12 @@ fn loaded_from_raw(path: &std::path::Path, raw: String) -> Loaded {
         }
     };
     let mut dropped = 0usize;
-    let squads = file
+    let loaded = file
         .squads
         .into_iter()
         .map(|mut sq| {
             let before = sq.members.len();
-            // (x-5f7f) A member is valid in either shape: a claude attach id,
+            // A member is valid in either shape: a claude attach id,
             // or a worker registry name. Anything else (including a worker
             // name carrying a path separator or metacharacter) is dropped at
             // load before a resume can key on it.
@@ -519,7 +588,78 @@ fn loaded_from_raw(path: &std::path::Path, raw: String) -> Loaded {
             dropped += before - sq.members.len();
             sq
         })
+        .collect::<Vec<_>>();
+    // Repair rows carrying both a name and a key - a rename of an
+    // unnamed squad used to mint exactly that and leave the old key row alive
+    // beside it. Clearing the key is reversible without loss (clearing a name
+    // re-derives it from origins). Two passes: strip every both-fields key
+    // first (remembering it), then fold, so a twin is found whichever row the
+    // store lists first. A stripped row folds into its unnamed key twin
+    // anywhere in the list - the named row is the one the operator chose -
+    // else onto an emitted row of the same name. Every repair lands in the
+    // notice; never folded silently.
+    let mut repaired = 0usize;
+    let mut folded = 0usize;
+    let mut rows: Vec<(StoredSquad, Option<String>)> = loaded
+        .into_iter()
+        .map(|mut sq| {
+            let key =
+                (!sq.name.is_empty() && !sq.key.is_empty()).then(|| std::mem::take(&mut sq.key));
+            if key.is_some() {
+                repaired += 1;
+            }
+            (sq, key)
+        })
         .collect();
+    let mut drop_row = vec![false; rows.len()];
+    for i in 0..rows.len() {
+        let Some(key) = rows[i].1.clone() else {
+            continue;
+        };
+        let Some(j) = (0..rows.len())
+            .find(|&j| j != i && !drop_row[j] && rows[j].0.name.is_empty() && rows[j].0.key == key)
+        else {
+            continue;
+        };
+        folded += 1;
+        let mut members = std::mem::take(&mut rows[j].0.members);
+        members.retain(|m| !rows[i].0.members.contains(m));
+        rows[i].0.members.extend(members);
+        if rows[i].0.created_at.is_empty()
+            || (!rows[j].0.created_at.is_empty() && rows[j].0.created_at < rows[i].0.created_at)
+        {
+            rows[i].0.created_at = rows[j].0.created_at.clone();
+        }
+        drop_row[j] = true;
+    }
+    let mut squads: Vec<StoredSquad> = Vec::with_capacity(rows.len());
+    for ((sq, stripped), drop) in rows.into_iter().zip(drop_row) {
+        if drop {
+            continue;
+        }
+        // A repaired row whose cleared name collides with an emitted row of
+        // the same name folds into it. A row that never carried both fields
+        // passes through untouched: a pre-existing duplicate-name pair is not
+        // this repair's defect, and the next write collapses it.
+        if stripped.is_some() {
+            if let Some(existing) = squads
+                .iter_mut()
+                .find(|s| !s.name.is_empty() && s.name == sq.name)
+            {
+                folded += 1;
+                let mut members = sq.members;
+                members.retain(|m| !existing.members.contains(m));
+                existing.members.extend(members);
+                if existing.created_at.is_empty()
+                    || (!sq.created_at.is_empty() && sq.created_at < existing.created_at)
+                {
+                    existing.created_at = sq.created_at;
+                }
+                continue;
+            }
+        }
+        squads.push(sq);
+    }
     // Same argv-safety gate for lifecycle records: a malformed attach_id never
     // survives load, so a reconcile / rm can never shell it (epic Boundaries).
     let before_lc = file.external_lifecycle.len();
@@ -529,16 +669,29 @@ fn loaded_from_raw(path: &std::path::Path, raw: String) -> Loaded {
         .filter(|r| valid_attach_id(&r.attach_id))
         .collect();
     let dropped_lc = before_lc - external_lifecycle.len();
-    let notice = match (dropped, dropped_lc) {
-        (0, 0) => None,
-        (s, 0) => Some(format!("dropped {s} malformed squad member(s)")),
-        (0, l) => Some(format!("dropped {l} malformed lifecycle record(s)")),
-        (s, l) => Some(format!(
-            "dropped {s} malformed squad member(s) and {l} lifecycle record(s)"
+    let mut notice_parts = Vec::new();
+    match (dropped, dropped_lc) {
+        (0, 0) => {}
+        (s, 0) => notice_parts.push(format!("dropped {s} malformed workspace member(s)")),
+        (0, l) => notice_parts.push(format!("dropped {l} malformed lifecycle record(s)")),
+        (s, l) => notice_parts.push(format!(
+            "dropped {s} malformed workspace member(s) and {l} lifecycle record(s)"
         )),
-    };
+    }
+    if repaired > 0 {
+        let folded_note = if folded > 0 {
+            format!(", {folded} folded into their twin")
+        } else {
+            String::new()
+        };
+        notice_parts.push(format!(
+            "repaired {repaired} workspace row(s) carrying both a name and a key{folded_note}"
+        ));
+    }
+    let notice = (!notice_parts.is_empty()).then(|| notice_parts.join("; "));
     Loaded {
         squads,
+        generations: file.generations,
         next_pane_id: file.next_pane_id,
         external_lifecycle,
         notice,
@@ -568,6 +721,16 @@ fn same_squad(s: &StoredSquad, name: &str, key: &str) -> bool {
     }
 }
 
+fn generation_key(name: &str, key: &str) -> Option<String> {
+    if !name.is_empty() {
+        Some(format!("name:{name}"))
+    } else if !key.is_empty() {
+        Some(format!("key:{key}"))
+    } else {
+        None
+    }
+}
+
 /// Insert-or-replace the entry with this identity (`name` if named, else the
 /// durable `key`), preserving its `created_at` if it already exists (else
 /// stamping now). Write-through for `NewSquad`, recruit, member close, tombstone,
@@ -579,13 +742,32 @@ pub fn upsert(
     origins: &[String],
     members: &[StoredMember],
 ) -> io::Result<()> {
+    upsert_with_generations(None, name, key, origins, members).map(|_| ())
+}
+
+pub fn upsert_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    name: &str,
+    key: &str,
+    origins: &[String],
+    members: &[StoredMember],
+) -> io::Result<SnapshotBatch> {
     // A squad with neither a name nor a durable key has no identity across a
     // restart, so it cannot be persisted (nor found again). Skip it here, the
     // one place every write path funnels through, rather than at each caller.
     if name.is_empty() && key.is_empty() {
-        return Ok(());
+        return Ok(SnapshotBatch {
+            generations: std::collections::HashMap::new(),
+            conflicts: Vec::new(),
+        });
     }
-    mutate(|squads| {
+    // A named squad keys by name and leaves the key empty (the
+    // struct's own contract at `StoredSquad::key`). Enforced here, where every
+    // write funnels through, for the same reason the identity-less skip above
+    // lives here: a caller passing both minted a row that matched by name
+    // while its key-keyed twin stayed alive.
+    let key = if name.is_empty() { key } else { "" };
+    mutate_generations(expected, &[], false, |squads| {
         let existing = squads.iter().find(|s| same_squad(s, name, key));
         let created_at = existing
             .map(|s| s.created_at.clone())
@@ -594,7 +776,7 @@ pub fn upsert(
         // Preserve template tab specs and tab trees (owned by set_tab_specs /
         // set_tab_trees, not this path) across a membership upsert - the struct
         // is rebuilt fresh, so an un-carried field would be silently wiped
-        // (x-c4d4, x-caef).
+        //.
         let tab_specs = existing.map(|s| s.tab_specs.clone()).unwrap_or_default();
         let (tab_trees, active_tab) = existing
             .map(|s| (s.tab_trees.clone(), s.active_tab))
@@ -613,12 +795,20 @@ pub fn upsert(
     })
 }
 
-/// Set the template tab specs for `name` (x-c4d4), preserving its other fields.
+/// Set the template tab specs for `name`, preserving its other fields.
 /// Inserts a minimal entry if the squad is not yet persisted (a template applied
 /// before any membership write). A store-write failure is the caller's to treat
 /// as degraded persistence (the live layout stands).
 pub fn set_tab_specs(name: &str, tab_specs: &[StoredTabSpec]) -> io::Result<()> {
-    mutate(|squads| {
+    set_tab_specs_with_generations(None, name, tab_specs).map(|_| ())
+}
+
+pub fn set_tab_specs_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    name: &str,
+    tab_specs: &[StoredTabSpec],
+) -> io::Result<SnapshotBatch> {
+    mutate_generations(expected, &[], false, |squads| {
         if let Some(s) = squads.iter_mut().find(|s| s.name == name) {
             s.tab_specs = tab_specs.to_vec();
         } else {
@@ -671,11 +861,90 @@ pub fn set_tab_trees(
     })
 }
 
+/// Replace every current snapshot in one write and report stale identities.
+pub fn set_snapshots_if_generations(
+    expected: &std::collections::HashMap<String, u64>,
+    snapshots: &[SquadSnapshot],
+) -> io::Result<SnapshotBatch> {
+    set_snapshots_inner(expected, snapshots)
+}
+
+fn set_snapshots_inner(
+    expected: &std::collections::HashMap<String, u64>,
+    snapshots: &[SquadSnapshot],
+) -> io::Result<SnapshotBatch> {
+    let keys: Option<Vec<_>> = snapshots
+        .iter()
+        .map(|snapshot| generation_key(&snapshot.name, &snapshot.key))
+        .collect();
+    let Some(keys) = keys else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "snapshot needs a name or durable key",
+        ));
+    };
+    mutate_file(|file| {
+        let mut generations = std::collections::HashMap::new();
+        let mut conflicts = Vec::new();
+        for (snapshot, generation_key) in snapshots.iter().zip(&keys) {
+            if file.generations.get(generation_key).copied().unwrap_or(0)
+                != expected.get(generation_key).copied().unwrap_or(0)
+            {
+                conflicts.push(generation_key.clone());
+                continue;
+            }
+            let key = if snapshot.name.is_empty() {
+                snapshot.key.as_str()
+            } else {
+                ""
+            };
+            let existing = file
+                .squads
+                .iter()
+                .find(|s| same_squad(s, &snapshot.name, key));
+            let created_at = existing
+                .map(|s| s.created_at.clone())
+                .filter(|stamp| !stamp.is_empty())
+                .unwrap_or_else(now_iso);
+            let tab_specs = existing.map(|s| s.tab_specs.clone()).unwrap_or_default();
+            file.squads.retain(|s| !same_squad(s, &snapshot.name, key));
+            file.squads.push(StoredSquad {
+                name: snapshot.name.clone(),
+                key: key.to_string(),
+                origins: snapshot.origins.clone(),
+                members: snapshot.members.clone(),
+                created_at,
+                tab_specs,
+                tab_trees: snapshot.tab_trees.clone(),
+                active_tab: snapshot.active_tab,
+            });
+            let generation = file.generations.entry(generation_key.clone()).or_default();
+            *generation = generation.saturating_add(1);
+            generations.insert(generation_key.clone(), *generation);
+        }
+        SnapshotBatch {
+            generations,
+            conflicts,
+        }
+    })
+}
+
 /// Delete the entry with this identity (`name` if named, else the durable
 /// `key`): a user-closed / removed workspace, or an unnamed lane whose last pane
 /// closed. An identity not present is a silent no-op.
 pub fn remove(name: &str, key: &str) -> io::Result<()> {
-    mutate(|squads| squads.retain(|s| !same_squad(s, name, key)))
+    remove_with_generations(None, name, key).map(|_| ())
+}
+
+pub fn remove_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    name: &str,
+    key: &str,
+) -> io::Result<SnapshotBatch> {
+    let protected: Vec<_> = generation_key(name, key).into_iter().collect();
+    mutate_generations(expected, &protected, false, |squads| {
+        squads.retain(|s| !same_squad(s, name, key))
+    })
 }
 
 // --- prune: reap squads whose every origin is gone and nothing is live -----
@@ -731,6 +1000,37 @@ pub struct MemberEvidence {
     dead: std::collections::HashSet<String>,
     live_pairs: std::collections::HashSet<(String, String)>,
     dead_pairs: std::collections::HashSet<(String, String)>,
+    /// Worker names positively recorded dead: a never-bound
+    /// journal marker, a DEAD registry row, or a spawned worker whose row a
+    /// successful registry read no longer carries. Kept separate from `dead`
+    /// because the name is the identity of LAST resort: in `verdict` it only
+    /// reaches the keys branch (a member with no session id - the one case
+    /// where the name is all the member has). A session-keyed member keeps
+    /// its exact pair (AC7-EDGE).
+    dead_names: std::collections::HashSet<String>,
+    /// Every registry row name one fold observed. With
+    /// `complete_registry_names`, a spawned name ABSENT here is dead evidence
+    /// (its row was reaped), not missing evidence.
+    registry_row_names: std::collections::HashSet<String>,
+    /// Worker names the spawn journal records, held or not.
+    spawned_names: std::collections::HashSet<String>,
+    /// Names with a still-held spawn receipt: the worker is
+    /// resumable, so registry absence must stay `Unknown`.
+    held_names: std::collections::HashSet<String>,
+    /// Names the provenance cascade POSITIVELY resolved to a done,
+    /// PR-confirmed node. The caller asks the cascade once per Unknown
+    /// name-only member and inserts only the positive answers; a live name
+    /// never reaches here, so the verdict arm below retires nothing on an
+    /// absence.
+    retire_eligible_names: std::collections::HashSet<String>,
+    /// The Unmeasured expiry: an Unmeasured registry row whose last
+    /// activity is older than this many seconds contributes its NAME to the
+    /// dead-row candidates, where the reuse guard (an alive same-name row, a
+    /// held spawn receipt) still protects it. Zero (the default) disables
+    /// the expiry and keeps the historical fail-safe.
+    unmeasured_expiry_s: u64,
+    now_secs: u64,
+    complete_registry_names: bool,
     complete_attach_set: bool,
 }
 
@@ -744,6 +1044,14 @@ impl MemberEvidence {
             dead,
             live_pairs: std::collections::HashSet::new(),
             dead_pairs: std::collections::HashSet::new(),
+            dead_names: std::collections::HashSet::new(),
+            registry_row_names: std::collections::HashSet::new(),
+            spawned_names: std::collections::HashSet::new(),
+            held_names: std::collections::HashSet::new(),
+            retire_eligible_names: std::collections::HashSet::new(),
+            unmeasured_expiry_s: 0,
+            now_secs: 0,
+            complete_registry_names: false,
             complete_attach_set: false,
         }
     }
@@ -757,12 +1065,27 @@ impl MemberEvidence {
             dead: std::collections::HashSet::new(),
             live_pairs: std::collections::HashSet::new(),
             dead_pairs: std::collections::HashSet::new(),
+            dead_names: std::collections::HashSet::new(),
+            registry_row_names: std::collections::HashSet::new(),
+            spawned_names: std::collections::HashSet::new(),
+            held_names: std::collections::HashSet::new(),
+            retire_eligible_names: std::collections::HashSet::new(),
+            unmeasured_expiry_s: 0,
+            now_secs: 0,
+            complete_registry_names: false,
             complete_attach_set: true,
         }
     }
 
     pub fn add_dead(&mut self, identity: impl Into<String>) {
         self.dead.insert(identity.into());
+    }
+
+    /// A name-keyed never-bound removal marker. Only ever reached by
+    /// a member with no harness and no session id (`verdict` scopes it), so a
+    /// reused name cannot kill a member that carries a stronger identity.
+    pub fn add_dead_name(&mut self, name: impl Into<String>) {
+        self.dead_names.insert(name.into());
     }
 
     pub fn add_live(&mut self, identity: impl Into<String>) {
@@ -773,12 +1096,150 @@ impl MemberEvidence {
         self.complete_attach_set = true;
     }
 
+    /// Arm the Unmeasured expiry: `now_secs` is the fold's clock,
+    /// `expiry_s` the inactivity bound past which an Unmeasured row's name
+    /// may join the dead-row candidates. Zero keeps the historical
+    /// fail-safe.
+    pub fn set_unmeasured_expiry(&mut self, now_secs: u64, expiry_s: u64) {
+        self.now_secs = now_secs;
+        self.unmeasured_expiry_s = expiry_s;
+    }
+
+    /// A cascade answer: this name positively resolved to a done,
+    /// PR-confirmed node.
+    pub fn add_retire_eligible_name(&mut self, name: impl Into<String>) {
+        self.retire_eligible_names.insert(name.into());
+    }
+
     pub fn add_live_pair(&mut self, harness: impl Into<String>, session_id: impl Into<String>) {
         self.live_pairs.insert((harness.into(), session_id.into()));
     }
 
     pub fn add_dead_pair(&mut self, harness: impl Into<String>, session_id: impl Into<String>) {
         self.dead_pairs.insert((harness.into(), session_id.into()));
+    }
+
+    /// True when `name` carries positive dead evidence (dead row,
+    /// never-bound marker, or reaped spawned worker - reuse-guarded).
+    pub fn is_dead_name(&self, name: &str) -> bool {
+        self.dead_names.contains(name)
+    }
+
+    /// THE shared registry-row fold. Both evidence builders (the CLI
+    /// prune's file read and the daemon's cached rows) call this one function,
+    /// so the two can never drift on what a row proves. Beyond today's
+    /// pair/identity folding it records every row's name and derives two new
+    /// name-keyed death signals:
+    ///
+    /// - a DEAD row (exited/permanent-dead) proves its NAME dead, unless the
+    ///   same read holds an ALIVE row of that name or a still-held spawn
+    ///   receipt carries it (name-reuse guard);
+    /// - a journal-spawned name that a COMPLETE registry read does not carry
+    ///   is a reaped row, and reaping the row destroyed the old evidence with
+    ///   it - so the absence itself is the death evidence. A held receipt
+    ///   keeps the name `Unknown` (the worker is resumable). An INCOMPLETE
+    ///   read (failed, or roster unreadable) proves nothing: absence stays
+    ///   missing evidence and members stay fail-safe `Unknown`.
+    ///
+    /// `spawned_names`/`held_names` come from one [`crate::spawn_journal`]
+    /// walk. Fold roster live-evidence BEFORE calling, so a roster-live name
+    /// can never land in `dead_names`.
+    pub fn fold_registry_rows(
+        &mut self,
+        rows: &[crate::agents_view::RegistryAgent],
+        spawned_names: std::collections::HashSet<String>,
+        held_names: std::collections::HashSet<String>,
+        complete_registry_names: bool,
+    ) {
+        let mut alive_names = std::collections::HashSet::new();
+        let mut dead_row_names = std::collections::HashSet::new();
+        for row in rows {
+            self.registry_row_names.insert(row.name.clone());
+            // The pair session id is the union of both builders' prior
+            // resolutions: the row's own harness id, claude's uuid, and the
+            // fno session id - so unifying the fold widens neither side's
+            // pair coverage by less than it merges.
+            let pair_session = row
+                .harness_session_id
+                .as_deref()
+                .or(row.claude_session_uuid.as_deref())
+                .or(row.session_id.as_deref());
+            match row.liveness {
+                crate::agents_view::Liveness::Alive => {
+                    alive_names.insert(row.name.clone());
+                }
+                crate::agents_view::Liveness::Dead => {
+                    dead_row_names.insert(row.name.clone());
+                }
+                crate::agents_view::Liveness::Unmeasured => {
+                    // The expiry: a row the probe never measured
+                    // and whose last activity is older than the bound is
+                    // not live in any positive sense its evidence can
+                    // name. Its name joins the DEAD-ROW candidates, where
+                    // the reuse guard (an alive same-name row, a held spawn
+                    // receipt) still protects it. Zero disables.
+                    if self.unmeasured_expiry_s > 0 {
+                        if let Some(at) = row.updated_at {
+                            if self.now_secs.saturating_sub(at) > self.unmeasured_expiry_s {
+                                dead_row_names.insert(row.name.clone());
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            if let (Some(harness), Some(session_id)) = (row.harness.as_deref(), pair_session) {
+                match row.liveness {
+                    crate::agents_view::Liveness::Alive => {
+                        self.add_live_pair(harness, session_id);
+                        // A paired row still owes its NAME to the live set: a
+                        // session-less member sharing the name must read Live
+                        // (the daemon's old key fold did this; the pair-only
+                        // path would strand it Unknown). Dead rows skip this -
+                        // their name reaches members only through the
+                        // reuse-guarded dead_names rule below.
+                        self.live.insert(row.name.clone());
+                    }
+                    crate::agents_view::Liveness::Dead => self.add_dead_pair(harness, session_id),
+                    crate::agents_view::Liveness::Unmeasured => {}
+                }
+                continue;
+            }
+            let mut keys = vec![row.name.as_str()];
+            if let Some(id) = row.attach_id.as_deref() {
+                keys.push(id);
+            }
+            if let Some(id) = row.effective_identity() {
+                keys.push(id);
+            }
+            for key in keys {
+                match row.liveness {
+                    crate::agents_view::Liveness::Alive => self.add_live(key),
+                    crate::agents_view::Liveness::Dead => self.add_dead(key),
+                    crate::agents_view::Liveness::Unmeasured => {}
+                }
+            }
+        }
+        self.spawned_names = spawned_names;
+        self.held_names = held_names;
+        self.complete_registry_names = complete_registry_names;
+        let reuse_or_live = |evidence: &Self, name: &str| {
+            alive_names.contains(name)
+                || evidence.held_names.contains(name)
+                || evidence.live.contains(name)
+        };
+        for name in dead_row_names {
+            if !reuse_or_live(self, &name) {
+                self.dead_names.insert(name);
+            }
+        }
+        if complete_registry_names {
+            for name in self.spawned_names.iter() {
+                if !self.registry_row_names.contains(name) && !reuse_or_live(self, name) {
+                    self.dead_names.insert(name.clone());
+                }
+            }
+        }
     }
 
     pub fn verdict(&self, member: &StoredMember) -> MemberLiveness {
@@ -817,6 +1278,14 @@ impl MemberEvidence {
                 .into_iter()
                 .flatten()
                 .any(|key| self.dead.contains(key))
+            || member
+                .worker
+                .as_deref()
+                .is_some_and(|w| self.dead_names.contains(w))
+            || member
+                .worker
+                .as_deref()
+                .is_some_and(|w| self.retire_eligible_names.contains(w))
         {
             MemberLiveness::Dead
         } else {
@@ -1224,7 +1693,7 @@ pub fn prune(
     live: Option<&std::collections::HashSet<String>>,
 ) -> io::Result<PruneOutcome> {
     let mut out = PruneOutcome::default();
-    mutate_file(|sf| {
+    mutate_squads_file(|sf| {
         let mut kept = Vec::with_capacity(sf.squads.len());
         for mut sq in sf.squads.drain(..) {
             let fate = classify_squad(&sq, &decide, live);
@@ -1257,10 +1726,18 @@ pub fn prune_with_evidence(
     decide: impl Fn(&StoredSquad) -> PruneDecision,
     evidence: &MemberEvidence,
 ) -> io::Result<PruneOutcome> {
+    prune_with_evidence_with_generations(None, decide, evidence).map(|(outcome, _)| outcome)
+}
+
+pub fn prune_with_evidence_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    decide: impl Fn(&StoredSquad) -> PruneDecision,
+    evidence: &MemberEvidence,
+) -> io::Result<(PruneOutcome, SnapshotBatch)> {
     let mut out = PruneOutcome::default();
-    mutate_file(|sf| {
-        let mut kept = Vec::with_capacity(sf.squads.len());
-        for mut sq in sf.squads.drain(..) {
+    let batch = mutate_generations(expected, &[], true, |squads| {
+        let mut kept = Vec::with_capacity(squads.len());
+        for mut sq in squads.drain(..) {
             let fate = classify_squad_with_evidence(&sq, &decide, evidence);
             if matches!(fate.decision, PruneDecision::Prune) {
                 out.members_reaped += fate.reaped_if_kept;
@@ -1280,13 +1757,13 @@ pub fn prune_with_evidence(
             out.members_kept_unknown += fate.kept_unknown;
             kept.push(sq);
         }
-        sf.squads = kept;
+        *squads = kept;
     })?;
-    Ok(out)
+    Ok((out, batch))
 }
 
 /// Heal duplicate rows that accumulated under the old random-mint identity
-/// (x-e447, unnamed; legacy shared mint keys, named). Migrate every unnamed
+/// (unnamed; legacy shared mint keys, named). Migrate every unnamed
 /// squad with origins onto its derived
 /// [`origin_key`] (Locked Decision 1: the durable key IS a function of the
 /// origin set), then collapse rows that now share an identity: among same-key
@@ -1309,7 +1786,7 @@ pub fn prune_with_evidence(
 /// rather than healing on one machine and silently staying broken on another.
 pub fn collapse_duplicate_squads() -> io::Result<usize> {
     let mut dropped = 0usize;
-    mutate_file(|sf| {
+    mutate_squads_file(|sf| {
         for sq in sf.squads.iter_mut() {
             if sq.name.is_empty() && !sq.origins.is_empty() {
                 sq.key = origin_key(&sq.origins);
@@ -1403,7 +1880,7 @@ fn collapse_groups(
         squads[surv]
             .tab_specs
             .dedup_by(|a, b| a.tab_name == b.tab_name);
-        // Trees have no durable per-tab key (identity is position, x-caef), so
+        // Trees have no durable per-tab key (identity is position), so
         // a merge dedups only exact duplicates - a would-be reshape by the heal
         // is wrong, and any real divergence survives until the next topology
         // mutation rewrites the survivor's whole vec.
@@ -1420,7 +1897,18 @@ pub fn rename(
     origins: &[String],
     members: &[StoredMember],
 ) -> io::Result<()> {
-    mutate(|squads| {
+    rename_with_generations(None, old, new, origins, members).map(|_| ())
+}
+
+pub fn rename_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    old: &str,
+    new: &str,
+    origins: &[String],
+    members: &[StoredMember],
+) -> io::Result<SnapshotBatch> {
+    let protected = [format!("name:{old}"), format!("name:{new}")];
+    mutate_generations(expected, &protected, false, |squads| {
         let existing = squads.iter().find(|s| s.name == old || s.name == new);
         let created_at = existing
             .map(|s| s.created_at.clone())
@@ -1444,7 +1932,7 @@ pub fn rename(
     })
 }
 
-/// Begin an external STOP (x-7561, AC2-FR gate): under the store lock, move the
+/// Begin an external STOP (AC2-FR gate): under the store lock, move the
 /// record for `id` to `stopping` with a FRESH generation, snapshotting
 /// `name`/`cwd` (cosmetic). A LIVE row carries no record yet, so an absent id
 /// inserts one at generation 1. Refused (no state change) when the current state
@@ -1500,14 +1988,17 @@ pub fn begin_external_stop(id: &str, name: &str, cwd: &str) -> io::Result<Lifecy
     Ok(outcome)
 }
 
-/// Begin an external RM (x-7561, stop-then-rm ordering): refuse unless the
+/// Begin an external RM (stop-then-rm ordering): refuse unless the
 /// record is `stopped`. On commit, bump generation and set `removing` before the
 /// caller spawns `claude rm`. A live/`stopping`/`failed` target refuses with
 /// `stop it first`; `unknown` refuses with `state unknown; retry stop`; an
 /// absent record refuses (nothing to remove). Same persistence-error contract as
 /// [`begin_external_stop`].
 pub fn begin_external_rm(id: &str) -> io::Result<LifecycleCas> {
-    let mut outcome = LifecycleCas::Refused(format!("no such stopped row: {id}"));
+    // The record is absent: say THAT, not "no such stopped row" - the
+    // reader would look for a stopped row that never existed (
+    // change 4, AC4-ERR).
+    let mut outcome = LifecycleCas::Refused(format!("no external lifecycle record: {id}"));
     mutate_lifecycle(|records| {
         if let Some(r) = records.iter_mut().find(|r| r.attach_id == id) {
             outcome = match r.state {
@@ -1528,7 +2019,7 @@ pub fn begin_external_rm(id: &str) -> io::Result<LifecycleCas> {
     Ok(outcome)
 }
 
-/// Record a subprocess completion (x-7561). Applied ONLY when the record exists,
+/// Record a subprocess completion. Applied ONLY when the record exists,
 /// its `generation` matches, AND its current state is the in-flight `action` -
 /// so a stale retry's late completion (older generation, or a state a newer
 /// action already moved on from) is ignored and can never overwrite a newer
@@ -1564,7 +2055,7 @@ pub fn complete_external(
     })
 }
 
-/// Apply the startup reconcile ATOMICALLY under the store lock (x-7561): the
+/// Apply the startup reconcile ATOMICALLY under the store lock: the
 /// `claude agents` liveness query runs off-lock (it must - a subprocess cannot
 /// be awaited while holding the flock), but the load -> compute -> write is
 /// serialized here so a concurrent operator action is never clobbered
@@ -1601,10 +2092,90 @@ where
 /// corrupt file read here is treated as empty (the load path owns quarantine),
 /// so a write never fails on unreadable prior content.
 fn mutate(f: impl FnOnce(&mut Vec<StoredSquad>)) -> io::Result<()> {
-    mutate_file(|sf| f(&mut sf.squads))
+    mutate_squads_file(|sf| f(&mut sf.squads))
 }
 
-/// The lifecycle-collection twin of [`mutate`] (x-7561): the SAME locked atomic
+fn mutate_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    protected: &[String],
+    protect_all: bool,
+    f: impl FnOnce(&mut Vec<StoredSquad>),
+) -> io::Result<SnapshotBatch> {
+    mutate_file(|file| {
+        let all_protected;
+        let protected = if protect_all {
+            all_protected = squads_by_identity(file)
+                .into_keys()
+                .chain(
+                    expected
+                        .into_iter()
+                        .flat_map(|expected| expected.keys().cloned()),
+                )
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            all_protected.as_slice()
+        } else {
+            protected
+        };
+        let conflicts: Vec<_> = match expected {
+            Some(expected) => protected
+                .iter()
+                .filter(|identity| {
+                    file.generations.get(*identity).copied().unwrap_or(0)
+                        != expected.get(*identity).copied().unwrap_or(0)
+                })
+                .cloned()
+                .collect(),
+            None => Vec::new(),
+        };
+        if !conflicts.is_empty() {
+            return SnapshotBatch {
+                generations: std::collections::HashMap::new(),
+                conflicts,
+            };
+        }
+        let before = squads_by_identity(file);
+        f(&mut file.squads);
+        changed_generations(file, before, expected)
+    })
+}
+
+/// Retire every member whose (harness, session id) matches, by the store's
+/// own tombstone convention (task 3): a tombstoned member reads Dead,
+/// never renders, and restart/restore cannot resurrect it, while the squad's
+/// other members and the last operator shell stay untouched. Returns the
+/// number of members newly retired; a second call retires none (idempotent).
+/// A resume epoch that re-adds the same native id as a NEW member is real new
+/// membership and is not hidden by the old tombstone.
+pub fn retire_session_members(harness: &str, session_id: &str) -> io::Result<usize> {
+    retire_session_members_with_generations(None, harness, session_id).map(|(retired, _)| retired)
+}
+
+pub fn retire_session_members_with_generations(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    harness: &str,
+    session_id: &str,
+) -> io::Result<(usize, SnapshotBatch)> {
+    let mut retired = 0usize;
+    let batch = mutate_generations(expected, &[], false, |squads| {
+        for squad in squads {
+            for member in &mut squad.members {
+                let matches = member.harness.as_deref() == Some(harness)
+                    && member.harness_session_id.as_deref() == Some(session_id)
+                    && !member.tombstone;
+                if matches {
+                    member.tombstone = true;
+                    member.tombstone_reason = Some("session retired by harness".into());
+                    retired += 1;
+                }
+            }
+        }
+    })?;
+    Ok((retired, batch))
+}
+
+/// The lifecycle-collection twin of [`mutate`]: the SAME locked atomic
 /// read-modify-write, applying `f` to `external_lifecycle` while preserving
 /// `squads` byte-for-byte. Both collections ride one version-1 object, so a
 /// squad write can never drop a lifecycle record and vice-versa.
@@ -1612,18 +2183,19 @@ fn mutate_lifecycle(f: impl FnOnce(&mut Vec<ExternalLifecycle>)) -> io::Result<(
     mutate_file(|sf| f(&mut sf.external_lifecycle))
 }
 
-/// Walk `exe`'s ancestors for a directory named `target` carrying a cargo
-/// build-tree marker (`.rustc_info.json` or `CACHEDIR.TAG`). Every exec'd test
-/// binary lives under `target/{debug,release,...}`; no installed binary
-/// (`~/.cargo/bin`, homebrew, a deployed `fno`) does. Pure over the path so the
-/// marker logic is unit-testable; [`assert_writable`] feeds it `current_exe()`.
-/// A bare directory named `target` without a marker is NOT a build tree (the
-/// marker is what proves cargo owns it), so a coincidentally-named dir never
-/// trips the guard.
+/// Walk `exe`'s ancestors for the nearest directory carrying a cargo build-tree
+/// marker (`.rustc_info.json` or `CACHEDIR.TAG`). Every exec'd test binary lives
+/// under a build tree - `target/{debug,release,...}` with the classic layout, or
+/// `<build-dir>/<hash>/debug/deps` under build.build-dir, where the markers sit
+/// on the hash dir and no ancestor is named `target`. No installed binary
+/// (`~/.cargo/bin`, homebrew, a deployed `fno`) carries a marker. Pure over the
+/// path so the marker logic is unit-testable; [`assert_writable`] feeds it
+/// `current_exe()`. A bare directory named `target` without a marker is NOT a
+/// build tree (the marker is what proves cargo owns it), so a coincidentally
+/// named dir never trips the guard.
 fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
     exe.ancestors()
-        .find(|d| d.file_name().is_some_and(|n| n == "target"))
-        .filter(|d| d.join(".rustc_info.json").exists() || d.join("CACHEDIR.TAG").exists())
+        .find(|d| d.join(".rustc_info.json").exists() || d.join("CACHEDIR.TAG").exists())
         .map(|d| d.to_path_buf())
 }
 
@@ -1664,6 +2236,58 @@ fn assert_writable() -> io::Result<()> {
 /// apply `f` to both collections at once, pin the version, and atomically
 /// rename a tmp over the target. `mutate` / `mutate_lifecycle` are thin views
 /// onto it, so every mutation preserves both collections.
+fn mutate_squads_file<T>(f: impl FnOnce(&mut StoreFile) -> T) -> io::Result<T> {
+    mutate_squads_file_with_generations(None, f).map(|(result, _)| result)
+}
+
+fn mutate_squads_file_with_generations<T>(
+    expected: Option<&std::collections::HashMap<String, u64>>,
+    f: impl FnOnce(&mut StoreFile) -> T,
+) -> io::Result<(T, SnapshotBatch)> {
+    mutate_file(|file| {
+        let before = squads_by_identity(file);
+        let result = f(file);
+        (result, changed_generations(file, before, expected))
+    })
+}
+
+fn squads_by_identity(file: &StoreFile) -> std::collections::HashMap<String, StoredSquad> {
+    file.squads
+        .iter()
+        .filter_map(|squad| generation_key(&squad.name, &squad.key).map(|key| (key, squad.clone())))
+        .collect()
+}
+
+fn changed_generations(
+    file: &mut StoreFile,
+    before: std::collections::HashMap<String, StoredSquad>,
+    expected: Option<&std::collections::HashMap<String, u64>>,
+) -> SnapshotBatch {
+    let after = squads_by_identity(file);
+    let identities: std::collections::HashSet<_> =
+        before.keys().chain(after.keys()).cloned().collect();
+    let mut generations = std::collections::HashMap::new();
+    let mut conflicts = Vec::new();
+    for identity in identities {
+        if before.get(&identity) == after.get(&identity) {
+            continue;
+        }
+        let observed = file.generations.get(&identity).copied().unwrap_or(0);
+        let generation = file.generations.entry(identity.clone()).or_default();
+        *generation = generation.saturating_add(1);
+        if expected.is_none_or(|expected| expected.get(&identity).copied().unwrap_or(0) == observed)
+        {
+            generations.insert(identity, *generation);
+        } else {
+            conflicts.push(identity);
+        }
+    }
+    SnapshotBatch {
+        generations,
+        conflicts,
+    }
+}
+
 fn mutate_file<T>(f: impl FnOnce(&mut StoreFile) -> T) -> io::Result<T> {
     #[cfg(not(test))]
     assert_writable()?;
@@ -1800,6 +2424,12 @@ fn now_iso() -> String {
     epoch_to_iso(now_secs())
 }
 
+/// Public twin for cross-module callers that need the same UTC stamp shape
+/// (the mux stats answer carries the counter's measurement window).
+pub fn epoch_to_iso_public(secs: u64) -> String {
+    epoch_to_iso(secs)
+}
+
 fn epoch_to_iso(secs: u64) -> String {
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
@@ -1819,1783 +2449,7 @@ fn epoch_to_iso(secs: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    /// A scratch store dir installed via the per-thread path override, so the
-    /// store never touches a real file AND never mutates the process
-    /// environment (no cross-test env race). Cleared on drop.
-    struct Scratch(PathBuf);
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("fno-squadstore-{}-{name}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            super::set_test_path(&dir);
-            Scratch(dir)
-        }
-        fn file(&self) -> PathBuf {
-            self.0.join("squads.json")
-        }
-    }
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            super::clear_test_path();
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn m(id: &str) -> StoredMember {
-        StoredMember {
-            attach_id: id.into(),
-            tombstone: false,
-            detached: false,
-            tab_name: None,
-            cwd: None,
-            worker: None,
-            harness: None,
-            harness_session_id: None,
-        }
-    }
-
-    #[test]
-    fn stored_member_roundtrips_detached_marker() {
-        let raw = r#"{
-            "attach_id":"",
-            "worker":"worker-a",
-            "harness":"codex",
-            "harness_session_id":"session-a",
-            "detached":true
-        }"#;
-        let member: StoredMember = serde_json::from_str(raw).unwrap();
-        let encoded = serde_json::to_value(member).unwrap();
-        assert_eq!(
-            encoded.get("detached"),
-            Some(&serde_json::Value::Bool(true)),
-            "restore needs a positive persisted detached marker"
-        );
-    }
-
-    #[test]
-    fn default_test_store_never_targets_the_user_home() {
-        super::clear_test_path();
-        let path = squads_path();
-        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
-        assert!(
-            !path.starts_with(&home),
-            "an unscoped unit test must not persist mux squads under HOME: {}",
-            path.display()
-        );
-    }
-
-    #[test]
-    fn pane_id_reservation_survives_restart_and_advances_past_floor() {
-        let _s = Scratch::new("pane-counter");
-
-        assert_eq!(reserve_next_pane_id(1).unwrap(), 1);
-        assert_eq!(reserve_next_pane_id(1).unwrap(), 2);
-        assert_eq!(reserve_next_pane_id(9).unwrap(), 9);
-        assert_eq!(load().next_pane_id, 10);
-    }
-
-    #[test]
-    fn missing_file_is_a_fresh_store() {
-        let _s = Scratch::new("missing");
-        let loaded = load();
-        assert!(loaded.squads.is_empty());
-        assert!(loaded.notice.is_none(), "a missing file is silent");
-    }
-
-    #[test]
-    fn pre_xc4d4_store_loads_without_tab_specs_field() {
-        // AC9: a store written before x-c4d4 has no `tab_specs` key. It must load
-        // unquarantined (STORE_VERSION unchanged), defaulting tab_specs to empty.
-        let s = Scratch::new("no-tab-specs");
-        // Hand-write a v1 squad object WITHOUT the tab_specs key.
-        let raw = r#"{"version":1,"squads":[{"name":"w","origins":[],"members":[],"created_at":"2026-07-11T00:00:00Z"}]}"#;
-        std::fs::write(s.file(), raw).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1, "not quarantined");
-        assert!(
-            loaded.squads[0].tab_specs.is_empty(),
-            "tab_specs defaults to empty"
-        );
-        assert!(loaded.notice.is_none());
-    }
-
-    #[test]
-    fn set_tab_specs_persists_and_upsert_preserves_it() {
-        use crate::proto::{LayoutSpec, SlotBinding, TemplateName};
-        let _s = Scratch::new("tab-specs");
-        let spec = StoredTabSpec {
-            tab_name: "grid".into(),
-            spec: LayoutSpec {
-                template: TemplateName::MainLeft,
-                slots: vec![SlotBinding::Fno("S1".into()), SlotBinding::Shell],
-            },
-        };
-        upsert("w", "", &["/r".into()], &[m("c19cd2c3")]).unwrap();
-        set_tab_specs("w", std::slice::from_ref(&spec)).unwrap();
-        assert_eq!(load().squads[0].tab_specs, vec![spec.clone()]);
-        // A later membership upsert must NOT wipe the template specs (they are
-        // owned by set_tab_specs, and upsert rebuilds the struct fresh).
-        upsert("w", "", &["/r".into()], &[m("c19cd2c3"), m("deadbeef")]).unwrap();
-        let after = load();
-        assert_eq!(after.squads[0].members.len(), 2, "membership updated");
-        assert_eq!(
-            after.squads[0].tab_specs,
-            vec![spec],
-            "tab_specs preserved across upsert"
-        );
-    }
-
-    #[test]
-    fn tab_trees_persist_by_key_for_an_unnamed_squad_and_survive_upsert() {
-        // x-caef gate 2: topology keys by squad IDENTITY (name or key), so an
-        // unnamed squad - the operator's `commanders` case, a named tab in an
-        // unnamed squad - holds a layout. A membership upsert must not wipe it.
-        use crate::proto::{LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec};
-        use crate::tree::Axis;
-        let _s = Scratch::new("tab-trees");
-        let tree = StoredTabTree {
-            tab_name: Some("commanders".into()),
-            tree: LayoutTreeSpec::Split {
-                axis: Axis::Horizontal,
-                children: vec![
-                    LayoutTreeChild {
-                        weight: 0.407,
-                        tree: LayoutTreeSpec::Slot("aaaaaaaa".into()),
-                    },
-                    LayoutTreeChild {
-                        weight: 0.593,
-                        tree: LayoutTreeSpec::Split {
-                            axis: Axis::Vertical,
-                            children: vec![
-                                LayoutTreeChild {
-                                    weight: 0.5,
-                                    tree: LayoutTreeSpec::Slot("p1".into()),
-                                },
-                                LayoutTreeChild {
-                                    weight: 0.5,
-                                    tree: LayoutTreeSpec::Slot("p2".into()),
-                                },
-                            ],
-                        },
-                    },
-                ],
-            },
-            slots: vec![
-                LayoutSlot {
-                    name: "aaaaaaaa".into(),
-                    binding: LayoutBinding::Fno("aaaaaaaa".into()),
-                },
-                LayoutSlot {
-                    name: "p1".into(),
-                    binding: LayoutBinding::Shell,
-                },
-                LayoutSlot {
-                    name: "p2".into(),
-                    binding: LayoutBinding::Shell,
-                },
-            ],
-            focus: Some("p1".into()),
-        };
-        // An UNNAMED squad, keyed by its durable key with no name.
-        set_tab_trees(
-            "",
-            "k1",
-            &["/repo".into()],
-            std::slice::from_ref(&tree),
-            Some(0),
-        )
-        .unwrap();
-        let loaded = load();
-        assert_eq!(
-            loaded.squads.len(),
-            1,
-            "minimal row minted for the keyed lane"
-        );
-        assert_eq!(loaded.squads[0].tab_trees, vec![tree.clone()]);
-        assert_eq!(loaded.squads[0].active_tab, Some(0));
-        // A membership upsert (same identity) preserves the tree lane.
-        upsert("", "k1", &["/repo".into()], &[m("aaaaaaaa")]).unwrap();
-        let after = load();
-        assert_eq!(after.squads.len(), 1);
-        assert_eq!(
-            after.squads[0].tab_trees,
-            vec![tree.clone()],
-            "trees survive upsert"
-        );
-        assert_eq!(after.squads[0].members.len(), 1);
-        // An identity-less squad is skipped, exactly like upsert.
-        set_tab_trees("", "", &[], std::slice::from_ref(&tree), None).unwrap();
-        assert_eq!(load().squads.len(), 1, "no row minted without identity");
-    }
-
-    #[test]
-    fn pre_xcaef_store_loads_without_tab_trees_field() {
-        // Wire tolerance: a store written before x-caef has neither key. It
-        // must load unquarantined (STORE_VERSION unchanged), trees empty, and
-        // restore takes the legacy member/template lanes.
-        let s = Scratch::new("no-tab-trees");
-        let raw = r#"{"version":1,"squads":[{"name":"w","origins":[],"members":[],"created_at":"2026-08-11T00:00:00Z","tab_specs":[]}]}"#;
-        std::fs::write(s.file(), raw).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1, "not quarantined");
-        assert!(loaded.squads[0].tab_trees.is_empty());
-        assert_eq!(loaded.squads[0].active_tab, None);
-        assert!(loaded.notice.is_none());
-    }
-
-    #[test]
-    fn pre_xcaef_member_loads_without_cwd_field() {
-        // Wire tolerance for StoredMember.cwd, same rule as tab_trees above: a
-        // member row written before x-caef has no "cwd" key and must load
-        // unquarantined with cwd defaulting to None.
-        let s = Scratch::new("no-member-cwd");
-        let raw = r#"{"version":1,"squads":[{"name":"w","origins":[],"members":[{"attach_id":"c19cd2c3","tombstone":false}],"created_at":"2026-08-11T00:00:00Z","tab_specs":[]}]}"#;
-        std::fs::write(s.file(), raw).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1, "not quarantined");
-        assert_eq!(loaded.squads[0].members[0].cwd, None);
-    }
-
-    #[test]
-    fn upsert_then_load_roundtrips_and_preserves_created_at() {
-        let _s = Scratch::new("roundtrip");
-        upsert("harden", "", &["/repo".into()], &[m("c19cd2c3")]).unwrap();
-        let first = load();
-        assert_eq!(first.squads.len(), 1);
-        let created = first.squads[0].created_at.clone();
-        assert!(created.ends_with('Z') && created.len() == 20, "{created}");
-        // A second upsert (new members) keeps the original created_at.
-        upsert(
-            "harden",
-            "",
-            &["/repo".into()],
-            &[m("c19cd2c3"), m("deadbeef")],
-        )
-        .unwrap();
-        let second = load();
-        assert_eq!(second.squads.len(), 1, "upsert replaces, never dupes");
-        assert_eq!(second.squads[0].members.len(), 2);
-        assert_eq!(second.squads[0].created_at, created, "created_at preserved");
-    }
-
-    #[test]
-    fn valid_worker_name_gate() {
-        // x-5f7f: the worker field is a registry name that keys a resume, so
-        // the same argv-safety posture as valid_attach_id - a hostile value
-        // must never survive load. Registry names are slugs; anything else
-        // (separator, whitespace, metachar, overlong, non-ascii) is refused.
-        assert!(valid_worker_name("probe-x5f7f"));
-        assert!(valid_worker_name("t-xf730-sonnet"));
-        assert!(valid_worker_name("a.b_c"));
-        assert!(!valid_worker_name(""));
-        assert!(!valid_worker_name("a/b"), "path separator");
-        assert!(!valid_worker_name("a b"), "whitespace");
-        assert!(!valid_worker_name("a;rm"), "shell metacharacter");
-        assert!(!valid_worker_name("$(x)"), "command substitution");
-        assert!(!valid_worker_name(&"x".repeat(65)), "overlong");
-        assert!(!valid_worker_name("héllo"), "non-ascii");
-    }
-
-    #[test]
-    fn worker_member_roundtrips_without_a_jobid() {
-        // x-5f7f: a worker member carries a registry NAME and an EMPTY
-        // attach_id (a codex/agy pane has no claude jobId). It must round-trip
-        // through the store and survive the load gate, which previously
-        // dropped every member whose attach_id was not 8 hex digits - the
-        // measured reason a widened field alone would have shipped nothing.
-        let _s = Scratch::new("worker-roundtrip");
-        let worker = StoredMember {
-            attach_id: String::new(),
-            tombstone: false,
-            detached: false,
-            tab_name: Some("lane".into()),
-            cwd: Some("/repo/wt".into()),
-            worker: Some("probe-x5f7f".into()),
-            harness: None,
-            harness_session_id: None,
-        };
-        upsert("work", "", &["/repo".into()], &[worker, m("c19cd2c3")]).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1, "no quarantine");
-        assert!(loaded.notice.is_none(), "{:?}", loaded.notice);
-        let members = &loaded.squads[0].members;
-        assert_eq!(members.len(), 2, "worker member survives the load gate");
-        let w = members
-            .iter()
-            .find(|m| m.worker.is_some())
-            .expect("worker member present");
-        assert_eq!(w.worker.as_deref(), Some("probe-x5f7f"));
-        assert_eq!(w.attach_id, "", "no claude jobId on a worker member");
-        assert_eq!(w.tab_name.as_deref(), Some("lane"), "tab name round-trips");
-        assert_eq!(w.cwd.as_deref(), Some("/repo/wt"));
-    }
-
-    #[test]
-    fn worker_member_roundtrips_full_harness_session_id() {
-        let raw = r#"{
-            "name":"targets",
-            "members":[{
-                "attach_id":"",
-                "worker":"t-x8a01-restore",
-                "harness":"codex",
-                "harness_session_id":"01a03a85-1111-7222-8333-444455556666"
-            }]
-        }"#;
-        let squad: StoredSquad = serde_json::from_str(raw).expect("stored squad");
-        let encoded = serde_json::to_value(&squad).expect("serialize stored squad");
-        assert_eq!(
-            encoded["members"][0]["harness_session_id"], "01a03a85-1111-7222-8333-444455556666",
-            "the full resume key must survive a squads.json read/write"
-        );
-        assert_eq!(encoded["members"][0]["harness"], "codex");
-    }
-
-    #[test]
-    fn hostile_worker_name_is_dropped_at_load() {
-        // The load gate's argv-safety half: a worker name carrying a path
-        // separator or a metacharacter never reaches a resume, exactly like a
-        // malformed attach_id never reaches `claude attach`.
-        let _s = Scratch::new("worker-hostile");
-        let hostile = StoredMember {
-            attach_id: String::new(),
-            tombstone: false,
-            detached: false,
-            tab_name: None,
-            cwd: None,
-            worker: Some("a;rm -rf".into()),
-            harness: None,
-            harness_session_id: None,
-        };
-        upsert("work", "", &["/repo".into()], &[hostile, m("c19cd2c3")]).unwrap();
-        let loaded = load();
-        assert_eq!(
-            loaded.squads[0].members.len(),
-            1,
-            "hostile worker member dropped at load"
-        );
-        assert_eq!(
-            loaded.squads[0].members[0].attach_id, "c19cd2c3",
-            "the healthy member is untouched"
-        );
-        assert!(loaded.notice.is_some(), "the drop is named, never silent");
-    }
-
-    #[test]
-    fn four_squad_store_on_disk_loads_whole() {
-        // x-5f7f: the exact store shape measured on the operator's disk -
-        // four squads, three holding ZERO members (the empty-squads defect:
-        // worker panes never entered the membership funnel) and one holding
-        // six claude attach members. The widened member must not quarantine or
-        // notice on any of them; the fourth squad exercises a named row.
-        let s = Scratch::new("four-squads");
-        let members = [
-            "119e3c52", "cbd219bd", "f5996a81", "3d9938aa", "a1b2c3d4", "e5f60718",
-        ]
-        .iter()
-        .map(|id| {
-            serde_json::json!({
-                "attach_id": id,
-                "tombstone": false,
-                "tab_name": null,
-                "cwd": "/wt/a"
-            })
-        })
-        .collect::<Vec<_>>();
-        let raw = serde_json::json!({
-            "version": 1,
-            "squads": [
-                {"name": "", "key": "1111111111111111", "origins": ["/repo"],
-                 "members": members, "created_at": "2026-08-21T00:00:00Z"},
-                {"name": "", "key": "2222222222222222", "origins": ["/gone"],
-                 "members": [], "created_at": "2026-08-21T00:00:00Z"},
-                {"name": "", "key": "3333333333333333", "origins": ["/gone2"],
-                 "members": [], "created_at": "2026-08-21T00:00:00Z"},
-                {"name": "x-f3d0", "key": "", "origins": ["/repo"],
-                 "members": [], "created_at": "2026-08-21T00:00:00Z"}
-            ]
-        });
-        std::fs::write(s.file(), serde_json::to_string(&raw).unwrap()).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 4, "all four load");
-        assert!(loaded.notice.is_none(), "{:?}", loaded.notice);
-        assert_eq!(
-            loaded.squads[0].members.len(),
-            6,
-            "the six claude members survive"
-        );
-        assert!(loaded.squads.iter().any(|sq| sq.name == "x-f3d0"));
-    }
-
-    #[test]
-    fn tab_name_roundtrips_and_absent_field_loads_none() {
-        // x-0f9d US4: a member's tab_name persists and reloads; a pre-x-0f9d
-        // store written without the field is wire-tolerant (loads as None ->
-        // the tab restores unnamed), so STORE_VERSION stays 1.
-        let s = Scratch::new("tabname");
-        let mut named = m("c19cd2c3");
-        named.tab_name = Some("reviews".into());
-        upsert("work", "", &["/repo".into()], &[named]).unwrap();
-        let loaded = load();
-        assert_eq!(
-            loaded.squads[0].members[0].tab_name.as_deref(),
-            Some("reviews"),
-            "chosen tab name round-trips"
-        );
-
-        // A hand-written v1 store with no tab_name field must not quarantine.
-        std::fs::write(
-            s.file(),
-            r#"{"version":1,"squads":[{"name":"legacy","origins":[],"members":[{"attach_id":"deadbeef","tombstone":false}],"created_at":""}]}"#,
-        )
-        .unwrap();
-        let loaded = load();
-        assert!(loaded.notice.is_none(), "absent field is not corruption");
-        assert_eq!(
-            loaded.squads[0].members[0].tab_name, None,
-            "absent tab_name -> None"
-        );
-    }
-
-    #[test]
-    fn corrupt_file_is_quarantined_and_read_empty() {
-        // AC1-ERR: invalid JSON is renamed aside, not fatal.
-        let s = Scratch::new("corrupt");
-        std::fs::write(s.file(), "{not valid json").unwrap();
-        let loaded = load();
-        assert!(loaded.squads.is_empty());
-        assert!(loaded.notice.as_deref().unwrap().contains("quarantined"));
-        assert!(!s.file().exists(), "the corrupt file was moved aside");
-        let asides: Vec<_> = std::fs::read_dir(&s.0)
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("squads.json.corrupt-")
-            })
-            .collect();
-        assert_eq!(asides.len(), 1, "exactly one quarantine file");
-    }
-
-    #[test]
-    fn a_quarantine_that_did_not_happen_is_never_claimed() {
-        // The fallback shape from head-review round nine: bytes whose source
-        // file is gone. The rename fails, so the notice must say so instead
-        // of claiming a quarantine that repeats falsely on every load.
-        let loaded = loaded_from_raw(
-            std::path::Path::new("/nonexistent-squads-source"),
-            "{not valid json".into(),
-        );
-        let notice = loaded.notice.expect("corrupt content must notice");
-        assert!(!notice.contains("quarantined corrupt"), "{notice}");
-        assert!(notice.contains("could not be quarantined"), "{notice}");
-    }
-
-    #[test]
-    fn the_seed_degrades_legacy_corruption_and_refuses_primary_corruption() {
-        // parse_seed mirrors load(): legacy-sourced corruption starts fresh
-        // (load() quarantines-and-empties the same bytes), while corruption
-        // at the primary path refuses the write rather than clobbering.
-        let corrupt = "{not valid json".to_string();
-        assert!(parse_seed(Some(corrupt.clone()), true)
-            .unwrap()
-            .squads
-            .is_empty());
-        assert!(parse_seed(Some(corrupt), false).is_err());
-        assert!(parse_seed(None, false).unwrap().squads.is_empty());
-        assert!(parse_seed(Some("  ".into()), true)
-            .unwrap()
-            .squads
-            .is_empty());
-        // An unknown version takes the same arms: refuse at the primary (the
-        // read path quarantines it), degrade from the legacy fallback. The
-        // rewrite at STORE_VERSION must never downgrade a future store.
-        let future = r#"{"version":99,"squads":[]}"#.to_string();
-        assert!(parse_seed(Some(future.clone()), false).is_err());
-        assert!(parse_seed(Some(future), true).unwrap().squads.is_empty());
-    }
-
-    #[test]
-    fn unknown_version_is_quarantined() {
-        // Discretion 5: a version this build does not understand takes the
-        // quarantine path, never a best-effort parse.
-        let s = Scratch::new("version");
-        std::fs::write(s.file(), r#"{"version":999,"squads":[]}"#).unwrap();
-        let loaded = load();
-        assert!(loaded.squads.is_empty());
-        assert!(loaded.notice.as_deref().unwrap().contains("quarantined"));
-    }
-
-    #[test]
-    fn hostile_attach_ids_are_dropped_at_load() {
-        // AC2-ERR: a member whose attach_id is not 8-hex never survives load,
-        // so restore can never spawn it.
-        let s = Scratch::new("hostile");
-        let file = StoreFile {
-            version: STORE_VERSION,
-            squads: vec![StoredSquad {
-                name: "w".into(),
-                key: String::new(),
-                origins: vec![],
-                members: vec![
-                    m("c19cd2c3"),  // good
-                    m("; rm -rf"),  // shell metachar
-                    m("deadbeef9"), // 9 chars
-                    m("GHIJKLmn"),  // non-hex
-                ],
-                created_at: "2026-07-11T00:00:00Z".into(),
-                tab_specs: vec![],
-                tab_trees: Vec::new(),
-                active_tab: None,
-            }],
-            ..StoreFile::default()
-        };
-        std::fs::write(s.file(), serde_json::to_string(&file).unwrap()).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads[0].members, vec![m("c19cd2c3")]);
-        assert!(loaded.notice.as_deref().unwrap().contains("dropped 3"));
-    }
-
-    #[test]
-    fn remove_and_rename_mutate_by_name() {
-        let _s = Scratch::new("remove-rename");
-        upsert("a", "", &[], &[m("11111111")]).unwrap();
-        upsert("b", "", &[], &[m("22222222")]).unwrap();
-        rename("a", "aa", &["/x".into()], &[m("11111111")]).unwrap();
-        remove("b", "").unwrap();
-        let loaded = load();
-        let names: Vec<_> = loaded.squads.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["aa"], "a renamed, b removed");
-        assert_eq!(loaded.squads[0].origins, vec!["/x".to_string()]);
-    }
-
-    #[test]
-    fn unnamed_squad_persists_keyed_by_durable_key() {
-        // Operator decision: every squad remains across restart, not only named
-        // workspaces. An unnamed squad (empty name - the home squad, a lane) is
-        // keyed by its durable KEY, not its origins - so two same-origin unnamed
-        // squads stay distinct (the codex P1: two cleared names, or two sessions'
-        // home for one repo). Same key -> replace in place; distinct keys with the
-        // SAME origins -> two entries; a keyless unnamed squad is not persisted.
-        let _s = Scratch::new("unnamed-key");
-        upsert("", "k1", &["/repo".into()], &[m("aaaaaaaa")]).unwrap();
-        upsert("", "k2", &["/repo".into()], &[m("bbbbbbbb")]).unwrap();
-        // Same key -> replace, not duplicate.
-        upsert("", "k1", &["/repo".into()], &[m("aaaaaaaa"), m("cccccccc")]).unwrap();
-        // No name and no key -> no identity -> skipped silently.
-        upsert("", "", &["/repo".into()], &[m("dddddddd")]).unwrap();
-        let loaded = load();
-        assert_eq!(
-            loaded.squads.len(),
-            2,
-            "two same-origin unnamed squads stay distinct by key; the keyless one is skipped"
-        );
-        let k1 = loaded
-            .squads
-            .iter()
-            .find(|s| s.key == "k1")
-            .expect("lane k1 persisted by key");
-        assert!(k1.name.is_empty(), "restored unnamed");
-        assert_eq!(k1.members.len(), 2, "same-key upsert replaced in place");
-        // Remove by key drops exactly that lane, leaving its same-origin sibling.
-        remove("", "k1").unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1);
-        assert_eq!(loaded.squads[0].key, "k2");
-        assert_eq!(loaded.squads[0].origins, vec!["/repo".to_string()]);
-    }
-
-    #[test]
-    fn origin_key_is_stable_order_independent_and_distinct_per_set() {
-        // x-e447: an unnamed squad's durable key is a pure function of its origin
-        // SET, so one repo's home squad derives one key across restarts. Order-
-        // independent and duplicate-insensitive (sorted + deduped), distinct per
-        // distinct set, and the separator keeps adjacent-path sets apart.
-        assert_eq!(
-            origin_key(&["/a".into(), "/b".into()]),
-            origin_key(&["/b".into(), "/a".into()]),
-            "order does not matter"
-        );
-        assert_eq!(
-            origin_key(&["/a".into(), "/a".into()]),
-            origin_key(&["/a".into()]),
-            "duplicate origins collapse"
-        );
-        assert_eq!(
-            origin_key(&["/a".into()]).len(),
-            16,
-            "16 hex chars, mint_key shape"
-        );
-        assert_ne!(
-            origin_key(&["/ab".into()]),
-            origin_key(&["/a".into(), "b".into()]),
-            "separator keeps adjacent sets distinct"
-        );
-        assert_ne!(
-            origin_key(&["/repo".into()]),
-            origin_key(&["/other".into()]),
-            "distinct origins derive distinct keys"
-        );
-    }
-
-    #[test]
-    fn collapse_duplicate_squads_merges_same_origin_into_one() {
-        // x-e447 AC-HP2: the backlog rows carry distinct random keys (the old
-        // mint), so a key-based upsert cannot heal them. collapse groups by
-        // origin, rekeys onto origin_key, keeps the membered row, merges every
-        // dropped row's members, and leaves exactly one row per origin. A named
-        // squad sharing the origin is NOT absorbed (it keys by name).
-        let _s = Scratch::new("collapse-same-origin");
-        let repo = "/repo/backlog";
-        let one = origin_key(&[repo.into()]);
-        upsert("", "dead0001", &[repo.into()], &[]).unwrap();
-        upsert("", "dead0002", &[repo.into()], &[m("aaaaaaaa")]).unwrap();
-        upsert("", "dead0003", &[repo.into()], &[m("bbbbbbbb")]).unwrap();
-        // A different origin and a named squad stay separate.
-        upsert("", "other1", &["/other".into()], &[]).unwrap();
-        upsert("named", "", &[repo.into()], &[m("cccccccc")]).unwrap();
-
-        let dropped = collapse_duplicate_squads().unwrap();
-        assert_eq!(dropped, 2, "collapsed the two extra same-origin rows");
-
-        let loaded = load();
-        let same_origin: Vec<_> = loaded
-            .squads
-            .iter()
-            .filter(|s| s.name.is_empty() && s.origins == vec![repo.to_string()])
-            .collect();
-        assert_eq!(same_origin.len(), 1, "one row for the origin");
-        assert_eq!(
-            same_origin[0].key, one,
-            "migrated onto the derived origin key"
-        );
-        assert_eq!(
-            same_origin[0].members.len(),
-            2,
-            "members merged into the survivor"
-        );
-        assert_eq!(
-            loaded.squads.len(),
-            3,
-            "named + other-origin + the one collapsed row"
-        );
-        assert!(
-            loaded.squads.iter().any(|s| s.name == "named"),
-            "named squad untouched"
-        );
-    }
-
-    #[test]
-    fn collapse_duplicate_squads_is_idempotent() {
-        // x-e447: collapse runs every restore; a second pass must be a no-op
-        // (drops nothing) once the store has converged.
-        let _s = Scratch::new("collapse-idempotent");
-        upsert("", "k1", &["/r".into()], &[m("aaaaaaaa")]).unwrap();
-        upsert("", "k2", &["/r".into()], &[]).unwrap();
-        assert_eq!(collapse_duplicate_squads().unwrap(), 1);
-        assert_eq!(collapse_duplicate_squads().unwrap(), 0, "second pass no-op");
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 1);
-        assert_eq!(loaded.squads[0].key, origin_key(&["/r".into()]));
-    }
-
-    #[test]
-    fn collapse_duplicate_squads_surfaces_a_write_error() {
-        // x-e447 AC-ERR1: a collapse write error is not swallowed. A corrupt
-        // store makes the locked read fail loud, and collapse returns Err so the
-        // caller degrades restore instead of healing silently on one machine.
-        let s = Scratch::new("collapse-err");
-        std::fs::write(s.file(), "{garbage not json").unwrap();
-        assert!(collapse_duplicate_squads().is_err());
-    }
-
-    #[test]
-    fn collapse_duplicate_named_merges_a_legacy_shared_key_newest_name_wins() {
-        // AC5-HP: two named rows sharing one legacy random mint key are one
-        // workspace wearing two names (a mint is unique per squad). They
-        // collapse to the NEWEST created_at row's name with the union of both
-        // member lists. `prune --include-named` cannot reach this pair (the
-        // origin still exists), so this collapse is the only heal.
-        let s = Scratch::new("collapse-named-legacy");
-        let legacy = "25a5abd2af1696a0";
-        let origins = vec!["/repo".into()];
-        assert_ne!(
-            legacy,
-            origin_key(&origins),
-            "precondition: a legacy mint, not a derived origin key"
-        );
-        let file = StoreFile {
-            version: STORE_VERSION,
-            next_pane_id: 0,
-            squads: vec![
-                StoredSquad {
-                    name: "f[no]".into(),
-                    key: legacy.into(),
-                    origins: origins.clone(),
-                    members: vec![m("aaaaaaaa"), m("bbbbbbbb")],
-                    created_at: "2026-07-23T00:00:00Z".into(),
-                    tab_specs: vec![],
-                    tab_trees: Vec::new(),
-                    active_tab: None,
-                },
-                StoredSquad {
-                    name: "fno".into(),
-                    key: legacy.into(),
-                    origins,
-                    members: vec![m("cccccccc")],
-                    created_at: "2026-07-26T00:00:00Z".into(),
-                    tab_specs: vec![],
-                    tab_trees: Vec::new(),
-                    active_tab: None,
-                },
-            ],
-            external_lifecycle: vec![],
-        };
-        std::fs::write(s.file(), serde_json::to_string(&file).unwrap()).unwrap();
-
-        let dropped = collapse_duplicate_squads().unwrap();
-        assert_eq!(dropped, 1, "the older duplicate row is gone");
-
-        let loaded = load();
-        let rows: Vec<_> = loaded
-            .squads
-            .iter()
-            .filter(|r| r.name == "fno" || r.name == "f[no]")
-            .collect();
-        assert_eq!(rows.len(), 1, "one row survives");
-        assert_eq!(rows[0].name, "fno", "the newest created_at row's name wins");
-        for id in ["aaaaaaaa", "bbbbbbbb", "cccccccc"] {
-            assert!(
-                rows[0].members.iter().any(|x| x.attach_id == id),
-                "member {id} merged into the survivor"
-            );
-        }
-    }
-
-    #[test]
-    fn collapse_duplicate_named_spares_same_origin_derived_keys() {
-        // AC6-EDGE: two named rows sharing a key that EQUALS origin_key of
-        // their own origins are two same-origin squads that each derived it -
-        // common key proves nothing, and both rows must survive the heal.
-        let s = Scratch::new("collapse-named-derived");
-        let key = origin_key(&["/repo".into()]);
-        let file = StoreFile {
-            version: STORE_VERSION,
-            next_pane_id: 0,
-            squads: vec![
-                StoredSquad {
-                    name: "one".into(),
-                    key: key.clone(),
-                    origins: vec!["/repo".into()],
-                    members: vec![m("aaaaaaaa")],
-                    created_at: "2026-07-23T00:00:00Z".into(),
-                    tab_specs: vec![],
-                    tab_trees: Vec::new(),
-                    active_tab: None,
-                },
-                StoredSquad {
-                    name: "two".into(),
-                    key,
-                    origins: vec!["/repo".into()],
-                    members: vec![m("bbbbbbbb")],
-                    created_at: "2026-07-26T00:00:00Z".into(),
-                    tab_specs: vec![],
-                    tab_trees: Vec::new(),
-                    active_tab: None,
-                },
-            ],
-            external_lifecycle: vec![],
-        };
-        std::fs::write(s.file(), serde_json::to_string(&file).unwrap()).unwrap();
-
-        let dropped = collapse_duplicate_squads().unwrap();
-        assert_eq!(dropped, 0, "derived shared keys are not duplicates");
-        let loaded = load();
-        assert!(loaded.squads.iter().any(|r| r.name == "one"));
-        assert!(loaded.squads.iter().any(|r| r.name == "two"));
-    }
-
-    #[test]
-    fn write_onto_a_corrupt_file_fails_loud_and_never_clobbers() {
-        // gemini review: the write path must NOT clobber unreadable content. A
-        // corrupt existing file makes upsert fail (Err) rather than overwrite it
-        // with just this delta - the load path owns quarantine, not the writer.
-        let s = Scratch::new("write-corrupt");
-        std::fs::write(s.file(), "{garbage not json").unwrap();
-        let before = std::fs::read_to_string(s.file()).unwrap();
-        let res = upsert("w", "", &[], &[m("c19cd2c3")]);
-        assert!(res.is_err(), "a write onto corrupt content fails loud");
-        assert_eq!(
-            std::fs::read_to_string(s.file()).unwrap(),
-            before,
-            "the corrupt file is left intact, not clobbered"
-        );
-    }
-
-    #[test]
-    fn epoch_to_iso_matches_known_stamps() {
-        assert_eq!(epoch_to_iso(0), "1970-01-01T00:00:00Z");
-        // 2026-07-11T13:00:00Z -> verified against `date -u -j`.
-        assert_eq!(epoch_to_iso(1_783_774_800), "2026-07-11T13:00:00Z");
-    }
-
-    #[test]
-    fn valid_attach_id_gate() {
-        assert!(valid_attach_id("c19cd2c3"));
-        assert!(!valid_attach_id("c19cd2c")); // 7
-        assert!(!valid_attach_id("c19cd2c33")); // 9
-        assert!(!valid_attach_id("c19cd2cg")); // non-hex
-        assert!(!valid_attach_id(""));
-    }
-
-    #[test]
-    fn build_tree_marker_detection_is_pure_over_path() {
-        // The guard's detector: an ancestor `target` with a cargo marker is a
-        // build tree; a coincidental `target` dir without one is not, and a
-        // binary with no `target` ancestor (an install) never is. Pure over the
-        // path so it needs no env and no real build tree.
-        let tmp = std::env::temp_dir().join(format!("fno-guard-unit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        let target = tmp.join("target");
-        std::fs::create_dir_all(target.join("debug")).unwrap();
-        let exe = target.join("debug").join("fno");
-
-        // No marker -> a bare `target` dir is NOT a build tree.
-        assert_eq!(build_tree_target_dir(&exe), None);
-
-        // `.rustc_info.json` is the cargo marker written into target/.
-        std::fs::write(target.join(".rustc_info.json"), "{}").unwrap();
-        assert_eq!(build_tree_target_dir(&exe), Some(target.clone()));
-
-        // `CACHEDIR.TAG` alone also qualifies (llvm-cov / build tooling).
-        std::fs::remove_file(target.join(".rustc_info.json")).unwrap();
-        std::fs::write(target.join("CACHEDIR.TAG"), "x").unwrap();
-        assert_eq!(build_tree_target_dir(&exe), Some(target));
-
-        // An installed binary (no `target` ancestor) is never a build tree.
-        std::fs::create_dir_all(tmp.join("bin")).unwrap();
-        assert_eq!(build_tree_target_dir(&tmp.join("bin").join("fno")), None);
-
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    fn lc(id: &str) -> Option<ExternalLifecycle> {
-        load()
-            .external_lifecycle
-            .into_iter()
-            .find(|r| r.attach_id == id)
-    }
-
-    #[test]
-    fn squad_and_lifecycle_collections_never_drop_each_other() {
-        // The version-1 object carries both collections; a squad write must
-        // preserve lifecycle records and a lifecycle CAS must preserve squads.
-        let _s = Scratch::new("both-collections");
-        upsert("w", "", &["/repo".into()], &[m("c19cd2c3")]).unwrap();
-        assert!(matches!(
-            begin_external_stop("deadbeef", "ext", "/tmp").unwrap(),
-            LifecycleCas::Committed { generation: 1 }
-        ));
-        // A SECOND squad write must not clobber the lifecycle record.
-        upsert("w2", "", &[], &[m("11111111")]).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 2, "both squads survive");
-        assert_eq!(
-            loaded.external_lifecycle.len(),
-            1,
-            "lifecycle survives a squad write"
-        );
-        // And a lifecycle CAS must not clobber the squads.
-        complete_external("deadbeef", 1, ExternalState::Stopping, true, None).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.squads.len(), 2, "squads survive a lifecycle write");
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Stopped);
-    }
-
-    #[test]
-    fn begin_stop_inserts_then_bumps_generation_on_retry() {
-        // A LIVE row has no record -> insert at generation 1 (stopping). A retry
-        // from a rest state bumps the generation, so a stale completion cannot
-        // clobber the newer action.
-        let _s = Scratch::new("begin-stop-gen");
-        assert!(matches!(
-            begin_external_stop("deadbeef", "ext", "/tmp").unwrap(),
-            LifecycleCas::Committed { generation: 1 }
-        ));
-        // Land it in `failed`, then retry the stop: generation must advance.
-        complete_external(
-            "deadbeef",
-            1,
-            ExternalState::Stopping,
-            false,
-            Some("boom".into()),
-        )
-        .unwrap();
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Failed);
-        assert!(matches!(
-            begin_external_stop("deadbeef", "ext", "/tmp").unwrap(),
-            LifecycleCas::Committed { generation: 2 }
-        ));
-    }
-
-    #[test]
-    fn begin_stop_refused_from_stopped_and_removing() {
-        // stop-then-rm: a stopped tombstone is removed, not re-stopped; a row
-        // already being removed refuses a concurrent stop.
-        let _s = Scratch::new("begin-stop-refused");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap();
-        complete_external("deadbeef", 1, ExternalState::Stopping, true, None).unwrap(); // -> stopped
-        assert!(matches!(
-            begin_external_stop("deadbeef", "ext", "/tmp").unwrap(),
-            LifecycleCas::Refused(_)
-        ));
-        begin_external_rm("deadbeef").unwrap(); // -> removing (gen 2)
-        assert!(matches!(
-            begin_external_stop("deadbeef", "ext", "/tmp").unwrap(),
-            LifecycleCas::Refused(_)
-        ));
-    }
-
-    #[test]
-    fn begin_stop_refused_while_already_stopping() {
-        // codex P1: a stop in flight must NOT launch a second `claude stop`. A
-        // `stopping` record refuses "already stopping" (only failed/unknown rest
-        // states retry) - the generation never advances, so the first
-        // completion is never orphaned by a duplicate spawn.
-        let _s = Scratch::new("begin-stop-inflight");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen1 Stopping
-        match begin_external_stop("deadbeef", "ext", "/tmp").unwrap() {
-            LifecycleCas::Refused(r) => assert!(r.contains("already stopping")),
-            _ => panic!("a second stop while stopping must refuse"),
-        }
-        assert_eq!(
-            lc("deadbeef").unwrap().generation,
-            1,
-            "generation must not advance"
-        );
-    }
-
-    #[test]
-    fn begin_rm_requires_a_stopped_record() {
-        // rm is reachable ONLY from `stopped` (stop-before-rm). A live/stopping
-        // row refuses "stop it first"; an unknown row refuses "retry stop"; an
-        // absent id refuses.
-        let _s = Scratch::new("begin-rm");
-        assert!(matches!(
-            begin_external_rm("deadbeef").unwrap(),
-            LifecycleCas::Refused(_) // absent
-        ));
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // -> stopping
-        match begin_external_rm("deadbeef").unwrap() {
-            LifecycleCas::Refused(r) => assert!(r.contains("stop it first")),
-            _ => panic!("rm on a stopping row must refuse"),
-        }
-        complete_external("deadbeef", 1, ExternalState::Stopping, true, None).unwrap(); // -> stopped
-        assert!(matches!(
-            begin_external_rm("deadbeef").unwrap(),
-            LifecycleCas::Committed { generation: 2 }
-        ));
-    }
-
-    #[test]
-    fn complete_external_ignores_a_stale_generation() {
-        // A stale retry's late completion (older generation) must never overwrite
-        // the newer action - the core anti-clobber invariant.
-        let _s = Scratch::new("stale-gen");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen 1, stopping
-        complete_external("deadbeef", 1, ExternalState::Stopping, false, None).unwrap(); // -> failed
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen 2, stopping
-                                                                 // A gen-1 completion arriving late is ignored; the gen-2 stopping stands.
-        complete_external("deadbeef", 1, ExternalState::Stopping, true, None).unwrap();
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Stopping);
-        assert_eq!(lc("deadbeef").unwrap().generation, 2);
-    }
-
-    #[test]
-    fn complete_rm_deletes_on_ok_and_retains_on_err() {
-        let _s = Scratch::new("complete-rm");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap();
-        complete_external("deadbeef", 1, ExternalState::Stopping, true, None).unwrap(); // stopped
-        begin_external_rm("deadbeef").unwrap(); // gen 2 removing
-                                                // Failure keeps the tombstone stopped (rm stays retryable).
-        complete_external(
-            "deadbeef",
-            2,
-            ExternalState::Removing,
-            false,
-            Some("nope".into()),
-        )
-        .unwrap();
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Stopped);
-        begin_external_rm("deadbeef").unwrap(); // gen 3 removing
-        complete_external("deadbeef", 3, ExternalState::Removing, true, None).unwrap();
-        assert!(
-            lc("deadbeef").is_none(),
-            "a successful rm deletes the tombstone"
-        );
-    }
-
-    #[test]
-    fn reconcile_lifecycle_leaves_a_generation_advanced_record_untouched() {
-        // Lost-update guard (code review): a record a concurrent operator action
-        // advanced PAST the reconcile's baseline generation is excluded from the
-        // reconcile and left untouched - reconciling it against a pre-action
-        // liveness snapshot would drop the action's completion.
-        let _s = Scratch::new("reconcile-gen-guard");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen1 Stopping
-        complete_external("deadbeef", 1, ExternalState::Stopping, false, None).unwrap(); // gen1 Failed
-        let baseline: std::collections::HashMap<String, u64> =
-            [("deadbeef".to_string(), 1u64)].into_iter().collect();
-        // A concurrent retry advances the record to gen2 BEFORE reconcile applies.
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen2 Stopping
-        let notices = reconcile_lifecycle(&baseline, |recs| {
-            let n = recs.len();
-            let mapped = recs
-                .into_iter()
-                .map(|mut r| {
-                    r.state = ExternalState::Stopped;
-                    r
-                })
-                .collect();
-            (mapped, (0..n).map(|_| "reconciled".to_string()).collect())
-        })
-        .unwrap();
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Stopping);
-        assert_eq!(lc("deadbeef").unwrap().generation, 2);
-        assert!(
-            notices.is_empty(),
-            "the advanced record was excluded from reconcile"
-        );
-    }
-
-    #[test]
-    fn reconcile_lifecycle_applies_to_a_baseline_matching_record() {
-        // The other half: with no concurrent action, a baseline-matching record
-        // IS reconciled and its notices flow out.
-        let _s = Scratch::new("reconcile-applies");
-        begin_external_stop("deadbeef", "ext", "/tmp").unwrap(); // gen1 Stopping
-        complete_external("deadbeef", 1, ExternalState::Stopping, false, None).unwrap(); // gen1 Failed
-        let baseline: std::collections::HashMap<String, u64> =
-            [("deadbeef".to_string(), 1u64)].into_iter().collect();
-        let notices = reconcile_lifecycle(&baseline, |recs| {
-            let mapped = recs
-                .into_iter()
-                .map(|mut r| {
-                    r.state = ExternalState::Stopped;
-                    r
-                })
-                .collect();
-            (mapped, vec!["done".to_string()])
-        })
-        .unwrap();
-        assert_eq!(lc("deadbeef").unwrap().state, ExternalState::Stopped);
-        assert_eq!(notices, vec!["done".to_string()]);
-    }
-
-    #[test]
-    fn load_drops_a_malformed_lifecycle_attach_id() {
-        // Boundaries: a malformed attach_id never survives load, so a reconcile
-        // or rm can never shell it.
-        let s = Scratch::new("bad-lifecycle-id");
-        let file = StoreFile {
-            version: STORE_VERSION,
-            external_lifecycle: vec![
-                ExternalLifecycle {
-                    attach_id: "deadbeef".into(),
-                    name: "good".into(),
-                    cwd: "/tmp".into(),
-                    state: ExternalState::Stopped,
-                    generation: 1,
-                    updated_at: String::new(),
-                    reason: None,
-                },
-                ExternalLifecycle {
-                    attach_id: "; rm -rf".into(), // shell metachar
-                    name: "evil".into(),
-                    cwd: "/tmp".into(),
-                    state: ExternalState::Stopped,
-                    generation: 1,
-                    updated_at: String::new(),
-                    reason: None,
-                },
-            ],
-            ..StoreFile::default()
-        };
-        std::fs::write(s.file(), serde_json::to_string(&file).unwrap()).unwrap();
-        let loaded = load();
-        assert_eq!(loaded.external_lifecycle.len(), 1);
-        assert_eq!(loaded.external_lifecycle[0].attach_id, "deadbeef");
-        assert!(loaded
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("lifecycle record"));
-    }
-
-    #[test]
-    fn prune_predicate_matrix() {
-        use std::collections::HashSet;
-        let live: HashSet<String> = ["live0001".into()].into_iter().collect();
-        let live_some = Some(&live);
-        let no_cwds: Vec<String> = Vec::new();
-        let gone = |_: &str| false; // no origin dir exists
-        let exists = |p: &str| p == "/alive";
-
-        let squad = |name: &str, key: &str, origins: &[&str], members: &[&str]| StoredSquad {
-            name: name.into(),
-            key: key.into(),
-            origins: origins.iter().map(|s| (*s).to_string()).collect(),
-            members: members.iter().copied().map(m).collect(),
-            created_at: String::new(),
-            tab_specs: Vec::new(),
-            tab_trees: Vec::new(),
-            active_tab: None,
-        };
-
-        // Named without --include-named -> SkipNamed (AC1-EDGE).
-        assert_eq!(
-            prune_decision(
-                &squad("work", "", &["/g"], &["deadbeef"]),
-                false,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::SkipNamed
-        );
-        // Named WITH --include-named, gone origin, dead member -> Prune.
-        assert_eq!(
-            prune_decision(
-                &squad("work", "", &["/g"], &["deadbeef"]),
-                true,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::Prune
-        );
-        // Unnamed, gone, dead -> Prune.
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &["/g"], &["deadbeef"]),
-                false,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::Prune
-        );
-        // A surviving origin no longer outranks member deadness. This assertion
-        // used to expect Keep, and that expectation WAS the defect: every squad
-        // origin measured on this machine is a repo root, a directory that never
-        // disappears, so the old arm kept 12 of 15 finished squads immortal. A
-        // directory existing says nothing about whether anything runs in it.
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &["/alive", "/g"], &["deadbeef"]),
-                false,
-                live_some,
-                &no_cwds,
-                &exists
-            ),
-            PruneDecision::Prune
-        );
-        // A live member -> Keep.
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &["/g"], &["live0001"]),
-                false,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::Keep
-        );
-        // Liveness query failed (None) with a non-tombstone member -> KeepUnknown (AC3-FR).
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &["/g"], &["deadbeef"]),
-                false,
-                None,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::KeepUnknown
-        );
-        // Empty members, gone -> Prune (a side-effect squad with nothing live).
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &["/g"], &[]),
-                false,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::Prune
-        );
-        // Empty origins (no surviving origin), dead -> Prune.
-        assert_eq!(
-            prune_decision(
-                &squad("", "k1", &[], &["deadbeef"]),
-                false,
-                live_some,
-                &no_cwds,
-                &gone
-            ),
-            PruneDecision::Prune
-        );
-        // All-tombstone members, gone -> Prune (tombstones are not live).
-        {
-            let mut s = squad("", "k1", &["/g"], &[]);
-            s.members = vec![StoredMember {
-                attach_id: "deadbeef".into(),
-                tombstone: true,
-                detached: false,
-                tab_name: None,
-                cwd: None,
-                worker: None,
-                harness: None,
-                harness_session_id: None,
-            }];
-            assert_eq!(
-                prune_decision(&s, false, live_some, &no_cwds, &gone),
-                PruneDecision::Prune
-            );
-        }
-        // A live pane no longer overrides a squad's OWN dead members. The pane
-        // is matched by "cwd sits under an origin", and with repo-root origins
-        // that is nearly every pane on the machine: one live session kept 9 of
-        // the 12 finished squads measured here, two of them with nine dead
-        // members each. A member-less squad still gets this protection, since
-        // there the pane may BE its unrecorded worker (asserted just below).
-        {
-            let cwds = vec!["/gone/child".to_string()];
-            assert_eq!(
-                prune_decision(
-                    &squad("", "k1", &["/gone"], &["deadbeef"]),
-                    false,
-                    live_some,
-                    &cwds,
-                    &gone
-                ),
-                PruneDecision::Prune
-            );
-        }
-        // ...but a MEMBER-LESS squad with a live pane under its origin is kept.
-        {
-            let cwds = vec!["/gone/child".to_string()];
-            assert_eq!(
-                prune_decision(
-                    &squad("", "k1", &["/gone"], &[]),
-                    false,
-                    live_some,
-                    &cwds,
-                    &gone
-                ),
-                PruneDecision::Keep
-            );
-        }
-    }
-
-    // -- The empty-member grace window --------------------------------------
-    //
-    // Nine of the fifteen squads measured on this machine have ZERO members. A
-    // squad mid-recruit and a squad whose members are long gone look identical
-    // there, and only the clock separates them, so this is the case most likely
-    // to destroy something a person is still using.
-
-    /// A member-less squad stamped `created_at`, for the grace tests.
-    fn empty_squad(created_at: &str) -> StoredSquad {
-        StoredSquad {
-            name: String::new(),
-            key: "k1".into(),
-            origins: vec!["/alive".into()],
-            members: Vec::new(),
-            created_at: created_at.into(),
-            tab_specs: Vec::new(),
-            tab_trees: Vec::new(),
-            active_tab: None,
-        }
-    }
-
-    /// 2026-08-13T12:00:00Z in epoch seconds, from an INDEPENDENT implementation
-    /// (`python3 -c "datetime.fromisoformat(...).timestamp()"`), so a wrong
-    /// parser cannot agree with itself. The first value written here was wrong
-    /// and this assertion is what caught it.
-    const T_NOON: i64 = 1_786_622_400;
-
-    #[test]
-    fn stamp_parser_matches_a_known_epoch() {
-        assert_eq!(parse_stamp_epoch("2026-08-13T12:00:00Z"), Some(T_NOON));
-        assert_eq!(parse_stamp_epoch("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(parse_stamp_epoch("2000-03-01T00:00:00Z"), Some(951_868_800));
-        // Leap day, the case a naive month table gets wrong.
-        assert_eq!(
-            parse_stamp_epoch("2024-02-29T00:00:00Z"),
-            Some(1_709_164_800)
-        );
-    }
-
-    #[test]
-    fn unparseable_stamp_keeps_the_squad() {
-        // Cannot age it -> cannot claim it is finished.
-        for bad in [
-            "",
-            "not-a-date",
-            "2026-08-13",
-            "20260813T120000Z",
-            "xxxx-08-13T12:00:00Z",
-        ] {
-            assert_eq!(parse_stamp_epoch(bad), None, "{bad:?} must not parse");
-            assert_eq!(
-                prune_decision_at(
-                    &empty_squad(bad),
-                    false,
-                    Some(&std::collections::HashSet::new()),
-                    &[],
-                    &|_| true,
-                    Some(T_NOON),
-                ),
-                PruneDecision::KeepUnknown,
-                "{bad:?} must keep"
-            );
-        }
-    }
-
-    #[test]
-    fn a_fresh_member_less_squad_is_never_pruned() {
-        let live = std::collections::HashSet::new();
-        // Created one second ago: recruiting, not finished.
-        assert_eq!(
-            prune_decision_at(
-                &empty_squad("2026-08-13T11:59:59Z"),
-                false,
-                Some(&live),
-                &[],
-                &|_| true,
-                Some(T_NOON),
-            ),
-            PruneDecision::KeepUnknown
-        );
-    }
-
-    #[test]
-    fn the_grace_boundary_keeps_until_strictly_past() {
-        let live = std::collections::HashSet::new();
-        let decide = |created: &str, now: i64| {
-            prune_decision_at(
-                &empty_squad(created),
-                false,
-                Some(&live),
-                &[],
-                &|_| true,
-                Some(now),
-            )
-        };
-        // Exactly at the window: still kept.
-        assert_eq!(
-            decide("2026-08-13T12:00:00Z", T_NOON + EMPTY_SQUAD_GRACE_SECS),
-            PruneDecision::KeepUnknown
-        );
-        // One second past: prunable.
-        assert_eq!(
-            decide("2026-08-13T12:00:00Z", T_NOON + EMPTY_SQUAD_GRACE_SECS + 1),
-            PruneDecision::Prune
-        );
-    }
-
-    #[test]
-    fn a_clock_we_cannot_read_keeps_every_member_less_squad() {
-        // `None` is "no clock". Without one, a fresh recruit and a finished squad
-        // are the same thing, so nothing may be destroyed on the guess.
-        assert_eq!(
-            prune_decision_at(
-                &empty_squad("2020-01-01T00:00:00Z"),
-                false,
-                Some(&std::collections::HashSet::new()),
-                &[],
-                &|_| true,
-                None,
-            ),
-            PruneDecision::KeepUnknown
-        );
-    }
-
-    #[test]
-    fn a_vanished_origin_resolves_the_ambiguity_without_waiting() {
-        // Nothing left to recruit INTO, so the clock is not needed.
-        assert_eq!(
-            prune_decision_at(
-                &empty_squad("2026-08-13T11:59:59Z"),
-                false,
-                Some(&std::collections::HashSet::new()),
-                &[],
-                &|_| false,
-                Some(T_NOON),
-            ),
-            PruneDecision::Prune
-        );
-    }
-
-    #[test]
-    fn a_tombstoned_member_is_evidence_and_needs_no_grace() {
-        // The distinction the grace window turns on. A tombstone RECORDS that a
-        // member registered and died; an empty list records nothing. Three of the
-        // fifteen squads measured are all-tombstoned, and they are finished now,
-        // not in an hour.
-        let mut s = empty_squad("2026-08-13T11:59:59Z");
-        s.members = vec![StoredMember {
-            attach_id: "deadbeef".into(),
-            tombstone: true,
-            detached: false,
-            tab_name: None,
-            cwd: None,
-            worker: None,
-            harness: None,
-            harness_session_id: None,
-        }];
-        assert_eq!(
-            prune_decision_at(
-                &s,
-                false,
-                Some(&std::collections::HashSet::new()),
-                &[],
-                &|_| true,
-                Some(T_NOON),
-            ),
-            PruneDecision::Prune
-        );
-    }
-
-    #[test]
-    fn grace_never_overrides_liveness_or_the_name_skip() {
-        // The window may only ever DELAY a prune. It must not become a path that
-        // reaps something live or something the operator named.
-        let mut live = std::collections::HashSet::new();
-        live.insert("live0001".to_string());
-        let mut s = empty_squad("2020-01-01T00:00:00Z"); // long past grace
-        s.members = vec![m("live0001")];
-        assert_eq!(
-            prune_decision_at(&s, false, Some(&live), &[], &|_| true, Some(T_NOON)),
-            PruneDecision::Keep
-        );
-
-        let named = {
-            let mut n = empty_squad("2020-01-01T00:00:00Z");
-            n.name = "mine".into();
-            n
-        };
-        assert_eq!(
-            prune_decision_at(
-                &named,
-                false,
-                Some(&std::collections::HashSet::new()),
-                &[],
-                &|_| true,
-                Some(T_NOON),
-            ),
-            PruneDecision::SkipNamed
-        );
-
-        // ONE CLOCK FOR BOTH DIRECTORY ARMS.
-        //
-        // A live pane protects a member-less squad only while it is young enough
-        // for that pane to plausibly BE its unrecorded worker. Past grace it does
-        // not, and this assertion is the one that changed: the pane arm used to
-        // be unconditional, so a squad weeks old stayed immortal while any
-        // session ran in the same repo. Measured here, that held six of them.
-        assert_eq!(
-            prune_decision_at(
-                &empty_squad("2020-01-01T00:00:00Z"),
-                false,
-                Some(&std::collections::HashSet::new()),
-                &["/alive/child".to_string()],
-                &|_| true,
-                Some(T_NOON),
-            ),
-            PruneDecision::Prune
-        );
-        // ...and WITHIN grace the same pane still protects it, so the arm is
-        // aged, not deleted. Without this pair, "past grace prunes" would also
-        // pass against a predicate that ignored panes entirely.
-        assert_eq!(
-            prune_decision_at(
-                &empty_squad("2026-08-13T11:59:00Z"),
-                false,
-                Some(&std::collections::HashSet::new()),
-                &["/alive/child".to_string()],
-                &|_| true,
-                Some(T_NOON),
-            ),
-            PruneDecision::Keep
-        );
-    }
-
-    #[test]
-    fn prune_decision_delegates_to_the_clocked_form() {
-        // One predicate, two entry points. The clockless wrapper must not drift
-        // into a second opinion.
-        let live = std::collections::HashSet::new();
-        let s = empty_squad("2020-01-01T00:00:00Z");
-        assert_eq!(
-            prune_decision(&s, false, Some(&live), &[], &|_| true),
-            prune_decision_at(&s, false, Some(&live), &[], &|_| true, None)
-        );
-    }
-
-    #[test]
-    fn prune_removes_only_prunable_and_preserves_lifecycle() {
-        let _s = Scratch::new("prune");
-        upsert("", "dead", &["/gone".into()], &[m("deadbeef")]).unwrap();
-        upsert("", "kept", &["/survives".into()], &[m("deadbeef")]).unwrap();
-        upsert("named", "", &["/gone".into()], &[m("deadbeef")]).unwrap();
-        assert!(matches!(
-            begin_external_stop("cafef00d", "x", "/t").unwrap(),
-            LifecycleCas::Committed { generation: 1 }
-        ));
-
-        let live = std::collections::HashSet::<String>::new(); // nothing live
-        let outcome = prune(
-            |sq| prune_decision(sq, false, Some(&live), &[], &|p| p == "/survives"),
-            Some(&live),
-        )
-        .unwrap();
-
-        // BOTH unnamed squads go. `kept` has a surviving origin, and that used to
-        // save it; a squad whose every member is dead is finished wherever its
-        // directory happens to live.
-        assert_eq!(
-            outcome.removed_count(),
-            2,
-            "a surviving origin no longer keeps a squad whose members are all dead"
-        );
-        let mut removed_keys: Vec<&str> = outcome.removed.iter().map(|r| r.key.as_str()).collect();
-        removed_keys.sort_unstable();
-        assert_eq!(
-            removed_keys,
-            vec!["dead", "kept"],
-            "the receipt names the squads actually removed"
-        );
-        assert_eq!(
-            outcome.skipped_named, 1,
-            "the named squad is counted skip-named"
-        );
-
-        let after = load();
-        assert!(
-            !after.squads.iter().any(|s| s.key == "dead"),
-            "prunable squad gone"
-        );
-        assert!(
-            !after.squads.iter().any(|s| s.key == "kept"),
-            "a surviving origin does not save a squad whose members are all dead"
-        );
-        assert!(
-            after.squads.iter().any(|s| s.name == "named"),
-            "named squad kept"
-        );
-        assert_eq!(
-            after.external_lifecycle.len(),
-            1,
-            "external_lifecycle preserved byte-for-byte across a prune"
-        );
-    }
-
-    fn tomb(id: &str) -> StoredMember {
-        StoredMember {
-            attach_id: id.into(),
-            tombstone: true,
-            detached: false,
-            tab_name: None,
-            cwd: None,
-            worker: None,
-            harness: None,
-            harness_session_id: None,
-        }
-    }
-
-    fn worker_member(name: &str) -> StoredMember {
-        StoredMember {
-            attach_id: String::new(),
-            tombstone: false,
-            detached: false,
-            tab_name: None,
-            cwd: None,
-            worker: Some(name.into()),
-            harness: None,
-            harness_session_id: None,
-        }
-    }
-
-    #[test]
-    fn member_reap_drops_dead_worker_members_beside_a_live_member() {
-        // AC1-HP: a live member keeps its squad, while worker members with
-        // positive dead evidence are removed from that surviving squad.
-        let _s = Scratch::new("member-reap-worker-hp");
-        upsert(
-            "",
-            "keeper",
-            &[],
-            &[
-                m("11111111"),
-                worker_member("dead-worker-one"),
-                worker_member("dead-worker-two"),
-            ],
-        )
-        .unwrap();
-
-        let mut live = std::collections::HashSet::new();
-        live.insert("11111111".to_string());
-        let outcome = prune(
-            |sq| prune_decision(sq, false, Some(&live), &[], &|_| true),
-            Some(&live),
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome.removed_count(),
-            0,
-            "the live member keeps the squad"
-        );
-        assert_eq!(outcome.members_reaped, 2);
-        let after = load();
-        assert_eq!(after.squads.len(), 1);
-        assert_eq!(after.squads[0].members.len(), 1);
-        assert_eq!(after.squads[0].members[0].attach_id, "11111111");
-    }
-
-    #[test]
-    fn member_reap_with_evidence_keeps_an_unmeasured_worker() {
-        // AC1-ERR: a missing identity verdict is retained, while an exact
-        // terminal verdict in the same surviving squad is reaped.
-        let _s = Scratch::new("member-reap-worker-unknown");
-        upsert(
-            "",
-            "keeper",
-            &[],
-            &[
-                m("11111111"),
-                worker_member("dead-worker"),
-                worker_member("unmeasured-worker"),
-            ],
-        )
-        .unwrap();
-
-        let live = ["11111111".to_string()].into_iter().collect();
-        let dead = ["dead-worker".to_string()].into_iter().collect();
-        let evidence = MemberEvidence::from_sets(live, dead);
-        let outcome = prune_with_evidence(
-            |sq| prune_decision_with_evidence(sq, false, &evidence, &[], &|_| true, None),
-            &evidence,
-        )
-        .unwrap();
-
-        assert_eq!(outcome.removed_count(), 0);
-        assert_eq!(outcome.members_reaped, 1);
-        assert_eq!(outcome.members_kept_live, 1);
-        assert_eq!(outcome.members_kept_unknown, 1);
-        let after = load();
-        assert!(after.squads[0]
-            .members
-            .iter()
-            .any(|m| m.worker.as_deref() == Some("unmeasured-worker")));
-    }
-
-    #[test]
-    fn member_reap_drops_tombstoned_members_a_live_member_keeps_the_squad_alive() {
-        // AC4-HP: a squad kept by one live member still has its tombstoned
-        // members reaped in the same pass, so a dead worker beside a live one
-        // does not synthesize a `cc-` row forever.
-        let _s = Scratch::new("member-reap-hp");
-        upsert(
-            "",
-            "keeper",
-            &[],
-            &[m("11111111"), tomb("deadbee1"), tomb("deadbee2")],
-        )
-        .unwrap();
-
-        let mut live = std::collections::HashSet::new();
-        live.insert("11111111".to_string());
-        let outcome = prune(
-            |sq| prune_decision(sq, false, Some(&live), &[], &|_| true),
-            Some(&live),
-        )
-        .unwrap();
-
-        assert_eq!(outcome.removed_count(), 0, "the squad itself survives");
-        assert_eq!(outcome.members_reaped, 2);
-        let after = load();
-        assert_eq!(after.squads.len(), 1);
-        assert_eq!(after.squads[0].members.len(), 1);
-        assert_eq!(after.squads[0].members[0].attach_id, "11111111");
-    }
-
-    #[test]
-    fn member_reap_does_nothing_when_liveness_is_unknown() {
-        // AC4-EDGE: the liveness query failed (`live` is `None`). No member is
-        // removed - same fail-safe direction `KeepUnknown` takes for whole
-        // squads.
-        let _s = Scratch::new("member-reap-edge");
-        upsert(
-            "",
-            "keeper",
-            &[],
-            &[m("11111111"), tomb("deadbee1"), tomb("deadbee2")],
-        )
-        .unwrap();
-
-        let outcome = prune(|sq| prune_decision(sq, false, None, &[], &|_| true), None).unwrap();
-
-        assert_eq!(outcome.removed_count(), 0);
-        assert_eq!(outcome.members_reaped, 0, "an unknown roster reaps nothing");
-        let after = load();
-        assert_eq!(after.squads[0].members.len(), 3);
-    }
-
-    #[test]
-    fn member_reap_to_zero_does_not_get_double_pruned_in_the_same_pass() {
-        // AC4-COV: a NAMED squad skipped by `include_named` policy still has
-        // its tombstoned members reaped, and that can reap it to zero members
-        // in this call. `decide` already ran (SkipNamed) against the ORIGINAL
-        // member list before the reap, so this pass must not turn around and
-        // treat the now-empty squad as prunable under the empty-squad grace
-        // arm - that only happens on a LATER call, against fresh state.
-        let _s = Scratch::new("member-reap-cov");
-        upsert(
-            "archived-crew",
-            "",
-            &[],
-            &[tomb("deadbee1"), tomb("deadbee2")],
-        )
-        .unwrap();
-
-        let live = std::collections::HashSet::<String>::new(); // nothing live
-        let outcome = prune(
-            |sq| prune_decision(sq, false, Some(&live), &[], &|_| true),
-            Some(&live),
-        )
-        .unwrap();
-
-        assert_eq!(
-            outcome.removed_count(),
-            0,
-            "SkipNamed never proposes the squad for removal"
-        );
-        assert_eq!(outcome.skipped_named, 1);
-        assert_eq!(outcome.members_reaped, 2);
-        let after = load();
-        assert_eq!(
-            after.squads.len(),
-            1,
-            "the squad row survives with zero members, not pruned in this pass"
-        );
-        assert!(after.squads[0].members.is_empty());
-    }
-}
+mod member_join_tests;
+#[cfg(test)]
+#[path = "squad_store_tests.rs"]
+mod tests;

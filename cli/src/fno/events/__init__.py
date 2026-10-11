@@ -27,17 +27,18 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib as _hashlib
 import json as _json
-import math as _math
 import os
 import re as _re
 import secrets as _secrets
-import sys as _sys
+from threading import RLock as _RLock
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml as _yaml
 
-from ..mutex import acquire_dir_mutex, release_dir_mutex
+from ..config._dispatch_verbs import is_verb_seed
+from ..paths import EPHEMERAL_EVENTS_SUFFIX as EPHEMERAL_SUFFIX
+from .store_client import EventStoreUnavailable, resolve_native_bin
 from .verify_child_promise import FanInTally, tally_fan_in, verify_child_promise
 
 
@@ -49,32 +50,8 @@ class SchemaUnavailableError(Exception):
     """Raised when the schema manifest cannot be loaded at module import."""
 
 
-def _is_nonnegative_integral_number(value: Any) -> TypeGuard[int | float]:
-    if type(value) is int:
-        return 0 <= value <= _sys.float_info.max
-    if type(value) is float:
-        return _math.isfinite(value) and value >= 0 and value.is_integer()
-    return False
 
 
-def _utc_timestamp(value: Any) -> _dt.datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    if (
-        _re.fullmatch(
-            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|\+00:00)",
-            value,
-        )
-        is None
-    ):
-        return None
-    try:
-        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None or parsed.utcoffset() != _dt.timedelta(0):
-        return None
-    return parsed
 
 
 def _resolve_manifest_path() -> Path:
@@ -100,7 +77,7 @@ def _load_schema() -> dict[str, Any]:
         raise SchemaUnavailableError(f"failed to parse {path}: {exc}") from exc
 
 
-_RETENTION_CLASSES = frozenset({"ephemeral", "gate", "durable"})
+_RETENTION_CLASSES = frozenset({"ephemeral", "gate", "telemetry", "durable"})
 
 
 def validate_retention_schema(schema: dict[str, Any]) -> None:
@@ -131,72 +108,150 @@ def validate_retention_schema(schema: dict[str, Any]) -> None:
             )
 
 
-# Schema is loaded lazily so a missing manifest does NOT break module
-# import. ``validate()`` and the typed builders raise SchemaUnavailableError
-# when invoked without a loadable schema. Smoke-test contexts (an isolated
-# venv installing the wheel) need to import fno.events without
-# crashing if the YAML isn't on disk; fail at validate-time instead so
-# unrelated CLI subcommands still work.
+# Schema is loaded lazily so importing fno.events does not parse the manifest.
+# ``validate()`` and the typed builders raise SchemaUnavailableError when
+# invoked without a loadable schema. Smoke-test contexts (an isolated venv
+# installing the wheel) need to import fno.events without crashing if the YAML
+# isn't on disk; fail at validate-time instead so unrelated CLI subcommands
+# still work.
 SCHEMA: dict[str, Any] | None
 EVENT_TYPES: dict[str, dict[str, Any]] | None
 ENVELOPE_REQUIRED: list[str]
 MAX_DATA_BYTES: int
 DATA_SIZE_ENCODING: str
 ALLOWED_SOURCES: set[str]
-# x-2901: per-agent worker sources (worker:<id>, stream-worker:<id>) validate by
+# per-agent worker sources (worker:<id>, stream-worker:<id>) validate by
 # regex, not enum membership. Compiled from envelope.properties.source.patterns.
 ALLOWED_SOURCE_PATTERNS: list[Any]
 ALLOWED_GATES: set[str]
 RETENTION_DEFAULT: str
 RETENTION_MINIMUM_TTL_HOURS: int
+# EPHEMERAL_SUFFIX (sibling journal for ephemeral-class rows) is
+# aliased from fno.paths at import time, one definition shared by every
+# Python reader and writer; a parity test holds it equal to the Rust const.
 _schema_load_error: SchemaUnavailableError | None = None
 
-try:
-    SCHEMA = _load_schema()
-    validate_retention_schema(SCHEMA)
-    EVENT_TYPES = {e["name"]: e for e in SCHEMA.get("event_types", [])}
-    ENVELOPE_REQUIRED = SCHEMA["envelope"]["required"]
-    MAX_DATA_BYTES = SCHEMA.get("limits", {}).get("max_data_bytes", 65536)
-    DATA_SIZE_ENCODING = SCHEMA.get("limits", {}).get("data_size_encoding", "")
-    if DATA_SIZE_ENCODING != "compact-json-ascii-v1":
-        raise SchemaUnavailableError(
-            f"unsupported limits.data_size_encoding: {DATA_SIZE_ENCODING!r}"
-        )
-    ALLOWED_SOURCES = set(SCHEMA["envelope"]["properties"]["source"]["enum"])
-    ALLOWED_SOURCE_PATTERNS = [
-        _re.compile(p) for p in SCHEMA["envelope"]["properties"]["source"].get("patterns", [])
-    ]
-    ALLOWED_GATES = set(SCHEMA.get("gates", []))
-    RETENTION_DEFAULT = SCHEMA.get("retention", {}).get("default", "durable")
-    RETENTION_MINIMUM_TTL_HOURS = int(
-        SCHEMA.get("retention", {}).get("minimum_ephemeral_ttl_hours", 672)
-    )
-    # a2a status-breakpoint family (x-dbaf): types carrying the extended envelope.
-    _family = SCHEMA.get("protocol_family", {})
-    PROTOCOL_FAMILY_TYPES = set(_family.get("types", []))
-    PROTOCOL_FAMILY_VERSION = _family.get("version", 1)
-    PROTOCOL_ENVELOPE_ALLOWED = set(_family.get("envelope", {}).get("allowed", []))
-    PROTOCOL_ENVELOPE_REQUIRED = list(_family.get("envelope", {}).get("required", []))
-    PROTOCOL_OUTCOME_ENUM = set(_family.get("outcome", {}).get("enum", []))
-    PROTOCOL_OUTCOME_ON = set(_family.get("outcome", {}).get("present_on", []))
-except SchemaUnavailableError as _exc:
-    SCHEMA = None
-    EVENT_TYPES = None
-    ENVELOPE_REQUIRED = []
-    MAX_DATA_BYTES = 65536
-    DATA_SIZE_ENCODING = ""
-    ALLOWED_SOURCES = set()
-    ALLOWED_SOURCE_PATTERNS = []
-    ALLOWED_GATES = set()
-    RETENTION_DEFAULT = "durable"
-    RETENTION_MINIMUM_TTL_HOURS = 672
-    PROTOCOL_FAMILY_TYPES = set()
-    PROTOCOL_FAMILY_VERSION = 1
-    PROTOCOL_ENVELOPE_ALLOWED = set()
-    PROTOCOL_ENVELOPE_REQUIRED = []
-    PROTOCOL_OUTCOME_ENUM = set()
-    PROTOCOL_OUTCOME_ON = set()
-    _schema_load_error = _exc
+if TYPE_CHECKING:
+    # These names are populated dynamically after import by
+    # _ensure_schema_loaded(). Keep them visible to static analysis without
+    # creating module attributes that would defeat __getattr__.
+    SCHEMA = cast(dict[str, Any] | None, None)
+    EVENT_TYPES = cast(dict[str, dict[str, Any]] | None, None)
+    ENVELOPE_REQUIRED = cast(list[str], None)
+    MAX_DATA_BYTES = cast(int, None)
+    DATA_SIZE_ENCODING = cast(str, None)
+    ALLOWED_SOURCES = cast(set[str], None)
+    ALLOWED_SOURCE_PATTERNS = cast(list[Any], None)
+    ALLOWED_GATES = cast(set[str], None)
+    RETENTION_DEFAULT = cast(str, None)
+    RETENTION_MINIMUM_TTL_HOURS = cast(int, None)
+    PROTOCOL_FAMILY_TYPES = cast(set[str], None)
+    PROTOCOL_FAMILY_VERSION = cast(int, None)
+    PROTOCOL_ENVELOPE_ALLOWED = cast(set[str], None)
+    PROTOCOL_ENVELOPE_REQUIRED = cast(list[str], None)
+    PROTOCOL_OUTCOME_ENUM = cast(set[str], None)
+    PROTOCOL_OUTCOME_ON = cast(set[str], None)
+    validate = cast(Any, None)  # served through __getattr__; the native shim
+
+_schema_loaded = False
+_schema_lock = _RLock()
+_SCHEMA_PUBLIC_NAMES = frozenset(
+    {
+        "SCHEMA",
+        "EVENT_TYPES",
+        "ENVELOPE_REQUIRED",
+        "MAX_DATA_BYTES",
+        "DATA_SIZE_ENCODING",
+        "ALLOWED_SOURCES",
+        "ALLOWED_SOURCE_PATTERNS",
+        "ALLOWED_GATES",
+        "RETENTION_DEFAULT",
+        "RETENTION_MINIMUM_TTL_HOURS",
+        "PROTOCOL_FAMILY_TYPES",
+        "PROTOCOL_FAMILY_VERSION",
+        "PROTOCOL_ENVELOPE_ALLOWED",
+        "PROTOCOL_ENVELOPE_REQUIRED",
+        "PROTOCOL_OUTCOME_ENUM",
+        "PROTOCOL_OUTCOME_ON",
+    }
+)
+
+
+def _ensure_schema_loaded() -> None:
+    """Populate schema-derived globals on their first real use."""
+    global _schema_loaded, _schema_load_error
+    if _schema_loaded:
+        return
+    with _schema_lock:
+        if _schema_loaded:
+            return
+        try:
+            schema = _load_schema()
+            validate_retention_schema(schema)
+            globals().update(
+                SCHEMA=schema,
+                EVENT_TYPES={e["name"]: e for e in schema.get("event_types", [])},
+                ENVELOPE_REQUIRED=schema["envelope"]["required"],
+                MAX_DATA_BYTES=schema.get("limits", {}).get("max_data_bytes", 65536),
+                DATA_SIZE_ENCODING=schema.get("limits", {}).get("data_size_encoding", ""),
+                ALLOWED_SOURCES=set(schema["envelope"]["properties"]["source"]["enum"]),
+                ALLOWED_SOURCE_PATTERNS=[
+                    _re.compile(p)
+                    for p in schema["envelope"]["properties"]["source"].get("patterns", [])
+                ],
+                ALLOWED_GATES=set(schema.get("gates", [])),
+                RETENTION_DEFAULT=schema.get("retention", {}).get("default", "durable"),
+                RETENTION_MINIMUM_TTL_HOURS=int(
+                    schema.get("retention", {}).get("minimum_ephemeral_ttl_hours", 672)
+                ),
+            )
+            if DATA_SIZE_ENCODING != "compact-json-ascii-v1":
+                raise SchemaUnavailableError(
+                    f"unsupported limits.data_size_encoding: {DATA_SIZE_ENCODING!r}"
+                )
+            # a2a status-breakpoint family: types carrying the extended envelope.
+            family = schema.get("protocol_family", {})
+            globals().update(
+                PROTOCOL_FAMILY_TYPES=set(family.get("types", [])),
+                PROTOCOL_FAMILY_VERSION=family.get("version", 1),
+                PROTOCOL_ENVELOPE_ALLOWED=set(family.get("envelope", {}).get("allowed", [])),
+                PROTOCOL_ENVELOPE_REQUIRED=list(family.get("envelope", {}).get("required", [])),
+                PROTOCOL_OUTCOME_ENUM=set(family.get("outcome", {}).get("enum", [])),
+                PROTOCOL_OUTCOME_ON=set(family.get("outcome", {}).get("present_on", [])),
+            )
+        except SchemaUnavailableError as _exc:
+            globals().update(
+                SCHEMA=None,
+                EVENT_TYPES=None,
+                ENVELOPE_REQUIRED=[],
+                MAX_DATA_BYTES=65536,
+                DATA_SIZE_ENCODING="",
+                ALLOWED_SOURCES=set(),
+                ALLOWED_SOURCE_PATTERNS=[],
+                ALLOWED_GATES=set(),
+                RETENTION_DEFAULT="durable",
+                RETENTION_MINIMUM_TTL_HOURS=672,
+                PROTOCOL_FAMILY_TYPES=set(),
+                PROTOCOL_FAMILY_VERSION=1,
+                PROTOCOL_ENVELOPE_ALLOWED=set(),
+                PROTOCOL_ENVELOPE_REQUIRED=[],
+                PROTOCOL_OUTCOME_ENUM=set(),
+                PROTOCOL_OUTCOME_ON=set(),
+            )
+            _schema_load_error = _exc
+        _schema_loaded = True
+
+
+def __getattr__(name: str) -> Any:
+    """Load schema-derived compatibility exports only when accessed."""
+    if name == "validate":
+        # The judge itself lives in the native store; the shim is served
+        # lazily so the module carries no ``validate`` definition of its own.
+        return _validate_via_store
+    if name in _SCHEMA_PUBLIC_NAMES:
+        _ensure_schema_loaded()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 MAX_SAFE_EVENT_INTEGER = 9_007_199_254_740_991
@@ -204,6 +259,7 @@ MAX_SAFE_EVENT_INTEGER = 9_007_199_254_740_991
 
 def _require_schema() -> None:
     """Raise the deferred SchemaUnavailableError if module import couldn't load."""
+    _ensure_schema_loaded()
     if _schema_load_error is not None:
         raise _schema_load_error
 
@@ -215,572 +271,53 @@ def retention_for(event_type: str) -> str:
     return entry.get("retention", RETENTION_DEFAULT) if entry else RETENTION_DEFAULT
 
 
-def validate(event: dict[str, Any]) -> None:
-    """Validate an event against the canonical envelope and per-type shape.
-
-    Returns ``None`` on success; raises ``ValidationError`` with a single-
-    line diagnostic naming the failed field. Raises
-    ``SchemaUnavailableError`` if the schema YAML could not be loaded at
-    module import (deferred until first validate so unrelated CLI
-    subcommands can import the package).
-    """
-    _require_schema()
-    for field in ENVELOPE_REQUIRED:
-        if field not in event:
-            raise ValidationError(f"event missing required field: {field}")
-    source = event["source"]
-    # isinstance guard first: a non-str source must reject cleanly, not crash
-    # p.match() with a TypeError (the pre-pattern set-membership tolerated it).
-    if not isinstance(source, str) or (
-        source not in ALLOWED_SOURCES and not any(p.match(source) for p in ALLOWED_SOURCE_PATTERNS)
-    ):
-        raise ValidationError(
-            f"unknown source: {source!r} "
-            f"(allowed: {sorted(ALLOWED_SOURCES)} "
-            f"or patterns {[p.pattern for p in ALLOWED_SOURCE_PATTERNS]})"
-        )
-
-    type_name = event["type"]
-    assert EVENT_TYPES is not None  # _require_schema() above guarantees it is loaded
-    if type_name not in EVENT_TYPES:
-        raise ValidationError(f"unknown event type: {type_name}")
-
-    type_spec = EVENT_TYPES[type_name]
-    raw_data = event.get("data")
-    if raw_data is not None and not isinstance(raw_data, dict):
-        raise ValidationError("event data must be an object")
-    data = raw_data or {}
-
-    for field in type_spec.get("data", {}).get("required", []):
-        if field == "gate" and not data.get("gate_bearing", False):
-            continue
-        if field not in data:
-            raise ValidationError(f"event type {type_name} missing required data field: {field}")
-
-    # Claim records have two truthful PID shapes. A null PID must carry the
-    # positive marker and a TTL expiry, while an integer PID must not carry the
-    # marker. Without this cross-field check, a missing instrument and a
-    # deliberate PID-unavailable claim become indistinguishable in the audit log.
-    if type_name.startswith("claim_") and "pid" in data:
-        pid = data.get("pid")
-        if "pid_unavailable" in data and not isinstance(data["pid_unavailable"], bool):
-            raise ValidationError(
-                f"event type {type_name} pid_unavailable must be boolean"
-            )
-        unavailable = data.get("pid_unavailable") is True
-        if pid is None and (not unavailable or data.get("expires_at") is None):
-            raise ValidationError(
-                f"event type {type_name} null pid requires pid_unavailable=true and expires_at"
-            )
-        if pid is not None and unavailable:
-            raise ValidationError(
-                f"event type {type_name} pid_unavailable=true requires pid=null"
-            )
-
-    # a2a status-breakpoint family (x-dbaf): the extended envelope. Routable
-    # fields live at envelope level; additionalProperties:false for this family
-    # ONLY (legacy types keep today's tolerance). Enforced pre-lock so a
-    # malformed emit rejects before touching events.jsonl.
-    if type_name in PROTOCOL_FAMILY_TYPES:
-        for field in PROTOCOL_ENVELOPE_REQUIRED:
-            if field not in event:
-                raise ValidationError(
-                    f"event type {type_name} missing required envelope field: {field}"
-                )
-        extra = set(event) - PROTOCOL_ENVELOPE_ALLOWED
-        if extra:
-            raise ValidationError(
-                f"event type {type_name} has unknown envelope field(s): "
-                f"{sorted(extra)} (allowed: {sorted(PROTOCOL_ENVELOPE_ALLOWED)})"
-            )
-        if event.get("v") != PROTOCOL_FAMILY_VERSION:
-            raise ValidationError(
-                f"event type {type_name} envelope v must be "
-                f"{PROTOCOL_FAMILY_VERSION} (got {event.get('v')!r})"
-            )
-        has_outcome = "outcome" in event
-        if type_name in PROTOCOL_OUTCOME_ON:
-            if not has_outcome:
-                raise ValidationError(f"event type {type_name} requires envelope field: outcome")
-            if event["outcome"] not in PROTOCOL_OUTCOME_ENUM:
-                raise ValidationError(
-                    f"unknown {type_name} outcome: {event['outcome']!r} "
-                    f"(allowed: {sorted(PROTOCOL_OUTCOME_ENUM)})"
-                )
-        elif has_outcome:
-            raise ValidationError(
-                f"event type {type_name} must not carry envelope field outcome "
-                f"(allowed only on {sorted(PROTOCOL_OUTCOME_ON)})"
-            )
-
-    if type_name == "phase_transition" and data.get("gate_bearing") and not data.get("gate"):
-        raise ValidationError("phase_transition with gate_bearing=true must include data.gate")
-
-    if type_name == "failover_swapped":
-        if source != "daemon":
-            raise ValidationError("failover_swapped source must be daemon")
-        if not isinstance(data.get("short_id"), str) or not data["short_id"]:
-            raise ValidationError("failover_swapped short_id must be a non-empty string")
-        if type(data.get("redispatched")) is not bool:
-            raise ValidationError("failover_swapped redispatched must be boolean")
-        # The reason is what makes an abandonment diagnosable, so an
-        # abandonment without one is refused at the writer rather than
-        # discovered later as an untraceable false (x-763a).
-        if not data["redispatched"] and not str(data.get("reason") or "").strip():
-            raise ValidationError(
-                "failover_swapped with redispatched=false must name a reason"
-            )
-
-    if type_name == "context_snapshot":
-        if source not in {"hook", "test"}:
-            raise ValidationError(f"context_snapshot source must be hook or test (got {source!r})")
-        session_id = data.get("session_id")
-        harness = data.get("harness")
-        entry_state = data.get("entry_state")
-        if not isinstance(session_id, str) or not session_id.strip():
-            raise ValidationError("context_snapshot session_id cannot be empty")
-        if not isinstance(harness, str) or harness not in {"claude", "codex", "gemini"}:
-            raise ValidationError(f"unknown context_snapshot harness: {harness!r}")
-        if not isinstance(entry_state, str) or entry_state not in {
-            "startup",
-            "resume",
-            "clear",
-            "post_compact",
-        }:
-            raise ValidationError(f"unknown context_snapshot entry_state: {entry_state!r}")
-        manifest = data.get("source_manifest")
-        errors = data.get("measurement_errors", [])
-        if not isinstance(manifest, list) or not all(isinstance(item, dict) for item in manifest):
-            raise ValidationError("context_snapshot source_manifest must contain objects")
-        if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
-            raise ValidationError("context_snapshot measurement_errors must contain strings")
-        observed = [item for item in manifest if item.get("status") == "observed"]
-        if any(
-            not _is_nonnegative_integral_number(item.get("bytes"))
-            or not isinstance(item.get("content_hash"), str)
-            for item in observed
-        ):
-            raise ValidationError(
-                "context_snapshot observed sources require nonnegative bytes and content_hash"
-            )
-        expected_bytes = sum(int(item["bytes"]) for item in observed)
-        expected_hashes = [item["content_hash"] for item in observed]
-        expected_context_hash = (
-            _hashlib.sha256("\n".join(expected_hashes).encode()).hexdigest()
-            if expected_hashes
-            else None
-        )
-        context_bytes = data.get("context_bytes")
-        estimated_tokens = data.get("estimated_tokens")
-        if (
-            not _is_nonnegative_integral_number(context_bytes)
-            or int(context_bytes) != expected_bytes
-        ):
-            raise ValidationError("context_snapshot context_bytes disagrees with source_manifest")
-        if (
-            not _is_nonnegative_integral_number(estimated_tokens)
-            or int(estimated_tokens) != (expected_bytes + 3) // 4
-        ):
-            raise ValidationError("context_snapshot estimated_tokens disagrees with context_bytes")
-        if data.get("source_hashes") != expected_hashes:
-            raise ValidationError("context_snapshot source_hashes disagree with source_manifest")
-        if data.get("context_hash") != expected_context_hash:
-            raise ValidationError("context_snapshot context_hash disagrees with source_hashes")
-        if not isinstance(data.get("measurement_complete"), bool):
-            raise ValidationError("context_snapshot measurement_complete must be boolean")
-        complete = data.get("measurement_complete") is True
-        all_observed = bool(manifest) and len(observed) == len(manifest)
-        if complete != (all_observed and not errors):
-            raise ValidationError(
-                "context_snapshot completeness disagrees with manifest and errors"
-            )
-
-    if type_name == "verification_receipt":
-        if _utc_timestamp(event["ts"]) is None:
-            raise ValidationError("verification_receipt envelope ts must be RFC3339 UTC")
-        type_sources = type_spec.get("sources", [])
-        if source not in type_sources:
-            raise ValidationError(
-                f"verification_receipt does not allow source {source!r} "
-                f"(allowed: {sorted(type_sources)})"
-            )
-        type_props = type_spec["data"]["properties"]
-        mode = data.get("mode")
-        result = data.get("result")
-        if mode not in type_props["mode"]["enum"]:
-            raise ValidationError(f"unknown verification_receipt data.mode: {mode!r}")
-        if result not in type_props["result"]["enum"]:
-            raise ValidationError(f"unknown verification_receipt data.result: {result!r}")
-        candidate_sha = data.get("candidate_sha")
-        if (
-            not isinstance(candidate_sha, str)
-            or _re.fullmatch(r"[0-9a-f]{40}", candidate_sha, _re.IGNORECASE) is None
-        ):
-            raise ValidationError("verification_receipt candidate_sha must be full 40-hex")
-        command = data.get("command")
-        scope = data.get("scope")
-        if (
-            not isinstance(command, list)
-            or not command
-            or len(command) > 4096
-            or not all(
-                isinstance(item, str) and item and len(item.encode("utf-8")) <= 4096
-                for item in command
-            )
-        ):
-            raise ValidationError("verification_receipt command must contain bounded argv strings")
-        if (
-            not isinstance(scope, list)
-            or not scope
-            or len(scope) > 128
-            or not all(
-                isinstance(item, str) and item and len(item.encode("utf-8")) <= 512
-                for item in scope
-            )
-        ):
-            raise ValidationError("verification_receipt scope must contain bounded step names")
-        environment = data.get("environment")
-        if not isinstance(environment, dict) or not all(
-            isinstance(environment.get(field), str) and environment[field].strip()
-            for field in ("host", "platform", "runner")
-        ):
-            raise ValidationError(
-                "verification_receipt environment requires host, platform, and runner"
-            )
-        producer = data.get("producer")
-        if not isinstance(producer, dict) or not all(
-            isinstance(producer.get(field), str) and producer[field].strip()
-            for field in ("kind", "id")
-        ):
-            raise ValidationError("verification_receipt producer requires kind and id")
-        started = _utc_timestamp(data.get("started_at"))
-        finished = _utc_timestamp(data.get("finished_at"))
-        if started is None or finished is None or finished < started:
-            raise ValidationError("verification_receipt timestamps must be ordered RFC3339 UTC")
-        expected = data.get("steps_expected")
-        executed = data.get("steps_executed")
-        generation = data.get("generation")
-        if (
-            not _is_nonnegative_integral_number(generation)
-            or int(generation) < 1
-            or int(generation) > MAX_SAFE_EVENT_INTEGER
-            or not _is_nonnegative_integral_number(expected)
-            or not _is_nonnegative_integral_number(executed)
-            or int(executed) > int(expected)
-            or int(expected) != len(scope)
-        ):
-            raise ValidationError("verification_receipt step counts are invalid")
-        if (
-            mode == "full"
-            and result == "passed"
-            and (int(expected) == 0 or int(executed) != int(expected))
-        ):
-            raise ValidationError("verification_receipt full pass requires every nonzero step")
-        if mode == "void" and result == "passed":
-            raise ValidationError("verification_receipt void mode cannot pass")
-
-    if type_name == "phase_transition" and data.get("gate") and data["gate"] not in ALLOWED_GATES:
-        raise ValidationError(f"unknown gate: {data['gate']!r} (allowed: {sorted(ALLOWED_GATES)})")
-
-    if type_name == "mission_complete":
-        status = data.get("status")
-        type_props = type_spec["data"]["properties"]
-        allowed_statuses = type_props.get("status", {}).get("enum", [])
-        if allowed_statuses and status not in allowed_statuses:
-            raise ValidationError(f"unknown status: {status!r} (allowed: {allowed_statuses})")
-
-    # Enforce the data.source enum for session_satisfied + auto_complete_triggered
-    # at validate() time so shell callers using `fno doctor event emit --type ... --data ...`
-    # (which routes through _build -> validate) can't silently land a typo. The
-    # typed builders enforce the same enum at call time, but the schema-validator
-    # is the chokepoint that catches all paths including the generic emit CLI.
-    if type_name in ("session_satisfied", "auto_complete_triggered"):
-        # Explicit indexing instead of .get(default={}) - per Gemini review on
-        # PR #286: helpers validating schema-derived inputs should raise on
-        # unexpected shape rather than silently degrading to "no enum check".
-        # If the schema YAML lacks data.properties.source.enum for these
-        # event types, that's a schema-correctness bug we want to surface.
-        source_prop = type_spec["data"]["properties"]["source"]
-        allowed_data_sources = source_prop["enum"]
-        data_source = data.get("source")
-        if data_source not in allowed_data_sources:
-            raise ValidationError(
-                f"unknown {type_name} data.source: {data_source!r} "
-                f"(allowed: {allowed_data_sources})"
-            )
-
-    if type_name == "termination":
-        allowed = type_spec["data"]["properties"]["reason"]["enum"]
-        reason = data.get("reason")
-        if reason not in allowed:
-            raise ValidationError(
-                f"unknown termination data.reason: {reason!r} (allowed: {allowed})"
-            )
-
-    if type_name == "transition_rejected":
-        type_props = type_spec["data"]["properties"]
-        for field in ("kind", "event", "from"):
-            allowed = type_props[field]["enum"]
-            if field in data and data[field] not in allowed:
-                raise ValidationError(
-                    f"unknown transition_rejected data.{field}: {data[field]!r} "
-                    f"(allowed: {allowed})"
-                )
-
-    # Same chokepoint rationale as session_satisfied above: the generic emit
-    # CLI is the only writer for two of the three human_touch emitters (the mux
-    # shells out), so a typo'd source/resolution must fail here, not land.
-    if type_name == "human_touch":
-        type_props = type_spec["data"]["properties"]
-        for field in ("source", "resolution"):
-            allowed = type_props[field]["enum"]
-            if data.get(field) not in allowed:
-                raise ValidationError(
-                    f"unknown human_touch data.{field}: {data.get(field)!r} (allowed: {allowed})"
-                )
-
-    # Same chokepoint rationale: skill_eval_finding's dimension/verdict drive
-    # x-0ca7's downstream ranking logic, so a typo'd enum value must fail here
-    # rather than silently landing as an unrecognized bucket.
-    if type_name == "skill_eval_finding":
-        type_props = type_spec["data"]["properties"]
-        for field in ("dimension", "verdict"):
-            allowed = type_props[field]["enum"]
-            if data.get(field) not in allowed:
-                raise ValidationError(
-                    f"unknown skill_eval_finding data.{field}: {data.get(field)!r} "
-                    f"(allowed: {allowed})"
-                )
-
-    # Same chokepoint rationale: review_attestation is a trust-core gate event
-    # (x-e703). loop-check fail-closes on anything but an exact `pass`, but a
-    # producer typo (`verdict: passs`) should fail LOUD at emit rather than land
-    # a silently-never-satisfying record. The generic emit CLI is a writer, so
-    # the enum must be enforced here, not only in the typed helper.
-    if type_name == "review_attestation":
-        allowed = type_spec["data"]["properties"]["verdict"]["enum"]
-        if data.get("verdict") not in allowed:
-            raise ValidationError(
-                f"unknown review_attestation data.verdict: {data.get('verdict')!r} "
-                f"(allowed: {allowed})"
-            )
-        # The finding record is optional as a whole (every pre-existing
-        # attestation carries none of it), but a PRESENT key must be the
-        # right shape: this is the record the gate re-derives blocking from,
-        # so a silently-malformed one is a forged count one level down.
-        for count_field in ("findings_blocking", "findings_nonblocking", "review_round"):
-            value = data.get(count_field)
-            if value is not None and (
-                not _is_nonnegative_integral_number(value)
-                or int(value) > MAX_SAFE_EVENT_INTEGER
-            ):
-                raise ValidationError(
-                    f"review_attestation data.{count_field} must be a non-negative integer"
-                )
-        if data.get("findings_truncated") is not None and not isinstance(
-            data.get("findings_truncated"), bool
-        ):
-            raise ValidationError("review_attestation data.findings_truncated must be boolean")
-        findings = data.get("findings")
-        if findings is not None:
-            if not isinstance(findings, list) or not all(
-                isinstance(item, dict)
-                and isinstance(item.get("blocking"), bool)
-                and isinstance(item.get("has_required_fields"), bool)
-                and isinstance(item.get("finding_key"), str)
-                and item["finding_key"].strip()
-                and (
-                    item.get("category") is None
-                    or isinstance(item.get("category"), str)
-                )
-                and (item.get("verdict") is None or isinstance(item.get("verdict"), str))
-                for item in findings
-            ):
-                raise ValidationError(
-                    "review_attestation data.findings must be an array of "
-                    "{category, verdict, blocking, has_required_fields, finding_key} "
-                    "primitives"
-                )
-        dispositions = data.get("dispositions")
-        if dispositions is not None:
-            disposition_enum = type_spec["data"]["properties"]["dispositions"]["items"][
-                "properties"
-            ]["disposition"]["enum"]
-            if not isinstance(dispositions, list) or not all(
-                isinstance(item, dict)
-                and isinstance(item.get("finding_key"), str)
-                and item["finding_key"].strip()
-                and item.get("disposition") in disposition_enum
-                and isinstance(item.get("reason"), str)
-                and item["reason"].strip()
-                for item in dispositions
-            ):
-                raise ValidationError(
-                    "review_attestation data.dispositions must be an array of "
-                    "{finding_key, disposition in "
-                    f"{disposition_enum}, reason}} objects"
-                )
-        # The producer's disposition obligation, enforced where every writer
-        # already passes (the script with or without a findings file, the
-        # hooks, the sanctioned manual emit): a findings-free pass attests
-        # nothing about EARLIER findings, so emitting one over a branch whose
-        # chain still holds non-terminal blocking findings leaves them
-        # non-terminal forever - the silent deadlock that surfaces rounds
-        # later as an impossible merge. Only a `fixed` disposition carried by
-        # THIS record leaves the outstanding set: the gate keeps `nonblocking`
-        # and an uncorroborated `declined` non-terminal by its own rules, and
-        # a producer check that waved those through would emit a pass the
-        # gate still refuses - the delayed failure this exists to make loud.
-        # Enforced HERE rather than in the classify builder so no producer
-        # surface needs new flags or a newer caller to be covered, and an
-        # older deployment without this check degrades to today's behavior
-        # instead of refusing to emit. A reader without a branch cannot
-        # scope the chain and is not asked; an unreadable log produces
-        # rather than refuses, because an instrument failure must not wedge
-        # every reviewer on the machine.
-        if data.get("verdict") == "pass" and not findings:
-            branch = data.get("branch")
-            head = data.get("head_sha")
-            if isinstance(branch, str) and branch.strip():
-                try:
-                    # importlib, not an import statement: the gate is an
-                    # optional runtime dependency of this validator, and a
-                    # static import edge from fno.events into fno.pr makes
-                    # mypy degrade the lazy Path constants in
-                    # fno.graph._constants for every downstream reader.
-                    import importlib
-
-                    cap_verdict = importlib.import_module(
-                        "fno.pr._coverage_gate"
-                    ).cap_verdict
-                    nonterminal = cap_verdict(
-                        os.getcwd(), head if isinstance(head, str) else "", branch, None
-                    ).nonterminal_keys
-                except Exception:  # noqa: BLE001 - instrument failure, not absence
-                    nonterminal = []
-                disposing = {
-                    entry.get("finding_key")
-                    for entry in (dispositions or [])
-                    if isinstance(entry, dict)
-                    and entry.get("disposition") == "fixed"
-                }
-                outstanding = [key for key in nonterminal if key not in disposing]
-                if outstanding:
-                    raise ValidationError(
-                        "review_attestation refused: a findings-free pass "
-                        "disposes nothing, and branch "
-                        f"{branch} still holds non-terminal blocking finding(s) "
-                        f"without a fixed disposition here: "
-                        f"{', '.join(outstanding)}; carry a fixed disposition "
-                        "for every finding you verified (a decline stays the "
-                        "merge gate's call, never the producer's)"
-                    )
-
-    # Same chokepoint rationale: mail_escalation's reason drives the overlay
-    # evidence text and the question-vs-attended-miss split, so a typo'd reason
-    # must fail loud here, not land as a silent bucket.
-    if type_name == "mail_escalation":
-        allowed = type_spec["data"]["properties"]["reason"]["enum"]
-        if data.get("reason") not in allowed:
-            raise ValidationError(
-                f"unknown mail_escalation data.reason: {data.get('reason')!r} (allowed: {allowed})"
-            )
-
-    # Same chokepoint rationale: gate_escape's reason drives the retro
-    # autonomy-debt ranking (x-f894). A typo'd reason must fail CLOSED here so
-    # it is loud, not a silent bucket - the design's #1 correctness invariant.
-    if type_name == "gate_escape":
-        allowed = type_spec["data"]["properties"]["reason"]["enum"]
-        if data.get("reason") not in allowed:
-            raise ValidationError(
-                f"unknown gate_escape data.reason: {data.get('reason')!r} (allowed: {allowed})"
-            )
-
-    # Same chokepoint rationale: post_merge_dispatch_receipt is the attribution
-    # record for a merge hand-off, and its phase drives the reserved-before-
-    # accepted lifecycle the seven-day observation relies on (x-a35a). The typed
-    # emit_receipt helper constrains phase at call time, but the generic emit
-    # path is also a writer, so a typo'd phase/route must fail loud here, not
-    # land a silently-misattributed record.
-    if type_name == "post_merge_dispatch_receipt":
-        type_props = type_spec["data"]["properties"]
-        for field in ("phase", "route"):
-            allowed = type_props[field]["enum"]
-            if data.get(field) not in allowed:
-                raise ValidationError(
-                    f"unknown post_merge_dispatch_receipt data.{field}: "
-                    f"{data.get(field)!r} (allowed: {allowed})"
-                )
-
-    # worktree_overlap_observed is the recurrence key for `fno agents workspace worktree
-    # overlaps`: an empty or non-list peer_session_ids would record an overlap
-    # with no peers, a self-contradiction that must fail loud at the chokepoint
-    # (the generic emit CLI is a writer here) rather than land and inflate or
-    # corrupt the fold. observation_id is a 64-hex sha256 digest; rejecting a
-    # non-digest id here blocks a hand-crafted event from impersonating another
-    # observation and skewing the recurrence fold.
-    if type_name == "worktree_overlap_observed":
-        peers = data.get("peer_session_ids")
-        if (
-            not isinstance(peers, list)
-            or not peers
-            or not all(isinstance(p, str) and p for p in peers)
-        ):
-            raise ValidationError(
-                "worktree_overlap_observed peer_session_ids must be a non-empty "
-                "list of non-empty strings"
-            )
-        # Stored peers must already be the sorted, deduped form the digest was
-        # computed from, and the observer cannot be its own peer (the read-only
-        # predicate excludes SELF_ID). A hand-crafted event that violates either
-        # is rejected rather than counted.
-        if peers != sorted(set(peers)):
-            raise ValidationError(
-                "worktree_overlap_observed peer_session_ids must be sorted and unique"
-            )
-        oid = data.get("observation_id")
-        if not isinstance(oid, str) or _re.fullmatch(r"[0-9a-f]{64}", oid) is None:
-            raise ValidationError(
-                "worktree_overlap_observed observation_id must be a 64-hex sha256 digest"
-            )
-        # Recompute the digest from the fields so a hand-crafted event cannot
-        # carry another observation's id and skew the recurrence fold. The
-        # digest helper is the single implementation; validate reuses it.
-        repo = data.get("repository_key")
-        wt = data.get("worktree_key")
-        obs = data.get("observer_session_id")
-        if not (
-            isinstance(repo, str)
-            and repo
-            and isinstance(wt, str)
-            and wt
-            and isinstance(obs, str)
-            and obs
-        ):
-            raise ValidationError(
-                "worktree_overlap_observed requires non-empty repository_key, "
-                "worktree_key, and observer_session_id strings"
-            )
-        if obs in peers:
-            raise ValidationError("worktree_overlap_observed observer cannot be its own peer")
-        if oid != _overlap_observation_id(repo, wt, obs, sorted(set(peers))):
-            raise ValidationError(
-                "worktree_overlap_observed observation_id does not match its fields"
-            )
-
+def _utc_timestamp(value: Any) -> _dt.datetime | None:
+    """Parse an RFC3339 UTC timestamp; status_fanout reads it beside the judge."""
+    if not isinstance(value, str) or not value:
+        return None
+    m = _re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.([0-9]{1,9}))?(?:Z|\+00:00)",
+        value,
+    )
+    if m is None:
+        return None
+    frac = m.group(1)
+    if frac is not None and len(frac) > 6:  # nanoseconds -> microseconds
+        value = f"{value[: value.index('.')]}.{frac[:6]}Z"
     try:
-        _json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        serialized = (
-            _json.dumps(data, separators=(",", ":"), ensure_ascii=True)
-            .replace("\x7f", "\\u007f")
-            .encode("ascii")
-        )
-    except (TypeError, UnicodeError, ValueError) as exc:
-        raise ValidationError(f"event data is not serializable: {exc}") from exc
-    if len(serialized) > MAX_DATA_BYTES:
-        raise ValidationError(
-            f"event data exceeds max_data_bytes (got {len(serialized)}, limit {MAX_DATA_BYTES})"
-        )
+        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != _dt.timedelta(0):
+        return None
+    return parsed
+
+
+def _validate_via_store(event: dict[str, Any]) -> None:
+    """Judge through the native door: the store's judge is the one owner.
+
+    Kept only until the reader families (pr, scoreboard, worktree_cli)
+    port their read-side re-validation in their own children; the dual
+    inventory row names it. Served as the module attribute ``validate``
+    through ``__getattr__`` so the judge symbol itself stays deleted.
+    """
+    import subprocess
+
+    line = _json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+    proc = subprocess.run(
+        [resolve_native_bin(), "doctor", "event", "emit-envelope", "--validate-only"],
+        input=line,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if proc.returncode == 0:
+        return
+    if proc.returncode == 1:
+        raise ValidationError(proc.stderr.strip())
+    raise EventStoreUnavailable(
+        f"event validator substrate failure: {proc.stderr.strip()}"
+    )
 
 
 def _ts_now() -> str:
@@ -797,13 +334,13 @@ def _build(
 ) -> dict[str, Any]:
     event = {"ts": _ts_now(), "type": type_name, "source": source, "data": data}
     if envelope:
-        # Extra top-level routable fields (x-dbaf protocol family). A None value
+        # Extra top-level routable fields (protocol family). A None value
         # means "omit" (a non-session producer drops from/model entirely rather
         # than faking an empty string), so it is never written.
         for k, v in envelope.items():
             if v is not None:
                 event[k] = v
-    validate(event)
+    _validate_via_store(event)
     return event
 
 
@@ -924,7 +461,7 @@ def phase_0_decision(
     measurement-gated phases). Routes through ``_build`` so the canonical
     ``data`` envelope is used and the event passes schema validation.
 
-    As of ab-a1118224 the ``fno doctor event emit`` CLI subcommand also routes
+    As of the ``fno doctor event emit`` CLI subcommand also routes
     through ``_build`` + ``append_event``, so generic callers can now use
     either path. This typed builder is preferred for code paths that
     construct the event in Python (it enforces the decision enum at build
@@ -1035,6 +572,7 @@ def operator_question(
     ask: str | None = None,
     options: "list[str] | None" = None,
     blocks: "list[str] | None" = None,
+    subject: str | None = None,
     source: str = "target",
 ) -> dict[str, Any]:
     """Build an ``operator_question`` event (an agent needs a human answer).
@@ -1054,6 +592,7 @@ def operator_question(
         ("ask", ask),
         ("options", options),
         ("blocks", blocks),
+        ("subject", subject),
     ):
         if value is not None:
             data[key] = value
@@ -1080,6 +619,31 @@ def operator_question_closed(
     return _build("operator_question_closed", source, data)
 
 
+NOTICE_CAP = 2000
+
+
+def operator_notice(
+    *,
+    title: str,
+    body: str,
+    pointer: str = "",
+    source: str = "python",
+) -> dict[str, Any]:
+    """Build an ``operator_notice`` event (the notify chokepoint's journal leg).
+
+    A notice is a pointer to the durable queue, never a second inbox, so
+    ``pointer`` carries the verb that shows the content and ``body`` carries
+    counts, not rows.
+    """
+    data: dict[str, Any] = {
+        "title": title[:NOTICE_CAP],
+        "body": body[:NOTICE_CAP],
+    }
+    if pointer:
+        data["pointer"] = pointer[:NOTICE_CAP]
+    return _build("operator_notice", source, data)
+
+
 def operator_decision(
     *,
     decision_id: str,
@@ -1099,6 +663,8 @@ def operator_decision(
     graduation: dict[str, str] | None = None,
     rationale: str | None = None,
     supersedes: str | None = None,
+    reads: "list[dict[str, Any]] | None" = None,
+    scope: str | None = None,
     source: str = "target",
 ) -> dict[str, Any]:
     """Build an ``operator_decision`` event (a durable decision record).
@@ -1106,7 +672,9 @@ def operator_decision(
     Modeled on ``approval_decided``: who decided, under what authority, and
     what was on the table. ``subject`` is the recovery key a later agent
     queries; ``supersedes`` orders two decisions on one subject so a reader
-    of the older one can tell it is not current.
+    of the older one can tell it is not current. ``reads`` carries the
+    executed evidence rows for a code fact the ruling asserts (see
+    the evidence gate): cmd, exit code, output head.
     """
     data: dict[str, Any] = {"decision_id": decision_id, "decision": decision[:QUESTION_CAP]}
     for key, value in (
@@ -1125,6 +693,8 @@ def operator_decision(
         ("graduation", graduation),
         ("rationale", rationale[:QUESTION_CAP] if rationale else None),
         ("supersedes", supersedes),
+        ("reads", reads),
+        ("scope", scope),
     ):
         if value is not None:
             data[key] = value
@@ -1174,12 +744,14 @@ def agent_raw_inject(
     target_head: str | None = None,
     confirmed: bool | None = None,
     origin: str | None = None,
+    verb: str | None = None,
+    self_send: bool = False,
     source: str = "daemon",
 ) -> dict[str, Any]:
     """Build an ``agent_raw_inject`` provenance event.
 
     Records an UNWRAPPED injection (no ``<fno_mail`` envelope) at the transport,
-    so the audit trail survives the loss of the in-transcript marker (x-f26c's
+    so the audit trail survives the loss of the in-transcript marker (
     greppability property moves to the ledger). Keyed on the payload not starting
     with ``<fno_mail``; emitted best-effort from both the mail-inject binary and
     the mux pane send. ``sender``/``target_cwd``/``target_head`` are optional
@@ -1189,11 +761,17 @@ def agent_raw_inject(
     after the send, and its ``False`` covers both a clean refusal and a landed
     payload the confirm budget missed.
     """
+    if verb is None and is_verb_seed(payload):
+        verb = payload.split(maxsplit=1)[0]
+    if not isinstance(self_send, bool):
+        raise ValidationError("agent_raw_inject self_send must be a boolean")
     data: dict[str, Any] = {
         "target_session": target_session,
         "payload": payload,
         "harness": harness,
         "lane": lane,
+        "verb": verb,
+        "self_send": self_send,
     }
     if sender is not None:
         data["sender"] = sender
@@ -1556,6 +1134,71 @@ def config_write(
     return _build("config_write", "config", data)
 
 
+def plan_stamped(
+    *,
+    plan_path: str,
+    session_id: str,
+    outcome: str,
+    node_id: str | None = None,
+    status_from: str | None = None,
+    status_to: str | None = None,
+    urls: list[str] | None = None,
+    expected_url_count: int | None = None,
+    reason: str | None = None,
+    source: str = "target",
+) -> dict[str, Any]:
+    """Build the receipt emitted after a plan stamp is applied."""
+    if outcome not in {"stamped", "idempotent_noop"}:
+        raise ValidationError(f"unknown plan_stamped outcome: {outcome!r}")
+    data: dict[str, Any] = {
+        "plan_path": plan_path,
+        "session_id": session_id,
+        "outcome": outcome,
+    }
+    for key, value in (
+        ("node_id", node_id),
+        ("status_from", status_from),
+        ("status_to", status_to),
+        ("urls", urls),
+        ("expected_url_count", expected_url_count),
+        ("reason", reason),
+    ):
+        if value is not None:
+            data[key] = value
+    return _build("plan_stamped", source, data)
+
+
+def plan_graduated(
+    *,
+    plan_path: str,
+    outcome: str,
+    session_id: str | None = None,
+    node_id: str | None = None,
+    status_from: str | None = None,
+    status_to: str | None = None,
+    urls: list[str] | None = None,
+    expected_url_count: int | None = None,
+    reason: str | None = None,
+    source: str = "target",
+) -> dict[str, Any]:
+    """Build the receipt emitted after a plan graduate decision."""
+    if outcome not in {"graduated", "idempotent_noop", "not_met"}:
+        raise ValidationError(f"unknown plan_graduated outcome: {outcome!r}")
+    data: dict[str, Any] = {"plan_path": plan_path, "outcome": outcome}
+    for key, value in (
+        ("session_id", session_id),
+        ("node_id", node_id),
+        ("status_from", status_from),
+        ("status_to", status_to),
+        ("urls", urls),
+        ("expected_url_count", expected_url_count),
+        ("reason", reason),
+    ):
+        if value is not None:
+            data[key] = value
+    return _build("plan_graduated", source, data)
+
+
 class HermeticEscapeError(RuntimeError):
     """A test process tried to append to a journal outside its sandbox."""
 
@@ -1619,28 +1262,23 @@ def _refuse_hermetic_escape(path: Path) -> None:
 
     Scope, stated so the next reader does not overclaim it: this guards
     :func:`append_event` only. ``events/log.py`` and ``agents/events.py`` write
-    journals through their own file handles and do not pass here, so the doc
-    must not say every Python event write funnels through this function.
+    journals through their own file handles and do not pass here. The rule
+    itself lives in :func:`fno.hermetic.declared_root`, so this fence and the
+    accessor fence in ``fno.paths`` cannot disagree.
     """
-    if os.environ.get("FNO_TEST_HERMETIC") != "1":
-        return
-    roots = _hermetic_allowed_roots()
-    # ONLY the realpath is judged. Accepting the raw form too would let a
-    # symlink sitting inside the sandbox pass while resolving to a live journal
-    # outside it - which is the precise mechanism this guard exists to stop, a
-    # worktree's `.fno/events.jsonl` being a symlink to the canonical one.
-    # Measured: 200 bytes of a production-shaped row reached the outside file
-    # through exactly that shape. The roots carry both forms already, so the
-    # macOS `/var` vs `/private/var` split is still handled.
-    resolved = Path(os.path.realpath(path))
-    if any(resolved == root or root in resolved.parents for root in roots):
-        return
-    raise HermeticEscapeError(
-        f"append_event refused a journal write outside the test sandbox: {path}. "
-        "A hermetic run must not touch a live events.jsonl. Pass an explicit "
-        "events_path= under tmp_path, or resolve the journal with "
-        "fno.paths.project_events_json() so FNO_EVENTS_PATH applies."
-    )
+    from fno.hermetic import UndeclaredStateRootError, declared_root
+
+    try:
+        declared_root(path)
+    except (HermeticEscapeError, UndeclaredStateRootError) as exc:
+        # Both refusals get the journal's remedy: the undeclared one is a
+        # SIBLING class, so catching only the escape sends the wrong advice.
+        raise type(exc)(
+            f"append_event refused a journal write with no declared root: "
+            f"{path}. Pass an explicit events_path= under tmp_path, or resolve "
+            "the journal with fno.paths.project_events_json() so "
+            f"FNO_EVENTS_PATH applies. ({exc})"
+        ) from exc
 
 
 def append_event(
@@ -1648,55 +1286,49 @@ def append_event(
     events_path: Path | None = None,
     *,
     lock_timeout_seconds: float = 30,
-) -> None:
-    """Append a validated event to events.jsonl under a mkdir mutex.
+) -> dict[str, Any] | None:
+    """Commit an event to the authoritative store.
 
-    Validates the event before acquiring the lock so a malformed payload
-    cannot block other writers. The mutex directory matches the convention
-    used by ``scripts/migrate-events-shape.py`` and
-    ``crates/fno-agents/src/claims.rs``, so cross-language callers serialize
-    correctly on the same path.
+    Hands the exact envelope to the native binary's SQL transaction (WAL,
+    FULL sync, positive readback); the store's judge decides the schema at
+    commit, and a refused write raises :class:`ValidationError` carrying
+    the one-line diagnostic. The retention class comes from the store, not
+    a journal route, and there is no file fallback: a failed commit raises
+    :class:`EventStoreUnavailable` instead of reporting a committed event.
+    Returns the native receipt dict.
+
+    ``events_path`` resolves the sibling store (``events.jsonl`` ->
+    ``events.db`` beside it); it is a store locator, never an append target.
+    The store judges the envelope at commit: a refused write raises
+    :class:`ValidationError` carrying the one-line diagnostic.
     """
-    validate(event)
-
     if events_path is None:
         from fno.paths import project_events_json
 
         events_path = project_events_json()
     requested_path = Path(events_path)
-    # Before the mkdir: a refused write must not leave a .fno/ behind either.
+    # Before the commit: a refused write must not leave a .fno/ behind either.
     _refuse_hermetic_escape(requested_path)
-    requested_path.parent.mkdir(parents=True, exist_ok=True)
-    while True:
-        # Setup can replace a local journal with a canonical-journal symlink
-        # while this writer waits on the old mutex. Re-resolve after acquiring
-        # and retry whenever the leaf changed during that handoff.
-        resolved_path = requested_path.resolve()
-        # Re-judge the RESOLVED leaf, not just the requested one. The check
-        # above raced: the loop exists precisely because a local journal can be
-        # swapped for a canonical-journal symlink mid-write, and that swap is
-        # the escape this guard targets. Judging only before the resolve leaves
-        # the window the retry loop was written to acknowledge.
-        _refuse_hermetic_escape(resolved_path)
-        resolved_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_dir = resolved_path.parent / (resolved_path.name + ".lock.d")
-        token = acquire_dir_mutex(lock_dir, lock_timeout_seconds)
-        if token is None:
-            raise TimeoutError(f"events.jsonl lock timeout: {lock_dir}")
-        try:
-            current_path = requested_path.resolve()
-        except (OSError, RuntimeError):
-            release_dir_mutex(lock_dir, token)
-            raise
-        if current_path == resolved_path:
-            break
-        release_dir_mutex(lock_dir, token)
+    from fno.events.store_client import EventStoreUnavailable, emit_envelope
+
+    if requested_path.is_dir():
+        # A directory at the journal path is a corrupt setup, and the store
+        # would silently commit beside it (events.db strips the .jsonl stem),
+        # reporting a mirrored receipt no reader can ever find there.
+        raise EventStoreUnavailable(
+            f"events path is a directory, not a journal: {requested_path}"
+        )
 
     try:
-        with resolved_path.open("a", encoding="utf-8") as fh:
-            fh.write(_json.dumps(event, separators=(",", ":")) + "\n")
-    finally:
-        release_dir_mutex(lock_dir, token)
+        return emit_envelope(event, requested_path, timeout=lock_timeout_seconds)
+    except EventStoreUnavailable:
+        raise
+    except ValidationError:
+        # A judged refusal is the caller's named error class, never a store
+        # failure: the broad catch below exists for everything else.
+        raise
+    except Exception as exc:  # noqa: BLE001 - one named failure class for callers
+        raise EventStoreUnavailable(f"event store commit failed: {exc}") from exc
 
 
 __all__ = [
@@ -1708,6 +1340,7 @@ __all__ = [
     "MAX_DATA_BYTES",
     "RETENTION_DEFAULT",
     "RETENTION_MINIMUM_TTL_HOURS",
+    "EPHEMERAL_SUFFIX",
     "SCHEMA",
     "SESSION_SATISFIED_SOURCES",
     "SchemaUnavailableError",
@@ -1734,6 +1367,7 @@ __all__ = [
     "phase_transition",
     "session_satisfied",
     "retention_for",
+    "EventStoreUnavailable",
     "validate",
     "validate_retention_schema",
     "FanInTally",
@@ -1742,4 +1376,7 @@ __all__ = [
     "wave_advanced",
     "worktree_overlap_observed",
     "config_write",
+    "plan_stamped",
+    "plan_graduated",
+    "agent_raw_inject",
 ]

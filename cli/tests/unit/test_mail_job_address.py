@@ -101,7 +101,7 @@ def test_send_refuses_when_no_holder(runner, isolated, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
     res = runner.invoke(
         app,
-        ["mail", "send", "node:free-abcd", "please review", "--from-name", "king"],
+        ["mail", "send", "node:free-abcd", "review the change", "--from-name", "lead"],
     )
     assert res.exit_code == 16, res.output
     assert "no live holder" in (res.stdout + (res.stderr or "")).lower()
@@ -111,34 +111,23 @@ def test_send_refuses_when_no_holder(runner, isolated, monkeypatch):
 
 def test_send_refuses_when_claim_stale(runner, isolated, monkeypatch):
     # A STALE claim (expired TTL) reads as non-live -> refuse, same path as free.
-    from fno.claims.core import claim_status
+    from fno.claims.core import acquire_claim, claim_status
+    from tests._table_seed import update_claim
 
-    # Acquire with the minimum TTL, then rewrite the lock file to back-date its
-    # expiry past the horizon so classify() reports STALE (not suspect/live).
-    from fno.claims.io import claim_path
-
-    acquire = __import__("fno.claims.core", fromlist=["acquire_claim"]).acquire_claim
-    acquire(
+    acquire_claim(
         key="node:stale-abcd",
         holder="target-session:dead0000-0000-0000-0000-000000000000",
         ttl_ms=60_000,
         reason="test",
         harness="claude",
     )
-    p = claim_path("node:stale-abcd")
-    text = p.read_text()
-    import re
-
-    # Push expires_at into the distant past.
-    text = re.sub(r"expires_at: \d+", "expires_at: 1000", text)
-    text = re.sub(r"acquired_at: \d+", "acquired_at: 1000", text)
-    p.write_text(text)
+    update_claim("node:stale-abcd", acquired_at=1000, expires_at=1000)
     assert claim_status("node:stale-abcd")["state"] == "stale"
 
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
     res = runner.invoke(
         app,
-        ["mail", "send", "node:stale-abcd", "hello", "--from-name", "king"],
+        ["mail", "send", "node:stale-abcd", "hello", "--from-name", "lead"],
     )
     assert res.exit_code == 16, res.output
     assert _bus_to("node:stale-abcd") == []
@@ -167,7 +156,7 @@ def test_send_live_holder_records_audit_without_redelivery(
 
     res = runner.invoke(
         app,
-        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "king"],
+        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "lead"],
     )
     assert res.exit_code == 0, res.output
     assert "delivered (hosted)" in res.stdout
@@ -178,7 +167,7 @@ def test_send_live_holder_records_audit_without_redelivery(
     audit = rows[0]
     assert audit.id in res.stdout
     assert (audit.from_, audit.kind, audit.delivery, audit.to_kind) == (
-        "king", "send", "hosted", "node"
+        "lead", "send", "hosted", "node"
     )
     assert audit.body == injected_bodies[0]
 
@@ -202,7 +191,7 @@ def test_send_live_holder_audit_failure_keeps_hosted_receipt(
 
     result = runner.invoke(
         app,
-        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "king"],
+        ["mail", "send", "node:live-abcd", "ship it", "--from-name", "lead"],
     )
 
     assert result.exit_code == 0, result.output
@@ -228,7 +217,7 @@ def test_send_live_miss_durables_to_job_address(runner, isolated, monkeypatch):
 
     res = runner.invoke(
         app,
-        ["mail", "send", "node:miss-abcd", "try again", "--from-name", "king"],
+        ["mail", "send", "node:miss-abcd", "try again", "--from-name", "lead"],
     )
     assert res.exit_code == 0, res.output
     assert "queued (durable)" in res.stdout
@@ -250,9 +239,9 @@ def test_send_live_miss_durables_to_job_address(runner, isolated, monkeypatch):
 def test_pr_resolves_to_node_and_delivers(runner, isolated, monkeypatch):
     # Seed the graph with one node carrying PR 4242, held live.
     monkeypatch.setattr(
-        "fno.graph.store.read_graph",
+        "fno.graph.api.wire_rows",
         lambda *a, **k: [
-            {"id": "x-pr42", "title": "pr node", "pr_number": 4242, "status": "ready"}
+            {"id": "x-pr42", "title": "pr node", "slug": "x-pr42", "type": "feature", "priority": "p2", "pr_number": 4242, "status": "ready"}
         ],
     )
     _acquire_node("x-pr42", "33333333-3333-3333-3333-333333333333")
@@ -263,7 +252,7 @@ def test_pr_resolves_to_node_and_delivers(runner, isolated, monkeypatch):
     )
 
     res = runner.invoke(
-        app, ["mail", "send", "pr:4242", "review plz", "--from-name", "king"]
+        app, ["mail", "send", "pr:4242", "review plz", "--from-name", "lead"]
     )
     assert res.exit_code == 0, res.output
     assert "node:x-pr42" in res.stdout
@@ -272,7 +261,7 @@ def test_pr_resolves_to_node_and_delivers(runner, isolated, monkeypatch):
 def test_pr_with_no_node_refuses(runner, isolated, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
     res = runner.invoke(
-        app, ["mail", "send", "pr:9991", "hello", "--from-name", "king"]
+        app, ["mail", "send", "pr:9991", "hello", "--from-name", "lead"]
     )
     assert res.exit_code == 16, res.output
     assert _bus_to("node:") == []
@@ -282,7 +271,7 @@ def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
     # Two nodes carry PR 5050 (per-repo numbers collide on the global graph).
     # pr:<n> must refuse rather than silently route to one of them.
     monkeypatch.setattr(
-        "fno.graph.store.read_graph",
+        "fno.graph.api.wire_rows",
         lambda *a, **k: [
             {"id": "x-a", "pr_number": 5050, "status": "ready"},
             {"id": "x-b", "pr_number": 5050, "status": "ready"},
@@ -290,7 +279,7 @@ def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
     )
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
     res = runner.invoke(
-        app, ["mail", "send", "pr:5050", "hi", "--from-name", "king"]
+        app, ["mail", "send", "pr:5050", "hi", "--from-name", "lead"]
     )
     assert res.exit_code == 16, res.output
     out = (res.stdout + (res.stderr or "")).lower()
@@ -301,7 +290,7 @@ def test_pr_refuses_when_ambiguous_across_nodes(runner, isolated, monkeypatch):
 def test_pr_resolves_via_additional_prs(runner, isolated, monkeypatch):
     # A PR carried only as a secondary entry (additional_prs) still resolves.
     monkeypatch.setattr(
-        "fno.graph.store.read_graph",
+        "fno.graph.api.wire_rows",
         lambda *a, **k: [
             {
                 "id": "x-multi",
@@ -317,7 +306,7 @@ def test_pr_resolves_via_additional_prs(runner, isolated, monkeypatch):
         "fno.agents.dispatch._mail_inject_claude", lambda sid, wrapped, **_k: True
     )
     res = runner.invoke(
-        app, ["mail", "send", "pr:101", "secondary pr", "--from-name", "king"]
+        app, ["mail", "send", "pr:101", "secondary pr", "--from-name", "lead"]
     )
     assert res.exit_code == 0, res.output
     assert "node:x-multi" in res.stdout
@@ -328,7 +317,7 @@ def test_pr_unicode_digit_refuses_cleanly(runner, isolated, monkeypatch):
     # crash with a traceback.
     monkeypatch.setenv("CLAUDE_PROJECTS_DIR", str(isolated / "projects"))
     res = runner.invoke(
-        app, ["mail", "send", "pr:²", "hi", "--from-name", "king"]
+        app, ["mail", "send", "pr:²", "hi", "--from-name", "lead"]
     )
     assert res.exit_code == 16, res.output
     assert "Traceback" not in res.output
@@ -486,14 +475,14 @@ def test_an_explicit_from_name_keeps_the_reply_address_it_named(
     )
 
     res = runner.invoke(
-        app, ["mail", "send", "node:named-abc", "ship it", "--from-name", "king"]
+        app, ["mail", "send", "node:named-abc", "ship it", "--from-name", "lead"]
     )
     assert res.exit_code == 0, res.output
     rows = _bus_to("node:named-abc")
     assert len(rows) == 1
-    # Omitted, not this session's: an id here would silently win over "king".
+    # Omitted, not this session's: an id here would silently win over "lead".
     assert rows[0].from_session is None
-    assert rows[0].from_ == "king"
+    assert rows[0].from_ == "lead"
 
     captured: list[str] = []
     monkeypatch.setattr(
@@ -504,7 +493,7 @@ def test_an_explicit_from_name_keeps_the_reply_address_it_named(
         app, ["mail", "reply", "--to", rows[0].id, "--body", "got it"]
     )
     assert reply.exit_code == 0, reply.output
-    assert captured == ["king"]
+    assert captured == ["lead"]
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +515,7 @@ def test_drain_self_surfaces_job_mail_for_holder(runner, isolated, monkeypatch):
         Envelope(
             id="msg-drain-1",
             thread="msg-drain-1",
-            from_="king",
+            from_="lead",
             to="node:drain-abcd",
             kind="send",
             body="reached the successor",
@@ -562,14 +551,9 @@ def test_drain_self_surfaces_job_mail_for_holder(runner, isolated, monkeypatch):
     from fno.claims.core import claim_status as _cs
 
     _diag["direct_status"] = _cs("node:drain-abcd", root=_root)
-    # The leg that separates "the claim is gone" from "the reader looked
-    # somewhere else". `direct_status` above passes $FNO_CLAIMS_ROOT explicitly,
-    # while `resolve_truth_status` derives the root itself, so a disagreement
-    # names the derivation as the suspect. That is exactly what it named once:
-    # see `test_truth_status_root_binding_is_late`.
-    from fno.claims.io import claims_root_for as _crf
-
-    _diag["derived_root"] = str(_crf("node:drain-abcd"))
+    # `direct_status` reads $FNO_CLAIMS_ROOT explicitly; `resolve_truth_status`
+    # passes no root and the native leg routes node: keys to the same store, so
+    # a disagreement names the routing as the suspect.
     assert "reached the successor" in res.stdout, f"diag={_diag}"
 
 
@@ -588,7 +572,7 @@ def test_drain_self_skips_job_mail_when_not_holder(runner, isolated, monkeypatch
         Envelope(
             id="msg-other-1",
             thread="msg-other-1",
-            from_="king",
+            from_="lead",
             to="node:other-abcd",
             kind="send",
             body="not for me",

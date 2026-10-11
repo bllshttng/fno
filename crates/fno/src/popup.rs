@@ -1,4 +1,4 @@
-//! The shared anchored/centered popup overlay widget (x-8ccf US1): the single
+//! The shared anchored/centered popup overlay widget (US1): the single
 //! component behind the row context menu, the which-key keybinds modal, and the
 //! NEW|MENU / settings popups. It owns positioning (clamp + edge-flip), the row
 //! anatomy (glyph · label · right-aligned hint, headers, rules, a full-width
@@ -13,12 +13,17 @@
 //! The selected target renders as a normal-video cut-out in the inverse block.
 
 use crate::chrome::{self, BodyLine, Chrome, FramedLine, Scroll};
-use crate::proto::Cell;
-use crate::theme::{cell_style, Role, Theme};
+use crate::proto::{Cell, Color};
+use crate::theme::{Role, Theme};
 
 /// Popup content never renders wider than this (fixed max width); longer
 /// lines ellipsize. Anchored menus are usually far narrower.
 pub const WIDTH_CAP: usize = 60;
+
+/// Cells of air between a row's right-most content and the right border: the
+/// two-cell inset the review asked for, so key hints and clipped hints never
+/// touch the edge.
+const BODY_RIGHT_GAP_COLS: usize = 2;
 
 /// Where a popup anchors. `At` opens at a screen cell (pointer / button cell)
 /// and clamps + flips to stay fully on-screen; `Center` centers a fixed block.
@@ -42,8 +47,15 @@ pub struct GridCell {
 pub enum PopupRow {
     /// Section header, rendered in an accent style, not selectable.
     Header(String),
+    /// Plain body text, not selectable: prose and bullets that must not
+    /// wear the header accent. An empty string renders the spacer line.
+    Text(String),
     /// A horizontal rule separator, not selectable.
     Rule,
+    /// A read-only field row: the label in the fixed key column (accent, the
+    /// bold left column a field list reads by), the value plain. No target
+    /// and no hit span: a modal's provenance text, never an action.
+    Info { label: String, value: String },
     /// A selectable action: glyph + label + right-aligned key hint.
     Entry {
         glyph: String,
@@ -59,6 +71,26 @@ pub enum PopupRow {
     FullWidth(String),
     /// A row of selectable grid cells (the 2x2 split block = two Grid rows).
     Grid(Vec<GridCell>),
+    /// A selectable entry with a literal-color swatch beside the label (the
+    /// settings Colors tab). The color is content, not chrome: it paints
+    /// through `Role::Swatch` and never shifts with the theme.
+    SwatchEntry {
+        glyph: String,
+        label: String,
+        hint: String,
+        /// Same contract as `Entry::enabled`.
+        enabled: bool,
+        color: Color,
+    },
+    /// A text field: ` label: text` with one cursor cell, or the dimmed
+    /// placeholder while empty. Never a target: the keyboard owns it.
+    Input {
+        label: String,
+        text: String,
+        /// A char index into `text`; its length is the cell past the end.
+        cursor: usize,
+        placeholder: String,
+    },
 }
 
 impl PopupRow {
@@ -71,11 +103,175 @@ impl PopupRow {
             // hit span so a click resolves to no target (then swallowed by
             // Rendered::contains rather than dismissing the menu). All three
             // reachable paths, not one.
-            PopupRow::Entry { enabled: false, .. } => 0,
-            PopupRow::Entry { .. } | PopupRow::FullWidth(_) => 1,
-            PopupRow::Header(_) | PopupRow::Rule => 0,
+            PopupRow::Entry { enabled: false, .. }
+            | PopupRow::SwatchEntry { enabled: false, .. } => 0,
+            PopupRow::Entry { .. } | PopupRow::SwatchEntry { .. } | PopupRow::FullWidth(_) => 1,
+            PopupRow::Header(_)
+            | PopupRow::Text(_)
+            | PopupRow::Rule
+            | PopupRow::Info { .. }
+            | PopupRow::Input { .. } => 0,
         }
     }
+}
+
+/// Wrap rows wider than `w` content columns instead of cutting them. A
+/// Header splits at word bounds into several Headers. An Entry, Info or
+/// SwatchEntry keeps its key and its text's first line, and the rest follows as
+/// inert continuation Headers indented under the text column. An Entry hint
+/// that leaves its label too little room moves onto continuation lines of its
+/// own. A FullWidth row keeps its first line selectable. Returns each output
+/// row's source index; continuations are inert, so the selectable order holds.
+fn wrap_rows(rows: &[PopupRow], w: usize, kw: usize, plain: bool) -> (Vec<PopupRow>, Vec<usize>) {
+    const MIN_LABEL_W: usize = 12;
+    let wrap = |text: &str, width: usize| {
+        let mut out = Vec::new();
+        crate::client::wrap_line(text, width.max(1), &mut out);
+        out
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    let mut src = Vec::with_capacity(rows.len());
+    fn tail(
+        out: &mut Vec<PopupRow>,
+        src: &mut Vec<usize>,
+        i: usize,
+        indent: usize,
+        lines: Vec<String>,
+        cont: fn(String) -> PopupRow,
+    ) {
+        for line in lines {
+            out.push(cont(format!("{}{line}", " ".repeat(indent))));
+            src.push(i);
+        }
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let cols = chrome::str_cols;
+        match row {
+            // A Header renders as " {s}" with two cells of air after it.
+            PopupRow::Header(s) | PopupRow::FullWidth(s) if cols(s) + 1 > w => {
+                let mut lines = wrap(s, w.saturating_sub(2)).into_iter();
+                let first = lines.next().unwrap_or_default();
+                out.push(match row {
+                    PopupRow::FullWidth(_) => PopupRow::FullWidth(first),
+                    _ => PopupRow::Header(first),
+                });
+                src.push(i);
+                tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Header);
+            }
+            // Body text wraps like a Header but lands as plain Text rows.
+            PopupRow::Text(s) if cols(s) + 1 > w => {
+                let mut lines = wrap(s, w.saturating_sub(2)).into_iter();
+                let first = lines.next().unwrap_or_default();
+                out.push(PopupRow::Text(first));
+                src.push(i);
+                tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Text);
+            }
+            // An Entry wraps only where render would cut it: pad + key column
+            // + gap + label in a plain body, pad + glyph + space + label
+            // otherwise, and a non-plain hint needs its space and two cells of
+            // air too. Wrapped lines keep kw + 5 for air.
+            PopupRow::Entry {
+                glyph,
+                label,
+                hint,
+                enabled,
+            } if 2
+                + cols(label)
+                + if plain {
+                    kw
+                } else if hint.is_empty() {
+                    cols(glyph)
+                } else {
+                    cols(glyph) + cols(hint) + 3
+                }
+                > w =>
+            {
+                let with_hint = w.saturating_sub(cols(glyph) + cols(hint) + 5);
+                let hint_inline = plain || hint.is_empty() || with_hint >= MIN_LABEL_W;
+                let label_w = if hint_inline && !plain && !hint.is_empty() {
+                    with_hint
+                } else {
+                    w.saturating_sub(kw + 5)
+                };
+                let mut lines = wrap(label, label_w).into_iter();
+                out.push(PopupRow::Entry {
+                    glyph: glyph.clone(),
+                    label: lines.next().unwrap_or_default(),
+                    hint: if hint_inline {
+                        hint.clone()
+                    } else {
+                        String::new()
+                    },
+                    enabled: *enabled,
+                });
+                src.push(i);
+                tail(
+                    &mut out,
+                    &mut src,
+                    i,
+                    kw + 1,
+                    lines.collect(),
+                    PopupRow::Header,
+                );
+                if !hint_inline {
+                    tail(
+                        &mut out,
+                        &mut src,
+                        i,
+                        kw + 1,
+                        wrap(hint, w.saturating_sub(kw + 5)),
+                        PopupRow::Header,
+                    );
+                }
+            }
+            PopupRow::Info { label, value } if kw + 2 + cols(value) > w => {
+                let mut lines = wrap(value, w.saturating_sub(kw + 4)).into_iter();
+                out.push(PopupRow::Info {
+                    label: label.clone(),
+                    value: lines.next().unwrap_or_default(),
+                });
+                src.push(i);
+                tail(
+                    &mut out,
+                    &mut src,
+                    i,
+                    kw + 1,
+                    lines.collect(),
+                    PopupRow::Header,
+                );
+            }
+            PopupRow::SwatchEntry {
+                glyph,
+                label,
+                hint,
+                enabled,
+                color,
+            } if plain && kw + 5 + cols(label) > w => {
+                let mut lines = wrap(label, w.saturating_sub(kw + 8)).into_iter();
+                out.push(PopupRow::SwatchEntry {
+                    glyph: glyph.clone(),
+                    label: lines.next().unwrap_or_default(),
+                    hint: hint.clone(),
+                    enabled: *enabled,
+                    color: *color,
+                });
+                src.push(i);
+                tail(
+                    &mut out,
+                    &mut src,
+                    i,
+                    kw + 4,
+                    lines.collect(),
+                    PopupRow::Header,
+                );
+            }
+            row => {
+                out.push(row.clone());
+                src.push(i);
+            }
+        }
+    }
+    (out, src)
 }
 
 /// Menu glyphs must stay in the BMP. Astral symbols render as tofu on
@@ -88,7 +284,7 @@ pub fn menu_glyph_is_bmp(glyph: &str) -> bool {
 fn validate_menu_glyphs(rows: &[PopupRow]) {
     for row in rows {
         match row {
-            PopupRow::Entry { glyph, .. } => assert!(
+            PopupRow::Entry { glyph, .. } | PopupRow::SwatchEntry { glyph, .. } => assert!(
                 menu_glyph_is_bmp(glyph),
                 "menu glyph must be a non-empty BMP string: {glyph:?}"
             ),
@@ -101,7 +297,12 @@ fn validate_menu_glyphs(rows: &[PopupRow]) {
                     );
                 }
             }
-            PopupRow::Header(_) | PopupRow::Rule | PopupRow::FullWidth(_) => {}
+            PopupRow::Header(_)
+            | PopupRow::Text(_)
+            | PopupRow::Rule
+            | PopupRow::FullWidth(_)
+            | PopupRow::Info { .. }
+            | PopupRow::Input { .. } => {}
         }
     }
 }
@@ -128,18 +329,43 @@ pub struct Popup {
     /// which-key modal scrolls; short anchored menus keep this 0). Clamped in
     /// [`Popup::render`] so it can never scroll past the last screenful.
     pub scroll: usize,
+    /// Extend selectable entry rows to the inner width required by the
+    /// chrome, including a longer footer or title.
+    full_width_selection: bool,
     /// The chrome every modal wears. Its level is derived from `anchor` and
     /// private (no setter), so every centered modal is Full and every anchored
     /// menu is Bare with no way for a call site to disagree.
     pub chrome: Chrome,
+    /// A floor the caller pins so a TABBED modal keeps one width across its
+    /// tabs (tabbed-modal width): the widest tab's content width, capped by
+    /// [`WIDTH_CAP`] in [`Popup::render`]. `0` (the default) measures only
+    /// this tab's own rows.
+    pub min_width: usize,
+    /// Opt this popup into the plain-body anatomy: no inverse ground, the key
+    /// column bold accent ([`Role::BodyAccent`]), the cursor row the one
+    /// filled band ([`Role::BodyCursor`]), section headings accent text. The
+    /// which-key modal's shape (the unreadable-inverse-body review).
+    pub plain_body: bool,
+    /// A viewport ceiling as a percent of terminal rows, `0` (the default) =
+    /// uncapped. The which-key modal caps at 60 so a tall table scrolls in a
+    /// fixed window instead of growing one row per binding.
+    pub body_cap_pct: usize,
+    /// Keep the LABEL column whole on a narrow block and clip the HINT
+    /// instead. The default protects the hint (the key modal's stable
+    /// action id); a picker whose hint is a prose error needs the opposite:
+    /// the diagnosis label must never ellipsize.
+    pub label_first: bool,
+    /// The content width ceiling, [`WIDTH_CAP`] by default. The screen still
+    /// caps it in [`Popup::render`].
+    pub width_cap: usize,
 }
 
 /// One laid-out line ready to draw, plus its style and the selected sub-span
-/// (whole line for an Entry/FullWidth, a single cell for a Grid).
+/// (whole line for an Entry/FullWidth, the key column of a plain-body Entry, a
+/// single cell for a Grid).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedLine {
     pub text: String,
-    pub header: bool,
     /// Whether this line is a greyed, inert `Entry`. Computed once here (the
     /// only place that reads `enabled`) and carried through rather than
     /// re-derived by re-indexing `self.rows` later - two derivations of the
@@ -156,6 +382,14 @@ pub struct RenderedLine {
     /// unframed body line (tests); the production draw path colors each char by
     /// `roles[j]` via [`crate::theme::cell_style`].
     pub roles: Vec<Role>,
+    /// `(char_offset, len, role)` spans styling the line's chars. A char no
+    /// span covers takes [`RenderedLine::pad_role`]. Set only on a plain-body
+    /// popup's rows (the key column, a section heading, the cursor band); the
+    /// framed pass translates them into the per-char `roles`.
+    pub segs: Vec<(usize, usize, Role)>,
+    /// The role for chars no seg covers: the theme ground
+    /// ([`Role::PanelBody`]) under every theme - one body treatment.
+    pub pad_role: Role,
 }
 
 /// A fully laid-out popup: where it sits and the lines to draw.
@@ -179,6 +413,31 @@ impl Rendered {
         let col = col as usize;
         row >= r0 && row < r0 + h && col >= c0 && col < c0 + self.width
     }
+
+    fn hits_at(&self, row: u16, col: u16) -> impl Iterator<Item = usize> + '_ {
+        let (r0, c0) = self.origin;
+        let line = (row as usize)
+            .checked_sub(r0)
+            .and_then(|li| self.lines.get(li));
+        let cc = (col as usize).checked_sub(c0);
+        line.into_iter().flat_map(move |line| {
+            line.hits
+                .iter()
+                .filter(move |(_, off, len)| cc.is_some_and(|cc| cc >= *off && cc < off + len))
+                .map(|(t, _, _)| *t)
+        })
+    }
+
+    /// The body row target under a screen cell. Tabs and esc spans are not
+    /// rows: returning one would clamp `select` onto the last entry.
+    pub fn row_target_at(&self, row: u16, col: u16) -> Option<usize> {
+        self.hits_at(row, col).find(|t| chrome::is_row_hit(*t))
+    }
+
+    /// The tab index under a screen cell.
+    pub fn tab_at(&self, row: u16, col: u16) -> Option<usize> {
+        self.hits_at(row, col).find_map(chrome::tab_of_hit)
+    }
 }
 
 impl Popup {
@@ -190,7 +449,19 @@ impl Popup {
             anchor,
             sel: 0,
             scroll: 0,
+            min_width: 0,
+            full_width_selection: false,
+            plain_body: false,
+            body_cap_pct: 0,
+            label_first: false,
+            width_cap: WIDTH_CAP,
         }
+    }
+
+    /// Raise (or lower) the content width ceiling (see the field doc).
+    pub fn width_cap(mut self, w: usize) -> Self {
+        self.width_cap = w;
+        self
     }
 
     /// Set the chrome title (the modal's heading).
@@ -210,6 +481,54 @@ impl Popup {
         self.chrome.footer = Some(f.into());
         self
     }
+    /// Pin the width floor for a tabbed modal (see the field doc).
+    pub fn min_width(mut self, w: usize) -> Self {
+        self.min_width = w;
+        self
+    }
+
+    /// Opt this popup into the plain-body anatomy (see the field doc).
+    pub fn plain_body(mut self) -> Self {
+        self.plain_body = true;
+        self
+    }
+
+    /// Cap the viewport at a percent of terminal rows (see the field doc).
+    pub fn body_cap_pct(mut self, pct: usize) -> Self {
+        self.body_cap_pct = pct;
+        self
+    }
+
+    /// Keep the label column whole and clip the hint instead (see the field
+    /// doc).
+    pub fn label_first(mut self) -> Self {
+        self.label_first = true;
+        self
+    }
+
+    /// The content width this popup's own rows measure to, BEFORE the
+    /// clamp/frame: the number a tabbed caller takes as one tab's
+    /// contribution to the shared floor.
+    pub fn content_width(&self) -> usize {
+        self.measure_content_w()
+    }
+
+    /// Opt this anchored menu into the full chrome (title row + footer row).
+    /// `Anchor::At` fixes `Level::Bare` - border-only, the selector menus'
+    /// shape - but the composer's pickers carry their grammar in words: the
+    /// live filter query rides the title and the list keys the footer, so
+    /// both rows must render while the menu stays anchored to its chip.
+    pub fn full_chrome(mut self) -> Self {
+        self.chrome = self.chrome.full();
+        self
+    }
+
+    /// Make entry hit targets and selection spans fill the rendered inner
+    /// width. Useful when the footer is wider than every row.
+    pub fn full_width_selection(mut self) -> Self {
+        self.full_width_selection = true;
+        self
+    }
 
     /// Scroll the body by `delta` rows (negative = up), saturating at the top.
     /// The bottom clamp happens in [`Popup::render`] against the live viewport.
@@ -222,35 +541,75 @@ impl Popup {
     /// too-short terminal still shows one body row. Must agree with the window
     /// [`Popup::render`] cuts, else `follow_sel`/`clamp_sel` could park the
     /// selection in a body row render() windows out (an invisible Enter target).
-    fn viewport_h(&self, term_rows: usize) -> usize {
+    fn viewport_h(&self, term_rows: usize, lines: usize) -> usize {
         let avail = term_rows.saturating_sub(self.chrome.rows_overhead()).max(1);
-        self.rows.len().min(avail)
+        let avail = if self.body_cap_pct > 0 {
+            avail.min((term_rows * self.body_cap_pct / 100).max(1))
+        } else {
+            avail
+        };
+        lines.min(avail)
+    }
+
+    /// Each laid-out body line's source row at a `tcols`-wide terminal: the
+    /// layout [`Popup::render`] draws, so scroll and selection agree with it.
+    fn line_src(&self, tcols: usize) -> Vec<usize> {
+        wrap_rows(
+            &self.rows,
+            self.layout_w(tcols),
+            self.key_col_w(),
+            self.plain_body,
+        )
+        .1
+    }
+
+    /// The fixed key-column width for a plain-body popup: the widest entry
+    /// glyph or Info label, so descriptions start on one column. Non-plain
+    /// popups never call it.
+    fn key_col_w(&self) -> usize {
+        self.rows
+            .iter()
+            .filter_map(|r| match r {
+                PopupRow::Entry { glyph, .. } | PopupRow::SwatchEntry { glyph, .. } => {
+                    Some(chrome::str_cols(glyph))
+                }
+                PopupRow::Info { label, .. } => Some(chrome::str_cols(label)),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
     }
 
     /// After an arrow move, scroll so the selected row stays visible (a tall
     /// menu/modal must never leave the selection off-screen, where Enter would
     /// run an invisible entry).
-    pub fn follow_sel(&mut self, term_rows: usize) {
-        let vis_h = self.viewport_h(term_rows);
+    pub fn follow_sel(&mut self, term: (u16, u16)) {
+        let src = self.line_src(term.1.max(1) as usize);
+        let vis_h = self.viewport_h(term.0.max(1) as usize, src.len());
         if let Some((ri, _)) = self.selected() {
-            if ri < self.scroll {
-                self.scroll = ri;
-            } else if ri >= self.scroll + vis_h {
-                self.scroll = ri + 1 - vis_h;
+            let li = src.iter().position(|&r| r == ri).unwrap_or(0);
+            if li < self.scroll {
+                self.scroll = li;
+            } else if li >= self.scroll + vis_h {
+                self.scroll = li + 1 - vis_h;
             }
         }
-        self.scroll = self.scroll.min(self.rows.len().saturating_sub(vis_h));
+        self.scroll = self.scroll.min(src.len().saturating_sub(vis_h));
     }
 
     /// After a page/wheel scroll, pull the selection onto a visible row, so a
     /// subsequent Enter can never execute an off-screen target.
-    pub fn clamp_sel_to_view(&mut self, term_rows: usize) {
-        let vis_h = self.viewport_h(term_rows);
-        let scroll = self.scroll.min(self.rows.len().saturating_sub(vis_h));
-        let (lo, hi) = (scroll, scroll + vis_h);
+    pub fn clamp_sel_to_view(&mut self, term: (u16, u16)) {
+        let src = self.line_src(term.1.max(1) as usize);
+        let vis_h = self.viewport_h(term.0.max(1) as usize, src.len());
+        let scroll = self.scroll.min(src.len().saturating_sub(vis_h));
+        let visible = |ri: usize| {
+            let li = src.iter().position(|&r| r == ri).unwrap_or(0);
+            li >= scroll && li < scroll + vis_h
+        };
         if let Some((ri, _)) = self.selected() {
-            if ri < lo || ri >= hi {
-                if let Some(idx) = self.targets().iter().position(|(r, _)| *r >= lo && *r < hi) {
+            if !visible(ri) {
+                if let Some(idx) = self.targets().iter().position(|(r, _)| visible(*r)) {
                     self.sel = idx;
                 }
             }
@@ -317,74 +676,194 @@ impl Popup {
         }
     }
 
-    /// Lay the popup out against a `(rows, cols)` terminal: compute the block
-    /// width from its content, position it (centered or clamped/flipped anchor),
-    /// and render each row to a padded line with selection + hit-test spans.
-    pub fn render(&self, term: (u16, u16)) -> Rendered {
-        let (trows, tcols) = (term.0.max(1) as usize, term.1.max(1) as usize);
-        let sel = self.selected();
-        // Per-cell width for a grid row: the widest cell content + padding.
-        let grid_cell_w = self
-            .rows
+    /// Per-cell width for a grid row: the widest cell content + padding.
+    fn grid_cell_w(&self) -> usize {
+        self.rows
             .iter()
             .flat_map(|r| match r {
                 PopupRow::Grid(cells) => cells
                     .iter()
-                    .map(|c| c.glyph.chars().count() + c.label.chars().count() + 3)
+                    .map(|c| chrome::str_cols(&c.glyph) + chrome::str_cols(&c.label) + 3)
                     .collect::<Vec<_>>(),
                 _ => vec![],
             })
             .max()
-            .unwrap_or(0);
-        // Content width: the widest row before padding.
-        let content_w = self
-            .rows
+            .unwrap_or(0)
+    }
+
+    /// The widest row before padding (the content width). Shared by
+    /// [`Popup::render`] and [`Popup::content_width`].
+    fn measure_content_w(&self) -> usize {
+        let kw = if self.plain_body { self.key_col_w() } else { 0 };
+        self.rows
             .iter()
             .map(|r| match r {
-                PopupRow::Header(s) | PopupRow::FullWidth(s) => s.chars().count() + 2,
+                PopupRow::Header(s) | PopupRow::Text(s) | PopupRow::FullWidth(s) => {
+                    chrome::str_cols(s) + 2
+                }
                 PopupRow::Rule => 0,
+                PopupRow::Info { label: _, value } => 1 + kw + 1 + chrome::str_cols(value) + 2,
+                PopupRow::Input {
+                    label,
+                    text,
+                    placeholder,
+                    ..
+                } => {
+                    let body = chrome::str_cols(text).max(1 + chrome::str_cols(placeholder));
+                    1 + chrome::str_cols(label) + 2 + body + 1 + 2
+                }
                 PopupRow::Entry {
                     glyph, label, hint, ..
                 } => {
-                    // glyph + space + label + gap + hint
-                    glyph.chars().count() + 1 + label.chars().count() + 2 + hint.chars().count() + 2
+                    if self.plain_body {
+                        // The two-column shape: leading pad + fixed key column
+                        // + gap + label; the hint column is dropped.
+                        1 + kw + 1 + chrome::str_cols(label) + 2
+                    } else {
+                        // glyph + space + label + gap + hint
+                        chrome::str_cols(glyph)
+                            + 1
+                            + chrome::str_cols(label)
+                            + 2
+                            + chrome::str_cols(hint)
+                            + 2
+                    }
                 }
-                PopupRow::Grid(cells) => grid_cell_w * cells.len(),
+                PopupRow::Grid(cells) => self.grid_cell_w() * cells.len(),
+                PopupRow::SwatchEntry {
+                    glyph, label, hint, ..
+                } => {
+                    let _ = hint;
+                    if self.plain_body {
+                        // Two-column shape + the two swatch cells.
+                        1 + kw + 1 + 2 + 1 + chrome::str_cols(label) + 2
+                    } else {
+                        chrome::str_cols(glyph) + 1 + chrome::str_cols(label) + 2 + 2 + 2
+                    }
+                }
             })
             .max()
-            .unwrap_or(0);
-        let width = content_w.clamp(1, WIDTH_CAP.min(tcols));
+            .unwrap_or(0)
+    }
+
+    /// The body width [`Popup::render`] lays rows out at for a `tcols`-wide
+    /// terminal.
+    fn layout_w(&self, tcols: usize) -> usize {
+        // Content width: the widest row before padding, raised to the caller's
+        // tabbed floor and the chrome's own minimum (title/footer/tabs), so
+        // the frame never pads the extra columns with body background the
+        // selection span does not cover (popup width rules).
+        let content_w = self
+            .measure_content_w()
+            .max(self.min_width)
+            .max(self.chrome.min_inner_w());
+        // The framer paints its two pad cells INSIDE the body width, so the
+        // framed block spans `width + 4`: cap the builder width to the
+        // terminal minus the borders and the pad, or the right border leaves
+        // a full-width screen.
+        let cap = self
+            .width_cap
+            .min(tcols.saturating_sub(chrome::Chrome::FRAME_COLS * 2).max(1));
+        if self.full_width_selection {
+            content_w
+                .min(cap)
+                .max(self.chrome.min_inner_w().min(tcols))
+                .max(1)
+        } else {
+            content_w.clamp(1, cap)
+        }
+    }
+
+    /// Lay the popup out against a `(rows, cols)` terminal: compute the block
+    /// width from its content, position it (centered or clamped/flipped anchor),
+    /// and render each row to a padded line with selection + hit-test spans. A
+    /// row wider than the block wraps onto inert continuation lines.
+    pub fn render(&self, term: (u16, u16)) -> Rendered {
+        let (trows, tcols) = (term.0.max(1) as usize, term.1.max(1) as usize);
+        let sel = self.selected();
+        let width = self.layout_w(tcols);
+        let kw = self.key_col_w();
+        let (rows, src) = wrap_rows(&self.rows, width, kw, self.plain_body);
 
         let mut target_idx = 0usize;
-        let mut lines = Vec::with_capacity(self.rows.len());
-        for (ri, row) in self.rows.iter().enumerate() {
+        let mut lines = Vec::with_capacity(rows.len());
+        for (li, row) in rows.iter().enumerate() {
+            let ri = src[li];
             let line = match row {
-                PopupRow::Header(s) => RenderedLine {
-                    text: pad(&format!(" {s}"), width),
-                    header: true,
-                    disabled: false,
-                    sel_span: None,
-                    hits: vec![],
-                    roles: vec![],
-                },
+                PopupRow::Header(s) => {
+                    let text = pad(&format!(" {s}"), width);
+                    // A section heading is accent TEXT on the theme ground,
+                    // never a band; an empty header is the inter-section
+                    // spacer line. One body treatment under every theme.
+                    let segs = (!s.is_empty())
+                        .then(|| vec![(0usize, text.chars().count(), Role::BodyAccent)])
+                        .unwrap_or_default();
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs,
+                        pad_role: Role::PanelBody,
+                    }
+                }
+                PopupRow::Text(s) => {
+                    // Body text: no accent, no selection. An empty string is
+                    // the inter-section spacer line.
+                    let text = pad(&format!(" {s}"), width);
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs: vec![],
+                        pad_role: Role::PanelBody,
+                    }
+                }
                 PopupRow::Rule => RenderedLine {
                     text: "─".repeat(width),
-                    header: false,
                     disabled: false,
                     sel_span: None,
                     hits: vec![],
                     roles: vec![],
+                    segs: vec![],
+                    pad_role: Role::PanelMeta,
                 },
+                PopupRow::Info { label, value } => {
+                    // The plain two-column shape, inert: the label sits in the
+                    // fixed key column as accent text (the bold left column a
+                    // field list reads by), the value plain. No hit span and
+                    // no selection: provenance text, never an action.
+                    let text = pad(&format!(" {} {}", pad(label, kw), value), width);
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs: vec![(1usize, kw, Role::BodyAccent)],
+                        pad_role: Role::PanelBody,
+                    }
+                }
+                PopupRow::Input {
+                    label,
+                    text,
+                    cursor,
+                    placeholder,
+                } => input_line(label, text, *cursor, placeholder, width),
                 PopupRow::FullWidth(s) => {
                     let ti = target_idx;
                     target_idx += 1;
                     RenderedLine {
                         text: pad(&format!(" {s}"), width),
-                        header: false,
                         disabled: false,
                         sel_span: (sel == Some((ri, 0))).then_some((0, width)),
                         hits: vec![(ti, 0, width)],
                         roles: vec![],
+                        segs: vec![],
+                        pad_role: Role::PanelBody,
                     }
                 }
                 PopupRow::Entry {
@@ -393,22 +872,83 @@ impl Popup {
                     hint,
                     enabled,
                 } => {
-                    // The right column is EXACT; the left one ellipsizes. Padding
-                    // the whole row and letting `pad` clip from the right ate the
-                    // hint on a narrow modal, and in the key modal the hint is the
-                    // stable action id an operator types into `config.mux.keys`.
-                    // A clipped `grab-…` there is worse than absent, because it
-                    // still looks like an id. The label is prose and survives
-                    // clipping as something a reader can still recognise.
-                    let hint_w = hint.chars().count();
-                    let left = format!(" {glyph} {label}");
-                    let text = if hint_w == 0 {
-                        pad(&left, width)
-                    } else {
-                        let room = width.saturating_sub(hint_w + 2);
-                        pad(&format!("{} {hint} ", pad(&left, room)), width)
-                    };
                     let disabled = !*enabled;
+                    let selected = !disabled && sel == Some((ri, 0));
+                    // Plain-body: the two-column shape. The key column is
+                    // fixed-width accent text, the label plain, the hint
+                    // column dropped. The cursor row is the one filled band,
+                    // riding the segs: a sel_span would paint the inverse
+                    // cut-out, invisible on the plain ground.
+                    let (text, segs, pad_role, sel_span) = if self.plain_body {
+                        let left = format!(" {} {}", pad(glyph, kw), label);
+                        let text = pad(&left, width);
+                        let chars = text.chars().count();
+                        let segs = if disabled {
+                            vec![]
+                        } else if selected {
+                            vec![(0usize, chars, Role::BodyCursor)]
+                        } else {
+                            // Char 0 is the leading pad; the key chars carry
+                            // the accent span.
+                            vec![(1usize, kw, Role::BodyAccent)]
+                        };
+                        (
+                            text,
+                            segs,
+                            if selected {
+                                Role::BodyCursor
+                            } else {
+                                Role::PanelBody
+                            },
+                            None,
+                        )
+                    } else if self.label_first {
+                        // The LEFT column is exact; the hint clips. A picker's
+                        // hint is prose (a refusal's reason, a route), and the
+                        // label is the diagnosis - the reverse of the key
+                        // modal, whose hint is the stable id.
+                        let left = format!(" {glyph} {label}");
+                        let left_w = chrome::str_cols(&left).min(width);
+                        // The hint never touches the right border: two cells
+                        // of air stay between the last column and the edge.
+                        let room = width.saturating_sub(left_w + BODY_RIGHT_GAP_COLS);
+                        let hint_text = clip_cols(hint, room);
+                        let gap = width
+                            .saturating_sub(left_w + chrome::str_cols(&hint_text))
+                            .max(BODY_RIGHT_GAP_COLS);
+                        let mut text = left;
+                        text.push_str(&" ".repeat(gap));
+                        text.push_str(&hint_text);
+                        (
+                            pad(&text, width),
+                            vec![],
+                            Role::PanelBody,
+                            (!disabled && selected).then_some((0, width)),
+                        )
+                    } else {
+                        // The right column is EXACT; the left one ellipsizes. Padding
+                        // the whole row and letting `pad` clip from the right ate the
+                        // hint on a narrow modal, and in the key modal the hint is the
+                        // stable action id an operator types into `config.mux.keys`.
+                        // A clipped `grab-…` there is worse than absent, because it
+                        // still looks like an id. The label is prose and survives
+                        // clipping as something a reader can still recognise.
+                        // The hint keeps the two-cell air before the border.
+                        let hint_w = chrome::str_cols(hint);
+                        let left = format!(" {glyph} {label}");
+                        let text = if hint_w == 0 {
+                            pad(&left, width)
+                        } else {
+                            let room = width.saturating_sub(hint_w + 1 + BODY_RIGHT_GAP_COLS);
+                            pad(&format!("{} {hint} ", pad(&left, room)), width)
+                        };
+                        (
+                            text,
+                            vec![],
+                            Role::PanelBody,
+                            (!disabled && selected).then_some((0, width)),
+                        )
+                    };
                     // A disabled entry contributes no target and no hit span, so
                     // nav()/selected() (which read targets()) and the click router
                     // (which reads hits) both pass over it. Its row still renders,
@@ -422,34 +962,105 @@ impl Popup {
                     };
                     RenderedLine {
                         text,
-                        header: false,
                         disabled,
-                        sel_span: (!disabled && sel == Some((ri, 0))).then_some((0, width)),
+                        sel_span,
                         hits,
                         roles: vec![],
+                        segs,
+                        pad_role,
+                    }
+                }
+                PopupRow::SwatchEntry {
+                    glyph,
+                    label,
+                    hint,
+                    enabled,
+                    color,
+                } => {
+                    let disabled = !*enabled;
+                    let selected = !disabled && sel == Some((ri, 0));
+                    // The plain-body two-column shape with a two-cell swatch
+                    // between the key column and the label; the swatch paints
+                    // through Role::Swatch, so the color is content. The
+                    // cursor row keeps the swatch cells literal by splitting
+                    // its cursor seg around them.
+                    let swatch_start = 1 + kw + 1;
+                    let text = if self.plain_body {
+                        pad(
+                            &format!(" {} {} {}", pad(glyph, kw), "\u{2588}\u{2588}", label),
+                            width,
+                        )
+                    } else {
+                        // Defensive: no non-plain surface builds this row
+                        // today; render it as a plain entry with no swatch.
+                        let room = width.saturating_sub(chrome::str_cols(hint) + 2);
+                        pad(
+                            &format!("{} {hint} ", pad(&format!(" {glyph} {label}"), room)),
+                            width,
+                        )
+                    };
+                    let chars = text.chars().count();
+                    let mut segs = Vec::new();
+                    if !disabled && self.plain_body {
+                        if selected {
+                            let tail = chars.saturating_sub(swatch_start + 2);
+                            segs.push((0usize, swatch_start, Role::BodyCursor));
+                            segs.push((swatch_start, 2usize, Role::Swatch(*color)));
+                            segs.push((swatch_start + 2, tail, Role::BodyCursor));
+                        } else {
+                            // The accent marks the CHOSEN row only: the
+                            // builder's `●` glyph. Unchosen radios read as
+                            // ordinary text, never a wall of brand marks.
+                            if glyph == "\u{25cf}" {
+                                segs.push((1usize, kw, Role::BodyAccent));
+                            }
+                            segs.push((swatch_start, 2usize, Role::Swatch(*color)));
+                        }
+                    }
+                    let hits = if disabled {
+                        Vec::new()
+                    } else {
+                        let ti = target_idx;
+                        target_idx += 1;
+                        vec![(ti, 0, width)]
+                    };
+                    RenderedLine {
+                        text,
+                        disabled,
+                        sel_span: None,
+                        hits,
+                        roles: vec![],
+                        segs,
+                        pad_role: if selected && self.plain_body {
+                            Role::BodyCursor
+                        } else {
+                            Role::PanelBody
+                        },
                     }
                 }
                 PopupRow::Grid(cells) => {
                     let mut text = String::new();
                     let mut hits = Vec::new();
                     let mut sel_span = None;
+                    let gcw = self.grid_cell_w();
                     for (ci, c) in cells.iter().enumerate() {
-                        let cell = center(&format!("{} {}", c.glyph, c.label), grid_cell_w);
-                        let off = ci * grid_cell_w;
-                        hits.push((target_idx, off, grid_cell_w));
+                        let cell = center(&format!("{} {}", c.glyph, c.label), gcw);
+                        let off = ci * gcw;
+                        hits.push((target_idx, off, gcw));
                         if sel == Some((ri, ci)) {
-                            sel_span = Some((off, grid_cell_w));
+                            sel_span = Some((off, gcw));
                         }
                         target_idx += 1;
                         text.push_str(&cell);
                     }
                     RenderedLine {
                         text: pad(&text, width),
-                        header: false,
                         disabled: false,
                         sel_span,
                         hits,
                         roles: vec![],
+                        segs: vec![],
+                        pad_role: Role::PanelBody,
                     }
                 }
             };
@@ -462,7 +1073,7 @@ impl Popup {
         // the bottom border off-screen, which is the single easiest bug to ship
         // here (an anchored menu near the bottom edge flips above its anchor).
         let body_total = lines.len();
-        let body_vis_h = self.viewport_h(trows);
+        let body_vis_h = self.viewport_h(trows, body_total);
         let scroll = self.scroll.min(body_total.saturating_sub(body_vis_h));
         let windowed: Vec<RenderedLine> = lines[scroll..scroll + body_vis_h].to_vec();
         let scroll_state = (body_total > body_vis_h).then_some(Scroll {
@@ -471,18 +1082,26 @@ impl Popup {
             visible: body_vis_h,
         });
         // Hand the body to chrome as BodyLines; frame() shifts hit offsets past
-        // the left border and adds the chrome rows + scrollbar column.
+        // the left border and adds the chrome rows + scrollbar column. The
+        // body width arrives pad-inclusive: frame() paints the two side pads
+        // inside it, so the builder rows padded to `width` survive whole.
         let body: Vec<BodyLine> = windowed
             .iter()
             .map(|l| BodyLine {
+                segs: l.segs.clone(),
+                pad_role: l.pad_role,
                 text: l.text.clone(),
-                header: l.header,
                 disabled: l.disabled,
                 sel_span: l.sel_span,
                 hits: l.hits.clone(),
             })
             .collect();
-        let framed = chrome::frame(&body, &self.chrome, width, scroll_state);
+        let framed = chrome::frame(
+            &body,
+            &self.chrome,
+            width + chrome::Chrome::FRAME_COLS,
+            scroll_state,
+        );
         let total_h = framed.lines.len();
         let origin = origin(self.anchor, framed.width, total_h, (trows, tcols));
         // Convert framed lines back to RenderedLines (roles carry styling; hits
@@ -492,11 +1111,12 @@ impl Popup {
             .into_iter()
             .map(|fl: FramedLine| RenderedLine {
                 text: fl.text,
-                header: false,
                 disabled: false,
                 sel_span: None,
                 hits: fl.hits,
                 roles: fl.roles,
+                segs: vec![],
+                pad_role: Role::PanelBody,
             })
             .collect();
         Rendered {
@@ -504,6 +1124,47 @@ impl Popup {
             width: framed.width,
             lines,
         }
+    }
+}
+
+/// Lay out one text field row. A text wider than the room shows the window
+/// that keeps the cursor cell in view.
+fn input_line(
+    label: &str,
+    text: &str,
+    cursor: usize,
+    placeholder: &str,
+    width: usize,
+) -> RenderedLine {
+    let head = format!(" {label}: ");
+    let head_n = head.chars().count();
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    let room = width.saturating_sub(head_n + 1).max(1);
+    let start = (cursor + 1).saturating_sub(room);
+    let end = chars.len().min(start + room);
+    let mut line: String = head.clone();
+    line.extend(&chars[start..end]);
+    let cursor_at = head_n + cursor - start;
+    if cursor == chars.len() {
+        line.push(' ');
+    }
+    let mut segs = vec![
+        (1usize, head_n.saturating_sub(2), Role::BodyAccent),
+        (cursor_at, 1, Role::BodyCursor),
+    ];
+    if chars.is_empty() && !placeholder.is_empty() {
+        line.push_str(placeholder);
+        segs.push((cursor_at + 1, placeholder.chars().count(), Role::PanelMeta));
+    }
+    RenderedLine {
+        text: pad(&line, width),
+        disabled: false,
+        sel_span: None,
+        hits: vec![],
+        roles: vec![],
+        segs,
+        pad_role: Role::PanelBody,
     }
 }
 
@@ -529,30 +1190,44 @@ pub fn origin(anchor: Anchor, w: usize, h: usize, term: (usize, usize)) -> (usiz
     }
 }
 
-/// Truncate to `w` display chars (ellipsizing) and pad with spaces to `w`, so a
-/// line is a fixed-width block that fully overwrites the content beneath it.
-/// Mirrors `client::pad_to` (kept local so the widget is self-contained).
+/// Truncate to `w` display columns (ellipsizing) and pad with spaces to `w`, so
+/// a line is a fixed-width block that fully overwrites the content beneath it.
+/// Measured in terminal columns, not chars: a fullwidth glyph is one char and
+/// two cells. The cut is [`crate::chrome::fit_ellipsis`], the one ellipsis
+/// rule; the pad stays local so the widget is self-contained.
 fn pad(s: &str, w: usize) -> String {
-    let count = s.chars().count();
-    if count > w {
-        let mut t: String = s.chars().take(w.saturating_sub(1)).collect();
-        t.push('…');
-        t
+    let cols = chrome::str_cols(s);
+    if cols > w {
+        chrome::fit_ellipsis(s, w)
     } else {
         let mut t = s.to_string();
-        t.push_str(&" ".repeat(w - count));
+        t.push_str(&" ".repeat(w - cols));
         t
     }
 }
 
-/// Center `s` within `w` (space padded); truncates via [`pad`] when too wide.
+/// Clip `s` to `w` display columns, ellipsizing when the cut removes
+/// anything (the label-first hint column's cut; [`pad`] pads to a fixed
+/// block instead).
+fn clip_cols(s: &str, w: usize) -> String {
+    if chrome::str_cols(s) <= w {
+        return s.to_string();
+    }
+    if w == 0 {
+        return String::new();
+    }
+    chrome::fit_ellipsis(s, w)
+}
+
+/// Center `s` within `w` display columns (space padded); truncates via [`pad`]
+/// when too wide.
 fn center(s: &str, w: usize) -> String {
-    let count = s.chars().count();
-    if count >= w {
+    let cols = chrome::str_cols(s);
+    if cols >= w {
         return pad(s, w);
     }
-    let left = (w - count) / 2;
-    let right = w - count - left;
+    let left = (w - cols) / 2;
+    let right = w - cols - left;
     format!("{}{}{}", " ".repeat(left), s, " ".repeat(right))
 }
 
@@ -564,24 +1239,17 @@ fn center(s: &str, w: usize) -> String {
 pub fn draw(cells: &mut [Cell], rows: usize, cols: usize, r: &Rendered, theme: &Theme) {
     let (r0, c0) = r.origin;
     for (i, line) in r.lines.iter().enumerate() {
-        let sr = r0 + i;
-        if sr >= rows {
-            break;
-        }
-        for (j, ch) in line.text.chars().enumerate() {
-            let sc = c0 + j;
-            if sc >= cols {
-                break;
-            }
-            let role = line.roles.get(j).copied().unwrap_or(Role::Body);
-            let (fg, bg, flags) = cell_style(role, theme);
-            cells[sr * cols + sc] = Cell {
-                c: ch,
-                fg,
-                bg,
-                flags,
-            };
-        }
+        chrome::paint_line(
+            cells,
+            rows,
+            cols,
+            r0 + i,
+            c0,
+            &line.text,
+            &line.roles,
+            theme,
+        );
+        chrome::record_close_spans((rows, cols), (r0 + i, c0), r.width, &line.hits);
     }
 }
 
@@ -609,6 +1277,39 @@ mod tests {
             enabled: true,
         }
     }
+
+    #[test]
+    fn a_long_hint_wraps_and_the_label_stays_whole() {
+        // The composer's regression: a disabled row whose LABEL names the
+        // failure must not lose it so a long prose hint can paint. Neither
+        // shape cuts either column now: the hint moves to its own lines.
+        let rows = vec![disabled(
+            "\u{2022}",
+            "model list unavailable",
+            "account records unavailable: Usage: fno-py config get [OPTIONS] {key}",
+        )];
+        for label_first in [false, true] {
+            let mut p = Popup::new(rows.clone(), Anchor::At { row: 1, col: 1 })
+                .full_chrome()
+                .full_width_selection();
+            if label_first {
+                p = p.label_first();
+            }
+            let text: String = p
+                .render((24, 120))
+                .lines
+                .iter()
+                .map(|l| l.text.clone())
+                .collect();
+            assert!(
+                text.contains("model list unavailable"),
+                "label whole: {text:?}"
+            );
+            assert!(text.contains("{key}"), "hint whole: {text:?}");
+            assert!(!text.contains('\u{2026}'), "no ellipsis: {text:?}");
+        }
+    }
+
     fn disabled(g: &str, l: &str, reason: &str) -> PopupRow {
         PopupRow::Entry {
             glyph: g.into(),
@@ -617,6 +1318,30 @@ mod tests {
             enabled: false,
         }
     }
+
+    #[test]
+    fn body_rows_keep_two_cells_of_air_before_the_right_border() {
+        // The right column is EXACT; its hint ends two cells shy of the
+        // border. The label-first shape holds the same gap after its clip.
+        let rows = vec![entry("\u{25cf}", "run", "grab-x")];
+        let p = Popup::new(rows, Anchor::At { row: 1, col: 1 })
+            .full_chrome()
+            .full_width_selection();
+        let rendered = p.render((24, 120));
+        let line = rendered
+            .lines
+            .iter()
+            .find(|l| l.text.contains("grab-x"))
+            .expect("the entry row renders");
+        let text: Vec<char> = line.text.chars().collect();
+        let hint_end = text.iter().rposition(|&c| c == 'x').unwrap();
+        let width = text.len();
+        assert!(
+            width - 1 - hint_end >= 2,
+            "hint must end two cells before the border (width {width}, hint at {hint_end})"
+        );
+    }
+
     fn grid(labels: &[&str]) -> PopupRow {
         PopupRow::Grid(
             labels
@@ -781,6 +1506,53 @@ mod tests {
     }
 
     #[test]
+    fn the_selection_highlight_spans_the_row() {
+        // highlight-span fix:: a footer wider than the rows widens the frame;
+        // the selected row's highlight must reach the borders, not stop at
+        // the narrower content width.
+        let p = Popup::new(
+            vec![entry("a", "one", ""), entry("b", "two", "")],
+            Anchor::Center,
+        )
+        .title("settings")
+        .footer("tab switches section · esc close");
+        let r = p.render((30, 100));
+        // Line 1 is the first (selected) body row.
+        let body = &r.lines[1];
+        let non_border: Vec<&Role> = body.roles.iter().filter(|r| **r != Role::Border).collect();
+        assert!(
+            !non_border.is_empty() && non_border.iter().all(|r| matches!(r, Role::BodySel)),
+            "every body cell of the selected row is highlighted: {:?}",
+            body.roles
+        );
+    }
+
+    #[test]
+    fn a_tabbed_modal_keeps_one_width_across_tabs() {
+        // tabbed-width fix:: the widest tab's floor pins the modal, so
+        // switching tabs never resizes the box. The footer stays short: a
+        // long footer widens every fixture equally and masks the difference.
+        let narrow = Popup::new(vec![entry("a", "one", "")], Anchor::Center)
+            .title("settings")
+            .footer("esc close");
+        let wide = Popup::new(
+            vec![entry("a", "one", "hint-hint-hint"), entry("b", "two", "")],
+            Anchor::Center,
+        )
+        .title("settings")
+        .footer("esc close");
+        let pinned = Popup::new(vec![entry("a", "one", "")], Anchor::Center)
+            .title("settings")
+            .footer("esc close")
+            .min_width(wide.content_width());
+        let w_narrow = narrow.render((30, 100)).width;
+        let w_wide = wide.render((30, 100)).width;
+        let w_pinned = pinned.render((30, 100)).width;
+        assert!(w_wide > w_narrow, "the fixture tabs differ in width");
+        assert_eq!(w_pinned, w_wide, "the floor pins the narrow tab wide");
+    }
+
+    #[test]
     fn render_marks_selected_line_and_hits() {
         let p = Popup::new(
             vec![entry("a", "one", "x"), entry("b", "two", "y")],
@@ -801,8 +1573,9 @@ mod tests {
         // Each body row reports one hit, offset past the left border (+1).
         assert_eq!(body0.hits.len(), 1);
         assert_eq!(body0.hits[0].0, 0);
+        // Border plus the frame's two side pad cells.
         assert_eq!(
-            body0.hits[0].1, 1,
+            body0.hits[0].1, 3,
             "hit offset shifted past the left border"
         );
         assert_eq!(body1.hits[0].0, 1);
@@ -843,7 +1616,7 @@ mod tests {
         // Terminal 5 rows tall. Walk selection down past the fold; scroll follows.
         for _ in 0..8 {
             p.nav(NavDir::Down);
-            p.follow_sel(5);
+            p.follow_sel((5, 80));
         }
         let (ri, _) = p.selected().unwrap();
         assert_eq!(ri, 8);
@@ -869,7 +1642,7 @@ mod tests {
         let mut p = Popup::new(rows, Anchor::Center);
         assert_eq!(p.selected(), Some((0, 0)));
         p.scroll_by(6); // page down
-        p.clamp_sel_to_view(5);
+        p.clamp_sel_to_view((5, 80));
         let (ri, _) = p.selected().unwrap();
         assert!(ri >= p.scroll, "selection moved into the scrolled viewport");
     }
@@ -886,7 +1659,8 @@ mod tests {
         // The two cells occupy disjoint, adjacent spans, offset past the border.
         let (_, off0, len0) = body.hits[0];
         let (_, off1, _) = body.hits[1];
-        assert_eq!(off0, 1, "first cell past the left border");
+        // Border plus the frame's two side pad cells.
+        assert_eq!(off0, 3, "first cell past the left border");
         assert_eq!(off1, off0 + len0, "cells are disjoint and adjacent");
     }
 
@@ -916,14 +1690,24 @@ mod tests {
         // an absence alone, which cannot tell "no color" from "nothing ran".
         let p = Popup::new(vec![entry("a", "one", "x")], Anchor::Center).title("T");
         let r = p.render((24, 80));
-        let theme = Theme::default_theme();
+        // The property belongs to the `terminal` theme specifically: it is
+        // the no-op whose whole contract is byte-identity, while the default
+        // theme paints the chrome.
+        let theme = Theme::from_name("terminal").0;
         let mut cells = vec![Cell::default(); 24 * 80];
         draw(&mut cells, 24, 80, &r, &theme);
         // Positive control: the popup drew its top-left border corner.
-        assert!(cells.iter().any(|c| c.c == '┌'), "drew the border");
-        // Byte-identity: every cell is Default-colored.
+        assert!(cells.iter().any(|c| c.c == '╭'), "drew the border");
+        // Byte-identity except the two named slots the terminal theme still
+        // colors: the border role (its own amber field, and any
+        // mux.theme.border override) and the brand accent on the key column.
+        let border = theme.border;
         for c in cells.iter() {
-            assert_eq!(c.fg, crate::proto::Color::Default);
+            assert!(
+                c.fg == crate::proto::Color::Default || c.fg == border || c.fg == theme.brand,
+                "unexpected fg {:?}",
+                c.fg
+            );
             assert_eq!(c.bg, crate::proto::Color::Default);
         }
     }

@@ -9,6 +9,7 @@
 //! the single source of truth; the client never emulates VT itself.
 
 use std::collections::VecDeque;
+use std::path::Path;
 
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -21,7 +22,7 @@ use alacritty_terminal::vte::ansi::{Color as VtColor, NamedColor, Processor, Rgb
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 use serde::{Deserialize, Serialize};
 
-/// (x-d401) What the pane's own OSC 133 evidence says about its shell: a
+/// What the pane's own OSC 133 evidence says about its shell: a
 /// four-way reading, never a blind default. `Unmeasured` when no marker was
 /// ever seen (nothing here is knowable - the reading the old render folded
 /// into `Idle`), `Running` when a command block is open, `Empty` when the
@@ -129,14 +130,14 @@ pub struct Pane {
     max_retained_bytes: usize,
     /// Between `B` (command start) and `C` (output start): the block's start
     /// anchor row (see [`Pane::anchor_row`]) plus the command echo bytes, so the
-    /// command line is byte-captured (not grid-scraped, which x-122e retired) for
+    /// command line is byte-captured (not grid-scraped, which retired) for
     /// rerun. `None` outside that window.
     pending_cmd: Option<PendingCmd>,
     /// The block seq the keyboard block-selection walk (prefix+v) rests on.
     /// Cleared whenever the selection itself clears.
     selected_block: Option<u64>,
-    /// (v12, x-e780) The active in-scrollback search, or `None`. Each step
-    /// re-scans against the live grid (x-1e67: a frozen snapshot's `abs_row`
+    /// (v12) The active in-scrollback search, or `None`. Each step
+    /// re-scans against the live grid (: a frozen snapshot's `abs_row`
     /// anchors drift once scrollback saturates, landing the highlight on the
     /// wrong row). Shared per-pane (Locked 2) - every co-viewer sees the jump +
     /// highlight; only the initiator gets the `[i/n]` counter.
@@ -170,7 +171,7 @@ struct SearchMatch {
 #[derive(Debug, Clone)]
 struct SearchState {
     /// The query, kept so each step re-scans (anchors drift once scrollback
-    /// saturates, so a frozen snapshot highlights the wrong row - x-1e67).
+    /// saturates, so a frozen snapshot highlights the wrong row -).
     needle: Vec<char>,
     /// Matches for the current position, ascending `abs_row` (oldest -> newest).
     /// Rebuilt against the live grid on every step, so `abs_row` is always fresh.
@@ -309,7 +310,7 @@ impl Pane {
         self.osc_title.title.as_deref()
     }
 
-    /// (x-fbb1) True when this pane is a pristine, idle mux shell - safe to reap
+    /// True when this pane is a pristine, idle mux shell - safe to reap
     /// for `.`=here take-over. Requires positive OSC 133 evidence: markers are
     /// active (`saw_marker`, so the signal is trustworthy - an un-integrated
     /// shell reads false and is never reaped), NO command is running (`open` is
@@ -322,7 +323,7 @@ impl Pane {
         matches!(self.shell_activity(), ShellActivity::Empty)
     }
 
-    /// (x-d401) The pane's shell activity as a four-way reading. This is the
+    /// The pane's shell activity as a four-way reading. This is the
     /// ONE predicate the takeover gate and the sideline render both consume:
     /// `is_pristine_idle_shell` is `matches!(.., Empty)` over it, and the
     /// bare-pane sideline row carries it so a render can distinguish a live
@@ -463,7 +464,7 @@ impl Pane {
         viewport_to_point(self.display_offset(), Point::new(row, Column(col)))
     }
 
-    // -- Links (x-a2d0) --------------------------------------------------------
+    // -- Links --------------------------------------------------------
 
     /// The URL under viewport cell `(row, col)`, or `None`.
     ///
@@ -472,19 +473,90 @@ impl Pane {
     /// Everything else is linkified from the text, because the common case is a
     /// plain URL printed by a tool that never heard of OSC 8.
     ///
-    /// Returns only what [`crate::link::is_openable`] accepts. The OSC 8 URI is
-    /// chosen by whatever runs in the pane, so the allowlist is applied at this
-    /// end rather than trusted to the client.
-    pub fn link_at(&self, row: u16, col: u16) -> Option<String> {
-        self.link_span(row, col).map(|span| span.uri)
+    /// Returns only what the pane-sourced gates accept: web URLs pass
+    /// [`crate::link::is_openable`], and a detected path comes back as a
+    /// strict [`crate::link::FILE_SCHEME`] URI. The OSC 8 URI is chosen by
+    /// whatever runs in the pane, so the allowlist is applied at this end
+    /// rather than trusted to the client.
+    pub fn link_at(&self, row: u16, col: u16, cwd: &str) -> Option<String> {
+        self.link_span(row, col, cwd).map(|span| span.uri)
     }
 
-    /// One resolved link: the validated URL plus every VISIBLE pane-local cell
+    /// One resolved link: the validated URI plus every VISIBLE pane-local cell
     /// belonging to it, so a hover affordance can underline exactly what a
-    /// click would open. The click path keeps [`Pane::link_at`] as the URL-only
+    /// click would open. The click path keeps [`Pane::link_at`] as the URI-only
     /// projection of this match, so click and hover cannot disagree.
-    pub fn link_span(&self, row: u16, col: u16) -> Option<LinkSpan> {
+    ///
+    /// fno's own protocol tokens (`@handle`, a bare `fmail-` id) outrank
+    /// everything else on the line, OSC 8 included: an app may hyperlink-wrap
+    /// them, but the landing (the Messages thread) is fno's to name. OSC 8
+    /// then wins over the plain-text linkify pass (see `link_at`).
+    ///
+    /// `cwd` is the pane's live working directory, from which bare relative
+    /// candidates are resolved; see [`crate::link::find_paths`].
+    pub fn link_span(&self, row: u16, col: u16, cwd: &str) -> Option<LinkSpan> {
         let point = self.viewport_point(row, col);
+        let line = self.logical_line(point.line);
+        if let Some((text, points)) = &line {
+            if let Some(idx) = points.iter().position(|p| *p == point) {
+                // Hover fires this per mouse move, and each finder below
+                // allocates a char vector of the line: the two byte scans
+                // keep an ordinary line free of all four walks. Each token
+                // finder answers ONE occurrence; a line can carry several,
+                // so the walks below step over spans that sit left of the
+                // clicked cell.
+                if text.contains("fmail-") {
+                    if let Some((start, end, id)) = crate::link::find_mail_message(text) {
+                        if idx >= start && idx < end {
+                            return Some(LinkSpan {
+                                uri: format!("{}{id}", crate::link::MESSAGE_SCHEME),
+                                cells: self.visible_cells(&points[start..end]),
+                            });
+                        }
+                    }
+                    if let Some((start, end, handle, _)) = crate::link::find_mail_sender(text) {
+                        // A token the handle grammar rejects (a retired
+                        // `a/b` name, say) spans no sender URI; the id
+                        // beside it still opens the mail.
+                        if idx >= start && idx < end && crate::link::is_handle_name(&handle) {
+                            return Some(LinkSpan {
+                                uri: format!("{}{handle}", crate::link::SENDER_SCHEME),
+                                cells: self.visible_cells(&points[start..end]),
+                            });
+                        }
+                    }
+                    let mut skip = 0;
+                    while let Some((start, end, id)) = crate::link::find_fmail_token(text, skip) {
+                        if idx < end {
+                            if idx >= start {
+                                return Some(LinkSpan {
+                                    uri: format!("{}{id}", crate::link::MESSAGE_SCHEME),
+                                    cells: self.visible_cells(&points[start..end]),
+                                });
+                            }
+                            break;
+                        }
+                        skip = end;
+                    }
+                }
+                if text.contains('@') {
+                    let mut skip = 0;
+                    while let Some((start, end, name)) = crate::link::find_handle_token(text, skip)
+                    {
+                        if idx < end {
+                            if idx >= start {
+                                return Some(LinkSpan {
+                                    uri: format!("{}{name}", crate::link::HANDLE_SCHEME),
+                                    cells: self.visible_cells(&points[start..end]),
+                                });
+                            }
+                            break;
+                        }
+                        skip = end;
+                    }
+                }
+            }
+        }
         if let Some(h) = self.term.grid()[point.line][point.column].hyperlink() {
             // OSC 8 wins when present (see `link_at`); the span is the run of
             // cells carrying the SAME anchor, soft wraps included.
@@ -495,15 +567,24 @@ impl Pane {
                 cells: self.osc8_span_cells(point, &anchor),
             });
         }
-        let (text, points) = self.logical_line(point.line)?;
+        let (text, points) = line?;
         let idx = points.iter().position(|p| *p == point)?;
-        let (start, end) = crate::link::find_urls(&text)
+        if let Some((start, end)) = crate::link::find_urls(&text)
             .into_iter()
-            .find(|&(a, b)| idx >= a && idx < b)?;
-        let uri: String = text.chars().skip(start).take(end - start).collect();
-        crate::link::is_openable(&uri).then(|| LinkSpan {
-            uri,
-            cells: self.visible_cells(&points[start..end]),
+            .find(|&(a, b)| idx >= a && idx < b)
+        {
+            let uri: String = text.chars().skip(start).take(end - start).collect();
+            return crate::link::is_openable(&uri).then(|| LinkSpan {
+                uri,
+                cells: self.visible_cells(&points[start..end]),
+            });
+        }
+        let hit = crate::link::find_paths(&text, Path::new(cwd))
+            .into_iter()
+            .find(|p| idx >= p.start && idx < p.end)?;
+        Some(LinkSpan {
+            uri: hit.uri,
+            cells: self.visible_cells(&points[hit.start..hit.end]),
         })
     }
 
@@ -680,7 +761,7 @@ impl Pane {
         Some((text, points))
     }
 
-    // -- Block navigation (x-38c4) ---------------------------------------------
+    // -- Block navigation ---------------------------------------------
 
     /// A grid row as an offset from the TOP of retained scrollback:
     /// `grid_line + history_size`. This is the block navigation anchor. It is
@@ -832,7 +913,7 @@ impl Pane {
         target.cmd.clone()
     }
 
-    // -- In-scrollback search (x-e780, v12) ------------------------------------
+    // -- In-scrollback search (v12) ------------------------------------
 
     /// Scan the pane's whole retained buffer (history + live grid) for `query`
     /// as a case-insensitive plain substring (Locked 6: no regex, single
@@ -873,7 +954,7 @@ impl Pane {
 
     /// Walk the active search: `Prev` toward older (smaller `abs_row`), `Next`
     /// toward newer, resting at the ends (AC2-EDGE locked default). Re-scans the
-    /// live grid first (x-1e67: stored anchors drift once scrollback saturates,
+    /// live grid first (: stored anchors drift once scrollback saturates,
     /// so the frozen list would re-highlight the wrong row), then re-jumps and
     /// re-highlights. `None` only when no search is active. If every match has
     /// aged out of retained scrollback, the query now matches nothing: drop the
@@ -1312,7 +1393,7 @@ pub fn mode_diff(old: Modes, new: Modes) -> Vec<u8> {
         out.extend_from_slice(if new.app_keypad { b"\x1b=" } else { b"\x1b>" });
     }
     if new.kitty_flags != old.kitty_flags {
-        // "CSI = flags ; 1 u": set the given flags and unset the rest - the
+        // "CSI = flags; 1 u": set the given flags and unset the rest - the
         // stateless form, so no push/pop stack bookkeeping crosses the wire.
         out.extend_from_slice(format!("\x1b[={};1u", new.kitty_flags).as_bytes());
     }
@@ -1621,7 +1702,7 @@ impl BlockRead {
 // alacritty's ANSI processor silently drops OSC sequences it does not model, so
 // OSC 133 never reaches a handler we control (verified against the landed code).
 // Capture is therefore a pre-`advance` byte scanner: it walks the PTY stream, and
-// at each `ESC ] 133 ; <arg> (BEL | ST)` it emits a typed marker and STRIPS the
+// at each `ESC ] 133; <arg> (BEL | ST)` it emits a typed marker and STRIPS the
 // bytes (the Term would ignore them anyway; stripping keeps the grid canonical).
 // Everything else flows to the Term verbatim - nothing is ever swallowed. The
 // discipline mirrors `keys.rs`: a tiny state machine with a bounded accumulator,
@@ -1659,7 +1740,7 @@ enum ScanState {
     Esc,
     /// Saw `ESC ]`; matched `n` bytes of `133;`.
     Prefix(usize),
-    /// Matched `ESC ] 133 ;`; accumulating the arg until a terminator.
+    /// Matched `ESC ] 133;`; accumulating the arg until a terminator.
     Payload(Vec<u8>),
     /// In the payload, saw `ESC`; a following `\` closes the marker (ST).
     PayloadEsc(Vec<u8>),
@@ -1807,7 +1888,7 @@ impl Osc133Scanner {
                             self.state = ScanState::Prefix(n + 1);
                         }
                     } else {
-                        // Not a 133 OSC (e.g. a title `ESC ] 0 ;`). Hand back what
+                        // Not a 133 OSC (e.g. a title `ESC ] 0;`). Hand back what
                         // we held and let the Term parse the rest of this OSC.
                         plain.push(0x1b);
                         plain.push(0x5d);
@@ -1883,7 +1964,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn server_spine_vt_renders_text_and_cursor() {
+    fn vt_render_rows() {
         let mut pane = Pane::new(24, 80);
         pane.feed(b"hello");
         let frame = pane.frame();
@@ -1892,212 +1973,7 @@ mod tests {
         assert_eq!(frame.cursor_col, 5);
         assert!(frame.cursor_visible);
         assert_eq!(frame.cells.len(), 24 * 80);
-    }
 
-    #[test]
-    fn link_at_finds_a_plain_text_url_only_under_its_own_cells() {
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"see https://example.com/a now");
-        // Column 4 is the 'h'; 25 is the trailing 'a'.
-        assert_eq!(pane.link_at(0, 4).as_deref(), Some("https://example.com/a"));
-        assert_eq!(
-            pane.link_at(0, 24).as_deref(),
-            Some("https://example.com/a")
-        );
-        // "see" before it and "now" after it are not part of the link.
-        assert_eq!(pane.link_at(0, 0), None);
-        assert_eq!(pane.link_at(0, 27), None);
-        // Nor is an empty row.
-        assert_eq!(pane.link_at(2, 5), None);
-    }
-
-    #[test]
-    fn link_at_joins_a_url_soft_wrapped_across_rows() {
-        // 20 columns forces the URL to wrap mid-path; clicking either half must
-        // yield the WHOLE url, not the fragment on the clicked row.
-        let mut pane = Pane::new(4, 20);
-        let url = "https://example.com/a/very/long/path";
-        pane.feed(url.as_bytes());
-        assert_eq!(pane.link_at(0, 0).as_deref(), Some(url), "first row");
-        assert_eq!(
-            pane.link_at(1, 2).as_deref(),
-            Some(url),
-            "wrapped continuation"
-        );
-    }
-
-    #[test]
-    fn link_at_returns_the_whole_url_not_a_prefix_when_it_wraps_past_the_old_cap() {
-        // codex, PR 702. The cap was a fixed 8 rows, so a URL wrapping further
-        // was cut WHILE STILL WRAPPING and find_urls treated the collected
-        // prefix as a complete URL. is_openable accepts a prefix - it is a
-        // well-formed http URL - so a click opened a DIFFERENT address than the
-        // one on screen, which is worse than opening nothing.
-        //
-        // 20 columns and a 200-char URL is 10 rows: past the old 8-row cap, and
-        // the click sits on row 0 so the scheme is inside the window either way.
-        // That is what makes prefix-vs-whole the thing under test rather than
-        // detected-vs-not.
-        let url = format!("https://example.com/{}", "a".repeat(180));
-        assert!(url.len() > 20 * 8, "must outrun the old cap");
-        let mut pane = Pane::new(14, 20);
-        pane.feed(url.as_bytes());
-
-        assert_eq!(
-            pane.link_at(0, 0).as_deref(),
-            Some(url.as_str()),
-            "a wrapped URL must resolve whole; a prefix is a different address"
-        );
-    }
-    #[test]
-    fn link_at_reads_an_osc8_hyperlink_whose_text_is_not_a_url() {
-        // OSC 8 with display text that looks nothing like a link: only the URI
-        // carried in the escape can answer this, so it proves the OSC 8 path
-        // rather than the linkifier.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"\x1b]8;;https://example.com/pr/700\x07click me\x1b]8;;\x07");
-        assert_eq!(
-            pane.link_at(0, 2).as_deref(),
-            Some("https://example.com/pr/700")
-        );
-        // Past the anchor text the link ends.
-        assert_eq!(pane.link_at(0, 20), None);
-    }
-
-    #[test]
-    fn link_at_refuses_an_osc8_uri_outside_the_scheme_allowlist() {
-        // A pane's output chooses this URI. `open(1)` would act on file:// and
-        // on registered app schemes, so the grid walk must drop it.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"\x1b]8;;file:///etc/passwd\x07innocent\x1b]8;;\x07");
-        assert_eq!(pane.link_at(0, 2), None);
-    }
-
-    #[test]
-    fn link_at_survives_a_click_past_the_end_of_content() {
-        // The click column is clamped into the grid; a click on padding finds
-        // no link rather than panicking or reaching the previous row's URL.
-        let mut pane = Pane::new(4, 20);
-        pane.feed(b"https://example.com");
-        assert_eq!(pane.link_at(3, 19), None);
-        assert_eq!(pane.link_at(200, 200), None, "out-of-range click clamps");
-    }
-
-    // -- hover affordance: the shared span behind click and hover ---------------
-
-    #[test]
-    fn link_span_covers_the_urls_own_cells_and_refuses_non_link_cells() {
-        // Plain text: the span is exactly the linkified URL's cells, so the
-        // hover underline paints what a click would open - no more, no less.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"see https://example.com/a now");
-        let span = pane.link_span(0, 4).expect("the URL's own cell resolves");
-        assert_eq!(span.uri, "https://example.com/a");
-        assert_eq!(
-            span.cells,
-            (4..25).map(|c| (0, c)).collect::<Vec<_>>(),
-            "cols 4..=24, row 0, nothing of the surrounding words"
-        );
-        // Negative with a positive control in the same fixture: "see" is not a
-        // link; the URL cell beside it still resolves.
-        assert!(
-            pane.link_span(0, 0).is_none(),
-            "the leading word is no link"
-        );
-        assert!(
-            pane.link_span(0, 26).is_none(),
-            "the trailing word is no link"
-        );
-        assert!(
-            pane.link_span(0, 10).is_some(),
-            "control: the URL still does"
-        );
-    }
-
-    #[test]
-    fn link_span_joins_a_soft_wrapped_url_into_both_rows() {
-        // A URL soft-wrapped across rows is ONE link: querying either half
-        // yields the whole URL and the cells of both halves, so the underline
-        // reads as one link, not two fragments.
-        let mut pane = Pane::new(4, 20);
-        let url = "https://example.com/a/very/long/path";
-        pane.feed(url.as_bytes());
-        let span = pane
-            .link_span(1, 2)
-            .expect("the wrapped continuation resolves");
-        assert_eq!(span.uri, url);
-        assert!(
-            span.cells.iter().any(|&(r, _)| r == 0) && span.cells.iter().any(|&(r, _)| r == 1),
-            "both the head row and the continuation row are in the span"
-        );
-        // Click and hover cannot disagree: the projection answers the same URI.
-        assert_eq!(pane.link_at(0, 0).as_deref(), Some(url));
-    }
-
-    #[test]
-    fn link_span_reads_an_osc8_anchor_across_its_text_without_grouping_a_reused_uri() {
-        // OSC 8: the span is the run of cells carrying the SAME anchor. A
-        // second, separate anchor that happens to reuse the URI sits mid-row
-        // after plain text: the contiguous walk must stop at the gap, never
-        // underline both. Visible text: "open it mid also".
-        let mut pane = Pane::new(4, 60);
-        pane.feed(b"\x1b]8;;https://example.com/pr/700\x07open it\x1b]8;;\x07 mid \x1b]8;;https://example.com/pr/700\x07also\x1b]8;;\x07");
-        let span = pane.link_span(0, 2).expect("the first anchor's text");
-        assert_eq!(span.uri, "https://example.com/pr/700");
-        assert_eq!(
-            span.cells,
-            (0..7).map(|c| (0, c)).collect::<Vec<_>>(),
-            "exactly 'open it' (cols 0..=6); the later anchor never joins"
-        );
-        // The later anchor still resolves on its own cells - a separate span.
-        let second = pane.link_span(0, 13).expect("the second anchor's text");
-        assert_eq!(second.uri, "https://example.com/pr/700");
-        assert_eq!(second.cells, vec![(0, 12), (0, 13), (0, 14), (0, 15)]);
-    }
-
-    #[test]
-    fn link_span_covers_a_soft_wrapped_osc8_anchor_exactly_once() {
-        // An OSC 8 anchor whose text wraps across three rows: hovering the
-        // MIDDLE row returns every cell of the anchor exactly once. The two
-        // extensions grow from the pointed row's own run in each direction,
-        // so no row is re-derived by the other walk (the duplicate-cells bug
-        // this test pins: the middle row used to come back twice).
-        let mut pane = Pane::new(4, 10);
-        pane.feed(b"\x1b]8;;https://example.com/wrapped\x07");
-        pane.feed(b"aaaaaaaaaaaaaaaaaaaaaaaaa");
-        pane.feed(b"\x1b]8;;\x07");
-        let span = pane.link_span(1, 3).expect("the middle row resolves");
-        assert_eq!(span.uri, "https://example.com/wrapped");
-        let mut cells = span.cells.clone();
-        cells.sort();
-        let want: Vec<(u16, u16)> = (0..10)
-            .map(|c| (0, c))
-            .chain((0..10).map(|c| (1, c)))
-            .chain((0..5).map(|c| (2, c)))
-            .collect();
-        assert_eq!(cells, want, "25 cells, each exactly once");
-        assert_eq!(span.cells.len(), 25, "no row duplicated by the two walks");
-        // Hovering the TOP row yields the same single span: the anchor is one
-        // link whichever half the pointer sits on.
-        let top = pane.link_span(0, 0).expect("the top row resolves");
-        assert_eq!(top.cells.len(), 25);
-    }
-
-    #[test]
-    fn link_span_refuses_a_disallowed_osc8_scheme_with_no_cells() {
-        // The allowlist applies to the span exactly as it does to the click.
-        // Positive control beside it: a safe anchor in the same pane resolves.
-        // Visible text: "bad good".
-        let mut pane = Pane::new(4, 60);
-        pane.feed(b"\x1b]8;;file:///etc/passwd\x07bad\x1b]8;;\x07 \x1b]8;;https://ok.example\x07good\x1b]8;;\x07");
-        assert!(pane.link_span(0, 2).is_none(), "file:// answers nothing");
-        let span = pane.link_span(0, 6).expect("the https anchor resolves");
-        assert_eq!(span.uri, "https://ok.example");
-        assert_eq!(span.cells, (4..8).map(|c| (0, c)).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn server_spine_vt_styles_map_to_cell_flags_and_colors() {
         let mut pane = Pane::new(4, 20);
         // Bold red fg on indexed-blue bg, then reset.
         pane.feed(b"\x1b[1;31;44mX\x1b[0m");
@@ -2107,18 +1983,12 @@ mod tests {
         assert_eq!(x.flags & cell_flags::BOLD, cell_flags::BOLD);
         assert_eq!(x.fg, Color::Indexed(1));
         assert_eq!(x.bg, Color::Indexed(4));
-    }
 
-    #[test]
-    fn server_spine_vt_true_color_passes_through() {
         let mut pane = Pane::new(2, 10);
         pane.feed(b"\x1b[38;2;10;20;30mZ");
         let frame = pane.frame();
         assert_eq!(frame.cells[0].fg, Color::Rgb(10, 20, 30));
-    }
 
-    #[test]
-    fn server_spine_vt_alt_screen_swaps_and_restores() {
         let mut pane = Pane::new(4, 20);
         pane.feed(b"main-screen");
         // Enter the alternate screen (what vim does), draw, snapshot.
@@ -2137,19 +2007,13 @@ mod tests {
             "{:?}",
             frame_text(&main)
         );
-    }
 
-    #[test]
-    fn server_spine_vt_cursor_visibility_tracks_dectcem() {
         let mut pane = Pane::new(4, 20);
         pane.feed(b"\x1b[?25l");
         assert!(!pane.frame().cursor_visible);
         pane.feed(b"\x1b[?25h");
         assert!(pane.frame().cursor_visible);
-    }
 
-    #[test]
-    fn server_spine_vt_wide_glyph_spacer_is_flagged_and_skipped() {
         let mut pane = Pane::new(2, 10);
         pane.feed("宽x".as_bytes());
         let frame = pane.frame();
@@ -2164,7 +2028,314 @@ mod tests {
     }
 
     #[test]
-    fn server_spine_vt_modes_track_dec_private_sets() {
+    fn link_refusal_rows() {
+        // A pane's output chooses this URI. `open(1)` would act on file:// and
+        // on registered app schemes, so the grid walk must drop it.
+        let mut pane = Pane::new(4, 40);
+        pane.feed(b"\x1b]8;;file:///etc/passwd\x07innocent\x1b]8;;\x07");
+        assert_eq!(pane.link_at(0, 2, "/nonexistent"), None);
+
+        // The click column is clamped into the grid; a click on padding finds
+        // no link rather than panicking or reaching the previous row's URL.
+        let mut pane = Pane::new(4, 20);
+        pane.feed(b"https://example.com");
+        assert_eq!(pane.link_at(3, 19, "/nonexistent"), None);
+        assert_eq!(
+            pane.link_at(200, 200, "/nonexistent"),
+            None,
+            "out-of-range click clamps"
+        );
+
+        // The allowlist applies to the span exactly as it does to the click.
+        // Positive control beside it: a safe anchor in the same pane resolves.
+        // Visible text: "bad good".
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"\x1b]8;;file:///etc/passwd\x07bad\x1b]8;;\x07 \x1b]8;;https://ok.example\x07good\x1b]8;;\x07");
+        assert!(
+            pane.link_span(0, 2, "/nonexistent").is_none(),
+            "file:// answers nothing"
+        );
+        let span = pane
+            .link_span(0, 6, "/nonexistent")
+            .expect("the https anchor resolves");
+        assert_eq!(span.uri, "https://ok.example");
+        assert_eq!(span.cells, (4..8).map(|c| (0, c)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn path_span_resolves_only_existing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("slash.md");
+        std::fs::write(&file, b"hi").expect("write");
+        let canon = std::fs::canonicalize(&file).expect("canonical");
+        let cwd = dir.path().to_string_lossy().to_string();
+        let mut pane = Pane::new(4, 60);
+        pane.feed(format!("see {} hard", file.display()).as_bytes());
+        let span = pane
+            .link_span(0, 6, "/nonexistent")
+            .expect("absolute path resolves");
+        assert_eq!(span.uri, format!("fno-file:{}", canon.display()));
+        assert!(!span.cells.is_empty());
+        // A relative candidate with a separator resolves against the pane cwd;
+        // a separator with no file behind it resolves no span at all.
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"see ./slash.md hard");
+        let span = pane
+            .link_span(0, 5, cwd.as_str())
+            .expect("relative path resolves");
+        assert_eq!(span.uri, format!("fno-file:{}", canon.display()));
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"see docs/gone.md hard");
+        assert!(pane.link_span(0, 6, "/nonexistent").is_none());
+    }
+    // -- hover affordance: the shared span behind click and hover ---------------
+
+    #[test]
+    fn sender_span_cells_in_a_pane_line() {
+        // The sender and message ID are separate clickable spans on one
+        // header line: the @handle opens the handle's session, the fmail id
+        // opens the mail.
+        let line = "`@t-glm-9663 · fmail-840a07863897 · fix the gate`";
+        let mut pane = Pane::new(4, 60);
+        pane.feed(line.as_bytes());
+        let span = pane
+            .link_span(0, 2, "/nonexistent")
+            .expect("a cell inside @name resolves");
+        assert_eq!(span.uri, "fno-sender:t-glm-9663");
+        assert_eq!(
+            span.cells,
+            (1..12).map(|c| (0, c)).collect::<Vec<_>>(),
+            "cols 1..=11, the @name run and nothing else"
+        );
+        // The ID opens the message; the summary remains plain text.
+        let message = pane
+            .link_span(0, 15, "/nonexistent")
+            .expect("the fmail ID resolves");
+        assert_eq!(message.uri, "fno-message:fmail-840a07863897");
+        assert_eq!(
+            message.cells,
+            (15..33).map(|c| (0, c)).collect::<Vec<_>>(),
+            "the fmail token alone is clickable"
+        );
+        assert!(
+            pane.link_span(0, 36, "/nonexistent").is_none(),
+            "the summary is not"
+        );
+
+        // The matcher tolerates a harness prompt prefix before the header.
+        let mut pane = Pane::new(4, 60);
+        pane.feed("❯ `@worker · fmail-0123456789ab · hi`".as_bytes());
+        assert!(
+            pane.link_span(0, 4, "/nonexistent").is_some(),
+            "prompt prefix still spans"
+        );
+        // A retired name the handle grammar rejects (`a/b`, today's field
+        // case) spans no sender URI; the id beside it still opens the mail,
+        // and the name's valid prefix still reads as the generic handle it
+        // grammatically is.
+        let mut pane = Pane::new(4, 60);
+        pane.feed("`@fno/quiet-recovery · fmail-840a07863897 · hi`".as_bytes());
+        assert_eq!(
+            pane.link_span(0, 3, "/nonexistent")
+                .expect("prefix spans")
+                .uri,
+            "fno-handle:fno",
+            "a slash name is no sender link; its prefix is a plain handle"
+        );
+        let message = pane
+            .link_span(0, 24, "/nonexistent")
+            .expect("the fmail ID beside it still resolves");
+        assert_eq!(message.uri, "fno-message:fmail-840a07863897");
+        // A malformed id, a spaced name, an empty summary, a legacy msg- id,
+        // and a nameless separator resolve no span at all.
+        for bad in [
+            "`@a · fmail-zzzzzzzzzzzz · hi`",
+            "`@a · fmail-840a0786389 · hi`",
+            "`@a · fmail-840a078638971 · hi`",
+            "`@a b · fmail-840a07863897 · hi`",
+            "`@a · fmail-840a07863897 · ",
+            "`@a · msg-whatever · hi`",
+            "` · fmail-840a07863897 · hi`",
+        ] {
+            let mut pane = Pane::new(4, 60);
+            pane.feed(bad.as_bytes());
+            assert!(
+                pane.link_span(0, 2, "/nonexistent").is_none(),
+                "no sender span for {bad}"
+            );
+        }
+        // The sender URI must never read as openable: the platform opener
+        // can never receive it.
+        assert!(!crate::link::is_openable("fno-sender:fmail-840a07863897"));
+    }
+
+    #[test]
+    fn link_span_rows() {
+        // Plain text: the span is exactly the linkified URL's cells, so the
+        // hover underline paints what a click would open - no more, no less.
+        let mut pane = Pane::new(4, 40);
+        pane.feed(b"see https://example.com/a now");
+        let span = pane
+            .link_span(0, 4, "/nonexistent")
+            .expect("the URL's own cell resolves");
+        assert_eq!(span.uri, "https://example.com/a");
+        assert_eq!(
+            span.cells,
+            (4..25).map(|c| (0, c)).collect::<Vec<_>>(),
+            "cols 4..=24, row 0, nothing of the surrounding words"
+        );
+        // Negative with a positive control in the same fixture: "see" is not a
+        // link; the URL cell beside it still resolves.
+        assert!(
+            pane.link_span(0, 0, "/nonexistent").is_none(),
+            "the leading word is no link"
+        );
+        assert!(
+            pane.link_span(0, 26, "/nonexistent").is_none(),
+            "the trailing word is no link"
+        );
+        assert!(
+            pane.link_span(0, 10, "/nonexistent").is_some(),
+            "control: the URL still does"
+        );
+
+        // A URL soft-wrapped across rows is ONE link: querying either half
+        // yields the whole URL and the cells of both halves, so the underline
+        // reads as one link, not two fragments.
+        let mut pane = Pane::new(4, 20);
+        let url = "https://example.com/a/very/long/path";
+        pane.feed(url.as_bytes());
+        let span = pane
+            .link_span(1, 2, "/nonexistent")
+            .expect("the wrapped continuation resolves");
+        assert_eq!(span.uri, url);
+        assert!(
+            span.cells.iter().any(|&(r, _)| r == 0) && span.cells.iter().any(|&(r, _)| r == 1),
+            "both the head row and the continuation row are in the span"
+        );
+
+        // codex, PR 702. The cap was a fixed 8 rows, so a URL wrapping further
+        // was cut WHILE STILL WRAPPING and find_urls treated the collected
+        // prefix as a complete URL. is_openable accepts a prefix - it is a
+        // well-formed http URL - so a click opened a DIFFERENT address than the
+        // one on screen, which is worse than opening nothing.
+        //
+        // 20 columns and a 200-char URL is 10 rows: past the old 8-row cap, and
+        // the query sits on row 0 so the scheme is inside the window either way.
+        // That is what makes prefix-vs-whole the thing under test rather than
+        // detected-vs-not.
+        let url = format!("https://example.com/{}", "a".repeat(180));
+        assert!(url.len() > 20 * 8, "must outrun the old cap");
+        let mut pane = Pane::new(14, 20);
+        pane.feed(url.as_bytes());
+        let span = pane
+            .link_span(0, 0, "/nonexistent")
+            .expect("the outrunning URL resolves");
+        assert_eq!(
+            span.uri, url,
+            "a wrapped URL must resolve whole; a prefix is a different address"
+        );
+
+        // Click and hover cannot disagree: the projection answers the same URI.
+        assert_eq!(
+            pane.link_at(0, 0, "/nonexistent").as_deref(),
+            Some(url.as_str())
+        );
+
+        // OSC 8: the span is the run of cells carrying the SAME anchor. A
+        // second, separate anchor that happens to reuse the URI sits mid-row
+        // after plain text: the contiguous walk must stop at the gap, never
+        // underline both. Visible text: "open it mid also".
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"\x1b]8;;https://example.com/pr/700\x07open it\x1b]8;;\x07 mid \x1b]8;;https://example.com/pr/700\x07also\x1b]8;;\x07");
+        let span = pane
+            .link_span(0, 2, "/nonexistent")
+            .expect("the first anchor's text");
+        assert_eq!(span.uri, "https://example.com/pr/700");
+        assert_eq!(
+            span.cells,
+            (0..7).map(|c| (0, c)).collect::<Vec<_>>(),
+            "exactly 'open it' (cols 0..=6); the later anchor never joins"
+        );
+        // The later anchor still resolves on its own cells - a separate span.
+        let second = pane
+            .link_span(0, 13, "/nonexistent")
+            .expect("the second anchor's text");
+        assert_eq!(second.uri, "https://example.com/pr/700");
+        assert_eq!(second.cells, vec![(0, 12), (0, 13), (0, 14), (0, 15)]);
+
+        // An OSC 8 anchor whose text wraps across three rows: hovering the
+        // MIDDLE row returns every cell of the anchor exactly once. The two
+        // extensions grow from the pointed row's own run in each direction,
+        // so no row is re-derived by the other walk (the duplicate-cells bug
+        // this test pins: the middle row used to come back twice).
+        let mut pane = Pane::new(4, 10);
+        pane.feed(b"\x1b]8;;https://example.com/wrapped\x07");
+        pane.feed(b"aaaaaaaaaaaaaaaaaaaaaaaaa");
+        pane.feed(b"\x1b]8;;\x07");
+        let span = pane
+            .link_span(1, 3, "/nonexistent")
+            .expect("the middle row resolves");
+        assert_eq!(span.uri, "https://example.com/wrapped");
+        let mut cells = span.cells.clone();
+        cells.sort();
+        let want: Vec<(u16, u16)> = (0..10)
+            .map(|c| (0, c))
+            .chain((0..10).map(|c| (1, c)))
+            .chain((0..5).map(|c| (2, c)))
+            .collect();
+        assert_eq!(cells, want, "25 cells, each exactly once");
+        assert_eq!(span.cells.len(), 25, "no row duplicated by the two walks");
+        // Hovering the TOP row yields the same single span: the anchor is one
+        // link whichever half the pointer sits on.
+        let top = pane
+            .link_span(0, 0, "/nonexistent")
+            .expect("the top row resolves");
+        assert_eq!(top.cells.len(), 25);
+    }
+
+    #[test]
+    fn fno_tokens_outrank_osc8_and_plain_body_text() {
+        // A bare fmail id in body text - no delivered header around it - is a
+        // message link wherever it prints.
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"quote: fmail-0123456789ab done");
+        let span = pane
+            .link_span(0, 10, "/nonexistent")
+            .expect("the bare id resolves");
+        assert_eq!(span.uri, "fno-message:fmail-0123456789ab");
+        assert_eq!(
+            span.cells,
+            (7..25).map(|c| (0, c)).collect::<Vec<_>>(),
+            "exactly the id token"
+        );
+
+        // An app hyperlink-wrapped the handle: the token still wins, because
+        // the landing is fno's to name, and the span is the token's cells.
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"\x1b]8;;https://example.com\x07@nemo\x1b]8;;\x07 shipped it");
+        let span = pane
+            .link_span(0, 2, "/nonexistent")
+            .expect("the wrapped handle resolves");
+        assert_eq!(span.uri, "fno-handle:nemo");
+        assert_eq!(span.cells, vec![(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
+
+        // The token pass answers only its own cells: an OSC 8 anchor beside a
+        // token on one line keeps its own cells, and the two never bleed.
+        let mut pane = Pane::new(4, 60);
+        pane.feed(b"\x1b]8;;https://example.com\x07open\x1b]8;;\x07 @nemo now");
+        let anchor = pane
+            .link_span(0, 1, "/nonexistent")
+            .expect("the anchor's own cell resolves");
+        assert_eq!(anchor.uri, "https://example.com");
+        let token = pane
+            .link_span(0, 5, "/nonexistent")
+            .expect("the handle's own cell resolves");
+        assert_eq!(token.uri, "fno-handle:nemo");
+    }
+
+    #[test]
+    fn vt_mode_rows() {
         let mut pane = Pane::new(4, 20);
         // alacritty's TermMode::default() ships ALTERNATE_SCROLL on, so a
         // fresh pane is NOT Modes::default() (= a raw client terminal). The
@@ -2187,10 +2358,7 @@ mod tests {
         let m = pane.modes();
         assert!(!m.mouse_motion && !m.bracketed_paste);
         assert!(m.sgr_mouse, "unrelated modes survive");
-    }
 
-    #[test]
-    fn server_spine_vt_mode_diff_emits_only_changes() {
         let plain = Modes::default();
         let vim = Modes {
             app_cursor: true,
@@ -2230,10 +2398,11 @@ mod tests {
         assert!(set.contains("\x1b[=11;1u"), "{set:?}");
         let clear = String::from_utf8(mode_diff(kitty, plain)).unwrap();
         assert!(clear.contains("\x1b[=0;1u"), "{clear:?}");
-    }
 
-    #[test]
-    fn server_spine_vt_resize_is_clamped_and_safe() {
+        // Resize clamps a degenerate PTY size to a 1x1 grid instead of
+        // panicking or zeroing the grid: the only behavioral guard for the
+        // clamp contract after the standalone test left in the upstream
+        // reshape.
         let mut pane = Pane::new(24, 80);
         pane.resize(0, 0);
         pane.feed(b"q");
@@ -2241,7 +2410,6 @@ mod tests {
         let frame = pane.frame();
         assert_eq!(frame.cells.len(), 1);
     }
-
     // -- OSC 133 scanner (Task 1.1) --------------------------------------------
 
     /// Run byte chunks through a fresh scanner; return (markers, passthrough).
@@ -2264,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn osc133_recognizes_finalterm_letters_and_exit() {
+    fn osc133_rows() {
         // A prompt, B command, C output-start, D;1 done-with-exit-1 (BEL-terminated).
         let (markers, pass) =
             scan(b"\x1b]133;A\x07$ \x1b]133;B\x07false\x1b]133;C\x07\x1b]133;D;1\x07");
@@ -2279,10 +2447,7 @@ mod tests {
         );
         // AC1-UI: no marker bytes survive in the passthrough - only real text.
         assert_eq!(pass, b"$ false");
-    }
 
-    #[test]
-    fn osc133_st_terminator_and_bare_d() {
         // ST (ESC \) terminator, and a bare `D` with no exit field.
         let (markers, pass) = scan(b"\x1b]133;C\x1b\\ok\x1b]133;D\x1b\\");
         assert_eq!(
@@ -2290,10 +2455,7 @@ mod tests {
             vec![Osc133::OutputStart, Osc133::CmdDone { exit: None }]
         );
         assert_eq!(pass, b"ok");
-    }
 
-    #[test]
-    fn osc133_splits_one_byte_per_feed_identically() {
         // AC1-EDGE: a marker split one byte per feed parses identically.
         let stream = b"a\x1b]133;C\x07b\x1b]133;D;0\x07c";
         let chunks: Vec<&[u8]> = stream.iter().map(std::slice::from_ref).collect();
@@ -2303,11 +2465,8 @@ mod tests {
             vec![Osc133::OutputStart, Osc133::CmdDone { exit: Some(0) }]
         );
         assert_eq!(pass, b"abc");
-    }
 
-    #[test]
-    fn osc133_non_133_osc_passes_through() {
-        // A window-title OSC (`ESC ] 0 ; ...`) is not ours: passed through whole,
+        // A window-title OSC (`ESC ] 0; ...`) is not ours: passed through whole,
         // no marker (the Term consumes it as a title).
         let (markers, pass) = scan(b"\x1b]0;my title\x07hello");
         assert!(markers.is_empty());
@@ -2315,7 +2474,7 @@ mod tests {
     }
 
     #[test]
-    fn osc133_hostile_payload_is_bounded_no_marker() {
+    fn osc133_guard_rows() {
         // AC1-ERR: a garbage payload past the length cap flushes as inert bytes,
         // records no phantom marker, does not panic or buffer unbounded.
         let mut hostile = b"\x1b]133;".to_vec();
@@ -2325,18 +2484,12 @@ mod tests {
         let (markers, pass) = scan(&hostile);
         assert!(markers.is_empty());
         assert!(pass.ends_with(b"tail"), "nothing swallowed after flush");
-    }
 
-    #[test]
-    fn osc133_unknown_subtype_is_stripped_without_marker() {
         // FinalTerm defines A/B/C/D; an unknown letter is stripped, no marker.
         let (markers, pass) = scan(b"x\x1b]133;Z;foo\x07y");
         assert!(markers.is_empty());
         assert_eq!(pass, b"xy");
-    }
 
-    #[test]
-    fn osc133_markers_never_reach_the_grid() {
         // Integration: feed markers through a Pane; the grid holds only real text.
         let mut pane = Pane::new(24, 80);
         pane.feed(b"\x1b]133;A\x07$ \x1b]133;C\x07out\x1b]133;D;0\x07");
@@ -2354,7 +2507,7 @@ mod tests {
     }
 
     #[test]
-    fn blocks_capture_seq_and_exit_in_order() {
+    fn block_capture_rows() {
         // AC1-HP: two commands -> two blocks, correct seq order and exit codes.
         let mut pane = Pane::new(24, 80);
         run_command(&mut pane, "hello", 0);
@@ -2372,10 +2525,7 @@ mod tests {
 
         // AC2-HP: `Last` is the most recent completed block.
         assert_eq!(pane.read_block(BlockSel::Last).unwrap().seq, Some(1));
-    }
 
-    #[test]
-    fn markerless_pane_reads_one_implicit_block() {
         // AC2-ERR: no markers -> `Last` returns the whole output, flagged
         // implicit; a specific seq is BLOCK_UNAVAILABLE.
         let mut pane = Pane::new(24, 80);
@@ -2384,20 +2534,14 @@ mod tests {
         assert!(read.implicit && read.seq.is_none() && read.complete);
         assert_eq!(read.text, "just output\nline two");
         assert!(pane.read_block(BlockSel::Seq(5)).is_err());
-    }
 
-    #[test]
-    fn open_block_reads_live_and_incomplete() {
         // AC2-FR: a block mid-output (no D) reads the span so far, incomplete.
         let mut pane = Pane::new(24, 80);
         pane.feed(b"\x1b]133;A\x07$ \x1b]133;C\x07partial");
         let read = pane.read_block(BlockSel::Last).unwrap();
         assert_eq!((read.seq, read.complete), (Some(0), false));
         assert_eq!(read.text, "partial");
-    }
 
-    #[test]
-    fn completed_block_survives_width_resize() {
         // AC2-EDGE flip (amendment): a completed block returns its CAPTURED text
         // after a width-changing resize, never BLOCK_UNAVAILABLE.
         let mut pane = Pane::new(24, 80);
@@ -2405,10 +2549,19 @@ mod tests {
         pane.resize(24, 40); // width change reflows the grid
         let read = pane.read_block(BlockSel::Seq(0)).unwrap();
         assert_eq!(read.text, "keepme");
+
+        // AC1-EDGE: a 200-char logical line to an 80-col pane is captured as one
+        // 200-char line (the grid path would have wrapped it to 3 rows).
+        let mut pane = Pane::new(24, 80);
+        let long = "x".repeat(200);
+        pane.feed(b"\x1b]133;A\x07$ \x1b]133;C\x07");
+        pane.feed(long.as_bytes());
+        pane.feed(b"\x1b]133;D;0\x07");
+        assert_eq!(pane.read_block(BlockSel::Last).unwrap().text, long);
     }
 
     #[test]
-    fn evicted_block_reads_unavailable() {
+    fn block_bound_rows() {
         // AC1-FR: past the retained-block budget, the oldest evicts and reads
         // BLOCK_UNAVAILABLE; the newest still reads.
         let mut pane = Pane::new(24, 80);
@@ -2418,10 +2571,7 @@ mod tests {
         assert!(pane.read_block(BlockSel::Seq(0)).is_err(), "oldest evicted");
         let last = (MAX_BLOCKS + 3 - 1) as u64;
         assert!(pane.read_block(BlockSel::Seq(last)).is_ok(), "newest kept");
-    }
 
-    #[test]
-    fn block_truncated_flag_fires_at_per_block_byte_cap() {
         // Locked decision 4: `truncated` now means THIS block's head bytes were
         // dropped by the per-block byte cap, decoupled from the pane's scrollback
         // fullness. A block under the cap is exact; one over it is flagged.
@@ -2436,10 +2586,7 @@ mod tests {
             pane.read_block(BlockSel::Last).unwrap().truncated,
             "over the per-block cap: head dropped, flagged truncated"
         );
-    }
 
-    #[test]
-    fn block_capture_survives_scrollback_saturation() {
         // AC2-HP: fill a tiny scrollback well past its cap, THEN run a command
         // block. Its output is captured exactly - the pre-fix grid-anchor path
         // returned a wrong span here once `history_size()` saturated.
@@ -2454,10 +2601,7 @@ mod tests {
             "captured pre-grid, scroll-independent"
         );
         assert!(!read.truncated, "small block under the byte cap is exact");
-    }
 
-    #[test]
-    fn runaway_open_block_is_memory_bounded() {
         // AC1-FR: an open block (no `D`) fed more than `max_block_bytes` keeps only
         // the most-recent tail, flagged truncated - a never-closing command
         // (`tail -f`) cannot pin unbounded server memory.
@@ -2475,63 +2619,7 @@ mod tests {
             "keeps the most-recent tail: {:?}",
             read.text
         );
-    }
 
-    #[test]
-    fn block_captures_logical_not_wrapped_lines() {
-        // AC1-EDGE: a 200-char logical line to an 80-col pane is captured as one
-        // 200-char line (the grid path would have wrapped it to 3 rows).
-        let mut pane = Pane::new(24, 80);
-        let long = "x".repeat(200);
-        pane.feed(b"\x1b]133;A\x07$ \x1b]133;C\x07");
-        pane.feed(long.as_bytes());
-        pane.feed(b"\x1b]133;D;0\x07");
-        assert_eq!(pane.read_block(BlockSel::Last).unwrap().text, long);
-    }
-
-    #[test]
-    fn strip_ansi_removes_escapes_keeps_visible_text() {
-        // AC1-ERR: CSI color, a non-133 OSC title, a 2-byte escape, and invalid
-        // UTF-8 -> visible characters only, no ESC byte, no panic.
-        let out = strip_ansi(b"\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b=text\xff!");
-        assert!(!out.contains('\x1b'), "no ESC survives: {out:?}");
-        assert!(out.starts_with("redtext"), "visible text kept: {out:?}");
-        assert!(out.ends_with('!'), "trailing text kept: {out:?}");
-        assert!(
-            out.contains('\u{fffd}'),
-            "bad UTF-8 -> replacement char: {out:?}"
-        );
-    }
-
-    #[test]
-    fn strip_ansi_drops_partial_trailing_escape() {
-        // An unterminated escape at the buffer end is dropped, not emitted raw
-        // (Errors: partial escape at an open block's end).
-        assert_eq!(strip_ansi(b"ok\x1b[3"), "ok"); // partial CSI
-        assert_eq!(strip_ansi(b"ok\x1b]0;unterminated"), "ok"); // partial OSC
-        assert_eq!(strip_ansi(b"ok\x1b"), "ok"); // bare ESC
-    }
-
-    #[test]
-    fn strip_ansi_keeps_newlines_tabs_and_cr() {
-        // Discretion 4: keep `\n`/`\r`/`\t` verbatim; drop only escape sequences.
-        assert_eq!(strip_ansi(b"a\tb\nc\rd"), "a\tb\nc\rd");
-    }
-
-    #[test]
-    fn strip_ansi_consumes_charset_designation_final_byte() {
-        // `ESC ( B` (designate US-ASCII into G0, common in `sgr0`/reset) is a
-        // 3-byte nF escape: the intermediate `(` AND the final `B` must both be
-        // dropped, not leak a stray `B` into captured text.
-        assert_eq!(strip_ansi(b"a\x1b(Bb"), "ab");
-        assert_eq!(strip_ansi(b"\x1b)0\x1b(Bx"), "x"); // ESC ) 0 then ESC ( B
-        assert_eq!(strip_ansi(b"red\x1b(B\x1b[mtext"), "redtext");
-        // Unterminated nF escape at the buffer end is dropped, not leaked.
-        assert_eq!(strip_ansi(b"ok\x1b("), "ok");
-    }
-
-    #[test]
-    fn block_text_is_bounded_by_byte_budgets() {
         // Tiny budgets: 10 bytes per block, 30 bytes total.
         let mut pane = Pane::with_limits(4, 80, 100, 10, 30);
 
@@ -2559,7 +2647,39 @@ mod tests {
     }
 
     #[test]
-    fn read_tail_reaches_into_history() {
+    fn strip_ansi_rows() {
+        // AC1-ERR: CSI color, a non-133 OSC title, a 2-byte escape, and invalid
+        // UTF-8 -> visible characters only, no ESC byte, no panic.
+        let out = strip_ansi(b"\x1b[31mred\x1b[0m\x1b]0;title\x07\x1b=text\xff!");
+        assert!(!out.contains('\x1b'), "no ESC survives: {out:?}");
+        assert!(out.starts_with("redtext"), "visible text kept: {out:?}");
+        assert!(out.ends_with('!'), "trailing text kept: {out:?}");
+        assert!(
+            out.contains('\u{fffd}'),
+            "bad UTF-8 -> replacement char: {out:?}"
+        );
+
+        // An unterminated escape at the buffer end is dropped, not emitted raw
+        // (Errors: partial escape at an open block's end).
+        assert_eq!(strip_ansi(b"ok\x1b[3"), "ok"); // partial CSI
+        assert_eq!(strip_ansi(b"ok\x1b]0;unterminated"), "ok"); // partial OSC
+        assert_eq!(strip_ansi(b"ok\x1b"), "ok"); // bare ESC
+
+        // Discretion 4: keep `\n`/`\r`/`\t` verbatim; drop only escape sequences.
+        assert_eq!(strip_ansi(b"a\tb\nc\rd"), "a\tb\nc\rd");
+
+        // `ESC ( B` (designate US-ASCII into G0, common in `sgr0`/reset) is a
+        // 3-byte nF escape: the intermediate `(` AND the final `B` must both be
+        // dropped, not leak a stray `B` into captured text.
+        assert_eq!(strip_ansi(b"a\x1b(Bb"), "ab");
+        assert_eq!(strip_ansi(b"\x1b)0\x1b(Bx"), "x"); // ESC ) 0 then ESC ( B
+        assert_eq!(strip_ansi(b"red\x1b(B\x1b[mtext"), "redtext");
+        // Unterminated nF escape at the buffer end is dropped, not leaked.
+        assert_eq!(strip_ansi(b"ok\x1b("), "ok");
+    }
+
+    #[test]
+    fn scroll_rows() {
         // AC5-HP: output taller than the viewport; a large --lines reaches history.
         let mut pane = Pane::new(4, 20);
         for i in 0..20 {
@@ -2571,12 +2691,7 @@ mod tests {
         assert!(tail.contains("row11"), "reached into history: {tail:?}");
         // AC5-UI: a viewport-sized read matches the visible grid.
         assert_eq!(pane.read_tail(4), pane.text());
-    }
 
-    // -- US1 scroll ------------------------------------------------------------
-
-    #[test]
-    fn scroll_moves_view_into_history_and_back() {
         // AC1-HP: output taller than the viewport; scrolling up reveals history.
         let mut pane = Pane::new(4, 20);
         for i in 0..20 {
@@ -2597,10 +2712,7 @@ mod tests {
         pane.scroll_to_bottom();
         assert_eq!(pane.display_offset(), 0);
         assert!(pane.text().contains("row19"));
-    }
 
-    #[test]
-    fn scroll_clamps_at_history_top_without_panic() {
         // AC1-EDGE: scrolling past the oldest line clamps, never wraps/panics.
         let mut pane = Pane::new(4, 20);
         for i in 0..30 {
@@ -2610,10 +2722,7 @@ mod tests {
         assert!(off > 0, "scrolled up");
         // A second huge scroll is idempotent at the clamp.
         assert_eq!(pane.scroll(1_000_000), off, "clamped at history top");
-    }
 
-    #[test]
-    fn frame_hides_cursor_and_marks_indicator_when_scrolled() {
         // AC1-UI: the cursor is hidden off-live; offset is the indicator source.
         let mut pane = Pane::new(4, 20);
         for i in 0..20 {
@@ -2625,10 +2734,12 @@ mod tests {
         assert_ne!(pane.display_offset(), 0);
     }
 
+    // -- US1 scroll ------------------------------------------------------------
+
     // -- US2 selection ---------------------------------------------------------
 
     #[test]
-    fn selection_and_highlight_pin_to_the_press_cell() {
+    fn selection_rows() {
         // Regression: a drag anchored on the FIRST glyph must select and
         // highlight from that glyph, never N chars late. Repro that motivated
         // this: dragging '[' -> ']' over "[Image #4]" rendered "age #4]" (leading
@@ -2646,10 +2757,7 @@ mod tests {
             cell_flags::SELECTED,
             "leading '[' highlighted, not skipped",
         );
-    }
 
-    #[test]
-    fn selection_extracts_text_and_marks_cells() {
         // AC2-HP: a drag selects cells; the text and the SELECTED flags agree.
         let mut pane = Pane::new(2, 20);
         pane.feed(b"abcdefghij");
@@ -2674,10 +2782,7 @@ mod tests {
             0,
             "past selection"
         );
-    }
 
-    #[test]
-    fn selection_spans_history_lines() {
         // AC2-EDGE: a selection reaching scrolled-off rows extracts them.
         let mut pane = Pane::new(3, 20);
         for i in 0..10 {
@@ -2689,10 +2794,7 @@ mod tests {
         pane.selection_update(0, 5);
         let text = pane.selection_text().unwrap_or_default();
         assert!(text.starts_with("line"), "history row selected: {text:?}");
-    }
 
-    #[test]
-    fn resize_clears_selection() {
         // AC2-UI: reflow drops a stale selection rather than mis-highlight.
         let mut pane = Pane::new(2, 20);
         pane.feed(b"abcdefghij");
@@ -2703,7 +2805,7 @@ mod tests {
         assert!(!pane.has_selection(), "selection cleared on resize");
     }
 
-    // -- Block navigation (x-38c4) ---------------------------------------------
+    // -- Block navigation ---------------------------------------------
 
     /// Feed one full command WITH a command echo between `B` and `C` (so the
     /// block captures a rerun-able command line), then multi-line output tall
@@ -2727,7 +2829,7 @@ mod tests {
     }
 
     #[test]
-    fn block_jump_walks_prev_then_next_across_blocks() {
+    fn block_jump_rows() {
         // AC1-HP (Change 1/2): from the live tail, prev lands on the newest
         // block, then steps older; next steps newer and returns to live.
         let mut pane = three_blocks();
@@ -2765,20 +2867,14 @@ mod tests {
         ));
         assert_eq!(pane.block_jump(BlockDir::Next), BlockJumpOutcome::AtLive);
         assert_eq!(pane.display_offset(), 0, "back at the live tail");
-    }
 
-    #[test]
-    fn block_jump_on_markerless_pane_reports_no_blocks() {
         // AC-ERR (Change 2): a pane that never emitted OSC 133 has no blocks; the
         // jump is a visible NoBlocks, never a crash or silent no-op.
         let mut pane = Pane::new(6, 40);
         pane.feed(b"plain shell output\r\nno markers here\r\n");
         assert_eq!(pane.block_jump(BlockDir::Prev), BlockJumpOutcome::NoBlocks);
         assert_eq!(pane.block_jump(BlockDir::Next), BlockJumpOutcome::NoBlocks);
-    }
 
-    #[test]
-    fn block_jump_clamps_when_oldest_blocks_evicted() {
         // AC1-EDGE: with a tiny retained-byte budget the oldest blocks front-drop;
         // walking prev past the retained window clamps on the oldest RETAINED
         // block (never a dropped/stale row), no panic.
@@ -2798,10 +2894,7 @@ mod tests {
         // one (all retained seqs are the highest few).
         let oldest = *seen.iter().min().unwrap();
         assert!(oldest >= 4, "evicted blocks are not navigable: {seen:?}");
-    }
 
-    #[test]
-    fn block_select_walks_and_feeds_the_copy_chain() {
         // AC (Change 3): block-select sets a real selection whose text is the
         // whole block; walking prev moves to the older block; clear resets it.
         let mut pane = three_blocks();
@@ -2829,7 +2922,7 @@ mod tests {
     }
 
     #[test]
-    fn rerun_command_targets_selected_else_newest() {
+    fn rerun_rows() {
         // AC-HP (Change 4): rerun resolves the command line to re-send - the
         // selected block's, else the newest.
         let mut pane = three_blocks();
@@ -2837,10 +2930,7 @@ mod tests {
         pane.block_select(BlockDir::Prev); // newest (2)
         pane.block_select(BlockDir::Prev); // block 1
         assert_eq!(pane.rerun_command().as_deref(), Some("echo two"));
-    }
 
-    #[test]
-    fn rerun_command_heals_a_selected_block_evicted_since_selection() {
         // Select a block, then evict it under a tiny retained budget: rerun must
         // fall back to the newest command, not report "nothing to rerun" on the
         // stale ref.
@@ -2858,10 +2948,7 @@ mod tests {
         );
         // The stale selected_block=0 no longer resolves; heal to the newest.
         assert_eq!(pane.rerun_command().as_deref(), Some("cmd5"));
-    }
 
-    #[test]
-    fn search_releases_the_block_selection_for_rerun() {
         // Search and block-select share term.selection, so a search must not leave
         // a stale selected_block as the rerun target (incl. a co-viewer's rerun).
         let mut pane = three_blocks();
@@ -2885,11 +2972,18 @@ mod tests {
         assert_eq!(pane.search_open("zz-no-such-token"), (0, 0));
         assert_eq!(pane.selected_block, None);
         assert_eq!(pane.rerun_command().as_deref(), Some("echo three"));
+
+        // A block from a bare-`C` emitter (no `B`, no captured command) has
+        // nothing to rerun - None, so the server refuses rather than sending garbage.
+        let mut pane = Pane::new(6, 40);
+        pane.feed(b"$ \x1b]133;C\x07output\x1b]133;D;0\x07");
+        assert!(pane.read_block(BlockSel::Last).is_ok());
+        assert_eq!(pane.rerun_command(), None);
     }
 
     #[test]
-    fn is_pristine_idle_shell_gates_takeover() {
-        // (x-fbb1) The `.`=here take-over reap gate. Only a shell that has drawn a prompt and run
+    fn takeover_rows() {
+        // The `.`=here take-over reap gate. Only a shell that has drawn a prompt and run
         // nothing is safe to reap.
         // No markers yet (un-integrated / not-yet-prompted): not trustworthy -> refuse.
         let mut pane = Pane::new(6, 40);
@@ -2907,11 +3001,8 @@ mod tests {
         let mut ran = Pane::new(6, 40);
         ran.feed(b"\x1b]133;C\x07out\x1b]133;D;0\x07\x1b]133;A\x07");
         assert!(!ran.is_pristine_idle_shell(), "a command has already run");
-    }
 
-    #[test]
-    fn shell_activity_names_what_the_pane_knows() {
-        // (x-d401) One reading for four realities. A pane that never spoke OSC 133
+        // One reading for four realities. A pane that never spoke OSC 133
         // is UNMEASURED, never idle; an open command block is Running; a prompt
         // that ran nothing is Empty; a completed block is Idle. The takeover gate
         // is exactly the Empty reading - one predicate, no second copy to drift.
@@ -2945,16 +3036,6 @@ mod tests {
         assert!(!ran.is_pristine_idle_shell(), "Idle is not pristine");
     }
 
-    #[test]
-    fn rerun_command_is_none_for_a_bare_c_block() {
-        // A block from a bare-`C` emitter (no `B`, no captured command) has
-        // nothing to rerun - None, so the server refuses rather than sending garbage.
-        let mut pane = Pane::new(6, 40);
-        pane.feed(b"$ \x1b]133;C\x07output\x1b]133;D;0\x07");
-        assert!(pane.read_block(BlockSel::Last).is_ok());
-        assert_eq!(pane.rerun_command(), None);
-    }
-
     // -- Turn blocks (hook-emitted markers) -------------------------------------
 
     /// Feed one agent TURN the way the inside-leg hook emits it: a bare `C` at
@@ -2969,7 +3050,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_markers_segment_pane_history_and_navigate() {
+    fn turn_rows() {
         // Hook-shaped markers segment a claude pane by turns: each block's span
         // is exactly one turn's output, idle repaints between turns land outside
         // every block, and BlockJump prev from the live tail anchors at the
@@ -3020,10 +3101,7 @@ mod tests {
             sel.contains("t3a") && sel.contains("t3c"),
             "selection spans the turn: {sel:?}"
         );
-    }
 
-    #[test]
-    fn shell_and_turn_blocks_navigate_the_union_in_stream_order() {
         // AC edge: a pane mixing SHELL blocks (auto-injected zsh) and TURN blocks
         // (claude launched from that shell) is one stream-ordered sequence - no
         // special-casing anywhere.
@@ -3087,10 +3165,10 @@ mod tests {
         assert_eq!(pane.read_block(BlockSel::Last).unwrap().seq, Some(1));
     }
 
-    // -- In-scrollback search (x-e780, v12) ------------------------------------
+    // -- In-scrollback search (v12) ------------------------------------
 
     #[test]
-    fn search_jumps_scrolls_and_highlights_case_insensitively() {
+    fn search_rows() {
         // AC1-HP + AC3-EDGE: the match is found case-insensitively and as a
         // substring, the view scrolls back into history to reach it, and the
         // highlight spans exactly the matched columns on the single row.
@@ -3111,10 +3189,7 @@ mod tests {
             "Deadlock",
             "highlight spans exactly the 8 matched columns"
         );
-    }
 
-    #[test]
-    fn search_no_match_is_zero_and_does_not_move() {
         // AC1-ERR: a query with no occurrence returns total 0, sets no selection,
         // and leaves the viewport where it was (a visible signal, never a jump).
         let mut pane = Pane::new(4, 40);
@@ -3126,10 +3201,7 @@ mod tests {
         assert!(!pane.has_selection());
         assert!(!pane.has_search());
         assert_eq!(pane.display_offset(), before, "viewport did not move");
-    }
 
-    #[test]
-    fn search_step_walks_and_rests_at_both_ends() {
         // AC2-HP + AC2-EDGE: n/N walk the matches and rest (do not wrap) at the
         // oldest and newest, with the counter tracking the position. 12 rows each
         // carry "error" - a match on the live tail and the oldest history row both
@@ -3157,50 +3229,8 @@ mod tests {
             (_, c) = pane.search_step(BlockDir::Next).unwrap();
         }
         assert_eq!(c, 12, "Next rests on the newest match");
-    }
 
-    #[test]
-    fn search_empty_query_clears() {
-        // Boundaries: an empty query is a clear, not a scan that matches every row.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"hello world\r\n");
-        pane.search_open("hello");
-        assert!(pane.has_selection());
-        assert_eq!(pane.search_open(""), (0, 0));
-        assert!(!pane.has_selection(), "empty query drops the highlight");
-        assert!(!pane.has_search());
-    }
-
-    #[test]
-    fn search_step_without_active_search_is_none() {
-        // Errors: a step on a pane with no active search is a clean None (the
-        // server maps it to a no-op Notice), never a panic.
-        let mut pane = Pane::new(4, 40);
-        pane.feed(b"nothing to find here\r\n");
-        assert_eq!(pane.search_step(BlockDir::Next), None);
-        assert_eq!(pane.search_step(BlockDir::Prev), None);
-        assert!(!pane.has_search());
-    }
-
-    #[test]
-    fn resize_clears_active_search() {
-        // AC3-FR: reflow stales the stored anchors, so a resize drops the search
-        // snapshot and its highlight; a later step no-ops rather than mis-jumping.
-        let mut pane = Pane::new(3, 20);
-        for i in 0..8 {
-            pane.feed(format!("match{i}\r\n").as_bytes());
-        }
-        pane.search_open("match");
-        assert!(pane.has_search());
-        pane.resize(3, 10);
-        assert!(!pane.has_search(), "resize drops the search snapshot");
-        assert!(!pane.has_selection());
-        assert_eq!(pane.search_step(BlockDir::Next), None);
-    }
-
-    #[test]
-    fn search_step_re_highlights_the_right_row_after_saturation() {
-        // x-1e67 (AC edge): saturate a tiny scrollback so history is already at
+        // (AC edge): saturate a tiny scrollback so history is already at
         // cap, open a search, then stream output that evicts lines the match
         // survives. A re-highlight (search_step) must land on the real match, not
         // a row `E` away - the frozen-snapshot `abs_row` drifted by the eviction
@@ -3229,8 +3259,41 @@ mod tests {
     }
 
     #[test]
+    fn search_edge_rows() {
+        // Boundaries: an empty query is a clear, not a scan that matches every row.
+        let mut pane = Pane::new(4, 40);
+        pane.feed(b"hello world\r\n");
+        pane.search_open("hello");
+        assert!(pane.has_selection());
+        assert_eq!(pane.search_open(""), (0, 0));
+        assert!(!pane.has_selection(), "empty query drops the highlight");
+        assert!(!pane.has_search());
+
+        // Errors: a step on a pane with no active search is a clean None (the
+        // server maps it to a no-op Notice), never a panic.
+        let mut pane = Pane::new(4, 40);
+        pane.feed(b"nothing to find here\r\n");
+        assert_eq!(pane.search_step(BlockDir::Next), None);
+        assert_eq!(pane.search_step(BlockDir::Prev), None);
+        assert!(!pane.has_search());
+
+        // AC3-FR: reflow stales the stored anchors, so a resize drops the search
+        // snapshot and its highlight; a later step no-ops rather than mis-jumping.
+        let mut pane = Pane::new(3, 20);
+        for i in 0..8 {
+            pane.feed(format!("match{i}\r\n").as_bytes());
+        }
+        pane.search_open("match");
+        assert!(pane.has_search());
+        pane.resize(3, 10);
+        assert!(!pane.has_search(), "resize drops the search snapshot");
+        assert!(!pane.has_selection());
+        assert_eq!(pane.search_step(BlockDir::Next), None);
+    }
+
+    #[test]
     fn search_step_re_anchors_when_older_matches_age_out() {
-        // x-1e67 (gemini/codex review): stepping must move relative to where the
+        // (gemini/codex review): stepping must move relative to where the
         // current match IS, not a stale ordinal. On match B in [A,B,C,D], when A
         // ages out the fresh list is [B,C,D]; `Next` must land on C (2/3), not
         // skip to D (3/3) by reusing the old index 1.

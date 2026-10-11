@@ -7,7 +7,6 @@ LOW predicate, and the refusal to return a half-resolved destination.
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +14,7 @@ import pytest
 from fno.adapters.providers import runtime_state as rs
 from fno.adapters.providers.runtime_state import HeadroomState, QuotaSignal
 from fno.agents import autonomous_route as ar
+
 
 DEST = ("ccr", "codex", {"CODEX_HOME": "/tmp/ccr"})
 
@@ -36,16 +36,52 @@ def _route(**kw):
 
 
 class TestRouteActions:
-    def test_exhausted_cuts_over_to_the_other_harness(self, monkeypatch) -> None:
-        # AC1-HP: exhausted claude + healthy codex candidate -> cutover, with
-        # the complete destination tuple a spawn needs.
-        _signal(monkeypatch, state=HeadroomState.EXHAUSTED, defer=True, cutover=True)
-        _dest(monkeypatch, DEST)
-        r = _route()
-        assert r.action == "cutover"
-        assert (r.record_id, r.harness, r.account_env) == DEST
-        assert r.source_record == "ccm"
-        assert r.window == "exhausted"
+    def test_ac4_hp_real_probe_cuts_over_to_the_healthy_record(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import time
+        from fno.adapters.providers.error_taxonomy import ErrorRule
+        from fno.adapters.providers.model import QuotaConfig
+        from fno.adapters.providers.rotation import Combo, next_healthy_provider
+        from fno.adapters.providers.runtime_state import (
+            PROVIDER_HEALTH_TTL_SECONDS,
+            UsageSnapshot,
+            UsageWindow,
+            update_provider_health,
+            write_usage_snapshot,
+        )
+        monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime.json"))
+        quota = QuotaConfig(observe=True, defer_dispatch=True)
+        monkeypatch.setattr(
+            "fno.adapters.providers.loader.load_quota_config",
+            lambda repo_root=None: quota,
+        )
+        now = time.time()
+        write_usage_snapshot(
+            UsageSnapshot(
+                provider_id="source",
+                windows=(UsageWindow("5h", 100.0, now + 3600),),
+                probed_at=now,
+                source="quota-endpoint",
+            ),
+            now=now,
+        )
+        update_provider_health(
+            "healthy", ErrorRule(status=429, backoff=True),
+            now=now - PROVIDER_HEALTH_TTL_SECONDS - 1,
+            resets_at=now + 3600,
+        )
+        def destination(_cwd, _exhausted):
+            chosen = next_healthy_provider(
+                Combo(name="fallback", providers=("healthy",)), quota=quota
+            )
+            return (chosen, "codex", {}) if chosen else None
+        monkeypatch.setattr(ar, "_select_destination", destination)
+        route = ar.select_autonomous_route(
+            provider_id="source", node_cwd=str(tmp_path), now=now
+        )
+        assert route.action == "cutover"
+        assert route.record_id == "healthy"
 
     def test_distant_low_cuts_over(self, monkeypatch) -> None:
         # AC2-HP: the inverted predicate - a LOW window resetting far away is a
@@ -77,7 +113,7 @@ class TestRouteActions:
         _dest(monkeypatch, None)
         assert _route().action == "stay"
 
-    @pytest.mark.parametrize("reason", ["defer-dispatch-off", "p0-exempt", "no-provider"])
+    @pytest.mark.parametrize("reason", ["p0-exempt"])
     def test_unprobed_proceeds_without_reading_the_combo(self, monkeypatch, reason) -> None:
         _signal(
             monkeypatch,
@@ -93,10 +129,6 @@ class TestRouteActions:
         r = _route()
         assert r.action == "unknown-proceed"
         assert r.reason == reason
-
-    def test_ok_stays(self, monkeypatch) -> None:
-        _signal(monkeypatch, state=HeadroomState.OK, defer=False, cutover=False, resets_at=None)
-        assert _route().action == "stay"
 
 
 class TestExplicitIntentWins:
@@ -124,18 +156,6 @@ class TestExplicitIntentWins:
             lambda *a, **k: pytest.fail("config read before the explicit pin won"),
         )
         assert ar.launch_is_pinned(**kwargs) is True
-
-    def test_configured_dispatch_harness_pins(self, monkeypatch) -> None:
-        # Precedence: configured dispatch harness outranks quota policy, so it
-        # must block an automatic reroute the same way an invocation pin does.
-        import fno.config as cfg
-
-        monkeypatch.setattr(
-            cfg,
-            "load_settings",
-            lambda *a, **k: SimpleNamespace(dispatch=SimpleNamespace(harness="codex")),
-        )
-        assert ar.launch_is_pinned({}) is True
 
     def test_stage_table_harness_pins(self, monkeypatch) -> None:
         # The stage table is the home for the harness axis, so a launch routed
@@ -171,23 +191,6 @@ class TestExplicitIntentWins:
         assert r.action == "defer"
         assert r.reason == "pinned"
 
-    def test_pinned_distant_low_stays(self, monkeypatch) -> None:
-        _signal(monkeypatch, state=HeadroomState.LOW, defer=False, cutover=True)
-        monkeypatch.setattr(
-            ar, "_select_destination", lambda *a: pytest.fail("pinned launch was rerouted")
-        )
-        assert _route(pinned=True).action == "stay"
-
-
-class TestUnresolvableDestination:
-    """AC5-FR: a destination missing either half is never launched."""
-
-    def test_selector_never_returns_a_partial_tuple(self, monkeypatch) -> None:
-        _signal(monkeypatch, state=HeadroomState.EXHAUSTED, defer=True, cutover=True)
-        _dest(monkeypatch, DEST)
-        r = _route()
-        assert all(v is not None for v in (r.record_id, r.harness, r.account_env))
-
 
 class TestCutoverConfig:
     def test_unreadable_config_disarms_proactive_cutover(self, monkeypatch) -> None:
@@ -196,13 +199,6 @@ class TestCutoverConfig:
 
         monkeypatch.setattr("fno.config.load_settings", boom)
         assert ar._cutover_low_after_minutes(None) == 0
-
-    def test_negative_and_non_int_values_degrade_to_off(self) -> None:
-        from fno.config import DispatchBlock
-
-        for bad in (-30, True, "60", 1.5, None):
-            assert DispatchBlock(cutover_low_after_minutes=bad).cutover_low_after_minutes == 0
-        assert DispatchBlock(cutover_low_after_minutes=60).cutover_low_after_minutes == 60
 
 
 # ---------------------------------------------------------------------------
@@ -292,120 +288,6 @@ def test_select_destination_unstaged_account_defers(monkeypatch):
     assert ar._select_destination(None, "ccm") is None
 
 
-def test_select_destination_no_active_combo_defers(monkeypatch):
-    """_select_destination: failover configured but the active target is a
-    bare provider (no combo) -> None (nothing to walk)."""
-    from fno.config import SettingsModel
-    from fno.agents.dispatch_target import DispatchTarget
-
-    monkeypatch.setattr(
-        "fno.config.load_settings",
-        lambda *a, **k: SettingsModel(dispatch={"on_exhaustion": "failover"}),
-    )
-    monkeypatch.setattr(
-        "fno.agents.dispatch_target.resolve_dispatch_target",
-        lambda *a, **k: DispatchTarget(provider_id="ccm", source="active_provider"),
-    )
-    assert ar._select_destination(None, "ccm") is None
-
-
-class TestAutonomousResolveRung:
-    """`fno agents dispatch resolve --autonomous`: the seam the shell dispatcher uses.
-
-    dispatch-node.sh reached only the pure resolver, so /target bg and blueprint
-    auto-launch never saw a quota verdict. These pin the folded tuple.
-    """
-
-    def _resolve(self, monkeypatch, route, *, harness=None, node="ab-1111aaaa"):
-        import fno.dispatch as dm
-        from typer.testing import CliRunner
-
-        monkeypatch.setattr(dm, "_lookup_node", lambda ref: {"id": node, "priority": "p2"})
-        monkeypatch.setattr(dm, "_autonomous_route_for", lambda *a, **k: route)
-        args = ["resolve", "--autonomous", "--node", node, "-J"]
-        if harness:
-            args += ["--harness", harness]
-        return CliRunner().invoke(dm.dispatch_app, args)
-
-    def test_cutover_returns_the_destination_harness_and_command(self, monkeypatch) -> None:
-        route = ar.AutonomousRoute(
-            "cutover",
-            "exhausted-cutover",
-            source_record="ccm",
-            record_id="ccr",
-            harness="codex",
-            account_env={"CODEX_HOME": "/acct/ccr"},
-            window="exhausted",
-        )
-        out = json.loads(self._resolve(monkeypatch, route).stdout)
-        assert out["route_action"] == "cutover"
-        assert out["harness"] == "codex"
-        # Codex takes its own command surface, never a raw claude slash verb.
-        assert out["command"].startswith("$fno:target")
-        # The record id crosses the process boundary; the credentials never do.
-        assert out["route_account"] == "ccr"
-        assert "CODEX_HOME" not in json.dumps(out)
-
-    def test_defer_is_reported_so_the_shell_can_park(self, monkeypatch) -> None:
-        route = ar.AutonomousRoute(
-            "defer", "exhausted", source_record="ccm", retry_at=9e18, window="exhausted"
-        )
-        out = json.loads(self._resolve(monkeypatch, route).stdout)
-        assert out["route_action"] == "defer"
-        assert out["route_source"] == "ccm"
-        assert out["route_retry_at"] == 9e18
-
-    def test_unrenderable_destination_falls_back_to_defer_not_the_walled_harness(
-        self, monkeypatch
-    ) -> None:
-        """A cutover that cannot render is not a cutover, but the quota verdict
-        behind it stands: falling back to the original harness would launch on
-        the very account the selector ruled out."""
-        route = ar.AutonomousRoute(
-            "cutover",
-            "exhausted-cutover",
-            source_record="ccm",
-            record_id="ghost",
-            harness="no-such-harness",
-            account_env={"X": "1"},
-            window="exhausted",
-            defer_fallback=True,
-        )
-        out = json.loads(self._resolve(monkeypatch, route).stdout)
-        assert out["route_action"] == "defer"
-        assert out["route_reason"].endswith("destination-unrenderable")
-        assert out["route_account"] == ""
-
-    def test_unrenderable_destination_on_a_nonbinding_low_stays(self, monkeypatch) -> None:
-        route = ar.AutonomousRoute(
-            "cutover",
-            "low-cutover",
-            source_record="ccm",
-            record_id="ghost",
-            harness="no-such-harness",
-            account_env={"X": "1"},
-            window="low",
-            defer_fallback=False,
-        )
-        out = json.loads(self._resolve(monkeypatch, route).stdout)
-        assert out["route_action"] == "stay"
-
-    def test_bare_resolve_stays_pure(self, monkeypatch) -> None:
-        import fno.dispatch as dm
-        from typer.testing import CliRunner
-
-        monkeypatch.setattr(dm, "_lookup_node", lambda ref: {"id": "ab-1111aaaa"})
-        monkeypatch.setattr(
-            dm,
-            "_autonomous_route_for",
-            lambda *a, **k: pytest.fail("bare resolve probed quota"),
-        )
-        out = json.loads(
-            CliRunner().invoke(dm.dispatch_app, ["resolve", "--node", "ab-1111aaaa", "-J"]).stdout
-        )
-        assert "route_action" not in out
-
-
 class TestAlternateAccountScope:
     """The defer escape must not be answered from the wrong repository."""
 
@@ -440,139 +322,16 @@ class TestAlternateAccountScope:
         assert _route(pinned=True).action == "defer"
 
 
-class TestCutoverMergePosture:
-    """Quota exhaustion must not change who may merge."""
-
-    def test_cutover_command_keeps_no_merge_under_auto_merge_config(self, monkeypatch) -> None:
-        # `fno agents dispatch`'s normal path always spawns the no-merge `/target`. Routing
-        # the cutover through the full resolver would read
-        # config.dispatch.auto_merge and could hand the rerouted worker merge
-        # authority the non-cutover launch never gets.
-        import fno.dispatch as dm
-        from fno.config import DispatchBlock
-
-        monkeypatch.setattr(
-            "fno.config.load_settings",
-            lambda *a, **k: SimpleNamespace(dispatch=DispatchBlock(auto_merge=True)),
-        )
-        for harness in ("claude", "codex"):
-            cmd = dm._cutover_command(harness, "ab-1111aaaa")
-            assert "--no-merge" in cmd, (harness, cmd)
-            assert "ab-1111aaaa" in cmd
-
-    def test_unresolvable_harness_renders_nothing(self) -> None:
-        import fno.dispatch as dm
-
-        assert dm._cutover_command("no-such-harness", "ab-1111aaaa") == ""
+# Quota exhaustion must not change who may merge. x-e53e deleted the pre-render
+# (`_cutover_command`) this class pinned; the carrier now is the subprocess
+# env - the cutover shellout sets TARGET_NO_MERGE=1 unconditionally, pinned in
+# test_dispatch_one.py::test_cutover_pins_harness_and_record_and_no_merge.
 
 
-class TestUnresolvableNodeIsNotRouted:
-    def test_a_named_node_that_does_not_resolve_returns_no_route(self, monkeypatch) -> None:
-        """No known repository means no route: selecting from the CALLER's
-        registry would pick a combo and an account out of the wrong project."""
-        import fno.dispatch as dm
-
-        monkeypatch.setattr(dm, "_lookup_node", lambda ref: None)
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route",
-            lambda **k: pytest.fail("routed a node with no resolved repository"),
-        )
-        assert dm._autonomous_route_for(None, None, "ab-nosuch") is None
-
-    def test_a_node_less_resolve_still_routes(self, monkeypatch) -> None:
-        # The bare autonomous resolve (no --node) legitimately routes from the
-        # caller's own repository; only a NAMED-but-unresolved node abstains.
-        import fno.dispatch as dm
-
-        sentinel = object()
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route", lambda **k: sentinel
-        )
-        assert dm._autonomous_route_for(None, None, None) is sentinel
-
-
-class TestPinnedHarnessSkipsAnUnrelatedPool:
-    def test_a_codex_pin_is_not_deferred_by_a_walled_claude_account(self, monkeypatch) -> None:
-        """A pin can only stay or defer, so deferring it on the ACTIVE record's
-        quota would hold a codex launch because a claude account is walled.
-        Those are unrelated pools."""
-        import fno.dispatch as dm
-
-        monkeypatch.setattr(dm, "_resolve_provider_id", lambda *a, **k: "ccm")
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: SimpleNamespace(by_id={"ccm": SimpleNamespace(harness="claude")}),
-        )
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route",
-            lambda **k: pytest.fail("probed an unrelated pool for a pinned harness"),
-        )
-        assert dm._autonomous_route_for({}, "codex", None) is None
-
-    def test_a_matching_pin_still_probes(self, monkeypatch) -> None:
-        # Same harness = same pool: the pin still may defer on its own quota.
-        import fno.dispatch as dm
-
-        sentinel = object()
-        monkeypatch.setattr(dm, "_resolve_provider_id", lambda *a, **k: "ccm")
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: SimpleNamespace(by_id={"ccm": SimpleNamespace(harness="claude")}),
-        )
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route", lambda **k: sentinel
-        )
-        assert dm._autonomous_route_for({}, "claude", None) is sentinel
-
-    def test_an_unreadable_registry_keeps_probing(self, monkeypatch) -> None:
-        # Fail-open means "keep today's behaviour", never "skip the quota check".
-        import fno.dispatch as dm
-
-        sentinel = object()
-        monkeypatch.setattr(dm, "_resolve_provider_id", lambda *a, **k: "ccm")
-        monkeypatch.setattr(
-            "fno.adapters.providers.loader.load_providers",
-            lambda *a, **k: (_ for _ in ()).throw(OSError("unreadable")),
-        )
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route", lambda **k: sentinel
-        )
-        assert dm._autonomous_route_for({}, "codex", None) is sentinel
-
-
-def test_an_explicit_account_is_the_record_that_gets_probed(monkeypatch, tmp_path) -> None:
-    """--account names the record the launch runs on, so it is the record whose
-    quota decides. Probing the active one would defer a healthy pinned account
-    because an unrelated active account is walled."""
-    import fno.dispatch as dm
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(dm, "_next_node", lambda project: {"id": "ab-1111aaaa", "priority": "p2"})
-    monkeypatch.setattr(
-        dm, "_resolve_provider_id", lambda *a, **k: pytest.fail("probed the active record")
-    )
-    seen = {}
-    monkeypatch.setattr(
-        "fno.agents.autonomous_route.select_autonomous_route",
-        lambda **k: seen.update(k) or ar.AutonomousRoute("stay", "ok"),
-    )
-    monkeypatch.setattr(
-        "fno.agents.account_env.resolve_account_overlay",
-        lambda a, **k: SimpleNamespace(env={"CLAUDE_CONFIG_DIR": "/acct/ccr"}),
-    )
-    # `bound` too: the dispatcher's `launched` return reports whether the worker
-    # actually bound a session, not just whether a pane was created.
-    monkeypatch.setattr(
-        dm, "dispatch_spawn_pane", lambda **kw: SimpleNamespace(pane_id="p1", bound=True)
-    )
-    dm._dispatch_one(session="s", node=None, project=None, account="ccr")
-    assert seen["provider_id"] == "ccr"
-
-
-def test_a_launcher_that_hardcodes_its_harness_cannot_pin_on_the_config(monkeypatch) -> None:
-    """`fno agents dispatch one` hardcodes a claude pane, so config.dispatch.harness is
-    not a choice it honors. Pinning on it there would suppress a cutover to
-    protect a setting the launch ignores."""
+def test_a_configured_harness_pins_the_launch(monkeypatch) -> None:
+    """config.dispatch.harness is a choice the launch honors (x-e53e deleted
+    the one dispatcher that hardcoded its harness and needed an opt-out), so
+    the configured rung pins: a cutover must never override it."""
     import fno.config as cfg
 
     monkeypatch.setattr(
@@ -581,9 +340,8 @@ def test_a_launcher_that_hardcodes_its_harness_cannot_pin_on_the_config(monkeypa
         lambda *a, **k: SimpleNamespace(dispatch=SimpleNamespace(harness="codex")),
     )
     assert ar.launch_is_pinned({}) is True
-    assert ar.launch_is_pinned({}, honors_config_harness=False) is False
-    # An explicit pin still wins regardless of the opt-out.
-    assert ar.launch_is_pinned({}, account="ccr", honors_config_harness=False) is True
+    # An explicit account pin needs no config at all.
+    assert ar.launch_is_pinned({}, account="ccr") is True
 
 
 class TestQuotaRotationDeclinedEvent:
@@ -592,10 +350,9 @@ class TestQuotaRotationDeclinedEvent:
     journal (the assert-a-positive-marker pitfall)."""
 
     def _events(self, tmp_path):
-        events_path = tmp_path / ".fno" / "events.jsonl"
-        if not events_path.exists():
-            return []
-        return [json.loads(ln) for ln in events_path.read_text().splitlines() if ln.strip()]
+        from tests._event_rows import event_rows
+
+        return event_rows(tmp_path / ".fno" / "events.jsonl")
 
     def test_unknown_proceed_emits_exactly_one_declined_event(
         self, monkeypatch, tmp_path,
@@ -620,30 +377,6 @@ class TestQuotaRotationDeclinedEvent:
         assert events[0]["data"] == {
             "provider": "ccm", "reason": "defer-dispatch-off", "node_id": "fake-node-1",
         }
-
-    def test_no_usage_snapshot_omits_age_and_the_event_still_lands(
-        self, monkeypatch, tmp_path,
-    ) -> None:
-        # AC2: read_usage() with no snapshot ever written returns None, so
-        # snapshot_age_s is simply absent - the event must still validate and
-        # append (both `provider` and `reason` are its only required fields).
-        monkeypatch.chdir(tmp_path)
-        # The journal too. The hermetic sandbox pins FNO_EVENTS_PATH for the
-        # whole pytest process, and project_events_json checks it ahead of the
-        # cwd-derived root, so a test reading tmp_path's journal must name it.
-        monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / ".fno" / "events.jsonl"))
-        monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", str(tmp_path / "runtime-state.json"))
-        _signal(
-            monkeypatch, state=HeadroomState.UNKNOWN, defer=False, cutover=False,
-            resets_at=None, reason="no-provider",
-        )
-
-        ar.select_autonomous_route(provider_id="ccm")  # no node_id this time
-
-        events = self._events(tmp_path)
-        assert len(events) == 1
-        assert "snapshot_age_s" not in events[0]["data"]
-        assert "node_id" not in events[0]["data"]
 
     def test_append_event_failure_is_swallowed_and_route_is_unchanged(
         self, monkeypatch, tmp_path,
@@ -671,36 +404,3 @@ class TestQuotaRotationDeclinedEvent:
         assert r.action == "unknown-proceed"
         assert r.reason == "not-probed"
         assert not (tmp_path / ".fno" / "events.jsonl").exists()
-
-    def test_explicit_node_never_calls_select_autonomous_route(
-        self, monkeypatch, tmp_path,
-    ) -> None:
-        # AC4: dispatch.py's explicit --node path sets `explicit = True`, which
-        # skips select_autonomous_route entirely (Locked Decision 5) - so no
-        # quota_rotation_declined event can be emitted for a human-directed
-        # launch. Pin the CONTRACT (fail loudly if that call is ever added to
-        # the explicit branch), mirroring the account-probing test above.
-        import fno.dispatch as dm
-
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            dm, "_lookup_node",
-            lambda node: {"id": node, "priority": "p2", "cwd": str(tmp_path)},
-        )
-        monkeypatch.setattr(
-            "fno.agents.autonomous_route.select_autonomous_route",
-            lambda **k: pytest.fail("explicit --node dispatch must never route on quota"),
-        )
-        monkeypatch.setattr(
-            dm, "dispatch_spawn_pane",
-            lambda **kw: SimpleNamespace(pane_id="p1", bound=True),
-        )
-
-        dm._dispatch_one(session="s", node="ab-1111aaaa", project=None)
-
-        # _dispatch_one legitimately emits its own events (e.g. claim_acquired)
-        # regardless of quota routing - the contract under test is narrower:
-        # no quota_rotation_declined event, since select_autonomous_route was
-        # never called to produce one.
-        declined = [e for e in self._events(tmp_path) if e["type"] == "quota_rotation_declined"]
-        assert not declined

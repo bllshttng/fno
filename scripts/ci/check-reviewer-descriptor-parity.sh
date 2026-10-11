@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # scripts/ci/check-reviewer-descriptor-parity.sh
 #
-# Cross-language reviewer-descriptor parity check (node x-cdc7).
+# Cross-language reviewer-descriptor parity check (node).
 #
 # The set of local reviewers, and the invocation that satisfies each one, is
 # declared twice:
 #
 #   - Python: _RESOLVABLE_REVIEWERS  in cli/src/fno/config/__init__.py
 #             (the config validator + the init capability refusal)
-#   - Rust  : REVIEWER_INVOCATIONS   in crates/fno-agents/src/loopcheck.rs
+#   - Rust: REVIEWER_INVOCATIONS   in
+#             crates/fno-agents/src/loopcheck/self_review_floor.rs
 #             (the stop gate's blocked reason)
 #
 # Compared per reviewer: the invocation string, whether it is a self-cert
@@ -45,7 +46,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-RUST_FILE="${REPO_ROOT}/crates/fno-agents/src/loopcheck.rs"
+RUST_FILE="${REPO_ROOT}/crates/fno-agents/src/loopcheck/self_review_floor.rs"
 PYTHON_FILE="${REPO_ROOT}/cli/src/fno/config/__init__.py"
 SELFTEST=0
 

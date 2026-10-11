@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Verify the Codex Stop hook nudges the author in-session on one non-clean
-# native review result, without a king or daemon transport.
+# native review result, without a lead or daemon transport.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,8 +37,20 @@ grep -q 'Act on the findings in your current context' "$TMP/turn-findings.err" \
   || { echo "FAIL: nudge does not tell the worker to act in-session"; exit 1; }
 grep -q 'request-self-review --pr <n>' "$TMP/turn-findings.err" \
   || { echo "FAIL: nudge does not require a new-head review"; exit 1; }
-! grep -qE 'fno agents mail|daemon|king' "$TMP/turn-findings.err" \
-  || { echo "FAIL: nudge routed through forbidden king/daemon/mail path"; exit 1; }
+grep -q 'rounds_exhausted' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not read the round budget"; exit 1; }
+grep -q 'review-hold round --branch <branch> --head <sha>' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not explain the pre-PR budget read"; exit 1; }
+grep -q 'request-self-review' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not name the review request path"; exit 1; }
+grep -q 'fno do pr push --no-preflight' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not push a PR fix before re-review"; exit 1; }
+grep -q "When it reads rounds_exhausted true" "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not name the at-cap path"; exit 1; }
+grep -q 'merge on green CI' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge does not explain the at-cap disposition"; exit 1; }
+! grep -qE 'fno agents mail|daemon|lead' "$TMP/turn-findings.err" \
+  || { echo "FAIL: nudge routed through forbidden lead/daemon/mail path"; exit 1; }
 
 rc="$(run_hook turn-findings "$findings")"
 [[ "$rc" == "0" ]] || { echo "FAIL: same review turn was nudged twice"; exit 1; }

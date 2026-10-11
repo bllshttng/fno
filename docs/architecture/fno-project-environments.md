@@ -17,12 +17,12 @@ Most people asking for "a clean instance" want the slice. The graph is one store
 | Value | Board shows |
 |---|---|
 | `repo` (default) | this checkout's `project.id`, plus unscoped cards |
-| `workspace:<name>` | every project `work.workspaces.<name>` declares, plus unscoped |
+| `workspace:<name>` | every project the `work.workspaces.<name>` project group declares, plus unscoped |
 | `all` | every project (the historical board) |
 
 `repo` needs no configuration. `project.id` resolves through git, so every worktree layout of a checkout answers with the same project.
 
-`workspace:<name>` reuses the project set you already declared. A workspace named `main` holding `web`, `backend` and `marketing` scopes the board to those three:
+`workspace:<name>` reuses the project set you already declared. The `work.workspaces.<name>` key is a project group: a named set of repos this board value scopes to. It is not the mux workspace object that houses threads. That ruling lives in [vocabulary-user-and-operator.md](vocabulary-user-and-operator.md). A project group named `main` holding `web`, `backend` and `marketing` scopes the board to those three:
 
 ```toml
 [[work.workspaces.main.projects]]
@@ -63,7 +63,7 @@ So an isolated environment is isolated about data and not about identity. A sess
 
 Three failures on one machine in one day, all on the layer-2 vector:
 
-- Claude sessions carried a real `CODEX_SESSION_ID` that nothing in the fleet had spawned. One of them was refused a crown grant because of it.
+- Claude sessions carried a real `CODEX_SESSION_ID` that nothing in the fleet had spawned. One of them was refused a role grant because of it.
 - A claim recorded a pid belonging to a desktop app's own codex process. That pid stayed alive, so the claim read `state=live` for eleven hours past its expiry. It fenced every merge in the meantime.
 - A model override was inherited from a long-lived daemon. A session then ran on a model nobody had selected for it.
 
@@ -71,7 +71,7 @@ None of these is exotic. Each is an environment variable outliving the process t
 
 The remedy for layer 2 is provenance, not isolation. `resolve_owned_identity` (`cli/src/fno/harness_identity.py`) proves ownership from the process tree instead of picking by precedence order. When it cannot prove one, it refuses rather than guessing. Durable stamp sites reach it through `resolve_self_identity` (`cli/src/fno/claims/self_identity.py`). That function supplies the process-tree prover and nothing else. The registry collider stays at the one init-time verb that owns a registry row. Hoisting it into the shared resolver broke that: a session then refused its own row whenever the walk failed.
 
-The discriminator is the raw primitive's own docstring. If the resolved harness or session id ends up WRITTEN to a durable record, it is a stamp and uses the owned path. Those records: a claim, a mail record, an event, an agent-state row, a registry row, a crown grant, a decision record, a graph session record. A caller that only reads to display or branch keeps the precedence primitive.
+The discriminator is the raw primitive's own docstring. If the resolved harness or session id ends up WRITTEN to a durable record, it is a stamp and uses the owned path. Those records: a claim, a mail record, an event, an agent-state row, a registry row, a role grant, a decision record, a graph session record. A caller that only reads to display or branch keeps the precedence primitive.
 
 That rule was documented long before anything enforced it, which is how the caller set drifted from two obeying it to dozens not. `scripts/ci/check-identity-stamp-sites.sh` is the enforcement. Every remaining precedence-primitive caller is listed in a baseline with the reason it is read-only. A new one fails CI until someone makes that call and writes it down.
 
@@ -98,12 +98,11 @@ so a project-local `config.toml` wins per key and deep-merges over the global (`
 
 The bus derives from `state_dir`, so an isolated environment gets its own. That is right for a demo. When the operator wants to message a demo worker from a real session, it is wrong. The receipt states it rather than leaving it inherited. There is no `--share-mail` escape until someone needs one.
 
-## The two refusals
+## The refusal
 
 `fno config project init` refuses rather than half-isolating:
 
 - **A different `state_dir` already pinned** in this repo's `config.toml`. It prints the existing value and the file path, and writes nothing. Overwriting silently moves a live environment's graph, ledger and mail bus.
-- **`config.paths.agents_registry_path` set.** That explicit override is honored ahead of the `state_dir` fallback. The environment then gets its own graph and shares the agent roster. The refusal names the key.
 
 ## Appendix: does `CLAUDE_CONFIG_DIR` give a distinct claude daemon namespace?
 

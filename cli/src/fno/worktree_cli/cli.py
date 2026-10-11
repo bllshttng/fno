@@ -6,7 +6,7 @@ This CLI exposes the bookkeeping subset of the old git-worktrees skill:
 listing active worktrees with target status, cleaning up stale ones, and
 archiving (remove directory, keep branch).
 
-`ensure` is the mechanical dispatch-time primitive (node x-73ca): the
+`ensure` is the mechanical dispatch-time primitive (node): the
 deterministic-isolation behaviour PR #29 gave the bash spawn path, exposed as
 a CLI verb so the two Rust-intercepted code-dispatch callers (`dispatch-node.sh`
 and `/execute`'s foreign-wave prose) can shell it. It lives here, NOT under
@@ -18,7 +18,7 @@ from typing import Optional
 
 import typer
 
-from fno._subprocess_util import propagate_returncode
+from fno._subprocess_util import fno_py_cmd, propagate_returncode
 from fno.paths import resolve_plugin_script, resolve_repo_root
 
 app = typer.Typer(
@@ -63,8 +63,8 @@ def stranded(
     apply: bool = typer.Option(
         False,
         "--apply",
-        help="Act on the classification: push+file STRANDED rows, record UNKNOWN rows. "
-        "Default is classify-and-print only.",
+        help="Act on the classification: push STRANDED rows and record the recovery "
+        "as a sweep event, record UNKNOWN rows. Default is classify-and-print only.",
     ),
 ) -> None:
     """Classify every worktree git+graph+fleet can't otherwise tell apart.
@@ -126,32 +126,35 @@ def cleanup(
     kill_orphans: bool = typer.Option(
         False,
         "--kill-orphans",
-        help="With --merged, SIGTERM ppid-1 orphan processes squatting in a "
-        "candidate worktree instead of skipping it. Live process trees are never killed.",
+        hidden=True,
+        help="Retired: classified processes release a tree by default, "
+        "unclassified ones always keep it.",
     ),
     cargo_targets: bool = typer.Option(
         False,
         "--cargo-targets",
-        help="Reap inactive Cargo target directories by age and total-byte cap. Dry-run by default.",
+        help="Reap inactive Cargo target directories by age and total-byte cap. "
+        "The build base itself is swept by `fno doctor reclaim` (lane "
+        "cargo_build_dirs). Dry-run by default.",
     ),
-    cap_bytes: int = typer.Option(
-        68_719_476_736,
+    cap_bytes: Optional[int] = typer.Option(
+        None,
         "--cap-bytes",
         min=1,
         help="With --cargo-targets, absolute ceiling on aggregate allocated "
         "target bytes (default 64 GiB). The effective ceiling is "
         "min(this, --free-share-pct percent of free disk space).",
     ),
-    free_share_pct: int = typer.Option(
-        50,
+    free_share_pct: Optional[int] = typer.Option(
+        None,
         "--free-share-pct",
         min=1,
         max=100,
         help="With --cargo-targets, percent of free disk space the effective "
         "ceiling never exceeds (default 50).",
     ),
-    target_max_age: str = typer.Option(
-        "7d",
+    target_max_age: Optional[str] = typer.Option(
+        None,
         "--target-max-age",
         help="With --cargo-targets, reap inactive targets at least this old (default 7d).",
     ),
@@ -160,7 +163,8 @@ def cleanup(
 
     Two selection modes (mutually exclusive): --older-than (commit age) or
     --merged (branch already merged into origin/main). --cargo-targets is a
-    separate dry-run-by-default mode bounded by target age and allocated bytes.
+    separate dry-run-by-default mode bounded by target age and allocated bytes;
+    the bash defaults are the only defaults.
     """
     if merged and older_than:
         typer.echo("worktree cleanup: --merged and --older-than are mutually exclusive", err=True)
@@ -179,17 +183,15 @@ def cleanup(
     if kill_orphans:
         args.append("--kill-orphans")
     if cargo_targets:
-        args.extend(
-            [
-                "--cargo-targets",
-                "--cap-bytes",
-                str(cap_bytes),
-                "--free-share-pct",
-                str(free_share_pct),
-                "--target-max-age",
-                target_max_age,
-            ]
-        )
+        args.append("--cargo-targets")
+        # Forwarded only when given: the bash defaults are the only defaults,
+        # so this surface cannot drift from them.
+        if cap_bytes is not None:
+            args.extend(["--cap-bytes", str(cap_bytes)])
+        if free_share_pct is not None:
+            args.extend(["--free-share-pct", str(free_share_pct)])
+        if target_max_age is not None:
+            args.extend(["--target-max-age", target_max_age])
     raise typer.Exit(code=_run_lifecycle(*args))
 
 
@@ -226,13 +228,25 @@ def archive(
     raise typer.Exit(code=_run_lifecycle(*args))
 
 
-# --- ensure: mechanical dispatch-time isolation primitive (x-73ca) ----------
+# --- ensure: mechanical dispatch-time isolation primitive ----------
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True
     )
+
+
+def _worktree_for_branch(repo: Path, branch: str) -> Optional[Path]:
+    """The worktree that already has ``branch`` checked out, or None.
+
+    Through the porcelain parser three other modules already share, which also
+    gets `bare` and `detached` right - a second hand-rolled reader of the same
+    output is the shape the dual-implementation rule refuses.
+    """
+    from fno.worktree_status import _worktrees
+
+    return next((Path(p) for b, p in _worktrees(repo) if b == branch), None)
 
 
 def _abs_git_path(repo: Path, which: str) -> Optional[Path]:
@@ -254,6 +268,105 @@ def _base_ref(repo: Path) -> Optional[str]:
     for ref in ("origin/main", "origin/master"):
         if _git(repo, "rev-parse", "--verify", "--quiet", ref).returncode == 0:
             return ref
+    return None
+
+
+def _ahead_count(repo: Path, base: str, ref: str) -> Optional[int]:
+    """Commits in `base..ref`, or None when `ref` does not resolve."""
+    if _git(repo, "rev-parse", "--verify", "--quiet", ref).returncode != 0:
+        return None
+    out = _git(repo, "rev-list", "--count", f"{base}..{ref}")
+    if out.returncode != 0 or not out.stdout.strip().isdigit():
+        return None
+    return int(out.stdout.strip())
+
+
+def _fetch_failure(fetch: Optional[subprocess.CompletedProcess[str]]) -> str:
+    """The one fatal line meaning origin itself was unreachable. A missing
+    optional ref also fails the fetch, but that is the NORMAL shape here:
+    the feature branch and salvage ref usually do not exist yet."""
+    if fetch is None:
+        return "git fetch origin timed out after 60s"
+    for line in (fetch.stderr or "").splitlines():
+        if "fatal" in line and "couldn't find remote ref" not in line:
+            return line.strip()
+    return ""
+
+
+def _node_branch(name: str) -> str:
+    """The node's branch, minted by the one Rust resolver:
+    `fno backlog get <name> --field _branch`. A deployed binary that
+    predates `_branch` prints null and a non-node name exits 1; both
+    degrade to today's feature/<name>."""
+    try:
+        p = subprocess.run(
+            [*fno_py_cmd(), "backlog", "get", name, "--field", "_branch"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return f"feature/{name}"
+    if p.returncode == 0:
+        out = (p.stdout or "").strip()
+        if out and out != "null":
+            return out
+    return f"feature/{name}"
+
+
+def _continuation_base(
+    repo: Path, name: str, base: str, br: str
+) -> Optional[tuple]:
+    """What a re-dispatch should continue : origin/<br>
+    ahead of base wins, then a salvage ref ahead of base (remote, then the
+    local one a dead worker's hook wrote). Ahead-of-base by rev-list count,
+    never name existence. Returns (kind, receipt_ref, count, create_target)."""
+    remote_branch = base.split("/", 1)[1]
+    salvage = f"refs/fno/salvage/{name}"
+    feat = f"origin/{br}"
+    feat_ref = f"refs/remotes/origin/{br}"
+    fetch: Optional[subprocess.CompletedProcess[str]]
+    try:
+        fetch = subprocess.run(
+            ["git", "-C", str(repo), "fetch", "--quiet", "origin",
+             remote_branch, f"{br}:{feat_ref}"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        fetch = None
+    # Full-path dst: materializes the tracking ref even on a --single-branch
+    # clone, and a short `origin/feature/<name>` would land at refs/origin/
+    # and make every later rev-parse ambiguous.
+    count = _ahead_count(repo, base, feat_ref)
+    if count:
+        return ("continued", feat, count, feat_ref)
+    # git refuses fetch destinations under refs/fno/*, so the remote salvage
+    # ref lands per-name under refs/remotes/ - never the repo-wide
+    # FETCH_HEAD, which parallel ensures would race.
+    remote_salvage = f"refs/remotes/fno-salvage/{name}"
+    try:
+        sal_fetch = subprocess.run(
+            ["git", "-C", str(repo), "fetch", "--quiet", "origin",
+             f"{salvage}:{remote_salvage}"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        sal_fetch = None
+    count = (
+        _ahead_count(repo, base, remote_salvage)
+        if sal_fetch is not None and sal_fetch.returncode == 0
+        else None
+    )
+    if count:
+        return ("salvaged", salvage, count, remote_salvage)
+    count = _ahead_count(repo, base, salvage)
+    if count:
+        return ("salvaged", salvage, count, salvage)
+    failed = _fetch_failure(fetch)
+    if failed:
+        # Fresh AND why: a stale main reads as cuttable when it is not.
+        typer.echo(
+            f"worktree ensure: base fetch failed ({failed}); cutting fresh from {base}",
+            err=True,
+        )
     return None
 
 
@@ -297,6 +410,8 @@ def _worktree_ensure(
         policy_receipt += (
             f" requested={pol.requested_policy} degraded=true"
         )
+    if pol.note:
+        policy_receipt += f"; {pol.note}"
     if pol.policy == "never":
         # A caller that explicitly demanded a distinct branch (e.g. the batch
         # lane's `--branch feature/batch-...`) cannot get one in place: launching
@@ -350,9 +465,32 @@ def _worktree_ensure(
             and wt_top.returncode == 0
             and Path(wt_top.stdout.strip()).resolve() == wt.resolve()
         ):
+            # A demanded branch the reused tree does not carry is honored:
+            # the caller picked it, so the launch runs it (a branch has one
+            # checkout, so a branch already checked out elsewhere refuses
+            # here - fail closed, never launching the wrong branch). A dirty
+            # tree that blocks the checkout refuses the same way.
+            if branch is not None:
+                cur = _git(wt, "branch", "--show-current")
+                if cur.returncode == 0 and cur.stdout.strip() != branch:
+                    co = _git(wt, "checkout", branch)
+                    if co.returncode != 0:
+                        typer.echo(
+                            f"worktree ensure: checkout {branch} in {wt} failed: "
+                            f"{co.stderr.strip() or co.stdout.strip()}",
+                            err=True,
+                        )
+                        return 1
+                    typer.echo(
+                        f"worktree ensure: {policy_receipt}; "
+                        f"switched worktree at {wt} to {branch} created=false",
+                        err=True,
+                    )
+                    typer.echo(str(wt))
+                    return 0
             typer.echo(
                 f"worktree ensure: {policy_receipt}; "
-                f"reusing worktree at {wt}",
+                f"reusing worktree at {wt} created=false",
                 err=True,
             )
             typer.echo(str(wt))
@@ -364,17 +502,59 @@ def _worktree_ensure(
         )
         return 1
 
+    br = branch or _node_branch(name)
+    # base= stays ONE whitespace-free token: the orientation line is a
+    # key=value contract.
+    base_note = ""
+    # A branch has exactly ONE checkout, so anything that MOVES the resolved
+    # path - a harness that stopped resolving to claude, a `worktrees_base`
+    # edit - hit `git worktree add`'s "already used by worktree at ..." and
+    # wedged that lane forever, the old tree being unmerged. Reuse keyed on the
+    # path alone made a relocation fatal; the contract is create-or-reuse.
+    # Only a REAL linked worktree may be handed back. Two rows look like a
+    # reusable checkout and are not: a prunable registration whose directory was
+    # removed by hand (the porcelain still lists it), and the CANONICAL checkout
+    # itself when the branch is checked out there. Returning either with exit 0
+    # is worse than refusing, because the old failure exited 1 with empty stdout
+    # and every caller's `${wt:-<repo-root>}` fallback took over. Falling
+    # through instead reaches `git worktree add`, whose "already used by
+    # worktree at ..." is the honest refusal.
+    existing = _worktree_for_branch(top, br)
+    if (
+        existing is not None
+        and existing.resolve() != wt.resolve()
+        and existing.resolve() != top.resolve()
+        and existing.exists()
+    ):
+        typer.echo(
+            f"worktree ensure: {policy_receipt}; reusing {br} at {existing} "
+            f"(policy resolves {wt}; a branch has one checkout) created=false",
+            err=True,
+        )
+        typer.echo(str(existing))
+        return 0
     wt.parent.mkdir(parents=True, exist_ok=True)
-    br = branch or f"feature/{name}"
     if _git(top, "show-ref", "--verify", "--quiet", f"refs/heads/{br}").returncode == 0:
         # Branch already exists (e.g. a re-dispatch after archive) -> check it out.
         add = _git(top, "worktree", "add", str(wt), br)
     else:
         base = _base_ref(top)
-        add_args = ["worktree", "add", str(wt), "-b", br]
-        if base:
-            add_args.append(base)
-        add = _git(top, *add_args)
+        # Continue the node's own work when it reached origin. An explicit
+        # --branch (batch lane) is the caller's choice; default path only.
+        cont = _continuation_base(top, name, base, br) if base and branch is None else None
+        if cont is not None:
+            kind, source, count, target = cont
+            if kind == "continued":
+                add = _git(top, "worktree", "add", "-b", br, "--track", str(wt), target)
+            else:
+                add = _git(top, "worktree", "add", str(wt), "-b", br, target)
+            base_note = f" base={kind}:{source}:+{count}"
+        else:
+            add_args = ["worktree", "add", str(wt), "-b", br]
+            if base:
+                add_args.append(base)
+            add = _git(top, *add_args)
+            base_note = f" base=fresh:{base}" if base else ""
     if add.returncode != 0:
         typer.echo(
             f"worktree ensure: git worktree add failed: {add.stderr.strip() or add.stdout.strip()}",
@@ -393,7 +573,8 @@ def _worktree_ensure(
     # location, incl. a harness-native->external degradation - the resolver already
     # collapsed a non-native harness to `external`, so pol.policy is the true mode).
     typer.echo(
-        f"worktree ensure: {policy_receipt}; worktree at {wt}",
+        f"worktree ensure: {policy_receipt}; worktree at {wt}{base_note} "
+        f"created=true",
         err=True,
     )
     typer.echo(str(wt))  # the ONLY stdout line -> the caller's $wt
@@ -403,23 +584,41 @@ def _worktree_ensure(
 @app.command()
 def reapable(
     path: str = typer.Argument(..., help="Worktree path to classify."),
+    allow_unborn: bool = typer.Option(
+        False, "--allow-unborn",
+        help="Lift the setup-window refusal for a tree a human named.",
+    ),
 ) -> None:
     """Say whether removing <path> can destroy anything. Read-only.
 
-    Prints one line, e.g. `reapable=yes reason=clean recoverable_deletions=76`.
-    Exit 0 when reapable, 1 when something blocks. The three removal call sites
-    (the --merged sweep, archive-worktree.sh, the Rust row-GC probe) read this
-    instead of each deciding for itself.
+    Prints one line, e.g. `reapable=yes reason=clean recoverable_deletions=76
+    discounted=0`. Exit 0 when reapable, 1 when something blocks. The gate
+    itself is the fno-agents binary (crates/fno-agents/src/
+    worktree_reapable.rs), the single implementation since the port; this leaf
+    only execs it, so Python and Rust cannot drift apart. The done-node arm is
+    the merged sweep's flag (`WT_REAPABLE_DONE_NODE`), which reaches the
+    binary through scripts/lib/worktree-reapable.sh - the Python flag surface
+    never grows.
 
     A missing tracked file never blocks: HEAD holds its content, so removal
-    loses nothing. Modified tracked content, untracked files, and unmerged
-    conflicts do block, and a probe that cannot answer blocks too.
+    loses nothing. Nor do the symlinks setup-worktree.sh writes, which
+    `reason=setup-links` and `detail` name. Modified tracked content, other
+    untracked files, unmerged conflicts and an unanswerable probe do block.
+    A worktree inside its 30-minute setup window on a branch that never
+    moved blocks too (`reason=unborn`); `--allow-unborn` lifts exactly that,
+    for the one-tree orphan recovery, never for a bulk sweep.
     """
-    from fno.worktree_reapable import reapable as _classify
+    from fno.agents.rust_runtime import refuse_without_binary, route_to_rust
+    from fno.rust_binary import resolve_binary
 
-    verdict = _classify(path)
-    typer.echo(verdict.line())
-    raise typer.Exit(code=0 if verdict.reapable else 1)
+    binary = resolve_binary()
+    if binary is None:
+        refuse_without_binary("worktree-reapable")
+    flags = [path]
+    if allow_unborn:
+        flags.append("--allow-unborn")
+    # os.execv never returns; the binary prints the receipt and sets the exit.
+    route_to_rust(["worktree-reapable", *flags], binary=binary)
 
 
 @app.command()
@@ -427,7 +626,7 @@ def ensure(
     repo: str = typer.Option(..., "--repo", help="Repo MAIN checkout to spawn a worktree from."),
     name: str = typer.Option(..., "--name", help="Worktree name (dir + default branch suffix)."),
     branch: Optional[str] = typer.Option(
-        None, "--branch", help="Branch to create/checkout (default: feature/<name>)."
+        None, "--branch", help="Branch to create/checkout (default: the node's branch, else feature/<name>)."
     ),
     harness: Optional[str] = typer.Option(
         None, "--harness", help="Resolved harness (claude/codex/...); drives the policy gate."
@@ -452,10 +651,9 @@ def policy(
 ) -> None:
     """Print the resolved worktree policy for <repo>. Read-only.
 
-    Line 1 is the policy (never|harness-native|external); for a non-never result
-    line 2 is `base=<worktrees-base>`. Shares the SAME resolver `ensure` uses, so
-    bash callers get the identical verdict with no second precedence impl. A
-    parse error / out-of-enum value exits 1 with the reason on stderr.
+    Line 1 is the policy word; later lines: base= (non-never), source=, and a
+    requested=/degraded=true clause. Same resolver `ensure` uses; a parse
+    error exits 1 with the reason on stderr.
     """
     from fno.worktree_paths import resolve_worktree_policy
 
@@ -464,13 +662,18 @@ def policy(
     except Exception as exc:  # noqa: BLE001 - report any resolve error, incl. OSError
         typer.echo(f"worktree policy: {exc}", err=True)
         raise typer.Exit(1)
+    if pol.note:
+        typer.echo(pol.note, err=True)
     typer.echo(pol.policy)
     if pol.policy != "never":
         typer.echo(f"base={pol.base}")
+    typer.echo(f"source={pol.source}")
+    if pol.degraded:
+        typer.echo(f"requested={pol.requested_policy} degraded=true")
     raise typer.Exit(0)
 
 
-# --- overlap telemetry (x-cd4d) -------------------------------------------
+# --- overlap telemetry -------------------------------------------
 
 
 @app.command("overlap-record", hidden=True)

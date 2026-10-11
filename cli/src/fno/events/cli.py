@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 
 cli = typer.Typer(name="event", help="emit and audit events", no_args_is_help=True)
 
-# Documented cap for truncatable x-dbaf family data strings (title/reason/evidence/
+# Documented cap for truncatable family data strings (title/reason/evidence/
 # termination_reason). Mirrors the Rust RUN_SUMMARY_DATA_CAP; keeps a runaway
 # reason from bloating an events.jsonl line while still landing the event.
 _PROTOCOL_DATA_STR_CAP = 500
@@ -27,7 +27,7 @@ _PROTOCOL_DATA_STR_CAP = 500
 # This entry was originally added on a misdiagnosis - the block it was meant to
 # fix was coverage never being produced at all, not an attestation missing from
 # canonical. It stays for symmetry with the coverage path, which loopcheck.rs
-# already dual-writes for exactly this reason, and because x-3a3f moves a reader
+# already dual-writes for exactly this reason, and because moves a reader
 # to the global log and will need it. Named intent, not dead code.
 #
 # `review_coverage` earns its entry for the HAND emit alone: loopcheck.rs
@@ -38,6 +38,12 @@ _PROTOCOL_DATA_STR_CAP = 500
 # identity guard (skip when the project log IS the global log) keeps a
 # same-file emit from doubling.
 GLOBAL_MIRROR_TYPES = frozenset({"review_attestation", "review_coverage", "worktree_removed"})
+
+# Event types whose emit ALSO mirrors the verdict to GitHub as the reviewer
+# lane's bot identity. A SEPARATE set from GLOBAL_MIRROR_TYPES on purpose:
+# global-log membership drifts for its own reasons and must not silently
+# gain a GitHub posting call.
+PUBLISH_REVIEW_TYPES = frozenset({"review_attestation"})
 
 
 @cli.callback()
@@ -55,17 +61,17 @@ def _event_callback(
     merge_json_flag(ctx, json_output)
 
 
-def _detect_source(state_path: Path) -> str:
+def _detect_source(state_path: Path) -> Optional[str]:
     """Resolve the event source from a state file's presence.
 
     Returns ``"target"`` when ``state_path`` exists and the file body contains
     a ``session_id:`` key (the marker for a real target session). Otherwise
-    returns ``"test"`` (an allowed source enum value for ad-hoc CLI use).
+    returns ``None``: there is no session to attribute the row to, and the
+    caller must name a producer with ``--source`` explicitly. ``test`` stays
+    a legal explicit value for fixtures; it is no longer the silent default.
 
     The detection is intentionally lightweight (substring match, not YAML
     parse) so the CLI does not pay PyYAML startup cost on every invocation.
-    Callers that want a different source for non-target contexts pass
-    ``--source`` explicitly.
     """
     try:
         if state_path.is_file():
@@ -74,7 +80,7 @@ def _detect_source(state_path: Path) -> str:
                 return "target"
     except OSError:
         pass
-    return "test"
+    return None
 
 
 def _read_manifest_fields(state_path: Path) -> dict[str, str]:
@@ -108,7 +114,7 @@ def _stamp_protocol_envelope(
     outcome: Optional[str],
     project: Optional[str],
 ) -> dict:
-    """Assemble the extended-envelope fields for an x-dbaf status-breakpoint
+    """Assemble the extended-envelope fields for an status-breakpoint
     event. Work coordinates fall back to the manifest; identity (from/model) is
     stamped ONLY for a real session producer and omitted entirely otherwise
     (a bare-shell producer never fakes an empty handle). ``None`` values are
@@ -218,21 +224,17 @@ def _push_to_parent(
         msg += f" node={node}"
     if reason:
         msg += f": {reason}"
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("push: note: fno-agents unavailable, skipped parent push", err=True)
+        return False
+    argv = [str(binary), "machine-mail-send", "--arm", "events-push"]
+    argv.extend(["--timeout-secs", "20", "--to", parent, "--", msg])
     try:
         result = subprocess.run(
-            [
-                "fno",
-                "agents",
-                "mail",
-                "send",
-                parent,
-                msg,
-                "--origin",
-                "scheduler",
-            ],
-            check=False,
-            capture_output=True,
-            timeout=20,
+            argv, check=False, capture_output=True, timeout=20
         )
     except FileNotFoundError:
         typer.echo("push: note: fno unavailable, skipped parent push", err=True)
@@ -271,7 +273,7 @@ def push_parent(
         None, "--parent", help="explicit parent handle (else registry-resolved)"
     ),
 ) -> None:
-    """Push a status-breakpoint notice to the parent handle (x-dbaf push leg).
+    """Push a status-breakpoint notice to the parent handle (push leg).
 
     The Rust ``finalize`` shells this for ``run_summary`` (it emits the
     events.jsonl line natively, so it cannot ride the emit-CLI auto-push). No
@@ -306,7 +308,7 @@ def mirror_to_global_log(event: dict, resolved_events: Path, repo_root: Optional
         global_events = global_events_json()
         if global_events.resolve() != Path(resolved_events).resolve():
             # Scope the row the way loopcheck scopes every coverage row it
-            # writes here (x-f43c). The global log is cross-project and this
+            # writes here. The global log is cross-project and this
             # payload carries no repo of its own, so without it a reader can
             # only match on `head_sha` - and a fork shares those. Stamped on
             # the MIRRORED copy alone: the project log needs no scoping, and
@@ -329,6 +331,48 @@ def mirror_to_global_log(event: dict, resolved_events: Path, repo_root: Optional
         )
 
 
+def stamp_review_attestation_model(
+    data_dict: dict[str, Any], harness: str, session_id: str
+) -> None:
+    """Stamp data.model on a review_attestation from the emitting process.
+
+    THE MODEL IS STAMPED HERE, SAME RULE AS THE ATTESTER. The routed-model env
+    names the model the session ASKED for; a non-Anthropic name over an unset
+    base URL silently falls back to the primary model, so a claim read from env
+    can name a model that never answered. The session's own transcript reports
+    what actually answered, read through the platform provenance leaf
+    (fno.provenance.observed - L0, like this module, which is why the stamp
+    does not reach the L5 agent-runtime resolver). An unresolvable transcript
+    means NOT OBSERVABLE, so the caller's env claim is dropped, never laundered
+    into the record; empty is the schema's contract for that. A supplied value
+    that disagrees with the transcript is refused naming both, the same rule
+    attester_session_id follows.
+
+    Both review_attestation writers call this - the `fno doctor event emit`
+    chokepoint below and `fno do review classify --attest` - so two rows can
+    never disagree about the rule.
+    """
+    import os
+
+    from fno.provenance.observed import observed_model_for_session
+
+    observed = observed_model_for_session(harness, session_id, os.getcwd())
+    name = observed.get("model") if observed.get("kind") == "observed" else None
+    supplied_model = str(data_dict.get("model") or "").strip()
+    if name:
+        if supplied_model and supplied_model != name:
+            typer.echo(
+                f"error: model supplied as '{supplied_model}' but this session's "
+                f"transcript reads '{name}'. Drop the field; the emitter stamps it. "
+                "No event emitted.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        data_dict["model"] = name
+    else:
+        data_dict.pop("model", None)
+
+
 @cli.command()
 def emit(
     ctx: typer.Context,
@@ -342,24 +386,24 @@ def emit(
         help="JSON object string for the event's data envelope",
     ),
     node: Optional[str] = typer.Option(
-        None, "--node", help="backlog node id (x-dbaf family; envelope coordinate)"
+        None, "--node", help="backlog node id (family; envelope coordinate)"
     ),
     task: Optional[str] = typer.Option(
-        None, "--task", help="task id within the plan (x-dbaf family; envelope coordinate)"
+        None, "--task", help="task id within the plan (family; envelope coordinate)"
     ),
     run: Optional[str] = typer.Option(
-        None, "--run", help="target-run id, the dedup identity (x-dbaf family; manifest fallback)"
+        None, "--run", help="target-run id, the dedup identity (family; manifest fallback)"
     ),
     parent: Optional[str] = typer.Option(
-        None, "--parent", help="parent spawn-lineage handle (x-dbaf family; when spawned)"
+        None, "--parent", help="parent spawn-lineage handle (family; when spawned)"
     ),
     outcome: Optional[str] = typer.Option(
         None,
         "--outcome",
-        help="return-contract outcome (x-dbaf family; task_done/run_summary only)",
+        help="return-contract outcome (family; task_done/run_summary only)",
     ),
     project: Optional[str] = typer.Option(
-        None, "--project", help="project the work belongs to (x-dbaf family; envelope coordinate)"
+        None, "--project", help="project the work belongs to (family; envelope coordinate)"
     ),
     payload: Optional[str] = typer.Option(
         None,
@@ -370,7 +414,7 @@ def emit(
         None,
         "--source",
         "-s",
-        help="event source enum (default: 'target' if state file present, else 'test')",
+        help="event source enum (default: 'target' if state file present; otherwise required)",
     ),
     state_path: Optional[Path] = typer.Option(
         None, "--state", help="path to target-state.md (for source auto-detection)"
@@ -384,14 +428,15 @@ def emit(
         "with --events.",
     ),
 ) -> None:
-    """Emit a single canonical event to events.jsonl.
+    """Emit a single canonical event to the project event store (events.db beside the journal path).
 
     The envelope is ``{ts, type, source, data}`` (see
     ``cli/src/fno/events/schema.yaml``). Validation runs before the
     file lock is acquired so a malformed call cannot block writers.
 
-    Source defaults to ``target`` when a target state file is present and
-    ``test`` otherwise. Override with ``--source``.
+    Source defaults to ``target`` when a target state file is present.
+    Otherwise ``--source`` is required; the emit refuses rather than
+    guessing a producer.
     """
     if type_ == "verification_receipt":
         typer.echo(
@@ -468,6 +513,13 @@ def emit(
             raise typer.Exit(code=1)
         data_dict["attester_session_id"] = resolved_id
         data_dict["attester_witness"] = witness
+        import os
+
+        from fno.harness_identity import harness_from_env
+
+        stamp_review_attestation_model(
+            data_dict, harness_from_env(os.environ, warn=False) or "", resolved_id
+        )
 
     # Anchor default state + events paths to the repo root so `fno doctor event emit`
     # produces consistent results regardless of which subdirectory the user
@@ -476,11 +528,11 @@ def emit(
     # and missed the central state file. Fall back to the relative path only
     # if repo discovery fails entirely (e.g. invoked outside any git repo).
     try:
-        from fno.paths import resolve_repo_root
+        from fno.paths import project_log, resolve_repo_root, target_state_path_or_legacy
 
         repo_root = resolve_repo_root()
-        default_state = repo_root / ".fno" / "target-state.md"
-        default_events = repo_root / ".fno" / "events.jsonl"
+        default_state = target_state_path_or_legacy(repo_root)
+        default_events = project_log("events.jsonl", project_root=repo_root)
     except Exception:
         # Bound either way: the global-log mirror below reads it, and leaving it
         # unbound here would turn a discovery failure into a NameError there.
@@ -490,6 +542,17 @@ def emit(
 
     resolved_state = state_path if state_path is not None else default_state
     resolved_source = source if source is not None else _detect_source(resolved_state)
+    if resolved_source is None:
+        from fno.events import EVENT_TYPES
+
+        declared = sorted((EVENT_TYPES or {}).get(type_, {}).get("sources") or [])
+        typer.echo(
+            "error: no target session detected and --source was not given, so this "
+            f"emit cannot name its producer. {type_} declares: "
+            f"{', '.join(declared) if declared else '(none declared)'}.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     envelope = None
     if type_ in PROTOCOL_FAMILY_TYPES:
@@ -554,12 +617,37 @@ def emit(
     if type_ in GLOBAL_MIRROR_TYPES:
         mirror_to_global_log(event, resolved_events, repo_root)
 
-    # Push leg (x-dbaf): blocked + run_summary notify the parent when spawn
-    # lineage exists. Fired AFTER the durable append so the events.jsonl record
-    # is independent of the push (AC1-FR). No lineage -> silent skip.
-    # (run_summary is normally pushed by Rust finalize's native emit; a
-    # CLI-emitted one pushes here too for uniformity.)
-    if type_ in ("blocked", "run_summary"):
+    # BOT-REVIEW MIRROR: a review_attestation also posts to GitHub as the
+    # reviewer lane's bot identity. This emit is the ONE call every verdict
+    # already funnels through, so the producer has exactly one reachable
+    # path. Best-effort like the global-log mirror above: the durable append
+    # already succeeded, so a network failure must never fail the emit.
+    if type_ in PUBLISH_REVIEW_TYPES:
+        try:
+            import os
+
+            from fno.pr._publish_review import publish_review_call
+
+            _data = event.get("data", {})
+            result = publish_review_call(
+                {
+                    "pr_number": None,
+                    "head_sha": str(_data.get("head_sha") or ""),
+                    "verdict": str(_data.get("verdict") or ""),
+                    "reviewer": str(_data.get("reviewer") or ""),
+                    "cwd": str(repo_root) if repo_root else os.getcwd(),
+                    "dry_run": False,
+                }
+            )
+            typer.echo(result.get("receipt", "bot-review: skipped (no receipt)"), err=True)
+        except Exception as exc:  # noqa: BLE001 - never fail the emit
+            typer.echo(f"bot-review: skipped (mirror error: {exc})", err=True)
+
+    # Push leg: blocked notifies the parent when spawn lineage exists. Fired
+    # AFTER the durable append so the events.jsonl record is independent of the
+    # push (AC1-FR). No lineage -> silent skip. run_summary is pushed only by
+    # Rust finalize, which dedups on run plus reason; this emit path never pushes it.
+    if type_ == "blocked":
         _parent = event.get("parent")  # already resolved into the envelope above
         if _parent:
             _push_to_parent(
@@ -614,7 +702,7 @@ def gate_escape(
         None, "--events", help="path to events.jsonl (default: canonical root)"
     ),
 ) -> None:
-    """Tag a human intervention the loop should have handled (x-91b5, Tier-2).
+    """Tag a human intervention the loop should have handled (Tier-2).
 
     Low-friction manual sugar for the reasons with no clean auto chokepoint
     (flake / stale-base / wedge): an operator runs this at the moment they
@@ -676,9 +764,11 @@ def gc(
     """Delete expired explicit-ephemeral rows while preserving all other rows."""
     from fno.events import RETENTION_MINIMUM_TTL_HOURS, SchemaUnavailableError
     from fno.events.gc import gc_events
-    from fno.paths import resolve_repo_root
+    from fno.paths import project_events_json
 
-    resolved = events_path or (resolve_repo_root() / ".fno" / "events.jsonl")
+    # The space journal, not a hand-built checkout path: gc on the retired
+    # file compacts rows nobody reads while the live journal grows.
+    resolved = events_path or project_events_json()
     horizon = ttl_hours if ttl_hours is not None else RETENTION_MINIMUM_TTL_HOURS
     try:
         result = gc_events(resolved, ttl_hours=horizon, dry_run=dry_run)
@@ -700,6 +790,7 @@ def gc(
             f"scanned={result['scanned']} deleted={result['deleted']} "
             f"kept={result['kept']} malformed={result['malformed']}"
         )
+
 
 
 @cli.command()
@@ -726,3 +817,112 @@ def audit(
 
     if not result["ok"]:
         raise typer.Exit(code=1)
+import re  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def _parse_find_since(raw: str | None) -> datetime | None:
+    if raw is None:
+        return None
+    match = re.fullmatch(r"(\d+)([smhd])", raw.strip().lower())
+    if match:
+        amount = int(match.group(1))
+        unit = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}[match.group(2)]
+        return datetime.now(timezone.utc) - timedelta(**{unit: amount})
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"--since must be ISO-8601 or a duration such as 7d: {raw!r}") from None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_find_fields(raw_fields: list[str]) -> list[tuple[str, str]]:
+    parsed: list[tuple[str, str]] = []
+    for raw in raw_fields:
+        field, separator, value = raw.partition("=")
+        if not separator or not field:
+            raise ValueError(f"--field must use FIELD=VALUE: {raw!r}")
+        parsed.append((field, value))
+    return parsed
+
+
+@cli.command("find")
+def find(
+    ctx: typer.Context,
+    kind: Optional[str] = typer.Argument(None, help="Event kind to match."),
+    field: list[str] = typer.Option(
+        [], "--field", help="Field filter FIELD=VALUE; may be repeated."
+    ),
+    since: Optional[str] = typer.Option(
+        None, "--since", help="Lower timestamp bound as ISO-8601 or a duration such as 7d."
+    ),
+    session_id: Optional[str] = typer.Option(None, "--session-id", help="Session id to match."),
+    session_legacy: Optional[str] = typer.Option(
+        None, "--session", hidden=True, help="[DEPRECATED] alias for --session-id."
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, help="Maximum matching rows to print."),
+    kinds: bool = typer.Option(False, "--kinds", help="Summarize every event kind."),
+    json_out: bool = typer.Option(False, "--json", "-J", help="Emit one structured result."),
+) -> None:
+    """Query every event journal and retained rotation with a denominator.
+
+    The reader accepts the three envelopes in the store. It names every file
+    it covered and reports unreadable segments separately from a measured zero.
+    """
+    from fno.paths import event_journals
+
+    session = session_id or session_legacy
+    # KIND-vs---kinds is refused by the native verb itself; relaying keeps
+    # the refusal single-sourced. The value parsers stay local: their
+    # refusals read better than a spawned-binary error.
+    try:
+        _parse_find_fields(field)
+        _parse_find_since(since)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    try:
+        journal_paths = event_journals()
+    except OSError as exc:
+        typer.echo(f"error: could not resolve event journals: {exc}", err=True)
+        raise typer.Exit(code=3) from exc
+
+    from fno.events.store_client import EventStoreUnavailable, resolve_native_bin
+
+    try:
+        bin_path = resolve_native_bin()
+    except EventStoreUnavailable as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    cmd = [bin_path, "doctor", "event", "find"]
+    for path in journal_paths:
+        cmd += ["--events", str(path)]
+    if kind:
+        cmd.append(kind)
+    for kv in field:
+        cmd += ["--field", kv]
+    if since:
+        cmd += ["--since", since]
+    if session:
+        cmd += ["--session-id", session]
+    cmd += ["--limit", str(limit)]
+    if kinds:
+        cmd.append("--kinds")
+    json_mode = json_out or bool(ctx.obj and ctx.obj.get("json", False))
+    if json_mode:
+        cmd.append("--json")
+    import subprocess
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        typer.echo(f"error: native find failed to start: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(proc.stdout, nl=False)
+    if proc.stderr:
+        typer.echo(proc.stderr.strip(), err=True)
+    raise typer.Exit(proc.returncode)

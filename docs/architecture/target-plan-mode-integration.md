@@ -116,9 +116,10 @@ construction).
 matcher never fires, no sidecar is written, and `/target` behaves exactly as
 today. The feature lives entirely in the optional hook + skill-relative scripts,
 so the portable driver-skill contract (CI-enforced self-containment) is intact.
-See `docs/SKILL-COMPAT-MATRIX.md` (the `target (plan-mode front door)` row).
 
-**Headless / megawalk runs skip the front door entirely** (it requires a human
+The front door is a claude-only sub-mode of `target`, not a row of its own in `docs/harnesses/verb-matrix.md`. `docs/SKILL-COMPAT-MATRIX.md` states the sub-mode rule.
+
+**Headless runs skip the front door entirely** (it requires a human
 confirm). The bundled `archer` agent carries an explicit attended-only guard, so
 a headless worker never detects, backfills, or consumes a sidecar
 (Open Question 2: headless never consumes).

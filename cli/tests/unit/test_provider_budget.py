@@ -15,10 +15,8 @@ from typing import Any
 import pytest
 
 from fno.agents.model_routing import ROUTE_PROVIDER_ENV, bind_route_provider
-from fno.agents.spawn_gate import provider_lanes_cap
 from fno.config import (
     AgentsBlock,
-    ProviderBudget,
     assert_subagent_budget,
     provider_subagent_budget,
 )
@@ -88,18 +86,6 @@ def test_a_malformed_table_restores_the_safe_builtin(written):
     # Restoring the whole built-in table, rather than dropping one entry, is
     # what keeps a typo from making a shared provider unlimited.
     assert _budget(max_lanes=written) == (5, 1)
-
-
-# --- the two readers of the record -----------------------------------------
-
-
-def test_lanes_cap_reads_both_spellings_at_one_seam():
-    # The gate's configured path carries the record and its fail-safe path
-    # carries the integer. One reader is why they cannot disagree about a cap.
-    assert provider_lanes_cap(ProviderBudget(lanes=5, subagents=1)) == 5
-    assert provider_lanes_cap(5) == 5
-    assert provider_lanes_cap(None) is None
-    assert provider_lanes_cap(ProviderBudget(subagents=1)) is None
 
 
 def test_subagent_budget_fails_open_on_every_unknown():
@@ -241,15 +227,30 @@ def test_the_stamp_is_cleared_by_whatever_clears_a_route():
     assert ROUTE_PROVIDER_ENV in SCRUB_AUTH_VARS
 
 
-def test_a_codex_route_carries_the_same_stamp():
+@pytest.mark.dev_build
+def test_a_codex_route_carries_the_same_stamp(tmp_path, monkeypatch):
     # Without it a routed codex worker resolves "unknown" and a shared provider
-    # reached through codex still launches the full panel.
-    import inspect
-
+    # reached through codex still launches the full panel. The stamp is BUILT in
+    # Rust now (codex_route.rs appends FNO_ROUTE_PROVIDER to CodexRoute.env);
+    # the Python lane relays the builder's answer verbatim, so the parity is
+    # asserted on a resolved route, not on Python source (x-3954).
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[model_routing]\n"
+        '[model_routing.roles]\ntidy = "oai,glm-5.2"\n'
+        "[model_routing.providers.oai]\n"
+        'protocol = "openai"\n'
+        'base_url = "https://example.test/v1"\n'
+        'api_key_env = "OPENAI_API_KEY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FNO_CONFIG", str(cfg))
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
     from fno.agents import model_routing
 
-    source = inspect.getsource(model_routing.resolve_codex_route)
-    assert "ROUTE_PROVIDER_ENV" in source
+    route = model_routing.resolve_codex_route("tidy")
+    assert route is not None
+    assert route.env.get("FNO_ROUTE_PROVIDER") == "oai"
 
 
 def test_a_stamp_alone_does_not_count_as_a_recorded_route(tmp_path):
@@ -266,16 +267,3 @@ def test_a_stamp_alone_does_not_count_as_a_recorded_route(tmp_path):
     )
     with pytest.raises(RouteRestoreError, match="records no route"):
         read_route_settings(str(path))
-
-
-# --- the lane cap survived the widening -------------------------------------
-
-
-def test_the_lanes_view_reads_the_record_not_the_object():
-    # `cap` reached a `{:>3}` cell and a json.dumps; rendering the record there
-    # raised instead of printing a number.
-    from fno.scoreboard.fold import _lane_cap
-
-    assert _lane_cap({"zai": ProviderBudget(lanes=5, subagents=1)}, "zai") == 5
-    assert _lane_cap({"zai": 5}, "zai") == 5
-    assert _lane_cap({}, "zai") is None

@@ -17,12 +17,14 @@ supersedes the drift-check).
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
 
+from tests._init_space import STUB, install_state_path_stub
 
 _REPO_ROOT = Path(__file__).parent.parent.parent.parent
 _INIT_SCRIPT = _REPO_ROOT / "hooks" / "helpers" / "init-target-state.sh"
@@ -112,6 +114,33 @@ def _stub_fno(bin_dir: Path) -> None:
     fno.chmod(0o755)
 
 
+def _space_state(tmpdir: Path) -> Path:
+    """Where init writes the manifest once the state-path stub answers."""
+    return tmpdir / "space" / "target-state.md"
+
+
+def _ensure_feature_repo(root: Path) -> None:
+    if (root / ".git").exists():
+        return
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "fno@test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.name", "fno"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "checkout", "-q", "-b", "feature/init-test"],
+        check=True,
+    )
+
+
 def _run_init_script(
     tmpdir: Path, extra_env: dict[str, str], *, timeout_s: int = 900
 ) -> subprocess.CompletedProcess:
@@ -122,17 +151,23 @@ def _run_init_script(
     round-trips are startup-cost no-ops in this isolated env. With the stub a run
     is sub-second, so the timeout stops being load-sensitive.
     """
+    _ensure_feature_repo(tmpdir)
+
     plan_file = tmpdir / "plan.md"
     plan_file.write_text("# Test plan\n")
 
+    home_dir = tmpdir / "home"
+    home_dir.mkdir(exist_ok=True)
+    (home_dir / ".fno").mkdir(exist_ok=True)
     state_dir = tmpdir / ".fno"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     bin_dir = tmpdir / "bin"
     _stub_fno(bin_dir)
+    stub_env = install_state_path_stub(bin_dir, tmpdir / "space")
 
     env = {
-        "HOME": str(tmpdir),
+        "HOME": str(home_dir),
         # Prepend the stub dir so the hook resolves tmp/bin/fno first; keep the
         # real PATH tail so bash/date/mkdir still resolve. A stub miss degrades
         # to slow (real fno), never wrong.
@@ -141,6 +176,7 @@ def _run_init_script(
         "TARGET_INPUT": str(plan_file),
         "TARGET_AUTO_MERGE": "false",
         "FNO_CALLS_LOG": str(tmpdir / "fno-calls.log"),
+        **stub_env,
     }
     env.update(extra_env)
 
@@ -184,7 +220,7 @@ def test_flat_skip_flags_per_size_profile(target_size, tmp_path):
         f"stdout: {proc.stdout[:500]}\nstderr: {proc.stderr[:500]}"
     )
 
-    state_file = tmp_path / ".fno" / "target-state.md"
+    state_file = _space_state(tmp_path)
     assert state_file.exists(), "target-state.md not created"
 
     fm = _parse_target_state_frontmatter(state_file)
@@ -221,7 +257,7 @@ def test_flat_skip_flags_reflect_env_override(tmp_path):
         f"stdout: {proc.stdout[:500]}\nstderr: {proc.stderr[:500]}"
     )
 
-    state_file = tmp_path / ".fno" / "target-state.md"
+    state_file = _space_state(tmp_path)
     fm = _parse_target_state_frontmatter(state_file)
 
     # Flat flag must reflect the override
@@ -236,45 +272,18 @@ def test_flat_skip_flags_reflect_env_override(tmp_path):
     )
 
 
-def test_no_phase_init_event_emitted(tmp_path):
-    """AC1-EDGE: no phase_init event is emitted (loop-check reads manifest directly).
-
-    After control-plane collapse, phase_init event emission is removed.
-    The manifest is the authoritative input record; events.jsonl gets
-    termination events from loop-check, not init events from this script.
-    """
-    assert _INIT_SCRIPT.exists(), f"init script missing: {_INIT_SCRIPT}"
-
-    proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
-    assert proc.returncode == 0, (
-        f"init-target-state.sh must succeed; stderr: {proc.stderr}"
-    )
-
-    state_file = tmp_path / ".fno" / "target-state.md"
-    assert state_file.exists(), "State file must still be created"
-
-    events_file = tmp_path / ".fno" / "events.jsonl"
-    if events_file.exists():
-        phase_init_found = any(
-            '"type":"phase_init"' in line or '"event":"phase_init"' in line
-            for line in events_file.read_text().splitlines()
-        )
-        assert not phase_init_found, (
-            "phase_init event must NOT be emitted by the new immutable init "
-            "(loop-check reads manifest directly; ab-d0337fbc)"
-        )
-    # If events.jsonl doesn't exist at all, that's also correct.
-
-
 def test_cancelled_claimless_session_is_archived_on_next_init(tmp_path):
     """A finalized explicit cancel must not strand the next target init."""
-    state_dir = tmp_path / ".fno"
+    state_dir = tmp_path / "space"
     state_dir.mkdir()
     (state_dir / "target-state.md").write_text(
         "---\nsession_id: old-run\ninput: old-plan\n---\n",
         encoding="utf-8",
     )
-    (state_dir / ".target-cancelled").touch()
+    # The cancel sentinel is written repo-relative (.fno/) by the documented
+    # cancel procedure, and the finalize probe reads it there (init :651).
+    (tmp_path / ".fno").mkdir(exist_ok=True)
+    (tmp_path / ".fno" / ".target-cancelled").touch()
     (state_dir / "events.jsonl").write_text(
         '{"type":"session_finalized","data":{"session_id":"old-run",'
         '"termination_reason":"Interrupted"}}\n',
@@ -284,7 +293,7 @@ def test_cancelled_claimless_session_is_archived_on_next_init(tmp_path):
     proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
 
     assert proc.returncode == 0, proc.stderr
-    assert "old-run" not in (state_dir / "target-state.md").read_text()
+    assert "old-run" not in _space_state(tmp_path).read_text()
     assert list(state_dir.glob("target-state.terminal.*.md"))
 
 
@@ -297,7 +306,7 @@ def test_authority_absent_without_beastmode(tmp_path):
     proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
     assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
 
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert "authority" not in fm, f"authority must be absent without beastmode; got {fm.get('authority')!r}"
 
 
@@ -306,7 +315,7 @@ def test_authority_full_with_beastmode(tmp_path):
     proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M", "TARGET_BEASTMODE": "1"})
     assert proc.returncode == 0, f"stderr: {proc.stderr[:500]}"
 
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert fm.get("authority") == "full", f"expected authority=full, got {fm.get('authority')!r}"
     # The grant is orthogonal to auto-merge: beastmode spends judgment, never
     # irreversibles (epic G8).
@@ -320,7 +329,7 @@ def test_immutable_manifest_has_no_mutable_fields(tmp_path):
     proc = _run_init_script(tmp_path, {"TARGET_SIZE": "M"})
     assert proc.returncode == 0
 
-    state_file = tmp_path / ".fno" / "target-state.md"
+    state_file = _space_state(tmp_path)
     fm = _parse_target_state_frontmatter(state_file)
 
     forbidden = [
@@ -356,15 +365,28 @@ def test_plan_path_env_lands_in_manifest_with_anchor(tmp_path):
     proc = _run_init_script(tmp_path, {"TARGET_PLAN_PATH": f"{bound}#group-2"})
     assert proc.returncode == 0, f"init failed: {proc.stderr}"
 
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert fm.get("plan_path") == f"{bound}#group-2"
 
 
 def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedProcess:
+    _ensure_feature_repo(tmp_path)
     (tmp_path / ".fno").mkdir(exist_ok=True)
+    home_dir = tmp_path / "home"
+    home_dir.mkdir(exist_ok=True)
+    (home_dir / ".fno").mkdir(exist_ok=True)
+    # The run-id mint rides the fno-agents test double: `fno` itself stays
+    # absent, which is the degraded hold-gate leg under test, while the mint
+    # still answers (a binary-less init refuses before the mint's own error).
+    # No FNO_TEST_SPACE: the legacy $REPO_ROOT/.fno fallback stays pinned.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    stub_copy = bin_dir / "fno-agents"
+    shutil.copyfile(STUB, stub_copy)
+    stub_copy.chmod(0o755)
     env = {
-        "HOME": str(tmp_path),
-        "PATH": "/usr/bin:/bin",
+        "HOME": str(home_dir),
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
         "TARGET_START": "1",
         "TARGET_INPUT": target_input,
         "TARGET_LOCATION_OK": "main-acknowledged",
@@ -382,6 +404,7 @@ def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedP
 def test_fno_absent_allows_free_text_without_a_hold_source(tmp_path):
     result = _run_without_fno(tmp_path, "describe a new feature")
     assert result.returncode == 0, result.stderr
+    # The no-fno leg pins the $REPO_ROOT/.fno fallback: no stub, legacy path.
     assert (tmp_path / ".fno" / "target-state.md").is_file()
 
 
@@ -398,14 +421,14 @@ def test_fno_absent_refuses_named_node_hold_lookup(tmp_path):
 def test_env_grant_honored_on_operator_origin_run(tmp_path):
     """AC-HP: TARGET_AUTO_MERGE=1 on an attended, agent-free run folds to the
     env grant. This is the documented per-run arm the merge verb and finalize
-    honor; the crown's own origin bar (no FNO_AGENT_SELF) decides who holds
+    honor; the role's own origin bar (no FNO_AGENT_SELF) decides who holds
     it."""
     proc = _run_init_script(
         tmp_path, {"TARGET_AUTO_MERGE": "1", "FNO_AGENT_SELF": ""}
     )
     assert proc.returncode == 0, proc.stderr[:500]
     assert "TARGET_AUTO_MERGE=1 ignored" not in proc.stderr
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert fm["auto_merge_approved"] is True
     assert fm["auto_merge_source"] == "env-target-auto-merge"
 
@@ -421,7 +444,7 @@ def test_env_grant_scrubbed_on_agent_origin_run(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr[:500]
     assert "TARGET_AUTO_MERGE=1 ignored" in proc.stderr
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert fm["auto_merge_approved"] is False
     assert fm["auto_merge_source"] != "env-target-auto-merge"
 
@@ -439,6 +462,6 @@ def test_env_grant_scrubbed_on_unattended_run(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr[:500]
     assert "TARGET_AUTO_MERGE=1 ignored" in proc.stderr
-    fm = _parse_target_state_frontmatter(tmp_path / ".fno" / "target-state.md")
+    fm = _parse_target_state_frontmatter(_space_state(tmp_path))
     assert fm["auto_merge_approved"] is False
     assert fm["auto_merge_source"] != "env-target-auto-merge"

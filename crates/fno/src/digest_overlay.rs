@@ -1,4 +1,4 @@
-//! Attach-time "while you were gone" catch-up overlay (x-4e2d, client half).
+//! Attach-time "while you were gone" catch-up overlay (x-aaaa, client half).
 //!
 //! On attach the client asks: was I away from this mux session long enough to
 //! want a catch-up? If so it shells out to `fno-agents digest --json` for the
@@ -24,6 +24,9 @@
 use crate::proto;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+pub(crate) static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const DEFAULT_THRESHOLD_MIN: u64 = 10;
 /// Fail-open budget for the fold shell-out; a slow `fno-agents` yields no
@@ -84,15 +87,51 @@ pub fn attach_digest_enabled(cwd: &Path) -> bool {
 }
 
 /// `config.mux.hover_focus` (default ON) — the focus-follows-mouse off-switch
-/// (x-a496). Latched once at client startup. Lives here because this module owns
+///. Latched once at client startup. Lives here because this module owns
 /// the `fno` crate's `config.mux.*` reader (mirrors `attach_digest_enabled`).
 pub fn hover_focus_enabled(cwd: &Path) -> bool {
     mux_bool(cwd, "hover_focus", true)
 }
 
+/// `config.mux.card_graph` (default `activity`) — what the sideline card's
+/// graph slot plots. `activity` draws the tool-call ramp, blank until two
+/// intervals exist; `context` draws the context percent's fill bar, steady
+/// for the whole session. The slot never switches between them mid-session.
+/// Latched once at client startup. Anything unparsable reads the default.
+pub fn card_graph(cwd: &Path) -> crate::client::CardGraph {
+    match mux_str(cwd, "card_graph").as_deref() {
+        Some("context") => crate::client::CardGraph::Context,
+        _ => crate::client::CardGraph::Activity,
+    }
+}
+
+/// `config.split.opens` (default `pane`) - where the row menu's Split
+/// Direction toggle starts: `portal` starts it on portal, anything else reads
+/// pane. The toggle flips it in-menu; the flip persists through
+/// `fno config set split.opens`. Latched once at client startup.
+pub fn split_opens(cwd: &Path) -> crate::client::SplitOpens {
+    match config_str(cwd, "split", "opens").as_deref() {
+        Some("portal") => crate::client::SplitOpens::Portal,
+        _ => crate::client::SplitOpens::Pane,
+    }
+}
+
 /// `config.mux.status_row` (default ON), latched once at client startup.
 pub fn status_row_enabled(cwd: &Path) -> bool {
     mux_bool(cwd, "status_row", true)
+}
+
+/// `config.mux.paint_background` (default ON) - the OSC background
+/// takeover's kill switch. OFF = fno never writes the terminal's default
+/// colors and never restores them; the terminal's own scheme stays.
+pub fn paint_background_enabled(cwd: &Path) -> bool {
+    mux_bool(cwd, "paint_background", true)
+}
+
+/// `config.mux.load_readout`: `detailed` shows the raw load numbers; any
+/// other value reads as `simple` (the default), plain words a person reads.
+pub fn load_readout_detailed(cwd: &Path) -> bool {
+    mux_str(cwd, "load_readout").is_some_and(|v| v.trim() == "detailed")
 }
 
 /// `config.resource_meter.enabled` (default OFF) - the whole-machine meter's
@@ -111,27 +150,465 @@ pub fn resource_meter_refresh_secs(cwd: &Path) -> u64 {
         .max(1)
 }
 
-/// `config.mux.show_missions` (default ON) - the `~ missions` progress band's
-/// off-switch. A mission can never hold a session, so an operator who runs no
-/// epics can drop the band entirely rather than dismiss it each session.
-pub fn missions_section_enabled(cwd: &Path) -> bool {
-    mux_bool(cwd, "show_missions", true)
-}
-
-/// `config.mux.show_backlog` (default ON) - the `~ backlog` lane's off-switch.
-pub fn backlog_section_enabled(cwd: &Path) -> bool {
-    mux_bool(cwd, "show_backlog", true)
-}
-
-/// (x-f75e) `config.mux.theme`: the chrome palette name, latched once at client
-/// startup. An unset key reads as `None` (meaning "no preference") and resolves
-/// to `terminal`. An UNKNOWN name also resolves to `terminal` but carries a
+/// `config.mux.theme`: the chrome palette name, latched once at client
+/// startup. An unset key reads as `None` (meaning "no preference") and
+/// resolves to the brand default: `footnote-superscript`, or
+/// `footnote-paper` when the terminal reports a light background through
+/// `COLORFGBG`. An UNKNOWN name also resolves to the default but carries a
 /// notice through the same channel a refused keymap rebind uses, because a
-/// config that is quietly ignored is indistinguishable from one never written.
-pub fn theme_for(cwd: &Path) -> (crate::theme::Theme, Option<crate::keys::KeymapWarning>) {
-    match mux_str(cwd, "theme") {
-        Some(name) => crate::theme::Theme::from_name(&name),
-        None => (crate::theme::Theme::default_theme(), None),
+/// config that is quietly ignored is indistinguishable from one never
+/// written. The `mux.theme.brand` / `mux.theme.needs_you` role overrides
+/// fold in here and at the settings modal's swap, so they hold under every
+/// theme.
+///
+/// The third tuple leg is the inference flag: `true` when no config named a
+/// theme, so the theme was CHOSEN FOR the terminal. An inferred light theme
+/// (paper) does not repaint the ground: the operator's own light bg and fg
+/// stay exactly as the terminal had them (the theme-ground ruling) - the theme
+/// contributes only the chrome colors, which were tuned against a light
+/// ground. An EXPLICIT paper pick still paints: the operator named it.
+pub fn theme_for(
+    cwd: &Path,
+) -> (
+    crate::theme::Theme,
+    Option<crate::keys::KeymapWarning>,
+    bool,
+) {
+    // The user's own themes resolve by name here, and their parse problems
+    // ride the same notice even when no config key names one: a theme the
+    // picker will list must not fail silently.
+    let (user, mut user_warns) = user_themes(cwd);
+    let resolved = match mux_str(cwd, "theme").as_deref() {
+        // An empty value is "no preference", the same as the unset key: it
+        // rides the light-background ladder instead of pinning the dark
+        // default.
+        Some(name) if !name.trim().is_empty() => {
+            let (t, w) = crate::theme::Theme::from_name_in(name, &user);
+            (t, w, false)
+        }
+        _ => {
+            let env = std::env::var("COLORFGBG").ok();
+            (
+                crate::theme::Theme::default_for(colorfgbg_is_light(env.as_deref())),
+                None,
+                true,
+            )
+        }
+    };
+    let (t, warn, inferred) = resolved;
+    let (t, warn) = theme_role_overrides(cwd, (t, warn));
+    if let Some(w) = warn {
+        user_warns.push(w);
+    }
+    (t, join_warnings(user_warns), inferred)
+}
+
+/// The user's own themes: the import's theme folder, then config
+/// `[mux.themes.<name>]` tables materialized through the same file ladder
+/// the keymap walks (`$FNO_CONFIG` sole, else project roots over the global
+/// file, a higher layer wins per role key - the Python loader's deep-merge,
+/// mirrored). The folder sits below every config layer, so a hand-written
+/// table tunes an imported theme one role at a time. Built-ins win name
+/// collisions, so a user theme can never shadow a shipped one. `inherit`
+/// names a built-in to start from (default `footnote-superscript`); every
+/// other key is a Theme role in the sideline color vocabulary, and a value
+/// the reader cannot parse is reported, never silently ignored. File-level
+/// problems (bad TOML, unreadable file) stay the keymap reader's warnings -
+/// it reads these same files and already reports them once.
+pub fn user_themes(
+    cwd: &Path,
+) -> (
+    Vec<(String, crate::theme::Theme)>,
+    Vec<crate::keys::KeymapWarning>,
+) {
+    let mut layers: Vec<PathBuf> = theme_folder_files();
+    layers.extend(match non_empty_env("FNO_CONFIG") {
+        Some(explicit) => vec![PathBuf::from(explicit)],
+        None => {
+            let global = global_config_toml();
+            global
+                .into_iter()
+                .chain(
+                    config_roots(cwd)
+                        .into_iter()
+                        .rev()
+                        .map(|r| r.join(".fno/config.toml")),
+                )
+                .collect()
+        }
+    });
+    let merged = merge_theme_layers(layers.iter().map(|p| themes_from_file(p)));
+    let mut themes: Vec<(String, crate::theme::Theme)> = Vec::new();
+    let mut warnings: Vec<crate::keys::KeymapWarning> = Vec::new();
+    for (name, spec) in &merged {
+        // A blank key (`[mux.themes.""]`) materializes a theme whose name
+        // matches nothing the picker can label - report it, never quietly
+        // drop it.
+        if name.trim().is_empty() {
+            warnings.push(crate::keys::KeymapWarning(
+                "mux.themes.\"\": a theme name is required; ignored".to_string(),
+            ));
+            continue;
+        }
+        let (t, mut w) = materialize_user_theme(name, spec);
+        themes.push((name.clone(), t));
+        warnings.append(&mut w);
+    }
+    // TOML tables iterate in an arbitrary order; a stable list is a picker
+    // that does not reshuffle between opens.
+    themes.sort_by(|a, b| a.0.cmp(&b.0));
+    (themes, warnings)
+}
+
+/// One config file's `[mux.themes.<name>]` as `(name, [(key, value)])`. A
+/// non-string role value is reported here (it is a THEME problem, not a
+/// file problem).
+fn themes_from_file(path: &Path) -> Vec<(String, Vec<(String, String)>)> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    themes_from_str(&content)
+}
+
+/// The `[mux.themes.<name>]` tables of one file's TEXT, the same shape
+/// [`themes_from_file`] returns. The theme importer parses fetched text
+/// through this reader, so a preview resolves through the exact code the
+/// reader runs.
+pub(crate) fn themes_from_str(text: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(themes) = table
+        .get("mux")
+        .and_then(|m| m.as_table())
+        .and_then(|m| m.get("themes"))
+        .and_then(|t| t.as_table())
+    else {
+        return Vec::new();
+    };
+    themes
+        .iter()
+        .filter_map(|(name, v)| {
+            let spec = v.as_table()?;
+            Some((
+                name.clone(),
+                spec.iter()
+                    .map(|(k, v)| match v.as_str() {
+                        Some(s) => (k.clone(), s.to_string()),
+                        // A non-string (e.g. `base = 3`) rides as its TOML
+                        // display so the materialize warning names what the
+                        // operator actually wrote.
+                        None => (k.clone(), v.to_string()),
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        })
+        .collect()
+}
+
+/// The imported-theme folder: `<state root>/mux/themes`. The import saves
+/// here and [`user_themes`] reads it as the lowest layer. `None` in test
+/// builds without an override: `mux_sidecar_root` has no test twin, so a
+/// test that wants the folder pins it through [`set_themes_dir_for_test`].
+pub(crate) fn themes_dir() -> Option<PathBuf> {
+    #[cfg(not(test))]
+    {
+        Some(crate::proto::mux_sidecar_root().join("mux").join("themes"))
+    }
+    #[cfg(test)]
+    TEST_THEMES_DIR.with(|c| c.borrow().clone())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_THEMES_DIR: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_themes_dir_for_test(dir: Option<PathBuf>) {
+    TEST_THEMES_DIR.with(|c| *c.borrow_mut() = dir);
+}
+
+/// The folder's `*.toml` files, sorted by name: one layer per file, lowest
+/// precedence. A missing folder adds no layer; an unreadable file stays
+/// silent, the same posture as a bad config file.
+pub(crate) fn theme_folder_files() -> Vec<PathBuf> {
+    let Some(dir) = themes_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "toml"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// Collapse theme layers, lowest precedence first, one (theme, role) pair at
+/// a time - the same shape as [`merge_key_layers`], keyed by theme name.
+fn merge_theme_layers(
+    layers: impl Iterator<Item = Vec<(String, Vec<(String, String)>)>>,
+) -> Vec<(String, Vec<(String, String)>)> {
+    let mut merged: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    for layer in layers {
+        for (name, spec) in layer {
+            match merged.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, held)) => {
+                    for (k, v) in spec {
+                        held.retain(|(hk, _)| *hk != k);
+                        held.push((k, v));
+                    }
+                }
+                None => merged.push((name, spec)),
+            }
+        }
+    }
+    merged
+}
+
+/// Build one user theme from its merged `(role, value)` spec. The name and
+/// the parent's palette identity are interned with `Box::leak`: `Theme.name`
+/// is `&'static str`, and a config read is attach-rate, so the ceiling is
+/// bytes per distinct theme name per attach, not per render.
+pub(crate) fn materialize_user_theme(
+    name: &str,
+    spec: &[(String, String)],
+) -> (crate::theme::Theme, Vec<crate::keys::KeymapWarning>) {
+    let mut warnings: Vec<crate::keys::KeymapWarning> = Vec::new();
+    let trimmed = name.trim();
+    let inherit = spec
+        .iter()
+        .find(|(k, _)| k == "inherit")
+        .map(|(_, v)| v.trim().to_string());
+    let (mut t, parent_name) = match inherit.as_deref() {
+        None => (
+            crate::theme::Theme::from_name("footnote-superscript").0,
+            "footnote-superscript",
+        ),
+        Some(b) => match crate::theme::Theme::from_name(b) {
+            (t, None) => (t, t.name),
+            (_, Some(w)) => {
+                warnings.push(crate::keys::KeymapWarning(format!(
+                    "mux.themes.{trimmed}.inherit: {}",
+                    w.0
+                )));
+                let t = crate::theme::Theme::from_name("footnote-superscript").0;
+                (t, t.name)
+            }
+        },
+    };
+    for (key, raw) in spec {
+        if key == "inherit" {
+            continue;
+        }
+        let Some(color) = parse_override_color(raw) else {
+            warnings.push(crate::keys::KeymapWarning(format!(
+                "mux.themes.{trimmed}.{key} {raw:?} is not #rrggbb, indexed(<n>), or an ANSI-16 name; ignored"
+            )));
+            continue;
+        };
+        match key.as_str() {
+            "base" => t.base = color,
+            "stamp" => t.stamp = color,
+            "border" => t.border = color,
+            "title" => t.title = color,
+            "brand" => t.brand = color,
+            "needs_you" => t.needs_you = color,
+            "sel" => t.sel = color,
+            "dim" => t.dim = color,
+            "chip" => t.chip = color,
+            other => warnings.push(crate::keys::KeymapWarning(format!(
+                "mux.themes.{trimmed}.{other}: not a theme role; ignored"
+            ))),
+        }
+    }
+    t.name = Box::leak(trimmed.to_string().into_boxed_str());
+    t.inherit_from = parent_name;
+    (t, warnings)
+}
+
+fn join_warnings(warnings: Vec<crate::keys::KeymapWarning>) -> Option<crate::keys::KeymapWarning> {
+    match warnings.len() {
+        0 => None,
+        1 => warnings.into_iter().next(),
+        _ => Some(crate::keys::KeymapWarning(
+            warnings
+                .into_iter()
+                .map(|w| w.0)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )),
+    }
+}
+
+/// Whether `COLORFGBG` reports a light terminal background. The rxvt
+/// convention every terminal that sets the var follows: `fg;bg`, and a bg of
+/// 7 or 15 is white. Absent or unparseable means "no signal" -> dark.
+fn colorfgbg_is_light(v: Option<&str>) -> bool {
+    matches!(
+        v.and_then(|s| s.split(';').next_back())
+            .and_then(|b| b.parse::<u8>().ok()),
+        Some(7) | Some(15)
+    )
+}
+
+/// Parse one theme-role override value: the sideline palette's color
+/// vocabulary (`#rrggbb`, an ANSI-16 name, or `indexed(<n>)`), so an
+/// operator writes the same forms the sideline already accepts, plus
+/// `default`: the terminal's own text color, so a border follows the
+/// emulator palette (white on a dark ground, black on paper) under any
+/// theme.
+fn parse_override_color(s: &str) -> Option<crate::proto::Color> {
+    if s.trim().eq_ignore_ascii_case("default") {
+        return Some(crate::proto::Color::Default);
+    }
+    crate::sideline_color::parse_color(s)
+}
+
+/// Fold the `mux.theme.brand` / `mux.theme.needs_you` / `mux.theme.border`
+/// role overrides into `t`: the three roles are config's to pin under ANY
+/// theme - brand recolors selection, the active tab and the interaction
+/// accents; needs_you recolors the waiting-on-you accent; border recolors
+/// every border at once (the pane frame and the modal/popover borders,
+/// which default to the theme's brand). Every role also takes `default`:
+/// that role pins to the terminal's own text color. The tab-bar mark's
+/// stamp takes NO override - the mark keeps its theme's own label. In TOML
+/// the keys are quoted dotted keys inside `[mux]` (`"theme.border" =
+/// "#ff3434"`), which coexists with the scalar `theme` name. An
+/// unparseable value is reported, never silently ignored (the keymap
+/// notice channel).
+/// Injectable so tests never touch process env.
+fn apply_overrides_to(
+    t: &mut crate::theme::Theme,
+    brand: Option<&str>,
+    needs_you: Option<&str>,
+    border: Option<&str>,
+) -> Option<crate::keys::KeymapWarning> {
+    let mut bad: Vec<String> = Vec::new();
+    for (raw, role) in [
+        (brand, "brand"),
+        (needs_you, "needs_you"),
+        (border, "border"),
+    ] {
+        let Some(raw) = raw else { continue };
+        match parse_override_color(raw) {
+            Some(c) if role == "brand" => t.brand = c,
+            Some(c) if role == "border" => t.border = c,
+            Some(c) => t.needs_you = c,
+            None => bad.push(format!(
+                "mux.theme.{role} {raw:?} is not #rrggbb, indexed(<n>), an ANSI-16 name, or default; ignored"
+            )),
+        }
+    }
+    (!bad.is_empty()).then(|| crate::keys::KeymapWarning(bad.join("; ")))
+}
+
+/// Read the role overrides through the config ladder and apply them to a
+/// resolved theme. The one fold both the startup latch and the settings
+/// modal's in-memory swap ride, so an override survives a theme switch.
+pub fn theme_role_overrides(
+    cwd: &Path,
+    (mut t, warn): (crate::theme::Theme, Option<crate::keys::KeymapWarning>),
+) -> (crate::theme::Theme, Option<crate::keys::KeymapWarning>) {
+    let brand = mux_str(cwd, "theme.brand");
+    let needs_you = mux_str(cwd, "theme.needs_you");
+    let border = mux_str(cwd, "theme.border");
+    let override_warn = apply_overrides_to(
+        &mut t,
+        brand.as_deref(),
+        needs_you.as_deref(),
+        border.as_deref(),
+    );
+    let warn = match (warn, override_warn) {
+        (Some(a), Some(b)) => Some(crate::keys::KeymapWarning(format!("{}; {}", a.0, b.0))),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
+    };
+    (t, warn)
+}
+
+#[cfg(test)]
+mod colorfgbg_tests {
+    use super::colorfgbg_is_light;
+
+    #[test]
+    fn only_a_white_background_is_light() {
+        assert!(!colorfgbg_is_light(None));
+        assert!(!colorfgbg_is_light(Some("")));
+        assert!(!colorfgbg_is_light(Some("15;0")), "black bg is dark");
+        assert!(!colorfgbg_is_light(Some("0;8")));
+        assert!(!colorfgbg_is_light(Some("nonsense")));
+        assert!(colorfgbg_is_light(Some("0;7")), "white bg is light");
+        assert!(colorfgbg_is_light(Some("15;15")));
+    }
+}
+
+#[cfg(test)]
+mod theme_role_override_tests {
+    use super::{apply_overrides_to, parse_override_color};
+    use crate::proto::Color;
+    use crate::theme::{cell_style, Role, Theme};
+
+    #[test]
+    fn theme_override_rows() {
+        assert_eq!(
+            parse_override_color("#ff3434"),
+            Some(Color::Rgb(0xff, 0x34, 0x34))
+        );
+        // The sideline names resolve, trimmed and case-insensitive.
+        assert_eq!(parse_override_color(" RED "), Some(Color::Indexed(1)));
+        assert_eq!(parse_override_color("indexed(8)"), Some(Color::Indexed(8)));
+        // `default` names the terminal's own text color: Color::Default.
+        assert_eq!(parse_override_color("default"), Some(Color::Default));
+        assert_eq!(parse_override_color(" DEFAULT "), Some(Color::Default));
+        assert_eq!(parse_override_color("#f34"), None);
+        assert_eq!(parse_override_color("#zzzzzz"), None);
+        assert_eq!(parse_override_color("ff3434"), None, "hex needs its #");
+        assert_eq!(parse_override_color(""), None);
+
+        for name in crate::theme::THEME_NAMES {
+            let (mut t, _) = Theme::from_name(name);
+            let (stamp, sel) = (t.stamp, t.sel);
+            let warn =
+                apply_overrides_to(&mut t, Some("#123456"), Some("#abcdef"), Some("#654321"));
+            assert!(warn.is_none(), "{name}");
+            assert_eq!(t.brand, Color::Rgb(0x12, 0x34, 0x56), "{name}");
+            assert_eq!(t.needs_you, Color::Rgb(0xab, 0xcd, 0xef), "{name}");
+            assert_eq!(t.border, Color::Rgb(0x65, 0x43, 0x21), "{name}");
+            assert_eq!(t.stamp, stamp, "{name}: the mark takes no override");
+            assert_eq!(t.sel, sel, "{name}: only the overridden roles move");
+        }
+
+        let (mut t, _) = Theme::from_name("terminal");
+        let warn = apply_overrides_to(&mut t, Some("notacolor"), None, None)
+            .expect("a bad value must warn");
+        assert!(warn.0.contains("mux.theme.brand"), "{warn:?}");
+        assert!(warn.0.contains("notacolor"), "{warn:?}");
+        // The untouched role keeps its theme value.
+        assert_eq!(t.brand, Color::Indexed(3));
+
+        // AC4-OVERRIDE: the border key recolors modal borders AND the focused
+        // pane frame at once, because both read t.border. `default` resolves
+        // to Color::Default, the terminal's own text color, so the border
+        // follows the emulator palette (white on a dark ground, black on
+        // paper) under EVERY theme.
+        for value in ["#112233", "default"] {
+            for name in crate::theme::THEME_NAMES {
+                let (mut t, _) = Theme::from_name(name);
+                apply_overrides_to(&mut t, None, None, Some(value));
+                assert_eq!(
+                    t.border,
+                    parse_override_color(value).unwrap(),
+                    "{name} {value}"
+                );
+                assert_eq!(cell_style(Role::Border, &t).0, t.border, "{name}");
+            }
+        }
     }
 }
 
@@ -152,6 +629,16 @@ pub fn keymap(cwd: &Path) -> (crate::keys::Keymap, Vec<crate::keys::KeymapWarnin
         warnings.insert(0, w);
     }
     (map, warnings)
+}
+
+/// The file the settings key page edits: `$FNO_CONFIG` when it pins one,
+/// else this checkout's `.fno/config.toml`, the file `fno config set
+/// --local` writes.
+pub(crate) fn keys_file_path(cwd: &Path) -> PathBuf {
+    match non_empty_env("FNO_CONFIG") {
+        Some(explicit) => PathBuf::from(explicit),
+        None => project_root(cwd).join(".fno").join("config.toml"),
+    }
 }
 
 /// A warning when `$FNO_CONFIG` names a file this reader cannot parse.
@@ -337,7 +824,7 @@ fn mux_bool(cwd: &Path, key: &str, default: bool) -> bool {
 
 /// A `config.<section>.<key>` boolean with a fail-open default - the same
 /// coercion as [`mux_bool`] for a non-mux section (`resource_meter`).
-fn section_bool(cwd: &Path, section: &str, key: &str, default: bool) -> bool {
+pub(crate) fn section_bool(cwd: &Path, section: &str, key: &str, default: bool) -> bool {
     config_str(cwd, section, key)
         .and_then(|v| parse_bool(&v))
         .unwrap_or(default)
@@ -405,7 +892,7 @@ fn canonical_suppressed(value: Option<&std::ffi::OsStr>) -> bool {
 /// canonical-candidate test assert `Some(...)` against a function forced to
 /// return `None` - green everywhere except the one gate that runs before a
 /// push.
-fn canonical_suppressed_by_env() -> bool {
+pub(crate) fn canonical_suppressed_by_env() -> bool {
     canonical_suppressed(std::env::var_os("FNO_NO_CANONICAL_CONFIG").as_deref())
 }
 
@@ -439,7 +926,7 @@ fn canonical_suppressed_by_env() -> bool {
 /// `fno_agents::agents_config` verbatim. A third reader with its own idea of
 /// truthiness would resurrect the very split-brain this candidate fixes, just
 /// for operators who set it to "0" or "true".
-fn canonical_root_with(worktree: &Path, suppressed: bool) -> Option<PathBuf> {
+pub(crate) fn canonical_root_with(worktree: &Path, suppressed: bool) -> Option<PathBuf> {
     if suppressed {
         return None;
     }
@@ -454,7 +941,7 @@ fn canonical_root_with(worktree: &Path, suppressed: bool) -> Option<PathBuf> {
 /// without an env var the whole process shares.
 ///
 /// Falls back to `cwd` outside a repo, which is where a bare `.fno/` would be.
-fn repo_root_from(cwd: &Path) -> PathBuf {
+pub(crate) fn repo_root_from(cwd: &Path) -> PathBuf {
     let mut dir = cwd;
     loop {
         // A linked worktree's `.git` is a FILE, not a directory.
@@ -493,7 +980,7 @@ pub(crate) fn mux_restore_hold_workers(cwd: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// (x-7b5e) What startup restore does with worker members. `hold` is the
+/// What startup restore does with worker members. `hold` is the
 /// shipped default: named held panes, resume on focus. `idle` leaves every
 /// member an idle row. `resume` additionally runs the bulk restore driver at
 /// startup, bringing each member back through its own harness.
@@ -540,7 +1027,7 @@ pub(crate) fn mux_restore_policy(cwd: &Path) -> MuxRestorePolicy {
 /// (sole candidate) else the global config. The mux resolves its state root
 /// through this, deliberately NOT through the project tier below: one
 /// machine's mux fleet is shared infrastructure invoked from many cwds
-/// (kings, watchdogs, mail inject, pane transport), and a cwd-anchored
+/// (leads, watchdogs, mail inject, pane transport), and a cwd-anchored
 /// project tier would silently split those external callers off a project's
 /// sessions. Explicit isolation (`FNO_CONFIG`, inherited by every subprocess
 /// an isolated environment spawns) is the supported isolation for the mux.
@@ -550,6 +1037,17 @@ pub(crate) fn config_explicit_top_str(key: &str) -> Option<String> {
         return read_top_file(&PathBuf::from(explicit), key);
     }
     global_config_toml().and_then(|g| read_top_file(&g, key))
+}
+
+/// A TOP-LEVEL key read through the FULL ladder: `$FNO_CONFIG` (sole
+/// candidate) else the project tier, else the global config. The lead page
+/// resolver reads through this so the bridge serves the state root Python's
+/// renderer wrote to (`fno.paths.state_dir()` is project-aware); the mux's
+/// sockets and sidecars keep the existing explicit-only reader (see
+/// [`config_explicit_top_str`]) because one machine's fleet is shared
+/// infrastructure invoked from many cwds.
+pub(crate) fn config_top_str(cwd: &Path, key: &str) -> Option<String> {
+    resolve_config_key(cwd, &|path| read_top_file(path, key))
 }
 
 /// The per-user global config.toml: the config.toml SIBLING of
@@ -729,8 +1227,9 @@ fn parse_bool(v: &str) -> Option<bool> {
 
 /// Resolve the `fno-agents` binary: `$FNO_AGENTS_BIN`, else a sibling of the
 /// running `fno` binary (the installed layout, mirroring `resolve_daemon_bin`),
-/// else bare `fno-agents` on PATH. Crate-visible: the server's claim-sweep
-/// shell-out (x-54fa) resolves the same binary the same way.
+/// else bare `fno-agents` on PATH. Public: the front door's `mail show` exec
+/// and the server's claim-sweep shell-out resolve the same binary the same
+/// way.
 /// The cargo profile dir (`…/target/debug`) of a running binary's directory,
 /// when that binary is a dev-build artifact: `exe_dir` itself for a plain
 /// binary, its parent for a TEST binary (cargo links those one level deeper,
@@ -773,30 +1272,46 @@ pub(crate) fn paired_bin(env_var: &str, name: &str) -> PathBuf {
         if sibling.exists() {
             return sibling;
         }
-        // …/crates/fno/target/debug (or …/debug/deps for a test binary)
-        // → …/crates/fno/target → …/crates/fno → …/crates
         if let Some(profile) = dev_profile_dir(dir) {
-            let dev = profile
-                .parent()
-                .and_then(|t| t.parent())
-                .and_then(|crate_dir| crate_dir.parent())
-                .map(|crates| {
-                    crates
-                        .join("fno-agents")
-                        .join("target")
-                        .join(profile.file_name().unwrap())
-                        .join(name)
-                })
-                .filter(|p| p.exists());
-            if let Some(dev) = dev {
-                return dev;
+            if dir.file_name().is_some_and(|n| n == "deps") {
+                // A test binary: resolve the sibling crate from THIS crate's
+                // manifest dir. Under build.build-dir the exe sits under the
+                // build base, so the old climb through crates/ leaves the
+                // checkout; final binaries still land in the checkout's
+                // crates/fno-agents/target/<profile>. Falls back to the bare
+                // name on PATH, as before.
+                let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../fno-agents/target")
+                    .join(profile.file_name().unwrap())
+                    .join(name);
+                if dev.exists() {
+                    return dev;
+                }
+            } else {
+                // A plain final binary at …/crates/fno/target/<profile>: keep
+                // the climb (final binaries stay in the checkout's target/).
+                let dev = profile
+                    .parent()
+                    .and_then(|t| t.parent())
+                    .and_then(|crate_dir| crate_dir.parent())
+                    .map(|crates| {
+                        crates
+                            .join("fno-agents")
+                            .join("target")
+                            .join(profile.file_name().unwrap())
+                            .join(name)
+                    })
+                    .filter(|p| p.exists());
+                if let Some(dev) = dev {
+                    return dev;
+                }
             }
         }
     }
     PathBuf::from(name)
 }
 
-pub(crate) fn fno_agents_bin() -> PathBuf {
+pub fn fno_agents_bin() -> PathBuf {
     paired_bin("FNO_AGENTS_BIN", "fno-agents")
 }
 
@@ -918,16 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_mux_restore_hold_workers_is_readable() {
-        let body = "[mux.restore]\nhold_workers = false\n";
-        assert_eq!(
-            read_nested_value(body, "mux", "restore", "hold_workers"),
-            Some("false".into())
-        );
-    }
-
-    #[test]
-    fn reads_top_level_keys() {
+    fn config_reader_rows() {
         let cfg = "schema_version = 1\nstate_dir = \"~/.fno/\"\n";
         assert_eq!(read_top_value(cfg, "state_dir"), Some("~/.fno/".into()));
         assert_eq!(read_top_value(cfg, "schema_version"), Some("1".into()));
@@ -956,30 +1462,13 @@ mod tests {
             read_top_value("state_dir = [\"a\", \"b\"]\n", "state_dir"),
             None
         );
-    }
 
-    #[test]
-    fn selector_is_worktree_basename() {
+        let body = "[mux.restore]\nhold_workers = false\n";
         assert_eq!(
-            selector_from_cwd("/Users/x/conductor/workspaces/footnote/x-4e2d").as_deref(),
-            Some("x-4e2d")
+            read_nested_value(body, "mux", "restore", "hold_workers"),
+            Some("false".into())
         );
-        assert_eq!(selector_from_cwd("/w/x-4e2d/").as_deref(), Some("x-4e2d"));
-        assert_eq!(selector_from_cwd(""), None);
-        assert_eq!(selector_from_cwd("/"), None);
-    }
 
-    #[test]
-    fn config_defaults_when_absent() {
-        let dir = Path::new("/nonexistent-xyz");
-        // No settings file anywhere reachable -> defaults (on, 10min).
-        // (HOME may have one; the point is the parse path, covered below.)
-        let _ = attach_digest_enabled(dir);
-        let _ = threshold_secs(dir);
-    }
-
-    #[test]
-    fn reads_mux_values() {
         let yaml = "[mux]\nattach_digest = false\nattach_digest_threshold_min = 30\n";
         assert_eq!(
             read_mux_value(yaml, "attach_digest").as_deref(),
@@ -997,25 +1486,86 @@ mod tests {
     }
 
     #[test]
-    fn status_row_reads_the_project_config_and_defaults_on() {
-        let root = std::env::temp_dir().join(format!("fno-status-row-{}", std::process::id()));
-        let config_dir = root.join(".fno");
-        std::fs::create_dir_all(root.join(".git")).expect("repo marker");
-        std::fs::create_dir_all(&config_dir).expect("config dir");
+    fn the_top_ladder_reads_the_project_tier_the_explicit_reader_ignores() {
+        let _env = super::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-top-ladder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let proj_state = base.join("proj-state");
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::create_dir_all(base.join(".fno")).unwrap();
+        std::fs::create_dir_all(&proj_state).unwrap();
         std::fs::write(
-            config_dir.join("config.toml"),
-            "[mux]\nstatus_row = false\n",
+            base.join(".fno/config.toml"),
+            format!("state_dir = \"{}\"\n", proj_state.display()),
         )
-        .expect("config");
-        assert!(!status_row_enabled(&root));
+        .unwrap();
+        let global = base.join("global-config.toml");
+        std::fs::write(&global, "state_dir = \"/global/state\"\n").unwrap();
+        let explicit = base.join("explicit-config.toml");
+        std::fs::write(&explicit, "state_dir = \"/explicit/state\"\n").unwrap();
+        // Save the ambient pins; a lib test process runs every module's
+        // tests together, so the walk ends by restoring what it found.
+        let ambient: Vec<(&str, Option<std::ffi::OsString>)> =
+            ["FNO_CONFIG", "FNO_GLOBAL_SETTINGS_PATH", "FNO_REPO_ROOT"]
+                .map(|k| (k, std::env::var_os(k)))
+                .to_vec();
+        for (key, _) in &ambient {
+            std::env::remove_var(key);
+        }
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &global);
 
-        std::fs::write(config_dir.join("config.toml"), "[mux]\n").expect("config without key");
-        assert!(status_row_enabled(&root));
-        std::fs::remove_dir_all(root).ok();
+        // The project tier answers where the explicit-only reader saw only
+        // the global file: this is the lead-page resolution the bridge owed
+        // Python's renderer.
+        assert_eq!(
+            config_top_str(&base, "state_dir").as_deref(),
+            Some(proj_state.to_str().unwrap())
+        );
+        // No project key: the global leg still answers.
+        std::fs::write(base.join(".fno/config.toml"), "[mux]\n").unwrap();
+        assert_eq!(
+            config_top_str(&base, "state_dir").as_deref(),
+            Some("/global/state")
+        );
+        // The explicit pin is the project-excluding sole candidate when set.
+        std::env::set_var("FNO_CONFIG", &explicit);
+        assert_eq!(
+            config_top_str(&base, "state_dir").as_deref(),
+            Some("/explicit/state")
+        );
+        for (key, value) in &ambient {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
-    fn json_to_lines_frames_and_pads() {
+    fn selector_is_worktree_basename() {
+        assert_eq!(
+            selector_from_cwd("/Users/x/conductor/workspaces/footnote/x-aaaa").as_deref(),
+            Some("x-aaaa")
+        );
+        assert_eq!(selector_from_cwd("/w/x-aaaa/").as_deref(), Some("x-aaaa"));
+        assert_eq!(selector_from_cwd(""), None);
+        assert_eq!(selector_from_cwd("/"), None);
+    }
+
+    #[test]
+    fn config_defaults_when_absent() {
+        let dir = Path::new("/nonexistent-xyz");
+        // No settings file anywhere reachable -> defaults (on, 10min).
+        // (HOME may have one; the point is the parse path, covered below.)
+        let _ = attach_digest_enabled(dir);
+        let _ = threshold_secs(dir);
+    }
+
+    #[test]
+    fn json_lines_rows() {
         let json = r#"{"lines":["! 1 block (last: FAILURE) - resolved","PR #42 OPEN - CI SUCCESS - reviewed"]}"#;
         let lines = lines_from_json(json).expect("has lines");
         assert!(lines[0].starts_with("while you were gone"));
@@ -1024,49 +1574,21 @@ mod tests {
         // All padded to a common width (clean inverse rectangle).
         let w = lines[0].chars().count();
         assert!(lines.iter().all(|l| l.chars().count() == w));
-    }
 
-    #[test]
-    fn json_empty_lines_is_none() {
         assert_eq!(lines_from_json(r#"{"lines":[]}"#), None);
         assert_eq!(lines_from_json("not json"), None);
         assert_eq!(lines_from_json(r#"{"no_lines":1}"#), None);
     }
 
     #[test]
-    fn a_project_rebind_outranks_a_global_one_whatever_its_case() {
-        let layer = |a: &str, k: &str| vec![(a.to_string(), k.to_string())];
-        let merged = |a: Vec<(String, String)>, b: Vec<(String, String)>| {
-            merge_key_layers(vec![a, b].into_iter())
-        };
-        // Global first, project on top. The resolver folds case, so these two
-        // ids are ONE action and the higher layer has to win outright.
-        assert_eq!(
-            merged(layer("detach", "Q"), layer("Detach", "D")),
-            layer("detach", "D")
-        );
-        // And the other way round, or the test would only prove that `D` sorts
-        // before `Q`.
-        assert_eq!(
-            merged(layer("Detach", "D"), layer("detach", "Q")),
-            layer("detach", "Q")
-        );
-        // Untouched actions from the lower layer still survive the merge.
-        let global = vec![
-            ("detach".to_string(), "Q".to_string()),
-            ("zoom".to_string(), "z".to_string()),
-        ];
-        assert_eq!(
-            merge_key_layers(vec![global, layer("DETACH", "D")].into_iter()),
-            vec![
-                ("detach".to_string(), "D".to_string()),
-                ("zoom".to_string(), "z".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_project_layer_anchors_on_the_repo_root_not_the_launch_cwd() {
+    fn config_layer_rows() {
+        // The config ladder below reads FNO_CONFIG ambient, and the env-pinning
+        // tests hold this same lock while theirs is set: without it, a sibling
+        // fixture's pin short-circuits the ladder and status_row reads as its
+        // default mid-race.
+        let _env = super::ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // mux is routinely attached from a subdirectory. Anchored on cwd, the
         // project layer reads <repo>/sub/.fno/config.toml, which does not
         // exist, and every project key silently reads as unset.
@@ -1095,10 +1617,7 @@ mod tests {
 
         std::fs::remove_dir_all(&base).ok();
         std::fs::remove_dir_all(&orphan).ok();
-    }
 
-    #[test]
-    fn an_unreadable_config_is_not_the_same_as_an_absent_one() {
         // Absence is the normal case and stays quiet. Every OTHER read error is
         // a file the operator DOES have and the mux cannot use, and collapsing
         // those into "no config here" is the same silent drop as discarding a
@@ -1128,71 +1647,7 @@ mod tests {
         assert_eq!(read_layer(&as_dir).1.len(), 1);
 
         std::fs::remove_dir_all(&dir).ok();
-    }
 
-    #[test]
-    fn nothing_the_key_reader_cannot_use_disappears_quietly() {
-        let p = Path::new("/tmp/config.toml");
-
-        // A value that is not a string parses as valid TOML and is not a key.
-        // Filtering it out here left the resolver nothing to refuse, so the
-        // entry vanished and the keyboard silently kept its default.
-        let (entries, warnings) =
-            keys_from_toml(p, "[mux.keys]\ndetach = 3\nzoom = false\nfind = \"F\"\n");
-        assert_eq!(entries, vec![("find".to_string(), "F".to_string())]);
-        assert_eq!(warnings.len(), 2, "both bad values reported: {warnings:?}");
-        for want in ["detach", "zoom"] {
-            assert!(
-                warnings.iter().any(|w| w.0.contains(want)),
-                "{want} must be named: {warnings:?}"
-            );
-        }
-
-        // A file that will not parse defaults EVERY key, so it says so once
-        // rather than once per missing binding.
-        let (entries, warnings) = keys_from_toml(p, "[mux.keys\ndetach = \"Q\"\n");
-        assert!(entries.is_empty());
-        assert_eq!(warnings.len(), 1);
-        assert!(
-            warnings[0].0.contains("bad TOML") && warnings[0].0.contains("defaults"),
-            "and says what the operator is getting: {:?}",
-            warnings[0].0
-        );
-
-        // The ordinary cases stay quiet: a good file, and one with no [mux.keys]
-        // at all, which is what almost every config looks like.
-        assert_eq!(keys_from_toml(p, "[mux.keys]\ndetach = \"Q\"\n").1.len(), 0);
-        assert_eq!(keys_from_toml(p, "[mux]\nhover_focus = false\n").1.len(), 0);
-    }
-
-    #[test]
-    fn a_yaml_fno_config_says_so_instead_of_reading_as_empty() {
-        // Python reads an explicitly pinned file as-is and parses YAML by
-        // suffix, while every Rust reader here is TOML-only. That combination
-        // used to mean `fno config` showed values the mux silently never saw.
-        // TOML-only stays (fno_agents::agents_config settled the same way); what
-        // changes is that it says so.
-        for yaml in ["/tmp/settings.yaml", "/tmp/settings.yml", "/tmp/x.YAML"] {
-            let w = warn_if_not_toml(Path::new(yaml))
-                .unwrap_or_else(|| panic!("{yaml} must warn, not read as empty"));
-            assert!(w.0.contains(yaml), "the warning names the file: {}", w.0);
-            // Meaning BEFORE the path: the notice strip clips from the right, so
-            // a path-first message is a truncated path and nothing else on a
-            // 40-column terminal.
-            let head: String = w.0.chars().take(38).collect();
-            assert!(
-                head.contains("defaults") && head.contains("not TOML"),
-                "the first 38 columns must carry the meaning, got {head:?}"
-            );
-        }
-        assert!(warn_if_not_toml(Path::new("/tmp/config.toml")).is_none());
-        assert!(warn_if_not_toml(Path::new("/tmp/config.TOML")).is_none());
-        // No extension is left alone rather than warned about on every run.
-        assert!(warn_if_not_toml(Path::new("/tmp/fnoconfig")).is_none());
-    }
-
-    #[test]
-    fn a_bare_worktree_still_reaches_the_canonical_config() {
         // I had assumed setup-worktree.sh always symlinks the config in. It does
         // not: link_file skips a source that does not exist yet, so a worktree
         // created before the project config existed stays bare, and without this
@@ -1258,6 +1713,108 @@ mod tests {
         assert!(!canonical_suppressed(None));
 
         std::fs::remove_dir_all(&base).ok();
+
+        let root = std::env::temp_dir().join(format!("fno-status-row-{}", std::process::id()));
+        let config_dir = root.join(".fno");
+        std::fs::create_dir_all(root.join(".git")).expect("repo marker");
+        std::fs::create_dir_all(&config_dir).expect("config dir");
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[mux]\nstatus_row = false\n",
+        )
+        .expect("config");
+        assert!(!status_row_enabled(&root));
+
+        std::fs::write(config_dir.join("config.toml"), "[mux]\n").expect("config without key");
+        assert!(status_row_enabled(&root));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn key_reader_rows() {
+        let p = Path::new("/tmp/config.toml");
+
+        // A value that is not a string parses as valid TOML and is not a key.
+        // Filtering it out here left the resolver nothing to refuse, so the
+        // entry vanished and the keyboard silently kept its default.
+        let (entries, warnings) =
+            keys_from_toml(p, "[mux.keys]\ndetach = 3\nzoom = false\nfind = \"F\"\n");
+        assert_eq!(entries, vec![("find".to_string(), "F".to_string())]);
+        assert_eq!(warnings.len(), 2, "both bad values reported: {warnings:?}");
+        for want in ["detach", "zoom"] {
+            assert!(
+                warnings.iter().any(|w| w.0.contains(want)),
+                "{want} must be named: {warnings:?}"
+            );
+        }
+
+        // A file that will not parse defaults EVERY key, so it says so once
+        // rather than once per missing binding.
+        let (entries, warnings) = keys_from_toml(p, "[mux.keys\ndetach = \"Q\"\n");
+        assert!(entries.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].0.contains("bad TOML") && warnings[0].0.contains("defaults"),
+            "and says what the operator is getting: {:?}",
+            warnings[0].0
+        );
+
+        // The ordinary cases stay quiet: a good file, and one with no [mux.keys]
+        // at all, which is what almost every config looks like.
+        assert_eq!(keys_from_toml(p, "[mux.keys]\ndetach = \"Q\"\n").1.len(), 0);
+        assert_eq!(keys_from_toml(p, "[mux]\nhover_focus = false\n").1.len(), 0);
+
+        // Python reads an explicitly pinned file as-is and parses YAML by
+        // suffix, while every Rust reader here is TOML-only. That combination
+        // used to mean `fno config` showed values the mux silently never saw.
+        // TOML-only stays (fno_agents::agents_config settled the same way); what
+        // changes is that it says so.
+        for yaml in ["/tmp/settings.yaml", "/tmp/settings.yml", "/tmp/x.YAML"] {
+            let w = warn_if_not_toml(Path::new(yaml))
+                .unwrap_or_else(|| panic!("{yaml} must warn, not read as empty"));
+            assert!(w.0.contains(yaml), "the warning names the file: {}", w.0);
+            // Meaning BEFORE the path: the notice strip clips from the right, so
+            // a path-first message is a truncated path and nothing else on a
+            // 40-column terminal.
+            let head: String = w.0.chars().take(38).collect();
+            assert!(
+                head.contains("defaults") && head.contains("not TOML"),
+                "the first 38 columns must carry the meaning, got {head:?}"
+            );
+        }
+        assert!(warn_if_not_toml(Path::new("/tmp/config.toml")).is_none());
+        assert!(warn_if_not_toml(Path::new("/tmp/config.TOML")).is_none());
+        // No extension is left alone rather than warned about on every run.
+        assert!(warn_if_not_toml(Path::new("/tmp/fnoconfig")).is_none());
+
+        let layer = |a: &str, k: &str| vec![(a.to_string(), k.to_string())];
+        let merged = |a: Vec<(String, String)>, b: Vec<(String, String)>| {
+            merge_key_layers(vec![a, b].into_iter())
+        };
+        // Global first, project on top. The resolver folds case, so these two
+        // ids are ONE action and the higher layer has to win outright.
+        assert_eq!(
+            merged(layer("detach", "Q"), layer("Detach", "D")),
+            layer("detach", "D")
+        );
+        // And the other way round, or the test would only prove that `D` sorts
+        // before `Q`.
+        assert_eq!(
+            merged(layer("Detach", "D"), layer("detach", "Q")),
+            layer("detach", "Q")
+        );
+        // Untouched actions from the lower layer still survive the merge.
+        let global = vec![
+            ("detach".to_string(), "Q".to_string()),
+            ("zoom".to_string(), "z".to_string()),
+        ];
+        assert_eq!(
+            merge_key_layers(vec![global, layer("DETACH", "D")].into_iter()),
+            vec![
+                ("detach".to_string(), "D".to_string()),
+                ("zoom".to_string(), "z".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -1266,5 +1823,186 @@ mod tests {
         assert!(detach_file("a/b").is_none());
         assert!(detach_file("").is_none());
         assert!(detach_file("main").is_some());
+    }
+}
+
+#[cfg(test)]
+mod user_theme_tests {
+    use super::{
+        join_warnings, materialize_user_theme, merge_theme_layers, set_themes_dir_for_test,
+        user_themes,
+    };
+    use crate::keys::KeymapWarning;
+    use crate::proto::Color;
+    use crate::theme::{ground_set, Theme};
+    use std::path::Path;
+
+    use super::ENVIRONMENT_LOCK;
+
+    fn spec(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn assert_user_theme_loads_inherits_and_overrides() {
+        let (t, w) = materialize_user_theme(
+            "midnight",
+            &spec(&[
+                ("inherit", "tokyo-night"),
+                ("base", "#101018"),
+                ("brand", " RED "),
+            ]),
+        );
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(t.name, "midnight");
+        assert_eq!(t.inherit_from, "tokyo-night");
+        assert_eq!(t.base, Color::Rgb(0x10, 0x10, 0x18));
+        assert_eq!(t.brand, Color::Indexed(1));
+        // Untouched roles ride the parent.
+        assert_eq!(t.sel, Theme::from_name("tokyo-night").0.sel);
+    }
+
+    fn assert_default_inherit_and_unknown_inherit_warn() {
+        let (t, w) = materialize_user_theme("bare", &spec(&[]));
+        assert!(w.is_empty());
+        assert_eq!(t.inherit_from, "footnote-superscript");
+        let (t, w) = materialize_user_theme("typo", &spec(&[("inherit", "solarized")]));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].0.contains("mux.themes.typo.inherit"), "{w:?}");
+        assert_eq!(t.inherit_from, "footnote-superscript");
+    }
+
+    fn assert_bad_hex_and_unknown_role_warn_and_are_ignored() {
+        let (t, w) =
+            materialize_user_theme("sloppy", &spec(&[("base", "#zzzzzz"), ("wat", "#112233")]));
+        assert_eq!(w.len(), 2, "{w:?}");
+        assert!(w[0].0.contains("mux.themes.sloppy.base"), "{w:?}");
+        assert!(w[1].0.contains("not a theme role"), "{w:?}");
+        assert_eq!(
+            t.base,
+            Theme::from_name("footnote-superscript").0.base,
+            "the bad hex is ignored, the role keeps its parent value"
+        );
+    }
+
+    fn assert_user_theme_paints_its_ground_through_its_parents_palette() {
+        let (t, w) = materialize_user_theme(
+            "midnight",
+            &spec(&[("inherit", "footnote-superscript"), ("base", "#0f0f14")]),
+        );
+        assert!(w.is_empty());
+        let osc = ground_set(&t).expect("an inherited slot table means a ground");
+        let s = String::from_utf8(osc).unwrap();
+        assert!(
+            s.contains("\x1b]11;#0f0f14"),
+            "the user base is the OSC 11 ground: {s:?}"
+        );
+        // The parent's 16-slot table rides (OSC 4 slots emitted).
+        assert!(s.contains("\x1b]4;0;"), "parent palette slots ride: {s:?}");
+    }
+
+    #[test]
+    fn user_theme_materialization_keeps_role_fallbacks_warnings_and_ground() {
+        assert_user_theme_loads_inherits_and_overrides();
+        assert_default_inherit_and_unknown_inherit_warn();
+        assert_bad_hex_and_unknown_role_warn_and_are_ignored();
+        assert_user_theme_paints_its_ground_through_its_parents_palette();
+    }
+
+    #[test]
+    fn built_ins_outrank_user_names_and_unknown_names_still_warn() {
+        let shipped = Theme::from_name("gruvbox").0;
+        let (user, _) = materialize_user_theme("gruvbox-custom", &spec(&[("base", "#000000")]));
+        let table = vec![("gruvbox-custom".to_string(), user)];
+        let (t, w) = Theme::from_name_in("gruvbox", &table);
+        assert_eq!(t.name, "gruvbox");
+        assert_eq!(t.base, shipped.base);
+        assert!(w.is_none());
+        let (t, w) = Theme::from_name_in("gruvbox-custom", &table);
+        assert_eq!(t.name, "gruvbox-custom");
+        assert!(w.is_none());
+        let (_, w) = Theme::from_name_in("nowhere", &table);
+        assert!(w.is_some_and(|x| x.0.contains("nowhere")));
+    }
+
+    #[test]
+    fn a_higher_layer_wins_per_role() {
+        let layers = vec![
+            vec![("a".to_string(), spec(&[("brand", "#000000")]))],
+            vec![(
+                "a".to_string(),
+                spec(&[("brand", "#111111"), ("base", "#222222")]),
+            )],
+        ];
+        let merged = merge_theme_layers(layers.into_iter());
+        let a = merged.iter().find(|(n, _)| n == "a").unwrap();
+        assert!(a.1.iter().any(|(k, v)| k == "brand" && v == "#111111"));
+        assert!(a.1.iter().any(|(k, v)| k == "base" && v == "#222222"));
+        assert_eq!(a.1.len(), 2, "no key is dropped across layers");
+    }
+
+    #[test]
+    fn the_theme_folder_is_the_lowest_layer_and_a_config_table_wins_per_role() {
+        let _env = ENVIRONMENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("fno-themes-dir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("themes");
+        std::fs::create_dir_all(&dir).unwrap();
+        set_themes_dir_for_test(Some(dir.clone()));
+        let ambient = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("FNO_CONFIG", base.join("config.toml"));
+        std::fs::write(
+            dir.join("midnight.toml"),
+            "[mux.themes.midnight]\nbase = \"#101018\"\nstamp = \"#e8e8e8\"\nbrand = \"#0000ff\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            base.join("config.toml"),
+            "[mux.themes.midnight]\nbrand = \"#ff0000\"\n",
+        )
+        .unwrap();
+        let (themes, w) = user_themes(Path::new("/"));
+        assert!(w.is_empty(), "{w:?}");
+        let t = &themes.iter().find(|(n, _)| n == "midnight").unwrap().1;
+        assert_eq!(
+            t.base,
+            Color::Rgb(0x10, 0x10, 0x18),
+            "the folder supplies base"
+        );
+        assert_eq!(
+            t.brand,
+            Color::Rgb(0xff, 0x00, 0x00),
+            "the config table wins the role"
+        );
+        std::fs::write(
+            dir.join("gruvbox.toml"),
+            "[mux.themes.gruvbox]\nbase = \"#010203\"\n",
+        )
+        .unwrap();
+        let (themes, _) = user_themes(Path::new("/"));
+        assert!(
+            themes.iter().any(|(name, _)| name == "gruvbox"),
+            "the reader lists the folder name"
+        );
+        let (theme, warning) = Theme::from_name_in("gruvbox", &themes);
+        assert_eq!(theme.base, Theme::from_name("gruvbox").0.base);
+        assert!(warning.is_none());
+        match ambient {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        set_themes_dir_for_test(None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn multiple_warnings_join_into_one_notice() {
+        assert_eq!(join_warnings(vec![]), None);
+        let one = join_warnings(vec![KeymapWarning("a".into())]);
+        assert_eq!(one.unwrap().0, "a");
+        let two = join_warnings(vec![KeymapWarning("a".into()), KeymapWarning("b".into())]);
+        assert_eq!(two.unwrap().0, "a; b");
     }
 }

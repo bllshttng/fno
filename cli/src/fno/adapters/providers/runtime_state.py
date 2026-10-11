@@ -1,6 +1,6 @@
 """Per-provider runtime state for exponential-backoff failover.
 
-Plan A of provider failover hardening (ab-6534a78a). Distinct from the
+Plan A of provider failover hardening. Distinct from the
 phase-scoped ``failover-state.json`` (storm-cap, no-swap-back): this
 file owns per-provider exponential backoff state that survives target
 spawns within a megawalk campaign.
@@ -13,10 +13,10 @@ Concurrency: writes serialize via filelock (which dispatches to
 lock for a brief shared-style window via ``read_text`` after the write
 side has committed via ``os.replace``.
 
-TTL: ProviderHealth entries are dropped lazily on next read when
-``last_error_at`` is older than ``PROVIDER_HEALTH_TTL_SECONDS`` (1h).
-Lazy clear writes the file as a side effect of read, so callers MUST
-NOT assume read is side-effect-free.
+TTL: ProviderHealth entries are dropped lazily on the next state read or locked
+write when ``last_error_at`` is older than ``PROVIDER_HEALTH_TTL_SECONDS`` (1h).
+The lock deadline does not extend health indefinitely; a fresh usage observation
+can replace an old reactive verdict before either clock expires.
 
 Plan B (Spec 4) will add ``combo_cursors: dict[str, ComboCursor]`` to
 the same top-level state dataclass; ``schema_version: int`` is bumped
@@ -61,7 +61,7 @@ class ProviderHealth:
     reset_provider_health) and increments by 1 on each consecutive
     backoff-class error, capped at ``MAX_BACKOFF_LEVEL`` (15).
 
-    ``model_locks`` (Plan A1, ab-7fe3cdaf) is a dict mapping
+    ``model_locks`` (Plan A1) is a dict mapping
     model identifier -> unix-epoch-seconds cooldown expiry. It lets a
     quota error on one model lock only that model while leaving the
     provider record (and its other models) usable. Provider-level
@@ -106,7 +106,7 @@ class ProviderHealth:
 class ComboCursor:
     """Per-combo round-robin cursor state.
 
-    Plan B (Spec 4, ab-0e5a921e). One entry per round-robin combo, keyed by
+    Plan B (Spec 4). One entry per round-robin combo, keyed by
     combo name in ``ProviderRuntimeState.combo_cursors``. The cursor sticks
     on ``cursor_index`` for ``sticky_limit`` consecutive ``advance_cursor``
     calls before rolling to the next index.
@@ -592,7 +592,7 @@ def _parse_usage_payload(raw: dict[str, Any]) -> dict[str, UsageSnapshot]:
     reads as UNKNOWN, never OK).
 
     ``resets_at`` is nullable and may be absent, so a window written before
-    x-763a and a reset-less window written after it both load. ``partial``
+ and a reset-less window written after it both load. ``partial``
     defaults False and ``confidence`` defaults ``unknown``: a row already on
     disk was written by a probe that recorded neither, and claiming ``exact``
     for it would assert precision nobody measured.
@@ -828,26 +828,18 @@ def _drop_stale(
 ) -> tuple[dict[str, ProviderHealth], int]:
     """Return (kept_entries, dropped_count).
 
-    An entry with a LIVE lock is never stale, whatever its age. The TTL exists
-    to garbage-collect a long-quiet provider's backoff level, and it was
-    written when every lock was a seconds-scale backoff step, so "an hour since
-    the error" implied "the lock is long gone". A harvested reset breaks that
-    implication: a nine-hour lock is still binding at t+1h, and dropping the
-    record there turns EXHAUSTED back into UNKNOWN for the remaining eight
-    hours - which never means exhausted, so dispatch walks straight back into
-    the capped provider. The lock outlives the record's age by design now, so
-    the predicate has to say so.
+    The health TTL bounds a reactive observation independently of the lock
+    deadline. A harvested reset can describe a long vendor window, but an old
+    lock alone cannot keep an account classified forever when no fresh usage
+    observation confirms it.
     """
     cutoff = now - PROVIDER_HEALTH_TTL_SECONDS
     kept: dict[str, ProviderHealth] = {}
     dropped = 0
     for pid, h in health.items():
-        # Only the PROVIDER-level lock earns the reprieve. A model lock is a
-        # seconds-scale backoff, and ProviderHealth documents its TTL as
-        # record-level on purpose: when last_error_at ages out, every
-        # model_locks entry goes with it.
-        locked = h.rate_limited_until is not None and h.rate_limited_until > now
-        if not locked and h.last_error_at is not None and h.last_error_at < cutoff:
+        # The TTL is record-level on purpose: when last_error_at ages out,
+        # every model_locks entry and the provider-level lock go with it.
+        if h.last_error_at is not None and h.last_error_at < cutoff:
             dropped += 1
             continue
         kept[pid] = h
@@ -908,7 +900,7 @@ def _next_health(
     contract. The cap fires at level 15 (BASE * 2^14 already exceeds
     MAX_BACKOFF_MS so subsequent hits stay at the cap).
 
-    When ``model`` is provided (Plan A1, ab-7fe3cdaf) the cooldown is
+    When ``model`` is provided (Plan A1) the cooldown is
     written to ``model_locks[model]`` and ``rate_limited_until`` is
     preserved untouched. The cooldown ramp (``backoff_level``) is per
     provider regardless of model so a second 429 on a sibling model
@@ -981,7 +973,7 @@ def update_provider_health(
     write, and returns the last-known-good ``ProviderHealth`` (or a
     zero state if no prior entry exists).
 
-    When ``model`` is provided (Plan A1, ab-7fe3cdaf), the cooldown is
+    When ``model`` is provided (Plan A1), the cooldown is
     written to ``model_locks[model]`` and ``rate_limited_until`` is
     untouched (Locked Decision 2: model-locks-only when model is
     known). The provider-level ``backoff_level`` still increments
@@ -1116,15 +1108,12 @@ def reset_provider_health(
             if raw is None:
                 return  # nothing to reset
             health_map = _parse_state_payload(raw)
-            # Drop stale entries opportunistically under the lock; same
-            # rationale as in update_provider_health.
-            health_map, _dropped = _drop_stale(health_map, now)
+            # Reset is a targeted mutation. Do not run unrelated stale-entry
+            # cleanup here: a clear for one account must not delete another
+            # account's still-binding lock.
             cursors = _parse_cursors_payload(raw)
-            cursors, _ = _drop_stale_cursors(cursors, now)
-            if provider_id not in health_map and not _dropped:
-                # No-op fast path: nothing to do for this provider AND no
-                # health entries needed cleanup. Skip the cursor write so
-                # we don't churn the file just because cursors are present.
+            if provider_id not in health_map:
+                # No-op fast path: preserve every unrelated state entry.
                 return
             health_map.pop(provider_id, None)
             usage = _parse_usage_payload(raw)
@@ -1153,7 +1142,7 @@ def is_in_cooldown(
 ) -> bool:
     """Lock-free read: is ``provider_id`` currently in cooldown?
 
-    Two-level lookup (Plan A1, ab-7fe3cdaf):
+    Two-level lookup (Plan A1):
 
     1. If ``model`` is provided and ``model_locks[model] > now``, True.
     2. If ``rate_limited_until > now``, True (provider-level lock).
@@ -1178,7 +1167,7 @@ def is_in_cooldown(
     raw = _read_disk_payload(state_path)
     if raw is None:
         return False
-    health_map = _parse_state_payload(raw)
+    health_map, _dropped = _drop_stale(_parse_state_payload(raw), now)
     health = health_map.get(provider_id)
     if health is None:
         return False
@@ -1194,7 +1183,7 @@ def is_in_cooldown(
 # ---------------------------------------------------------------------------
 # Usage snapshot: read (lock-free, TTL) + write (locked) + refresh (probe).
 #
-# Quota-aware dispatch (x-5d3e). The snapshot is advisory-only: absence or
+# Quota-aware dispatch. The snapshot is advisory-only: absence or
 # staleness reads as "no data" and the caller proceeds fail-open. Writes carry
 # health + cursors through the same lock so a usage write never drops a
 # concurrent health/cursor mutation (and vice versa) - the same last-writer-wins
@@ -1404,12 +1393,15 @@ class Headroom:
     names which half of the signal drove it: ``lock`` (the authoritative
     provider-level ``rate_limited_until``), ``window`` (usage enrichment),
     ``stale``/``absent``/``empty`` (nothing usable), or ``""`` for callers that
-    construct a bare verdict.
+    construct a bare verdict. ``observed_at`` is when the evidence that spoke
+    was measured: the probe time for ``window``, the lock stamp for ``lock``,
+    and None when nothing was observed (stale/absent/empty).
     """
 
     state: HeadroomState
     resets_at: float | None = None
     source: str = ""
+    observed_at: float | None = None
 
 
 def headroom(
@@ -1422,19 +1414,16 @@ def headroom(
 ) -> Headroom:
     """Compute the headroom verdict for ``provider_id`` from cached usage.
 
-    The provider lock is AUTHORITATIVE and the usage window is optional
-    enrichment (M6): the lock is fresh, not TTL-gated, and written by the real
-    failure path on every 429, while the window sits behind a TTL with no
-    refresher on the dispatch path. So:
+    Fresh usage is the strongest account evidence; the provider lock is the
+    fallback when no fresh usable usage window exists. So:
 
-    - EXHAUSTED: an active provider-level ``rate_limited_until``, or a FRESH
-      binding window at >=100% (a probe that just measured a fully consumed
-      window produced a positive marker; a stale or absent one never does).
-    - LOW: a fresh window at >= ``threshold_pct``.
-    - UNKNOWN: no fresh usable window and no lock.
+    - EXHAUSTED: a fresh binding window at >=100%, or an active provider lock
+      when no fresh usable usage window exists.
+    - LOW: a fresh window at >= ``threshold_pct`` (or a partial response).
+    - UNKNOWN: no fresh usable window and no active lock.
     - OK: a fresh snapshot whose binding windows are all below threshold (a
-      window already reset never binds, so a stale 100% that has since reset
-      reads OK - AC1-EDGE).
+      window already reset never binds, so a fresh 100% reading that has since
+      reset reads OK - AC1-EDGE).
 
     Reads the state payload ONCE and derives both the provider-level lock and
     the usage snapshot from it (one disk read per call, not two - this is on the
@@ -1447,7 +1436,9 @@ def headroom(
         raw = _read_disk_payload(_resolve_state_path(repo_root))
     except Exception:  # noqa: BLE001 - a corrupt state read never breaks dispatch
         raw = None
-    health = _parse_state_payload(raw).get(provider_id) if raw else None
+    health_map = _parse_state_payload(raw) if raw else {}
+    health_map, _dropped = _drop_stale(health_map, now)
+    health = health_map.get(provider_id)
     rlu = None
     if health is not None and health.rate_limited_until is not None:
         rlu = health.rate_limited_until if health.rate_limited_until > now else None
@@ -1459,49 +1450,10 @@ def headroom(
         window = "stale"
         snap = None  # stale snapshot reads as absent (same TTL as read_usage)
 
-    return _headroom_from(snap, rlu, now=now, threshold_pct=threshold_pct, window=window)
-
-
-def headrooms(
-    provider_ids: list[str] | tuple[str, ...],
-    *,
-    now: float | None = None,
-    ttl_seconds: float = DEFAULT_USAGE_TTL_SECONDS,
-    threshold_pct: float = 90.0,
-    repo_root: Path | None = None,
-) -> dict[str, Headroom]:
-    """Headroom verdicts for many accounts from ONE state-file read.
-
-    :func:`headroom` per id would re-read and re-parse the whole file per
-    account; the capacity seam asks about every account a harness can speak
-    for, so the shared payload is read once and each verdict derives from it
-    via the same pure :func:`_headroom_from`. Fail-open like the single read.
-    """
-    if now is None:
-        now = time.time()
-    try:
-        raw = _read_disk_payload(_resolve_state_path(repo_root))
-    except Exception:  # noqa: BLE001 - a corrupt state read never breaks dispatch
-        raw = None
-    health = _parse_state_payload(raw) if raw else {}
-    usage = _parse_usage_payload(raw) if raw else {}
-    out: dict[str, Headroom] = {}
-    for pid in provider_ids:
-        h = health.get(pid)
-        rlu = None
-        if h is not None and h.rate_limited_until is not None:
-            rlu = h.rate_limited_until if h.rate_limited_until > now else None
-        snap = usage.get(pid)
-        window = "fresh"
-        if snap is None:
-            window = "absent"
-        elif snap.probed_at < now - ttl_seconds:
-            window = "stale"
-            snap = None
-        out[pid] = _headroom_from(
-            snap, rlu, now=now, threshold_pct=threshold_pct, window=window
-        )
-    return out
+    return _headroom_from(
+        snap, rlu, now=now, threshold_pct=threshold_pct, window=window,
+        lock_at=health.last_error_at if health is not None else None,
+    )
 
 
 def _headroom_from(
@@ -1511,6 +1463,7 @@ def _headroom_from(
     now: float,
     threshold_pct: float,
     window: str = "fresh",
+    lock_at: float | None = None,
 ) -> Headroom:
     """The pure verdict, given an already-resolved snapshot and provider lock.
 
@@ -1521,58 +1474,71 @@ def _headroom_from(
     observation into a launch onto the walled provider. ``window`` carries the
     absent/stale note from the reader so the receipt can name which half spoke.
     """
+    if (
+        rlu is not None
+        and lock_at is not None
+        and snap is not None
+        and snap.probed_at <= lock_at
+    ):
+        # A death recorded after the probe is the newer fact; the window cannot
+        # speak for it. The lock decides until a newer probe replaces it.
+        return Headroom(
+            HeadroomState.EXHAUSTED, rlu, source="lock", observed_at=lock_at
+        )
     # A window with no reset can never be "already reset", so the check that
     # exempts a stale window cannot exempt it: it always binds, on percentage
-    # alone. That is the whole point of retaining it (x-763a).
+    # alone. That is the whole point of retaining it.
     binding = [
         w
         for w in (snap.windows if snap else ())
         if w.resets_at is None or w.resets_at > now
     ]
     exhausted = [w for w in binding if w.used_pct >= 100.0]
-    if rlu is not None or exhausted:
-        # A certain exhaustion is never downgraded for want of a deadline. When
-        # no exhausted window carries a reset and there is no provider lock,
-        # the state is EXHAUSTED with an unknown reset rather than a softer
-        # verdict with a known one.
-        resets = [w.resets_at for w in exhausted if w.resets_at is not None]
-        if rlu is not None:
-            resets.append(rlu)
+    if snap is not None and snap.windows:
+        # A fresh usage response is the account's current evidence. It can
+        # override an older reactive lock by proving the account's current
+        # window is below the threshold; the lock is the fallback without a
+        # usable usage read.
+        if exhausted:
+            resets = [w.resets_at for w in exhausted if w.resets_at is not None]
+            return Headroom(
+                HeadroomState.EXHAUSTED,
+                min(resets) if resets else None,
+                source="window",
+                observed_at=snap.probed_at,
+            )
+        if snap.partial:
+            # A partial response has a missing window, so never answer OK from
+            # it. The reset is the soonest one actually observed.
+            soonest = [w.resets_at for w in binding if w.resets_at is not None]
+            return Headroom(
+                HeadroomState.LOW, min(soonest) if soonest else None, source="window",
+                observed_at=snap.probed_at,
+            )
+        if not binding:
+            return Headroom(
+                HeadroomState.OK, None, source="window", observed_at=snap.probed_at
+            )
+        worst = max(binding, key=lambda w: w.used_pct)
+        if worst.used_pct >= threshold_pct:
+            return Headroom(
+                HeadroomState.LOW, worst.resets_at, source="window",
+                observed_at=snap.probed_at,
+            )
         return Headroom(
-            HeadroomState.EXHAUSTED,
-            min(resets) if resets else None,
-            source="lock" if rlu is not None else "window",
+            HeadroomState.OK, None, source="window", observed_at=snap.probed_at
+        )
+    if rlu is not None:
+        # A lock remains useful when no fresh usable usage read exists.
+        return Headroom(
+            HeadroomState.EXHAUSTED, rlu, source="lock", observed_at=lock_at
         )
     if snap is None:
-        # An absent or stale window contributes nothing (M6/AC18): UNKNOWN,
-        # with the note naming which, never a verdict of its own.
+        # An absent or stale window contributes nothing: UNKNOWN never means
+        # exhausted and remains a legal failover destination.
         return Headroom(HeadroomState.UNKNOWN, None, source=window or "absent")
-    if not snap.windows:
-        # A snapshot that reported no windows: UNKNOWN, never OK (empty
-        # windows must not read as headroom).
-        return Headroom(HeadroomState.UNKNOWN, None, source="empty")
-    if snap.partial:
-        # The probe could not read the response whole, so some window it was
-        # meant to see is missing. Round toward strength: floor at LOW and
-        # never answer OK from a reading with a hole in it. The reset offered
-        # is the soonest one actually observed, or None when nothing binds.
-        soonest = [w.resets_at for w in binding if w.resets_at is not None]
-        return Headroom(
-            HeadroomState.LOW, min(soonest) if soonest else None, source="window"
-        )
-    if not binding:
-        # Every window has already reset: the limits are fresh, so there is
-        # headroom.
-        return Headroom(HeadroomState.OK, None, source="window")
-    worst = max(binding, key=lambda w: w.used_pct)
-    if worst.used_pct >= 100.0:
-        # A FRESH fully-consumed window is a positive exhaustion marker a
-        # probe actually measured (rotation failover and the review demotion
-        # both key on it). Only stale or absent windows contribute nothing.
-        return Headroom(HeadroomState.EXHAUSTED, worst.resets_at, source="window")
-    if worst.used_pct >= threshold_pct:
-        return Headroom(HeadroomState.LOW, worst.resets_at, source="window")
-    return Headroom(HeadroomState.OK, None, source="window")
+    # A snapshot that reported no windows is not evidence of headroom.
+    return Headroom(HeadroomState.UNKNOWN, None, source="empty")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1612,7 +1578,7 @@ def evaluate_quota_signal(
     UNKNOWN with both verdicts false, so a fresh install never probes, never
     defers and never reroutes.
 
-    Looking and acting are separate decisions (x-763a). ``observe`` arms the
+    Looking and acting are separate decisions. ``observe`` arms the
     probe and the snapshot write; ``defer_dispatch`` arms the verdicts that
     hold or reroute a dispatch, and implies ``observe`` because deferring
     requires looking. With ``observe`` on and ``defer_dispatch`` off the probe
@@ -1652,9 +1618,21 @@ def evaluate_quota_signal(
 
     # Probe-on-stale so the decision uses fresh data (the dispatcher tick is
     # not latency-sensitive, unlike combo rotation which reads cache only).
-    fresh = refresh_usage(
+    fresh = refresh_usage_detailed(
         provider_id, ttl_seconds=quota.probe_ttl_seconds, now=now, repo_root=repo_root
     )
+    if fresh.snapshot is None:
+        # A failed credential or usage probe says nothing about whether a
+        # worker can authenticate at launch. Do not let an older lock turn
+        # that unanswered observation into EXHAUSTED or a dispatch action.
+        return QuotaSignal(
+            provider_id,
+            HeadroomState.UNKNOWN,
+            None,
+            False,
+            False,
+            fresh.reason or "probe-failed",
+        )
     h = headroom(
         provider_id,
         now=now,
@@ -1662,13 +1640,13 @@ def evaluate_quota_signal(
         threshold_pct=quota.defer_threshold_pct,
         repo_root=repo_root,
     )
-    if h.state is HeadroomState.UNKNOWN and fresh is not None and fresh.windows:
+    if h.state is HeadroomState.UNKNOWN and fresh.snapshot.windows:
         # The probe SAW the provider, but the read-back did not: a persist that
         # lost a lock race reads as UNKNOWN, and UNKNOWN proceeds - which would
         # launch onto a provider we just observed as exhausted. Trust the
         # in-hand observation over the disk that failed to keep it.
         h = _headroom_from(
-            fresh,
+            fresh.snapshot,
             None,
             now=now,
             threshold_pct=quota.defer_threshold_pct,
@@ -1700,7 +1678,7 @@ def evaluate_quota_signal(
 # ---------------------------------------------------------------------------
 # Combo cursor: read (lock-free, eventual consistency) + advance (locked).
 #
-# Plan B (Spec 4, ab-0e5a921e). Mirrors the post-#228 invariant from the
+# Plan B (Spec 4). Mirrors the post-#228 invariant from the
 # health side: lazy cleanup of stale or hash-mismatched entries happens
 # ONLY in locked write paths. read_cursor never writes; it returns None
 # when the entry is stale, hash-mismatched, or absent. Cleanup of the

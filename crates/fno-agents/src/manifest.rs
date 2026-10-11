@@ -33,6 +33,11 @@ use crate::readiness::ScreenView;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::LazyLock;
+
+/// The rule-bordered composer's top-rule shape, compiled once.
+static COMPOSER_TOP_RULE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^─{3,}( \S.* ─)?$").expect("static regex"));
 
 /// Max nesting depth for a [`Gate`] tree. A pathological manifest (deeply nested
 /// `all`/`any`/`not`) is refused while building the [`Gate`] so `evaluate`'s
@@ -147,31 +152,44 @@ impl Region {
     }
 }
 
-/// Pull the body out of the last box-drawn input box. claude's composer is a
-/// `╭─╮ / │ … │ / ╰─╯` box; the body is the `│`-bordered lines between the last
-/// bottom border (`╰`) and its nearest preceding top border (`╭`), with the
-/// vertical borders stripped. Returns "" when no complete box is present.
+/// Pull the body out of the last input composer on screen. claude draws two
+/// shapes (pinned 2026-09-11 against claude 2.1.268): the `╭─╮ / │ … │ / ╰─╯`
+/// box, and a rule-bordered composer - a top rule carrying the session name
+/// (`─── <session> ─`), the `❯ ` prompt line, then a plain `─` bottom rule with
+/// status lines below it. The box wins when present; otherwise the last
+/// rule-bordered pair is taken. Returns "" when neither shape is present.
 ///
-/// ponytail: a single-heuristic box finder, tuned to claude's box-drawing glyphs;
-/// it does not handle nested boxes or ASCII `+--+` frames, and it does NOT yet
-/// distinguish the live composer from a box-drawn TABLE up in scrollback - it just
-/// takes the bottommost `╰`/`╭` pair, so a scrollback table can be extracted as
-/// stale "prompt body" and let a rule false-match (codex peer P2). Disambiguating
-/// composer-vs-scrollback needs ground truth (the box near the status area / on the
-/// cursor row) against a live claude TUI; deliberately not guessed here. E6.3's
-/// `claude.toml` `live_prompt_box` rule consumes this region, so that
-/// disambiguation is its load-bearing follow-up (carveout, pinned when E2 lands).
+/// ponytail: a single-heuristic finder, tuned to claude's glyphs; it does not
+/// handle nested boxes or ASCII `+--+` frames, and it just takes the bottommost
+/// pair of either shape, so stale scrollback copies can still be extracted (the
+/// `live_prompt_box` rule's `❯` gate is what keeps prose bodies from matching).
 fn prompt_box_body(text: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    let Some(bottom) = lines.iter().rposition(|l| l.contains('╰')) else {
+    if let Some(bottom) = lines.iter().rposition(|l| l.contains('╰')) {
+        if let Some(top) = lines[..bottom].iter().rposition(|l| l.contains('╭')) {
+            return lines[top + 1..bottom]
+                .iter()
+                .map(|l| l.trim().trim_matches('│').trim().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    // Rule-bordered composer. The bottom is the last line that is ONLY `─`
+    // (>= 20 of them, so a prose separator reads as neither edge); the top is
+    // the nearest `─── [name] ─` rule above it.
+    let plain_rule = |l: &str| l.trim().chars().count() >= 20 && l.trim().chars().all(|c| c == '─');
+    let Some(bottom) = lines.iter().rposition(|l| plain_rule(l)) else {
         return String::new();
     };
-    let Some(top) = lines[..bottom].iter().rposition(|l| l.contains('╭')) else {
+    let Some(top) = lines[..bottom]
+        .iter()
+        .rposition(|l| COMPOSER_TOP_RULE.is_match(l.trim()))
+    else {
         return String::new();
     };
     lines[top + 1..bottom]
         .iter()
-        .map(|l| l.trim().trim_matches('│').trim().to_string())
+        .map(|l| l.trim().to_string())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -415,7 +433,7 @@ impl AnswerGrammar {
 /// simultaneously-matching rules (highest wins). `skip_state_update` marks a
 /// rule whose match means "hold the current state, don't update it" - e.g.
 /// claude's ctrl+o transcript pager, which must not flip a working agent to idle.
-/// `answer` (x-c929) makes a `blocked` prompt answerable from the queue.
+/// `answer` makes a `blocked` prompt answerable from the queue.
 #[derive(Debug, Clone)]
 pub struct ManifestRule {
     pub id: String,
@@ -587,7 +605,7 @@ impl ManifestRule {
                 })
             }
         };
-        // Optional `[rule.answer]` (x-c929): parsed here so its blocked-only /
+        // Optional `[rule.answer]`: parsed here so its blocked-only /
         // bottom-N-region constraints fail loud alongside every other field.
         let answer = match v.get("answer") {
             None => None,
@@ -758,10 +776,10 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         "claude" => Some(include_str!("manifests/claude.toml")),
         "codex" => Some(include_str!("manifests/codex.toml")),
         "gemini" => Some(include_str!("manifests/gemini.toml")),
-        // x-8f7f: agy (hosted, US1) + opencode (staged/inert until x-51f6, US2).
+        // agy (hosted, US1) + opencode (staged/inert until, US2).
         "agy" => Some(include_str!("manifests/agy.toml")),
         "opencode" => Some(include_str!("manifests/opencode.toml")),
-        // x-83e7: full-roster roster. All staged/inert - none has a provider
+        // full-roster roster. All staged/inert - none has a provider
         // host yet (no build_pane_argv arm), so each is bundled-but-dormant like
         // opencode. Adapted from the reference manifests per manifests/ADAPTING.md.
         // "copilot" resolves github-copilot.toml, mirroring the reference's own mapping.
@@ -769,7 +787,11 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         // agy harness (id "agy"), already covered by agy.toml above.
         "amp" => Some(include_str!("manifests/amp.toml")),
         "cline" => Some(include_str!("manifests/cline.toml")),
+        // "cursor" is the dormant Cursor-IDE roster manifest; the
+        // cursor-agent CLI harness below is a distinct identity with its own
+        // pinned markers. Neither entry subsumes the other.
         "cursor" => Some(include_str!("manifests/cursor.toml")),
+        "cursor-agent" => Some(include_str!("manifests/cursor-agent.toml")),
         "devin" => Some(include_str!("manifests/devin.toml")),
         "droid" => Some(include_str!("manifests/droid.toml")),
         "copilot" => Some(include_str!("manifests/github-copilot.toml")),
@@ -780,6 +802,11 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         "kiro" => Some(include_str!("manifests/kiro.toml")),
         "pi" => Some(include_str!("manifests/pi.toml")),
         "qodercli" => Some(include_str!("manifests/qodercli.toml")),
+        // zcode: pane-less (the headless lane is the measured one), so the
+        // manifest is deliberately rule-free; see manifests/zcode.toml.
+        "zcode" => Some(include_str!("manifests/zcode.toml")),
+        // footnote: no pane lane, so no rules; see manifests/footnote.toml.
+        "footnote" => Some(include_str!("manifests/footnote.toml")),
         _ => None,
     }
 }
@@ -1406,16 +1433,32 @@ mod tests {
     #[test]
     fn bundled_manifests_all_parse() {
         // Every bundled agent must parse, carry rules, and evaluate against a
-        // synthetic view without panicking (x-83e7 AC-happy). This is the
+        // synthetic view without panicking (AC-happy). This is the
         // parse-coverage guard the domain pitfall calls for: a leftover reference-
         // only key (unknown region/field/root key) fails loud here, NAMING the
-        // file (x-83e7 AC-error) rather than silently shipping a dead manifest.
-        // x-8f7f added agy + opencode; x-83e7 grew the roster to full-roster parity.
+        // file (AC-error) rather than silently shipping a dead manifest.
+        // added agy + opencode; grew the roster to full-roster parity.
         let synthetic = view("some scrollback\nesc to interrupt\n\u{276f} ");
         for agent in [
-            "claude", "codex", "gemini", "agy", "opencode", // pre-x-83e7
-            "amp", "cline", "cursor", "devin", "droid", "copilot", "grok", "hermes", "kilo",
-            "kimi", "kiro", "pi", "qodercli", // x-83e7
+            "claude",
+            "codex",
+            "gemini",
+            "agy",
+            "opencode", // pre-change
+            "amp",
+            "cline",
+            "cursor",
+            "devin",
+            "droid",
+            "copilot",
+            "grok",
+            "hermes",
+            "kilo",
+            "kimi",
+            "kiro",
+            "pi",
+            "qodercli",     //
+            "cursor-agent", // the pinned CLI harness manifest
         ] {
             let src = bundled_manifest(agent).unwrap_or_else(|| panic!("{agent} is bundled"));
             let m = Manifest::parse(src)
@@ -1549,6 +1592,65 @@ mod tests {
         assert_eq!(v.rule_id, "permission_prompt");
     }
 
+    // AC1-HP: claude 2.1.268 draws the composer between plain rules
+    // with the session name set into the top rule. A scrollback frame plus that
+    // rule-bordered composer, no OSC title, reads idle via live_prompt_box.
+    #[test]
+    fn x3ea6_rule_bordered_composer_reads_idle_without_a_title() {
+        let m = bundled("claude");
+        let screen = "some scrollback\n\
+                      more scrollback\n\
+                      ─── t-84b2-ab-names ─\n\
+                      ❯ \n\
+                      ────────────────────\n\
+                      ? for shortcuts\n\
+                      ⏵⏵ accept edits on\n\
+                      token counts\n\
+                      status line\n";
+        let v = m.evaluate(&view(screen)).expect("rule composer matches");
+        assert_eq!(v.state, "idle");
+        assert_eq!(v.rule_id, "live_prompt_box");
+    }
+
+    // AC1-ERR: the busy shapes never read idle - the pinned spinner
+    // line above the composer, the queued-messages line, or a quarter-circle
+    // title spinner all badge `working`; a lone rule up in scrollback with no
+    // composer below does not match the idle rule.
+    #[test]
+    fn x3ea6_composer_working_markers_badge_working() {
+        let m = bundled("claude");
+        let top = "─── t-84b2-ab-names ─\n";
+        let bottom = "────────────────────\n";
+        let status = "? for shortcuts\n⏵⏵ accept edits on\n";
+        // Spinner line above the composer.
+        let working_screen =
+            format!("✳ Writing… (esc to interrupt · ctrl+t to hide)\n{top}❯ \n{bottom}{status}");
+        let v = m
+            .evaluate(&view(&working_screen))
+            .expect("spinner frame matches");
+        assert_eq!(v.state, "working");
+        assert_eq!(v.rule_id, "composer_working");
+        // Queued-messages line inside the composer body.
+        let queued_screen = format!("{top}❯ Press up to edit queued messages\n{bottom}{status}");
+        let v = m
+            .evaluate(&view(&queued_screen))
+            .expect("queued frame matches");
+        assert_eq!(v.state, "working");
+        assert_eq!(v.rule_id, "composer_working");
+        // Quarter-circle title spinner (the portal-view busy badge).
+        let idle_screen = format!("{top}❯ \n{bottom}{status}");
+        let v = m
+            .evaluate(&view_title(&idle_screen, "◑ lead-fno-g5"))
+            .expect("title spinner matches");
+        assert_eq!(v.state, "working");
+        assert_eq!(v.rule_id, "osc_title_working");
+        // A lone plain rule up in scrollback, prose below, no live composer.
+        let stale = format!("─── old-session ─\nprose line\n{bottom}more prose\n");
+        assert!(m
+            .evaluate(&view(&stale))
+            .is_none_or(|v| v.rule_id != "live_prompt_box"));
+    }
+
     #[test]
     fn load_manifest_prefers_override_then_bundled_then_none() {
         // No override dir -> bundled.
@@ -1557,7 +1659,7 @@ mod tests {
             .expect("parses");
         assert!(!m.rules().is_empty());
         // Unknown agent, no override -> None (caller fails loud). hermes is now
-        // bundled (x-83e7 full-roster parity), so use goose (a real coding CLI we
+        // bundled (full-roster parity), so use goose (a real coding CLI we
         // deliberately do not bundle a manifest for).
         assert!(load_manifest("goose", None).is_none());
 
@@ -1594,7 +1696,7 @@ mod tests {
         ));
     }
 
-    // AC1-HP (x-8f7f): agy's manifest is authored from AgyReadinessDetector
+    // AC1-HP: agy's manifest is authored from AgyReadinessDetector
     // (agy wraps Gemini, shares prompt_ready), so it badges idle/working/blocked
     // on the same conditions gemini does, with the never-false-ready bias
     // (auth_wall 980 > busy 900 > idle_prompt 100).
@@ -1619,7 +1721,7 @@ mod tests {
         );
     }
 
-    // AC2-HP + AC2-EDGE (x-8f7f): opencode's reference manifest, translated per
+    // AC2-HP + AC2-EDGE: opencode's reference manifest, translated per
     // ADAPTING.md, matches the same screens the reference's rules match - including the
     // multi-key AND permission rule whose nesting is preserved under one gate.
     #[test]
@@ -1658,7 +1760,7 @@ mod tests {
         assert!(m.evaluate(&view("here is your answer")).is_none());
     }
 
-    // AC2-ERR (x-8f7f): an adaptation that leaves a unknown source key in the TOML
+    // AC2-ERR: an adaptation that leaves a unknown source key in the TOML
     // fails loud at parse (our fail-closed parser) - the bad port never ships.
     #[test]
     fn x8f7f_unknown_source_key_fails_loud() {
@@ -1671,9 +1773,9 @@ mod tests {
         ));
     }
 
-    // AC2-FR / AC3 (x-8f7f, flipped live at x-51f6): the hosting gate is
+    // AC2-FR / AC3 (flipped live at): the hosting gate is
     // real. opencode's manifest was BUNDLED (staged) while opencode had no
-    // provider impl; x-51f6 added OpencodeProvider, so opencode is now both
+    // provider impl; added OpencodeProvider, so opencode is now both
     // bundled AND hostable (like agy) and its manifest can fire. goose
     // remains the genuinely-unhosted example (bundled nothing, hosted
     // nothing).
@@ -1693,7 +1795,7 @@ mod tests {
         );
     }
 
-    // ---- x-c929: answer grammar + fail-closed extractor ----
+    // ----: answer grammar + fail-closed extractor ----
 
     fn blocked_answer_manifest() -> Manifest {
         Manifest::parse(
@@ -1943,7 +2045,7 @@ mod tests {
         assert_eq!(ans.options[1].idx, "2");
     }
 
-    // x-5103: the bundled codex trust_prompt is answerable on a real (validated)
+    // the bundled codex trust_prompt is answerable on a real (validated)
     // borderless "› 1. Yes, continue / 2. No, quit" menu; the "›" marker (U+203A)
     // and surrounding non-option lines don't break extraction, and send="digit".
     #[test]
@@ -1964,7 +2066,7 @@ mod tests {
         assert_eq!(ans.options[1].keystroke, b"2");
     }
 
-    // x-5103 (codex review P2): a model reply that PRINTS "Do you trust …" plus a
+    // (codex review P2): a model reply that PRINTS "Do you trust …" plus a
     // plain numbered list while idle must NOT become answerable - only a live menu
     // draws the "›" selector before a digit. The gate's required marker is what
     // stops the response list from injecting "1"/"2" into the idle composer.
@@ -1981,16 +2083,16 @@ mod tests {
         assert!(ans.is_none(), "no live menu -> not answerable");
     }
 
-    // x-f498: Codex 0.144.1 renders command approval as a borderless numbered
+    // Codex 0.144.1 renders command approval as a borderless numbered
     // menu and commits a bare digit. This screen was captured from the live TUI.
     #[test]
     fn xf498_bundled_codex_command_approval_is_answerable() {
         let m = bundled("codex");
         let screen = "Would you like to run the following command?\n\n\
             Environment: local\n\n\
-            $ touch /tmp/fno-x-f498-approval-capture\n\n\
+            $ touch /tmp/fno-x-aaaa-approval-capture\n\n\
             \u{203a} 1. Yes, proceed (y)\n\
-              2. Yes, and don't ask again for commands that start with `touch /tmp/fno-x-f498-approval-capture` (p)\n\
+              2. Yes, and don't ask again for commands that start with `touch /tmp/fno-x-aaaa-approval-capture` (p)\n\
               3. No, and tell Codex what to do differently (esc)\n\n\
             Press enter to confirm or esc to cancel";
         let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
@@ -2017,7 +2119,7 @@ mod tests {
     #[test]
     fn xf498_bundled_codex_edit_approval_is_answerable() {
         let m = bundled("codex");
-        let screen = "Added .fno-x-f498-edit-capture (+1 -0)\n\
+        let screen = "Added .fno-x-aaaa-edit-capture (+1 -0)\n\
             1 +CAPTURE\n\n\
             Would you like to make the following edits?\n\n\
             \u{203a} 1. Yes, proceed (y)\n\
@@ -2054,7 +2156,7 @@ mod tests {
         assert!(ans.is_some());
     }
 
-    // x-5103: the bundled gemini trust_prompt is answerable on a real (validated)
+    // the bundled gemini trust_prompt is answerable on a real (validated)
     // BOXED radio ("│ ● 1. Trust folder … │"); the option regex consumes the box
     // border (│ U+2502) + radio marker (● U+25CF) and the trailing border.
     #[test]
@@ -2080,7 +2182,7 @@ mod tests {
         assert_eq!(ans.options[2].label, "Don't trust");
     }
 
-    // x-5103: agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
+    // agy's trust prompt is ARROW-ONLY ("> Yes … / No, exit" +
     // "↑/↓ Navigate") - no numbered options. No agy rule matches it, so it stays
     // focus-only (the documented Open Q1 no-op), never a fabricated grammar.
     #[test]

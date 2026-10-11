@@ -9,19 +9,20 @@ so the normal death path for an abandoned pipeline does not exist. The load
 starved a preflight holder to 0.31 seconds of CPU in 52 minutes, and that lock
 steals on `kill -0` death alone, so it never freed.
 
-This guard covers ONE of the three orphan classes that night: the process that
-cannot end on its own. Specimen 2 (a `grep -rn` at 64% CPU) and specimen 3
-(background tasks that outlived their session) are not refusable at creation
-time - a grep is a legitimate command, and nothing in the command text of
-specimen 3 marks it. Those are `fno agents orphans`' job, after the fact. See
-docs/architecture/background-process-hygiene.md.
+This guard covers the endless-process class and background Bash tasks that
+arrived without a supported wall-clock bound. A recursive grep is a legitimate
+command, and a task launched outside Bash still needs the harness's own bound;
+the after-the-fact orphan scan remains their backstop. The recursive cache walk
+has a separate exception: hooks/recursive-grep-guard.py refuses that class at
+the Bash boundary when the repository holds a CACHEDIR.TAG-confirmed Cargo
+cache. See docs/architecture/background-process-hygiene.md.
 
 Parse-only, stdlib alone. No third-party import, psutil included: a hook runs
 under whatever bare interpreter the harness hands it, and an ImportError here
 takes the guard down on every Bash call. It never inspects a live process.
 
-Fails OPEN on anything unexpected. A guard that breaks a session on its own bug
-is worse than the orphans it prevents.
+Fails OPEN on unexpected input for the legacy generator scan. A background task
+whose hard bound cannot be verified is denied instead of treated as bounded.
 """
 
 import json
@@ -31,6 +32,12 @@ import shlex
 import subprocess
 import sys
 import time
+
+# The shared liveness-row writer (hooks/lib) sits beside this script; the
+# guard runs under whatever interpreter the harness hands it, so the import
+# path is built from __file__, never the cwd.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from guard_mark import guard_mark
 
 # Characters shlex may accumulate into a single operator token.
 PUNCT_CHARS = set("();<>|&\n")
@@ -376,6 +383,66 @@ def _has_bound(segment):
     return head == "dd" and any(a.startswith("count=") for a in _operands(argv))
 
 
+def _has_background_bound(text, depth=0):
+    """Whether a background command carries one of the supported wall bounds.
+
+    `with_timeout` only counts when its portable helper was sourced in the same
+    command text. Native `fno do pr wait` owns its own timeout flag and needs no
+    outer wrapper. Shell `-c` payloads are checked recursively like generators.
+    """
+    if depth > 2:
+        return False
+    try:
+        segments = _segments(_tokens(_strip_heredocs(text)))
+    except ValueError:
+        return False
+
+    if len(segments) == 1:
+        segment = segments[0]
+        head, argv = _head_of(segment)
+        # An enclosing shell is accepted only when its whole -c payload has a
+        # recognized bound; a later command beside the wrapper could still hang.
+        payload = _payload_of(head, argv)
+        if payload:
+            return _has_background_bound(payload, depth + 1)
+        if "|" in segment or "|&" in segment:
+            return False
+        if head == "fno" and argv[:3] == ["do", "pr", "wait"]:
+            return any(
+                (arg == "--timeout" and index + 1 < len(argv) and
+                 re.fullmatch(r"\d+[smhdSMHD]?", argv[index + 1]))
+                or re.fullmatch(r"--timeout=\d+[smhdSMHD]?", arg)
+                for index, arg in enumerate(argv)
+            )
+        return False
+
+    if len(segments) != 2 or any("|" in segment or "|&" in segment for segment in segments):
+        return False
+    source_head, source_argv = _head_of(segments[0])
+    call_head, call_argv = _head_of(segments[1])
+    sourced_helper = source_head in {"source", "."} and any(
+        arg.endswith("scripts/lib/with-timeout.sh") for arg in source_argv
+    )
+    bounded_call = (
+        call_head == "with_timeout"
+        and bool(call_argv)
+        and re.fullmatch(r"\d+", call_argv[0]) is not None
+    )
+    return sourced_helper and bounded_call
+
+
+def _background_refusal(command):
+    return (
+        "Refusing a background Bash task without a recognized hard timeout.\n\n"
+        "  %s\n\n"
+        "Use the portable helper:\n"
+        "  bash -c 'source scripts/lib/with-timeout.sh; "
+        "with_timeout 1800 <command> [args...]'\n"
+        "or a native bounded wait such as `fno do pr wait <N> --timeout 15m`."
+        % command
+    )
+
+
 def _generator_reason(head, argv):
     """Why this segment can never end, or None when it can."""
     if head == "yes":
@@ -660,37 +727,10 @@ def _refusal(reason, segment):
 
 def _guard_mark(decision, tool):
     """One guard_decision event row per run: the liveness signal that this
-    guard actually ran and what it decided. Row shape matches
-    hooks/lib/guard-mark.sh output so bash and python guards write
-    indistinguishable rows. Best-effort by contract: any failure is
-    swallowed and can never change the decision."""
-    if decision == "deny":
-        # One vocabulary across every guard: bash guards say block, and the
-        # audit row is shared surface, so a refusal is "block" whichever
-        # language recorded it.
-        decision = "block"
-    try:
-        pin = os.environ.get("FNO_EVENTS_PATH")
-        if pin:
-            path = pin
-        elif os.path.isdir(".git") or os.path.isdir(".fno"):
-            path = os.path.join(".fno", "events.jsonl")
-        else:
-            root = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, timeout=5,
-            ).stdout.strip()
-            path = os.path.join(root or os.getcwd(), ".fno", "events.jsonl")
-        row = (
-            '{"ts":"%s","type":"guard_decision","data":{"guard":"bg-process-guard",'
-            '"decision":"%s","tool":"%s"},"source":"hook"}'
-            % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), decision, tool)
-        )
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(row + "\n")
-    except Exception:
-        pass
+    guard actually ran and what it decided. The shared writer commits it to
+    the journal's store; best-effort by contract: any failure is swallowed
+    and can never change the decision."""
+    guard_mark("bg-process-guard", decision, tool)
 
 
 _GUARD_MARKED = {"done": False}
@@ -742,9 +782,19 @@ def main():
     if input_data.get("tool_name", "") != "Bash":
         _exit_allow()
 
-    command = (input_data.get("tool_input", {}) or {}).get("command", "")
+    tool_input = input_data.get("tool_input", {}) or {}
+    command = tool_input.get("command", "")
     if not isinstance(command, str) or not command.strip():
         _exit_allow()
+
+    if tool_input.get("run_in_background") is True:
+        try:
+            bounded = _has_background_bound(command.strip())
+        except Exception:  # noqa: BLE001 -- an unverified background bound is refused
+            bounded = False
+        if not bounded:
+            _emit("deny", _background_refusal(command.strip()))
+            _exit_allow()
 
     # Denied whether or not run_in_background is set. A foreground unbounded
     # `yes` is orphaned just as surely when the session exits - that is exactly

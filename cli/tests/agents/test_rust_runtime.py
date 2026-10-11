@@ -6,17 +6,65 @@ to the binary only when opted in. The actual ``os.execv`` is always stubbed so
 the test process is never replaced.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
+import json
 import os
 import stat
+import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
 
 from fno import rust_binary
 from fno.agents import rust_runtime as rr
+
+
+@pytest.fixture(autouse=True)
+def _open_node_row(monkeypatch, tmp_path):
+    """The x-8d88 seam derives the node from a /target-family seed, so every
+    x-f370 seed here resolves against one open, /target-bearing row instead
+    of the real graph, where the historical node is long done and the
+    tightened guard would refuse the spawn before the behavior under test."""
+    (tmp_path / "p.md").write_text("---\n---\n", encoding="utf-8")
+    row = {
+        "id": "x-f370",
+        "slug": "codex-seed",
+        "dispatch_verb": "/target",
+        "difficulty": "medium",
+        "status": "in_progress",
+        "plan_path": str(tmp_path / "p.md"),
+        "cwd": str(tmp_path),
+    }
+    monkeypatch.setattr("fno.graph.store.read_nodes_by_ids", lambda path, tokens: {"entries": [row], "missing": []})
+    # resolve_seed_node reads through fno.graph.load.load_graph, a second
+    # reader the stub above does not cover: where a real store answers (CI's
+    # changed-smoke env), the seed lookup missed and refused the spawn before
+    # the behavior under test. Answer the loader with the same row.
+    monkeypatch.setattr(
+        "fno.graph.load.load_graph", lambda *a, **k: [{"id": "x-f370", "slug": "codex-seed"}]
+    )
+    # The verb reads the store itself for the nodeless derive: point its
+    # FNO_HOME at a fixture graph naming the same row.
+    monkeypatch.setenv("FNO_HOME", str(tmp_path))
+    seed_graph(tmp_path / "graph.json", json.dumps({"entries": [{"id": "x-f370"}]}))
+    monkeypatch.setattr(
+        "fno.agents.cli._spawn_guard_decision",
+        lambda *a, **k: (
+            {
+                "verdict": "dispatchable",
+                "reservation_key": "dispatch:x-f370",
+                "reservation_holder": "test-holder",
+            },
+            0,
+        ),
+    )
+
+# Declared journal isolation: the conftest pin keys on this module's name
+# (see _PLAN_JOURNAL_PINNED_MODULES) and the guard
+# scripts/ci/check-tests-hermetic-events.sh proves this marker did not rot.
+FNO_EVENTS_PATH = "hermetic: this module's journal is pinned per test"
 
 
 @pytest.fixture(autouse=True)
@@ -50,22 +98,28 @@ def _make_exe(path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# rust_runtime_enabled
+# runtime_mode
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize(
     "value,expected",
-    [("rust", True), ("RUST", True), (" rust ", True), ("rs", False),
-     ("python", False), ("", False), ("1", False)],
+    [("rust", "rust"), ("python", "python"), ("auto", "auto"), ("rs", "auto")],
 )
-def test_runtime_enabled_gating(monkeypatch, value, expected) -> None:
+def test_runtime_mode_gating(monkeypatch, value, expected) -> None:
     monkeypatch.setenv(rr.RUNTIME_ENV, value)
-    assert rr.rust_runtime_enabled() is expected
+    assert rr.runtime_mode() == expected
 
 
-def test_runtime_disabled_when_unset(monkeypatch) -> None:
-    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
-    assert rr.rust_runtime_enabled() is False
+def test_rm_target_name_skips_internal_audit_values() -> None:
+    assert rr._rm_target_name(
+        [
+            "--audit-actor",
+            "post-merge",
+            "--audit-reason=pr-merged",
+            "worker",
+            "--audit-worktree-touched",
+        ]
+    ) == "worker"
 
 
 # --------------------------------------------------------------------------- #
@@ -148,6 +202,17 @@ def test_route_missing_binary_exits_127(capsys) -> None:
     assert "not found" in err
 
 
+def test_python_forced_list_is_refused_with_no_table(monkeypatch) -> None:
+    """There is no Python list lane: forcing it names the binary and exits 127."""
+    from fno.cli import app
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    result = CliRunner().invoke(app, ["agents", "list"])
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert f"requires the '{rust_binary.BINARY_NAME}' binary" in result.output
+    assert "NAME" not in result.output
+
+
 def test_route_exec_failure_exits_127(capsys, tmp_path) -> None:
     """A resolved binary whose exec raises OSError fails legibly, not as a traceback."""
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
@@ -173,30 +238,42 @@ def test_agents_group_execs_when_opted_in(monkeypatch) -> None:
 
     captured: list = []
 
-    def fake_route(args):
+    def fake_route(args, **kwargs):
         captured.append(list(args))
         raise SystemExit(0)
 
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(app, ["agents", "ask", "worker-A", "hi", "--harness", "codex"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert captured == [["ask", "worker-A", "hi", "--harness", "codex"]]
 
 
-def test_spawn_seam_injects_config_defaults(monkeypatch) -> None:
+def test_spawn_seam_injects_config_defaults(
+    monkeypatch, tmp_path
+) -> None:
     """x-de9d US8: the seam injects config.agents.defaults into a bare spawn
-    argv before the route, so the Rust route sees the config provider."""
+    argv before the route, so the Rust route sees the config provider. The
+    compose reads the config FILE (the Python stub is invisible to it), so
+    the test pins a real TOML and the real binary."""
+    import pytest
+
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[agents.defaults]\nprovider = "codex"\nmodel = "gpt-5.6-sol"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FNO_CONFIG", str(config_path))
+    monkeypatch.setenv("FNO_NO_CANONICAL_CONFIG", "1")
+    monkeypatch.setenv("FNO_EVENTS_PATH", str(tmp_path / "events.jsonl"))
+
     from fno.cli import app
-    import fno.config as _config
-
-    class _D:
-        provider, model, effort = "codex", "gpt-5.6-sol", ""
-
-    class _S:
-        agents = type("A", (), {"defaults": _D()})()
-
-    monkeypatch.setattr(_config, "load_settings", lambda: _S())
 
     captured: list = []
 
@@ -208,15 +285,306 @@ def test_spawn_seam_injects_config_defaults(monkeypatch) -> None:
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", fake_route)
     result = CliRunner().invoke(
-        app, ["agents", "spawn", "--name", "worker-A", "hi", "--substrate", "bg"]
+        app, ["agents", "spawn", "--name", "worker-A", "hi", "--substrate", "thread"]
     )
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     argv = captured[0]
     assert argv[0] == "spawn"
     assert "--harness" in argv and argv[argv.index("--harness") + 1] == "codex"
     assert "--model" in argv and argv[argv.index("--model") + 1] == "gpt-5.6-sol"
     # positionals still resolvable after the injected flags
     assert argv[-2:] == ["worker-A", "hi"] or "worker-A" in argv
+
+
+def test_codex_code_spawn_refuses_when_git_grant_is_unresolved(
+    monkeypatch, tmp_path
+) -> None:
+    """A bounded code worker is refused before the route can mint a row."""
+    from fno.cli import app
+
+    called: list[list[str]] = []
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            "--node",
+            "x-f370",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert str(tmp_path) in result.output
+    assert "git rev-parse" in result.output
+    assert called == []
+
+
+def test_codex_node_dispatch_refuses_without_a_verb_prefixed_payload(
+    monkeypatch, tmp_path
+) -> None:
+    """A --node dispatch is a code payload even when no token carries a
+    /target-family prefix, so the grant refusal still holds."""
+    from fno.cli import app
+
+    called: list[list[str]] = []
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            "--node",
+            "x-f370",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert called == []
+
+
+def test_codex_code_payload_after_provider_fence_is_checked() -> None:
+    assert rr._is_codex_code_payload(
+        ["spawn", "--", "$fno:target x-f370"]
+    )
+    assert rr._is_codex_code_payload(
+        ["spawn", "--message=$fno:target x-f370"]
+    )
+
+
+def test_codex_code_spawn_in_a_repo_keeps_launch_path(
+    monkeypatch, tmp_path, loop_admission_ready
+) -> None:
+    """A resolved grant is the positive control and must not refuse."""
+    from fno.agents import sandbox_probe
+    from fno.cli import app
+
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
+    monkeypatch.setattr(
+        "fno.agents.dispatch._codex_thread_spawn",
+        lambda **kw: "fake-thread-id",
+    )
+    monkeypatch.setattr(
+        sandbox_probe, "probe_codex_sandbox", lambda cwd, **kw: sandbox_probe.SandboxProbe("reachable")
+    )
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize("bypass", ["--yolo", "-Y"])
+def test_codex_yolo_code_spawn_skips_bounded_grant_refusal(
+    monkeypatch, tmp_path, bypass, loop_admission_ready
+) -> None:
+    """x-8d88: a derived node makes this a node-bearing spawn, which takes
+    the Python dispatch lane; the client exec is stubbed at its terminus."""
+    from fno.cli import app
+
+    spawned: list[dict] = []
+
+    def fake_thread_spawn(**kw):
+        spawned.append(dict(kw))
+        return "fake-thread-id"
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
+    monkeypatch.setattr("fno.agents.dispatch._codex_thread_spawn", fake_thread_spawn)
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            bypass,
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(spawned) == 1
+    assert spawned[0]["node"] == "x-f370"
+
+
+def test_codex_full_auto_still_requires_a_git_grant(monkeypatch, tmp_path) -> None:
+    from fno.cli import app
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            "--permission-mode",
+            "full-auto",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "resolved git grant" in result.output
+
+
+@pytest.mark.parametrize(
+    "verdict,blocked,routed,marker",
+    [
+        ("blocked", [("gh", "error connecting to api.github.com")], False, "sandbox-probe: gh is unreachable"),
+        ("reachable", [], True, None),
+        ("unknown", [], True, "launching unprobed"),
+    ],
+)
+def test_bounded_codex_code_spawn_is_probed_before_it_routes(
+    monkeypatch, tmp_path, verdict, blocked, routed, marker, loop_admission_ready
+) -> None:
+    """x-8d88: the derived node takes the Python dispatch lane, so the
+    routed branch is observed at the codex thread terminus."""
+    from fno.agents import sandbox_probe
+    from fno.cli import app
+
+    spawned: list[dict] = []
+
+    def fake_thread_spawn(**kw):
+        spawned.append(dict(kw))
+        return "fake-thread-id"
+
+    probed: list[Path] = []
+
+    def fake_probe(cwd, **kw):
+        probed.append(cwd)
+        return sandbox_probe.SandboxProbe(verdict, blocked, "codex: command not found")
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
+    monkeypatch.setattr(sandbox_probe, "probe_codex_sandbox", fake_probe)
+    monkeypatch.setattr("fno.agents.dispatch._codex_thread_spawn", fake_thread_spawn)
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(repo),
+        ],
+    )
+
+    assert probed == [repo]
+    assert bool(spawned) is routed
+    if routed:
+        assert result.exit_code == 0, result.output
+    else:
+        assert result.exit_code == sandbox_probe.EXIT_SANDBOX_UNREACHABLE
+        assert "remedy:" in result.output
+    if marker:
+        assert marker in result.output
+
+
+def test_sandbox_probe_runs_only_for_bounded_codex_code_spawns(monkeypatch, tmp_path) -> None:
+    from fno.agents import sandbox_probe
+
+    probed: list[Path] = []
+    monkeypatch.setattr(
+        sandbox_probe,
+        "probe_codex_sandbox",
+        lambda cwd, **kw: probed.append(cwd) or sandbox_probe.SandboxProbe("reachable"),
+    )
+    base = ["spawn", "$fno:target x-f370", "--harness", "codex", "--substrate", "thread", "--cwd", str(tmp_path)]
+    rr._refuse_codex_spawn_with_unreachable_tools(base)
+    assert probed == [tmp_path]
+
+    for argv in (
+        [*base, "--yolo"],
+        [*base, "--once"],
+        [*base, "--permission-mode", "danger-full-access:never"],
+        ["spawn", "hello", *base[2:]],
+        [*base[:3], "claude", *base[4:]],
+    ):
+        rr._refuse_codex_spawn_with_unreachable_tools(argv)
+    assert probed == [tmp_path]
+
+
+def test_codex_danger_full_access_mode_skips_bounded_grant_refusal(
+    monkeypatch, tmp_path, loop_admission_ready
+) -> None:
+    """x-8d88: the derived node takes the Python dispatch lane."""
+    from fno.cli import app
+
+    spawned: list[dict] = []
+
+    def fake_thread_spawn(**kw):
+        spawned.append(dict(kw))
+        return "fake-thread-id"
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: None)
+    monkeypatch.setattr("fno.agents.dispatch._codex_thread_spawn", fake_thread_spawn)
+    result = CliRunner().invoke(
+        app,
+        [
+            "agents",
+            "spawn",
+            "$fno:target x-f370",
+            "--harness",
+            "codex",
+            "--substrate",
+            "thread",
+            "--cwd",
+            str(tmp_path),
+            "--permission-mode",
+            "danger-full-access:never",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(spawned) == 1
+    assert spawned[0]["node"] == "x-f370"
 
 
 def test_agents_help_falls_through_when_opted_in(monkeypatch) -> None:
@@ -229,7 +597,7 @@ def test_agents_help_falls_through_when_opted_in(monkeypatch) -> None:
     monkeypatch.setenv(rr.RUNTIME_ENV, "rust")
     monkeypatch.setattr(rr, "route_to_rust", boom)
     result = CliRunner().invoke(app, ["agents", "--help"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "agent" in result.output.lower()
 
 
@@ -244,7 +612,7 @@ def test_agents_default_path_untouched_when_unset(monkeypatch) -> None:
     monkeypatch.setattr(rr, "route_to_rust", boom)
     # --help is enough to exercise the make_context path without a real spawn.
     result = CliRunner().invoke(app, ["agents", "--help"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
 
 
 # --------------------------------------------------------------------------- #
@@ -367,13 +735,13 @@ def test_auto_route_verbs_have_no_python_contract() -> None:
     auto-routed verb is daemon-native, so routing it cannot regress a Python
     flag/stdout contract.
 
-    ``crown`` is the one human-attended shared-registry mutation with no Rust
+    ``role`` is the one human-attended shared-registry mutation with no Rust
     port. Every Rust-backed verb plus ``ask`` still auto-routes.
     """
     assert rr.AUTO_ROUTE_VERBS == rr.RUST_CLIENT_VERBS - rr.PYTHON_AGENT_VERBS
     assert rr.AUTO_ROUTE_VERBS.isdisjoint(rr.PYTHON_AGENT_VERBS)
-    assert "crown" in rr.PYTHON_AGENT_VERBS
-    assert "crown" not in rr.AUTO_ROUTE_VERBS
+    assert "role" in rr.PYTHON_AGENT_VERBS
+    assert "role" not in rr.AUTO_ROUTE_VERBS
     for parity in ("stop", "rm", "list", "reconcile", "ask"):
         assert parity in rr.AUTO_ROUTE_VERBS, f"{parity} must auto-route"
 
@@ -383,7 +751,7 @@ def test_python_agent_verbs_match_registered_commands() -> None:
 
     Every Python ``@agents_app.command`` is preserved as fallback dispatch for
     ``FNO_AGENTS_RUNTIME=python`` mode and no-binary environments. Rust-backed
-    commands auto-route; ``crown`` remains Python-owned because no Rust client
+    commands auto-route; ``role`` remains Python-owned because no Rust client
     port exists. The guard keeps any future Python-only verb from silently
     escaping the explicit set.
     """
@@ -405,6 +773,10 @@ def test_python_agent_verbs_match_registered_commands() -> None:
         "attach",
         "logs",
         "ask",
+        # x-1b75: ported to the Rust client beside trace (same daemon-free,
+        # client-side dispatch shape). The Python command stays registered as
+        # the FNO_AGENTS_RUNTIME=python / no-binary refusal.
+        "registry-json",
         # Task 1.2: spawn gains a Python implementation (--once / claude plain
         # spawn) but stays in RUST_CLIENT_VERBS + AUTO_ROUTE_VERBS so the
         # daemon PTY worker path (codex/gemini without --once) still auto-routes
@@ -412,7 +784,16 @@ def test_python_agent_verbs_match_registered_commands() -> None:
         # a Rust client port.
         "spawn",
     }
-    lazy_python_owned = set(rr.FOLDED_AGENT_SUBCOMMANDS) & set(rr.RUST_CLIENT_VERBS)
+    # Folded single-command leaves whose verb has NO Rust client port: they
+    # left ``registered_commands`` when they moved out of cli.py, so the
+    # RUST_CLIENT_VERBS intersection below cannot see them. Naming them here
+    # keeps the guard's teeth: a new folded leaf must be added to
+    # PYTHON_AGENT_VERBS and named here, or the assert fires. (`reseat` left
+    # when the whole verb moved to the native `fno mux thread reseat`.)
+    folded_python_leaves: set[str] = set()
+    lazy_python_owned = (
+        set(rr.FOLDED_AGENT_SUBCOMMANDS) & set(rr.RUST_CLIENT_VERBS)
+    ) | folded_python_leaves
     python_owned = (registered - rust_parity_verbs) | lazy_python_owned
     assert python_owned == set(rr.PYTHON_AGENT_VERBS), (
         "PYTHON_AGENT_VERBS is out of sync with the agents_app commands.\n"
@@ -464,9 +845,88 @@ def test_rust_client_verbs_match_client_rs() -> None:
     # Verbs dispatched before build_request via `verb == "…"` (drive, status; the
     # `--emit-schema` flag starts with `-` so it is excluded by the same anchor).
     specials = set(re.findall(r'verb == "([a-z][a-z0-9-]*)"', src))
-    routable = arms | specials
+    # Hidden direct-dispatch arms: the binary serves them before build_request,
+    # but Python never routes them. `board` is reached only through
+    # `fno inbox board` shelling to the binary via resolve_binary (d-e11b2b3e);
+    # adding it to RUST_CLIENT_VERBS would mint a second surface for it.
+    # `notify-watch` is the same shape: the pr-watch tick phase and the arms
+    # readout are its only callers, both through resolve_binary.
+    # The three territory doors are the same shape: `active-backlog-receipt`
+    # and `territory-rows` are reached through the config passthroughs, and
+    # `territory-verdict` through the spawn gate's delegate - every caller
+    # uses resolve_binary directly, never `fno agents <verb>` routing.
+    # `node-route` is shelled by the squad prune's cascade fold for a verdict
+    # per unknown member; `roster-reap` is the roster sweep's own door. Both
+    # are binary-first surfaces, never `fno` auto-routes.
+    # `reclaim` is `fno doctor reclaim`'s door and `plugin-install` is
+    # `fno config plugin install`'s: both thin Python wrappers shell the
+    # binary through resolve_binary, never auto-route.
+    # `publish-review` is the reviewer lane's bot-identity producer: the emit
+    # chokepoint and the hidden `fno do pr publish-review` verb shell it through
+    # verb_call, never auto-route.
+    # `canonical-check` (x-a150) is the same shape: the post-merge sync shells
+    # it through verb_call with a stdin JSON payload; an argv route would break.
+    # `sync-canonical` (x-85df) is the same shape again: the post-merge sync,
+    # its catch-up sweep and its staleness alarm all shell through verb_call
+    # with a stdin JSON payload, never an argv route.
+    routable = arms | (
+        specials
+        - {
+            "board",
+            "notify-watch",
+            "active-backlog-receipt",
+            "territory-rows",
+            "territory-verdict",
+            "node-route",
+            "roster-reap",
+            "reclaim",
+            "plugin-install",
+            "publish-review",
+            "canonical-check",
+            "sync-canonical",
+            # The patch door (x-665f): resolve_binary-only, like board - the
+            # client action list is shrink-only (d-fe66560a), so this arm is
+            # never registered and never routed.
+            "backlog-update",
+            # The provenance fold: `fno doctor intel` shells the binary
+            # through resolve_binary, never `fno agents intel` routing; the
+            # arm stays unregistered for the same shrink law.
+            "intel",
+            # `fno backlog session backfill` shells the binary through
+            # resolve_binary, never `fno agents` routing.
+            "session-backfill",
+            # `release-notes` is the update modal's notes builder: Python's
+            # `fno doctor update --check` resolver shells it through
+            # verb_call with a stdin JSON payload, never an argv route.
+            "release-notes",
+            # `update-journal` is the update lifecycle's transport-only door:
+            # crates/fno/src/doctor_update.rs execs the binary with the verb
+            # as the first token (like `backlog`), so it dispatches on the
+            # `verb ==` arm and is never routed or help-listed.
+            "update-journal",
+            # `chats` is the conversation store's read model: the bus log and
+            # reply resolver shell it through verb_call with a stdin JSON
+            # payload, never an argv route.
+            "chats",
+            # `mail-threads` is the messages tab's projection over the chats
+            # store: the fno client's gather and details door shell it
+            # directly, never an argv route.
+            "mail-threads",
+        }
+    )
 
-    assert routable == set(rr.RUST_CLIENT_VERBS), (
+    # d-fe66560a keeps the binary's action list shrink-only, so these leaves
+    # have no `verb ==` arm of their own: the router rewrites each into an
+    # argument of the `status` action before the exec. They stay routable
+    # verbs, and the rewrite target's flag must exist in client.rs or the
+    # route dies as an unknown verb at the binary.
+    for leaf, flag in sorted(rr._STATUS_ARG_LEAVES.items()):
+        assert f'"{flag}"' in src, (
+            f"rewrite target {flag} for routed leaf {leaf} is missing from client.rs"
+        )
+    routable |= set(rr._STATUS_ARG_LEAVES)
+
+    assert routable == set(rr.RUST_CLIENT_VERBS) | set(rr.RUST_VERB_ALIASES), (
         "RUST_CLIENT_VERBS is out of sync with client.rs routable verbs.\n"
         f"  only in client.rs: {sorted(routable - set(rr.RUST_CLIENT_VERBS))}\n"
         f"  only in RUST_CLIENT_VERBS: {sorted(set(rr.RUST_CLIENT_VERBS) - routable)}"
@@ -587,60 +1047,139 @@ def test_ask_routes_to_rust_without_provider_flag(monkeypatch, tmp_path) -> None
     assert captured == [(["ask", "ghost", "hi"], binary)]
 
 
-def test_ask_falls_back_to_python_without_installed_binary(monkeypatch) -> None:
-    """With no installed binary, `ask` falls through to the mature Python
-    dispatch (the no-binary fallback is intact for every provider)."""
+def test_ask_without_installed_binary_refuses(monkeypatch) -> None:
+    """With no installed binary, `ask` refuses legibly: the Python ask
+    runtime was ported to Rust, so there is no dispatch to fall back to."""
     from fno.cli import app
-    from fno.agents import dispatch as dispatch_mod
 
     called: list = []
-    dispatched: list = []
-
-    def fake_dispatch_ask(**kwargs):
-        # Stub the Python dispatch so the test verifies the fallback is
-        # SELECTED without EXECUTING a real provider call. Letting the real
-        # dispatch_ask run shells `claude --bg`/codex/gemini and spawns a
-        # live "newagent" session on every test run (the leak this guards).
-        dispatched.append(kwargs)
-        return SimpleNamespace(kind="create", short_id="stub", reply=None)
 
     monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    monkeypatch.setattr(dispatch_mod, "dispatch_ask", fake_dispatch_ask)
-    CliRunner().invoke(app, ["agents", "ask", "newagent", "hi", "--harness", "gemini"])
+    result = CliRunner().invoke(app, ["agents", "ask", "newagent", "hi", "--harness", "codex"])
     assert called == []
-    assert [d["name"] for d in dispatched] == ["newagent"]
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert "ported" in result.stderr
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex", "gemini"])
-def test_python_mode_forces_python_for_ask(monkeypatch, tmp_path, provider) -> None:
-    """`FNO_AGENTS_RUNTIME=python` keeps `ask` on the Python dispatch for every
-    provider even with a binary present (the fallback must stay intact)."""
+@pytest.mark.parametrize("binary_present", [True, False])
+def test_python_mode_refuses_ask(monkeypatch, tmp_path, binary_present) -> None:
+    """`FNO_AGENTS_RUNTIME=python` cannot force ask onto Python anymore: the
+    legs were ported and deleted. The refusal names the flag so the operator
+    learns the contract changed rather than staring at a missing command."""
     from fno.cli import app
-    from fno.agents import dispatch as dispatch_mod
+
+    called: list = []
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    if binary_present:
+        monkeypatch.setattr(
+            rust_binary, "resolve_installed_binary", lambda: tmp_path / "bin"
+        )
+    else:
+        monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(app, ["agents", "ask", "any", "hi", "--harness", "codex"])
+    assert called == []
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert rr.RUNTIME_ENV in result.stderr
+
+
+def test_rm_runtime_without_installed_binary_refuses(monkeypatch) -> None:
+    """With no installed binary, `rm` refuses legibly: the Python rm twin was
+    deleted (one verb, one implementation), so there is no dispatch to fall
+    back to."""
+    from fno.cli import app
+
+    called: list = []
+
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(app, ["agents", "rm", "ghost"])
+    assert called == []
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert "ported" in result.stderr
+
+
+@pytest.mark.parametrize("binary_present", [True, False])
+def test_rm_runtime_python_mode_refuses(monkeypatch, tmp_path, binary_present) -> None:
+    """`FNO_AGENTS_RUNTIME=python` cannot force rm onto Python anymore: the
+    twin was deleted. The refusal names the flag so the operator learns the
+    contract changed rather than staring at a missing command."""
+    from fno.cli import app
+
+    called: list = []
+
+    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    if binary_present:
+        monkeypatch.setattr(
+            rust_binary, "resolve_installed_binary", lambda: tmp_path / "bin"
+        )
+    else:
+        monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
+    result = CliRunner().invoke(app, ["agents", "rm", "any"])
+    assert called == []
+    assert result.exit_code == rr.BIN_NOT_FOUND_EXIT
+    assert rr.RUNTIME_ENV in result.stderr
+
+
+def test_rm_runtime_routes_to_binary_when_installed(monkeypatch, tmp_path) -> None:
+    """With an installed binary in auto mode, rm execs the binary exactly as
+    before the Python twin was deleted: the installed path is unchanged."""
+    from fno.cli import app
+
+    binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
+    captured: list = []
+
+    def fake_route(args, **kw):
+        captured.append((list(args), kw.get("binary")))
+        raise SystemExit(99)
+
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
+    monkeypatch.setattr(rr, "route_to_rust", fake_route)
+    result = CliRunner().invoke(app, ["agents", "rm", "ghost"])
+    assert result.exit_code == 99
+    assert captured == [(["rm", "ghost"], binary)]
+
+
+def test_rm_runtime_help_names_the_runtime_requirement(monkeypatch) -> None:
+    """`fno agents rm --help` must say rm runs on the Rust runtime only. The
+    help is the one surface that reaches a developer with no binary installed,
+    exactly the person the no-binary refusal also addresses."""
+    from fno.cli import app
+
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    result = CliRunner().invoke(app, ["agents", "rm", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "Rust runtime only" in result.output
+
+
+def test_anycast_ask_resolves_in_python_before_routing(monkeypatch, tmp_path) -> None:
+    """`ask --to-project` falls through to cmd_ask even with a binary (the
+    client has no --to-project flag), resolves the recipient from the
+    registry, and THEN routes the plain ask to the binary. With no live
+    peer the resolution is the refusal: exit 16, never a binary exec."""
+    from fno.cli import app
 
     binary = _make_exe(tmp_path / rust_binary.BINARY_NAME)
     called: list = []
-    dispatched: list = []
 
-    def fake_dispatch_ask(**kwargs):
-        # Stub the Python dispatch so the test verifies python-mode is
-        # SELECTED without EXECUTING a real provider call. Letting the real
-        # dispatch_ask run shells `claude --bg`/codex/gemini and spawns a
-        # live "any" session on every test run (the leak this guards).
-        dispatched.append(kwargs)
-        return SimpleNamespace(kind="create", short_id="stub", reply=None)
-
-    monkeypatch.setenv(rr.RUNTIME_ENV, "python")
+    monkeypatch.delenv(rr.RUNTIME_ENV, raising=False)
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: binary)
     monkeypatch.setattr(rr, "route_to_rust", lambda args, **kw: called.append(list(args)))
-    monkeypatch.setattr(dispatch_mod, "dispatch_ask", fake_dispatch_ask)
-    CliRunner().invoke(app, ["agents", "ask", "any", "hi", "--harness", provider])
-    assert called == [], f"=python must keep ask on Python for {provider}; got: {called}"
-    assert [d["name"] for d in dispatched] == ["any"], (
-        f"=python must reach the Python dispatch for {provider}; got: {dispatched}"
+    result = CliRunner().invoke(
+        app, ["agents", "ask", "--to-project", "no-such-project", "hi"]
     )
+    assert called == [], "anycast with no live peer must refuse before any exec"
+    from fno.agents.dispatch import UNKNOWN_AGENT_EXIT_CODE
+
+    assert result.exit_code == UNKNOWN_AGENT_EXIT_CODE
+    assert "no live peer" in result.stderr
 
 
 # --------------------------------------------------------------------------- #
@@ -678,7 +1217,7 @@ def test_agents_help_advertises_status_hides_plumbing() -> None:
 
     # `status` is the one advertised Rust-only verb; it appears in the listing.
     result = CliRunner().invoke(app, ["agents", "--help"])
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     assert "status" in result.output
 
 
@@ -845,7 +1384,7 @@ def test_monitor_bearing_spawn_not_routed_in_forced_rust_mode(monkeypatch) -> No
             "--monitor",
             "happy",
             "--substrate",
-            "bg",
+            "thread",
             "hello",
         ],
     )
@@ -906,15 +1445,19 @@ def test_plain_spawn_stays_python_bg_spawn_auto_routes(monkeypatch, tmp_path) ->
     CliRunner().invoke(app, ["agents", "spawn", "--name", "worker", "--harness", "claude"])
     assert captured == [], "a pane-substrate spawn must not route to the binary"
 
-    # bg substrate: still the binary's lane.
+    # bg substrate: still the binary's lane. The seam marker rides straight
+    # after the verb (x-90a9 task 0.1): it asserts the crossing upstream.
+    # A message rides along: a claude thread spawn with none is refused first.
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "worker", "--harness", "claude", "--substrate", "bg"],
+        ["agents", "spawn", "--name", "worker", "--harness", "claude", "--substrate", "thread", "hello"],
     )
     assert result.exit_code == 99
-    assert captured == [
-        ["spawn", "--name", "worker", "--harness", "claude", "--substrate", "bg"]
-    ]
+    assert len(captured) == 1
+    argv = captured[0]
+    assert argv[0] == "spawn"
+    assert argv[1].startswith("--defaults-applied=")
+    assert argv[2:] == ["--name", "worker", "--harness", "claude", "--substrate", "thread", "hello"]
 
 
 def test_is_role_bearing_spawn_predicate() -> None:
@@ -929,7 +1472,7 @@ def test_is_role_bearing_spawn_predicate() -> None:
 
 def test_is_monitor_bearing_spawn_predicate() -> None:
     assert rr._is_monitor_bearing_spawn(
-        "spawn", ["spawn", "w", "--monitor", "happy", "--substrate", "bg"]
+        "spawn", ["spawn", "w", "--monitor", "happy", "--substrate", "thread"]
     )
     assert rr._is_monitor_bearing_spawn("spawn", ["spawn", "--monitor=happy"])
     assert not rr._is_monitor_bearing_spawn(
@@ -946,7 +1489,7 @@ def test_is_resume_bearing_spawn_predicate() -> None:
     assert rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "--resume", uuid])
     assert rr._is_resume_bearing_spawn("spawn", ["spawn", "--name", "w", f"--resume={uuid}"])
     assert rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "-r", "6501096a"])
-    assert not rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "--substrate", "bg"])
+    assert not rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "--substrate", "thread"])
     assert not rr._is_resume_bearing_spawn("spawn", ["spawn", "w", "--role", "tidy"])
     # A --resume flag on a non-spawn verb never matches (resume is its own verb).
     assert not rr._is_resume_bearing_spawn("ask", ["ask", "w", "--resume", uuid])
@@ -1025,6 +1568,25 @@ def test_the_account_picker_leaves_a_cutover_spawn_alone(monkeypatch) -> None:
     assert rr._pick_account_at_seam(args) == args
 
 
+def test_the_seam_pick_fires_for_spawn_itself(monkeypatch) -> None:
+    """The pick, scrub and remap refusal live in the seam's shared arm, so a
+    spawn takes them like every worker verb. Wiring them only into the elif
+    made the whole provenance carrier decorative on the spawn path: a
+    bg spawn exec'd the Rust client and minted its row off whatever stale
+    parent env it inherited. The patch's exit code only surfaces if the seam
+    actually called it."""
+    from fno.cli import app
+
+    monkeypatch.setattr(rr, "_pick_account_at_seam", lambda args: exit(99))
+    result = CliRunner().invoke(app, ["agents", "spawn", "--name", "w-seam", "hi"])
+    assert result.exit_code == 99, result.output
+
+    # rm owns its own elif arm: the account seam must not leak into it.
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    result = CliRunner().invoke(app, ["agents", "rm", "--name", "w-seam"])
+    assert result.exit_code != 99, result.output
+
+
 def test_exec_lane_scrubs_ambient_identity_before_rust_spawn(monkeypatch, tmp_path) -> None:
     """A --substrate bg spawn execs the Rust client, which launches the worker
     from its own inherited env; the Python identity floor never runs on that
@@ -1052,7 +1614,7 @@ def test_exec_lane_scrubs_ambient_identity_before_rust_spawn(monkeypatch, tmp_pa
 
     result = CliRunner().invoke(
         app,
-        ["agents", "spawn", "--name", "worker", "--harness", "codex", "--substrate", "bg"],
+        ["agents", "spawn", "--name", "worker", "--harness", "codex", "--substrate", "thread"],
     )
     assert result.exit_code == 99
     assert seen["markers"] == {
@@ -1071,3 +1633,237 @@ def test_identity_scrub_at_exec_is_worker_verbs_only(monkeypatch) -> None:
     assert os.environ["CODEX_THREAD_ID"] == "live-thread"
     rr._scrub_ambient_identity_at_exec("spawn")
     assert "CODEX_THREAD_ID" not in os.environ
+
+
+# --------------------------------------------------------------------------- #
+# The seam marker (x-90a9 task 0.1): insertion point and bridge carriage
+# --------------------------------------------------------------------------- #
+
+def test_seam_marker_sits_straight_after_the_spawn_verb() -> None:
+    out = rr._with_seam_marker(["spawn", "--name", "p", "/target x"], "spawn")
+    assert out[0] == "spawn"
+    assert out[1].startswith("--defaults-applied=")
+    assert out[1].split("=", 1)[1] in ("enforced", "unenforced")
+    assert "--name" in out
+
+
+def test_seam_marker_skips_non_spawn_verbs_and_empty_argv() -> None:
+    argv = ["resume", "abc"]
+    assert rr._with_seam_marker(list(argv), "resume") == argv
+    assert rr._with_seam_marker([], "spawn") == []
+
+
+def test_seam_marker_carries_enforcement_state(monkeypatch) -> None:
+    """The marker value is the binary's only record of the seam's verdict."""
+    import fno.agents.spawn_defaults as sd
+
+    monkeypatch.setattr(sd, "routing_enforcement_state", lambda settings=None: "enforced")
+    out = rr._with_seam_marker(["spawn", "seed"], "spawn")
+    assert out[1] == "--defaults-applied=enforced"
+
+
+class _BridgeProc:
+    returncode = 0
+    stdout = json.dumps({"short_id": "s-1", "harness_session_id": "full-uuid"})
+    stderr = ""
+
+
+def _capture_bridge_run(captured: dict, monkeypatch) -> None:
+    import fno.agents.rust_spawn as rust_spawn
+
+    def _run(argv, **kw):
+        captured["argv"] = [str(a) for a in argv]
+        captured["env"] = kw.get("env")
+        return _BridgeProc()
+
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: Path("/bin/true"))
+    monkeypatch.setattr(rust_spawn.subprocess, "run", _run)
+
+
+def test_codex_bridge_carries_marker_before_the_message_fence(monkeypatch) -> None:
+    import fno.agents.rust_spawn as rust_spawn
+
+    captured: dict = {}
+    _capture_bridge_run(captured, monkeypatch)
+    rust_spawn._codex_thread_spawn(
+        "w",
+        "/target x-90a9",
+        Path("/tmp"),
+        "k",
+        "glm-5.3-flash[1m]",
+        False,
+        node="x-90a9",
+    )
+    argv = captured["argv"]
+    assert argv[1] == "spawn"
+    assert argv[2].startswith("--defaults-applied=")
+    assert argv.index(argv[2]) < argv.index("--")
+    tail = argv[argv.index("--") + 1 :]
+    assert tail == ["/target x-90a9"]
+    assert all(not t.startswith("--defaults-applied") for t in tail)
+
+
+def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) -> None:
+    import fno.agents.rust_spawn as rust_spawn
+
+    captured: dict = {}
+    _capture_bridge_run(captured, monkeypatch)
+    rust_spawn._opencode_serve_spawn(
+        name="w",
+        message="/target x-90a9",
+        cwd=Path("/tmp"),
+        from_name="k",
+        model="m1",
+        node="x-90a9",
+        # A profile-sourced effort must reach the serve lane, never the seed:
+        # the front door carries the axis on the opencode thread row, so
+        # dropping it here would silently seat the worker on the account
+        # default effort.
+        effort="high",
+    )
+    argv = captured["argv"]
+    assert argv[1] == "spawn"
+    assert argv[2].startswith("--defaults-applied=")
+    assert argv.index("--effort=high") < argv.index("--")
+    tail = argv[argv.index("--") + 1 :]
+    assert tail == ["/target x-90a9"]
+
+
+def test_codex_bridge_account_env_overlay_still_applies(monkeypatch) -> None:
+    """Positive control: the marker did not disturb the env overlay path."""
+    import fno.agents.rust_spawn as rust_spawn
+
+    captured: dict = {}
+    _capture_bridge_run(captured, monkeypatch)
+    rust_spawn._codex_thread_spawn(
+        "w",
+        "hello",
+        Path("/tmp"),
+        "k",
+        None,
+        False,
+        account_env={"CLAUDE_CONFIG_DIR": "/x"},
+    )
+    assert captured["env"].get("CLAUDE_CONFIG_DIR") == "/x"
+
+
+# ---------------------------------------------------------------------------
+# x-77db: stop/clear journey, every receipt carrying its exact generation
+# ---------------------------------------------------------------------------
+
+def _incident_binary() -> Path:
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    assert binary is not None, "the journey test needs the fno-agents binary"
+    return binary
+
+
+def _incident_run(binary: Path, *args: str, home: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [str(binary), "fleet-incident", *args],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "FNO_AGENTS_HOME": str(home)},
+        timeout=30,
+    )
+
+
+def test_fleet_incident_journey_stop_gates_and_clear_reopens(tmp_path, monkeypatch):
+    """AC4 journey: clear -> admits; stop -> refuses without process creation
+    while mail still delivers; clear -> admits again. Every stop/clear/status
+    receipt names its exact generation, so absence never passes as evidence."""
+    from fno.paths_testing import use_tmpdir
+
+    use_tmpdir(monkeypatch, tmp_path)
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / "agents-home"))
+    binary = _incident_binary()
+    home = tmp_path / "agents-home"
+    home.mkdir()
+    claims_root = tmp_path / "claims"
+    argv = ["--timeout", "30", "--claims-root", str(claims_root), "--", "/bin/echo", "journey-ok"]
+    run_env = {**os.environ, "FNO_AGENTS_HOME": str(home)}
+
+    # 1. Absent state is a positive default clear with source=default.
+    status = _incident_run(binary, "status", "--json", home=home)
+    assert status.returncode == 0, status.stderr
+    record = json.loads(status.stdout)
+    assert record["state"] == "clear" and record["generation"] == 0
+    assert record["source"] == "default"
+
+    # 2. A test invocation is admitted and really runs its argv.
+    admitted = subprocess.run(
+        [str(binary), "test-run", *argv],
+        capture_output=True, text=True, env=run_env, timeout=60,
+    )
+    assert admitted.returncode == 0, admitted.stderr + admitted.stdout
+    before_refusal = sorted(str(p) for p in claims_root.rglob("*")) if claims_root.exists() else []
+
+    # 3. Stop: the receipt carries generation 1.
+    stopped = _incident_run(binary, "stop", "--reason", "journey wedge", home=home)
+    assert stopped.returncode == 0, stopped.stderr
+    receipt = json.loads(stopped.stdout)
+    assert receipt["state"] == "stopped" and receipt["generation"] == 1
+
+    # 4. A FRESH process reads the stopped record at the same generation.
+    status = _incident_run(binary, "status", "--json", home=home)
+    assert status.returncode == 1
+    record = json.loads(status.stdout)
+    assert record["state"] == "stopped" and record["generation"] == 1
+
+    # 5. New test admission refuses (exit 90), emits suite_refused with the
+    # generation, and creates nothing: no claim, no process group.
+    refused = subprocess.run(
+        [str(binary), "test-run", *argv],
+        capture_output=True, text=True, env=run_env, timeout=60,
+    )
+    assert refused.returncode == 90, refused.stderr + refused.stdout
+    assert "suite_refused" in refused.stderr
+    assert "fleet-stop" in refused.stderr
+    assert "generation=1" in refused.stderr
+    after_refusal = sorted(str(p) for p in claims_root.rglob("*")) if claims_root.exists() else []
+    assert after_refusal == before_refusal, "a refused run must acquire no claim"
+
+    # 6. Announcements still deliver while stopped (AC2-STOPPED): the announce
+    # writer has no incident gate, so a send succeeds against the SAME stopped
+    # home. Direct invocation, isolated bus and registry, nothing mocked: the
+    # real writer runs and must not refuse.
+    bus_dir = tmp_path / "bus"
+    bus_dir.mkdir()
+    from tests._table_seed import seed_registry
+
+    seed_registry(path=home / "registry.json", rows=[{
+            "name": "red", "harness": "claude", "status": "live",
+            "harness_session_id": "abcd1234-1111-7222-8333-444455556666",
+            "cwd": "/tmp", "log_path": "/tmp/red.log",
+    }])
+    announce_env = {
+        **os.environ,
+        "FNO_AGENTS_HOME": str(home),
+        "FNO_BUS_DIR": str(bus_dir),
+        "FNO_SPAWN_GATE": "0",
+    }
+    announced = subprocess.run(
+        [str(binary), "announce", "send", "--scope", "all", "--from", "op",
+         "--sender-kind", "operator", "--json"],
+        input="still announcing", capture_output=True, text=True,
+        env=announce_env, timeout=60,
+    )
+    assert announced.returncode == 0, announced.stderr + announced.stdout
+    payload = json.loads(announced.stdout.strip().splitlines()[-1])
+    assert payload.get("id") and payload["scope"] == "all", announced.stdout
+    lines = [json.loads(line) for line in (bus_dir / "messages.jsonl").read_text().splitlines()]
+    assert [m["kind"] for m in lines] == ["announce"], lines
+
+    # 7. Clear is a positive record at the NEXT generation.
+    cleared = _incident_run(binary, "clear", "--reason", "journey resolved", home=home)
+    assert cleared.returncode == 0, cleared.stderr
+    receipt = json.loads(cleared.stdout)
+    assert receipt["state"] == "clear" and receipt["generation"] == 2
+
+    # 8. Admission reopens: the same invocation is admitted again.
+    admitted_again = subprocess.run(
+        [str(binary), "test-run", *argv],
+        capture_output=True, text=True, env=run_env, timeout=60,
+    )
+    assert admitted_again.returncode == 0, admitted_again.stderr + admitted_again.stdout

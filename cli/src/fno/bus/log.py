@@ -25,49 +25,28 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
+from fno.rust_binary import VerbUnavailable, chats_verb
 from fno.time_budget import validate_timeout_budget
 
 
 ENVELOPE_VERSION = 1
 HOSTED_DELIVERY = "hosted"
 #: `fno agents mail send --force`: the body was TYPED into a pane as keystrokes. Kept
-#: distinct from `hosted` on purpose (node x-3a64). Bytes written to a PTY is
+#: distinct from `hosted` on purpose (node). Bytes written to a PTY is
 #: not delivery and is certainly not action -- a full payload can arrive, render,
 #: and be discarded while the return selects a prompt's default. The row says
 #: what happened and no more, and names the pane a reader can go read.
 TYPED_DELIVERY = "typed"
 
-# Size-triggered rotation. A segment is rolled once it reaches this many bytes
-# (checked before each append, under the lock). Env overrides exist for tests
-# and operators; a malformed override degrades to the default rather than raising.
-_DEFAULT_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-_DEFAULT_RETAIN = 5  # rotated segments kept; cursors must resolve into these
+#: Audit-only: outage-era traffic backfilled with full provenance, never re-delivered.
+CROSS_SESSION_DELIVERY = "cross-session"
+
+# Size-triggered rotation now lives in the Rust bus-append door
+# (fno-agents announce::append_line), which reads the same
+# FNO_BUS_MAX_BYTES / FNO_BUS_RETAIN envs. A malformed override degrades
+# to the default rather than raising.
 _LOCK_TIMEOUT_SECONDS = 5.0
 _LOCK_POLL_SECONDS = 0.05
-
-
-def _max_bytes() -> int:
-    raw = os.environ.get("FNO_BUS_MAX_BYTES")
-    if raw:
-        try:
-            v = int(raw)
-            if v > 0:
-                return v
-        except ValueError:
-            pass
-    return _DEFAULT_MAX_BYTES
-
-
-def _retain() -> int:
-    raw = os.environ.get("FNO_BUS_RETAIN")
-    if raw:
-        try:
-            v = int(raw)
-            if v >= 1:
-                return v
-        except ValueError:
-            pass
-    return _DEFAULT_RETAIN
 
 
 # ---------------------------------------------------------------------------
@@ -79,8 +58,10 @@ class Envelope:
     """One line in the bus log. ``from_`` serializes to the canonical ``from`` key.
 
     ``from`` and ``to`` are the addresses (registry names, or a project name in
-    ``--to-project`` durable mode). ``provider_from``/``provider_to`` are
-    metadata-only tags for transport selection and audit, never for addressing.
+    ``--to-project`` durable mode). ``from_harness``/``to_harness`` are
+    metadata-only tags for transport selection and audit, never for addressing
+    (they hold a harness name, not a provider; the v2 reshape renamed them from
+    ``provider_from``/``provider_to``).
     Reply correlation uses ``request_id``/``in_reply_to`` exclusively.
     ``meta`` carries inbox-specific passthrough (refs, persist_to_memory) so the
     converged log preserves triage->graph provenance without polluting the
@@ -95,13 +76,13 @@ class Envelope:
     body: str
     ts: str
     v: int = ENVELOPE_VERSION
-    provider_from: Optional[str] = None
-    provider_to: Optional[str] = None
+    from_harness: Optional[str] = None
+    to_harness: Optional[str] = None
     request_id: Optional[str] = None
     in_reply_to: Optional[str] = None
     delivery: Optional[str] = None
     meta: dict = field(default_factory=dict)
-    # Addressed-delivery enrichment (Group 1, ab-ba91b807 / cv-d54ddd45). All
+    # Addressed-delivery enrichment (Group 1, / cv-d54ddd45). All
     # optional and omitted from the line when unset, so pre-existing lines are
     # byte-unchanged and old lines still parse (LD11 additive read).
     #  - from_session: the sender's session id, used to exclude the sender on a
@@ -111,16 +92,20 @@ class Envelope:
     from_session: Optional[str] = None
     from_model: Optional[str] = None
     to_kind: Optional[str] = None
-    # Send-time masked prose count (x-3700). Additive: a row written before this
+    # Send-time masked prose count. Additive: a row written before this
     # field existed reads back as None and never acquires a fabricated count.
-    # The send lane supplies it so the row, Rule 7, and the rolling budget all
-    # carry the count of the SAME string -- the raw body, not the wire wrapper.
+    # The send lane supplies it so the row and Rule 7 both carry the count of
+    # the SAME string -- the raw body, not the wire wrapper.
     word_count: Optional[int] = None
-    # Provenance axis for the authority trailer (ruling d-b328d8c4): the drain
-    # render stamps mail_trailer(origin) from the record itself, never from
-    # body text. Additive: a row written before this field existed reads back
-    # through the legacy meta fallback and renders with the peer trailer.
+    # Provenance axis (ruling d-b328d8c4), classified at write time by
+    # classify_origin and surfaced by the drain render as an origin label.
+    # Additive: a row written before this field existed reads back through the
+    # legacy meta fallback.
     origin: Optional[str] = None
+    # The sender's --subject. Additive: a row written before this
+    # field existed reads back as None and the envelope header derives its
+    # third field from the body as before.
+    subject: Optional[str] = None
 
     @classmethod
     def new(
@@ -133,8 +118,8 @@ class Envelope:
         id: Optional[str] = None,
         thread: Optional[str] = None,
         ts: Optional[str] = None,
-        provider_from: Optional[str] = None,
-        provider_to: Optional[str] = None,
+        from_harness: Optional[str] = None,
+        to_harness: Optional[str] = None,
         request_id: Optional[str] = None,
         in_reply_to: Optional[str] = None,
         delivery: Optional[str] = None,
@@ -144,6 +129,7 @@ class Envelope:
         to_kind: Optional[str] = None,
         word_count: Optional[int] = None,
         origin: Optional[str] = None,
+        subject: Optional[str] = None,
     ) -> "Envelope":
         mid = id or new_msg_id()
         return cls(
@@ -154,8 +140,8 @@ class Envelope:
             kind=kind,
             body=body,
             ts=ts or _now_iso(),
-            provider_from=provider_from,
-            provider_to=provider_to,
+            from_harness=from_harness,
+            to_harness=to_harness,
             request_id=request_id,
             in_reply_to=in_reply_to,
             delivery=delivery,
@@ -165,12 +151,13 @@ class Envelope:
             to_kind=to_kind,
             word_count=word_count,
             origin=origin,
+            subject=subject,
         )
 
 
 def new_msg_id() -> str:
-    """Generate a 'msg-XXXXXX' id (6 hex chars), matching the inbox store."""
-    return "msg-" + secrets.token_hex(3)
+    """A 'fmail-XXXXXXXXXXXX' id (12 hex); Rust twin announce.rs::new_msg_id."""
+    return "fmail-" + secrets.token_hex(6)
 
 
 def _now_iso() -> str:
@@ -179,11 +166,6 @@ def _now_iso() -> str:
 
 # Canonical key order. Always-present keys first, then optional tags, then body
 # last (bodies can be large; keeping them last keeps the line head scannable).
-_ALWAYS = ("v", "id", "ts", "thread", "from", "to", "kind")
-_OPTIONAL = (
-    "provider_from", "provider_to", "request_id", "in_reply_to", "delivery",
-    "from_session", "from_model", "to_kind", "word_count", "origin", "meta",
-)
 
 
 def to_json_line(env: Envelope) -> str:
@@ -201,10 +183,10 @@ def to_json_line(env: Envelope) -> str:
         "to": env.to,
         "kind": env.kind,
     }
-    if env.provider_from:
-        obj["provider_from"] = env.provider_from
-    if env.provider_to:
-        obj["provider_to"] = env.provider_to
+    if env.from_harness:
+        obj["from_harness"] = env.from_harness
+    if env.to_harness:
+        obj["to_harness"] = env.to_harness
     if env.request_id:
         obj["request_id"] = env.request_id
     if env.in_reply_to:
@@ -219,6 +201,8 @@ def to_json_line(env: Envelope) -> str:
         obj["to_kind"] = env.to_kind
     if env.origin:
         obj["origin"] = env.origin
+    if env.subject:
+        obj["subject"] = env.subject
     # `is not None`, not truthiness: a genuine zero-word body (a pasted log
     # masks to nothing) must serialize as 0, not vanish and read back as legacy.
     if env.word_count is not None:
@@ -247,8 +231,10 @@ def from_json_line(line: str) -> Envelope:
         body=str(obj.get("body", "")),
         ts=str(obj.get("ts", "")),
         v=int(obj.get("v", ENVELOPE_VERSION)),
-        provider_from=obj.get("provider_from"),
-        provider_to=obj.get("provider_to"),
+        # v2 rename: stored rows carry the old provider_* key, so the read
+        # accepts both, following the legacy fallback `origin` uses below.
+        from_harness=obj.get("from_harness") or obj.get("provider_from"),
+        to_harness=obj.get("to_harness") or obj.get("provider_to"),
         request_id=obj.get("request_id"),
         in_reply_to=obj.get("in_reply_to"),
         delivery=obj.get("delivery"),
@@ -261,6 +247,7 @@ def from_json_line(line: str) -> Envelope:
         # back to meta so pre-existing lines still render their provenance.
         origin=obj.get("origin")
         or (_meta.get("origin") if isinstance(_meta, dict) else None),
+        subject=obj.get("subject"),
     )
 
 
@@ -370,81 +357,53 @@ class _Flock:
                 self._fd = None
 
 
-def _rotate_locked(live: Path) -> None:
-    """Shift segments: drop the oldest beyond retention, then live -> .1.
-
-    Caller MUST hold the sidecar flock. No-op if the live segment is absent.
-    """
-    if not live.exists():
-        return
-    retain = _retain()
-    # Drop the oldest segment that would fall outside retention.
-    oldest = Path(f"{live}.{retain}")
-    if oldest.exists():
-        try:
-            oldest.unlink()
-        except OSError:
-            pass
-    # Shift .{n} -> .{n+1} from high to low so we never clobber.
-    for n in range(retain - 1, 0, -1):
-        src = Path(f"{live}.{n}")
-        if src.exists():
-            os.replace(str(src), f"{live}.{n + 1}")
-    os.replace(str(live), f"{live}.1")
-
-
 def append(env: Envelope) -> None:
-    """Append one envelope to the log under the sidecar flock.
+    """Append one envelope through the Rust bus-append door.
 
-    Rotation is checked (and performed) under the same lock before the write, so
-    concurrent APPENDERS never race on the size check or interleave a line. The
-    lock serializes writers only; lock-free readers may transiently miss the
-    just-renamed live->.1 segment during a rotation (the reader enumerates
-    segments and checks ``live.exists()`` without the lock). That window is
-    covered by the cursor fallback: a cursor whose message-id is not found in the
-    retained scan rescans all segments rather than declaring loss, so a message
-    is at most delayed by one drain cycle, never dropped.
+    The door owns the sidecar lock, the size rotation and the 0o600 mode,
+    and it records the chats row itself (the record seam and the receipt).
+    Lock-free readers may transiently miss the just-renamed live->.1
+    segment during a rotation; that window is covered by the cursor
+    fallback, so a message is at most delayed by one drain cycle, never
+    dropped. Python keeps the serializer and the one call (AC20-HP). A
+    contended door lock re-raises as :class:`BusLockTimeout`, the
+    exception contract the send path already catches.
     """
-    live = bus_log_path()
-    line = to_json_line(env) + "\n"
-    data = line.encode("utf-8")
-    with _Flock(_lock_path()):
-        try:
-            if live.exists() and live.stat().st_size >= _max_bytes():
-                _rotate_locked(live)
-        except OSError:
-            # A stat failure must not lose the message; fall through to append.
-            pass
-        live.parent.mkdir(parents=True, exist_ok=True)
-        # 0o600: the log holds message bodies; on a single global bus the
-        # filesystem mode is the backstop behind the mediated read, so it is
-        # owner-only (Group 1 privacy hardening, ab-ba91b807). umask may narrow
-        # this further but never widens it. O_CREAT's mode applies only on
-        # creation, so a segment created at 0o644 before this change would keep
-        # appending bodies group/other-readable; tighten an existing segment
-        # too. Best-effort: a chmod failure must never lose the message.
-        if live.exists():
+    try:
+        # The live path rides argv so the door writes wherever THIS
+        # resolver points: config.paths.bus_dir and both env legs stay
+        # Python's single source (the door has no settings reader).
+        chats_verb(["bus-append", str(bus_log_path())], json.loads(to_json_line(env)))
+    except VerbUnavailable as exc:
+        if "bus lock timeout" in str(exc):
+            raw = os.environ.get("FNO_BUS_LOCK_TIMEOUT_SECS")
             try:
-                os.chmod(str(live), 0o600)
-            except OSError:
-                pass
-        fd = os.open(str(live), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
-        try:
-            # os.write may short-write; loop so a partial write never leaves a
-            # truncated (corrupt) JSONL line. Under O_APPEND + the flock these
-            # writes stay contiguous.
-            written = 0
-            while written < len(data):
-                n = os.write(fd, data[written:])
-                if n == 0:
-                    raise OSError("bus log: os.write returned 0 bytes")
-                written += n
-        finally:
-            os.close(fd)
+                timeout = float(raw) if raw else _LOCK_TIMEOUT_SECONDS
+            except ValueError:
+                timeout = _LOCK_TIMEOUT_SECONDS
+            raise BusLockTimeout(_lock_path(), timeout) from exc
+        raise
+
+
+#: The tombstone kind. A withdrawal cannot delete a line (the log is
+#: append-only) and must not advance the RECIPIENT's cursor, which is a
+#: last-seen position rather than a per-message flag - moving it would swallow
+#: every other unread message addressed to them. So a withdrawal is one more
+#: appended envelope naming the message it retracts, and readers skip the pair.
+WITHDRAW_KIND = "withdraw"
+
+#: Durable proof one id reached its recipient's transcript. Never deliverable.
+LANDED_KIND = "landed"
+
+#: Rows that are ledger traffic about other messages, never inbox content.
+CONTROL_KINDS = frozenset({WITHDRAW_KIND, LANDED_KIND})
 
 
 def is_deliverable(env: Envelope) -> bool:
     """Whether a bus envelope is pending recipient delivery.
+
+    A control row (a withdrawal tombstone, a landed receipt) is bookkeeping
+    about another message and is never inbox content, whatever its `to` says.
 
     Missing delivery metadata is the legacy durable shape. A hosted row records
     a delivery that already succeeded and exists only for sender/operator audit.
@@ -452,7 +411,10 @@ def is_deliverable(env: Envelope) -> bool:
     is audit-only too -- draining it would hand the recipient a second copy of
     text already sitting at its prompt.
     """
-    return getattr(env, "delivery", None) not in (HOSTED_DELIVERY, TYPED_DELIVERY)
+    if getattr(env, "kind", None) in CONTROL_KINDS:
+        return False
+    delivery = getattr(env, "delivery", None)
+    return delivery not in (HOSTED_DELIVERY, TYPED_DELIVERY, CROSS_SESSION_DELIVERY)
 
 
 def record_hosted_delivery(
@@ -462,16 +424,25 @@ def record_hosted_delivery(
     recipient: str,
     body: str,
     thread: Optional[str] = None,
-    provider_from: Optional[str] = None,
-    provider_to: Optional[str] = None,
+    from_harness: Optional[str] = None,
+    to_harness: Optional[str] = None,
     request_id: Optional[str] = None,
     in_reply_to: Optional[str] = None,
     from_session: Optional[str] = None,
     from_model: Optional[str] = None,
     to_kind: Optional[str] = None,
     word_count: Optional[int] = None,
+    to_session: Optional[str] = None,
+    subject: Optional[str] = None,
+    before_live: bool = False,
 ) -> Envelope:
-    """Append one audit-only record after confirmed hosted delivery."""
+    """Append one audit-only record after confirmed hosted delivery. ``to_session``/
+    ``to_harness`` name the session actually injected into, for the landed check
+    (which reads the ``to_harness`` meta copy).
+
+    ``before_live`` writes first: the chats record only, before the live attempt,
+    so an interrupt cannot lose it and no drain sees it twice."""
+    meta = {k: v for k, v in (("to_session", to_session), ("to_harness", to_harness)) if v}
     env = Envelope.new(
         id=msg_id,
         thread=thread or msg_id,
@@ -479,17 +450,22 @@ def record_hosted_delivery(
         to=recipient,
         kind="send",
         body=body,
-        provider_from=provider_from,
-        provider_to=provider_to,
+        from_harness=from_harness,
+        to_harness=to_harness,
         request_id=request_id,
         in_reply_to=in_reply_to,
-        delivery=HOSTED_DELIVERY,
+        delivery=None if before_live else HOSTED_DELIVERY,
         from_session=from_session,
         from_model=from_model,
         to_kind=to_kind,
         word_count=word_count,
+        meta=meta or None,
+        subject=subject,
     )
-    append(env)
+    if before_live:
+        chats_verb(["append"], json.loads(to_json_line(env)))
+    else:
+        append(env)
     return env
 
 
@@ -502,17 +478,18 @@ def record_typed_delivery(
     pane_id: str,
     mux_session: Optional[str] = None,
     thread: Optional[str] = None,
-    provider_from: Optional[str] = None,
-    provider_to: Optional[str] = None,
+    from_harness: Optional[str] = None,
+    to_harness: Optional[str] = None,
     in_reply_to: Optional[str] = None,
     from_session: Optional[str] = None,
     from_model: Optional[str] = None,
     to_kind: Optional[str] = None,
     word_count: Optional[int] = None,
+    subject: Optional[str] = None,
 ) -> Envelope:
     """Append one audit-only record after a ``--force`` pane send typed the body.
 
-    The mapping from ``msg_id`` to ``pane_id`` is the whole point (node x-3a64).
+    The mapping from ``msg_id`` to ``pane_id`` is the whole point (node).
     A message delivered by keystroke used to be invisible to every mail surface:
     the recipient saw text with no id and the sender's outbox had no row. With
     the mapping, ``fno agents mail sent`` shows the message and names the transport, and
@@ -526,8 +503,8 @@ def record_typed_delivery(
         to=recipient,
         kind="send",
         body=body,
-        provider_from=provider_from,
-        provider_to=provider_to,
+        from_harness=from_harness,
+        to_harness=to_harness,
         in_reply_to=in_reply_to,
         delivery=TYPED_DELIVERY,
         # The reply address, on the row a reader reaches for first. `cmd_reply`
@@ -538,6 +515,7 @@ def record_typed_delivery(
         from_model=from_model,
         to_kind=to_kind,
         word_count=word_count,
+        subject=subject,
         meta={
             "transport": "pane",
             "pane_id": str(pane_id),
@@ -583,14 +561,6 @@ def iter_messages(*, warn: bool = True) -> Iterator[Envelope]:
             continue
 
 
-#: The tombstone kind. A withdrawal cannot delete a line (the log is
-#: append-only) and must not advance the RECIPIENT's cursor, which is a
-#: last-seen position rather than a per-message flag - moving it would swallow
-#: every other unread message addressed to them. So a withdrawal is one more
-#: appended envelope naming the message it retracts, and readers skip the pair.
-WITHDRAW_KIND = "withdraw"
-
-
 def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
     """Ids retracted by a tombstone, plus the tombstone ids themselves.
 
@@ -614,6 +584,40 @@ def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
         # "withdrawn: msg-xxxx" line about a message it had no power to retract.
         out.add(m.id)
         target_id = (m.meta or {}).get("withdraws")
+        target = by_id.get(target_id) if isinstance(target_id, str) else None
+        if target is None or target.from_ != m.from_ or target.to != m.to:
+            continue
+        out.add(target.id)
+    return out
+
+
+def record_landed(*, msg_id: str, sender: str, recipient: str) -> Envelope:
+    """Append one control row proving ``msg_id`` reached ``recipient``'s transcript.
+
+    The row is control traffic that no inbox renders; it only proves delivery.
+    """
+    env = Envelope.new(
+        from_=sender,
+        to=recipient,
+        kind=LANDED_KIND,
+        body="",
+        meta={"landed": msg_id},
+    )
+    append(env)
+    return env
+
+
+def landed_ids(msgs: list[Envelope]) -> set[str]:
+    """Ids proven landed by a same-sender/recipient ``record_landed`` row (mirrors
+    ``withdrawn_ids``). The control row's own id is never added, and the two
+    facts stay separate: the acknowledged message stays visible to its
+    recipient, and the acknowledging row is control traffic that no inbox renders."""
+    by_id = {m.id: m for m in msgs}
+    out: set[str] = set()
+    for m in msgs:
+        if m.kind != LANDED_KIND:
+            continue
+        target_id = (m.meta or {}).get("landed")
         target = by_id.get(target_id) if isinstance(target_id, str) else None
         if target is None or target.from_ != m.from_ or target.to != m.to:
             continue

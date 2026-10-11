@@ -62,14 +62,14 @@ def test_ac1_hp_every_known_spawner_appears(
 
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
     rows = collect_status(tmp_path)
 
-    # master switch + 9 known spawners + groom/restart/evals (wave 2 gated
+    # master switch + 9 known spawners + groom/evals (wave 2 gated
     # these) + recovery sweep (found while building the wave-3 registry ratchet)
-    # + the king loop.
-    assert len(rows) == 15
+    # + the lead loop. The blueprint auto-launch row is gone with its config
+    # leaf, so 14 - 1 = 13.
+    assert len(rows) == 13
     for r in rows:
         assert r.trigger
         assert r.gate_key
@@ -96,7 +96,6 @@ def test_ac1_hp_env_override_rank_is_visible(
     _write_settings(tmp_path, "schema_version: 1\n")
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     monkeypatch.setenv("FNO_AUTO_CONTINUE", "1")
 
     rows = collect_status(tmp_path)
@@ -108,19 +107,17 @@ def test_ac1_hp_env_override_rank_is_visible(
 def test_previously_ungated_spawners_now_gated_and_default_true(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """x-aaaf wave 2: groom/restart/evals now carry a real gate, defaulting
+    """x-aaaf wave 2: groom/evals now carry a real gate, defaulting
     True (matches their prior, ungated effective behavior)."""
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
     _write_settings(tmp_path, "schema_version: 1\n")
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
     rows = collect_status(tmp_path)
     by_name = {r.name: r for r in rows}
     for name, gate_key in (
         ("groom (_spawn_groom_worker)", "config.groom.enabled"),
-        ("restart (_revive_orphans)", "config.restart.enabled"),
         ("evals runner", "config.evals.enabled"),
     ):
         assert by_name[name].armed is True
@@ -128,24 +125,23 @@ def test_previously_ungated_spawners_now_gated_and_default_true(
         assert by_name[name].rank == "config"
 
 
-def test_king_loop_row_is_present_and_defaults_off(
+def test_lead_loop_row_is_present_and_defaults_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The king loop is the first self-sustaining row in this table, and it is
+    """The lead loop is the first self-sustaining row in this table, and it is
     the discoverability contract for it: an autonomous spawner that does not
     appear here is exactly what this verb exists to stop hiding."""
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
     _write_settings(tmp_path, "schema_version: 1\n")
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
     rows = collect_status(tmp_path)
-    king = next(r for r in rows if r.name == "king loop")
-    assert king.gate_key == "config.king.enabled"
-    assert king.armed is False, "the king loop must default off"
-    assert king.rank == "config"
-    assert "board non-empty" in king.trigger
+    lead = next(r for r in rows if r.name == "lead loop")
+    assert lead.gate_key == "config.lead.enabled"
+    assert lead.armed is False, "the lead loop must default off"
+    assert lead.rank == "config"
+    assert "board non-empty" in lead.trigger
 
 
 def test_master_switch_row_present_and_armed_by_default(
@@ -155,7 +151,6 @@ def test_master_switch_row_present_and_armed_by_default(
     _write_settings(tmp_path, "schema_version: 1\n")
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
     rows = collect_status(tmp_path)
     master = next(r for r in rows if r.name == "autonomy (master switch)")
@@ -172,7 +167,6 @@ def test_master_switch_off_vetoes_every_other_row(
     _write_settings(tmp_path, "schema_version: 1\nautonomy:\n  enabled: false\n")
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
     rows = collect_status(tmp_path)
     by_name = {r.name: r for r in rows}
@@ -180,12 +174,15 @@ def test_master_switch_off_vetoes_every_other_row(
     for name in (
         "post-merge ritual", "pr_watch (headless PR poll)",
         "recovery sweep (crash respawn)",
-        "groom (_spawn_groom_worker)", "restart (_revive_orphans)",
-        "evals runner", "blueprint auto-launch",
+        "groom (_spawn_groom_worker)",
+        "evals runner",
         "keep_going (autonomous follow-up)",
     ):
         assert by_name[name].armed is False, name
         assert by_name[name].rank == "autonomy", name
+    # The retired blueprint auto-launch row must never come back: a config
+    # carrying no such leaf renders no phantom spawner.
+    assert "blueprint auto-launch" not in by_name
     for name in (
         "advance (node-walk)", "spawn_think (context /think)",
     ):
@@ -223,3 +220,58 @@ def test_status_command_always_exits_0_even_on_resolver_error(
     monkeypatch.setattr(autonomy_cli, "collect_status", _boom)
     result = runner.invoke(_cli(), ["status", "--project-root", str(tmp_path)])
     assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# x-84b2: dispatch provenance codes
+# ---------------------------------------------------------------------------
+
+
+def test_status_rows_carry_source_and_verb_codes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / ".fno" / "settings.yaml"))
+    _write_settings(tmp_path, "schema_version: 1\n")
+
+    rows = collect_status(tmp_path)
+    by_name = {r.name: r for r in rows}
+    assert by_name["dispatch_lanes (parallel fill)"].source == "ab"
+    assert by_name["epic converge (mission drain)"].source == "ab"
+    assert by_name["advance (node-walk)"].source == "ac"
+    assert by_name["reconcile_dispatch (G4 de-stub)"].verb == "t"
+    # The master switch is not a dispatch path: no provenance codes.
+    assert by_name["autonomy (master switch)"].source is None
+
+
+def test_format_table_renders_source_verb_columns() -> None:
+    rows = [
+        SpawnerStatus("a", "trigger-a", "config.a.enabled", True, "config", "ab", "t"),
+        SpawnerStatus("b", "trigger-b", "(none)", None, "ungated"),
+    ]
+    table = format_table(rows)
+    assert "SOURCE" in table and "VERB" in table
+    assert "ab" in table and "ungated" in table
+
+
+def test_name_codes_check_prints_rows_and_marker() -> None:
+    """The provenance audit moved into the binary (PR 1813): the CI check
+    runs `fno-agents name-codes --check`, so the test drives the same verb
+    and asserts the same invariants the Python audit held."""
+    import subprocess
+
+    from tests.conftest import checkout_fno_agents_binary
+
+    binary = checkout_fno_agents_binary()
+    if binary is None:
+        pytest.skip("no fno-agents binary built in this checkout")
+    proc = subprocess.run(
+        [str(binary), "name-codes", "--check"], capture_output=True, text=True
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [line for line in proc.stdout.splitlines() if "\t" in line]
+    assert len(rows) == 17
+    sources = {row.split("\t")[1] for row in rows}
+    assert "ac" in sources
+    assert "sob" not in sources, "spawn-on-blueprint is retired"
+    assert sum(1 for row in rows if row.split("\t")[1] == "ab") == 2
+    assert "dispatch provenance: 17/17 coded" in proc.stdout

@@ -16,7 +16,7 @@ import sys
 
 
 def _build_unified_envelope_schema() -> dict:
-    """Build the unified events.jsonl envelope schema (x-2901).
+    """Build the unified events.jsonl envelope schema.
 
     Describes {ts, type, source, data} with source as an anyOf of the enum
     and the worker patterns. Structurally equal to schemas/events-v3.json
@@ -37,7 +37,7 @@ def _build_unified_envelope_schema() -> dict:
     source_anyof += [{"pattern": p.pattern} for p in ALLOWED_SOURCE_PATTERNS]
 
     return {
-        "$comment": "Unified envelope (x-2901). Emitted by cli/src/fno/events/__init__.py.",
+        "$comment": "Unified envelope. Emitted by cli/src/fno/events/__init__.py.",
         "type": "object",
         "required": ["ts", "type", "source", "data"],
         "properties": {
@@ -67,9 +67,10 @@ def _collect_event_types() -> list[str]:
     """Return the sorted list of Python-emitted event type names.
 
     Excludes event types that are Rust-only (sources exclusively 'daemon',
-    'subagent', or 'loop'). These are documented in events-schema.yaml for
-    validator coverage but are not emitted by the Python side; including
-    them would false-positive the parity check's collision detector.
+    'subagent', 'loop', 'pr-heal', or 'active-backlog'). These are documented
+    in events-schema.yaml for validator coverage but are not emitted by the
+    Python side; including them would false-positive the parity check's
+    collision detector.
     """
     from fno.events import SCHEMA  # noqa: PLC0415
 
@@ -77,10 +78,13 @@ def _collect_event_types() -> list[str]:
         return []
 
     # Rust-infrastructure sources: process identities used exclusively by the
-    # Rust fno-agents supervisor. Event types whose ALL sources are within this
-    # set were added to events-schema.yaml as documentation for Rust-emitted
-    # events and are never emitted by the Python fno pipeline.
-    rust_infra_sources = frozenset(["daemon", "subagent", "loop"])
+    # Rust fno-agents supervisor or its standalone spawn gate. Event types whose
+    # ALL sources are within this set are documented for Rust emitters and are
+    # never emitted by the Python fno pipeline. 'active-backlog' is the daemon's
+    # own dispatch task (daemon.rs), not a Python producer.
+    rust_infra_sources = frozenset(
+        ["daemon", "subagent", "loop", "pr-heal", "active-backlog", "rust"]
+    )
 
     result = []
     for entry in SCHEMA.get("event_types", []):

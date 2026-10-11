@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  fno mux read-only web attach (x-6a14). Served inline by `fno mux serve --web`
+  fno mux read-only web attach. Served inline by `fno mux serve --web`
   via include_str! - no CDN, no external resource of any kind, so the strict CSP
   below (default-src 'none') can hold and the page works offline / airgapped.
 
@@ -10,7 +10,7 @@
   never sends a byte upstream; pane selection only changes which cached frame we
   draw locally.
 
-  NOT SCROLLBACK (x-ce65). A Frame is a composite of the CURRENT VISIBLE GRID
+  NOT SCROLLBACK. A Frame is a composite of the CURRENT VISIBLE GRID
   and the bridge caches only the latest one per pane, so no history reaches this
   page. What it does instead is RETAIN: it diffs consecutive frames, keeps the
   rows that scrolled off the top, and paints them above the live grid. That is
@@ -64,8 +64,7 @@
   #bar.ended { background: #4a1616; color: #f08a8a; }
   #bar.authfailed { background: #4a1616; color: #f08a8a; }
   #status { font-weight: 600; }
-  #backlog-link { color: #9aa4b6; text-decoration: none; }
-  #backlog-link:hover { color: #fff; text-decoration: underline; }
+  /* Shared nav injected at serve time (see web.rs nav_fragment) */
   /* Pushed to the far edge, and a 30px box so a thumb can hit it. */
   #fitbtn { margin-left: auto; font: inherit; font-size: 12px; cursor: pointer;
     background: #141a26; color: #9aa4b6; border: 1px solid #232b3a;
@@ -99,7 +98,8 @@
 </style>
 </head>
 <body>
-  <div id="bar" class="connecting"><span id="status">connecting…</span><span id="sub"></span><a id="backlog-link" href="#">backlog</a><button id="fitbtn" type="button" title="fit the grid to the screen width, or show it at full size">fit</button></div>
+<!--fno-nav-->
+  <div id="bar" class="connecting"><span id="status">connecting…</span><span id="sub"></span><button id="fitbtn" type="button" title="fit the grid to the screen width, or show it at full size">fit</button></div>
   <div id="picker"></div>
   <div id="screen"><pre id="term"><span id="keptnote" class="kept-note"></span><span id="kept" class="kept"></span><span id="live"></span></pre></div>
   <div id="overlay"></div>
@@ -119,7 +119,7 @@
   let agents = [];            // from Layout
   let current = null;         // selected pane_id
   let upstreamUp = true;
-  // Retention (x-ce65), NOT scrollback: rows evicted off the top of the live
+  // Retention, NOT scrollback: rows evicted off the top of the live
   // grid, kept by this browser for the SELECTED pane only. The file header says
   // why the protocol cannot answer this and what the ceiling is.
   // The retained rows live in their OWN element, appended to and trimmed in
@@ -249,7 +249,7 @@
     return -1;
   }
 
-  // ---- fit to width (x-ce65), CLIENT SIDE ONLY ----
+  // ---- fit to width, CLIENT SIDE ONLY ----
   // A pane is as wide as its TERMINAL - 183 columns in the reported specimen -
   // and a phone shows roughly 45 of them at 13px. The fix shrinks the TYPE here
   // and never touches the terminal. It cannot do otherwise and must not try:
@@ -491,10 +491,7 @@
 
   // ---- websocket ----
   const token = new URLSearchParams(location.search).get("t") || "";
-  const backlogProject = new URLSearchParams(location.search).get("project");
-  const backlogScope = backlogProject ? `&project=${encodeURIComponent(backlogProject)}` : "";
-  $("backlog-link").href = `/backlog?t=${encodeURIComponent(token)}${backlogScope}`;
-  // A pasted per-pane link names its pane (x-b80d): pin the first paint to it
+  // A pasted per-pane link names its pane : pin the first paint to it
   // instead of whichever frame lands first, then clear the want so the operator
   // can still switch panes by hand afterwards. A want that never paints
   // (renumbered or dead pane) is dropped after 3s so the page still opens.
@@ -503,7 +500,8 @@
   if (wanted != null) { wanted = parseInt(wanted, 10); if (Number.isNaN(wanted)) wanted = null; if (wanted != null) wantedSince = Date.now(); }
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws?t=${encodeURIComponent(token)}`);
+    const base = document.querySelector("nav.fno-nav").dataset.base;
+    const ws = new WebSocket(`${proto}://${location.host}${base}ws?t=${encodeURIComponent(token)}`);
     ws.onopen = () => setBar("connecting", "connecting…", "waiting for first frame");
     ws.onmessage = (ev) => { try { onMsg(JSON.parse(ev.data)); } catch (_) {} };
     ws.onclose = (ev) => {

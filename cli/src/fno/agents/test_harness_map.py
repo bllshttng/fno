@@ -14,13 +14,26 @@ from fno.agents.harness_map import (
     permission_response_keys,
     render_session_argv,
     resolve_dispatch,
+    spawn_state,
     substrate_default,
     thread_lane,
+    thread_seatable,
 )
 
 # Config read is stubbed to empty in every resolve so the tests exercise the
 # built-in precedence, not the ambient project config.
 _NO_CFG: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _installed_loop_extensions(monkeypatch):
+    """These tests exercise resolution and normalization, not the loop gate's
+    install state, which is machine environment: whether fno's installer has
+    placed the extension at the harness's load surface is asserted in
+    tests/agents/test_harness_loop_participation.py."""
+    import fno.agents.harness_map as _harness_map
+
+    monkeypatch.setattr(_harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
 
 
 _REQUIRED_INTERACTIVE_FIELDS = {
@@ -65,7 +78,15 @@ def test_packaged_contract_is_complete_for_every_known_harness():
                 "c-1",
             ],
         ),
-        ("codex", "interactive_resume", "cx-1", ["codex", "resume", "cx-1"]),
+        # The resume row carries the same shared-daemon ownership assertion
+        # as attach: `--remote unix://` makes a daemon-down resume a named
+        # failure instead of a silently private in-process owner.
+        (
+            "codex",
+            "interactive_resume",
+            "cx-1",
+            ["codex", "resume", "cx-1", "--remote", "unix://"],
+        ),
         ("codex", "headless_resume", "cx-1", ["codex", "exec", "resume", "cx-1"]),
         # agy's resume primitive, measured 2026-08-26 on 1.1.19 and 1.1.21:
         # a fresh process quotes a token planted in an earlier turn
@@ -278,7 +299,7 @@ def test_every_session_builder_and_submit_path_names_the_shared_contract():
     consumers = [
         "cli/src/fno/agents/resume_cli.py", "cli/src/fno/agents/mux_spawn.py",
         "cli/src/fno/agents/harnesses/claude.py", "cli/src/fno/agents/harnesses/codex.py",
-        "crates/fno-agents/src/client_verbs.rs", "crates/fno-agents/src/provider.rs",
+        "crates/fno-agents/src/claude_resume.rs", "crates/fno-agents/src/provider.rs",
     ]
     for relative in consumers:
         assert "render_session_argv" in (root / relative).read_text(encoding="utf-8"), relative
@@ -288,7 +309,7 @@ def test_every_session_builder_and_submit_path_names_the_shared_contract():
     assert "CR_SETTLE_MS" not in rust_inject
     assert 'capabilities(recipient_harness)["send_keys_enter_delay_ms"]' in python_inject
     assert 'capabilities("claude")["send_keys_enter_delay_ms"]' not in python_inject
-    assert "default_enter_delay_ms(provider)" in rust_inject
+    assert "default_enter_delay_ms(harness)" in rust_inject
 
 
 def _resolve(**kw):
@@ -351,7 +372,6 @@ def test_undeclared_posture_answers_declared_false_without_reading_any_row(
     for name in ("openclaw", "nanoclaw"):
         posture = hm.capabilities_or_undeclared(name)
         assert posture["declared"] is False, name
-        assert posture["thread"] is False, name
         assert posture["autonomous_pane"] is False, name
         assert posture["route_on_pane"] is False, name
         assert posture["resume"] == "unsupported", name
@@ -391,20 +411,49 @@ def test_dispatch_command_refuses_undeclared_without_naming_a_neighbour():
     assert "gemini" not in msg
 
 
-def test_explicit_bg_on_unearned_harness_is_rejected():
-    """thread (and its bg alias) is earned by claude and codex; an explicit
-    bg on opencode is a hard error -> headless."""
+@pytest.fixture
+def unseated(monkeypatch):
+    """A harness whose spawn claim is not native, without depending on one.
+
+    Naming a real unseated subject goes vacuous the day that harness earns its
+    arm, which has now happened three times (pi, opencode, agy). The subject
+    under test is the refusal PATH, so patch the claim instead."""
+    import fno.agents.harness_map as hm
+
+    real = hm.spawn_state
+    monkeypatch.setattr(
+        hm, "spawn_state", lambda h: "capable" if h == "agy" else real(h)
+    )
+    return "agy"
+
+
+def test_explicit_bg_resolves_where_the_spawn_claim_is_native(unseated):
+    """thread is seated by the spawn claim: opencode's row reads native
+    (measured 2026-09-03 on the live daemon-owned session), so thread
+    resolves onto the thread lane. A harness whose claim is only `capable`
+    still refuses - real on the harness, no fno arm. The bg spelling refuses
+    with the redirect like every other door."""
+    out = _resolve(harness="opencode", substrate="thread")
+    assert out["substrate"] == "thread"
     with pytest.raises(DispatchResolveError, match="headless"):
+        _resolve(harness=unseated, substrate="thread")
+    with pytest.raises(DispatchResolveError, match="retired"):
         _resolve(harness="opencode", substrate="bg")
 
 
 def test_thread_lane_is_derived_from_the_attach_declaration():
-    """Lane A where interactive_attach declares a form; lane B where only
-    interactive_resume does. The selector reads the capability contract, so
-    a new row lands in its lane with no code edit."""
+    """Lane A where interactive_attach declares a form, or features.attach
+    reads native; lane B where only interactive_resume does. The selector
+    reads the capability contract, so a new row lands in its lane with no
+    code edit."""
     assert thread_lane("claude") == "attach"
     assert thread_lane("codex") == "attach"
-    for harness in ("pi", "opencode", "agy", "gemini"):
+    # opencode ships no `opencode attach <id>` subcommand (interactive_attach
+    # reads unsupported), but dispatch_opencode_serve is a real, working
+    # thread destination reached through the daemon-kept lane - the row's
+    # own features.attach claim already says so (x-df08).
+    assert thread_lane("opencode") == "attach"
+    for harness in ("pi", "agy", "gemini"):
         assert thread_lane(harness) == "keeper", harness
 
 
@@ -436,14 +485,12 @@ def test_thread_lane_resolver_carries_no_harness_name():
         assert name not in source, name
 
 
-def test_thread_refusal_names_the_missing_lane():
+def test_thread_refusal_names_the_missing_lane(unseated):
     """The gate keeps its condition and loses its name list: the refusal
     names which lane fno has not built for THIS harness, and points at
-    headless. Minting nothing is structural - resolve_dispatch is pure.
-    agy stands in for every still-refused harness now that pi's keeper lane
-    is journey-proven; opencode carries the same guard below."""
+    headless. Minting nothing is structural - resolve_dispatch is pure."""
     with pytest.raises(DispatchResolveError) as exc:
-        _resolve(harness="agy", substrate="thread")
+        _resolve(harness=unseated, substrate="thread")
     msg = str(exc.value)
     assert "keeper" in msg
     assert "headless" in msg
@@ -458,10 +505,9 @@ def test_explicit_thread_on_codex_is_allowed():
     assert out["thread"] is True
 
 
-def test_bg_is_a_deprecated_alias_for_thread():
-    out = _resolve(harness="claude", substrate="bg")
-    assert out["substrate"] == "thread"
-    assert out["thread"] is True
+def test_bg_refuses_with_the_redirect():
+    with pytest.raises(DispatchResolveError, match="retired"):
+        _resolve(harness="claude", substrate="bg")
 
 
 def test_thread_is_the_canonical_persistent_substrate():
@@ -576,14 +622,25 @@ def test_codex_normalization_accepts_plugin_qualified_slash_and_native_skill():
     assert normalize_command("$fno:target x-81ad", "codex") == "$fno:target x-81ad"
 
 
+def test_pi_namespaced_seed_renders_the_skill_command_form():
+    """The canonical seed reaches pi as its own skill command, never the
+    literal `/fno:target` (no such pi command) and never `/skill:fno:target`."""
+    from fno.agents.harness_map import normalize_command
+
+    assert normalize_command("/fno:target resume", "pi") == "/skill:target resume"
+    assert normalize_command("/target resume", "pi") == "/skill:target resume"
+    assert normalize_command("/skill:target resume", "pi") == "/skill:target resume"
+    assert normalize_command("/fno:target resume", "claude") == "/fno:target resume"
+
+
 def test_opencode_default_dispatch_renders_fno_slash():
     """AC1-HP: a default opencode dispatch renders the plugin-namespaced palette
-    invocation `/fno:target ...` - no prose brief. The serve lane is
-    launch-only, so the substrate falls back to headless rather than riding a
-    session nothing can steer."""
+    invocation `/fno:target ...` - no prose brief. The spawn claim reads
+    native (measured 2026-09-03 on the live daemon-owned session), so the
+    default substrate is the thread lane."""
     out = _resolve(harness="opencode", node_id="x-4d85")
     assert out["command"] == "/fno:target --no-merge x-4d85"
-    assert out["substrate"] == "headless"
+    assert out["substrate"] == "thread"
     assert out["command_surface"] == "slash"
 
 
@@ -600,11 +657,13 @@ def test_opencode_arbitrary_verb_renders_fno_prefix():
     assert out2["command"] == "/fno:zzz args x-9"
 
 
-def test_normalize_fallback_table_mirrors_harness_map():
-    """Parity: normalize.sh's static command-surface fallback (used only when
-    `fno agents dispatch resolve` is unreachable) MUST mirror harness_map, the SoT - a
-    drift would dispatch the wrong spelling. Parses the shell case block and
-    compares each provider's surface to capabilities()."""
+def test_normalize_slash_prefix_table_mirrors_harness_map():
+    """Parity: normalize.sh's slash_prefix helper MUST mirror harness_map, the
+    SoT - a drift would dispatch the wrong spelling. (x-3873 deleted the
+    static command-surface fallback this test also watched; the surface now
+    reads `fno agents capabilities` straight from the packaged table.) Parses
+    the shell case block and compares each provider's prefix to capabilities().
+    """
     import re
     from pathlib import Path
 
@@ -620,30 +679,18 @@ def test_normalize_fallback_table_mirrors_harness_map():
         root = root.parent
     assert norm is not None, "normalize.sh not found from test location"
 
-    m = re.search(
-        r"resolve_command_surface\(\).*?case \"\$_prov\" in(.*?)esac",
-        norm.read_text(),
-        re.S,
+    text = norm.read_text()
+    # The surface read has NO fallback copy anymore: it shells the Rust leaf.
+    # retired-ok: a prohibition naming the string it forbids.
+    assert "agents dispatch resolve" not in text, (
+        "normalize.sh resurrects the retired dispatch resolve ask"
     )
-    assert m, "resolve_command_surface case block not found"
-    shell_map: dict[str, str] = {}
-    for arm in re.finditer(r"([a-z|*]+)\)\s*printf '([a-z-]+)'", m.group(1)):
-        for prov in arm.group(1).split("|"):
-            if prov != "*":
-                shell_map[prov] = arm.group(2)
-    assert shell_map, "no provider arms parsed from normalize.sh"
-    for prov, surface in shell_map.items():
-        assert capabilities(prov)["command_surface"] == surface, (
-            f"normalize.sh fallback maps {prov!r}->{surface!r} but harness_map "
-            f"says {capabilities(prov)['command_surface']!r}"
-        )
-    for prov in ("claude", "agy", "opencode", "codex", "gemini"):
-        assert prov in shell_map, f"normalize.sh fallback omits {prov!r}"
+    assert "agents capabilities" in text, "surface read must use the Rust leaf"
 
-    # slash_prefix must mirror too, or opencode would render `/target` not
+    # slash_prefix must mirror, or opencode would render `/target` not
     # `/fno:target`. The shell helper lists only non-empty prefixes explicitly
     # (opencode); claude/agy fall to `*` -> "", matching harness_map's default.
-    mp = re.search(r"slash_prefix\(\).*?case \"\$1\" in(.*?)esac", norm.read_text(), re.S)
+    mp = re.search(r"slash_prefix\(\).*?case \"\$1\" in(.*?)esac", text, re.S)
     assert mp, "slash_prefix case block not found in normalize.sh"
     shell_prefix: dict[str, str] = {}
     for arm in re.finditer(r"([a-z|*]+)\)\s*printf '([a-z:-]*)'", mp.group(1)):
@@ -703,29 +750,33 @@ def test_substrate_default_table():
     assert substrate_default("claude") == "thread"
     assert substrate_default("codex") == "thread"
     # pi's keeper lane survived the seven-step restart journey
-    # (test_thread_keeper_journey.py), so its bit reads true.
+    # (test_thread_keeper_journey.py), so its spawn claim reads native.
     assert substrate_default("pi") == "thread"
-    # opencode's serve lane is launch-only (ask refuses, no steering), so its
-    # bit remains false until its steering lane earns an unattended journey.
-    for h in ("gemini", "agy", "opencode"):
-        assert substrate_default(h) == "headless"
+    # opencode's spawn claim read native 2026-09-03 (live daemon-owned
+    # session); its serve lane stays launch-only for steering, which is not
+    # what the seat gate measures.
+    assert substrate_default("opencode") == "thread"
+    # agy's arm landed with its own spawn-seam journey
+    # (test_agy_spawn_journey.py), which is what flipped it off this list.
+    assert substrate_default("agy") == "thread"
+    assert substrate_default("gemini") == "headless"
 
 
-def test_thread_bit_asserts_fnos_own_driver_not_the_resume_primitive():
-    """The bit is a claim about FNO's lane, never about the harness CLI: every
-    harness here has a working resume primitive (agy and opencode both measured
-    2026-08-26), but only claude has the driver + journey-proven lane the bit
-    asserts. Codex earned the bit through its live six-step journey. pi earned
-    it through the seven-step restart journey: both supervisors SIGKILLed, the
-    keeper child kept its pid, cwd and session id, and the session store
-    gained nothing (test_thread_keeper_journey.py). OpenCode remains
-    launch-only, so a true bit there would route autonomous spawns onto a
-    session the caller cannot steer, which is worse than refusing."""
-    assert capabilities("claude")["thread"] is True
-    assert capabilities("codex")["thread"] is True
-    assert capabilities("pi")["thread"] is True
-    for h in ("agy", "opencode"):
-        assert capabilities(h)["thread"] is False
+def test_thread_seat_is_derived_from_the_spawn_claim():
+    """The seat is a claim about FNO's lane, never about the harness CLI, and
+    it is DERIVED from the features dimension rather than stored: spawn reads
+    native where fno's own launch arm is wired and journey-proven. Codex
+    earned it through its live six-step journey; pi through the seven-step
+    restart journey (both supervisors SIGKILLed, the keeper child kept its
+    pid, cwd and session id, and the session store gained nothing). agy read
+    `capable` - real on the harness, no fno arm - until that arm shipped here
+    with its own journey. gemini reads `absent`, which is what keeps the
+    unseated leg from being vacuous."""
+    for h in ("claude", "codex", "opencode", "pi", "cursor-agent", "grok", "agy"):
+        assert thread_seatable(h) is True, h
+        assert spawn_state(h) == "native", h
+    assert thread_seatable("gemini") is False
+    assert spawn_state("gemini") == "absent"
     # the resume primitives themselves are all recorded as working
     for h in ("codex", "agy", "opencode"):
         assert capabilities(h)["resume_strategy"]["forms"]["interactive_resume"]["kind"] != (
@@ -733,44 +784,76 @@ def test_thread_bit_asserts_fnos_own_driver_not_the_resume_primitive():
         )
 
 
-def test_explicit_thread_on_partial_lane_refused_with_the_reason():
-    """An explicit thread request on a launch-only lane is a hard error naming
-    the missing lane, never a silent ride onto a half-working session."""
+def test_native_verbs_roster_is_filled_from_measured_sources():
+    """A slash harness with a TUI palette declares its native verbs; the
+    normalizer needs them so a native verb typed at a worker is not rewritten
+    into a footnote skill that does not exist. gemini is refused (deprecated)
+    and so declares none; pi's surface is extension-composed and declares the
+    one built-in its docs name."""
+    assert capabilities("claude")["native_verbs"]
+    assert capabilities("agy")["native_verbs"]
+    assert capabilities("opencode")["native_verbs"]
+    assert capabilities("cursor-agent")["native_verbs"]
+    assert capabilities("grok")["native_verbs"]
+    assert capabilities("codex")["native_verbs"] == [
+        "/review",
+        "/code-review",
+        "/model",
+        "/status",
+        "/compact",
+        "/goal",
+    ]
+    assert capabilities("pi")["native_verbs"] == ["/name"]
+    assert capabilities("gemini").get("native_verbs") is None
+
+
+def test_native_verb_stays_literal_on_the_slash_surface():
+    """The slash branch guards on the same roster the codex branch reads:
+    `/undo` on opencode is opencode's own palette verb, so it must reach the
+    palette verbatim, never a phantom `/fno:undo` plugin skill. Footnote verbs
+    still namespace, and an unknown verb keeps the AC4-EDGE behavior."""
+    from fno.agents.harness_map import normalize_command
+
+    assert normalize_command("/undo", "opencode") == "/undo"
+    assert normalize_command("/init", "opencode") == "/init"
+    assert normalize_command("/share x", "opencode") == "/share x"
+    assert normalize_command("/target x-1", "opencode") == "/fno:target x-1"
+    assert normalize_command("/zzz", "opencode") == "/fno:zzz"
+
+
+def test_explicit_thread_on_unbuilt_lane_refused_with_the_reason(unseated):
+    """An explicit thread request where fno has no arm is a hard error naming
+    the spawn state and the missing lane, never a silent ride onto a
+    half-working session."""
     with pytest.raises(DispatchResolveError, match="keeper") as exc:
-        _resolve(harness="opencode", substrate="thread")
+        _resolve(harness=unseated, substrate="thread")
+    assert "capable" in str(exc.value)
     assert "headless" in str(exc.value)
 
 
-def test_known_harnesses_covers_readable_set():
-    """The map covers the readable-provider set, which is the invariant here.
-
-    Asserted as the RELATION between the two rosters rather than as a literal
-    list, so a harness added to both keeps this green and a harness added to
-    only one goes red - which is the drift worth catching.
-    """
-    from fno.agents.harnesses import READABLE_PROVIDERS
-
-    assert set(known_harnesses()) == set(READABLE_PROVIDERS)
-
-
-def test_contract_rejects_a_row_absent_from_the_complete_roster():
-    """AC1-ERR: a capability row naming a harness KNOWN_HARNESSES does not
-    carry fails loudly at parse time, with the extra harness named. The
-    converse - a roster entry with no row - stays legal (hermes, openclaw),
-    which is why the relation is subset and not equality."""
+def test_contract_admits_a_row_absent_from_the_complete_roster():
+    """AC1-ERR, moved: the rows-stay-a-subset-of-the-roster check no longer
+    runs in this parser - a roster read here fired on the module-level parse
+    below and broke every binary-less import (the census, the lineage
+    check). The pin lives on the Rust side, in the provider round-trip test
+    that reads this same table's source; this layer only pins that the parse
+    itself stays roster-blind, so the packaged table keeps parsing."""
     from importlib.resources import files
 
     text = files("fno.agents").joinpath("harness_capabilities.toml").read_text(
         encoding="utf-8"
     )
     # Clone the claude section as [harness.ghost]: a full, well-formed row for
-    # a name the roster does not carry.
+    # a name the roster does not carry. The parse admits it; the Rust pin
+    # refuses it at the source. Cut at the next top-level harness (codex), not
+    # the next "[harness." - claude's own contract sub-tables share the prefix.
     start = text.index("[harness.claude]")
-    end = text.index("[harness.", start + 1)
-    ghost = text[start:end].replace("[harness.claude]", "[harness.ghost]", 1)
+    end = text.index("[harness.codex]")
+    ghost = text[start:end].replace("[harness.claude", "[harness.ghost")
     poisoned = text[:end] + ghost + text[end:]
-    with pytest.raises(DispatchResolveError, match=r"absent from KNOWN_HARNESSES: ghost"):
-        parse_capability_contract(poisoned)
+    version, harnesses = parse_capability_contract(poisoned)
+    assert "ghost" in harnesses
+    assert version >= 1
 
 
 def test_contract_rejects_an_empty_capability_table():
@@ -953,9 +1036,9 @@ def test_is_target_family_pins_the_carrier_vocabulary():
     """The refusal carrier judges only /target-family first tokens (x-9d11).
 
     Direct pins for the predicate trio every spawn lane shares: the family
-    gate, the word-padded flag match, and the legacy token rewrite. A drift
-    here re-opens either the prose-manufactures-a-refusal defect or the
-    family-scoping regression (rounds 6/8)."""
+    gate, the word-padded flag match, and the legacy token rewrite. The
+    vocabulary comes from the canonical merge_posture table (x-8151); the
+    Rust engine's tests pin the same answers from the same table."""
     from fno.agents.harness_map import is_target_family
 
     assert is_target_family("/target x-1")
@@ -1049,15 +1132,35 @@ def test_internal_slash_guard_lives_inside_normalize_command():
 
     It used to live in resolve_dispatch, whose three direct normalize_command
     call sites bypassed it. If the inline test reappears in resolve_dispatch,
-    a future caller split re-opens the capture hole."""
+    a future caller split re-opens the capture hole. x-c976: the guard is the
+    parse owner's no-second-slash shape rule, so the normalizer reads the
+    parser instead of hand-rolling the prefix test."""
     import inspect
 
     from fno.agents import harness_map
 
     norm_src = inspect.getsource(harness_map.normalize_command)
-    assert '"/" in first_word[1:]' in norm_src
+    assert "parse_verb_token(first_word)" in norm_src
     resolve_src = inspect.getsource(harness_map.resolve_dispatch)
     assert "'/' not in first_word[1:]" not in resolve_src
+
+
+@pytest.mark.parametrize(
+    ("harness", "expected"),
+    [("claude", "/fno:target x-caf8"), ("opencode", "/fno:target x-caf8")],
+)
+def test_normalize_command_rewrites_dollar_seed_for_slash_surfaces(harness, expected):
+    """x-413d: the sigil says WHO WROTE the seed, never which harness runs
+    it. A codex-authored `$fno:verb` seed rendered for a slash surface
+    arrives in that harness's native spelling, namespace preserved (agy
+    strips it, per its /fno: input rule)."""
+    from fno.agents.harness_map import normalize_command
+
+    assert normalize_command("$fno:target x-caf8", harness) == expected
+    assert normalize_command("$fno:target x-caf8", "agy") == "/target x-caf8"
+    # Codex keeps its own spelling; prose is never rewritten.
+    assert normalize_command("$fno:target x-caf8", "codex") == "$fno:target x-caf8"
+    assert normalize_command("do a $fno:blueprint", "claude") == "do a $fno:blueprint"
 
 
 # The measured rows from the operator's one-call table (bare verbs an operator
@@ -1111,7 +1214,7 @@ def test_native_and_review_verbs_come_from_the_capability_table():
 
     caps = capabilities("codex")
     assert set(caps["native_verbs"]) == {
-        "/review", "/code-review", "/model", "/status", "/compact",
+        "/review", "/code-review", "/model", "/status", "/compact", "/goal",
     }
     assert _CODEX_REVIEW_VERBS == {"/review", "/code-review"}
     assert _CODEX_REVIEW_VERBS <= set(caps["native_verbs"])

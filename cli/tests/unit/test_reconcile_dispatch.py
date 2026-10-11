@@ -10,14 +10,16 @@ FNO_REPO_ROOT, and the dependent's manifest lives under tmp_path/.fno so
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from fno import stub_manifest as sm
+from fno.backlog import advance as adv
 from fno.backlog import reconcile_dispatch as rd
 from fno.claims.core import acquire_claim
+
+requires_rust = pytest.mark.dev_build
 
 
 @pytest.fixture
@@ -29,9 +31,9 @@ def iso(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _events(p: Path) -> list[dict]:
-    if not p.exists():
-        return []
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(p)
 
 
 def _dep(tmp_path: Path, node_id="x-dep"):
@@ -45,7 +47,7 @@ def _patch_deps(monkeypatch, deps):
 def _patch_spawn(monkeypatch):
     calls = []
     def fake(node_id, node_cwd, node_slug=None, *, reconcile_manifest=None, model=None,
-             provider=None, node=None):
+             provider=None, node=None, **kwargs):
         calls.append({"node": node_id, "cwd": node_cwd, "manifest": reconcile_manifest,
                       "model": model, "provider": provider, "dep": node})
         return "short123"
@@ -119,11 +121,13 @@ def test_contract_dependents_copies_provider(monkeypatch, tmp_path):
     from fno.backlog import reconcile_dispatch as rdmod
 
     graph = [
-        {"id": "x-blk", "status": "done"},
-        {"id": "x-dep", "blocked_by": ["x-blk"], "dep": "contract",
-         "provider": "claude", "difficulty": "medium"},
+        {"id": "x-blk", "slug": "x-blk", "title": "x-blk", "type": "feature",
+         "priority": "p2", "status": "done"},
+        {"id": "x-dep", "slug": "x-dep", "title": "x-dep", "type": "feature",
+         "priority": "p2", "status": "ready", "blocked_by": ["x-blk"],
+         "dep": "contract", "provider": "claude", "difficulty": "medium"},
     ]
-    monkeypatch.setattr("fno.graph.store.read_graph", lambda _p: graph)
+    monkeypatch.setattr("fno.graph.api.wire_rows", lambda path=None, **k: graph)
     monkeypatch.setattr("fno.paths.graph_json", lambda: "ignored")
     deps = rdmod._contract_dependents("x-blk")
     assert deps and deps[0]["provider"] == "claude"
@@ -173,13 +177,12 @@ def test_disabled_dispatches_nothing(iso, tmp_path, monkeypatch):
 def test_live_node_claim_dedups(iso, tmp_path, monkeypatch):
     # Invariant: at-most-one reconcile. A worker already owns node:<dep>.
     sm.write("x-dep", [], tmp_path, contract_test="true")
-    acquire_claim("node:x-dep", "other-worker", ttl_ms=60_000,
-                  root=rd._claims_root_for("node:x-dep"))
+    acquire_claim("node:x-dep", "other-worker", ttl_ms=60_000)
     _patch_deps(monkeypatch, [_dep(tmp_path)])
     calls = _patch_spawn(monkeypatch)
 
     res = rd.dispatch_reconcile_for_blocker(closed_node_id="x-blk", events_path=iso)
-    assert res[0].decision == "skipped" and res[0].reason == "already-claimed"
+    assert res[0].decision == "skipped" and "other-worker" in res[0].reason
     assert calls == []
 
 
@@ -219,12 +222,11 @@ def test_fire_pending_reconcile_dispatches_and_releases(iso, tmp_path, monkeypat
     # drops the sentinel. The graph lookup is bypassed (no node) so it falls back
     # to {id, cwd=root}; the manifest path is built from root.
     sm.write("x-dep", [], tmp_path, contract_test="true")
-    acquire_claim("reconcile:x-dep", rd._pending_holder("x-dep"), ttl_ms=600_000,
-                  root=rd._claims_root_for("reconcile:x-dep"))
+    acquire_claim("reconcile:x-dep", rd._pending_holder("x-dep"), ttl_ms=600_000)
     monkeypatch.setattr(rd, "_contract_dependents", lambda c: [])  # unused path guard
     calls = _patch_spawn(monkeypatch)
     # graph lookup inside fire_* will read the real graph; force the fallback.
-    monkeypatch.setattr("fno.graph.store.read_graph", lambda *a, **k: [])
+    monkeypatch.setattr("fno.graph.api.wire_rows", lambda *a, **k: [])
 
     res = rd.fire_pending_reconcile("x-dep", tmp_path)
     assert res is not None and res.decision == "dispatched"
@@ -237,3 +239,69 @@ def test_fire_pending_reconcile_noop_without_sentinel(iso, tmp_path, monkeypatch
     calls = _patch_spawn(monkeypatch)
     assert rd.fire_pending_reconcile("x-dep", tmp_path) is None
     assert calls == []
+
+
+# ---- a machine-scoped gate refusal is a skip, not a node fault ----
+
+
+def test_reconcile_capacity_refusal_skips_with_gate_detail(iso, tmp_path, monkeypatch):
+    sm.write("x-dep", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_test="true")
+    _patch_deps(monkeypatch, [_dep(tmp_path)])
+    gate_line = "spawn-gate: refusing: load 348.26 against trigger 120.0"
+
+    def gate_refused(*a, **kw):
+        raise adv.SpawnError("fno agents spawn exited 79", exit_code=79, detail=gate_line)
+
+    monkeypatch.setattr(rd, "_spawn_worker", gate_refused)
+
+    res = rd.dispatch_reconcile_for_blocker(closed_node_id="x-blk", events_path=iso)
+
+    assert len(res) == 1
+    assert res[0].decision == "skipped" and res[0].reason == "capacity-refused"
+    evs = _events(iso)
+    skips = [e for e in evs if e["type"] == "advance_skipped"]
+    assert len(skips) == 1
+    assert skips[0]["data"]["exit_code"] == 79
+    assert gate_line in skips[0]["data"]["detail"]
+    assert not [e for e in evs if e["type"] == "advance_failed"]
+
+
+# ---- decision rows mirror into the tick's store ----
+
+
+@requires_rust
+def test_reconcile_skip_row_mirrors_into_the_tick_store(iso, tmp_path, monkeypatch):
+    """The reconcile row's journal is writer-relative and dies with a pruned
+    tree, while the tick's store survives every run. reconcile_dispatch shares
+    advance's _emit, so the mirror must hold through this path too - a local
+    re-shadow of the writer would reopen the loss class silently."""
+    tick_store = tmp_path / "tick-store" / "events.jsonl"
+    tick_store.parent.mkdir()
+    monkeypatch.setenv("FNO_EVENTS_PATH", str(tick_store))
+    _patch_deps(monkeypatch, [_dep(tmp_path)])
+    calls = _patch_spawn(monkeypatch)
+
+    res = rd.dispatch_reconcile_for_blocker(closed_node_id="x-blk", events_path=iso)
+
+    assert res[0].decision == "skipped"
+    assert calls == []
+    # The dispatch reservation's claim_acquired row rides the same pinned
+    # store; the assertion is on the mirrored decision row, not exclusivity.
+    assert [e["type"] for e in _events(tick_store)].count("advance_skipped") == 1
+
+
+@requires_rust
+def test_reconcile_dispatched_row_mirrors_into_the_tick_store(iso, tmp_path, monkeypatch):
+    tick_store = tmp_path / "tick-store" / "events.jsonl"
+    tick_store.parent.mkdir()
+    monkeypatch.setenv("FNO_EVENTS_PATH", str(tick_store))
+    sm.write("x-dep", [{"stub_id": "a", "file": "f", "kind": "fn"}], tmp_path,
+             contract_test="true")
+    _patch_deps(monkeypatch, [_dep(tmp_path)])
+    _patch_spawn(monkeypatch)
+
+    res = rd.dispatch_reconcile_for_blocker(closed_node_id="x-blk", events_path=iso)
+
+    assert res[0].decision == "dispatched"
+    assert [e["type"] for e in _events(tick_store)].count("advance_dispatched") == 1

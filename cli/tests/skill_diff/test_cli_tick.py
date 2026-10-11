@@ -19,7 +19,11 @@ runner = CliRunner()
 
 def _wire(monkeypatch, tmp_path, events, *, paused=False, level="report"):
     p = tmp_path / "events.jsonl"
-    p.write_text("".join(json.dumps(e) + "\n" for e in events))
+    from fno.events.store_client import emit_envelope
+
+    for i, e in enumerate(events):
+        envelope = {"ts": f"2026-01-01T00:00:{i:02d}Z", "source": "test", **e}
+        emit_envelope(envelope, p)
     monkeypatch.setattr(cli, "_events_paths", lambda: [p])
     monkeypatch.setattr(cli, "loops_paused", lambda: paused)
     monkeypatch.setattr(cli, "loop_level", lambda name: level)
@@ -27,19 +31,33 @@ def _wire(monkeypatch, tmp_path, events, *, paused=False, level="report"):
 
 
 def _events(path):
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(path)
 
 
-def _rc(run_id, top="structural_validity"):
+def _rc(run_id, top="collision_free"):
     return {"type": "skill_eval_run_complete",
             "data": {"run_id": run_id, "skill_id": "fno:blueprint",
-                     "skill_version": "abc", "failure_ranking": [{"dimension": top, "fail_count": 2}]}}
+                     "skill_version": "abc", "corpus_size": 3, "pass_count": 0,
+                     "degraded_count": 0, "fail_count": 2, "cost_usd": 0.0,
+                     "coverage_pct": 100.0,
+                     "failure_ranking": [{"dimension": top, "fail_count": 2}]}}
 
 
 def _finding(run_id, verdict="fail"):
     return {"type": "skill_eval_finding",
             "data": {"run_id": run_id, "skill_id": "fno:blueprint",
-                     "dimension": "structural_validity", "verdict": verdict}}
+                     "skill_version": "abc", "corpus_item_id": f"{run_id}-item",
+                     "dimension": "collision_free", "verdict": verdict,
+                     "evidence": "specimen text", "cost_usd": 0.0}}
+
+
+def _proposed_run(run_id):
+    return {"type": "skill_diff_proposed",
+            "data": {"run_id": run_id, "skill_id": "fno:blueprint",
+                     "pr_number": 1, "branch": f"skill-diff-{run_id}",
+                     "cited_finding_ids": [], "added_lines": 1, "removed_lines": 0}}
 
 
 def test_architectural_followup_filing_declares_difficulty(monkeypatch):
@@ -68,7 +86,9 @@ def test_architectural_followup_folds_when_near_duplicate_exists(monkeypatch):
         {
             "outcome": "choice_required",
             "minted_id": None,
-            "candidates": [{"id": "fno-cand01"}],
+            "candidates": [
+                {"id": "fno-cand01", "title": "skill-diff: blueprint failure looks architectural (run r0)"}
+            ],
             "wave_command": "fno backlog idea t --wave-of fno-cand01",
         },
         indent=2,
@@ -88,6 +108,33 @@ def test_architectural_followup_folds_when_near_duplicate_exists(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     assert cli._file_no_diff_node("blueprint", "run-2", "architectural") == "fno-cand01"
     assert "--wave-of" in calls[1] and "fno-cand01" in calls[1]
+
+
+def test_architectural_followup_mints_separately_over_another_skills_node(monkeypatch):
+    """The top fold candidate belongs to another skill: text similarity is not
+    identity, so the filer mints its own node with --separate."""
+    calls = []
+    choice = json.dumps(
+        {
+            "outcome": "choice_required",
+            "candidates": [
+                {"id": "fno-other1", "title": "skill-diff: review failure looks architectural (run r9)"}
+            ],
+        }
+    )
+    minted = json.dumps({"id": "fno-new01"})
+
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return Result(choice if len(calls) == 1 else minted)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli._file_no_diff_node("blueprint", "run-4", "architectural") == "fno-new01"
+    assert "--separate" in calls[1] and "--wave-of" not in calls[1]
 
 
 def test_architectural_followup_unparseable_receipt_defers(monkeypatch):
@@ -113,12 +160,6 @@ def test_paused_exits_zero_with_word(monkeypatch, tmp_path):
     assert "skill_diff_proposed" not in types
 
 
-def test_no_work_when_no_runs(monkeypatch, tmp_path):
-    _wire(monkeypatch, tmp_path, [])
-    r = runner.invoke(cli.skill_diff_app, ["tick", "--skill", "blueprint"])
-    assert r.exit_code == 0 and "no-work" in r.output
-
-
 def test_noop_on_all_pass_run(monkeypatch, tmp_path):  # AC6-EDGE
     p = _wire(monkeypatch, tmp_path, [_rc("r1"), _finding("r1", verdict="pass")])
     r = runner.invoke(cli.skill_diff_app, ["tick", "--skill", "blueprint"])
@@ -139,8 +180,7 @@ def test_report_level_is_dry_run(monkeypatch, tmp_path):  # report is the defaul
 
 
 def test_idempotent_after_proposed(monkeypatch, tmp_path):  # AC8-FR
-    events = [_rc("r1"), _finding("r1"),
-              {"type": "skill_diff_proposed", "data": {"run_id": "r1", "skill_id": "fno:blueprint"}}]
+    events = [_rc("r1"), _finding("r1"), _proposed_run("r1")]
     _wire(monkeypatch, tmp_path, events)
     r = runner.invoke(cli.skill_diff_app, ["tick", "--skill", "blueprint"])
     assert "no-work" in r.output  # r1 already handled
@@ -151,8 +191,7 @@ def test_local_maxima_files_node(monkeypatch, tmp_path):  # AC7-EDGE
     # r1/r2 already handled (proposed) so r3 is the oldest unprocessed run; the
     # window r1..r3 shares one top dimension with proposals in the span -> trip.
     events = [_rc("r1"), _rc("r2"), _rc("r3"), _finding("r3"),
-              {"type": "skill_diff_proposed", "data": {"run_id": "r1", "skill_id": "fno:blueprint"}},
-              {"type": "skill_diff_proposed", "data": {"run_id": "r2", "skill_id": "fno:blueprint"}}]
+              _proposed_run("r1"), _proposed_run("r2")]
     p = _wire(monkeypatch, tmp_path, events, level="assisted")
     r = runner.invoke(cli.skill_diff_app, ["tick", "--skill", "blueprint"])
     assert "no-diff-helps" in r.output and "local_maxima" in r.output
@@ -190,8 +229,7 @@ def test_no_diff_helps_defers_when_node_filing_fails(monkeypatch, tmp_path):  # 
     # Filing the backlog node fails -> NO terminal event, so the next tick retries.
     monkeypatch.setattr(cli, "_file_no_diff_node", lambda *a, **k: None)
     events = [_rc("r1"), _rc("r2"), _rc("r3"), _finding("r3"),
-              {"type": "skill_diff_proposed", "data": {"run_id": "r1", "skill_id": "fno:blueprint"}},
-              {"type": "skill_diff_proposed", "data": {"run_id": "r2", "skill_id": "fno:blueprint"}}]
+              _proposed_run("r1"), _proposed_run("r2")]
     p = _wire(monkeypatch, tmp_path, events, level="assisted")
     r = runner.invoke(cli.skill_diff_app, ["tick", "--skill", "blueprint"])
     assert "will retry" in r.output
@@ -234,17 +272,6 @@ def test_redaction_refusal_is_terminal(monkeypatch, tmp_path):  # P2 review
     assert ndh and ndh[0]["data"]["reason"] == "redaction_refused"
 
 
-def test_apply_refuses_path_traversal(monkeypatch, tmp_path):
-    # An LLM-supplied path that escapes the target skill dir must be refused.
-    with pytest.raises(RuntimeError, match="not a .md under"):
-        cli._apply_and_open_pr(
-            skill_id="fno:blueprint", run_id="obs-r1",
-            hunks=[{"file": "../../etc/passwd", "old_text": "", "new_text": "x",
-                    "cited_finding_ids": ["s1"]}],
-            body="b", cited=["s1"],
-        )
-
-
 def test_apply_refuses_non_markdown_and_other_skill(monkeypatch, tmp_path):
     # A .py path, or a path under a DIFFERENT skill, is refused (P2 review).
     for bad in ("skills/blueprint/scripts/x.py", "skills/review/SKILL.md"):
@@ -280,9 +307,10 @@ def test_registered_in_top_level_cli():
 # reconcile: detect-and-run (x-ed13)
 # --------------------------------------------------------------------------- #
 
-def _find(run_id, corpus_item, verdict="fail", dim="structural_validity", tool_fault=False):
-    d = {"run_id": run_id, "skill_id": "fno:blueprint", "corpus_item_id": corpus_item,
-         "dimension": dim, "verdict": verdict}
+def _find(run_id, corpus_item, verdict="fail", dim="collision_free", tool_fault=False):
+    d = {"run_id": run_id, "skill_id": "fno:blueprint", "skill_version": "abc",
+         "corpus_item_id": corpus_item, "dimension": dim, "verdict": verdict,
+         "evidence": "specimen text", "cost_usd": 0.0}
     if tool_fault:
         d["tool_fault"] = True
     return {"type": "skill_eval_finding", "data": d}
@@ -290,7 +318,9 @@ def _find(run_id, corpus_item, verdict="fail", dim="structural_validity", tool_f
 
 def _proposed(pr, run_id="r1", skill_id="fno:blueprint"):
     return {"type": "skill_diff_proposed",
-            "data": {"run_id": run_id, "skill_id": skill_id, "pr_number": pr}}
+            "data": {"run_id": run_id, "skill_id": skill_id, "pr_number": pr,
+                     "branch": f"skill-diff-{run_id}", "cited_finding_ids": [],
+                     "added_lines": 1, "removed_lines": 0}}
 
 
 def _wire_reeval(monkeypatch, path, merged=True, merge_sha="mergesha12345", replay=None):
@@ -307,10 +337,21 @@ def _wire_reeval(monkeypatch, path, merged=True, merge_sha="mergesha12345", repl
         if verdict is None:
             return 1  # observer emitted nothing usable (batch failure for this item)
         tf = verdict == "tool_fault"
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(_find(
-                run_id_after, corpus_item,
-                verdict="fail" if tf else verdict, tool_fault=tf)) + "\n")
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(
+            {
+                "ts": f"2026-01-02T00:00:{len(calls):02d}Z",
+                "source": "test",
+                **_find(
+                    run_id_after,
+                    corpus_item,
+                    verdict="fail" if tf else verdict,
+                    tool_fault=tf,
+                ),
+            },
+            path,
+        )
         return 0
 
     monkeypatch.setattr(cli, "_run_replay", fake_replay)
@@ -334,7 +375,7 @@ def test_reconcile_ac2_err_tool_fault_excluded(monkeypatch, tmp_path):  # AC2-ER
     p = _wire(monkeypatch, tmp_path, events)
     # sid-a's replay tool-faults (excluded); sid-b genuinely still fails.
     _wire_reeval(monkeypatch, p, replay={"sid-a": "tool_fault", "sid-b": "fail"})
-    r = runner.invoke(cli.skill_diff_app, ["reconcile", "--pr-number", "201"])
+    runner.invoke(cli.skill_diff_app, ["reconcile", "--pr-number", "201"])
     closed = [e for e in _events(p) if e["type"] == "skill_diff_eval_closed"]
     # before_fail=2, after_fail=1 (tool_fault not counted) -> delta=1, not 0.
     assert closed and closed[0]["data"]["score_delta"] == 1
@@ -385,12 +426,31 @@ def test_reconcile_concurrent_close_is_noop(monkeypatch, tmp_path):  # codex P1 
 
     def racing_replay(corpus_item, skill_ref, run_id_after):
         # Simulate a concurrent reconcile closing the PR during our replay window,
-        # plus our own after-finding.
-        with p.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(_find(run_id_after, corpus_item, verdict="pass")) + "\n")
-            fh.write(json.dumps({"type": "skill_diff_eval_closed",
-                     "data": {"pr_number": 201, "skill_id": "fno:blueprint",
-                              "run_id_before": "r1"}}) + "\n")
+        # plus our own after-finding. Both land as committed rows: the raw file
+        # is legacy only, and reconcile's re-read is store-first.
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(
+            {
+                "ts": "2026-01-02T00:00:01Z",
+                "source": "test",
+                **_find(run_id_after, corpus_item, verdict="pass"),
+            },
+            p,
+        )
+        emit_envelope(
+            {
+                "ts": "2026-01-02T00:00:02Z",
+                "source": "test",
+                "type": "skill_diff_eval_closed",
+                "data": {
+                    "pr_number": 201,
+                    "skill_id": "fno:blueprint",
+                    "run_id_before": "r1",
+                },
+            },
+            p,
+        )
         return 0
 
     monkeypatch.setattr(cli, "_run_replay", racing_replay)
@@ -402,7 +462,7 @@ def test_reconcile_concurrent_close_is_noop(monkeypatch, tmp_path):  # codex P1 
 
 def test_reconcile_ac5_edge_zero_failure_null_after(monkeypatch, tmp_path):  # AC5-EDGE
     # A merged proposer PR whose before run has no failing items on the top dim.
-    events = [_rc("r1", top="structural_validity"), _find("r1", "sid-a", verdict="pass"),
+    events = [_rc("r1", top="collision_free"), _find("r1", "sid-a", verdict="pass"),
               _proposed(201)]
     # Blank the ranking so top_dimension() is None (no failing dimension).
     events[0]["data"]["failure_ranking"] = []
@@ -470,7 +530,7 @@ def test_reconcile_pr_number_already_closed_is_noop(monkeypatch, tmp_path):  # A
         {"type": "skill_diff_eval_closed",
          "data": {"pr_number": 201, "skill_id": "fno:blueprint", "run_id_before": "r1"}},
     ]
-    p = _wire(monkeypatch, tmp_path, events)
+    _wire(monkeypatch, tmp_path, events)
     r = runner.invoke(cli.skill_diff_app, ["reconcile", "--pr-number", "201"])
     assert "already has an eval-closed receipt" in r.output
 

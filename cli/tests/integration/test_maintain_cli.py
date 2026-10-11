@@ -7,6 +7,7 @@ claimed-node skip, empty-graph no-op, idempotency, and the health-history report
 Filter: `python -m pytest tests/ -k maintain_cli`
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -23,7 +24,7 @@ runner = CliRunner()
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     import fno.graph._constants as gc
     import fno.graph.store as gs
 
@@ -44,15 +45,22 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
     import fno.graph.maintain as gm
 
     monkeypatch.setattr(gm, "load_workspaces", lambda: {})
+    from fno.claims import roster
+
+    monkeypatch.setattr(roster, "read_roster", lambda **_kw: roster.RosterReading(True, 0, {}))
     return g
 
 
 def _seed(g: Path, entries: list[dict]) -> None:
-    g.write_text(json.dumps({"entries": entries}, indent=2) + "\n")
+    seed_graph(g, json.dumps({"entries": entries}, indent=2) + "\n")
 
 
 def _read(g: Path) -> list[dict]:
-    return json.loads(g.read_text()).get("entries", [])
+    # The store owns state; graph.json is a frozen export, so read-backs
+    # come from store rows.
+    from fno.graph.store import read_graph_strict
+
+    return read_graph_strict(g)
 
 
 def _node(node_id: str, **over) -> dict:
@@ -162,7 +170,7 @@ def test_maintain_apply_refuses_when_live_claim_state_is_unavailable(
 ):
     import fno.graph.cli as gcli
 
-    entries = [_node("ab-leak03", cwd="/tmp/pytest-of-x/pytest-9/p")]
+    entries = [_node("ab-leak03", cwd="/tmp/pytest-of-x/pytest-9/p", status="idea")]
     _seed(tmp_graph, entries)
 
     def unavailable(*args, **kwargs):
@@ -174,7 +182,11 @@ def test_maintain_apply_refuses_when_live_claim_state_is_unavailable(
 
     assert result.exit_code == 1
     assert "live claim state is unavailable" in result.output
-    assert _read(tmp_graph) == entries
+    # The refused apply must not have mutated the graph: same ids, same cwd.
+    after = _read(tmp_graph)
+    assert [(e["id"], e.get("cwd"), e.get("status")) for e in after] == [
+        (e["id"], e.get("cwd"), e.get("status")) for e in entries
+    ]
 
 
 # --- AC2-HP / AC2-ERR: judgment legs propose, never mutate -----------------
@@ -186,9 +198,12 @@ def test_maintain_cli_judgment_legs_propose_only(tmp_graph):
     _seed(
         tmp_graph,
         [
-            # two near-duplicate ideas (no plan_path -> status idea)
-            _node("ab-dup01", title="Same idea", created_at=old),
-            _node("ab-dup02", title="same  idea!", created_at=old),
+            # two near-duplicate ideas (no plan_path -> status idea).
+            # Slugs are explicit: the import derives slugs from titles, so
+            # rows whose titles normalize identically collide on the slug
+            # index and only one survives.
+            _node("ab-dup01", title="Same idea", created_at=old, slug="same-idea"),
+            _node("ab-dup02", title="same  idea!", created_at=old, slug="same-idea-b"),
         ],
     )
     # Even WITH --apply, dedup + drain must not mutate.
@@ -254,9 +269,9 @@ def test_maintain_stale_receipt_zero_prints_zero_line(tmp_graph):
 def test_maintain_wip_count_includes_live_epic_promoted_children(
     tmp_graph, monkeypatch
 ):
-    import fno.graph.render_html as render_html
+    import fno.graph.maintain as maintain
 
-    monkeypatch.setattr(render_html, "_load_wip_caps", lambda: {"now": 1})
+    monkeypatch.setattr(maintain, "_now_wip_cap", lambda: 1)
     _seed(tmp_graph, [
         _node("ab-epic01", type="epic", status="ready", priority="p1"),
         _node(
@@ -273,9 +288,9 @@ def test_maintain_wip_count_includes_live_epic_promoted_children(
 def test_maintain_now_wip_excludes_in_progress_epic_overlay(
     tmp_graph, monkeypatch
 ):
-    import fno.graph.render_html as render_html
+    import fno.graph.maintain as maintain
 
-    monkeypatch.setattr(render_html, "_load_wip_caps", lambda: {"now": 1})
+    monkeypatch.setattr(maintain, "_now_wip_cap", lambda: 1)
     _seed(tmp_graph, [
         _node("ab-epic02", type="epic", status="ready", priority="p2"),
         _node(
@@ -296,9 +311,9 @@ def test_maintain_now_wip_excludes_in_progress_epic_overlay(
 
 
 def test_maintain_now_wip_excludes_stored_progress(tmp_graph, monkeypatch):
-    import fno.graph.render_html as render_html
+    import fno.graph.maintain as maintain
 
-    monkeypatch.setattr(render_html, "_load_wip_caps", lambda: {"now": 1})
+    monkeypatch.setattr(maintain, "_now_wip_cap", lambda: 1)
     _seed(tmp_graph, [
         _node(
             "ab-claim01",
@@ -348,12 +363,67 @@ def test_maintain_cli_appends_health_history(tmp_graph):
     result = _invoke(["--apply"])
     assert result.exit_code == 0, result.output
 
-    hist = Path.home() / ".fno" / "health-history.jsonl"
+    hist = Path.home() / ".fno" / "history" / "health-history.jsonl"
     assert hist.exists()
     lines = [json.loads(ln) for ln in hist.read_text().splitlines() if ln.strip()]
     maintain_records = [r for r in lines if r.get("scope") == "maintain"]
     assert maintain_records, "expected a maintain record in health-history"
     assert maintain_records[-1]["report"]["applied"] is True
+    # AC5: a run that finishes inside its budget records itself as complete.
+    assert maintain_records[-1]["report"]["complete"] is True
+    assert isinstance(maintain_records[-1]["report"]["duration_s"], (int, float))
+    assert maintain_records[-1]["report"]["incomplete_leg"] is None
+
+
+def test_maintain_json_payload_carries_complete_and_duration(tmp_graph):
+    result = _invoke(["-J"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["complete"] is True
+    assert isinstance(payload["duration_s"], (int, float))
+
+
+def test_maintain_budget_exceeded_exits_4_names_leg_and_appends_partial_row(
+    tmp_graph, monkeypatch
+):
+    """AC3/AC4: a pass that runs out of its budget exits 4, names the leg it
+    stopped in on stderr, keeps the finished legs on stdout (the legs that
+    never ran are omitted, not shown as zero), and lands a complete:false
+    health-history row carrying the leg and the duration."""
+    import fno.graph.maintain as gm
+
+    _seed(tmp_graph, [_node("ab-keep03", cwd="/home/u/code/fno", project="fno")])
+
+    class _DyingBudget:
+        """Dies at the dedup boundary: five detect legs have completed."""
+
+        def __init__(self, seconds):
+            pass
+
+        def enter(self, leg):
+            if leg == "dedup":
+                raise gm.BudgetExceeded("dedup", 301.4)
+
+        def remaining(self):
+            return 0.0
+
+    monkeypatch.setattr(gm, "Budget", _DyingBudget)
+    result = _invoke([])
+    assert result.exit_code == 4, result.output
+    assert "budget exceeded in leg 'dedup'" in result.stderr
+    assert "5/14 legs completed" in result.stderr
+    assert "results partial" in result.stderr
+    # Finished legs stay on stdout; dedup (never run) is absent, not zero.
+    assert "  rescope: 0" in result.stdout
+    assert "  harness-shape: 0" in result.stdout
+    assert "dedup:" not in result.stdout
+
+    hist = Path.home() / ".fno" / "history" / "health-history.jsonl"
+    lines = [json.loads(ln) for ln in hist.read_text().splitlines() if ln.strip()]
+    row = [r for r in lines if r.get("scope") == "maintain"][-1]["report"]
+    assert row["complete"] is False
+    assert row["incomplete_leg"] == "dedup"
+    assert isinstance(row["duration_s"], (int, float))
 
 
 # --- auto-defer apply-leg (#34, task 2.1) ----------------------------------
@@ -368,25 +438,45 @@ def _events_file() -> Path:
 
 
 def _seed_events(records: list[dict]) -> None:
+    from fno.events.store_client import emit_envelope
+
     p = _events_file()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("".join(json.dumps(r) + "\n" for r in records))
+    for i, r in enumerate(records):
+        emit_envelope({"ts": f"2026-01-01T00:00:{i:02d}Z", "source": "loop", **r}, p)
 
 
 def _ev_fail(nid: str) -> dict:
-    return {"type": "node_failed", "data": {"unit_id": nid}}
+    return {
+        "type": "node_failed",
+        "data": {"session_id": "s", "unit_id": nid, "iteration": 1, "exit_code": 1},
+    }
 
 
 def _ev_parked(nid: str) -> dict:
-    return {"type": "node_closed", "data": {"unit_id": nid, "close": "parked"}}
+    return {
+        "type": "node_closed",
+        "data": {
+            "session_id": "s",
+            "unit_id": nid,
+            "reason": "auto-failure:",
+            "close": "parked",
+            "detail": "specimen",
+            "iterations_used": 1,
+        },
+    }
 
 
 def _append_events(records: list[dict]) -> None:
+    from fno.events.store_client import emit_envelope
+
     p = _events_file()
     p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("a", encoding="utf-8") as fh:
-        for r in records:
-            fh.write(json.dumps(r) + "\n")
+    n = 0
+    for r in records:
+        n += 1
+        emit_envelope({"ts": f"2026-01-0{min(n // 3600 + 1, 9)}T{n // 60 % 60:02d}:{n % 60:02d}:00Z",
+                       "source": "loop", **r}, p)
 
 
 @pytest.fixture(autouse=True)
@@ -401,10 +491,22 @@ def _clean_events():
         p.unlink()
 
 
+@pytest.fixture(autouse=True)
+def _no_board_render(monkeypatch):
+    # The post-publish board render shells the installed front binary; these
+    # tests are about the maintain legs, and a stderr warning from a lagging
+    # install would land in CliRunner's mixed output and break the --json
+    # parses.
+    import fno.graph.roadmap_public as rp
+
+    monkeypatch.setattr(rp, "render_local_targets", lambda: 0)
+
+
 def _ready(node_id: str, **over) -> dict:
-    # A node with a plan_path and no completed/deferred state derives status:
-    # ready (the auto-defer candidate filter only considers ready nodes).
-    return _node(node_id, plan_path=f"plans/{node_id}.md", **over)
+    # Ready is stored state now (the plan-presence derivation died with the
+    # json leg), so the seed carries it explicitly. The auto-defer candidate
+    # filter only considers ready nodes.
+    return _node(node_id, plan_path=f"plans/{node_id}.md", status="ready", **over)
 
 
 def test_maintain_cli_auto_defer_at_threshold(tmp_graph):
@@ -504,6 +606,7 @@ def _invoke_health(args: list[str]):
     )
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_health_stranded_lists_dependents_of_auto_deferred_blocker(tmp_graph):
     # AC3-UI: each auto-failure-deferred node lists its dependents.
     _seed(
@@ -534,6 +637,7 @@ def test_health_stranded_lists_dependents_of_auto_deferred_blocker(tmp_graph):
     assert blk["status"] == "deferred"
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_health_stranded_ignores_manual_defer(tmp_graph):
     # A hand-deferred blocker (no auto-failure sentinel) is NOT strand-reported.
     _seed(
@@ -553,6 +657,7 @@ def test_health_stranded_ignores_manual_defer(tmp_graph):
     assert json.loads(result.output)["stranded_by_failed_blocker"] == []
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_health_stranded_section_always_runs(tmp_graph):
     # The section always runs (read-only): an absent entry means "none
     # stranded", never "not checked" - the key is present with an empty list.
@@ -567,6 +672,7 @@ def test_health_stranded_section_always_runs(tmp_graph):
 # --- end-to-end recovery (#34, task 3.1) -----------------------------------
 
 
+@pytest.mark.usefixtures("native_backlog_door")
 def test_e2e_undefer_gives_fresh_slate(tmp_graph):
     # AC5-FR: auto-defer, undefer, then a SINGLE fresh failure -> NOT
     # re-deferred. The undefer reset the streak; it needs N fresh failures.
@@ -595,16 +701,25 @@ def test_e2e_blocker_done_auto_readies_dependents(tmp_graph):
     _seed(
         tmp_graph,
         [
-            _node("ab-blkE2E"),  # blocker (no plan_path -> done skips the stamp)
+            # blocker carries an artifact link so the close-evidence rule
+            # passes; no plan_path still keeps the stamp skip.
+            _node("ab-blkE2E", artifact_url="https://example.test/artifact"),
             _ready("ab-depE2E", blocked_by=["ab-blkE2E"]),
         ],
     )
-    r = runner.invoke(
-        app,
-        ["backlog", "done", "ab-blkE2E", "--force", "--reason", "e2e recovery test"],
-        catch_exceptions=False,
-    )
-    assert r.exit_code == 0, r.output
+    # The close is native now; the wheel spelling names the door. This test's
+    # subject is the blocked_by resolution, so arrange the done state through
+    # the store and let the same mutation pipeline recompute the dependent.
+    from fno.graph.store import commit_rows_via_store
+
+    def stamp_done(rows):
+        for e in rows:
+            if e["id"] == "ab-blkE2E":
+                e["status"] = "done"
+                e["completed_at"] = "2026-04-01T00:00:00+00:00"
+        return rows
+
+    commit_rows_via_store(tmp_graph, stamp_done)
     by_id = {e["id"]: e for e in _read(tmp_graph)}
     assert by_id["ab-blkE2E"]["status"] == "done"
     assert by_id["ab-depE2E"]["status"] == "ready"  # auto-unblocked
@@ -643,7 +758,16 @@ def validity_env(tmp_path, monkeypatch):
 
 def test_validity_ac1_hp_bounded_deck(tmp_graph, validity_env):
     # AC1-HP: >25 ideas older than 60d -> reviews the 25 oldest, writes a deck.
-    _seed(tmp_graph, [_old_idea(f"ab-i{i:03d}", 100 + i) for i in range(30)])
+    # Split candidates across cap scopes so this tests selection, not intake.
+    entries = [
+        _node("ab-epic-a", type="epic", status="ready"),
+        _node("ab-epic-b", type="epic", status="ready"),
+        *[
+            _old_idea(f"ab-i{i:03d}", 100 + i, parent="ab-epic-a" if i < 15 else "ab-epic-b")
+            for i in range(30)
+        ],
+    ]
+    _seed(tmp_graph, entries)
     r = _invoke([])
     assert r.exit_code == 0, r.output
     assert "validity: reviewed 25 ideas" in r.output
@@ -808,3 +932,79 @@ def test_pr_url_backfill_keys_off_each_nodes_own_cwd(tmp_graph, stub_slugs):
         "ab-url0001": "https://github.com/o/a/pull/7",
         "ab-url0002": "https://github.com/o/b/pull/7",
     }
+
+
+# --- leg 9: abandoned do rows (x-f714) --------------------------------------
+
+_SID_GONE = "9f06a492-1111-4222-8333-444455556666"
+_SID_LIVE = "aa5b6c93-1111-4222-8333-444455556666"
+
+
+def _fixture_transcript(tmp_path, monkeypatch, sid, age_hours):
+    """A real claude transcript whose last event is age_hours old and whose
+    tail carries a <promise> (not an engaged signal)."""
+    from datetime import datetime, timedelta, timezone
+
+    stamp = (
+        datetime.now(timezone.utc) - timedelta(hours=age_hours)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    root = tmp_path / "projects" / "-some-worktree"
+    root.mkdir(parents=True, exist_ok=True)
+    record = {
+        "type": "assistant",
+        "timestamp": stamp,
+        "message": {"role": "assistant",
+                    "content": [{"type": "text", "text": "<promise>done</promise>"}]},
+    }
+    (root / f"{sid}.jsonl").write_text(json.dumps(record) + "\n")
+    import fno.provenance.resolver as resolver
+
+    monkeypatch.setattr(resolver, "_DEFAULT_PROJECTS_ROOT", tmp_path / "projects")
+
+
+@pytest.fixture
+def no_roster_workers(monkeypatch):
+    """Hermetic roster: no open-phase row names a live worker."""
+    monkeypatch.setattr(
+        "fno.graph.statuses.live_worked_node_ids", lambda **k: {}
+    )
+
+
+def test_maintain_abandoned_leg_settles_gone_holds_active(
+    tmp_graph, tmp_path, no_roster_workers, monkeypatch
+):
+    """AC1-HP + AC3-HP: idle rows past the bound settle; fresh rows hold."""
+    now = datetime.now(timezone.utc)
+    gone_at = (now - timedelta(hours=72)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    live_at = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _seed(tmp_graph, [
+        _node("ab-gone01", cwd="/repo/x", sessions=[
+            {"phase": "execute", "harness": "claude", "session_id": _SID_GONE,
+             "started_at": gone_at},
+        ]),
+        _node("ab-held01", cwd="/repo/x", sessions=[
+            {"phase": "execute", "harness": "claude", "session_id": _SID_LIVE,
+             "started_at": live_at},
+        ]),
+    ])
+
+    result = _invoke(["--apply", "--no-validity"])
+
+    assert result.exit_code == 0, result.output
+    assert "settled do row ab-gone01" in result.output
+    assert "row_closed true" in result.output
+    assert "status_after idea" in result.output
+    assert "ab-held01" in result.output
+    assert "row idle 1h, inside the 24h bound" in result.output
+
+    by_id = {n["id"]: n for n in _read(tmp_graph)}
+    gone_rows = by_id["ab-gone01"]["sessions"]
+    assert len(gone_rows) == 1, "the settled do row is filled and kept"
+    assert gone_rows[0]["ended_at"]
+    assert by_id["ab-gone01"]["status"] == "idea"
+    live_rows = by_id["ab-held01"]["sessions"]
+    assert len(live_rows) == 1
+    assert live_rows[0].get("ended_at") is None
+    assert live_rows[0]["session_id"] == _SID_LIVE
+    # Store rows normalize an open session to ended_at=None.
+    assert live_rows[0].get("ended_at") is None

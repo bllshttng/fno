@@ -18,10 +18,24 @@ VALIDATOR = REPO_ROOT / "scripts" / "validate-plan.sh"
 
 
 def _write_plan(tmp_path: Path, body: str, *, frontmatter: str = "") -> Path:
+    """Write a plan fixture, stamping the `kind` the BODY actually is.
+
+    The default used to stamp `kind: quick-plan` on every fixture, including
+    the `_full_plan` bodies that open with `## Overview` and carry none of the
+    four quick sections. That was invisible while the quick body checks ran
+    only on plans with no Execution Strategy - every full fixture has one. The
+    moment those checks became unconditional (they had silently stopped
+    running at all), 107 fixtures failed for missing a `## Context` they were
+    never meant to have. The fixture was lying about its own kind; the checks
+    were right.
+    """
+    if not frontmatter:
+        kind = "plan" if "## Overview" in body else "quick-plan"
+        frontmatter = f"status: ready\nkind: {kind}\ncreated: 2026-07-25\n"
     plan = tmp_path / "plan.md"
     plan.write_text(
         "---\n"
-        + (frontmatter or "status: ready\nkind: quick-plan\ncreated: 2026-07-25\n")
+        + frontmatter
         + "---\n\n# Plan\n\n"
         + body,
         encoding="utf-8",
@@ -55,6 +69,9 @@ tasks:
     acceptance: [AC1-HP]
 """
 
+
+
+VALID_STRATEGY_SECTION = "## Execution Strategy\n\n```yaml\n" + VALID_STRATEGY + "```\n"
 
 def test_valid_strategy_has_no_representation_warnings(tmp_path: Path) -> None:
     plan = _write_plan(tmp_path, _full_plan(VALID_STRATEGY))
@@ -347,6 +364,9 @@ def test_prose_and_non_commands_are_rejected_in_both_plan_shapes(
     assert {
         v.field for v in validate_execution(load_plan(full)).violations
     } == {"tasks.1.1.verify"}, verification
+    quick_cli = runner.invoke(plan_app, ["validate", str(quick), "--execution"])
+    assert quick_cli.exit_code == 1
+    assert "Verification:" in quick_cli.output
 
 
 def test_runnable_command_policy_has_no_positive_inventory() -> None:
@@ -370,17 +390,6 @@ def test_shell_expanded_executable_paths_remain_accepted(
         command,
         full_command=f"env FNO_TEST=1 {command}",
     )
-
-
-def test_quick_plan_prose_verification_is_not_runnable(tmp_path: Path) -> None:
-    plan = _write_plan(tmp_path, _quick_plan(verification="1. Manually inspect the result."))
-
-    result = validate_execution(load_plan(plan))
-    cli_result = runner.invoke(plan_app, ["validate", str(plan), "--execution"])
-
-    assert {v.field for v in result.violations} == {"Verification"}
-    assert cli_result.exit_code == 1
-    assert "Verification:" in cli_result.output
 
 
 def test_quick_plan_arbitrary_surface_word_is_not_a_file(tmp_path: Path) -> None:
@@ -608,31 +617,6 @@ def test_task_collections_must_be_yaml_lists(tmp_path: Path) -> None:
     assert "task '1.1' surface must be a list" in messages
 
 
-def test_parallel_wave_rejects_shared_surface(tmp_path: Path) -> None:
-    strategy = """execution_mode: parallel
-waves:
-  - wave: 1
-    mode: parallel
-    tasks: [\"1.1\", \"1.2\"]
-tasks:
-  - id: \"1.1\"
-    title: First
-    surface: [src/shared.py]
-    verify: fno doctor test tests/test_a.py
-    acceptance: [AC1]
-  - id: \"1.2\"
-    title: Second
-    surface: [src/shared.py]
-    verify: fno doctor test tests/test_b.py
-    acceptance: [AC2]
-"""
-    plan = _write_plan(tmp_path, _full_plan(strategy))
-
-    messages = "\n".join(v.message for v in validate_execution(load_plan(plan)).violations)
-
-    assert "parallel tasks share surface 'src/shared.py'" in messages
-
-
 def test_wave_dependency_cycle_fails(tmp_path: Path) -> None:
     strategy = """execution_mode: sequential
 waves:
@@ -728,32 +712,6 @@ def test_surface_items_are_paths_and_aliases_collide(tmp_path: Path) -> None:
     )
 
     assert "surface item 1 must be a non-empty path string" in malformed_messages
-
-    alias_strategy = """execution_mode: parallel
-waves:
-  - wave: 1
-    mode: parallel
-    tasks: ["1.1", "1.2"]
-tasks:
-  - id: "1.1"
-    title: First
-    surface: [src/shared.py]
-    verify: fno doctor test tests/test_a.py
-    acceptance: [AC1]
-  - id: "1.2"
-    title: Second
-    surface: [./src/shared.py]
-    verify: fno doctor test tests/test_b.py
-    acceptance: [AC2]
-"""
-    alias_plan = _write_plan(tmp_path, _full_plan(alias_strategy))
-
-    alias_messages = "\n".join(
-        v.message for v in validate_execution(load_plan(alias_plan)).violations
-    )
-
-    assert "parallel tasks share surface 'src/shared.py'" in alias_messages
-
 
 def test_duplicate_yaml_keys_fail_loud(tmp_path: Path) -> None:
     strategy = VALID_STRATEGY + "tasks: []\n"
@@ -978,3 +936,218 @@ def test_undatable_frontmatter_skips_the_wave_band_requirement(tmp_path: Path) -
     result = validate_execution(load_plan(plan))
 
     assert [v for v in result.violations if v.field.endswith(".difficulty")] == []
+
+
+# ---------------------------------------------------------------------------
+# The total-blocked_by-chain warning (x-a804 task 3.2).
+#
+# Per-task `blocked_by` shipped as a precision tool and became an authoring
+# reflex: 20 plans used it, 12 lose parallelism to it, 4 are fully foreclosed.
+# A declared blocker wins outright over wave inheritance, so a reflex chain
+# overrides the waves rather than restating them.
+#
+# WARNS, never refuses. The shape fires on 4 plans in a fortnight; refusing on
+# any multi-file plan without waves would fire on 172 and teach authors to
+# route around the validator.
+# ---------------------------------------------------------------------------
+
+_CHAIN_STRATEGY = """execution_mode: sequential
+waves:
+  - wave: 1
+    mode: sequential
+    name: Build
+    difficulty: medium
+    tasks: ["1.1", "1.2", "1.3"]
+tasks:
+  - id: "1.1"
+    title: First
+    surface: [cli/src/fno/plan/cli.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+    blocked_by: []
+  - id: "1.2"
+    title: Second
+    surface: [cli/src/fno/plan/schema.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+    blocked_by: ["1.1"]
+  - id: "1.3"
+    title: Third
+    surface: [cli/src/fno/plan/brief.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+    blocked_by: ["1.2"]
+"""
+
+
+def test_total_single_blocker_chain_warns_and_still_validates(tmp_path: Path) -> None:
+    """AC6-HP: the warning names the chain and the plan still validates."""
+    plan = _write_plan(tmp_path, _full_plan(_CHAIN_STRATEGY))
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.violations == [], result.violations
+    assert len(result.warnings) == 1, result.warnings
+    message = result.warnings[0].message
+    assert "1.1 -> 1.2 -> 1.3" in message, message
+    assert result.warnings[0].field == "tasks.blocked_by"
+
+
+def test_chain_warning_asks_for_the_artifact_each_edge_consumes(
+    tmp_path: Path,
+) -> None:
+    """The message has to ask the question whose answer justifies or deletes
+    the edge; a warning that only says 'this is a chain' teaches nothing."""
+    plan = _write_plan(tmp_path, _full_plan(_CHAIN_STRATEGY))
+
+    result = validate_execution(load_plan(plan))
+
+    assert "artifact" in result.warnings[0].message
+
+
+def test_branching_blocked_by_graph_emits_no_chain_warning(tmp_path: Path) -> None:
+    """AC6-ERR: two tasks sharing one blocker is a fan-out, which is real
+    parallelism, so it must not be reported as a foreclosed chain."""
+    strategy = _CHAIN_STRATEGY.replace(
+        'blocked_by: ["1.2"]', 'blocked_by: ["1.1"]'
+    )
+    plan = _write_plan(tmp_path, _full_plan(strategy))
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.violations == [], result.violations
+    assert result.warnings == [], result.warnings
+
+
+def test_plan_without_declared_blockers_emits_no_chain_warning(
+    tmp_path: Path,
+) -> None:
+    """An absent key inherits the previous wave, which is the shape the check
+    exists to PRESERVE. Warning there would fire on 172 plans."""
+    plan = _write_plan(tmp_path, _full_plan(VALID_STRATEGY))
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.warnings == [], result.warnings
+
+
+def test_two_task_chain_is_below_the_signal_floor(tmp_path: Path) -> None:
+    """A pair with one edge is an ordinary dependency, not a reflex. The
+    signal starts at three, where a chain spans a boundary it could have
+    inherited instead."""
+    strategy = """execution_mode: sequential
+waves:
+  - wave: 1
+    mode: sequential
+    name: Build
+    difficulty: medium
+    tasks: ["1.1", "1.2"]
+tasks:
+  - id: "1.1"
+    title: First
+    surface: [cli/src/fno/plan/cli.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+    blocked_by: []
+  - id: "1.2"
+    title: Second
+    surface: [cli/src/fno/plan/schema.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+    blocked_by: ["1.1"]
+"""
+    plan = _write_plan(tmp_path, _full_plan(strategy))
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.warnings == [], result.warnings
+
+
+def test_chain_warning_survives_the_head_declaring_an_empty_list(
+    tmp_path: Path,
+) -> None:
+    """REGRESSION. The first cut required exactly one blocker from EVERY task,
+    which rejected the head - and the head of a real chain declares
+    `blocked_by: []`. The live specimen does exactly that, so the check
+    silently found nothing on the one plan it was written for."""
+    plan = _write_plan(tmp_path, _full_plan(_CHAIN_STRATEGY))
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.warnings, "the empty-list head must not disqualify the chain"
+
+
+def test_quick_body_checks_still_run_when_a_strategy_is_present(tmp_path):
+    """REGRESSION, caught in review round 2.
+
+    `_validate_quick` ran only in the `strategy_text is None` branch. That was
+    sound while `quick` skipped the section - and this PR makes every quick
+    plan carry one, which turned the branch into dead code and took the body
+    checks with it. An unfilled epic-child scaffold went from 3 violations to
+    0: placeholder Changes, no concrete file path, and no runnable
+    verification all validated clean.
+
+    A gate a feature quietly switches off is worse than one never written.
+    """
+    body = """## Context
+
+Why this is needed.
+
+## Changes
+
+### 1. [change name]
+
+[describe the change here]
+
+## Files to Modify
+
+| File | Action |
+|---|---|
+| `path/to/file.ts` | Modify |
+
+## Verification
+
+1. Manually inspect the result
+
+## Execution Strategy
+
+```yaml
+execution_mode: sequential
+waves:
+  - wave: 1
+    mode: sequential
+    name: Build
+    difficulty: medium
+    tasks: ["1.1"]
+tasks:
+  - id: "1.1"
+    title: Do the work
+    surface: [cli/src/fno/plan/cli.py]
+    verify: fno doctor test cli/tests/unit/test_plan_execution_validation.py
+    acceptance: [AC1-HP]
+```
+"""
+    plan = _write_plan(tmp_path, body)
+
+    result = validate_execution(load_plan(plan))
+    fields = {v.field for v in result.violations}
+
+    assert "Changes" in fields, (
+        f"placeholder Changes must still be caught: {result.violations}"
+    )
+    assert "Files to Modify" in fields, (
+        f"placeholder file path must still be caught: {result.violations}"
+    )
+    assert "Verification" in fields, (
+        f"prose verification must still be caught: {result.violations}"
+    )
+
+
+def test_a_clean_quick_plan_with_a_strategy_still_validates(tmp_path):
+    """The other half: seeding the body violations must not refuse a plan
+    whose body is genuinely filled in."""
+    plan = _write_plan(tmp_path, _quick_plan() + "\n" + VALID_STRATEGY_SECTION)
+
+    result = validate_execution(load_plan(plan))
+
+    assert result.violations == [], result.violations

@@ -19,17 +19,22 @@
 //!   lines are already compact, so each matching line is emitted verbatim to
 //!   preserve source key order without a crate-wide serde_json `preserve_order`.
 
-use crate::claude_ask::{
-    family1_truth_state, family1_truth_state_for_resume, liveness_probe, locate_session, ClaudeHome,
-};
+use crate::adopt_identity::{AdoptError, AdoptSource};
+pub(crate) use crate::agents_event::append_agents_event;
+use crate::claude_ask::{liveness_probe, ClaudeHome};
+use crate::claude_resume::claude_resume_argv;
+use crate::lifecycle_child::heal_token;
 #[cfg(test)]
 use crate::manifest_lookup::parse_manifest_identity;
-use crate::manifest_lookup::{find_manifest_for_session, git_worktree_paths, ManifestIdentity};
+use crate::manifest_lookup::ManifestIdentity;
+use crate::pane_relaunch::{build_resume_argv, mesh_identity_assignments};
 use crate::paths::AgentsHome;
+use crate::resume_route::ResumeRoute;
 use crate::state::REGISTRY_SCHEMA_VERSION;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -78,7 +83,7 @@ impl serde_json::ser::Formatter for PythonDefaultFormatter {
 /// Serialize `value` with Python's default `json.dumps` spacing. Field order is
 /// the struct's declaration order (serde serializes struct fields in order), so
 /// callers control key order by field order rather than relying on map ordering.
-fn to_python_json<T: Serialize>(value: &T) -> String {
+pub(crate) fn to_python_json<T: Serialize>(value: &T) -> String {
     let mut buf = Vec::new();
     let mut ser = serde_json::Serializer::with_formatter(&mut buf, PythonDefaultFormatter);
     value
@@ -90,7 +95,7 @@ fn to_python_json<T: Serialize>(value: &T) -> String {
 /// Normalize `--key=value` tokens into `["--key", "value"]`, matching Click/Typer
 /// (which accept both the equals and space-separated forms). Only long options
 /// are split; positionals and `-n5`-style attached short options pass through.
-fn expand_eq(rest: &[String]) -> Vec<String> {
+pub(crate) fn expand_eq(rest: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(rest.len());
     for a in rest {
         if let Some(eq) = a.find('=') {
@@ -137,12 +142,12 @@ const AUTHORITY_MODES: &[&str] = &["interactive", "step", "paranoid"];
 /// One active drive-authority session. Field order is the JSON object key order
 /// Python emits (`active_drive_sessions` builds `{short_id, session_id, mode}`).
 #[derive(Serialize)]
-struct DriveAuthSession {
-    short_id: String,
+pub(crate) struct DriveAuthSession {
+    pub(crate) short_id: String,
     /// `drive_session_id` may be absent/null in `state.json`; preserved as-is so
     /// the JSON shows `null` (matching Python's `None`).
-    session_id: Value,
-    mode: String,
+    pub(crate) session_id: Value,
+    pub(crate) mode: String,
 }
 
 #[derive(Serialize)]
@@ -179,7 +184,7 @@ fn py_str(v: &Value) -> String {
 /// `AgentState`) so an edge-case `state.json` -- e.g. one with `drive_active`
 /// but no `short_id` -- is handled exactly as Python's `data.get(...)` does,
 /// rather than diverging on strict deserialization.
-fn active_drive_sessions(agents_root: &Path) -> Vec<DriveAuthSession> {
+pub(crate) fn active_drive_sessions(agents_root: &Path) -> Vec<DriveAuthSession> {
     let mut sessions = Vec::new();
     let read = match fs::read_dir(agents_root) {
         Ok(rd) => rd,
@@ -237,7 +242,7 @@ pub fn run_drive_authority(args: &[String], home: &AgentsHome) -> i32 {
     let mut json_out = false;
     for a in args {
         match a.as_str() {
-            "--json" | "-J" => json_out = true, // ab-3ff64151: global-register short
+            "--json" | "-J" => json_out = true, // global-register short
             other if other.starts_with("--") => {
                 eprintln!("fno-agents: unknown drive-authority flag: {other}");
                 return 2;
@@ -285,7 +290,7 @@ const ORPHAN_MARKER: &str = "                                          no _done 
 /// `paths.state_dir() / "events.jsonl"`. The Rust agents home is
 /// `state_dir/agents`, so the events log is the agents-home parent's
 /// `events.jsonl`.
-fn trace_events_path(home: &AgentsHome) -> PathBuf {
+pub(crate) fn trace_events_path(home: &AgentsHome) -> PathBuf {
     home.root()
         .parent()
         .map(|p| p.join("events.jsonl"))
@@ -295,7 +300,7 @@ fn trace_events_path(home: &AgentsHome) -> PathBuf {
 /// Parse an ISO8601 timestamp into a UTC instant, mirroring Python's
 /// `_parse_iso8601`: a trailing `Z` becomes `+00:00`, naive timestamps are
 /// assumed UTC. Returns `None` on unparseable input (the caller degrades open).
-fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+pub(crate) fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
     let raw = s.trim();
     let raw = match raw.strip_suffix('Z') {
@@ -352,11 +357,11 @@ fn read_jsonl(path: &Path) -> (Vec<(String, Value)>, usize) {
 
 /// A well-shaped registry identity token (provider or harness): non-empty,
 /// all-lowercase, whitespace-free. The relaxed load-gate corruption guard
-/// (x-8dfc) mirroring Python `registry._is_identity_token` -- it replaced the
+/// mirroring Python `registry._is_identity_token` -- it replaced the
 /// `KNOWN_PROVIDERS` enumeration so one alien harness never bricks the shared
-/// read (it degrades to durable routing, x-ec59 posture); dispatch capability
+/// read (it degrades to durable routing, posture); dispatch capability
 /// is gated separately at the spawn/ask seam (`bin/client.rs`).
-fn is_identity_token(v: Option<&str>) -> bool {
+pub(crate) fn is_identity_token(v: Option<&str>) -> bool {
     matches!(
         v,
         Some(s) if !s.is_empty()
@@ -387,24 +392,6 @@ const KNOWN_STATUSES: &[&str] = &[
     "exited",
     "permanent_dead",
 ];
-/// Registry schema versions this fno reads (current write version plus the older
-/// shapes it back-fills in memory). Each bump is forward-compat: a stale reader
-/// pinned to a lower set rejects a newer store instead of silently dropping a
-/// field. v10 (x-880e) removes the on-disk `provider` + per-provider session-id
-/// trio; a legacy v1..=v9 row still carries `provider`, read leniently below.
-const ACCEPTED_SCHEMA_VERSIONS: &[u64] = &[
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-];
-
-// The accepted set's upper bound MUST equal the version this binary writes, or
-// a freshly-written store would be rejected by its own reader. Compiler-enforced
-// so a future REGISTRY_SCHEMA_VERSION bump that forgets to widen the array fails
-// the build instead of drifting silently (type-design review, ab-a171ceb2).
-const _: () = assert!(
-    ACCEPTED_SCHEMA_VERSIONS[ACCEPTED_SCHEMA_VERSIONS.len() - 1] == REGISTRY_SCHEMA_VERSION as u64,
-    "ACCEPTED_SCHEMA_VERSIONS upper bound must equal REGISTRY_SCHEMA_VERSION"
-);
-
 /// Load the registry rows as raw JSON values, reproducing Python
 /// `registry.load_registry`:
 ///
@@ -420,45 +407,37 @@ const _: () = assert!(
 /// Raw `Value` access (not the strict typed `RegistryEntry`) mirrors Python's
 /// duck-typed `getattr`/`row.get` so extra/missing optional fields behave the
 /// same across the two implementations.
-fn load_registry_entries(registry_path: &Path) -> Result<Vec<Value>, String> {
-    let bytes = match fs::read(registry_path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("registry read failed: {e}")),
-    };
-    // Strict UTF-8: Python reads the registry with encoding="utf-8" (no
-    // replacement), so invalid bytes are a registry error, not silently mangled
-    // content the verbs then operate on (codex P2). (The trace events.jsonl read
-    // stays lossy on purpose -- Python uses errors="replace" there.)
-    let text =
-        std::str::from_utf8(&bytes).map_err(|e| format!("registry is not valid UTF-8: {e}"))?;
-    let raw: Value =
-        serde_json::from_str(text).map_err(|e| format!("registry is malformed JSON: {e}"))?;
+pub(crate) fn load_registry_entries(registry_path: &Path) -> Result<Vec<Value>, String> {
+    let raw = crate::registry_store::read(registry_path).map_err(|e| e.to_string())?;
     let obj = raw
         .as_object()
         .ok_or_else(|| "registry top-level is not a JSON object".to_string())?;
-    // READ FORWARD, matching Python's load_registry. This store is global to
-    // every agent on the machine, so refusing a newer writer bricked every
-    // deployed reader at once rather than only the one that was behind. Rows are
-    // read as raw `Value` here and unknown keys are already ignored, so a newer
-    // store costs this path nothing but the fields it cannot see.
-    //
-    // The announcement is required, not courtesy: silently reading a partial row
-    // makes it indistinguishable from a complete one, and a routing decision
-    // taken on one leaves no trace. Fixing only Python would have left this
-    // path, the daemon, and mux still failing closed on the same file.
+    // Read newer registries forward; announce whether this writer may safely
+    // write back, since this file governs every agent on the machine.
     let on_disk_version = obj.get("schema_version").and_then(Value::as_u64);
+    // Older schema shapes remain readable; newer versions are floor-gated.
     let mut read_forward = false;
     match on_disk_version {
-        Some(v) if ACCEPTED_SCHEMA_VERSIONS.contains(&v) => {}
+        Some(v) if (1..=REGISTRY_SCHEMA_VERSION as u64).contains(&v) => {}
         Some(v) if v > REGISTRY_SCHEMA_VERSION as u64 => {
             read_forward = true;
+            let writer = crate::state::Registry {
+                schema_version: u32::try_from(v).unwrap_or(u32::MAX),
+                min_writer_version: obj
+                    .get("min_writer_version")
+                    .and_then(Value::as_u64)
+                    .and_then(|n| n.try_into().ok()),
+                writer_rev: obj
+                    .get("writer_rev")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                ..Default::default()
+            };
+            let min_writer = crate::state::effective_min_writer(&writer);
+            let writer_rev = writer.writer_rev.as_deref().unwrap_or("unstamped");
             eprintln!(
-                "fno agents: registry at {} is schema_version={v}, ahead of the \
-                 schema_version={REGISTRY_SCHEMA_VERSION} this fno understands. \
-                 Reading the fields it knows and ignoring the rest; writes are \
-                 refused until this fno is upgraded. Rows may be incomplete.",
-                registry_path.display()
+                "{}",
+                registry_read_announcement(registry_path, v, min_writer, writer_rev)
             );
         }
         other => {
@@ -503,6 +482,23 @@ fn load_registry_entries(registry_path: &Path) -> Result<Vec<Value>, String> {
         }
     }
     Ok(out)
+}
+
+fn registry_read_announcement(
+    path: &Path,
+    version: u64,
+    min_writer: u32,
+    writer_rev: &str,
+) -> String {
+    let policy = if min_writer <= REGISTRY_SCHEMA_VERSION {
+        "additive; unknown fields preserved; writes allowed"
+    } else {
+        "incompatible; writes are refused until this fno is upgraded"
+    };
+    format!(
+        "fno agents: registry at {} has schema_version={version}, min_writer_version={min_writer}; {policy}; writer_rev={writer_rev}",
+        path.display()
+    )
 }
 
 /// One registry row's shape checks, split out of [`load_registry_entries`] so a
@@ -562,7 +558,7 @@ fn validate_registry_row(
         // Required-field presence, mirroring Python `AgentEntry(**row)` (codex P2):
         // a row missing a no-default field (name/cwd/log_path) raises
         // TypeError -> RegistryVersionError, not a later "agent not found" / "no
-        // cwd". `provider` left OFF this list (x-8dfc): a provider-less post-v10
+        // cwd". `provider` left OFF this list: a provider-less post-v10
         // row backfills provider <- harness below, so identity is enforced by the
         // shape check above, not by provider presence. Presence only (a null
         // value is a value), matching the dataclass.
@@ -581,7 +577,7 @@ fn validate_registry_row(
 /// fields regardless of the schema version that wrote the row.
 ///
 /// Extracted from [`load_registry_entries`] because a row healed from a harness
-/// store (x-da8c) never passes through that loader, and a row that skips this
+/// store never passes through that loader, and a row that skips this
 /// is subtly broken in ways the verb reports as something else: `logs`/`attach`
 /// read `provider`, which v10 no longer stores, and `claude_resume_argv` reads
 /// `claude_session_uuid`, which v10 replaced with `harness_session_id`. One
@@ -590,8 +586,11 @@ fn validate_registry_row(
 /// Caller obligation: at least one of `provider` / `harness` is a valid identity
 /// token. `load_registry_entries` checks that before calling; `heal_token` gets
 /// it from the healer, which only ever writes a known harness.
-fn backfill_row_aliases(obj: &mut serde_json::Map<String, Value>, legacy_provider_semantics: bool) {
-    // Lockstep alias heal (x-8dfc), mirroring Python `load_registry`:
+pub(crate) fn backfill_row_aliases(
+    obj: &mut serde_json::Map<String, Value>,
+    legacy_provider_semantics: bool,
+) {
+    // Lockstep alias heal, mirroring Python `load_registry`:
     // the two identity fields are the same token in the skew window, so
     // heal whichever is missing OR corrupt (shape-checked, not truthy)
     // from the valid sibling. Both directions, because resume reads
@@ -616,7 +615,7 @@ fn backfill_row_aliases(obj: &mut serde_json::Map<String, Value>, legacy_provide
             obj.insert("harness".into(), Value::String(p));
         }
     }
-    // v10 (x-880e) accept-on-read, the raw-Value mirror of the typed
+    // v10 accept-on-read, the raw-Value mirror of the typed
     // backfill_harness_aliases: TWO-WAY sync harness_session_id <-> the
     // harness-matching legacy per-provider key (canonical wins). A v1..=v9
     // row's legacy id back-fills the canonical field; a v10 row's canonical
@@ -647,7 +646,7 @@ fn backfill_row_aliases(obj: &mut serde_json::Map<String, Value>, legacy_provide
             (None, None) => {}
         }
     }
-    // v9 transport-key backfill (x-1b1e), the raw-Value mirror of Python
+    // v9 transport-key backfill, the raw-Value mirror of Python
     // `load_registry` popping `claude_short_id` into `short_id`: a legacy row's
     // jobId moves into an empty `short_id` and the old key is dropped so no verb
     // body reads it. A conflicting pair keeps `short_id` and warns once.
@@ -717,11 +716,11 @@ const ECHO_CAP: usize = 40;
 /// Quote and cap an unexpected positional so a refusal stays readable.
 ///
 /// A pasted prompt echoed in full makes the failure read like success to a
-/// human: on 2026-08-21 a king reported three failed resumes as working
+/// human: on 2026-08-21 a lead reported three failed resumes as working
 /// because the refusal ended in the prompt text. Quoting shows where the
 /// argument starts and stops; capping keeps the remedy on screen. Truncation
 /// is on char boundaries, so a multi-byte argument cannot panic here.
-fn echo_extra(arg: &str) -> String {
+pub(crate) fn echo_extra(arg: &str) -> String {
     let mut out: String = arg.chars().take(ECHO_CAP).collect();
     if arg.chars().count() > ECHO_CAP {
         out.push_str("...");
@@ -742,7 +741,7 @@ fn parse_trace_args(rest: &[String]) -> Result<TraceArgs, String> {
     let mut it = rest.iter().cloned().peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            // ab-3ff64151: -A/-J are the global-register shorts; mirror the
+            // -A/-J are the global-register shorts; mirror the
             // Python typer.Option aliases so Rust-routed `trace` honors them.
             "--all" | "-A" => a.all_agents = true,
             "--json" | "-J" => a.json_out = true,
@@ -803,7 +802,7 @@ fn trace_logic(args: &TraceArgs, events_path: &Path, registry_path: &Path) -> Tr
     }
 
     // Registry membership gate (unless --all). Resolve the token (name | short |
-    // full id, x-1b1e) to its canonical name so events - which key on the name -
+    // full id) to its canonical name so events - which key on the name -
     // filter correctly regardless of the address form the caller used.
     let mut resolved_name: Option<String> = args.name.clone();
     if let Some(token) = &args.name {
@@ -1027,13 +1026,13 @@ pub fn run_trace(rest: &[String], home: &AgentsHome) -> i32 {
 
 /// Harness -> session-id registry field, mirroring Python
 /// `registry.HARNESS_SESSION_ID_FIELDS`. claude resolves to the unified `short_id`
-/// transport key (the jobId); v10 (x-880e) resolves codex/gemini to the canonical
+/// transport key (the jobId); v10 resolves codex/gemini to the canonical
 /// `harness_session_id` (their per-provider fields are gone -- load_registry_entries
 /// back-fills it from a legacy row's per-provider key). This is the ONLY place a
 /// verb touches a session-id field; every session-connecting verb reaches a row via
 /// [`find_agent_entry`] instead of its own name-only `.find`.
 ///
-/// This is an EXCEPTION table, not the roster (x-efd7). claude is the one harness
+/// This is an EXCEPTION table, not the roster. claude is the one harness
 /// whose transport key differs from its canonical id, so it is the one entry that
 /// changes the answer; every other harness resolves `harness_session_id`, which is
 /// also what [`resume_session_id`] falls back to when this returns `None`. Read it
@@ -1043,7 +1042,7 @@ pub fn run_trace(rest: &[String], home: &AgentsHome) -> i32 {
 fn session_id_field(harness: &str) -> Option<&'static str> {
     match harness {
         "claude" => Some("short_id"),
-        "codex" | "gemini" | "agy" | "opencode" => Some("harness_session_id"),
+        "codex" | "gemini" | "agy" | "opencode" | "cursor-agent" => Some("harness_session_id"),
         _ => None,
     }
 }
@@ -1052,14 +1051,14 @@ fn session_id_field(harness: &str) -> Option<&'static str> {
 /// else the canonical `harness_session_id`.
 ///
 /// The exact mirror of Python `resume_cli._session_id_for` and the
-/// `AgentEntry.session_id` property, whose fallback this half lacked (x-efd7).
+/// `AgentEntry.session_id` property, whose fallback this half lacked.
 /// Two rows differing only in `harness` resumed differently: codex reached exec,
 /// pi -- absent from [`session_id_field`] but declaring `interactive_resume`
 /// support in the capability contract -- refused with "no recorded session_id".
 /// Falling back keeps the two rosters from disagreeing for any harness, added
 /// today or later, and it also keeps a claude PANE row resumable: such a row
 /// carries `harness_session_id` and no `short_id` by design.
-fn resume_session_id<'a>(entry: &'a Value, harness: &str) -> &'a str {
+pub(crate) fn resume_session_id<'a>(entry: &'a Value, harness: &str) -> &'a str {
     session_id_field(harness)
         .and_then(|field| entry.get(field))
         .and_then(Value::as_str)
@@ -1069,7 +1068,7 @@ fn resume_session_id<'a>(entry: &'a Value, harness: &str) -> &'a str {
 }
 
 // ---------------------------------------------------------------------------
-// Shared identifier resolver (x-1b1e): the Rust mirror of Python
+// Shared identifier resolver: the Rust mirror of Python
 // `registry.resolve_agent`. Every session-connecting verb (resume, attach,
 // logs, trace) resolves a token to one row through this, so a session is
 // addressable by name/slug, full harness_session_id, or an 8-hex short. Same
@@ -1108,33 +1107,7 @@ impl ResolveError {
     }
 }
 
-use crate::identity::session_handle_tier;
-
-fn entry_session_tier(entry: &Value, token: &str) -> Option<u8> {
-    let session_id = entry.get("harness_session_id").and_then(Value::as_str)?;
-    if let Some(tier) = session_handle_tier(token, session_id) {
-        return Some(tier);
-    }
-    // The one optional related id addresses the row at the same tiers as the
-    // primary (x-d285: both ids stay valid forever).
-    if let Some(related) = entry.get("related_session_id").and_then(Value::as_str) {
-        if let Some(tier) = session_handle_tier(token, related) {
-            return Some(tier);
-        }
-    }
-    // A predecessor id addresses the row at the FULL tier only (x-dfe7):
-    // succession retired it, so delivery naming A follows the row that now
-    // answers as B, while A's retired short/handle forms stay retired.
-    entry
-        .get("predecessor_session_ids")
-        .and_then(Value::as_array)
-        .and_then(|ids| {
-            ids.iter()
-                .filter_map(Value::as_str)
-                .any(|id| session_handle_tier(token, id) == Some(0))
-                .then_some(0)
-        })
-}
+use crate::resolve_tier::{entry_session_tier, is_session_shaped};
 
 /// Return the single matched row, or an ambiguity error. Dedup only repeated
 /// references to the same loaded row: a corrupt registry may contain one name
@@ -1225,189 +1198,11 @@ pub(crate) fn find_agent_entry<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// All-source short-token resolution (x-da8c). The registry is a cache of reality,
+// All-source short-token resolution. The registry is a cache of reality,
 // not a gate in front of it: store-only sessions participate in the same
 // ambiguity namespace as registry rows. Rust lifecycle verbs reach the Python
 // resolver through a shellout rather than growing a second store prober.
 // ---------------------------------------------------------------------------
-
-/// True for a token worth probing a harness store with -- the Rust mirror of
-/// `store_fallback.is_session_shaped`. A plain unknown NAME never probes, so a
-/// typo keeps today's refusal instead of paying for three store reads.
-fn is_session_shaped(token: &str) -> bool {
-    let token = token.trim();
-    if let Some(rest) = token.strip_prefix("ses_") {
-        return !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_alphanumeric());
-    }
-    (token.len() == 8 && token.bytes().all(|b| b.is_ascii_alphanumeric()))
-        || is_uuid_shaped(&token.to_ascii_lowercase())
-}
-
-fn helper_registry_path(registry_path: &Path) -> std::io::Result<PathBuf> {
-    let absolute = if registry_path.is_absolute() {
-        registry_path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(registry_path)
-    };
-    if let Ok(canonical) = fs::canonicalize(&absolute) {
-        return Ok(canonical);
-    }
-    if let (Some(parent), Some(name)) = (absolute.parent(), absolute.file_name()) {
-        if let Ok(canonical_parent) = fs::canonicalize(parent) {
-            return Ok(canonical_parent.join(name));
-        }
-    }
-    Ok(absolute)
-}
-
-fn token_helper_args(token: &str, registry_path: &Path, cross_project: bool) -> Vec<String> {
-    let mut args = vec![
-        "agents".to_string(),
-        "heal-token".to_string(),
-        token.to_string(),
-        "--registry".to_string(),
-        registry_path.to_string_lossy().into_owned(),
-        "--all-sources".to_string(),
-    ];
-    if cross_project {
-        args.push("--cross-project".to_string());
-    }
-    args
-}
-
-fn token_helper_output(
-    token: &str,
-    registry_path: &Path,
-    cross_project: bool,
-    scope_cwd: Option<&Path>,
-) -> std::io::Result<std::process::Output> {
-    use std::process::Command;
-
-    let registry_path = helper_registry_path(registry_path)?;
-    let mut command = Command::new("fno");
-    command
-        .args(token_helper_args(token, &registry_path, cross_project))
-        .env("FNO_AGENTS_RUNTIME", "python");
-    if let Some(cwd) = scope_cwd {
-        command.current_dir(cwd);
-    }
-    command.output()
-}
-
-/// Ask the Python resolver to union registry and harness-store candidates.
-///
-/// `Ok(Some(row))` on resolution, `Ok(None)` only on the helper's documented
-/// clean miss, and `Err(msg)` on ambiguity or unavailable/incomplete coverage.
-/// `FNO_AGENTS_RUNTIME=python` pins the child to the Python dispatch so the
-/// shellout cannot recurse back into this binary.
-fn heal_token(
-    token: &str,
-    registry_path: &Path,
-    cross_project: bool,
-    scope_cwd: Option<&Path>,
-) -> Result<Option<Value>, String> {
-    let out = match token_helper_output(token, registry_path, cross_project, scope_cwd) {
-        Ok(o) => o,
-        Err(exc) => {
-            return Err(format!(
-                "cannot safely resolve token {} because the all-source identity helper could not run: {exc}. Use the full session id.",
-                py_repr_str(token)
-            ));
-        }
-    };
-    // The healer adopts best-effort: a failed registry write still returns the
-    // row, with the reason on stderr. Swallowing that would make the degradation
-    // invisible -- the verb works, the roster silently does not.
-    let parsed = parse_heal_token_output(token, &out);
-    if matches!(&parsed, Ok(Some(_))) {
-        let warn = String::from_utf8_lossy(&out.stderr);
-        if !warn.trim().is_empty() {
-            eprint!("{warn}");
-        }
-    }
-    parsed
-}
-
-/// Enforce the Python helper's output contract without collapsing unavailable
-/// coverage into a clean miss. Kept pure so malformed/off-contract subprocess
-/// results are mechanically testable without mutating PATH.
-fn parse_heal_token_output(
-    token: &str,
-    out: &std::process::Output,
-) -> Result<Option<Value>, String> {
-    const AMBIGUOUS: i32 = 3;
-    const MISS: i32 = 13;
-
-    if out.status.code() == Some(AMBIGUOUS) {
-        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!(
-                "token {} is ambiguous across harness stores",
-                py_repr_str(token)
-            )
-        } else {
-            detail
-        });
-    }
-    if out.status.code() == Some(MISS) {
-        return Ok(None);
-    }
-    if !out.status.success() {
-        let why = String::from_utf8_lossy(&out.stderr);
-        let first = why
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("");
-        return Err(format!(
-            "cannot safely resolve token {} because the all-source identity helper failed (exit {}){}. Use the full session id.",
-            py_repr_str(token),
-            out.status.code().unwrap_or(-1),
-            if first.is_empty() { String::new() } else { format!(": {}", first.trim()) },
-        ));
-    }
-    // The LAST non-empty line, not the whole buffer: a first-run `fno` may print
-    // a setup-migration banner ahead of the payload.
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = match text.lines().rev().find(|l| !l.trim().is_empty()) {
-        Some(l) => l,
-        None => {
-            return Err(format!(
-                "cannot safely resolve token {} because the all-source identity helper returned no row. Use the full session id.",
-                py_repr_str(token)
-            ))
-        }
-    };
-    match serde_json::from_str::<Value>(line) {
-        Ok(mut row) if row.is_object() => {
-            // The healed row skipped `load_registry_entries`, so it gets neither
-            // that loader's alias reconciliation nor its validation. Apply both:
-            // without the backfill the row has no `claude_session_uuid` (resume's
-            // dead arm would refuse); without the field bar, an exit-0 helper returning `{}` or a
-            // partial object would resolve as a SUCCESS and surface as a confusing
-            // missing-cwd error three frames later instead of a clean not-found.
-            let obj = match row.as_object_mut() {
-                Some(o) => o,
-                None => unreachable!("object guard above"),
-            };
-            backfill_row_aliases(obj, false);
-            let has_identity = is_identity_token(obj.get("harness").and_then(Value::as_str));
-            let has_fields = ["name", "cwd", "log_path"]
-                .iter()
-                .all(|k| obj.contains_key(*k));
-            if !has_identity || !has_fields {
-                return Err(format!(
-                    "cannot safely resolve token {} because the all-source identity helper returned an incomplete row. Use the full session id.",
-                    py_repr_str(token)
-                ));
-            }
-            Ok(Some(row))
-        }
-        _ => Err(format!(
-            "cannot safely resolve token {} because the all-source identity helper returned malformed JSON. Use the full session id.",
-            py_repr_str(token)
-        )),
-    }
-}
 
 /// [`find_agent_entry`], plus all-source resolution for session-shaped tokens.
 ///
@@ -1424,7 +1219,7 @@ pub(crate) fn resolve_entry_with_heal(
     resolve_entry_with_heal_scoped(rows, token, registry_path, false, None)
 }
 
-fn resolve_entry_with_heal_scoped(
+pub(crate) fn resolve_entry_with_heal_scoped(
     rows: &[Value],
     token: &str,
     registry_path: &Path,
@@ -1462,7 +1257,7 @@ fn resolve_entry_with_heal_scoped(
 }
 
 // ---------------------------------------------------------------------------
-// adopt: synthesize a registry entry from durable evidence (plan x-0358)
+// adopt: synthesize a registry entry from durable evidence (plan x-aaaa)
 // ---------------------------------------------------------------------------
 
 /// All non-bare git worktrees of the repo at `cwd`. The durable evidence for an
@@ -1470,82 +1265,24 @@ fn resolve_entry_with_heal_scoped(
 /// adopt path scans these. Mirrors [`crate::paths::canonical_repo_root`] but
 /// returns every worktree, not just the main checkout. Empty outside a git repo
 /// (callers also fall back to `cwd`).
-/// claude's projects-dir slug for a cwd: both '/' and '.' replaced with '-'
-/// (matches Python's `fno.provenance.resolver._slug`). Not reversible, so the
-/// resume path resolves cwd by trying candidates and slug-checking rather than
-/// decoding a slug back to a path.
-fn claude_cwd_slug(path: &Path) -> String {
-    path.to_string_lossy().replace('/', "-").replace('.', "-")
-}
-
-/// The cwd `claude --resume <uuid>` must run in: the dir whose projects-dir
-/// slug actually holds the transcript, not the (possibly stale) recorded
-/// registration cwd. A session that ran `EnterWorktree` after registration has
-/// its transcript under the worktree's project dir, while the recorded cwd is
-/// the pre-`EnterWorktree` canonical - resuming there looks for the transcript
-/// in the wrong dir and lands on the wrong branch.
-///
-/// Tries the recorded cwd then its git worktrees; the first whose
-/// `<projects>/<slug>/<uuid>.jsonl` exists wins. Falls back to the recorded cwd
-/// and names which branch was taken on stderr (a probe that does not name the
-/// store it read is the trap the king's own SKILL.md warns about).
-fn resolve_resume_cwd(claude_home: &ClaudeHome, recorded: &str, uuid: &str) -> PathBuf {
-    if uuid.is_empty() {
-        return PathBuf::from(recorded);
-    }
-    let projects = claude_home.projects_dir();
-    let transcript = format!("{}.jsonl", uuid);
-    // Probe the recorded cwd first: the common case (no EnterWorktree) keeps
-    // the transcript under its own project dir, and a stat is far cheaper than
-    // spawning `git worktree list` on every resume. Only on a miss do we
-    // enumerate worktrees.
-    let recorded_pb = PathBuf::from(recorded);
-    let recorded_slug = claude_cwd_slug(&recorded_pb);
-    if projects.join(&recorded_slug).join(&transcript).exists() {
-        return recorded_pb;
-    }
-    let candidates: Vec<PathBuf> = git_worktree_paths(Path::new(recorded)).unwrap_or_default();
-    for cand in &candidates {
-        let slug = claude_cwd_slug(cand);
-        if projects.join(&slug).join(&transcript).exists() {
-            eprintln!(
-                "fno agents resume: cwd resolved from the transcript's project dir ({})",
-                cand.display()
-            );
-            return cand.clone();
-        }
-    }
-    eprintln!(
-        "fno agents resume: no transcript found under any candidate for {uuid}; \
-         using the recorded cwd ({})",
-        recorded
-    );
-    recorded_pb
-}
-
 /// Collision-safe 8-char handle from a session id (the final-eight convention),
 /// falling back to the whole trimmed id when shorter. The row's `short_id`, so
 /// `peek`/`ask`/`resume` resolve the adopted orphan.
-fn derived_short_id(session_id: &str) -> String {
+pub(crate) fn derived_short_id(session_id: &str) -> String {
     crate::identity::canonical_handle(session_id.trim())
 }
 
-/// Derivable, stable row name for a synthesized entry so re-adopting upserts one
-/// row (the upsert keys on `harness_session_id`; the name is for display + name
-/// addressing). `target-` tags the synthesis source (a /target orphan).
-fn synthesized_name(short: &str) -> String {
-    format!("target-{short}")
-}
-
 /// Build the registry row for an orphan adopted from a target manifest. Harness-
-/// generic ([`crate::claude_adopt::mint_adopted_entry`] is claude+RosterWorker-
-/// specific): the harness-appropriate session id comes from the manifest, claude
-/// also records the full uuid for its dead-arm `claude --resume`, and `fno_id`
-/// links the row to its node. `status: Idle`, no pid, default `exec` host_mode:
-/// a registered-but-not-driven row the GC keeps (non-terminal, no confirmed-dead
-/// pid -> `gc_action` Keep).
-fn mint_synthesized_entry(id: &ManifestIdentity, now: &str) -> crate::state::RegistryEntry {
-    use crate::state::RegistryEntry;
+/// generic (the retired `claude_adopt` mint was claude+RosterWorker-specific):
+/// the harness-appropriate session id comes from the manifest, claude
+/// also records the full uuid for its dead-arm `claude --resume`. `status: Idle`,
+/// no pid, default `exec` host_mode: a registered-but-not-driven row the GC
+/// keeps (non-terminal, no confirmed-dead pid -> `gc_action` Keep).
+pub(crate) fn mint_synthesized_entry(
+    id: &ManifestIdentity,
+    now: &str,
+) -> crate::state::RegistryEntry {
+    use crate::state::{Lineage, RegistryEntry};
     let harness = if !id.harness.is_empty() {
         id.harness.clone()
     } else if id.harness_session_id.is_empty()
@@ -1561,7 +1298,7 @@ fn mint_synthesized_entry(id: &ManifestIdentity, now: &str) -> crate::state::Reg
     let session = id.canonical_session_id().to_string();
     let short = derived_short_id(&session);
     let is_claude = harness == "claude";
-    // The synthesizing session's ambient identity (x-132c): this fn runs in
+    // The synthesizing session's ambient identity: this fn runs in
     // the CLIENT process, so the markers name the session that vouched for
     // the adopted row.
     let (parent_session, parent_harness, parent_cwd) = crate::claims::ambient_parent_edge();
@@ -1570,13 +1307,20 @@ fn mint_synthesized_entry(id: &ManifestIdentity, now: &str) -> crate::state::Reg
         // Synthesized from an identity that arrived without a row; the lane
         // it ran on is unobserved, so the substrate stays unknown.
         substrate: None,
-        name: synthesized_name(&short),
+        name: crate::claude_adopt::synthesized_entry_name(&session, &short),
         // Birth marker: synthesized from a session identity that arrived
         // without a row, so nothing here observed how that session started.
         // "adopted" says that; it is not a claim that no human is sitting in
         // it, and both watchdog lanes treat it as the non-answer it is.
-        origin: Some("adopted".into()),
-        // x-d285: synthesized from an identity that arrived without a row; the
+        // A user-typed adopt (no ambient agent identity, attended tty) stamps
+        // `operator` instead: the origin the gc keeps, so a row the user
+        // adopted is never reaped as fleet work (rev-2 scope).
+        origin: if crate::claims::adopter_is_operator() {
+            Some("operator".into())
+        } else {
+            Some("adopted".into())
+        },
+        // synthesized from an identity that arrived without a row; the
         // account it rode in on is unobserved, so the axis stays unknown.
         launch_account: None,
         related_session_id: None,
@@ -1586,20 +1330,22 @@ fn mint_synthesized_entry(id: &ManifestIdentity, now: &str) -> crate::state::Reg
         model: None,
         model_basis: None,
         effort: None,
-        // v23 (x-2019): synthesized from an identity that arrived without a
+        // v23: synthesized from an identity that arrived without a
         // row - no spawn request was observed, so the requested axis stays
         // unknown.
         requested_model: None,
         requested_provider: None,
         requested_effort: None,
         harness: Some(harness),
-        harness_session_id: Some(session.clone()),
         predecessor_session_ids: Vec::new(),
         forked_from_session_id: None,
+        route_provider_id: None,
+        model_name: None,
+        account_record_id: None,
         cwd: id.owner_cwd.clone(),
         project_root: id.owner_cwd.clone(),
         session_id: None,
-        claude_session_uuid: if is_claude { Some(session) } else { None },
+        claude_session_uuid: is_claude.then(|| session.clone()),
         messaging_socket_path: None,
         codex_session_id: None,
         gemini_session_id: None,
@@ -1618,30 +1364,23 @@ fn mint_synthesized_entry(id: &ManifestIdentity, now: &str) -> crate::state::Reg
         exited_at: None,
         mux: None,
         screen_state: None,
-        crown_level: None,
-        crown_scope: None,
-        crown_grantor: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
         route_settings_path: None,
-        fno_id: if id.fno_id.is_empty() {
-            None
-        } else {
-            Some(id.fno_id.clone())
-        },
         delivery_policy: None,
         sandbox_posture: None,
         spawn_trigger: None,
-        spawned_by_session: parent_session,
-        spawned_by_harness: parent_harness,
-        spawned_by_cwd: parent_cwd,
-        legacy_claude_short_id: None,
+        ..RegistryEntry::new(
+            Some(session),
+            Lineage::captured((parent_session, parent_harness, parent_cwd)),
+        )
     }
 }
 
 /// Upsert a synthesized row, keyed on the canonical `harness_session_id`
-/// (covers claude too: its uuid syncs there). Reuses
-/// [`crate::state::update_registry`] (the one locked writer) -- not a second
-/// registry writer.
-fn upsert_synthesized_row(
+/// (covers claude too: its uuid syncs there), through [`crate::state::update_registry`].
+pub(crate) fn upsert_synthesized_row(
     registry_path: &Path,
     entry: crate::state::RegistryEntry,
 ) -> Result<(), crate::state::StateError> {
@@ -1672,11 +1411,12 @@ fn upsert_synthesized_row(
                 merged.exited_at = old.exited_at.clone();
                 merged.predecessor_session_ids = old.predecessor_session_ids.clone();
                 merged.forked_from_session_id = old.forked_from_session_id.clone();
-                // x-98ab: adoption observed nothing about the node, so a
-                // merge keeps whatever a spawn/register path stamped.
+                // adoption observed nothing about the node, so the merge
+                // keeps whatever a spawn/register path stamped.
                 if merged.node.is_none() {
                     merged.node = old.node.clone();
                 }
+                crate::adopt_carry::carry_adopted_team(&mut merged, old);
                 reg.entries[i] = merged;
             }
             None => reg.entries.push(entry),
@@ -1684,191 +1424,7 @@ fn upsert_synthesized_row(
     })
 }
 
-/// Where an adoption's evidence came from (the receipt line).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AdoptSource {
-    Registry,
-    Manifest,
-    HarnessStore,
-}
-
-impl AdoptSource {
-    fn label(self) -> &'static str {
-        match self {
-            AdoptSource::Registry => "registry",
-            AdoptSource::Manifest => "target manifest",
-            AdoptSource::HarnessStore => "harness store",
-        }
-    }
-}
-
-/// Why an adoption did not complete.
-#[derive(Debug)]
-enum AdoptError {
-    /// No evidence in any source.
-    NoEvidence,
-    /// A registry read/write or harness-store consultation failed.
-    Io(String),
-}
-
-fn persist_manifest_identity(
-    id: &ManifestIdentity,
-    home: &AgentsHome,
-) -> Result<Value, AdoptError> {
-    let mut entry = mint_synthesized_entry(id, &crate::daemon::now_rfc3339_like());
-    entry.last_message_at =
-        crate::claude_adopt::transcript_activity(id.canonical_session_id()).map(|(stamp, _)| stamp);
-    // x-98ab: same missing-model closure as the roster adopt - the claude
-    // transcript states the model; the provider comes only from the
-    // route-settings match and otherwise records None.
-    if let Some(model) = crate::claude_adopt::transcript_model(id.canonical_session_id()) {
-        entry.provider = crate::claude_adopt::provider_from_route_settings(Some(&model));
-        entry.model = Some(model);
-        entry.model_basis = Some("verified".to_string());
-    }
-    upsert_synthesized_row(&home.registry_json(), entry.clone())
-        .map_err(|error| AdoptError::Io(error.to_string()))?;
-    serde_json::to_value(&entry).map_err(|error| AdoptError::Io(error.to_string()))
-}
-
-/// Resolve `session_id` to one registry row, minting one if needed, through the
-/// plan precedence: an existing registry row; a `.fno/target-state.md` whose
-/// session id matches; then the harness session stores (the heal-token shellout,
-/// which adopts best-effort). Identity only. Returns the row (as JSON), any
-/// `fno_id` carried, and the source.
-fn synthesize_and_adopt(
-    session_id: &str,
-    home: &AgentsHome,
-    cross_project: bool,
-) -> Result<(Value, Option<String>, AdoptSource), AdoptError> {
-    let registry_path = home.registry_json();
-    let entries = read_registry_entries(&registry_path).map_err(AdoptError::Io)?;
-    // 1. Already registered (name / full id / short resolution, no store heal yet).
-    if let Ok(e) = find_agent_entry(&entries, session_id) {
-        let fno_id = e
-            .get("fno_id")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        return Ok((e.clone(), fno_id, AdoptSource::Registry));
-    }
-    // 2. Target manifest.
-    if let Ok(Some(id)) = find_manifest_for_session(session_id) {
-        let fno_id = (!id.fno_id.is_empty()).then(|| id.fno_id.clone());
-        let value = persist_manifest_identity(&id, home)?;
-        return Ok((value, fno_id, AdoptSource::Manifest));
-    }
-    // 3. Harness session stores (heal-token adopts best-effort and writes the row).
-    match heal_token(session_id, &registry_path, cross_project, None) {
-        Ok(Some(row)) => Ok((row, None, AdoptSource::HarnessStore)),
-        Ok(None) => Err(AdoptError::NoEvidence),
-        Err(msg) => Err(AdoptError::Io(msg)),
-    }
-}
-
-/// Manifest-only adoption used as the `resume` fallback: `resolve_entry_with_heal`
-/// already consulted the registry + harness stores, so this is just the manifest
-/// path. Returns the minted row (already upserted), `None` when no manifest
-/// matches, or the actual registry/serialization failure.
-fn adopt_from_manifest(session_id: &str, home: &AgentsHome) -> Result<Option<Value>, AdoptError> {
-    let Ok(Some(id)) = find_manifest_for_session(session_id) else {
-        return Ok(None);
-    };
-    persist_manifest_identity(&id, home).map(Some)
-}
-
-/// Provider-specific resume argv, mirroring Python `_build_resume_argv`.
-/// Returns `None` for an unsupported provider AND for an unreadable capability
-/// contract, but the caller only ever sees the second kind through a narrow
-/// door. `interactive_resume_supported` also reads the packaged contract and
-/// `unwrap_or(false)`s a failure, so an unreadable contract refuses as "not
-/// supported" before this function runs. What actually reaches the caller's
-/// "resume contract is invalid" message is a contract that LOADS and declares
-/// the form, then fails to render it: a malformed token template.
-fn build_resume_argv(provider: &str, session_id: &str, cwd: Option<&str>) -> Option<Vec<String>> {
-    let mut argv = crate::harness_capabilities::render_session_argv(
-        provider,
-        "interactive_resume",
-        Some(session_id),
-    )
-    .ok()?;
-    // codex's bounded sandbox re-resolves from config on `resume`, so the git +
-    // plan grants ride as `-c` tokens spliced right after the `codex` binary
-    // token. (`codex resume` does accept --add-dir; `codex exec resume` is the
-    // lane that does not. `-c` is kept because one grant builder serves both.)
-    if provider == "codex" {
-        // `.filter` so an empty cwd is treated as absent, exactly as Python's
-        // `if cwd` does for both the grant and --cd. Without it this splices a
-        // bare `--cd ""`, which codex cannot start on, and the parity test does
-        // not exercise the empty string.
-        if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
-            let grant = crate::provider::codex_writable_config_args(Path::new(cwd));
-            let grant_len = grant.len();
-            if !grant.is_empty() {
-                argv.splice(1..1, grant);
-            }
-            // Without --cd, codex asks session-directory vs current-directory
-            // and defaults to the SESSION directory: the canonical checkout
-            // recorded at spawn, not the worktree the row works in. Unattended
-            // that prompt is a hang. Attended it is a wrong default a human
-            // must catch.
-            //
-            // Conditional, per codex's own docs: the prompt appears only when
-            // the process cwd differs from the session's saved directory. The
-            // config key `tui.resume_cwd` answers it globally, and --cd
-            // outranks that. This lane wants --cd because it is per
-            // invocation and names the directory outright.
-            //
-            // Spliced BEFORE the subcommand, beside the grant, which is the
-            // only global-before-subcommand precedent in this tree. The spawn
-            // lanes are not it: they spell the flag `-C`, after `exec` in the
-            // headless lane and on a bare `codex` in the pane lane. Both
-            // positions parse on codex 0.149.1, so this is a choice about
-            // where a reader expects a global, not a fix.
-            //
-            // NO permission bypass rides here, deliberately. A registry row
-            // records no sandbox posture, so this lane cannot tell a bounded
-            // worker from a yolo one, and an unconditional bypass would resume
-            // every bounded worker with approvals off. See the Python twin.
-            // Right after the grant, so the token order matches the Python
-            // twin exactly. `test_rust_verb_parity` compares the two argvs
-            // element for element, so "both are globals" is not enough here.
-            let at = (1 + grant_len).min(argv.len());
-            argv.splice(at..at, ["--cd".to_string(), cwd.to_string()]);
-        }
-    }
-    Some(argv)
-}
-
-fn interactive_resume_supported(provider: &str) -> bool {
-    crate::harness_capabilities::HarnessContract::packaged()
-        .ok()
-        .and_then(|contract| {
-            contract.capabilities(provider).ok().and_then(|caps| {
-                caps.resume_strategy
-                    .forms
-                    .get("interactive_resume")
-                    .map(|form| form.kind != "unsupported")
-            })
-        })
-        .unwrap_or(false)
-}
-
-/// True iff `s` is a lowercase `8-4-4-4-12` hex UUID (the shape `claude --resume`
-/// accepts). Guards the dead-arm argv so a malformed/empty recorded uuid can
-/// never reach `claude --resume` (x-9844 Failure Modes / Boundaries).
-fn is_uuid_shaped(s: &str) -> bool {
-    let groups = [8usize, 4, 4, 4, 12];
-    let parts: Vec<&str> = s.split('-').collect();
-    parts.len() == groups.len()
-        && parts.iter().zip(groups).all(|(p, n)| {
-            p.len() == n
-                && p.chars()
-                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
-        })
-}
-
-/// The shared liveness reader's answer (x-5d96). One stable vocabulary for
+/// The shared liveness reader's answer. One stable vocabulary for
 /// every caller that has to know whether a registry row's WORKER is running,
 /// replacing per-caller liveness derivations that each read a different
 /// surface (the stored `status` field chief among them, which is a constant
@@ -1888,7 +1444,7 @@ pub enum RowLiveness {
     Unknown,
 }
 
-/// The ladder of positive liveness markers (x-5d96), run in order:
+/// The ladder of positive liveness markers, run in order:
 ///
 /// 1. **Socket** (claude rows): a 250 ms in-process connect to the session's
 ///    messaging socket. This is the same probe `claude_resume_argv_with_truth`
@@ -1898,15 +1454,18 @@ pub enum RowLiveness {
 ///    printed a clean plausible negative).
 /// 2. **Heartbeat** (the codex arm; harness-agnostic): an
 ///    `inside_leg.received_at` STRICTLY LATER than `exited_at` proves the row
-///    advanced past its own exit stamp. This is the x-d3ad rule stated as a
+///    advanced past its own exit stamp. This is the rule stated as a
 ///    positive marker, not a preference between two fields: a heartbeat that
 ///    advances past `exited_at` proves life, a quiet one proves nothing.
 ///    Codex carries no claude socket, so without this rung a claude-only
 ///    probe answered `Unknown` for the codex majority of the registry forever.
 /// 3. **Transcript truth state** (claude rows): `working`, `watching` or
 ///    `your-move` is life. `done` is a TURN state, not a process state, and
-///    answers nothing here.
-/// 4. **Codex rollout freshness** (codex rows, x-798a): the session's rollout
+///    answers nothing here. The rung is silent on an exit-proven row (an
+///    exit stamp or a stored `Exited`): a transcript tail reads `working`
+///    for up to two hours after its worker stops, so it would resurrect the
+///    row. Rung 4 makes the same trade.
+/// 4. **Codex rollout freshness** (codex rows): the session's rollout
 ///    jsonl under `~/.codex/sessions/` written within
 ///    [`CODEX_ROLLOUT_FRESH_SECS`] proves the worker is still advancing. The
 ///    heartbeat rung cannot cover these rows - it needs `exited_at` to
@@ -1917,134 +1476,22 @@ pub enum RowLiveness {
 ///    fresh-written past its worker's stop, so on a stamped row freshness
 ///    would resurrect it - the stamp path owns that row instead.
 ///
-/// Silence on every rung is `Unknown`. The ladder NEVER returns `Dead`: only
-/// a positive death proof may, and absence never is one. A missing or
-/// unreadable transcript falls through the third rung and lands `Unknown`.
-///
-/// Resume keeps its own inline copy of rungs 1 and 3 because it must also
-/// read the truth VALUE (`done`/`stalled` route the relaunch arm, which the
-/// verdict type has no room for); its behavior is pinned identical by tests.
-pub fn row_liveness(entry: &crate::state::RegistryEntry, claude_home: &ClaudeHome) -> RowLiveness {
-    let sockets = sessions_socket_index(claude_home);
-    row_liveness_indexed(entry, &sockets)
-}
-
-/// One scan of claude's sessions dir: `jobId -> messagingSocketPath` for
-/// every live-shaped bg session file, first-sorted-wins (the same pick
-/// `locate_session` makes). The socket rung's cost is this walk, so a sweep
-/// probing N rows pays it once, not N times.
-pub fn sessions_socket_index(
-    claude_home: &ClaudeHome,
-) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    let dir = claude_home.sessions_dir();
-    let Ok(rd) = std::fs::read_dir(&dir) else {
-        return out;
-    };
-    let mut paths: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in paths {
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        if v.get("kind").and_then(Value::as_str) != Some("bg") {
-            continue;
-        }
-        let (Some(job), Some(sock)) = (
-            v.get("jobId").and_then(Value::as_str),
-            v.get("messagingSocketPath").and_then(Value::as_str),
-        ) else {
-            continue;
-        };
-        if job.is_empty() || sock.is_empty() || out.contains_key(job) {
-            continue;
-        }
-        out.insert(job.to_string(), sock.to_string());
-    }
-    out
-}
-
-/// [`row_liveness`] against a prebuilt [`sessions_socket_index`] - the form
-/// a sweep uses, so N probed rows cost one dir scan. The truth read is the
-/// production one.
-pub(crate) fn row_liveness_indexed(
-    entry: &crate::state::RegistryEntry,
-    sockets: &std::collections::HashMap<String, String>,
-) -> RowLiveness {
-    row_liveness_with_indexed(entry, sockets, None, family1_truth_state)
-}
-
-/// Rung 4's freshness window (x-798a): a codex rollout jsonl written within
+/// Rung 4's freshness window: a codex rollout jsonl written within
 /// this many seconds of now proves the session is advancing. A quiet rollout
 /// proves nothing - it falls through to `Unknown`, which keeps. The window
 /// only decides whether the sweep NAMES the row live; absence never
 /// authorizes a reap, so no value here can open a removal path.
-const CODEX_ROLLOUT_FRESH_SECS: u64 = 1800;
+pub(crate) const CODEX_ROLLOUT_FRESH_SECS: u64 = 1800;
 
-/// The codex home the way codex itself resolves it: `$CODEX_HOME` when set,
-/// else `~/.codex` (the `codex_app_server_socket_path` convention). Both codex
-/// store readers - rung 4's freshness index and `HarnessStoreIndex`'s
-/// existence index - must resolve the same home, or one of them reads a store
-/// the worker never writes.
-pub(crate) fn codex_home() -> Option<std::path::PathBuf> {
-    if let Ok(h) = std::env::var("CODEX_HOME") {
-        if !h.is_empty() {
-            return Some(std::path::PathBuf::from(h));
-        }
-    }
-    std::env::var("HOME")
-        .ok()
-        .map(|h| std::path::PathBuf::from(h).join(".codex"))
-}
+// codex store helpers moved to `codex_store.rs`; the re-export keeps every
+// existing caller.
+pub(crate) use crate::codex_store::{
+    codex_home, codex_rollout_fresh, codex_rollout_index, codex_rollout_matches,
+};
 
-/// THE codex rollout filename predicate, spelled once: `HarnessStoreIndex`
-/// (existence for the death-corroboration side) and rung 4 (freshness for
-/// the liveness side) must agree on what a rollout file is, or a store-layout
-/// change fixed in one walker silently strands the other. (name, session id)
-pub(crate) fn codex_rollout_matches(name: &str, session_id: &str) -> bool {
-    name.starts_with("rollout-") && name.contains(session_id)
-}
-
-/// One walk of the codex store, as `(filename, mtime secs)` for every rollout
-/// file - the sweep-shaped input to rung 4, built ONCE per sweep by
-/// `live_liveness_prober` the same way the claude socket index is. `None`
-/// root resolves `$HOME/.codex/sessions`. An unreadable store answers `None`
-/// (fail closed: the rung goes silent, `Unknown`, which keeps).
-pub(crate) fn codex_rollout_index(root: Option<&std::path::Path>) -> Option<Vec<(String, u64)>> {
-    let root = root
-        .map(std::borrow::Cow::Borrowed)
-        .or_else(|| codex_home().map(|h| std::borrow::Cow::Owned(h.join("sessions"))))?;
-    crate::daemon::index_tree(root.as_ref(), 0)
-        .ok()
-        .map(|files| {
-            files
-                .into_iter()
-                .filter(|(name, _)| name.starts_with("rollout-"))
-                .filter_map(|(name, path)| {
-                    let secs = std::fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())?
-                        .as_secs();
-                    Some((name, secs))
-                })
-                .collect()
-        })
-}
-
-/// Rung 4's freshness read against a prebuilt [`codex_rollout_index`]: any
-/// rollout for `session_id` written within the window proves the worker is
-/// advancing. Fail closed: an absent or unreadable store built no index, and
-/// a miss inside one is not-fresh - both read `Unknown`, which keeps.
-pub(crate) fn codex_rollout_fresh(index: &[(String, u64)], session_id: &str, now: u64) -> bool {
-    index.iter().any(|(name, mtime)| {
-        codex_rollout_matches(name, session_id)
-            && now.saturating_sub(*mtime) <= CODEX_ROLLOUT_FRESH_SECS
-    })
-}
+// sessions_socket_index and the row_liveness family moved to
+// `claude_sessions.rs`; the re-export keeps every existing caller.
+pub use crate::claude_sessions::{row_liveness, sessions_socket_index};
 
 /// [`row_liveness`] with the truth-state read injected, mirroring
 /// `claude_resume_argv_with_truth`'s seam so tests can stage transcript reads
@@ -2137,14 +1584,12 @@ where
             return RowLiveness::Alive;
         }
     }
-    if let Some(uuid) = entry
-        .claude_session_uuid
-        .as_deref()
-        .map(str::trim)
-        .filter(|u| !u.is_empty())
-    {
+    // A drive-eligible row is not exit-proven by a stamp a revive left behind.
+    let exit_proven = entry.status == crate::AgentStatus::Exited
+        || (entry.exited_at.is_some() && !entry.status.is_drive_eligible());
+    if let Some(handle) = crate::daemon::row_truth_handle(entry).filter(|_| !exit_proven) {
         if matches!(
-            truth_fn(uuid).as_deref(),
+            truth_fn(&handle).as_deref(),
             Some("working" | "watching" | "your-move")
         ) {
             return RowLiveness::Alive;
@@ -2179,308 +1624,10 @@ where
     RowLiveness::Unknown
 }
 
-/// The claude arm of `resume` (x-9844 Fix 1): liveness-probe first, then pick the
-/// argv. A live (incl. idle) supervisor -> `claude attach <short_id>` (today's
-/// behavior); a dead/absent one -> `claude --resume <uuid>` in the recorded cwd.
-/// Probe reality (locate_session + a 250 ms socket connect), never the registry
-/// `status` field: a stale-exited row whose supervisor is actually alive must
-/// attach, not `--resume` into a second writer on one transcript. The chosen lane
-/// is printed to stderr before returning so the operator always knows which
-/// fired. `Err(code)` carries the exit code for the uuid-absent refusal.
-/// Returns `(argv, claim_uuid)`. `claim_uuid` is `Some(uuid)` only for the
-/// dead-arm (`claude --resume`), which the caller must guard with the
-/// `session:<uuid>` single-writer claim before exec; the live attach arm returns
-/// `None` (claude's own supervisor owns attach safety).
-fn claude_resume_argv(
-    claude_home: &ClaudeHome,
-    entry: &Value,
-    name: &str,
-) -> Result<(Vec<String>, Option<String>), i32> {
-    claude_resume_argv_with_truth(claude_home, entry, name, family1_truth_state_for_resume)
-}
-
-fn claude_resume_argv_with_truth<F>(
-    claude_home: &ClaudeHome,
-    entry: &Value,
-    name: &str,
-    truth_fn: F,
-) -> Result<(Vec<String>, Option<String>), i32>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
-    let uuid = entry
-        .get("claude_session_uuid")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    let has_uuid = is_uuid_shaped(uuid);
-
-    let socket_live = !short_id.is_empty()
-        && locate_session(claude_home, short_id)
-            .map(|loc| liveness_probe(&loc.messaging_socket_path))
-            .unwrap_or(false);
-    // Probe on the canonical uuid whenever one is recorded. This used to also
-    // short-circuit on an empty short_id, so a pane worker (no short_id by
-    // design: _validate_single_live_ref enforces mux XOR worker XOR bg) never
-    // probed and reported "liveness is inconclusive" for a session whose uuid
-    // was resolvable - the x-b84f bug. The attach arm below gates on a present
-    // short_id, so dropping the short_id term lets a mux row probe without ever
-    // issuing a bare `claude attach ""`.
-    let truth_state = if socket_live || uuid.is_empty() {
-        None
-    } else {
-        truth_fn(uuid)
-    };
-    let live = socket_live
-        || matches!(
-            truth_state.as_deref(),
-            Some("working" | "watching" | "your-move")
-        );
-    let dead = matches!(truth_state.as_deref(), Some("done" | "stalled"));
-
-    if live && !short_id.is_empty() {
-        // Deliberately silent on mechanism: the caller (`run_resume`) decides
-        // AFTER this returns whether the row gets --print-command'd, the
-        // Python headless wake-and-verify delegation, or (a mux pane row
-        // never reaches this arm, so that leaves) nothing else -- an
-        // "attaching" claim printed here was true when this arm always led
-        // to a bare `claude attach` exec, and stayed on the screen after the
-        // delegation replaced that exec with a wake that never attaches at
-        // all. The caller's own downstream output (the printed command, or
-        // fno-py's before -> after line) is what actually describes what
-        // happened.
-        eprintln!("fno agents resume: {name} is live");
-        let argv = crate::harness_capabilities::render_session_argv_with_ids(
-            "claude",
-            "interactive_attach",
-            None,
-            Some(short_id),
-        )
-        .map_err(|_| 13)?;
-        Ok((argv, None))
-    } else if dead && has_uuid {
-        // x-ae2d: this arm RELAUNCHES (the live arm above only attaches), so it
-        // is the one door on this verb that can lose a route. A row that records
-        // one gets it re-applied through `--settings`, the same mechanism the
-        // original spawn used; a recorded file that is gone refuses rather than
-        // relaunching on the default Anthropic account, which works, bills the
-        // wrong vendor, and reports nothing.
-        let route_settings = entry
-            .get("route_settings_path")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|p| !p.is_empty());
-        let mut argv = crate::harness_capabilities::render_session_argv(
-            "claude",
-            "interactive_resume",
-            Some(uuid),
-        )
-        .map_err(|_| 13)?;
-        if let Some(path) = route_settings {
-            // Present is not enough. The file is the auth-scrub floor with the
-            // route written on top, and claude reads an empty settings value as
-            // UNSET - so a floor-only or malformed file hands claude a settings
-            // file that selects nothing and the worker comes back on the default
-            // account in silence. That is the same outcome as a missing file, so
-            // it takes the same refusal. Python's `read_route_settings` applies
-            // the identical rule; a check here that only tested existence would
-            // make these two doors disagree while the docs call them equivalent.
-            let usable = fs::read_to_string(path).ok().and_then(|raw| {
-                serde_json::from_str::<Value>(&raw).ok().map(|v| {
-                    v.get("env").and_then(Value::as_object).is_some_and(|env| {
-                        env.values()
-                            .any(|x| x.as_str().is_some_and(|s| !s.is_empty()))
-                    })
-                })
-            });
-            if usable != Some(true) {
-                let why = match usable {
-                    None => "cannot be read as a route settings file",
-                    _ => "records no route",
-                };
-                eprintln!(
-                    "fno agents resume: {name} was launched on the route recorded at \
-                     {path}, and it {why}; refusing to relaunch it on the default \
-                     account. Re-spawn with an explicit --route/-P to choose one."
-                );
-                return Err(13);
-            }
-            eprintln!("fno agents resume: restoring recorded route from {path}");
-            argv.splice(1..1, ["--settings".into(), path.into()]);
-        }
-        eprintln!("fno agents resume: {name} has exited - resuming in your terminal");
-        Ok((argv, Some(uuid.to_string())))
-    } else if !has_uuid {
-        // No resumable uuid and no live socket to attach through: name the cause.
-        // AC2: an id-less row is a definite "nothing to resume", never the
-        // "liveness is inconclusive" that printed an unrunnable empty-id hint and
-        // hid the real bug.
-        eprintln!("fno agents resume: {name} has no session id recorded; nothing to resume.");
-        Err(13)
-    } else if live {
-        // Probe-live but no short_id to attach through: a pane/mux worker that
-        // is already running. There is no resume action here - `claude attach`
-        // needs a short_id this row does not carry, and relaunching would open a
-        // second writer on one transcript. Do not call this "inconclusive": the
-        // probe just answered live, and the old hint sent the operator to re-run
-        // a probe whose answer contradicts the message.
-        eprintln!(
-            "fno agents resume: {name} is live but has no attach short_id \
-             (a pane worker); it is already running - drive it via its mux session, \
-             or re-spawn with `fno agents spawn`."
-        );
-        Err(13)
-    } else {
-        // has_uuid but neither attachable-live nor affirmatively dead: genuinely
-        // inconclusive (a silent-unreachable worker that may still be alive).
-        // Name the uuid the operator can probe, not the empty short_id the old
-        // hint interpolated.
-        eprintln!(
-            "fno agents resume: {name} liveness is inconclusive; refusing to open a second writer. Run 'fno agents truth {uuid}'."
-        );
-        Err(13)
-    }
-}
-
-/// Build the `mux pane run` argv (everything after the `fno` binary) that
-/// relaunches `claude_argv` on a new pane in `session` at `cwd`. The `--` fence
-/// keeps a `--resume <uuid>` (or any flag-shaped inner arg) out of the mux
-/// parser, so the resumed command is transported verbatim - the one-verb form
-/// of the manual `fno mux pane run 'cd <wt> && exec claude --resume <uuid>'`
-/// recovery recipe (x-b84f D3).
-fn mux_pane_run_argv(session: &str, cwd: &str, claude_argv: &[String]) -> Vec<String> {
-    let mut v: Vec<String> = vec![
-        "mux".into(),
-        "pane".into(),
-        "run".into(),
-        "--session".into(),
-        session.into(),
-        "--cwd".into(),
-        cwd.into(),
-        "--".into(),
-    ];
-    v.extend(claude_argv.iter().cloned());
-    v
-}
-
-/// Acquire the `session:<uuid>` single-writer claim for an interactive dead-row
-/// resume, anchored to THIS process. `exec` keeps the pid, so the claim is held
-/// by the resumed claude and self-releases when the operator quits (no explicit
-/// release). Two racing resumers both probe dead, but only one wins this atomic
-/// claim; the loser gets `Err` and refuses instead of opening a second writer on
-/// one transcript - the residual double-writer window the liveness probe alone
-/// cannot close. `root` is `None` in prod (session: keys route to
-/// `$FNO_CLAIMS_ROOT`/`$HOME`); tests inject a temp root.
-/// How long the session single-writer claim guards a mux-pane relaunch.
-/// The launching process exits once the pane is up, so the claim cannot ride
-/// the holder pid the way the in-terminal exec's does (a PID-only claim goes
-/// Stale the moment that pid dies, so a second resumer would steal it before
-/// the resumed claude is probe-live). This TTL keeps the claim Live across
-/// that launch-to-probe-live window; once claude is probe-live the truth probe
-/// (not this claim) stops a second relaunch. Picked wide against slow startup;
-/// after it expires, a crashed worker can be re-resumed rather than blocked.
-const MUX_RESUME_CLAIM_TTL_MS: u64 = 120_000;
-
-fn acquire_resume_session_claim(
-    uuid: &str,
-    root: Option<&Path>,
-    ttl_ms: Option<u64>,
-) -> Result<(), (i32, String)> {
-    acquire_named_session_claim(&format!("session:{uuid}"), uuid, root, ttl_ms)
-}
-
-/// Used directly by the dead-row `claude --resume` relaunch (keyed
-/// `session:{uuid}`). The live-row headless wake uses the matching
-/// `resume-attach:{short_id}` key too, but acquires it Python-side
-/// (`resume_cli.py`'s `_resume_claude_wake`, gated on skip-eligibility) --
-/// this Rust arm delegates the wake itself and does not call this function
-/// for that key. Two different key prefixes by design: a live wake and a
-/// dead relaunch are mutually exclusive outcomes of one truth-state read,
-/// never racing each other for the same row, but two concurrent resumes
-/// both landing on the SAME arm for the same row do race -- each key only
-/// needs to guard against its own arm's double-writer.
-fn acquire_named_session_claim(
-    key: &str,
-    label: &str,
-    root: Option<&Path>,
-    ttl_ms: Option<u64>,
-) -> Result<(), (i32, String)> {
-    use crate::claims::{acquire, AcquireOpts, AcquireOutcome};
-    let holder = format!("resume:{}", std::process::id());
-    let opts = AcquireOpts {
-        root: root.map(Path::to_path_buf),
-        reason: Some("interactive resume single-writer".to_string()),
-        ttl_ms: ttl_ms.map(|t| t as i64),
-        ..Default::default()
-    };
-    match acquire(key, &holder, opts) {
-        AcquireOutcome::Acquired(_) => Ok(()),
-        AcquireOutcome::HeldByOther { holder, pid, host } => Err((
-            11,
-            format!(
-                "fno agents resume: session {label} is held live by another writer \
-                 ({holder}, pid={}, host={host}); not opening a second writer on one transcript.",
-                // The Python twins print the bare pid / `None`, never `Some(n)`.
-                pid.map(|p| p.to_string())
-                    .unwrap_or_else(|| "None".to_string())
-            ),
-        )),
-        AcquireOutcome::Error(e) => Err((
-            12,
-            format!("fno agents resume: could not claim session {label}: {e}"),
-        )),
-    }
-}
-
-/// The dead-row pointer for `attach` (x-9844 Fix 2): `Some(message)` when `entry`
-/// is a claude row whose supervisor is gone (probe says dead) AND a well-shaped
-/// session uuid is recorded - the two revival commands to print instead of
-/// dead-ending in claude's own "session not found". `None` when the row is live
-/// (fall through to a normal attach) or carries no revivable uuid (nothing to
-/// point at - never print an unusable command). Probes reality (locate_session +
-/// socket), never the registry `status` field, matching the resume smart verb.
-fn claude_attach_pointer(claude_home: &ClaudeHome, entry: &Value, name: &str) -> Option<String> {
-    claude_attach_pointer_with_truth(claude_home, entry, name, family1_truth_state)
-}
-
-fn claude_attach_pointer_with_truth<F>(
-    claude_home: &ClaudeHome,
-    entry: &Value,
-    name: &str,
-    truth_fn: F,
-) -> Option<String>
-where
-    F: Fn(&str) -> Option<String>,
-{
-    let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
-    let uuid = entry
-        .get("claude_session_uuid")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if short_id.is_empty() || !is_uuid_shaped(uuid) {
-        return None;
-    }
-    let socket_live = locate_session(claude_home, short_id)
-        .map(|loc| liveness_probe(&loc.messaging_socket_path))
-        .unwrap_or(false);
-    if socket_live {
-        return None;
-    }
-    if !matches!(truth_fn(uuid).as_deref(), Some("done" | "stalled")) {
-        return None;
-    }
-    Some(format!(
-        "{name} has exited - fno agents resume {name} (continue it in your terminal)\n\
-         or: fno agents spawn {name} --resume {uuid} --substrate bg (detached worker)"
-    ))
-}
-
 /// POSIX shell quoting matching Python's `shlex.quote`: empty -> `''`; a string
 /// of only "safe" chars (`[\w@%+=:,./-]`) is returned as-is; otherwise it is
 /// single-quoted with embedded `'` escaped as `'"'"'`.
-fn shlex_quote(s: &str) -> String {
+pub(crate) fn shlex_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();
     }
@@ -2504,7 +1651,7 @@ fn shlex_quote(s: &str) -> String {
 /// printable non-ASCII (e.g. accented letters) stays literal, which is correct
 /// for every realistic agent name / cwd / short-id input. The rare divergence is
 /// non-ASCII code points that are non-printable above the C1 range (cv-b6bd4bf4).
-fn py_repr_str(s: &str) -> String {
+pub(crate) fn py_repr_str(s: &str) -> String {
     let has_single = s.contains('\'');
     let has_double = s.contains('"');
     let quote = if has_single && !has_double { '"' } else { '\'' };
@@ -2539,7 +1686,7 @@ fn py_repr_str(s: &str) -> String {
 /// `shutil.which`-style PATH lookup: true iff `name` resolves to an executable
 /// regular file (an absolute/relative path with a separator is checked directly;
 /// otherwise each `$PATH` entry is probed).
-fn which_on_path(name: &str) -> bool {
+pub(crate) fn which_on_path(name: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let is_exec = |p: &Path| -> bool {
         match fs::metadata(p) {
@@ -2560,59 +1707,10 @@ fn which_on_path(name: &str) -> bool {
     std::env::split_paths(&path).any(|dir| is_exec(&dir.join(name)))
 }
 
-/// Append one event line to `state_dir/events.jsonl` with the Python-agents
-/// envelope (`{...fields, ts, kind}`, compact). Best-effort: on a write error
-/// it warns to stderr and returns, mirroring `agents.events.emit` so a failed
-/// telemetry write never blocks the primary command (AC1-FR).
-///
-/// Deliberately a free function (not a `.emit()` method) so the crate's
-/// production-emit-kind scanner (which keys on `.emit(`/`.emit_fields(`) does
-/// not treat these Python-side audit kinds as Rust daemon event kinds.
-fn append_agents_event(events_path: &Path, kind: &str, fields: &[(&str, Value)]) {
-    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let mut parts: Vec<String> = fields
-        .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}:{}",
-                serde_json::to_string(k).unwrap_or_default(),
-                serde_json::to_string(v).unwrap_or_default()
-            )
-        })
-        .collect();
-    parts.push(format!(
-        "\"ts\":{}",
-        serde_json::to_string(&ts).unwrap_or_default()
-    ));
-    parts.push(format!(
-        "\"kind\":{}",
-        serde_json::to_string(kind).unwrap_or_default()
-    ));
-    let line = format!("{{{}}}\n", parts.join(","));
-
-    let result = (|| -> std::io::Result<()> {
-        if let Some(parent) = events_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        use std::io::Write;
-        let mut fh = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(events_path)?;
-        fh.write_all(line.as_bytes())
-    })();
-    if let Err(exc) = result {
-        eprintln!(
-            "fno agents: warning: events.emit('{kind}') to {}: {exc}",
-            events_path.display()
-        );
-    }
-}
-
 /// Read the registry rows for the subprocess-exec verbs. Thin alias over
 /// [`load_registry_entries`] (the validation + `"agents"`/`"entries"` key
 /// handling lives there) so resume/attach/logs and trace share one reader.
-fn read_registry_entries(path: &Path) -> Result<Vec<Value>, String> {
+pub(crate) fn read_registry_entries(path: &Path) -> Result<Vec<Value>, String> {
     load_registry_entries(path)
 }
 
@@ -2620,47 +1718,11 @@ fn read_registry_entries(path: &Path) -> Result<Vec<Value>, String> {
 // resume
 // ---------------------------------------------------------------------------
 
-/// `fno mux pane run` exit code when the mux never answered the control read
-/// (crates/fno `EXIT_CONTROL_UNANSWERED`). Duplicated here rather than
-/// imported: this crate does not depend on `fno`, and `fno mux pane run` is
-/// invoked as a subprocess, not a library call.
-const MUX_CONTROL_UNANSWERED: i32 = 20;
-
-/// Map a failed `fno mux pane run` (the resume launcher's subprocess) to its
-/// stderr message. Kept pure so the exit-code split is mechanically testable
-/// without mutating PATH or shelling out (parse_heal_token_output's pattern).
-///
-/// `EXIT_CONTROL_UNANSWERED` gets the truthful "may have started" message:
-/// the verb REACHED the server, so "(no pane started)" is false for this
-/// code alone. Adoption stays in the Python spawn path's
-/// `_reconcile_unanswered_run` (one place owns candidate matching); this
-/// launcher only names the inspect command, on the same reasoning.
-fn mux_pane_run_failure_message(
-    name: &str,
-    session: &str,
-    status: std::process::ExitStatus,
-) -> String {
-    if status.code() == Some(MUX_CONTROL_UNANSWERED) {
-        return format!(
-            "fno agents resume: the mux never answered the run for {name}; a pane \
-             MAY have started. Check `fno mux pane ls --session {session}` before \
-             retrying."
-        );
-    }
-    format!(
-        "fno agents resume: mux pane run for {name} exited {} (no pane started)",
-        status
-            .code()
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| "signal".to_string())
-    )
-}
-
 /// True for the one `claude_resume_argv_with_truth` arm that returns
 /// `(["claude", "attach", short_id], None)`: a live, short_id-addressable
 /// claude row with no mux ref. `claim_uuid` is `Some` only on the dead-relaunch
 /// arm; every other arm already returns `Err` before this is checked.
-fn should_delegate_claude_live_attach(
+pub(crate) fn should_delegate_claude_live_attach(
     harness: &str,
     claim_uuid: &Option<String>,
     mux_session: &Option<String>,
@@ -2668,105 +1730,29 @@ fn should_delegate_claude_live_attach(
     harness == "claude" && claim_uuid.is_none() && mux_session.is_none()
 }
 
-/// `fno-agents resume <name> [--print-command]` -- resume an agent in its
-/// recorded cwd via the provider's resume CLI (`os.execvp` equivalent), or
-/// print the shell snippet with `--print-command`. Mirrors Python `resume_logic`.
-/// Pure parse of `resume`'s argv: `NAME [--print-command] [--message|-m VALUE]`.
-/// `--message`/`-m` (Python's `cmd_resume`) only matters on the claude
-/// live-attach delegation in `run_resume`, but it must be ACCEPTED here or
-/// every `fno agents resume <name> --message ...` invocation dies with exit 2
-/// before that delegation is ever reached -- resume auto-routes to this
-/// binary by default (`RUST_CLIENT_VERBS`), so this parser is the only door.
-/// Extracted as a pure function (mirrors `should_delegate_claude_live_attach`)
-/// so the flag grammar is unit-testable without an `AgentsHome`/registry
-/// fixture; on error it prints the same diagnostic `run_resume` used to print
-/// inline and returns the exit code to propagate.
-fn parse_resume_args(
-    rest: &[String],
-) -> Result<(String, bool, Option<String>, bool, Option<String>), i32> {
-    let mut name: Option<String> = None;
-    let mut print_command = false;
-    let mut message: Option<String> = None;
-    let mut cross_project = false;
-    let mut cwd: Option<String> = None;
-    // Every sibling parser in this file (`parse_trace_args`, `parse_logs_args`)
-    // expands `--flag=value` into `--flag value` before iterating; without it
-    // `--message=continue` falls into the `starts_with("--")` unknown-flag arm
-    // instead of being recognized.
-    let rest = expand_eq(rest);
-    let mut iter = rest.iter();
-    while let Some(a) = iter.next() {
-        match a.as_str() {
-            "--print-command" => print_command = true,
-            "--cross-project" => cross_project = true,
-            "--message" | "-m" => {
-                message = Some(match iter.next() {
-                    Some(v) => v.clone(),
-                    None => {
-                        eprintln!("fno-agents: {a} needs a value");
-                        return Err(2);
-                    }
-                });
-            }
-            "--cwd" => {
-                cwd = Some(match iter.next() {
-                    Some(v) if !v.starts_with("--") => v.clone(),
-                    _ => {
-                        eprintln!("fno-agents: --cwd needs a value");
-                        return Err(2);
-                    }
-                });
-            }
-            other if other.starts_with("--") => {
-                eprintln!("fno-agents: unknown resume flag: {other}");
-                return Err(2);
-            }
-            other => {
-                if name.is_some() {
-                    // The remedy, not just the refusal: `resume` reattaches a
-                    // session and carries no message, so the operator who
-                    // typed a prompt wanted `ask`. Matches the sibling
-                    // refusal for a live pane worker, which already ends in
-                    // the command to run instead.
-                    eprintln!(
-                        "fno-agents: resume takes one NAME and no prompt (got extra: {}).",
-                        echo_extra(other)
-                    );
-                    eprintln!(
-                        "resume reattaches a session; it does not carry a message. \
-                         Send one with: fno agents ask <name> \"<prompt>\""
-                    );
-                    return Err(2);
-                }
-                name = Some(other.to_string());
-            }
-        }
-    }
-    match name {
-        Some(n) => Ok((n, print_command, message, cross_project, cwd)),
-        None => {
-            eprintln!("fno-agents: resume needs a <name>");
-            Err(2)
-        }
-    }
-}
+#[cfg(test)]
+use crate::resume_wake::MUX_RESUME_CLAIM_TTL_MS;
+/// Pure parse of `resume`'s argv (`NAME [--print-command] [--message|-m VALUE]`),
+/// extracted so the flag grammar is unit-testable without a registry fixture;
+/// `--message` must be ACCEPTED here or a `--message` resume dies at argv
+/// before the claude live-attach delegation that consumes it is ever reached.
+use crate::resume_wake::{acquire_resume_session_claim, is_uuid_shaped, run_and_confirm_respawn};
 
 pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
-    let (name, print_command, message, cross_project, cwd_override) = match parse_resume_args(rest)
-    {
+    let crate::resume_args::ResumeArgs {
+        name,
+        print_command,
+        message,
+        message_already_queued,
+        from_name,
+        cross_project,
+        cwd: cwd_override,
+        account,
+        ..
+    } = match crate::resume_args::parse_and_validate(rest) {
         Ok(v) => v,
         Err(code) => return code,
     };
-
-    if let Some(path) = cwd_override.as_deref() {
-        if !Path::new(path).is_dir() {
-            eprintln!(
-                "fno agents resume: replacement cwd {} is not an existing directory.",
-                py_repr_str(path)
-            );
-            return 13;
-        }
-    }
     let scope_cwd = cwd_override.as_deref().map(Path::new);
 
     let entries = match read_registry_entries(&home.registry_json()) {
@@ -2790,7 +1776,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             // `fno agents resume <session-id>` revives a /target orphan. A plain
             // name keeps today's refusal (AC7-HP: byte-identical for name args).
             let adopted = if is_session_shaped(&name) {
-                adopt_from_manifest(&name, home)
+                crate::adopt_identity::adopt_from_manifest(&name, home)
             } else {
                 Ok(None)
             };
@@ -2800,14 +1786,25 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
                 // `Err(Io)` -- `NoEvidence` is `synthesize_and_adopt`'s
                 // variant, unreachable through this call, kept here only for
                 // exhaustiveness over `AdoptError`.
-                Ok(None) | Err(AdoptError::NoEvidence) => {
+                Ok(None) | Err(crate::adopt_identity::AdoptError::NoEvidence) => {
+                    // A retired session keeps its resume tokens even though
+                    // its registry row is gone: consult the receipts store
+                    // before refusing.
+                    if crate::resume_receipt::maybe_hint_preserved_session(home, &name) {
+                        return 13;
+                    }
+                    let next_step = if is_uuid_shaped(&name.to_ascii_lowercase()) {
+                        format!("or run `fno agents adopt {name}` to register it first")
+                    } else {
+                        "or pass a full session id to resume an orphaned session".to_string()
+                    };
                     eprintln!(
-                        "fno agents resume: {}. Use `fno agents list` to see registered agents, or pass a full session id to resume an orphaned session.",
+                        "fno agents resume: {}. Use `fno agents list` to see registered agents, {next_step}.",
                         err.message()
                     );
                     return 13;
                 }
-                Err(AdoptError::Io(message)) => {
+                Err(crate::adopt_identity::AdoptError::Io(message)) => {
                     eprintln!("fno agents resume: manifest adoption failed: {message}");
                     return 13;
                 }
@@ -2816,7 +1813,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     };
     let entry = &entry;
 
-    // Identity is one axis (x-8dfc): resume keys on harness (provider fallback
+    // Identity is one axis: resume keys on harness (provider fallback
     // for a not-yet-backfilled row), and the exit-13 errors name the harness,
     // matching Python resume_cli. harness == provider on every current row.
     let harness = entry
@@ -2825,6 +1822,79 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         .filter(|s| !s.is_empty())
         .or_else(|| entry.get("provider").and_then(Value::as_str))
         .unwrap_or("");
+    let contract = match crate::harness_capabilities::HarnessContract::packaged() {
+        Ok(contract) => contract,
+        Err(error) => {
+            eprintln!("fno agents resume: resume contract is unavailable: {error}");
+            return 13;
+        }
+    };
+    let has_mux_ref = entry.get("mux").is_some_and(|mux| {
+        mux.get("session")
+            .and_then(Value::as_str)
+            .is_some_and(|session| !session.is_empty())
+            && mux.get("pane_id").and_then(Value::as_u64).is_some()
+    });
+    let route = crate::resume_route::resume_route(
+        harness,
+        entry.get("substrate").and_then(Value::as_str),
+        has_mux_ref,
+        std::io::stdin().is_terminal(),
+        &name,
+        resume_session_id(entry, harness),
+        &contract,
+    );
+    if has_mux_ref {
+        if let ResumeRoute::Refused(line) = &route {
+            eprintln!("{line}");
+            return 13;
+        }
+    }
+    if print_command {
+        return crate::resume_route::print_resume_command(
+            &name,
+            entry,
+            harness,
+            resume_session_id(entry, harness),
+            cwd_override.as_deref(),
+            home,
+            &contract,
+            &route,
+        );
+    }
+    if let ResumeRoute::Refused(line) = &route {
+        eprintln!("{line}");
+        return 13;
+    }
+    // Codex route args belong after the executable token. Keep terminal argv
+    // raw until route resolution; composing pre_exec first would put those
+    // args into the outer `sh -c` invocation.
+    let codex_terminal_exec = harness == "codex" && matches!(&route, ResumeRoute::TerminalExec);
+    // the account flag is parsed so a wake never exits 2 at argv. The
+    // ROW's recorded launch account stays the binding authority on this path -
+    // a wake continues a transcript that lives under the config dir it was
+    // created in, so an injected pick cannot move the namespace (the spawn
+    // seam's own `--resume` skip holds the same reasoning). The value is still
+    // validated when it NAMES SOMETHING ELSE: an account that does not resolve
+    // in the store is a typo reading as applied. The recorded account itself
+    // is never re-validated here - the reentry resolver below shells the same
+    // store for it, and a second spawn per wake buys nothing. Non-claude rows
+    // carry no account axis; the row's own lane bills itself.
+    if let Some(acct) = account.as_deref() {
+        let recorded = entry
+            .get("launch_account")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if matches!(&route, ResumeRoute::ClientResume) && acct != recorded {
+            if let Err(reason) = crate::reentry::shell_account_binding(acct) {
+                eprintln!(
+                    "fno agents resume: --account {acct:?} does not resolve: {reason}. \
+                     --account never re-binds an existing row; re-spawn the worker under the account you want."
+                );
+                return 13;
+            }
+        }
+    }
     let recorded_cwd = entry.get("cwd").and_then(Value::as_str).unwrap_or("");
     // claude keys transcript dirs by the session cwd, so a session that ran
     // EnterWorktree after registration has its transcript under a different
@@ -2832,12 +1902,12 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // from where the transcript actually is; other harnesses keep the recorded.
     let resolved_cwd = if let Some(override_cwd) = cwd_override.clone() {
         override_cwd
-    } else if harness == "claude" {
+    } else if matches!(&route, ResumeRoute::ClientResume) {
         let claude_uuid = entry
             .get("claude_session_uuid")
             .and_then(Value::as_str)
             .unwrap_or("");
-        resolve_resume_cwd(&ClaudeHome::from_env(), recorded_cwd, claude_uuid)
+        crate::reentry::resolve_resume_cwd(&ClaudeHome::from_env(), recorded_cwd, claude_uuid)
             .to_string_lossy()
             .into_owned()
     } else {
@@ -2847,42 +1917,22 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     let session_id = resume_session_id(entry, harness);
 
     if cwd.is_empty() {
-        if !session_id.is_empty() {
-            eprintln!(
-                "fno agents resume: agent {} has no recorded cwd. \
-                 the row is the resume handle and still carries the session id: the harness \
-                 itself can reach the session directly (e.g. claude --resume <id>). To re-drive \
-                 it under fno, rm this row and `fno agents adopt <id>` rebinds a fresh one \
-                 with a live cwd - that pair spends the recorded route bindings. rm alone just \
-                 deletes the handle.",
-                py_repr_str(&name)
-            );
-        } else {
-            // Neither cwd nor session id: nothing to resume and nothing to
-            // rebind. Do not claim an id the row does not carry.
-            eprintln!(
-                "fno agents resume: agent {} has no recorded cwd and no session id. \
-                 The row holds nothing resumable; rm it and re-spawn is the honest cleanup, \
-                 and nothing is lost.",
-                py_repr_str(&name)
-            );
-        }
-        return 13;
+        return crate::resume_gate::missing_cwd_refusal(&name, session_id);
     }
 
-    // claude gets the liveness-probed smart fork (US1/US2, x-9844): a live
+    // claude gets the liveness-probed smart fork (US1/US2): a live
     // (incl. idle) supervisor -> attach; a dead/absent one -> `claude --resume
     // <uuid>`. Other harnesses keep their settled-session resume CLI. Check
     // support before session_id so an unknown harness surfaces "not supported",
     // then check identity before rendering so a supported harness with no bound
     // session reports the missing binding instead of an invalid argv.
-    let (argv, claim_uuid) = if harness == "claude" {
+    let (mut argv, claim_uuid) = if matches!(&route, ResumeRoute::ClientResume) {
         match claude_resume_argv(&ClaudeHome::from_env(), entry, &name) {
             Ok(plan) => plan,
             Err(code) => return code,
         }
     } else {
-        if !interactive_resume_supported(harness) {
+        if !crate::resume_route::interactive_resume_supported(harness) {
             eprintln!(
                 "fno agents resume: harness {} resume not supported by this fno version.",
                 py_repr_str(harness)
@@ -2897,7 +1947,16 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             );
             return 13;
         }
-        let v = match build_resume_argv(harness, session_id, Some(cwd)) {
+        let v = match if codex_terminal_exec {
+            crate::pane_relaunch::build_resume_argv_tokens_split(
+                harness,
+                session_id,
+                Some(cwd),
+                true,
+            )
+        } else {
+            build_resume_argv(harness, session_id, Some(cwd))
+        } {
             Some(v) => v,
             None => {
                 eprintln!(
@@ -2910,10 +1969,13 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         (v, None)
     };
 
-    // A pane (mux) row carries the session it was launched on; resume puts the
-    // worker back THERE via `fno mux pane run`, not in this terminal, so the
-    // operator keeps their shell and the resumed session stays drivable from the
-    // mux (x-b84f D3). A row with no mux ref keeps the in-terminal exec.
+    // A routed codex row re-resolves its route from TODAY's config before
+    // launch. The refusal waits for the loaded-thread wake: it needs no route.
+    let codex_route_outcome =
+        crate::codex_route::resume_route(harness, entry, Path::new(cwd), &mut argv);
+
+    // Keep the row's mux session for the live Claude attach decision; exited
+    // pane refs route or refuse above.
     let mux_session = entry
         .get("mux")
         .and_then(|m| m.get("session"))
@@ -2921,15 +1983,10 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    if !which_on_path(&argv[0]) {
-        eprintln!("fno agents resume: {} CLI not on PATH", argv[0]);
-        return 14;
-    }
-
-    // x-d285: a claude row's re-entry resolves through the canonical plan so
+    // a claude row's re-entry resolves through the canonical plan so
     // the ACCOUNT axis (and, on the attach arm, the route) rides every launch
-    // shape below - delegation, --print-command, the mux pane relaunch, and
-    // the in-terminal exec. The dead arm's own `--settings` splice stays the
+    // shape below - delegation and the in-terminal exec.
+    // The dead arm's own `--settings` splice stays the
     // route carrier there (it applies the identical usability rule), so only
     // the plan's env is layered on that arm's argv; a duplicate `--settings`
     // from the plan argv would hand claude the flag twice. A proven default
@@ -2943,13 +2000,10 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         .filter(|s| !s.is_empty())
         .unwrap_or(&name)
         .to_string();
-    // The print form is pure inspection and stays available when no plan can
-    // resolve: a heal that could not REGISTER its row (an unwritable registry)
-    // still resolves the session from the store, and a rowless session records
-    // no binding to restore - the bare argv is the honest print. Every launch
-    // shape below keeps the refusal.
+    // The inspection form returned above. Executed Claude resumes require a
+    // canonical re-entry plan before they can launch.
     let mut reentry_plan = None;
-    if harness == "claude" {
+    if matches!(&route, ResumeRoute::ClientResume) {
         // The transition follows the arm `claude_resume_argv` already chose:
         // `claim_uuid` is Some only on the dead-relaunch arm, so a live row
         // asks for Attach (its true route) instead of hardcoding Resume -
@@ -2964,60 +2018,37 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             &row_name,
             transition,
             None,
-            cwd_override.as_deref(),
+            Some(cwd),
         ) {
-            Ok(plan) => reentry_plan = Some(plan),
+            Ok(plan) => reentry_plan = Some(plan.carry_pins(&mut argv)),
             Err(reason) => {
-                if print_command {
-                    eprintln!(
-                        "fno agents resume: no canonical re-entry plan ({reason}); \
-                         printing the bare recorded argv"
-                    );
-                } else {
-                    eprintln!("fno agents resume: refused: {reason}");
-                    return crate::reentry::REENTRY_REFUSED_EXIT;
-                }
+                eprintln!("fno agents resume: refused: {reason}");
+                return crate::reentry::REENTRY_REFUSED_EXIT;
             }
         }
     }
 
-    if print_command {
-        // x-d285: a claude row prints its CANONICAL plan argv - env prefix,
-        // session id, and the recorded --settings together - so the inspection
-        // form matches what `fno agents attach` and `recover --print-command`
-        // print for the same row. The dead arm's local argv equals the plan's;
-        // the live arm's bare attach line did not carry a recorded route.
-        // Paths and ids only; nothing from inside the route file is printed.
-        let printed_argv: Vec<String> = match &reentry_plan {
-            Some(plan) => {
-                // Same shape the mux server's verdict prefix builds: env(1)
-                // assignments, then the provider argv.
-                let mut prefixed: Vec<String> =
-                    plan.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                prefixed.extend(plan.argv.iter().cloned());
-                prefixed
-            }
-            None => argv.clone(),
-        };
-        if let Some(session) = mux_session.as_deref() {
-            // Pane form: `fno mux pane run ... -- claude ...`. Path only; nothing
-            // from inside the route file reaches the printed command (AC5).
-            let pane = mux_pane_run_argv(session, cwd, &printed_argv);
-            let pane_q = pane
-                .iter()
-                .map(|a| shlex_quote(a))
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("fno {pane_q}");
-        } else {
-            let argv_q = printed_argv
-                .iter()
-                .map(|a| shlex_quote(a))
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("cd {} && exec {}", shlex_quote(cwd), argv_q);
+    // Keep the row's identity on route-managed print commands and the codex
+    // wake route, which may relaunch the session through the daemon.
+    let identity = match mesh_identity_assignments(
+        entry.get("name").and_then(Value::as_str).unwrap_or(&name),
+        harness,
+        entry.get("node").and_then(Value::as_str),
+    ) {
+        Ok(a) => a,
+        Err(why) => {
+            eprintln!("fno agents resume: {why}; refusing an unattributable resume");
+            return 13;
         }
-        return 0;
+    };
+
+    if matches!(
+        &route,
+        ResumeRoute::ClientResume | ResumeRoute::TerminalExec | ResumeRoute::KeeperRevive
+    ) && !which_on_path(&argv[0])
+    {
+        eprintln!("fno agents resume: {} CLI not on PATH", argv[0]);
+        return 14;
     }
 
     // Validate cwd before claiming, delegating, or launching - AFTER the print
@@ -3028,184 +2059,142 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // means a gone cwd never acquires the session claim, and never burns a
     // wake attempt, on the failure path.
     if !Path::new(cwd).is_dir() {
-        eprintln!(
-            "fno agents resume: cwd {} for {} is no longer reachable. Check whether the path \
-             is recoverable first (renamed worktree base, unmounted volume): \
-             the row is the resume handle. To re-drive the session under fno from a live cwd, \
-             rm this row and `fno agents adopt <id>` rebinds a fresh one; rm alone deletes the \
-             handle and the session binding with it. rm is for a path that is gone for good.",
-            py_repr_str(cwd),
-            py_repr_str(&name)
-        );
-        return 13;
+        return crate::resume_gate::gone_cwd_refusal(cwd, &name);
     }
 
-    // Live claude row (short_id, no mux ref): `claim_uuid` is None only on
-    // this arm (the dead-relaunch arm above sets Some(uuid); the two error
-    // arms already returned). A bare `claude attach` exec here has no pty,
-    // no route-settings restore, and no post-exec verification -- the same
-    // gap the Python fallback (`resume_cli.py::_resume_claude_wake`) closed.
-    // Delegating to it rather than re-deriving that pty/bracketed-paste/
-    // retry recipe natively keeps ONE implementation instead of two: a fix
-    // landed only here would leave `fno agents resume` (this binary) fixed
-    // and `fno-agents resume` still printing "Attaching..." and exiting,
-    // which is the guard-on-one-of-N-paths trap this repo already tracks.
+    // No resume route may wake a subject while its loop door is held.
+    if let Some(code) =
+        crate::resume_gate::pause_refusal_for_entry(home, &name, session_id, entry, cwd)
+    {
+        return code;
+    }
+
+    // Parked Claude rows use harness state for live and dead arms. That
+    // route reserves before reviving; other rows continue to the gate below.
+    if matches!(&route, ResumeRoute::ClientResume) {
+        if let Some(code) = crate::resume_wake::parked_claude_route(
+            harness,
+            entry,
+            &name,
+            &row_name,
+            cwd,
+            message.as_deref(),
+            home,
+        ) {
+            return code;
+        }
+    }
+
+    // A down-route launch also refuses if another holder took its node or PR;
+    // print-command and live-attach paths remain inspection/attach only.
+    if !matches!(&route, ResumeRoute::ClientResume) || claim_uuid.is_some() {
+        let gate_id = claim_uuid.as_deref().unwrap_or(session_id);
+        if let Some(code) = crate::resume_gate::gate_and_reserve(home, &name, gate_id) {
+            return code;
+        }
+    }
+
+    // An exited keeper-lane thread row revives on a fresh keeper; the
+    // second-writer claim above is held before anything launches.
+    if matches!(&route, ResumeRoute::KeeperRevive) {
+        return crate::keeper_revival::revive(
+            home,
+            &row_name,
+            harness,
+            session_id,
+            cwd,
+            &argv,
+            message.as_deref(),
+        );
+    }
+
+    // Live claude rows are read from the account's roster and resumed over
+    // control.sock; the Python wake and its supervisor-birth leg are retired.
     if should_delegate_claude_live_attach(harness, &claim_uuid, &mux_session) {
-        // No claim acquired here (unlike the dead-relaunch arm below):
-        // acquiring it unconditionally, before knowing whether the row is
-        // even skip-eligible (already Working/Idle/Done, needing no wake at
-        // all), raced two concurrent no-op resumes into a spurious "held by
-        // another writer" on a lock that guards a pty write neither was
-        // making. That skip decision requires the live-status truth-read
-        // this arm deliberately does not duplicate (see above); re-deriving
-        // it here just to gate the claim would be the same duplicate-truth
-        // problem this delegation exists to avoid. `resume_cli.py`'s own
-        // `_resume_claude_wake` acquires the identical `resume-attach:
-        // {short_id}` key itself, gated on that same skip check, once exec'd
-        // below -- the wake this arm delegates to stays guarded either way,
-        // whether reached through this Rust delegation or as the standalone
-        // Python entrypoint (FNO_AGENTS_RUNTIME=python, no Rust binary
-        // installed), which never runs this arm at all.
-        // Route through `fno` (the wrapper every install puts on PATH, which
-        // resolves the `fno-py` console script by absolute path -- see
-        // crates/fno/src/bootstrap.rs), not a bare `fno-py`: this binary has
-        // no PATH-robust resolver of its own, and a bare `fno-py` fails on a
-        // cargo-only install where only the mux (`fno`) is on PATH (the same
-        // gap cli/src/fno/_subprocess_util.py's `fno_py_cmd()` closes on the
-        // Python side). `FNO_AGENTS_RUNTIME=python` pins the child to Python
-        // dispatch, mirroring `token_helper_output` above -- without it,
-        // `resume` (in RUST_CLIENT_VERBS) would auto-route straight back into
-        // this same binary and loop.
-        //
-        // exec(), not status(): this REPLACES the process rather than
-        // spawning a child, matching every other `Command::new("fno")...exec()`
-        // delegation in this crate (`bin/client.rs:523-534`, `:544-554`) --
-        // same exit-127-on-failure convention, and it sidesteps process-group
-        // signal-propagation questions a spawned child would raise, since
-        // there is no separate child to propagate a signal to.
-        use std::os::unix::process::CommandExt;
-        let mut command = std::process::Command::new("fno");
-        command
-            // --cwd carries the EnterWorktree-resolved cwd computed above
-            // (`resolved_cwd`), not the raw registry value: Python has no
-            // equivalent of `resolve_resume_cwd` and would otherwise re-derive
-            // the stale pre-EnterWorktree cwd from the registry entry itself.
-            .args(["agents", "resume", &name, "--cwd", cwd])
-            .env("FNO_AGENTS_RUNTIME", "python");
-        // x-d285: the delegated wake re-resolves the same plan on the Python
-        // side; carrying the env here keeps the two runtimes from disagreeing
-        // if a stale binary lags one side of the rule.
-        if let Some(plan) = &reentry_plan {
-            for (key, value) in &plan.env {
-                command.env(key, value);
-            }
-        }
-        if cross_project {
-            command.arg("--cross-project");
-        }
-        if let Some(msg) = &message {
-            command.args(["--message", msg]);
-        }
-        let err = command.exec();
-        eprintln!(
-            "fno agents resume: delegating {name} to fno-py failed: {err}. \
-             Install the fno front door or run `fno-py agents resume {name}` directly."
+        return crate::resume_wake::claude_live_route(
+            entry,
+            &name,
+            &row_name,
+            cwd,
+            message.as_deref(),
+            message_already_queued,
+            from_name.as_deref(),
+            reentry_plan.as_ref(),
+            cross_project,
+            home,
         );
-        return 127;
     }
 
-    // Guard a dead-row `claude --resume` with the session single-writer claim
-    // before exec (--print-command already returned above, so it never claims).
-    // The in-terminal exec keeps this pid, so a PID-only claim (ttl=None) lives
-    // as long as claude does. The mux path exits after pane dispatch, so it
-    // passes a TTL: without one the claim would go Stale on the dead holder and
-    // a second resumer would steal it before the resumed claude is probe-live.
-    if let Some(uuid) = &claim_uuid {
-        let ttl = if mux_session.is_some() {
-            Some(MUX_RESUME_CLAIM_TTL_MS)
-        } else {
-            None
+    // A codex thread wakes over the daemon before the terminal exec path.
+    if matches!(&route, ResumeRoute::ServerResume) {
+        let route = crate::resume_wake::codex_resume_wake_route(
+            &name,
+            entry,
+            session_id,
+            message.as_deref(),
+            cwd,
+            &row_name,
+            &identity,
+            home,
+        );
+        if let Some(code) = route {
+            return code;
+        }
+    }
+
+    // refuse after the wake, before any claim; announce a restore.
+    if let Some(code) = crate::codex_route::resume_verdict(&codex_route_outcome, entry, &row_name) {
+        return code;
+    }
+
+    if codex_terminal_exec {
+        argv = match crate::harness_capabilities::compose_pre_exec(
+            harness,
+            "interactive_resume",
+            argv,
+        ) {
+            Ok(argv) => argv,
+            Err(_) => {
+                eprintln!(
+                    "fno agents resume: harness {} resume contract is invalid.",
+                    py_repr_str(harness)
+                );
+                return 13;
+            }
         };
-        if let Err((code, msg)) = acquire_resume_session_claim(uuid, None, ttl) {
+        if !which_on_path(&argv[0]) {
+            eprintln!("fno agents resume: {} CLI not on PATH", argv[0]);
+            return 14;
+        }
+    }
+
+    // Guard claude's same-id session resume before launch. Terminal
+    // interactive-resume routes retain their existing exec behavior.
+    if let Some(uuid) = &claim_uuid {
+        if let Err((code, msg)) = acquire_resume_session_claim(uuid, None, None) {
             eprintln!("{msg}");
             return code;
         }
     }
 
-    // Pane relaunch (claude only): the mux owns the cwd (--cwd) and the pane,
-    // and this process returns after the launch so the operator's terminal
-    // stays free. stdin is null'd so a mux pane run that reads stdin cannot
-    // stall against this terminal. The claim above carries a TTL (not a pid) on
-    // this path, so it stays Live across the launch-to-probe-live window; once
-    // the resumed claude is probe-live the truth probe (not the claim) stops a
-    // second relaunch. Emit only on a successful launch so a failed pane start
-    // does not record a misleading agent_resumed.
-    //
-    // Scoped to claude: the session claim that guards this path is claude-only,
-    // and launching a non-claude pane worker on an unguarded pane would widen
-    // that pre-existing no-claim gap. A non-claude pane row falls through to
-    // the in-terminal exec below (its prior behavior).
-    let mux_session = if harness == "claude" {
-        mux_session
-    } else {
-        None
-    };
-    if let Some(session) = mux_session.as_deref() {
-        let pane = mux_pane_run_argv(session, cwd, &argv);
-        let mut pane_command = std::process::Command::new("fno");
-        pane_command.args(&pane).stdin(std::process::Stdio::null());
-        // x-d285: the account namespace rides the pane relaunch. The mux CLI
-        // forwards its environment to the pane child; the server-side
-        // canonical resolution lands with the mux gestures (wave 2.2).
-        if let Some(plan) = &reentry_plan {
-            for (key, value) in &plan.env {
-                pane_command.env(key, value);
-            }
-        }
-        match pane_command.status() {
-            Ok(s) if s.success() => {
-                // session_id is the transport short_id, empty on a pane row;
-                // the resumed session's id is the uuid (claim_uuid).
-                let resumed_id = claim_uuid.as_deref().unwrap_or(session_id);
-                append_agents_event(
-                    &trace_events_path(home),
-                    "agent_resumed",
-                    &[
-                        ("name", Value::String(name.clone())),
-                        ("provider", Value::String(harness.to_string())),
-                        ("session_id", Value::String(resumed_id.to_string())),
-                        ("cwd", Value::String(cwd.to_string())),
-                    ],
-                );
-                eprintln!("fno agents resume: {name} relaunched on mux session {session}");
-                return 0;
-            }
-            Ok(s) => {
-                eprintln!("{}", mux_pane_run_failure_message(&name, session, s));
-                return 1;
-            }
-            Err(e) => {
-                eprintln!("fno agents resume: failed to launch {name} on a mux pane: {e}");
-                return 1;
-            }
-        }
-    }
-
-    // Dead-arm respawn: the plan's mechanism says `claude respawn`, which
-    // exits as soon as the job relaunches. Run and confirm; exec would drop
-    // the operator into a shell that looks like a no-op.
+    // Dead-arm respawn and bg-resume: the plan's mechanism relaunches the
+    // session (respawn restarts the saved job; bg-resume backgrounds a
+    // same-id resume). Both exit as soon as the job relaunches. Run and
+    // confirm; exec would drop the operator into a shell that looks like a
+    // no-op.
     if reentry_plan
         .as_ref()
-        .is_some_and(|p| p.mechanism == "respawn")
+        .is_some_and(|p| matches!(p.mechanism.as_str(), "respawn" | "bg-resume"))
     {
-        return run_and_confirm_respawn(
+        return crate::resume_wake::respawn_and_deliver(
             reentry_plan.as_ref().unwrap(),
             &name,
-            "resume",
-            "agent_resumed",
+            message.as_deref(),
             home,
         );
     }
+
+    // a thread row's daemon arm lives in `resume_wake::codex_resume_route`.
 
     // chdir BEFORE the emit so a stale cwd surfaces as exit 13 rather than a
     // misleading "agent_resumed" event followed by a failed exec.
@@ -3231,7 +2220,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         &[
             ("name", Value::String(name.clone())),
             // Event field key stays "provider" (schema parity with Python's
-            // emit); the value is the resolved harness (== provider) (x-8dfc).
+            // emit); the value is the resolved harness (== provider).
             ("provider", Value::String(harness.to_string())),
             ("session_id", Value::String(session_id.to_string())),
             ("cwd", Value::String(cwd.to_string())),
@@ -3247,98 +2236,28 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
             exec_command.env(key, value);
         }
     }
+    // A claude row's argv is a `claude` client, so this exec can birth the
+    // supervisor too.
+    if matches!(&route, ResumeRoute::ClientResume) {
+        match &reentry_plan {
+            Some(plan) => crate::claude_supervisor::guard_birth_for_plan(&plan.env),
+            None => crate::claude_supervisor::guard_birth([]),
+        }
+    }
+    // the restored route's env rides the in-terminal exec.
+    if let Some(Ok(Some(route))) = &codex_route_outcome {
+        for (key, value) in &route.env {
+            exec_command.env(key, value);
+        }
+    }
     let err = exec_command.exec();
     // exec only returns on failure.
     eprintln!("fno agents resume: failed to exec {}: {err}", argv[0]);
     1
 }
 
-/// Run a respawn plan as a child and confirm it actually revived the row.
-///
-/// `claude respawn` exits as soon as the job is relaunched, so this verb must
-/// NOT exec it (the exec convention the other arms use): the operator's shell
-/// would come back with nothing to show. And exit 0 is not proof - the
-/// receipt-can-lie shape `fno agents rm` already shipped once. The
-/// confirmation is the positive marker: `jobs/<short>/state.json` re-read
-/// after the respawn with an `updated_at` newer than the pre-respawn read.
-/// The state WORD is not evidence - the wake lane's confirm primitive exists
-/// because `working -> working` read the same for a landed and an unlanded
-/// message.
-fn run_and_confirm_respawn(
-    plan: &crate::reentry::ReentryPlan,
-    name: &str,
-    verb: &str,
-    event_kind: &str,
-    home: &AgentsHome,
-) -> i32 {
-    use crate::claude_ask::{read_state_json, ClaudeHome};
-
-    let claude_home = ClaudeHome::from_env();
-    let jobs_dir = claude_home.jobs_dir_for(&plan.short_id);
-    let before_updated_at = read_state_json(&jobs_dir).ok().and_then(|s| s.updated_at);
-
-    let mut command = std::process::Command::new(&plan.argv[0]);
-    command.args(&plan.argv[1..]).current_dir(&plan.cwd);
-    for (key, value) in &plan.env {
-        command.env(key, value);
-    }
-    let status = match command.status() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("fno agents {verb}: failed to run {}: {e}", plan.argv[0]);
-            return 1;
-        }
-    };
-    if !status.success() {
-        eprintln!(
-            "fno agents {verb}: {} for {name} exited {}",
-            plan.argv.join(" "),
-            status
-                .code()
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "signal".to_string())
-        );
-        return 1;
-    }
-
-    let confirmed = match (before_updated_at, read_state_json(&jobs_dir)) {
-        (Some(before), Ok(s)) => s.updated_at.as_deref().is_some_and(|a| a > before.as_str()),
-        // No readable BEFORE stamp (the file the resolver just proved exists
-        // did not parse): an AFTER read carrying any stamp is the evidence
-        // left, and it is still content, never an exit code.
-        (None, Ok(s)) => s.updated_at.is_some(),
-        (_, Err(_)) => false,
-    };
-    if !confirmed {
-        eprintln!(
-            "fno agents {verb}: respawn for {name} reported success but {} did not \
-             advance; the row is NOT confirmed back in agent view. Check \
-             `claude agents` before retrying.",
-            jobs_dir.join("state.json").display()
-        );
-        return 16;
-    }
-
-    append_agents_event(
-        &trace_events_path(home),
-        event_kind,
-        &[
-            ("name", Value::String(name.to_string())),
-            ("provider", Value::String("claude".to_string())),
-            ("session_id", Value::String(plan.session_id.clone())),
-            ("cwd", Value::String(plan.cwd.clone())),
-        ],
-    );
-    eprintln!(
-        "{name} is live again under {} (same session id).",
-        plan.session_id
-    );
-    eprintln!("`fno agents attach {name}` to drop in.");
-    0
-}
-
 // ---------------------------------------------------------------------------
-// recover (x-d285 task 3.2)
+// recover (task 3.2)
 // ---------------------------------------------------------------------------
 
 /// `fno agents recover <agent> [--session <id>] [--print-command]` -- restore a
@@ -3455,52 +2374,11 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
         return code;
     }
 
-    // The recorded mux destination wins when there is one: the pane relaunch
-    // returns after the launch so the operator's terminal stays free, and the
-    // account namespace rides the child environment.
-    if let Some(mux_ref) = plan.mux.as_ref() {
-        let pane = mux_pane_run_argv(&mux_ref.session, &plan.cwd, &plan.argv);
-        let mut pane_command = std::process::Command::new("fno");
-        pane_command.args(&pane).stdin(std::process::Stdio::null());
-        for (key, value) in &plan.env {
-            pane_command.env(key, value);
-        }
-        match pane_command.status() {
-            Ok(s) if s.success() => {
-                append_agents_event(
-                    &trace_events_path(home),
-                    "agent_recovered",
-                    &[
-                        ("name", Value::String(name.clone())),
-                        ("provider", Value::String("claude".to_string())),
-                        ("session_id", Value::String(plan.session_id.clone())),
-                        ("cwd", Value::String(plan.cwd.clone())),
-                    ],
-                );
-                eprintln!(
-                    "fno agents recover: {} relaunched on mux session {}",
-                    name, mux_ref.session
-                );
-                return 0;
-            }
-            Ok(s) => {
-                eprintln!(
-                    "{}",
-                    mux_pane_run_failure_message(&name, &mux_ref.session, s)
-                );
-                return 1;
-            }
-            Err(e) => {
-                eprintln!("fno agents recover: failed to launch {name} on a mux pane: {e}");
-                return 1;
-            }
-        }
-    }
-
-    // Respawn mechanism: run and confirm (see run_and_confirm_respawn). A
-    // `claude respawn` exits at once, so the exec below would replace this
-    // process with a launcher that immediately returns.
-    if plan.mechanism == "respawn" {
+    // Respawn and bg-resume mechanisms: run and confirm (see
+    // run_and_confirm_respawn). Both relaunch shapes exit at once, so the
+    // exec below would replace this process with a launcher that immediately
+    // returns.
+    if matches!(plan.mechanism.as_str(), "respawn" | "bg-resume") {
         return run_and_confirm_respawn(&plan, &name, "recover", "agent_recovered", home);
     }
 
@@ -3529,6 +2407,8 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     for (key, value) in &plan.env {
         exec_command.env(key, value);
     }
+    // recover execs a claude client, so it can birth the supervisor too.
+    crate::claude_supervisor::guard_birth_for_plan(&plan.env);
     let err = exec_command.exec();
     // exec only returns on failure.
     eprintln!("fno agents recover: failed to exec {}: {err}", plan.argv[0]);
@@ -3590,7 +2470,7 @@ pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
 
-    match synthesize_and_adopt(&session_id, home, cross_project) {
+    match crate::adopt_identity::synthesize_and_adopt(&session_id, home, cross_project) {
         Ok((row, fno_id, source)) => {
             let name = row.get("name").and_then(Value::as_str).unwrap_or("");
             let short = row.get("short_id").and_then(Value::as_str).unwrap_or("");
@@ -3640,7 +2520,7 @@ pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
                             || format!("last_message_at={stamp} (unparseable or ahead of now)"),
                             |age| {
                                 format!(
-                                    "last_activity_age_s={age} (from transcript mtime, read before the row write)"
+                                    "last_activity_age_s={age} (from the newest transcript entry, mtime fallback, read before the row write)"
                                 )
                             },
                         ),
@@ -3681,7 +2561,7 @@ pub fn run_adopt(rest: &[String], home: &AgentsHome) -> i32 {
 
 /// Reproduce `_validate_lifecycle_name`: returns `Err((exit, message))` on a
 /// rejected name (the message is printed to stderr with a trailing newline).
-fn validate_lifecycle_name(name: &str) -> Result<(), (i32, String)> {
+pub(crate) fn validate_lifecycle_name(name: &str) -> Result<(), (i32, String)> {
     if name.is_empty() {
         return Err((2, "agent name must not be empty".to_string()));
     }
@@ -3703,7 +2583,7 @@ fn validate_lifecycle_name(name: &str) -> Result<(), (i32, String)> {
     Ok(())
 }
 
-/// (x-6678) Is this registry row a codex THREAD? Mirrors
+/// Is this registry row a codex THREAD? Mirrors
 /// `is_codex_thread_entry` in the daemon: an interactive host with no claude
 /// short id and no pane of its own. A codex PANE row answers false and keeps
 /// the refusal, because its process already has a place and `fno mux` is how
@@ -3713,7 +2593,7 @@ fn validate_lifecycle_name(name: &str) -> Result<(), (i32, String)> {
 /// (session, pane_id) pair, which is the same rule `agents_view::derive_rows`
 /// applies. A half-written field must not decide that one door drives the row
 /// and the other refuses it.
-fn is_codex_thread_row(entry: &Value) -> bool {
+pub(crate) fn is_codex_thread_row(entry: &Value) -> bool {
     entry
         .get("host_mode")
         .and_then(Value::as_str)
@@ -3725,515 +2605,6 @@ fn is_codex_thread_row(entry: &Value) -> bool {
             .unwrap_or("")
             .is_empty()
         && entry.get("mux").is_none_or(Value::is_null)
-}
-
-/// (x-296f) Attach through the harness's OWN declared `interactive_attach`
-/// form, or `None` when it declares none (the caller then keeps its refusal).
-///
-/// EXEC, never proxy: this replaces the process, so the terminal's child is
-/// the harness's own TUI and fno renders nothing. The argv is the same one the
-/// mux viewport renders from the declaration - one declaration, two doors,
-/// pinned byte-identical by `attach_argv_matches_the_mux_renderer`.
-///
-/// The row-shape predicate (`is_codex_thread_row`) is load-bearing and kept:
-/// a declared form widens WHICH harnesses can attach, never which row shapes.
-/// A codex PANE row and a one-shot ask row refuse exactly as before.
-fn attach_via_declared_form(
-    harness: &str,
-    entry: &Value,
-    name: &str,
-    events_path: &Path,
-) -> Option<i32> {
-    if !is_codex_thread_row(entry) {
-        return None;
-    }
-    let render = |session: Option<&str>, short: Option<&str>| {
-        crate::harness_capabilities::render_session_argv_with_ids(
-            harness,
-            "interactive_attach",
-            session,
-            short,
-        )
-    };
-    // A form takes EXACTLY ONE id, and the renderer refuses the other spelling
-    // rather than ignoring it - so probe with a placeholder to learn whether
-    // this harness declares a form at all, before the row's real (possibly
-    // empty) ids can turn "declares none" and "declares one I cannot fill"
-    // into the same answer.
-    let declares =
-        render(Some("probe-session"), None).is_ok() || render(None, Some("probeid")).is_ok();
-    if !declares {
-        return None;
-    }
-    let session_id = entry
-        .get("harness_session_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let short_id = entry
-        .get("short_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let argv = match render(Some(session_id), None).or_else(|_| render(None, Some(short_id))) {
-        Ok(argv) => argv,
-        Err(_) => {
-            // A thread with no turns yet has no session id recorded, and the
-            // harness resolves a session BY the rollout its first turn writes.
-            // Name that rather than handing the operator the vendor's "no
-            // rollout found for thread id" (measured 2026-08-28,
-            // codex-cli 0.149.1).
-            eprintln!(
-                "{harness} worker {} has no session id on file yet; nothing to attach to. \
-                 Follow it instead: fno agents peek {} --follow",
-                py_repr_str(name),
-                name
-            );
-            append_agents_event(
-                events_path,
-                "agent_attach_refused",
-                &[
-                    ("name", Value::String(name.to_string())),
-                    ("provider", Value::String(harness.to_string())),
-                    ("reason", Value::String("no-session-id-yet".to_string())),
-                ],
-            );
-            return Some(13);
-        }
-    };
-    if !which_on_path(&argv[0]) {
-        eprintln!("{} not on PATH", argv[0]);
-        return Some(14);
-    }
-    // A TUI needs a terminal. Without this the exec still happens and the
-    // operator gets the vendor's bare "stdin is not a terminal" with no clue
-    // which command produced it or what to do instead.
-    // SAFETY: isatty performs no I/O and only reads the descriptor's mode.
-    if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
-        eprintln!(
-            "attach needs a terminal ({harness} draws its own interface, and fno never renders \
-             one). From a script, read instead: fno agents peek {name} --follow"
-        );
-        append_agents_event(
-            events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.to_string())),
-                ("provider", Value::String(harness.to_string())),
-                ("reason", Value::String("no-tty".to_string())),
-            ],
-        );
-        return Some(13);
-    }
-    append_agents_event(
-        events_path,
-        "agent_attach_exec",
-        &[
-            ("name", Value::String(name.to_string())),
-            ("provider", Value::String(harness.to_string())),
-            ("session_id", Value::String(session_id.to_string())),
-        ],
-    );
-    // Replace this process: the terminal's child is the harness itself. A
-    // failed pre-exec inside the composed script still runs the attach, which
-    // produces the more specific of the two errors in the terminal the
-    // operator is already looking at.
-    use std::os::unix::process::CommandExt;
-    let err = std::process::Command::new(&argv[0]).args(&argv[1..]).exec();
-    eprintln!("fno agents attach: failed to exec {}: {err}", argv[0]);
-    Some(1)
-}
-
-/// (x-c198) Attach to a pi session by EXEC'ing pi's own TUI on the same
-/// session id, in the row's own cwd.
-///
-/// `None` means this is not a pi thread row and the caller should fall through
-/// to its refusal. `Some(code)` means this function owned the outcome.
-///
-/// One argv builder, two doors: the mux viewport's `Reach::Drive` arm runs the
-/// same command. Neither renders anything.
-///
-/// **This is a JOIN, and the cwd is what makes it one.** pi's session store is
-/// cwd-scoped, so the TUI finds the rpc lane's live session only when it runs
-/// in the same directory. Run elsewhere, the same argv CREATES a second
-/// session under one id and says nothing, which is the silent half of this
-/// harness. So the cwd is read off the row and the child is placed in it; a
-/// row with no cwd recorded is refused rather than defaulting to this
-/// process's own directory.
-fn attach_pi_session(entry: &Value, name: &str, events_path: &Path) -> Option<i32> {
-    // NOT `is_codex_thread_row`, and the difference is load-bearing. That
-    // predicate excludes a pane-hosted row, which is right for codex (its
-    // thread lives in a daemon, and a pane row's process already has a place)
-    // and wrong for every pi row fno can produce today: the pi spawn lane IS
-    // the pane lane, so gating on it refused every real row with "pi agents
-    // are one-shot", contradicting the docs shipped in the same change.
-    //
-    // pi needs neither exclusion, because a second pi on one session id is a
-    // measured-safe JOIN rather than a rival launch. What it does need is the
-    // PAIR: a session id, and the cwd that scopes it.
-    let session_id = entry
-        .get("harness_session_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())?;
-    let cwd = entry
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|c| !c.is_empty());
-    let Some(cwd) = cwd else {
-        eprintln!(
-            "fno agents attach: registry row {name:?} records no cwd, and a pi session is \
-the pair (cwd, session id). Attaching from the wrong directory would CREATE a second session \
-under this id rather than joining the live one, so this is refused."
-        );
-        append_agents_event(
-            events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.to_string())),
-                ("provider", Value::String("pi".to_string())),
-                ("reason", Value::String("pi-row-has-no-cwd".to_string())),
-            ],
-        );
-        return Some(13);
-    };
-    if !which_on_path("pi") {
-        eprintln!("pi CLI not on PATH");
-        return Some(14);
-    }
-    // The cwd has to EXIST, and checking it here is what lets the NotFound arm
-    // below mean the binary and only the binary. A pruned worktree is this
-    // fleet's normal lifecycle, and `Command::current_dir` on a missing
-    // directory fails with ErrorKind::NotFound, which that arm would report as
-    // "pi CLI not on PATH" - sending an operator to reinstall pi over a stale
-    // registry row.
-    let cwd_path = Path::new(cwd);
-    if !cwd_path.is_dir() {
-        eprintln!(
-            "fno agents attach: the cwd recorded for {name:?} is gone: {cwd}. A pi session is \
-the pair (cwd, session id), so there is nothing here to attach to."
-        );
-        append_agents_event(
-            events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.to_string())),
-                ("provider", Value::String("pi".to_string())),
-                ("reason", Value::String("pi-row-cwd-missing".to_string())),
-                ("detail", Value::String(cwd.to_string())),
-            ],
-        );
-        return Some(13);
-    }
-
-    // The duplicate refusal, fired at the door where a human reads it. pi's own
-    // behaviour on an ambiguous id is to pick the OLDEST file and print
-    // nothing, which is how three sessions of real work became unreachable.
-    // An `Unknown` reading is NOT a duplicate and never blocks an attach: it
-    // means the store could not be read, and an unreadable store is evidence
-    // of nothing.
-    let lookup = crate::pi::lookup_sessions(cwd_path, session_id);
-    if let Some(refusal) = crate::pi::duplicate_resume_refusal(cwd_path, session_id, &lookup) {
-        eprintln!("fno agents attach: {refusal}");
-        append_agents_event(
-            events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.to_string())),
-                ("provider", Value::String("pi".to_string())),
-                (
-                    "reason",
-                    Value::String("pi-session-id-ambiguous".to_string()),
-                ),
-                ("session_id", Value::String(session_id.to_string())),
-            ],
-        );
-        return Some(13);
-    }
-
-    // An attach during a live CREATE is a second create, not a join, and the
-    // store cannot say so: a session's file appears at the first turn ATTEMPT,
-    // so for the first seconds of a spawn the lookup above reads `None` for a
-    // session that is being made right now. Joining is safe; creating twice is
-    // the silent race this whole lane exists to close, and the only instrument
-    // that sees the window is the claim the spawn holds across it.
-    //
-    // So this reads that claim and refuses while it is held. `Live` and
-    // `Suspect` both mean held: `Suspect` is an unexpired TTL whose holder is
-    // not provably alive, and the acquire path already declines to steal it.
-    // `Free`, `Stale` and `Corrupted` are not evidence of a create in flight
-    // and never block an attach - a refusal on an unreadable claim would fail
-    // closed against the operator over a file that proves nothing.
-    let create_key = crate::pi::create_claim_key(cwd_path, session_id);
-    let (claim_state, claim_record) = crate::claims::status(&create_key, None);
-    if crate::pi::attach_blocked_by_create(claim_state) {
-        let holder = claim_record
-            .as_ref()
-            .map(|r| r.holder.clone())
-            .unwrap_or_else(|| "an unnamed holder".to_string());
-        eprintln!(
-            "fno agents attach: a pi session CREATE is in flight for {session_id:?} in {cwd}, \
-held by {holder}. pi writes its session file at the first turn ATTEMPT, so the store cannot \
-tell a session being made right now from one that is absent, and attaching into that window \
-CREATES a second session under this id rather than joining. Wait for the holder to finish, \
-then attach again."
-        );
-        append_agents_event(
-            events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.to_string())),
-                ("provider", Value::String("pi".to_string())),
-                ("reason", Value::String("pi-create-in-flight".to_string())),
-                ("session_id", Value::String(session_id.to_string())),
-                ("detail", Value::String(holder)),
-            ],
-        );
-        return Some(13);
-    }
-
-    let argv = crate::pi::pi_attach_argv(session_id);
-    let mut command = std::process::Command::new(&argv[0]);
-    command.args(&argv[1..]);
-    command.current_dir(cwd);
-    // Inherit stdio so pi's TUI takes over this terminal; mirror its exit code.
-    match command.status() {
-        Ok(status) => {
-            let exit_code = status.code().unwrap_or(1);
-            append_agents_event(
-                events_path,
-                "agent_attached",
-                &[
-                    ("name", Value::String(name.to_string())),
-                    ("provider", Value::String("pi".to_string())),
-                    ("session_id", Value::String(session_id.to_string())),
-                    ("pi_exit", Value::from(exit_code)),
-                ],
-            );
-            Some(exit_code)
-        }
-        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("pi CLI not on PATH");
-            Some(14)
-        }
-        Err(exc) => {
-            eprintln!("fno agents attach: pi session attach failed: {exc}");
-            Some(1)
-        }
-    }
-}
-
-/// `fno-agents attach <name>` -- interactive attach to a running claude agent,
-/// a codex thread, or a pi session (every other harness is refused). Mirrors
-/// Python `dispatch.attach_agent` + the `cmd_attach` Typer wrapper.
-pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
-    let mut name: Option<String> = None;
-    for a in rest {
-        match a.as_str() {
-            other if other.starts_with("--") => {
-                eprintln!("fno-agents: unknown attach flag: {other}");
-                return 2;
-            }
-            other => {
-                if name.is_some() {
-                    eprintln!(
-                        "fno-agents: attach takes one NAME (got extra: {}).",
-                        echo_extra(other)
-                    );
-                    return 2;
-                }
-                name = Some(other.to_string());
-            }
-        }
-    }
-    let name = match name {
-        Some(n) => n,
-        None => {
-            eprintln!("fno-agents: attach needs a <name>");
-            return 2;
-        }
-    };
-
-    if let Err((code, msg)) = validate_lifecycle_name(&name) {
-        eprintln!("{msg}");
-        return code;
-    }
-
-    let entries = match read_registry_entries(&home.registry_json()) {
-        Ok(e) => e,
-        Err(exc) => {
-            eprintln!("registry read failed: {exc}");
-            return 12;
-        }
-    };
-    let entry = match resolve_entry_with_heal(&entries, &name, &home.registry_json()) {
-        Ok(e) => e,
-        Err(err) => {
-            eprintln!("{}", err.message());
-            return 2;
-        }
-    };
-    let entry = &entry;
-
-    let harness = entry
-        .get("harness")
-        .and_then(Value::as_str)
-        .or_else(|| entry.get("provider").and_then(Value::as_str))
-        .unwrap_or("");
-    let events_path = trace_events_path(home);
-
-    // (x-296f) A harness whose contract row DECLARES an interactive_attach
-    // form execs it - codex today, whatever a harness declares tomorrow -
-    // still gated on the thread-row shape. One mechanism replaces the old
-    // two: the declared `pre_exec` starts the harness's own service (codex's
-    // `app-server daemon start`) where a separate `ensure_codex_daemon`
-    // pre-flight used to refuse, and its `codex-daemon-unavailable` refusal
-    // event is gone with it. A failed daemon start still runs the attach and
-    // surfaces codex's own more specific error.
-    if harness != "claude" {
-        if let Some(code) = attach_via_declared_form(harness, entry, &name, &events_path) {
-            return code;
-        }
-    }
-
-    // (x-c198) A pi row execs pi's own TUI on the same session id, which JOINS
-    // the session its rpc lane is driving. pi declares no form (its argv
-    // carries env-dependent provider/model), so it keeps its own builder.
-    if harness == "pi" {
-        if let Some(code) = attach_pi_session(entry, &name, &events_path) {
-            return code;
-        }
-    }
-
-    // Every other non-claude harness refuses attach (claude and a declared
-    // thread are the only rows with a persistent session to attach to).
-    // `!= "claude"` instead of an allowlist so a provider added to the roster
-    // inherits the refusal rather than falling through to a claude-shaped
-    // attach (x-51f6 US1).
-    if harness != "claude" {
-        eprintln!(
-            "{harness} agents are one-shot; no persistent session to attach to. Use 'fno agents logs {name} --follow' for live output."
-        );
-        append_agents_event(
-            &events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.clone())),
-                ("provider", Value::String(harness.to_string())),
-                (
-                    "reason",
-                    Value::String("one-shot-provider-no-persistent-session".to_string()),
-                ),
-            ],
-        );
-        return 13;
-    }
-
-    let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
-    if short_id.is_empty() {
-        eprintln!(
-            "registry entry {} has no short id on file; cannot attach.",
-            py_repr_str(&name)
-        );
-        return 12;
-    }
-
-    // Attach stays live-only, but a dead claude row (supervisor gone) with a
-    // recorded session uuid refuses with the exact revival commands instead of
-    // dead-ending in claude's own "session not found" (US3). The decision is a
-    // pure helper so it is testable without the exec path.
-    if let Some(msg) = claude_attach_pointer(&ClaudeHome::from_env(), entry, &name) {
-        eprintln!("{msg}");
-        append_agents_event(
-            &events_path,
-            "agent_attach_refused",
-            &[
-                ("name", Value::String(name.clone())),
-                ("provider", Value::String("claude".to_string())),
-                (
-                    "reason",
-                    Value::String("exited-revivable-pointer".to_string()),
-                ),
-            ],
-        );
-        return 13;
-    }
-
-    if !which_on_path("claude") {
-        eprintln!("claude CLI not on PATH");
-        return 14;
-    }
-
-    // x-d285: the inline attach consumes the canonical re-entry plan. A fresh
-    // claude process re-resolves its account namespace from ambient env, so a
-    // bare `claude attach` from the wrong shell lands in the wrong config
-    // namespace (the falsified "attach has nothing to do" premise). The plan
-    // restores the recorded account namespace and route settings together, or
-    // refuses before anything launches. A proven default row keeps the
-    // historical bare invocation: the plan carries no env and no --settings.
-    let plan = match crate::reentry::resolve_reentry(
-        &home.registry_json(),
-        &name,
-        crate::reentry::ReentryTransition::Attach,
-        None,
-        None,
-    ) {
-        Ok(p) => p,
-        Err(reason) => {
-            eprintln!("fno agents attach: refused: {reason}");
-            append_agents_event(
-                &events_path,
-                "agent_attach_refused",
-                &[
-                    ("name", Value::String(name.clone())),
-                    ("provider", Value::String("claude".to_string())),
-                    ("reason", Value::String("reentry-plan-refused".to_string())),
-                    ("detail", Value::String(reason)),
-                ],
-            );
-            return crate::reentry::REENTRY_REFUSED_EXIT;
-        }
-    };
-    let mut command = std::process::Command::new(&plan.argv[0]);
-    command.args(&plan.argv[1..]);
-    for (key, value) in &plan.env {
-        command.env(key, value);
-    }
-
-    // Inherit stdio so the claude TUI takes over; mirror its exit code.
-    match command.status() {
-        Ok(status) => {
-            let exit_code = status.code().unwrap_or(1);
-            append_agents_event(
-                &events_path,
-                "agent_attached",
-                &[
-                    ("name", Value::String(name.clone())),
-                    ("provider", Value::String("claude".to_string())),
-                    ("short_id", Value::String(short_id.to_string())),
-                    ("claude_exit", Value::from(exit_code)),
-                ],
-            );
-            exit_code
-        }
-        Err(exc) if exc.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!("claude CLI not on PATH");
-            14
-        }
-        Err(exc) => {
-            append_agents_event(
-                &events_path,
-                "agent_attached",
-                &[
-                    ("name", Value::String(name.clone())),
-                    ("provider", Value::String("claude".to_string())),
-                    ("short_id", Value::String(short_id.to_string())),
-                    ("claude_exit", Value::Null),
-                    ("error", Value::String(exc.to_string())),
-                    ("error_type", Value::String("OSError".to_string())),
-                ],
-            );
-            eprintln!("claude attach failed: {exc}");
-            1
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4258,7 +2629,7 @@ fn parse_logs_args(rest: &[String]) -> Result<LogsArgs, (i32, String)> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--follow" | "-f" => follow = true,
-            "--json" | "-J" => json_out = true, // ab-3ff64151: global-register short
+            "--json" | "-J" => json_out = true, // global-register short
             "--tail" | "-n" => {
                 let v = it.next().ok_or((2, "--tail needs a value".to_string()))?;
                 tail = v
@@ -4397,7 +2768,7 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
     // codex / gemini: read the tee'd JSONL file. Retrieval IS implemented
     // (proven by test_logs_codex_oneshot_parity); the only failure left here is
     // a genuinely-absent log file, so report that honestly instead of the stale
-    // "ships in Phase 3 US4" stub that made codex look unsupported (ab-65c3e60d).
+    // "ships in Phase 3 US4" stub that made codex look unsupported.
     // Byte-parity with read.py's matching branch.
     let log_path = entry.get("log_path").and_then(Value::as_str).unwrap_or("");
     if log_path.is_empty() || !Path::new(log_path).exists() {
@@ -4444,7 +2815,7 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
     if args.follow {
         // Stream subsequent lines via the agent.logs daemon RPC (Locked Decision #5).
         // The daemon looks up log_path by exact registry `name`, so carry the
-        // RESOLVED row's canonical name (x-1b1e: args.name may be a short/session
+        // RESOLVED row's canonical name (: args.name may be a short/session
         // id) rather than the raw token, or the follow attach silently misses.
         let resolved_name = entry
             .get("name")
@@ -4598,6 +2969,9 @@ fn build_report_params(rest: &[String]) -> Result<Value, String> {
     let mut state: Option<String> = None;
     let mut reason: Option<String> = None;
     let mut ttl_ms: Option<u64> = None;
+    let mut model: Option<String> = None;
+    let mut effort: Option<String> = None;
+    let mut posture: Option<String> = None;
 
     let mut it = args.into_iter();
     while let Some(a) = it.next() {
@@ -4605,6 +2979,21 @@ fn build_report_params(rest: &[String]) -> Result<Value, String> {
             "--session-id" => session_id = it.next(),
             "--state" => state = it.next(),
             "--reason" => reason = it.next(),
+            // The served model/effort axes, passed through verbatim.
+            "--model" => model = it.next(),
+            "--effort" => effort = it.next(),
+            // The served sandbox posture, `<sandbox>:<approval>`; the daemon
+            // is the parse authority, the CLI only checks the shape.
+            "--posture" => {
+                let v = it.next().ok_or("--posture needs <sandbox>:<approval>")?;
+                let (s, a) = v
+                    .split_once(':')
+                    .ok_or("--posture needs <sandbox>:<approval>")?;
+                if s.is_empty() || a.is_empty() {
+                    return Err("--posture needs <sandbox>:<approval>".into());
+                }
+                posture = Some(v);
+            }
             "--seq" => {
                 seq = Some(
                     it.next()
@@ -4632,7 +3021,9 @@ fn build_report_params(rest: &[String]) -> Result<Value, String> {
         Some("working") => "working",
         Some("blocked") => "blocked",
         Some("done") => "done",
-        _ => return Err("report needs --state working|blocked|done".into()),
+        // The PostModelSwitch posture: no inside-leg transition.
+        Some("model") => "model",
+        _ => return Err("report needs --state working|blocked|done|model".into()),
     };
 
     let mut params = serde_json::Map::new();
@@ -4644,6 +3035,15 @@ fn build_report_params(rest: &[String]) -> Result<Value, String> {
     }
     if let Some(t) = ttl_ms {
         params.insert("ttl_ms".into(), Value::Number(t.into()));
+    }
+    if let Some(m) = model {
+        params.insert("model".into(), Value::String(m));
+    }
+    if let Some(e) = effort {
+        params.insert("effort".into(), Value::String(e));
+    }
+    if let Some(p) = posture {
+        params.insert("posture".into(), Value::String(p));
     }
     Ok(Value::Object(params))
 }
@@ -4688,289 +3088,14 @@ pub async fn run_report(rest: &[String], home: &AgentsHome) -> i32 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// claim (hidden debug verb over the native claims module)
-// ---------------------------------------------------------------------------
-
-/// `fno-agents claim <acquire|release|status> <key> [flags]` — a thin front
-/// over [`crate::claims`], the native lockfile-protocol implementation.
-///
-/// Purpose: (a) the cross-impl compatibility matrix
-/// (`cli/tests/integration/test_claims_cross_impl.py`) drives the Rust side
-/// of the protocol through it, and (b) an ops escape hatch when the Python
-/// CLI is unavailable. It is deliberately HIDDEN — dispatched via `matches!`
-/// in `bin/client.rs` (the `mail-inject` pattern) so it stays out of
-/// `CLIENT_VERB_USAGE` / `RUST_CLIENT_VERBS`; `fno agents claim` remains the only
-/// operator CLI for claims.
-///
-/// Output is one JSON object on stdout. Exit codes: 0 success, 1 held by
-/// another live writer, 2 usage/validation/io error.
-pub fn run_claim(args: &[String]) -> i32 {
-    let Some(op) = args.first().map(String::as_str) else {
-        eprintln!("fno-agents: claim requires an operation: acquire|release|status|sweep");
-        return 2;
-    };
-    if op == "sweep" {
-        return run_claim_sweep(&args[1..]);
-    }
-    let Some(key) = args.get(1).filter(|k| !k.starts_with("--")).cloned() else {
-        eprintln!("fno-agents: claim {op} requires a key argument");
-        return 2;
-    };
-
-    let mut holder: Option<String> = None;
-    let mut opts = crate::claims::AcquireOpts::default();
-    let mut it = args[2..].iter();
-    while let Some(a) = it.next() {
-        let mut take = |name: &str| -> Option<String> {
-            let v = it.next().cloned();
-            if v.is_none() {
-                eprintln!("fno-agents: claim: {name} requires a value");
-            }
-            v
-        };
-        match a.as_str() {
-            "--holder" => holder = take("--holder"),
-            "--pid" => match take("--pid").and_then(|v| v.parse::<u32>().ok()) {
-                Some(p) => opts.pid = Some(p),
-                None => return 2,
-            },
-            "--pid-unavailable" => opts.pid_unavailable = true,
-            "--ttl-ms" => match take("--ttl-ms").and_then(|v| v.parse::<i64>().ok()) {
-                Some(t) => opts.ttl_ms = Some(t),
-                None => return 2,
-            },
-            "--reason" => match take("--reason") {
-                Some(r) => opts.reason = Some(r),
-                None => return 2,
-            },
-            "--metadata" => {
-                let Some(raw) = take("--metadata") else {
-                    return 2;
-                };
-                match serde_json::from_str::<Value>(&raw) {
-                    Ok(Value::Object(m)) => opts.metadata = Some(m),
-                    _ => {
-                        eprintln!("fno-agents: claim: --metadata must be a JSON object");
-                        return 2;
-                    }
-                }
-            }
-            "--root" => match take("--root") {
-                Some(r) => opts.root = Some(PathBuf::from(r)),
-                None => return 2,
-            },
-            "--json" | "-J" => {} // output is always JSON; accepted for symmetry
-            other => {
-                eprintln!("fno-agents: claim: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
-
-    match op {
-        "acquire" => {
-            let Some(holder) = holder else {
-                eprintln!("fno-agents: claim acquire requires --holder");
-                return 2;
-            };
-            match crate::claims::acquire(&key, &holder, opts) {
-                crate::claims::AcquireOutcome::Acquired(rec) => {
-                    let mut out = serde_json::to_value(&rec)
-                        .unwrap_or_else(|_| Value::Object(Default::default()));
-                    if let Value::Object(m) = &mut out {
-                        m.insert("outcome".into(), Value::String("acquired".into()));
-                    }
-                    println!("{out}");
-                    0
-                }
-                crate::claims::AcquireOutcome::HeldByOther { holder, pid, host } => {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "outcome": "held_by_other",
-                            "holder": holder, "pid": pid, "host": host,
-                        })
-                    );
-                    1
-                }
-                crate::claims::AcquireOutcome::Error(e) => {
-                    eprintln!("fno-agents: claim acquire failed: {e}");
-                    2
-                }
-            }
-        }
-        "release" => {
-            let Some(holder) = holder else {
-                eprintln!("fno-agents: claim release requires --holder");
-                return 2;
-            };
-            match crate::claims::release(
-                &key,
-                &holder,
-                opts.root.as_deref(),
-                opts.events_dir.as_deref(),
-            ) {
-                Ok(()) => {
-                    println!("{}", serde_json::json!({"outcome": "released", "key": key}));
-                    0
-                }
-                Err(e) => {
-                    eprintln!("fno-agents: claim release failed: {e}");
-                    2
-                }
-            }
-        }
-        "status" => {
-            let (state, rec) = crate::claims::status(&key, opts.root.as_deref());
-            // Mirror the `fno agents claim status -J` dict shape so the compat
-            // matrix can diff the two implementations field-by-field.
-            let mut out = serde_json::Map::new();
-            out.insert("key".into(), Value::String(key));
-            out.insert("state".into(), Value::String(state.as_str().into()));
-            if let Some(rec) = rec {
-                out.insert("holder".into(), Value::String(rec.holder));
-                out.insert(
-                    "schema_version".into(),
-                    Value::Number(rec.schema_version.into()),
-                );
-                out.insert(
-                    "pid".into(),
-                    rec.pid.map(Value::from).unwrap_or(Value::Null),
-                );
-                out.insert("pid_unavailable".into(), Value::Bool(rec.pid_unavailable));
-                out.insert("host".into(), Value::String(rec.host));
-                // Liveness compares this, not host. Omitting it here would leave a
-                // caller that classifies ownership from status JSON on the mutable
-                // hostname, so the fix would not reach that path at all.
-                out.insert(
-                    "machine_id".into(),
-                    rec.machine_id.map(Value::from).unwrap_or(Value::Null),
-                );
-                out.insert("acquired_at".into(), Value::Number(rec.acquired_at.into()));
-                out.insert(
-                    "expires_at".into(),
-                    rec.expires_at.map(Value::from).unwrap_or(Value::Null),
-                );
-                if let Some(r) = rec.reason {
-                    out.insert("reason".into(), Value::String(r));
-                }
-                if let Some(h) = rec.harness {
-                    out.insert("harness".into(), Value::String(h));
-                }
-                if !rec.metadata.is_empty() {
-                    out.insert("metadata".into(), Value::Object(rec.metadata));
-                }
-            }
-            println!("{}", Value::Object(out));
-            0
-        }
-        other => {
-            eprintln!(
-                "fno-agents: unknown claim operation: {other} (use acquire|release|status|sweep)"
-            );
-            2
-        }
-    }
-}
-
-/// `fno-agents claim sweep [--json] [--root <dir>]` — read every `node:` /
-/// `dispatch:` lockfile in the claims dir, classify each with the canonical
-/// [`crate::claims::classify`], and print ONE JSON object:
-/// `{"claims": [{"key", "state", "holder", "host", "pid"}, ...]}`.
-///
-/// The mux shells this (bounded, fail-open) to overlay in-flight state onto
-/// work-queue cards — the verdict shape above is a pinned contract (additive
-/// fields allowed, renames are not; `state` uses `ClaimState::as_str`
-/// vocabulary and consumers treat only `"live"` as in-flight).
-///
-/// A missing/unreadable claims dir is an EMPTY sweep (exit 0), not an error:
-/// no claims means no overlay. Unparseable/newer-schema lockfiles are
-/// excluded from the payload and logged to stderr (never fatal).
-fn run_claim_sweep(args: &[String]) -> i32 {
-    let mut root: Option<PathBuf> = None;
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--root" => match it.next() {
-                Some(r) => root = Some(PathBuf::from(r)),
-                None => {
-                    eprintln!("fno-agents: claim sweep: --root requires a value");
-                    return 2;
-                }
-            },
-            "--json" | "-J" => {} // output is always JSON; accepted for symmetry
-            other => {
-                eprintln!("fno-agents: claim sweep: unknown flag {other}");
-                return 2;
-            }
-        }
-    }
-    let Some(dir) = crate::claims::claims_dir_for(root.as_deref()) else {
-        // No resolvable claims root: same as an empty dir (fail-open).
-        println!("{}", serde_json::json!({"claims": []}));
-        return 0;
-    };
-    println!("{}", claim_sweep_payload(&dir));
-    0
-}
-
-/// Pure(ish) core of `claim sweep`: scan `dir` for `node:` / `dispatch:`
-/// lockfiles and build the pinned verdict object. Separated from
-/// [`run_claim_sweep`] so tests can drive it against a temp dir.
-fn claim_sweep_payload(dir: &Path) -> Value {
-    // Filename prefilter: keys are percent-encoded (`:` -> `%3A`), so only
-    // read files that can be node/dispatch claims; `.expired/` is a subdir
-    // and non-`.lock` names are skipped by the same test.
-    let node_pfx = crate::claims::encode_key("node:");
-    let dispatch_pfx = crate::claims::encode_key("dispatch:");
-    let mut claims: Vec<Value> = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return serde_json::json!({ "claims": [] }),
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !name.ends_with(".lock")
-            || !(name.starts_with(&node_pfx) || name.starts_with(&dispatch_pfx))
-        {
-            continue;
-        }
-        match crate::claims::read_claim_file(&entry.path()) {
-            Ok(rec) => {
-                // Trust the record's own key over the filename decode; a
-                // record whose key does not carry a sweep prefix is excluded
-                // (filename lied — treat like corruption, minus the noise).
-                if !(rec.key.starts_with("node:") || rec.key.starts_with("dispatch:")) {
-                    continue;
-                }
-                let state = crate::claims::classify(&rec, None);
-                claims.push(serde_json::json!({
-                    "key": rec.key,
-                    "state": state.as_str(),
-                    "holder": rec.holder,
-                    "host": rec.host,
-                    "pid": rec.pid,
-                }));
-            }
-            Err(crate::claims::ReadError::GoneAway) => continue,
-            Err(crate::claims::ReadError::Corrupted(e)) => {
-                eprintln!("fno-agents: claim sweep: skipping {name}: {e}");
-                continue;
-            }
-        }
-    }
-    claims.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
-    serde_json::json!({ "claims": claims })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claude_resume::{claude_attach_pointer_with_truth, claude_resume_argv_with_truth};
+    use crate::resume_wake::acquire_named_session_claim;
     use serde_json::json;
 
-    // --- attach: which rows are codex THREADS (x-6678) -----------------------
+    // --- attach: which rows are codex THREADS -----------------------
 
     /// AC17 / AC18 (row-selection half): exactly the codex rows that are
     /// threads take the exec path, and every other row falls through to the
@@ -4981,7 +3106,7 @@ mod tests {
     /// no unit test can host. The exec argv is pinned separately, in both
     /// crates, by `the_attach_argv_is_identical_in_both_crates`.
     #[test]
-    fn only_a_paneless_interactive_codex_row_is_a_thread() {
+    fn thread_rows() {
         let uuid = "01a04546-28b2-7a41-ae4c-892bbeb8e295";
         let thread = json!({
             "name": "cx", "harness": "codex", "cwd": "/w",
@@ -5016,107 +3141,25 @@ mod tests {
         let mut nulled = thread.clone();
         nulled["mux"] = Value::Null;
         assert!(is_codex_thread_row(&nulled));
+
+        for t in [
+            "a1b2c3d4",
+            "A1B2C3D4",
+            "ses_7f3a9b2c1d0e",
+            CLAUDE_UUID_FIXTURE,
+            // A canonical OpenCode tail may be eight alphabetic characters,
+            // so a same-shaped registry name must join the store namespace.
+            "reviewer",
+        ] {
+            assert!(is_session_shaped(t), "{t} should be probeable");
+        }
+        // Short tokens of the wrong width remain outside the store seam.
+        for t in ["a1b2c3", "a1b2c3d45", "", "ses_", "SES_7f3a9b2c1d0e"] {
+            assert!(!is_session_shaped(t), "{t} should not be probeable");
+        }
     }
 
-    /// AC11-ERR (x-296f): a codex thread row with NO session id on file
-    /// refuses by naming the missing rollout and pointing at `peek --follow`.
-    /// The vendor's bare "no rollout found for thread id" never reaches the
-    /// operator through this door. It never returns `None` (the "not a
-    /// thread, use the refusal" answer), because that would print a message
-    /// saying codex has no persistent session when the row IS a thread.
-    #[test]
-    fn a_codex_thread_row_with_no_session_id_refuses_naming_the_rollout() {
-        let home = std::env::temp_dir().join(format!("fno-x296f-nosess-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        let events = home.join("events.jsonl");
-        let entry = json!({
-            "name": "cx", "harness": "codex", "cwd": "/w",
-            "host_mode": "interactive", "short_id": "",
-        });
-
-        let outcome = attach_via_declared_form("codex", &entry, "cx", &events);
-
-        assert_eq!(outcome, Some(13));
-        let log = std::fs::read_to_string(&events).unwrap_or_default();
-        assert!(
-            log.contains("no-session-id-yet"),
-            "the refusal must name its own reason in the event log: {log}"
-        );
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    /// AC11-ERR (x-296f): the same attach with stdin not a terminal refuses
-    /// by naming the terminal requirement, with its own event reason - not
-    /// the vendor's bare "stdin is not a terminal" with no clue which command
-    /// produced it.
-    #[test]
-    fn a_codex_thread_attach_without_a_tty_refuses_naming_the_terminal() {
-        // cargo test runs with stdin detached, so the isatty probe is false
-        // here by construction; the exec path is unreachable in this suite.
-        let home = std::env::temp_dir().join(format!("fno-x296f-notty-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        let events = home.join("events.jsonl");
-        let entry = json!({
-            "name": "cx", "harness": "codex", "cwd": "/w",
-            "host_mode": "interactive", "short_id": "",
-            "harness_session_id": "01a04546-28b2-7a41-ae4c-892bbeb8e295",
-        });
-
-        let outcome = attach_via_declared_form("codex", &entry, "cx", &events);
-
-        assert_eq!(outcome, Some(13));
-        let log = std::fs::read_to_string(&events).unwrap_or_default();
-        assert!(
-            log.contains("\"no-tty\""),
-            "the refusal must name its own reason in the event log: {log}"
-        );
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    /// AC12 / AC4 (x-296f): a codex row that is NOT thread-shaped answers
-    /// `None` - the caller keeps its verbatim refusal, exit code included -
-    /// and a harness that declares no form does the same whatever its shape.
-    #[test]
-    fn non_thread_rows_and_undeclaring_harnesses_fall_through_to_the_refusal() {
-        let home = std::env::temp_dir().join(format!("fno-x296f-fall-{}", std::process::id()));
-        std::fs::create_dir_all(&home).unwrap();
-        let events = home.join("events.jsonl");
-        let thread = json!({
-            "name": "cx", "harness": "codex", "cwd": "/w",
-            "host_mode": "interactive", "short_id": "",
-            "harness_session_id": "01a04546-28b2-7a41-ae4c-892bbeb8e295",
-        });
-
-        // A pane row: its process already has a place.
-        let mut pane = thread.clone();
-        pane["mux"] = json!({"session": "s", "pane_id": 4});
-        assert_eq!(
-            attach_via_declared_form("codex", &pane, "cx", &events),
-            None
-        );
-        // A one-shot ask row: not a thread either.
-        let ask = json!({
-            "name": "cx-ask", "harness": "codex", "cwd": "/w",
-            "short_id": "",
-            "harness_session_id": "01a04546-28b2-7a41-ae4c-892bbeb8e295",
-        });
-        assert_eq!(attach_via_declared_form("codex", &ask, "cx", &events), None);
-        // gemini declares nothing: even a thread-shaped row falls through.
-        let gm = json!({
-            "name": "gm", "harness": "gemini", "cwd": "/w",
-            "host_mode": "interactive", "short_id": "",
-            "harness_session_id": "01a04546-28b2-7a41-ae4c-892bbeb8e295",
-        });
-        assert_eq!(attach_via_declared_form("gemini", &gm, "gm", &events), None);
-        assert_eq!(
-            std::fs::read_to_string(&events).unwrap_or_default(),
-            "",
-            "a fall-through owns no outcome and emits no event"
-        );
-        std::fs::remove_dir_all(&home).ok();
-    }
-
-    // --- find_agent_entry (x-1b1e): parity with Python resolve_agent ----------
+    // --- find_agent_entry: parity with Python resolve_agent ----------
 
     const CLAUDE_UUID_FIXTURE: &str = "a1b2c3d4-1111-2222-3333-444455556666";
 
@@ -5130,7 +3173,7 @@ mod tests {
     const RESOLVE_UUID: &str = "7c5dcf5d-c078-4b53-a8c9-7199b831eae4";
 
     #[test]
-    fn find_agent_entry_resolves_all_three_forms() {
+    fn find_rows() {
         // AC1-HP: name, full uuid (case-insensitive), and 8-hex short all hit one row.
         let rows = vec![claude_row("billing", "7c5dcf5d", RESOLVE_UUID)];
         for tok in [
@@ -5142,11 +3185,19 @@ mod tests {
             let e = find_agent_entry(&rows, tok).expect("resolves");
             assert_eq!(e["name"], "billing");
         }
-    }
+        // The row's own minted id addresses it at the full tier; a row that
+        // answers to a different mint refuses the token.
+        let mut split_row = claude_row("split", "7c5dcf5e", "7c5dcf5e-1111-4222-8333-444444444444");
+        split_row["fno_id"] = json!("0f6a4b2e-9c1d-4e5f-8a7b-3c2d1e0f9a8b");
+        let fno_id = split_row["fno_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            find_agent_entry(std::slice::from_ref(&split_row), &fno_id).unwrap()["name"],
+            "split"
+        );
+        split_row["fno_id"] = json!(Value::Null);
+        assert!(find_agent_entry(std::slice::from_ref(&split_row), &fno_id).is_err());
 
-    #[test]
-    fn session_lineage_predecessor_full_id_resolves_the_current_row() {
-        // x-dfe7 AC6-HP (Rust half): delivery naming a succeeded session's
+        // AC6-HP (Rust half): delivery naming a succeeded session's
         // full uuid follows the row that now answers as its successor.
         let mut row = claude_row("worker", "08054b1d", "08054b1d-2222-3333-4444-555555555555");
         row["predecessor_session_ids"] = json!(["e6f78b98-1111-2222-3333-444444444444"]);
@@ -5158,11 +3209,8 @@ mod tests {
             e["harness_session_id"],
             "08054b1d-2222-3333-4444-555555555555"
         );
-    }
 
-    #[test]
-    fn session_lineage_predecessor_short_form_stays_retired() {
-        // x-dfe7: a predecessor's 8-hex short retired with it and never
+        // a predecessor's 8-hex short retired with it and never
         // re-enters the successor's short-address namespace.
         let mut row = claude_row("worker", "08054b1d", "08054b1d-2222-3333-4444-555555555555");
         row["predecessor_session_ids"] = json!(["e6f78b98-1111-2222-3333-444444444444"]);
@@ -5172,10 +3220,7 @@ mod tests {
             find_agent_entry(&rows, "e6f78b98"),
             Err(ResolveError::NotFound(_))
         ));
-    }
 
-    #[test]
-    fn find_agent_entry_daemon_and_canonical_handle_both_resolve() {
         // AC2-HP: a codex row resolves by its name-derived daemon short AND by
         // the canonical random tail of its thread id.
         let uuid = "a1b2c3d4-1111-2222-3333-444455556666";
@@ -5188,14 +3233,48 @@ mod tests {
             find_agent_entry(&rows, "billingf").unwrap()["name"],
             "reviewer"
         );
+
+        // Two codex rows minted inside one UUIDv7 clock window share the same
+        // head; each row's fno handle still resolves to its own row, and the
+        // shared head refuses naming both. A lone row's head keeps resolving,
+        // so printed handles survive while they name one row.
+        let codex_a = json!({
+            "name": "codex-a", "provider": "codex", "cwd": "/w", "log_path": "/l",
+            "harness_session_id": "01a0fc7a-1111-7222-8333-444444444444",
+            "fno_id": "3f9a1c2d-0000-4000-8000-000000000001",
+        });
+        let codex_b = json!({
+            "name": "codex-b", "provider": "codex", "cwd": "/w", "log_path": "/l",
+            "harness_session_id": "01a0fc7a-2222-7333-9444-555555555555",
+            "fno_id": "7e2b4d5a-1111-4111-8111-111111111112",
+        });
+        let codex_rows = vec![codex_a, codex_b];
+        assert_eq!(
+            find_agent_entry(&codex_rows, "3f9a1c2d").unwrap()["name"],
+            "codex-a"
+        );
+        assert_eq!(
+            find_agent_entry(&codex_rows, "7e2b4d5a").unwrap()["name"],
+            "codex-b"
+        );
+        assert!(matches!(
+            find_agent_entry(&codex_rows, "01a0fc7a"),
+            Err(ResolveError::Ambiguous(_))
+        ));
+        let lone = vec![json!({
+            "name": "codex-c", "provider": "codex", "cwd": "/w", "log_path": "/l",
+            "harness_session_id": "01a0fc7a-3333-7444-a555-666666666666",
+            "fno_id": "9c1d2e3f-2222-4222-8222-222222222223",
+        })];
+        assert_eq!(
+            find_agent_entry(&lone, "01a0fc7a").unwrap()["name"],
+            "codex-c"
+        );
         assert_eq!(
             find_agent_entry(&rows, "55556666").unwrap()["name"],
             "reviewer"
         );
-    }
 
-    #[test]
-    fn canonical_handle_and_legacy_prefix_are_ambiguous() {
         let canonical = claude_row(
             "canonical",
             "transport1",
@@ -5211,10 +3290,7 @@ mod tests {
             find_agent_entry(&[legacy_a, legacy_b], "abcd1234"),
             Err(ResolveError::Ambiguous(_))
         ));
-    }
 
-    #[test]
-    fn find_agent_entry_name_and_short_id_collision_is_ambiguous() {
         let rows = vec![
             claude_row(
                 "deadbeef",
@@ -5227,10 +3303,7 @@ mod tests {
             find_agent_entry(&rows, "deadbeef"),
             Err(ResolveError::Ambiguous(_))
         ));
-    }
 
-    #[test]
-    fn find_agent_entry_duplicate_name_distinct_sessions_is_ambiguous() {
         let rows = vec![
             claude_row("same", "transport1", "aaaaaaaa-1111-7222-8333-4444deadbeef"),
             claude_row("same", "transport2", "bbbbbbbb-1111-7222-8333-4444cafefeed"),
@@ -5240,10 +3313,7 @@ mod tests {
             find_agent_entry(&rows, "same"),
             Err(ResolveError::Ambiguous(_))
         ));
-    }
 
-    #[test]
-    fn find_agent_entry_ambiguous_same_tier_short_collision() {
         // AC2-ERR: two rows sharing a short_id error as ambiguous, never first-match.
         let rows = vec![
             claude_row("aa", "abcd1234", "11111111-0000-0000-0000-000000000000"),
@@ -5253,17 +3323,11 @@ mod tests {
         let message = error.message();
         assert!(message.contains("11111111-0000-0000-0000-000000000000"));
         assert!(message.contains("22222222-0000-0000-0000-000000000000"));
-    }
 
-    #[test]
-    fn adopted_display_id_uses_canonical_head_eight() {
         let session = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4";
 
         assert_eq!(derived_short_id(session), "019f48e1");
-    }
 
-    #[test]
-    fn ambiguity_diagnostic_uses_v10_harness_field() {
         let rows = vec![
             json!({
                 "name": "one", "harness": "codex", "cwd": "/w", "log_path": "/l",
@@ -5282,10 +3346,7 @@ mod tests {
         assert!(message.contains("codex"));
         assert!(message.contains("opencode"));
         assert!(!message.contains("(?)"));
-    }
 
-    #[test]
-    fn find_agent_entry_unknown_and_empty_and_boundary() {
         // AC1-ERR: unknown token; empty token; 7/9-hex are not shorts.
         let rows = vec![claude_row("billing", "7c5dcf5d", RESOLVE_UUID)];
         for tok in ["nope", "", "   ", "7c5dcf5", "7c5dcf5dd"] {
@@ -5294,10 +3355,7 @@ mod tests {
                 Err(ResolveError::NotFound(_))
             ));
         }
-    }
 
-    #[test]
-    fn find_agent_entry_opencode_row_preserves_canonical_handle_case() {
         let ses = "ses_7f3a9b2cAbCd1234";
         let row = json!({
             "name": "oc", "provider": "opencode", "cwd": "/w", "log_path": "/l",
@@ -5313,29 +3371,10 @@ mod tests {
         ));
     }
 
-    // --- registry-miss heal (x-da8c) -----------------------------------------
+    // --- registry-miss heal -----------------------------------------
 
     #[test]
-    fn session_shape_gate_admits_only_probeable_tokens() {
-        for t in [
-            "a1b2c3d4",
-            "A1B2C3D4",
-            "ses_7f3a9b2c1d0e",
-            CLAUDE_UUID_FIXTURE,
-            // A canonical OpenCode tail may be eight alphabetic characters,
-            // so a same-shaped registry name must join the store namespace.
-            "reviewer",
-        ] {
-            assert!(is_session_shaped(t), "{t} should be probeable");
-        }
-        // Short tokens of the wrong width remain outside the store seam.
-        for t in ["a1b2c3", "a1b2c3d45", "", "ses_", "SES_7f3a9b2c1d0e"] {
-            assert!(!is_session_shaped(t), "{t} should not be probeable");
-        }
-    }
-
-    #[test]
-    fn heal_wrapper_preserves_registry_hit_and_clean_miss_results() {
+    fn heal_rows() {
         // No `fno` is stubbed here, so any shellout would degrade to NotFound
         // anyway; what this pins is that a hit returns the ROW and a store miss
         // returns the original resolution error.
@@ -5351,10 +3390,7 @@ mod tests {
             err.message(),
             "no agent matching 'ghost'; accepted forms: name, canonical handle, transport short id, or full session id"
         );
-    }
 
-    #[test]
-    fn heal_wrapper_keeps_an_ambiguous_registry_ambiguous() {
         // Healing an ambiguous registry would pick the winner the registry
         // deliberately refused to pick.
         let rows = vec![
@@ -5365,36 +3401,7 @@ mod tests {
             resolve_entry_with_heal(&rows, "abcd1234", Path::new("/nonexistent/registry.json")),
             Err(ResolveError::Ambiguous(_))
         ));
-    }
 
-    #[test]
-    fn heal_output_distinguishes_clean_miss_from_broken_coverage() {
-        use std::process::Command;
-
-        let miss = Command::new("sh").args(["-c", "exit 13"]).output().unwrap();
-        assert!(parse_heal_token_output("deadbeef", &miss)
-            .unwrap()
-            .is_none());
-
-        let off_contract = Command::new("sh")
-            .args(["-c", "echo probe-broke >&2; exit 7"])
-            .output()
-            .unwrap();
-        let message = parse_heal_token_output("deadbeef", &off_contract).unwrap_err();
-        assert!(message.contains("cannot safely resolve"));
-        assert!(message.contains("probe-broke"));
-
-        let malformed = Command::new("sh")
-            .args(["-c", "printf 'not-json\\n'"])
-            .output()
-            .unwrap();
-        assert!(parse_heal_token_output("deadbeef", &malformed)
-            .unwrap_err()
-            .contains("malformed JSON"));
-    }
-
-    #[test]
-    fn backfill_gives_a_healed_v10_row_the_fields_the_verbs_read() {
         // The shape `fno agents heal-token` emits: harness-only, no `provider`
         // and no `claude_session_uuid` (v10 removed both from disk). Without the
         // backfill, `logs` would take the codex branch and resume's dead arm
@@ -5407,10 +3414,7 @@ mod tests {
         backfill_row_aliases(row.as_object_mut().unwrap(), false);
         assert!(row.get("provider").is_none());
         assert_eq!(row["claude_session_uuid"], CLAUDE_UUID_FIXTURE);
-    }
 
-    #[test]
-    fn backfill_covers_the_non_claude_healed_row_too() {
         // The healer adopts codex rows as readily as claude ones, and their
         // resume path reads the legacy per-provider key just the same.
         let mut row = json!({
@@ -5421,10 +3425,42 @@ mod tests {
         assert!(row.get("provider").is_none());
         assert_eq!(row["codex_session_id"], CLAUDE_UUID_FIXTURE);
         assert!(row.get("claude_session_uuid").is_none());
+
+        let dir = cv_tmpdir();
+        let home = AgentsHome::at(dir.path());
+        let mut existing = mint_synthesized_entry(
+            &ManifestIdentity {
+                harness: "codex".into(),
+                harness_session_id: "existing-session".into(),
+                ..Default::default()
+            },
+            "t0",
+        );
+        existing.name = "01a0152f".into();
+        existing.short_id = "transport".into();
+        crate::state::update_registry(&home.registry_json(), |registry| {
+            registry.entries.push(existing);
+        })
+        .unwrap();
+
+        let result = crate::adopt_identity::persist_manifest_identity(
+            &ManifestIdentity {
+                harness: "codex".into(),
+                harness_session_id: "01a0152f-45fd-78f0-b109-78f8dffdeeca".into(),
+                ..Default::default()
+            },
+            &home,
+        );
+
+        let Err(AdoptError::Io(message)) = result else {
+            panic!("registry collision must remain an adoption I/O error");
+        };
+        assert!(message.contains("collides with row"));
+        assert!(message.contains("01a0152f"));
     }
 
     #[test]
-    fn report_params_full_payload() {
+    fn py_rows() {
         let p = build_report_params(&[
             "--session-id".into(),
             "uuid-x".into(),
@@ -5443,10 +3479,7 @@ mod tests {
         assert_eq!(p["state"], "blocked");
         assert_eq!(p["reason"], "awaiting input");
         assert_eq!(p["ttl_ms"], 5000);
-    }
 
-    #[test]
-    fn report_params_minimal_omits_optionals() {
         let p = build_report_params(&[
             "--session-id=uuid-y".into(), // also exercises --k=v expansion
             "--seq".into(),
@@ -5458,10 +3491,7 @@ mod tests {
         assert_eq!(p["session_id"], "uuid-y");
         assert!(p.get("reason").is_none());
         assert!(p.get("ttl_ms").is_none());
-    }
 
-    #[test]
-    fn report_params_rejects_bad_input() {
         assert!(build_report_params(&[
             "--seq".into(),
             "1".into(),
@@ -5501,10 +3531,31 @@ mod tests {
             "working".into()
         ])
         .is_err()); // non-int seq
-    }
 
-    #[test]
-    fn python_json_uses_spaced_separators() {
+        let p = build_report_params(&[
+            "--session-id".into(),
+            "uuid-x".into(),
+            "--seq".into(),
+            "1".into(),
+            "--state".into(),
+            "working".into(),
+            "--posture".into(),
+            "workspace-write:on-request".into(),
+        ])
+        .unwrap();
+        assert_eq!(p["posture"], "workspace-write:on-request");
+        assert!(build_report_params(&[
+            "--session-id".into(),
+            "x".into(),
+            "--seq".into(),
+            "1".into(),
+            "--state".into(),
+            "working".into(),
+            "--posture".into(),
+            "workspace-write".into()
+        ])
+        .is_err()); // posture without the approval half
+
         #[derive(Serialize)]
         struct S {
             active: bool,
@@ -5515,10 +3566,7 @@ mod tests {
             sessions: vec![],
         });
         assert_eq!(out, r#"{"active": false, "sessions": []}"#);
-    }
 
-    #[test]
-    fn drive_auth_json_shape_matches_python() {
         let out = DriveAuthOut {
             active: true,
             sessions: vec![DriveAuthSession {
@@ -5531,10 +3579,7 @@ mod tests {
             to_python_json(&out),
             r#"{"active": true, "sessions": [{"short_id": "wkI", "session_id": "d-1", "mode": "interactive"}]}"#
         );
-    }
 
-    #[test]
-    fn json_truthy_matches_python() {
         assert!(!json_truthy(None));
         assert!(!json_truthy(Some(&Value::Null)));
         assert!(!json_truthy(Some(&json!(false))));
@@ -5543,10 +3588,7 @@ mod tests {
         assert!(json_truthy(Some(&json!(1))));
         assert!(!json_truthy(Some(&json!(""))));
         assert!(json_truthy(Some(&json!("x"))));
-    }
 
-    #[test]
-    fn parse_iso8601_handles_z_and_naive() {
         let z = parse_iso8601("2026-05-26T10:30:45Z").unwrap();
         let off = parse_iso8601("2026-05-26T10:30:45+00:00").unwrap();
         assert_eq!(z, off);
@@ -5554,10 +3596,7 @@ mod tests {
         let naive = parse_iso8601("2026-05-26T10:30:45").unwrap();
         assert_eq!(naive, z);
         assert!(parse_iso8601("not-a-date").is_none());
-    }
 
-    #[test]
-    fn slice_limit_matches_python_slicing() {
         assert_eq!(slice_limit(vec![1, 2, 3, 4], 2), vec![1, 2]);
         assert_eq!(slice_limit(vec![1, 2, 3, 4], 0), Vec::<i32>::new());
         assert_eq!(slice_limit(vec![1, 2, 3, 4], 10), vec![1, 2, 3, 4]);
@@ -5568,7 +3607,7 @@ mod tests {
     }
 
     #[test]
-    fn trace_name_required_without_all() {
+    fn trace_rows() {
         let args = TraceArgs {
             name: None,
             request_id: None,
@@ -5580,10 +3619,7 @@ mod tests {
         let r = trace_logic(&args, Path::new("/nonexistent"), Path::new("/nonexistent"));
         assert_eq!(r.exit_code, 2);
         assert!(r.stderr.contains("agent NAME is required unless --all"));
-    }
 
-    #[test]
-    fn trace_all_empty_events_says_no_events() {
         let args = TraceArgs {
             name: None,
             request_id: None,
@@ -5599,10 +3635,7 @@ mod tests {
         );
         assert_eq!(r.exit_code, 0);
         assert_eq!(r.output, "no events yet\n");
-    }
 
-    #[test]
-    fn trace_surfaces_registry_ambiguity_instead_of_not_found() {
         let td = tempfile::TempDir::new().unwrap();
         let registry = td.path().join("registry.json");
         fs::write(
@@ -5647,7 +3680,7 @@ mod tests {
         assert!(!result.stderr.contains("not found"));
     }
 
-    /// The gate x-efd7 exists to install: the resume roster and the identity
+    /// The gate exists to install: the resume roster and the identity
     /// read are derived from ONE source, so they cannot disagree again.
     ///
     /// Keyed on the capability contract because that is what
@@ -5658,11 +3691,11 @@ mod tests {
     /// support must resolve a non-empty identity from a row carrying only
     /// `harness_session_id` -- the shape every non-claude row actually has.
     #[test]
-    fn every_resumable_harness_resolves_an_identity() {
+    fn resume_rows() {
         let contract = crate::harness_capabilities::HarnessContract::packaged().unwrap();
         let mut checked = 0usize;
         for harness in contract.harness.keys() {
-            if !interactive_resume_supported(harness) {
+            if !crate::resume_route::interactive_resume_supported(harness) {
                 continue;
             }
             let row = serde_json::json!({
@@ -5689,12 +3722,8 @@ mod tests {
             checked >= 2,
             "the resumable-harness loop never ran; contract declared {checked}"
         );
-    }
 
-    /// Both directions of the fallback, so neither reads as passing by accident.
-    #[test]
-    fn transport_key_wins_and_canonical_id_backstops() {
-        // pi: the x-efd7 repro. Absent from `session_id_field`, so the read has
+        // pi: the repro. Absent from `session_id_field`, so the read has
         // only the fallback to reach its id with.
         let pi = serde_json::json!({
             "harness": "pi",
@@ -5713,7 +3742,7 @@ mod tests {
         assert_eq!(resume_session_id(&claude, "claude"), "119e3c52");
 
         // A claude PANE row carries the canonical id and no short_id by design
-        // (x-b84f). It resolves rather than reporting "no session id".
+        //. It resolves rather than reporting "no session id".
         let pane = serde_json::json!({
             "harness": "claude",
             "short_id": "",
@@ -5724,97 +3753,10 @@ mod tests {
             "119e3c52-62bf-43b4-b3c4-3c7ce659f802"
         );
 
-        // A row carrying neither still resolves to empty, so the callers'
-        // is_empty refusals keep firing.
+        // A row carrying neither resolves to empty; callers' is_empty refusals keep firing.
         let bare = serde_json::json!({ "harness": "pi", "short_id": "" });
         assert_eq!(resume_session_id(&bare, "pi"), "");
-    }
 
-    #[test]
-    fn session_id_field_and_resume_argv_match_python() {
-        assert_eq!(session_id_field("claude"), Some("short_id"));
-        assert_eq!(session_id_field("codex"), Some("harness_session_id"));
-        assert_eq!(session_id_field("gemini"), Some("harness_session_id"));
-        assert_eq!(session_id_field("agy"), Some("harness_session_id"));
-        assert_eq!(session_id_field("opencode"), Some("harness_session_id"));
-        assert_eq!(session_id_field("unknown"), None);
-
-        // --cd lands the resume in the row's own tree instead of the session
-        // directory codex defaults to. It sits with the -c grant BEFORE the
-        // subcommand, where codex's globals go. Kept byte-identical to Python
-        // `_build_resume_argv`; `test_rust_verb_parity.py` fails on drift, so
-        // token ORDER is load-bearing here, not just membership.
-        assert_eq!(
-            build_resume_argv("codex", "uuid-1", Some("/path/that/does/not/exist")),
-            Some(vec![
-                "codex".into(),
-                "-c".into(),
-                "sandbox_workspace_write.writable_roots=[\"/path/that/does/not/exist/.fno/plans\"]"
-                    .into(),
-                "--cd".into(),
-                "/path/that/does/not/exist".into(),
-                "resume".into(),
-                "uuid-1".into(),
-            ])
-        );
-        // No cwd means no --cd: a bare flag fails parsing, and inventing a
-        // directory is the wrong-tree failure this exists to prevent.
-        assert_eq!(
-            build_resume_argv("codex", "uuid-2", None),
-            Some(vec!["codex".into(), "resume".into(), "uuid-2".into()])
-        );
-        // An EMPTY cwd is absent too, which is what Python's `if cwd` does.
-        // Pinned here because nothing else is: drop the `.filter` and this is
-        // the only assertion that fails, instead of a bare `--cd ""` reaching
-        // codex, which cannot start on it.
-        assert_eq!(
-            build_resume_argv("codex", "uuid-3", Some("")),
-            Some(vec!["codex".into(), "resume".into(), "uuid-3".into()]),
-            "empty cwd must be treated as absent, matching the Python twin"
-        );
-        assert_eq!(
-            build_resume_argv("claude", "abc123", None),
-            Some(vec!["claude".into(), "--resume".into(), "abc123".into()])
-        );
-        assert_eq!(
-            build_resume_argv("gemini", "g-1", None),
-            Some(vec!["gemini".into(), "--resume".into(), "g-1".into()])
-        );
-        assert_eq!(
-            build_resume_argv("opencode", "ses_1", None),
-            Some(vec!["opencode".into(), "--session".into(), "ses_1".into()])
-        );
-        // The measured primitive (fresh process quoting an earlier turn's
-        // token over `--conversation`, 2026-08-26): the argv renders, and a
-        // row carrying a canonical harness_session_id reaches it. No spawn
-        // lane records one yet, so `resume` on today's agy rows still stops
-        // at the missing-session-id refusal.
-        assert_eq!(
-            build_resume_argv("agy", "x", None),
-            Some(vec!["agy".into(), "--conversation".into(), "x".into()])
-        );
-    }
-
-    #[test]
-    fn is_uuid_shaped_accepts_only_lowercase_8_4_4_4_12_hex() {
-        assert!(is_uuid_shaped("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"));
-        assert!(!is_uuid_shaped("")); // empty
-        assert!(!is_uuid_shaped("not-a-uuid"));
-        assert!(!is_uuid_shaped("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9")); // uppercase
-        assert!(!is_uuid_shaped("0a1b2c3d4e5f6071829 3a4b5c6d7e8f9")); // no dashes
-        assert!(!is_uuid_shaped("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f")); // 11-char tail
-    }
-
-    // Fixture: an auto-cleaned temp dir used as a fake $HOME under which the
-    // tests write bg session files. Returns a tempfile::TempDir (the pattern the
-    // rest of this module's tests use) so a panicking test never leaks a /tmp
-    // tree.
-    fn cv_tmpdir() -> tempfile::TempDir {
-        tempfile::TempDir::new().unwrap()
-    }
-
-    #[test]
-    fn claude_resume_argv_live_attaches_dead_resumes_absent_refuses() {
         use std::os::unix::net::UnixListener;
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
 
@@ -5865,10 +3807,61 @@ mod tests {
                 None, // live attach arm claims nothing
             )
         );
-    }
 
-    #[test]
-    fn live_claude_attach_delegates_dead_and_non_claude_and_mux_do_not() {
+        // A rebooted thread row has no pane and records no pid, so its
+        // transcript reads stale-live or inconclusive forever and no falsifier
+        // fires. With the job state on disk and the socket down, the re-seat
+        // arm returns the dead-relaunch plan the caller resolves to the
+        // same-id background relaunch (claude respawn, no terminal) - never
+        // the false attach, never the inconclusive refusal.
+        let home3 = cv_tmpdir();
+        let jobs = home3.path().join(".claude").join("jobs").join("7c5dcf5d");
+        fs::create_dir_all(&jobs).unwrap();
+        fs::write(jobs.join("state.json"), "{\"state\":\"idle\"}").unwrap();
+        let ch3 = ClaudeHome::at(home3.path());
+        let thread_row = serde_json::json!({
+            "name": "lead", "provider": "claude", "substrate": "thread",
+            "short_id": "7c5dcf5d", "claude_session_uuid": uuid,
+        });
+        // The pre-reboot transcript still says your-move: no false attach.
+        assert_eq!(
+            claude_resume_argv_with_truth(&ch3, &thread_row, "lead", |_| {
+                Some("your-move".into())
+            })
+            .unwrap(),
+            (
+                vec!["claude".to_string(), "--resume".into(), uuid.into()],
+                Some(uuid.to_string()),
+            )
+        );
+        // An inconclusive truth re-seats too.
+        assert_eq!(
+            claude_resume_argv_with_truth(&ch3, &thread_row, "lead", |_| None).unwrap(),
+            (
+                vec!["claude".to_string(), "--resume".into(), uuid.into()],
+                Some(uuid.to_string()),
+            )
+        );
+        // No job state on disk: respawn has no target, so the honest
+        // inconclusive refusal stays.
+        let ch4 = ClaudeHome::at(cv_tmpdir().path());
+        assert_eq!(
+            claude_resume_argv_with_truth(&ch4, &thread_row, "lead", |_| None),
+            Err(13)
+        );
+        // A thread row whose socket ANSWERS is live: attach stays the arm.
+        let thread_live = serde_json::json!({
+            "name": "w", "provider": "claude", "substrate": "thread",
+            "short_id": "7c5dcf5d", "claude_session_uuid": uuid,
+        });
+        assert_eq!(
+            claude_resume_argv_with_truth(&ch2, &thread_live, "w", |_| None).unwrap(),
+            (
+                vec!["claude".to_string(), "attach".into(), "7c5dcf5d".into()],
+                None,
+            )
+        );
+
         // The live-attach arm ((["claude","attach",short_id], None)) is the one
         // this binary used to exec bare, with no pty/route/verification. It is
         // the only combination that should delegate to `fno-py agents resume`.
@@ -5889,64 +3882,7 @@ mod tests {
         ));
         // Every non-claude harness keeps its own provider resume CLI.
         assert!(!should_delegate_claude_live_attach("codex", &None, &None));
-    }
 
-    #[test]
-    fn resume_args_accept_message_flag_long_and_short() {
-        // code-review finding: --message/-m must not die with "unknown resume
-        // flag" -- resume auto-routes to this binary by default, so this
-        // parser is the only door the claude wake's --message option has.
-        let (name, print_command, message, cross_project, cwd) = parse_resume_args(&[
-            "alpha".to_string(),
-            "--message".to_string(),
-            "continue please".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(name, "alpha");
-        assert!(!print_command);
-        assert_eq!(message.as_deref(), Some("continue please"));
-        assert!(!cross_project);
-        assert_eq!(cwd, None);
-
-        let (name, _, message, cross_project, cwd) =
-            parse_resume_args(&["-m".to_string(), "hi".to_string(), "beta".to_string()]).unwrap();
-        assert_eq!(name, "beta");
-        assert_eq!(message.as_deref(), Some("hi"));
-        assert!(!cross_project);
-        assert_eq!(cwd, None);
-
-        // No --message given: still parses, message is None (unchanged
-        // pre-fix behavior for every other flag combination).
-        let (name, print_command, message, cross_project, cwd) =
-            parse_resume_args(&["gamma".to_string(), "--print-command".to_string()]).unwrap();
-        assert_eq!(name, "gamma");
-        assert!(print_command);
-        assert_eq!(message, None);
-        assert!(!cross_project);
-        assert_eq!(cwd, None);
-    }
-
-    // ---- recover (x-d285 task 3.2) --------------------------------------
-
-    fn forked_row() -> crate::state::RegistryEntry {
-        let mut entry = mint_synthesized_entry(
-            &ManifestIdentity {
-                harness: "claude".into(),
-                harness_session_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
-                ..Default::default()
-            },
-            "forked",
-        );
-        entry.cwd = std::env::temp_dir().to_string_lossy().to_string();
-        entry.name = "forked".into();
-        entry.short_id = "aaaaaaaa".into();
-        entry.launch_account = Some("default".into());
-        entry.related_session_id = Some("11111111-2222-3333-4444-555555555555".into());
-        entry
-    }
-
-    #[test]
-    fn recover_verb_refuses_two_ids_until_a_session_is_named() {
         // Recovery chooses a valid id, never a winner: with both slots
         // recorded the bare verb is the refusal, not a guess.
         let dir = cv_tmpdir();
@@ -5970,32 +3906,9 @@ mod tests {
             &home,
         );
         assert_eq!(code, crate::reentry::REENTRY_REFUSED_EXIT);
-    }
 
-    #[test]
-    fn recover_verb_print_command_selects_and_prints_paths_and_ids_only() {
         // --print-command is the no-side-effect inspection form: the selected
-        // fork id rides the argv and nothing launches. The dead arm probes
-        // jobs/<short>/state.json under $HOME, so pin HOME to a throwaway dir
-        // with that state staged. The state is staged under the REAL $HOME
-        // (jobs/11111111, removed after) rather than by repinning the HOME
-        // env: set_var is process-global and races every concurrent test's
-        // env reads and spawns (a flaked `git` NotFound on CI), and the lock
-        // only serializes the tests that already take it.
-        let home_dir = std::env::var_os("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
-        let jobs = home_dir.join(".claude").join("jobs").join("11111111");
-        let staged_here = !jobs.join("state.json").exists();
-        if staged_here {
-            std::fs::create_dir_all(&jobs).unwrap();
-            std::fs::write(
-                jobs.join("state.json"),
-                serde_json::json!({"state": "idle"}).to_string(),
-            )
-            .unwrap();
-        }
-
+        // fork id rides the argv and nothing launches.
         let dir = cv_tmpdir();
         let home = AgentsHome::at(dir.path());
         let entry = forked_row();
@@ -6013,14 +3926,8 @@ mod tests {
             ],
             &home,
         );
-        if staged_here {
-            std::fs::remove_dir_all(&jobs).unwrap();
-        }
         assert_eq!(code, 0);
-    }
 
-    #[test]
-    fn recover_verb_without_a_name_is_exit_2() {
         let dir = cv_tmpdir();
         let home = AgentsHome::at(dir.path());
         assert_eq!(run_recover(&[], &home), 2);
@@ -6031,134 +3938,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resume_args_message_flag_needs_a_value() {
-        assert_eq!(
-            parse_resume_args(&["alpha".to_string(), "--message".to_string()]),
-            Err(2)
+    /// Both directions of the fallback, so neither reads as passing by accident.
+
+    // Fixture: an auto-cleaned temp dir used as a fake $HOME under which the
+    // tests write bg session files, so a panicking test never leaks a /tmp tree.
+    fn cv_tmpdir() -> tempfile::TempDir {
+        let td = tempfile::TempDir::new().unwrap();
+        crate::paths::pin_test_claims_root(td.path().join("claims-root").as_path());
+        td
+    }
+
+    // ---- recover (task 3.2) --------------------------------------
+
+    fn forked_row() -> crate::state::RegistryEntry {
+        let mut entry = mint_synthesized_entry(
+            &ManifestIdentity {
+                harness: "claude".into(),
+                harness_session_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into(),
+                ..Default::default()
+            },
+            "forked",
         );
+        entry.cwd = std::env::temp_dir().to_string_lossy().to_string();
+        entry.name = "forked".into();
+        entry.short_id = "aaaaaaaa".into();
+        entry.launch_account = Some("default".into());
+        entry.related_session_id = Some("11111111-2222-3333-4444-555555555555".into());
+        entry
     }
 
     #[test]
-    fn resume_args_still_rejects_unknown_flags() {
-        assert_eq!(
-            parse_resume_args(&["alpha".to_string(), "--bogus".to_string()]),
-            Err(2)
-        );
-    }
-
-    #[test]
-    fn heal_token_helper_forwards_cross_project_exactly_once() {
-        let registry = Path::new("/tmp/registry.json");
-        assert_eq!(
-            token_helper_args("deadbeef", registry, false),
-            vec![
-                "agents",
-                "heal-token",
-                "deadbeef",
-                "--registry",
-                "/tmp/registry.json",
-                "--all-sources",
-            ]
-        );
-        assert_eq!(
-            token_helper_args("deadbeef", registry, true),
-            vec![
-                "agents",
-                "heal-token",
-                "deadbeef",
-                "--registry",
-                "/tmp/registry.json",
-                "--all-sources",
-                "--cross-project",
-            ]
-        );
-    }
-
-    #[test]
-    fn token_helper_runs_in_explicit_scope_cwd() {
-        // PATH mutation is process-global: take the lib-wide test mutex so a
-        // concurrent PATH-dependent test does not inherit this stub.
-        let _path_guard = crate::PATH_TEST_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        use std::os::unix::fs::PermissionsExt;
-
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let dir = cv_tmpdir();
-        let scope = dir.path().join("replacement");
-        fs::create_dir(&scope).unwrap();
-        let marker = dir.path().join("helper-cwd");
-        let registry_marker = dir.path().join("helper-registry");
-        let fake_fno = dir.path().join("fno");
-        fs::write(
-            &fake_fno,
-            "#!/bin/sh\npwd > \"$FNO_TEST_HELPER_CWD\"\nprintf '%s\\n' \"$5\" > \"$FNO_TEST_HELPER_REGISTRY\"\nexit 0\n",
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&fake_fno).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&fake_fno, permissions).unwrap();
-
-        let old_path = std::env::var_os("PATH");
-        let caller_cwd = std::env::current_dir().unwrap();
-        let relative_registry = Path::new("relative/registry.json");
-        let expected_registry = caller_cwd.join(relative_registry);
-        std::env::set_var("PATH", dir.path());
-        std::env::set_var("FNO_TEST_HELPER_CWD", &marker);
-        std::env::set_var("FNO_TEST_HELPER_REGISTRY", &registry_marker);
-        let output =
-            token_helper_output("deadbeef", relative_registry, false, Some(&scope)).unwrap();
-        match old_path {
-            Some(path) => std::env::set_var("PATH", path),
-            None => std::env::remove_var("PATH"),
-        }
-        std::env::remove_var("FNO_TEST_HELPER_CWD");
-        std::env::remove_var("FNO_TEST_HELPER_REGISTRY");
-
-        assert!(output.status.success());
-        let observed = Path::new(fs::read_to_string(marker).unwrap().trim())
-            .canonicalize()
-            .unwrap();
-        assert_eq!(observed, scope.canonicalize().unwrap());
-        assert_eq!(
-            Path::new(fs::read_to_string(registry_marker).unwrap().trim()),
-            expected_registry
-        );
-    }
-
-    #[test]
-    fn resume_args_accept_cross_project_and_replacement_cwd_forms() {
-        let parsed = parse_resume_args(&[
-            "full-session-id".to_string(),
-            "--cross-project".to_string(),
-            "--cwd".to_string(),
-            "/replacement/checkout".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(parsed.0, "full-session-id");
-        assert!(parsed.3);
-        assert_eq!(parsed.4.as_deref(), Some("/replacement/checkout"));
-
-        let parsed = parse_resume_args(&[
-            "--cwd=/replacement/checkout".to_string(),
-            "--cross-project".to_string(),
-            "full-session-id".to_string(),
-        ])
-        .unwrap();
-        assert!(parsed.3);
-        assert_eq!(parsed.4.as_deref(), Some("/replacement/checkout"));
-
-        assert_eq!(
-            parse_resume_args(&["full-session-id".to_string(), "--cwd".to_string()]),
-            Err(2)
-        );
-    }
-
-    #[test]
-    fn adopt_args_accept_cross_project_and_reject_extra_tokens() {
+    fn adopt_rows() {
         let (session_id, cross_project) =
             parse_adopt_args(&["full-session-id".to_string(), "--cross-project".to_string()])
                 .unwrap();
@@ -6173,11 +3983,8 @@ mod tests {
             ]),
             Err(2)
         );
-    }
 
-    #[test]
-    fn claude_resume_dead_arm_restores_a_recorded_route_or_refuses() {
-        // x-ae2d: the dead arm RELAUNCHES, so it is the one door on this verb
+        // the dead arm RELAUNCHES, so it is the one door on this verb
         // that can lose a route. Untested, the branch is a guard on paper: the
         // Python spawn door has its own tests and neither covers this one.
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
@@ -6241,11 +4048,8 @@ mod tests {
                 None
             )
         );
-    }
 
-    #[test]
-    fn claude_resume_argv_mux_row_relaunches_on_a_gone_verdict() {
-        // x-b84f: a pane worker carries a canonical uuid but NO short_id (empty
+        // a pane worker carries a canonical uuid but NO short_id (empty
         // by design: _validate_single_live_ref enforces mux XOR worker XOR bg, so
         // a mux row never gets the transport key). The loader backfill mirrors
         // harness_session_id -> claude_session_uuid, so the uuid IS resolvable.
@@ -6298,47 +4102,27 @@ mod tests {
             claude_resume_argv_with_truth(&ch, &entry_idless, "idless", |_| Some("done".into())),
             Err(13)
         );
-    }
 
-    #[test]
-    fn mux_pane_run_argv_fences_the_resumed_command() {
-        // x-b84f D3: the one-verb form of the manual `fno mux pane run` recovery.
-        // The `--` fence keeps the inner `--resume <uuid>` (and any flag-shaped
-        // arg) out of the mux parser, so the resumed command is transported
-        // verbatim. AC5: only a path appears, never a value from inside the file.
-        let claude = vec![
-            "claude".to_string(),
-            "--settings".into(),
-            "/route/path.json".into(),
-            "--resume".into(),
-            "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9".into(),
-        ];
-        let pane = mux_pane_run_argv("main", "/wt", &claude);
+        // `claude_session_uuid` never serializes, so a row returned by
+        // `serde_json::to_value(&RegistryEntry)` (the manifest adopt path) has
+        // only `harness_session_id`. Resume must still relaunch it.
+        let uuid = "6fb7b615-369e-4a54-bba6-56af7f3cfd8d";
+        let home = cv_tmpdir();
+        let ch = ClaudeHome::at(home.path());
+        let entry = serde_json::json!({
+            "name": "adopted", "harness": "claude", "short_id": "6fb7b615",
+            "harness_session_id": uuid,
+        });
+        let (argv, claim) =
+            claude_resume_argv_with_truth(&ch, &entry, "adopted", |_| Some("stalled".into()))
+                .expect("a dead adopted row relaunches");
+        assert_eq!(claim.as_deref(), Some(uuid));
         assert_eq!(
-            pane,
-            vec![
-                "mux".to_string(),
-                "pane".into(),
-                "run".into(),
-                "--session".into(),
-                "main".into(),
-                "--cwd".into(),
-                "/wt".into(),
-                "--".into(),
-                "claude".into(),
-                "--settings".into(),
-                "/route/path.json".into(),
-                "--resume".into(),
-                "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9".into(),
-            ]
+            argv,
+            vec!["claude".to_string(), "--resume".into(), uuid.into()]
         );
-        // The fence sits exactly between the mux transport and the command.
-        assert_eq!(pane.iter().position(|a| a == "--"), Some(7));
-    }
 
-    #[test]
-    fn claude_resume_argv_live_pane_row_is_not_called_inconclusive() {
-        // x-b84f review #4: a live pane worker has no short_id, so the live
+        // review #4: a live pane worker has no short_id, so the live
         // attach arm (which gates on a present short_id) does not fire. Pre-fix
         // it fell through to the else arm and printed "liveness is
         // inconclusive" for a session the probe JUST answered live, then told
@@ -6360,101 +4144,7 @@ mod tests {
             claude_resume_argv_with_truth(&ch, &entry, "live-pane", |_| Some("working".into()))
                 .expect_err("a live pane worker refuses cleanly instead of attaching");
         assert_eq!(code, 13);
-    }
 
-    fn _git(repo: &Path, args: &[&str]) {
-        let st = std::process::Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(st.success(), "git {:?} in {} failed", args, repo.display());
-    }
-
-    #[test]
-    fn resolve_resume_cwd_picks_the_transcripts_worktree_over_the_stale_recorded_cwd() {
-        // Registered at the canonical checkout; transcript under a worktree's
-        // project dir (the EnterWorktree case). Resume must resolve to the
-        // worktree, not the pre-EnterWorktree recorded cwd.
-        let tmp = tempfile::tempdir().unwrap();
-        // Canonicalize: macOS houses tempfile under /var/folders (a symlink to
-        // /private/var/folders), and `git` records the resolved /private/var
-        // path while the test's PathBuf carries /var - the slugs would diverge.
-        let home = tmp.path().canonicalize().unwrap();
-        let canonical = home.join("repo");
-        std::fs::create_dir_all(&canonical).unwrap();
-        _git(&canonical, &["init", "-q"]);
-        _git(&canonical, &["config", "user.email", "t@t"]);
-        _git(&canonical, &["config", "user.name", "t"]);
-        _git(&canonical, &["commit", "-q", "--allow-empty", "-m", "base"]);
-        let wt = home.join("wt");
-        _git(
-            &canonical,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "feature/x",
-                wt.to_str().unwrap(),
-            ],
-        );
-
-        let uuid = "9d2874cb-9365-48c0-aeb6-9e1d244f4cd3";
-        let wt_project = home
-            .join(".claude")
-            .join("projects")
-            .join(claude_cwd_slug(&wt));
-        std::fs::create_dir_all(&wt_project).unwrap();
-        std::fs::write(wt_project.join(format!("{uuid}.jsonl")), "[]").unwrap();
-
-        let resolved = resolve_resume_cwd(&ClaudeHome::at(home), canonical.to_str().unwrap(), uuid);
-        assert_eq!(
-            resolved, wt,
-            "resolved to the transcript's worktree, not the recorded cwd"
-        );
-    }
-
-    #[test]
-    fn resolve_resume_cwd_falls_back_to_recorded_when_no_transcript_exists() {
-        // No transcript under any candidate: fall back to the recorded cwd and
-        // say so on stderr. An absent number beats a guessed one.
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let recorded = home.join("recorded");
-        std::fs::create_dir_all(&recorded).unwrap();
-
-        let resolved = resolve_resume_cwd(
-            &ClaudeHome::at(home),
-            recorded.to_str().unwrap(),
-            "deadbeef-0000-0000-0000-000000000000",
-        );
-        assert_eq!(resolved, recorded);
-    }
-
-    #[test]
-    fn resolve_resume_cwd_confirms_recorded_when_its_slug_holds_the_transcript() {
-        // The transcript under the recorded cwd's own slug confirms it; no
-        // worktree enumeration needed.
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        let recorded = home.join("recorded");
-        std::fs::create_dir_all(&recorded).unwrap();
-        let uuid = "aaaaaaaa-0000-0000-0000-000000000000";
-        let project = home
-            .join(".claude")
-            .join("projects")
-            .join(claude_cwd_slug(&recorded));
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(project.join(format!("{uuid}.jsonl")), "[]").unwrap();
-
-        let resolved = resolve_resume_cwd(&ClaudeHome::at(home), recorded.to_str().unwrap(), uuid);
-        assert_eq!(resolved, recorded);
-    }
-
-    #[test]
-    fn claude_resume_socket_miss_requires_family1_death() {
         let home = cv_tmpdir();
         let ch = ClaudeHome::at(home.path());
         let entry = serde_json::json!({
@@ -6474,8 +4164,14 @@ mod tests {
         );
     }
 
+    /// The shared helper snapshots git's path; hand-rolling it resolved by name.
+    fn _git(repo: &Path, args: &[&str]) {
+        let out = crate::git_test_helpers::git_run(args, repo).unwrap();
+        assert!(out.status.success(), "git {args:?} failed in {repo:?}");
+    }
+
     #[test]
-    fn acquire_resume_session_claim_refuses_when_held_by_other() {
+    fn claim_rows() {
         use crate::claims::{acquire, AcquireOpts, AcquireOutcome};
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
         let root = cv_tmpdir();
@@ -6499,10 +4195,7 @@ mod tests {
         // A session with no holder: the resumer wins.
         let uuid2 = "1111abcd-2222-3333-4444-555566667777";
         assert!(acquire_resume_session_claim(uuid2, Some(root.path()), None).is_ok());
-    }
 
-    #[test]
-    fn acquire_resume_session_claim_records_an_expiry_for_the_mux_path() {
         // The mux relaunch exits after pane dispatch, so its session claim cannot
         // ride the holder pid. A PID-only claim (ttl=None) goes Stale the moment
         // that pid dies, and a second resumer steals it before the resumed claude
@@ -6521,26 +4214,17 @@ mod tests {
             rec.expires_at.is_some(),
             "a TTL claim records an expiry; a PID-only claim would not"
         );
-    }
 
-    #[test]
-    fn acquire_named_session_claim_guards_resume_attach_keys() {
-        // The live-attach delegation itself acquires no claim (Python's
-        // `_resume_claude_wake` does, gated on skip-eligibility, once exec'd)
-        // -- but the "resume-attach:{short_id}" key format this exercises is
-        // still the shared contract: Python's own claim uses the identical
-        // key so the two runtimes contend for the same lock on the same row
-        // whichever one ends up acquiring it. Verify that key independently
-        // refuses a second concurrent writer, the same contract
-        // acquire_resume_session_claim already has for its own key.
-        use crate::claims::{acquire, AcquireOpts, AcquireOutcome};
+        // The live-attach route acquires this key before injecting. Verify the
+        // shared lock contract independently: it refuses a second concurrent
+        // writer on the same row, as the session-claim path does for its key.
         let short_id = "deadbeef";
         let root = cv_tmpdir();
 
         // A different live writer already holds the claim (matching this
         // process's own holder string would just re-acquire, not conflict).
         let pre = acquire(
-            &format!("resume-attach:{short_id}"),
+            &crate::resume_wake::resume_attach_claim_key(short_id),
             "other-writer",
             AcquireOpts {
                 root: Some(root.path().to_path_buf()),
@@ -6550,7 +4234,7 @@ mod tests {
         assert!(matches!(pre, AcquireOutcome::Acquired(_)));
 
         let err = acquire_named_session_claim(
-            &format!("resume-attach:{short_id}"),
+            &crate::resume_wake::resume_attach_claim_key(short_id),
             short_id,
             Some(root.path()),
             None,
@@ -6562,26 +4246,89 @@ mod tests {
         // A different short_id: an unrelated row's wake is never blocked by
         // this one's claim.
         let other = acquire_named_session_claim(
-            "resume-attach:other-id",
+            &crate::resume_wake::resume_attach_claim_key("other-id"),
             "other-id",
             Some(root.path()),
             None,
         );
         assert!(other.is_ok());
+
+        use std::os::unix::net::UnixListener;
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let dead = cv_tmpdir();
+        let ch_dead = ClaudeHome::at(dead.path());
+
+        // Dead row + uuid -> pointer naming both revival commands.
+        let entry = serde_json::json!({
+            "name": "w", "provider": "claude",
+            "short_id": "7c5dcf5d", "claude_session_uuid": uuid,
+        });
+        let msg = claude_attach_pointer_with_truth(&ch_dead, &entry, "w", |_| Some("done".into()))
+            .expect("dead row -> pointer");
+        assert!(msg.contains("fno agents resume w"));
+        assert!(msg.contains(&format!("--resume {uuid} --substrate thread")));
+
+        // No uuid -> no pointer (never print an unusable command).
+        let no_uuid = serde_json::json!({
+            "name": "w", "provider": "claude", "short_id": "7c5dcf5d",
+        });
+        assert_eq!(
+            claude_attach_pointer_with_truth(&ch_dead, &no_uuid, "w", |_| Some("done".into())),
+            None
+        );
+
+        // Adopted typed row: claude_session_uuid never serializes, so only
+        // harness_session_id is present - the pointer still resolves.
+        let adopted = serde_json::json!({
+            "name": "w", "provider": "claude", "short_id": "7c5dcf5d",
+            "harness_session_id": uuid,
+        });
+        let msg =
+            claude_attach_pointer_with_truth(&ch_dead, &adopted, "w", |_| Some("done".into()))
+                .expect("adopted row -> pointer through the canonical id");
+        assert!(msg.contains(&format!("--resume {uuid} --substrate thread")));
+
+        // Live supervisor -> no pointer (fall through to a real attach).
+        let live_home = cv_tmpdir();
+        let sessions = live_home.path().join(".claude").join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let sock = live_home.path().join("live.sock");
+        let _l = UnixListener::bind(&sock).unwrap();
+        fs::write(
+            sessions.join("222.json"),
+            format!(
+                "{{\"jobId\":\"7c5dcf5d\",\"kind\":\"bg\",\"messagingSocketPath\":\"{}\",\"sessionId\":\"s\",\"cwd\":\"/tmp\"}}",
+                sock.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            claude_attach_pointer_with_truth(
+                &ClaudeHome::at(live_home.path()),
+                &entry,
+                "w",
+                |_| None
+            ),
+            None
+        );
+        assert_eq!(
+            claude_attach_pointer_with_truth(&ch_dead, &entry, "w", |_| None),
+            None
+        );
     }
 
     #[test]
-    fn parse_manifest_identity_reads_canonical_fields() {
+    fn manifest_rows() {
         let content = "---\n\
             fno_id: 20260804T202518Z-cl99002-4e0236\n\
-            input: \"x-0358\"\n\
+            input: \"x-aaaa\"\n\
             harness: claude\n\
             harness_session_id: c7dc6218-493a-4299-916a-330ec0b0b055\n\
             owner_cwd: \"/Users/x/code/wt\"\n\
             claude_session_id: c7dc6218-493a-4299-916a-330ec0b0b055\n\
             codex_thread_id: null\n\
             ---\n\
-            graph_node_id: x-0358\n";
+            graph_node_id: x-aaaa\n";
         let m = parse_manifest_identity(content);
         assert_eq!(m.harness, "claude");
         assert_eq!(m.harness_session_id, "c7dc6218-493a-4299-916a-330ec0b0b055");
@@ -6593,19 +4340,13 @@ mod tests {
         assert!(m.matches("c7dc6218-493a-4299-916a-330ec0b0b055"));
         assert!(!m.matches("nope"));
         assert!(!m.matches(""));
-    }
 
-    #[test]
-    fn manifest_identity_matches_codex_legacy_alias() {
         let m = ManifestIdentity {
             codex_thread_id: "thread-abc".into(),
             ..Default::default()
         };
         assert!(m.matches("thread-abc"));
-    }
 
-    #[test]
-    fn parse_manifest_identity_skips_forged_keys_in_input_scalar() {
         // A `/target` argument whose text spills across lines and contains
         // `key: value` continuations must NOT forge identity fields: the real
         // harness / harness_session_id (written after input) must win.
@@ -6624,10 +4365,7 @@ mod tests {
         assert_eq!(m.fno_id, "real-run");
         // The forged session id is never matchable.
         assert!(!m.matches("forged-id"));
-    }
 
-    #[test]
-    fn parse_manifest_identity_survives_ambiguous_scalar_terminator() {
         // `/target 'ship it \'` -> init writes an input whose closing quote is
         // preceded by a lone backslash, so the scalar's real terminator is the
         // next `plan_path: "..."` line. Consuming that line would leave the
@@ -6647,10 +4385,7 @@ mod tests {
         assert_eq!(m.harness_session_id, "c7dc6218-493a-4299-916a-330ec0b0b055");
         assert_eq!(m.owner_cwd, "/Users/x/wt");
         assert!(m.matches("c7dc6218-493a-4299-916a-330ec0b0b055"));
-    }
 
-    #[test]
-    fn mint_uses_legacy_alias_when_canonical_session_is_null() {
         // init writes `harness_session_id: ${_HARNESS_SESSION:-null}`, so a real
         // manifest can carry the session under the legacy alias alone. Keying on
         // the canonical field alone minted an empty session id / short_id and the
@@ -6667,7 +4402,7 @@ mod tests {
             Some("c7dc6218-493a-4299-916a-330ec0b0b055")
         );
         assert_eq!(e.short_id, "c7dc6218");
-        assert_eq!(e.name, "target-c7dc6218");
+        assert_eq!(e.name, "t-c7dc6218");
 
         // Codex-alias-only manifest with no `harness` must not default to claude.
         let codex = ManifestIdentity {
@@ -6678,28 +4413,22 @@ mod tests {
         assert_eq!(e.harness.as_deref(), Some("codex"));
         assert_eq!(e.harness_session_id.as_deref(), Some("thread-abcdef12"));
         assert_eq!(e.claude_session_uuid, None);
-    }
 
-    #[test]
-    fn parse_manifest_identity_single_line_input_does_not_open_scalar() {
-        // `input: "x-0358"` closes on the same line; the next real key parses.
-        let content = "input: \"x-0358\"\nharness: codex\n";
+        // `input: "x-aaaa"` closes on the same line; the next real key parses.
+        let content = "input: \"x-aaaa\"\nharness: codex\n";
         let m = parse_manifest_identity(content);
         assert_eq!(m.harness, "codex");
     }
 
     #[test]
-    fn derived_short_id_uses_canonical_head_eight() {
+    fn mint_rows() {
         assert_eq!(
             derived_short_id("c7dc6218-493a-4299-916a-330ec0b0b055"),
             "c7dc6218"
         );
         assert_eq!(derived_short_id("abc12345"), "abc12345");
         assert_eq!(derived_short_id("short"), "short");
-    }
 
-    #[test]
-    fn mint_synthesized_entry_sets_identity_short_id_and_fno_id() {
         let id = ManifestIdentity {
             harness: "codex".into(),
             harness_session_id: "thread-1234567890".into(),
@@ -6714,15 +4443,15 @@ mod tests {
         assert_eq!(e.project_root, "/Users/x/wt");
         // codex carries no claude uuid; claude_session_uuid stays None.
         assert_eq!(e.claude_session_uuid, None);
-        assert_eq!(e.fno_id.as_deref(), Some("20260804T202518Z-cl99002-4e0236"));
+        // The adopt row carries no run id: the registry write mints its own.
+        assert_eq!(e.fno_id, None);
         assert!(!e.short_id.is_empty());
-        assert_eq!(e.name, format!("target-{}", e.short_id));
+        // The name falls back to the derivable t- form (no transcript title
+        // in this test env, and the manifest run id no longer names the row).
+        assert_eq!(e.name, "t-thread-1");
         assert_eq!(e.status, crate::AgentStatus::Idle);
         assert!(e.pid.is_none());
-    }
 
-    #[test]
-    fn mint_synthesized_entry_claude_records_resume_uuid() {
         let id = ManifestIdentity {
             harness: "claude".into(),
             harness_session_id: "c7dc6218-493a-4299-916a-330ec0b0b055".into(),
@@ -6733,10 +4462,7 @@ mod tests {
             e.claude_session_uuid.as_deref(),
             Some("c7dc6218-493a-4299-916a-330ec0b0b055")
         );
-    }
 
-    #[test]
-    fn upsert_synthesized_row_is_idempotent_by_session_id() {
         let dir = cv_tmpdir();
         let reg = dir.path().join("registry.json");
         let id = ManifestIdentity {
@@ -6760,11 +4486,12 @@ mod tests {
             .collect();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].cwd, "/y");
-        assert_eq!(rows[0].fno_id.as_deref(), Some("run-1"));
-    }
+        // The row's id is minted at the first write and the re-upsert keeps it
+        // (the fill carries the predecessor's value); the manifest run id no
+        // longer names the row.
+        let minted = rows[0].fno_id.clone().expect("minted at the first write");
+        assert_ne!(minted, "run-1");
 
-    #[test]
-    fn upsert_synthesized_row_preserves_live_runtime_state() {
         // Re-adopting a session that already has a LIVE row (reachable when the
         // operator adopts by a legacy alias, which resolve_entry_with_heal
         // misses) must not downgrade it to Idle or drop its pid.
@@ -6797,30 +4524,6 @@ mod tests {
     }
 
     #[test]
-    fn gc_keeps_synthesized_idle_row() {
-        // An adopted orphan row (Idle, no pid, no exited_at) must survive the GC
-        // sweep: non-terminal + no confirmed-dead pid -> gc_action Keep, so the
-        // row stays addressable until the operator resumes it.
-        let row = crate::gc::GcRow {
-            status: crate::AgentStatus::Idle,
-            is_live: false,
-            pid_confirmed_dead: false,
-            owns_worktree: true,
-            exited_at: None,
-            liveness_surface: true,
-            transcript_fresh: Some(false),
-            harness_session_gone: None,
-            dormant_done: false,
-            worktree_clean: None,
-            probe: RowLiveness::Alive,
-        };
-        assert_eq!(
-            crate::gc::gc_action(&row, 1000, 60),
-            crate::gc::GcAction::Keep
-        );
-    }
-
-    #[test]
     fn synthesize_and_adopt_registry_hit_is_idempotent() {
         let _g = crate::claims::test_env_lock()
             .lock()
@@ -6840,13 +4543,17 @@ mod tests {
         upsert_synthesized_row(&home.registry_json(), seeded).unwrap();
         upsert_synthesized_row(&home.registry_json(), mint_synthesized_entry(&id, "t2")).unwrap();
         let (row, fno_id, source) =
-            synthesize_and_adopt("thread-seed-1234", &home, false).expect("seeded row resolves");
+            crate::adopt_identity::synthesize_and_adopt("thread-seed-1234", &home, false)
+                .expect("seeded row resolves");
         assert_eq!(source, AdoptSource::Registry);
         assert_eq!(
             row.get("harness_session_id").and_then(Value::as_str),
             Some("thread-seed-1234")
         );
-        assert_eq!(fno_id, None, "seeded row carried no fno_id");
+        assert!(
+            fno_id.is_some(),
+            "the seeded row carries its write-minted id"
+        );
         let persisted = crate::state::load_registry(&home.registry_json()).unwrap();
         assert_eq!(
             persisted.entries[0].predecessor_session_ids,
@@ -6860,41 +4567,6 @@ mod tests {
     }
 
     #[test]
-    fn persist_manifest_identity_surfaces_registry_write_failure() {
-        let dir = cv_tmpdir();
-        let home = AgentsHome::at(dir.path());
-        let mut existing = mint_synthesized_entry(
-            &ManifestIdentity {
-                harness: "codex".into(),
-                harness_session_id: "existing-session".into(),
-                ..Default::default()
-            },
-            "t0",
-        );
-        existing.name = "01a0152f".into();
-        existing.short_id = "transport".into();
-        crate::state::update_registry(&home.registry_json(), |registry| {
-            registry.entries.push(existing);
-        })
-        .unwrap();
-
-        let result = persist_manifest_identity(
-            &ManifestIdentity {
-                harness: "codex".into(),
-                harness_session_id: "01a0152f-45fd-78f0-b109-78f8dffdeeca".into(),
-                ..Default::default()
-            },
-            &home,
-        );
-
-        let Err(AdoptError::Io(message)) = result else {
-            panic!("registry collision must remain an adoption I/O error");
-        };
-        assert!(message.contains("collides with row"));
-        assert!(message.contains("01a0152f"));
-    }
-
-    #[test]
     fn synthesize_and_adopt_miss_writes_no_row() {
         let _g = crate::claims::test_env_lock()
             .lock()
@@ -6904,7 +4576,11 @@ mod tests {
         let home = AgentsHome::from_env();
         // A full session id absent from the registry, from every worktree manifest
         // (cwd is a bare tempdir), and from the harness stores. No row is written.
-        let res = synthesize_and_adopt("deadbeef-1111-2222-3333-444455556666", &home, false);
+        let res = crate::adopt_identity::synthesize_and_adopt(
+            "deadbeef-1111-2222-3333-444455556666",
+            &home,
+            false,
+        );
         assert!(
             matches!(res, Err(AdoptError::NoEvidence) | Err(AdoptError::Io(_))),
             "miss must refuse, not mint; got {res:?}"
@@ -6916,72 +4592,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_attach_pointer_only_for_dead_revivable_claude_row() {
-        use std::os::unix::net::UnixListener;
-        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let dead = cv_tmpdir();
-        let ch_dead = ClaudeHome::at(dead.path());
-
-        // Dead row + uuid -> pointer naming both revival commands.
-        let entry = serde_json::json!({
-            "name": "w", "provider": "claude",
-            "short_id": "7c5dcf5d", "claude_session_uuid": uuid,
-        });
-        let msg = claude_attach_pointer_with_truth(&ch_dead, &entry, "w", |_| Some("done".into()))
-            .expect("dead row -> pointer");
-        assert!(msg.contains("fno agents resume w"));
-        assert!(msg.contains(&format!("--resume {uuid} --substrate bg")));
-
-        // No uuid -> no pointer (never print an unusable command).
-        let no_uuid = serde_json::json!({
-            "name": "w", "provider": "claude", "short_id": "7c5dcf5d",
-        });
-        assert_eq!(
-            claude_attach_pointer_with_truth(&ch_dead, &no_uuid, "w", |_| Some("done".into())),
-            None
-        );
-
-        // Live supervisor -> no pointer (fall through to a real attach).
-        let live_home = cv_tmpdir();
-        let sessions = live_home.path().join(".claude").join("sessions");
-        fs::create_dir_all(&sessions).unwrap();
-        let sock = live_home.path().join("live.sock");
-        let _l = UnixListener::bind(&sock).unwrap();
-        fs::write(
-            sessions.join("222.json"),
-            format!(
-                "{{\"jobId\":\"7c5dcf5d\",\"kind\":\"bg\",\"messagingSocketPath\":\"{}\",\"sessionId\":\"s\",\"cwd\":\"/tmp\"}}",
-                sock.to_str().unwrap()
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            claude_attach_pointer_with_truth(
-                &ClaudeHome::at(live_home.path()),
-                &entry,
-                "w",
-                |_| None
-            ),
-            None
-        );
-        assert_eq!(
-            claude_attach_pointer_with_truth(&ch_dead, &entry, "w", |_| None),
-            None
-        );
-    }
-
-    #[test]
-    fn shlex_quote_matches_python() {
+    fn pycompat_rows() {
         assert_eq!(shlex_quote(""), "''");
         assert_eq!(shlex_quote("/Users/foo/code"), "/Users/foo/code");
         assert_eq!(shlex_quote("abc-def_123"), "abc-def_123");
         assert_eq!(shlex_quote("a b"), "'a b'");
         // embedded single quote -> '"'"'
         assert_eq!(shlex_quote("a'b"), "'a'\"'\"'b'");
-    }
 
-    #[test]
-    fn py_repr_str_matches_cpython_common_cases() {
         assert_eq!(py_repr_str("worker-A"), "'worker-A'");
         // contains ' but not " -> double-quoted
         assert_eq!(py_repr_str("it's"), "\"it's\"");
@@ -6996,10 +4614,7 @@ mod tests {
         assert_eq!(py_repr_str("\u{1b}["), "'\\x1b['");
         // printable non-ASCII stays literal, matching CPython repr('café').
         assert_eq!(py_repr_str("café"), "'café'");
-    }
 
-    #[test]
-    fn tail_lines_of_str_matches_python_slice() {
         // tail 0 -> empty; tail > 0 -> last N lines keepends; over-large -> all.
         assert_eq!(tail_lines_of_str("a\nb\nc\n", 0), "");
         assert_eq!(tail_lines_of_str("a\nb\nc\n", 2), "b\nc\n");
@@ -7007,10 +4622,7 @@ mod tests {
         // last line without trailing newline is preserved as-is here (the file
         // reader is what appends the missing newline).
         assert_eq!(tail_lines_of_str("a\nb", 1), "b");
-    }
 
-    #[test]
-    fn tail_lines_keepends_appends_missing_newline() {
         let dir = std::env::temp_dir().join(format!(
             "fno-cv-logs-{}-{}",
             std::process::id(),
@@ -7033,10 +4645,7 @@ mod tests {
             "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"
         );
         fs::remove_dir_all(&dir).ok();
-    }
 
-    #[test]
-    fn follow_exit_code_maps_ctrl_c_to_zero() {
         use std::os::unix::process::ExitStatusExt;
         use std::process::ExitStatus;
         // claude caught SIGINT and exited 130 (128 + SIGINT): clean stop -> 0.
@@ -7053,28 +4662,7 @@ mod tests {
     }
 
     #[test]
-    fn mux_pane_run_failure_message_names_unanswered_not_absent() {
-        use std::os::unix::process::ExitStatusExt;
-        use std::process::ExitStatus;
-        // exit 20 (EXIT_CONTROL_UNANSWERED): the verb reached the server, so
-        // the message must say a pane MAY have started - never the blanket
-        // "(no pane started)" the other codes get.
-        let msg = mux_pane_run_failure_message(
-            "worker-A",
-            "main",
-            ExitStatus::from_raw(MUX_CONTROL_UNANSWERED << 8),
-        );
-        assert!(msg.contains("MAY have started"), "{msg}");
-        assert!(msg.contains("pane ls --session main"), "{msg}");
-        assert!(!msg.contains("no pane started"), "{msg}");
-
-        // Every other non-zero code keeps the original, stronger claim.
-        let msg = mux_pane_run_failure_message("worker-A", "main", ExitStatus::from_raw(1 << 8));
-        assert!(msg.contains("no pane started"), "{msg}");
-    }
-
-    #[test]
-    fn parse_logs_args_defaults_and_rejects_negative_tail() {
+    fn logs_rows() {
         let a = parse_logs_args(&["worker-A".to_string()]).unwrap();
         assert_eq!(a.name, "worker-A");
         assert_eq!(a.tail, 100);
@@ -7103,19 +4691,13 @@ mod tests {
         );
         let err = parse_logs_args(&["w".to_string(), "--tail".to_string(), "-3".to_string()]);
         assert!(matches!(err, Err((2, _))));
-    }
 
-    #[test]
-    fn parse_logs_args_accepts_json_short() {
-        // ab-3ff64151 (codex P2, PR #431): -J must parse like --json on the
+        // (codex P2, PR #431): -J must parse like --json on the
         // Rust-routed `logs` path, not fall through to "unknown flag".
         let a = parse_logs_args(&["w".to_string(), "-J".to_string()]).unwrap();
         assert!(a.json_out);
-    }
 
-    #[test]
-    fn parse_trace_args_accepts_global_register_shorts() {
-        // ab-3ff64151 (codex P2, PR #431): -A/-J must parse identically to
+        // (codex P2, PR #431): -A/-J must parse identically to
         // --all/--json on the Rust-routed `trace` path.
         let short = parse_trace_args(&["-A".to_string(), "-J".to_string()]).unwrap();
         let long = parse_trace_args(&["--all".to_string(), "--json".to_string()]).unwrap();
@@ -7125,7 +4707,18 @@ mod tests {
     }
 
     #[test]
-    fn load_registry_entries_reads_agents_key_and_validates() {
+    fn registry_rows() {
+        // Each legacy shape gets its own home: the first read imports the
+        // file into the table and fences the path.
+        fn fresh_registry(dir: &std::path::Path, body: impl AsRef<[u8]>) -> std::path::PathBuf {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let home = dir.join(format!("case-{n}")).join("agents");
+            fs::create_dir_all(&home).unwrap();
+            let reg = home.join("registry.json");
+            fs::write(&reg, body).unwrap();
+            reg
+        }
         let dir = std::env::temp_dir().join(format!(
             "fno-cv-reg-{}-{}",
             std::process::id(),
@@ -7137,120 +4730,100 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let reg = dir.join("registry.json");
 
-        // Missing file -> empty (not an error).
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 0);
 
-        // Legacy Python format: top-level "agents" with provider as the
-        // harness identity. Current rows carry harness separately.
         let valid = r#"{"name":"cx","provider":"codex","cwd":"/tmp/x","log_path":"/tmp/x/l","status":"live"}"#;
         let valid_current = r#"{"name":"cx","harness":"codex","cwd":"/tmp/x","log_path":"/tmp/x/l","status":"live"}"#;
-        fs::write(
+        crate::registry_store::seed_raw(
             &reg,
             format!(r#"{{"schema_version":3,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         let rows = load_registry_entries(&reg).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["name"], "cx");
 
-        // Daemon format: "entries" fallback.
         let valid_g = r#"{"name":"e","provider":"gemini","cwd":"/tmp/x","log_path":"/tmp/x/l","status":"live"}"#;
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":3,"entries":[{valid_g}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
 
-        // Current v8 (canonical-identity bump, x-ec59), v5 (inside_leg), and the
-        // prior v4 (host_mode bump) are accepted, and v1 back-compat reads are
-        // retained (the widened accepted set).
-        fs::write(
-            &reg,
+        for (floor, expected) in [
+            (REGISTRY_SCHEMA_VERSION, "writes allowed"),
+            (REGISTRY_SCHEMA_VERSION + 1, "writes are refused"),
+        ] {
+            let announcement = registry_read_announcement(&reg, 99, floor, "writer");
+            assert!(announcement.contains(expected) && announcement.contains("writer_rev=writer"));
+        }
+
+        // Current, prior, and v1 registry shapes remain readable.
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":8,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":5,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":4,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":1,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
 
-        // A NEWER schema_version now reads forward rather than erroring. The old
-        // refusal meant one source-ahead writer bricked every deployed reader on
-        // the machine at once; a reader that is merely behind must degrade, not
-        // take the fleet down. Matches Python load_registry.
-        fs::write(
-            &reg,
+        // Newer schema reads forward so one ahead writer cannot brick all readers.
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":99,"agents":[{valid_current}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":15,"agents":[{valid_current}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             format!(r#"{{"schema_version":14,"agents":[{valid}]}}"#),
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
 
-        // A missing or non-integer version is damage, not a newer writer.
-        fs::write(&reg, r#"{"agents":[]}"#).unwrap();
+        // Missing or non-integer versions are damage.
+        let reg = fresh_registry(&dir, r#"{"agents":[]}"#);
         assert!(load_registry_entries(&reg).is_err());
-        fs::write(&reg, r#"{"schema_version":"fourteen","agents":[]}"#).unwrap();
+        let reg = fresh_registry(&dir, r#"{"schema_version":"fourteen","agents":[]}"#);
         assert!(load_registry_entries(&reg).is_err());
 
-        // x-8dfc: an unknown provider no longer bricks the read -- it loads as
-        // an undispatchable identity row (goose: a real CLI we deliberately do
-        // not host). Capability is refused later at the spawn seam, not here.
-        fs::write(
-            &reg,
+        // Unknown providers load as undispatchable rows; spawn refuses them.
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":3,"agents":[{"name":"x","provider":"goose","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
 
-        // Corrupt identity (empty provider AND no harness) still bricks (AC1-ERR).
-        fs::write(
-            &reg,
+        // Empty provider without a harness is corrupt.
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":3,"agents":[{"name":"x","provider":"","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert!(load_registry_entries(&reg).is_err());
 
-        // Unknown status -> Err.
-        fs::write(
-            &reg,
+        // Unknown statuses are corrupt.
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":3,"agents":[{"name":"x","provider":"codex","cwd":"/x","log_path":"/l","status":"zombie"}]}"#,
-        )
-        .unwrap();
+        );
         assert!(load_registry_entries(&reg).is_err());
 
-        // `exited` (and the other projected AgentStatus values) MUST be
-        // accepted: the daemon writes `status:"exited"` when a worker exits
-        // and retains the row until rm. A too-narrow {live,orphaned} set
-        // hard-errored every read until the row was removed (ab-3c063856
-        // grid testing surfaced this). Spot-check the previously-rejected
-        // statuses now load cleanly.
+        // Projected AgentStatus values, including exited, remain readable.
         for st in [
             "exited",
             "idle",
@@ -7261,13 +4834,12 @@ mod tests {
             "permanent_dead",
             "ready",
         ] {
-            fs::write(
-                &reg,
+            let reg = fresh_registry(
+                &dir,
                 format!(
                     r#"{{"schema_version":3,"agents":[{{"name":"x","provider":"codex","cwd":"/x","log_path":"/l","status":"{st}"}}]}}"#
                 ),
-            )
-            .unwrap();
+            );
             assert_eq!(
                 load_registry_entries(&reg).unwrap().len(),
                 1,
@@ -7275,32 +4847,20 @@ mod tests {
             );
         }
 
-        // Missing required field (no log_path) -> Err (Python AgentEntry TypeError).
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":3,"agents":[{"name":"x","provider":"codex","cwd":"/x","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert!(load_registry_entries(&reg).is_err());
 
-        // agents not a list -> Err.
-        fs::write(&reg, r#"{"schema_version":3,"agents":{}}"#).unwrap();
+        let reg = fresh_registry(&dir, r#"{"schema_version":3,"agents":{}}"#);
         assert!(load_registry_entries(&reg).is_err());
 
-        // Invalid UTF-8 -> Err (strict decode, codex P2).
-        fs::write(&reg, [0xff, 0xfe, 0x00]).unwrap();
+        let reg = fresh_registry(&dir, [0xff, 0xfe, 0x00]);
         assert!(load_registry_entries(&reg).is_err());
 
         fs::remove_dir_all(&dir).ok();
-    }
 
-    /// x-8dfc load-gate relaxation, the Rust half of the cross-language parity
-    /// (AC1-FR): this reader accepts the same alien-harness fixture Python's
-    /// `test_load_gate` accepts, and refuses the same corrupt fixture -- both
-    /// directions pinned. Also covers AC1-EDGE (provider-less post-v10 shape)
-    /// and AC2-ERR (divergence loads).
-    #[test]
-    fn load_registry_gate_shape_check_x8dfc() {
         let dir = std::env::temp_dir().join(format!(
             "fno-cv-reg8dfc-{}-{}",
             std::process::id(),
@@ -7310,26 +4870,21 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
 
-        // AC2-HP: an alien harness row (provider == harness == "newharness")
-        // loads instead of bricking. Same fixture the Python parity test uses.
-        fs::write(
-            &reg,
+        // Alien harness rows load instead of bricking.
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"nh","provider":"newharness","harness":"newharness","harness_session_id":"deadbeefcafef00d","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         let rows = load_registry_entries(&reg).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["provider"], "newharness");
 
-        // AC1-EDGE: a provider-less row (post-v10 writer shape, harness only)
-        // loads with provider backfilled from harness.
-        fs::write(
-            &reg,
+        // Provider-less rows load with provider backfilled from harness.
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"pv","harness":"claude","harness_session_id":"aaaabbbbccccdddd","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         let rows = load_registry_entries(&reg).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["provider"], "claude");
@@ -7339,47 +4894,40 @@ mod tests {
         assert_eq!(rows[0]["claude_session_uuid"], "aaaabbbbccccdddd");
 
         // AC2-ERR: a diverged row (provider != harness) LOADS (warning only).
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"dv","provider":"claude","harness":"codex","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert_eq!(load_registry_entries(&reg).unwrap().len(), 1);
 
         // Heal: a truthy-but-corrupt harness (whitespace) is replaced from the
         // valid provider, so resume (which reads through this) never keys on a
         // corrupt harness.
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"heal","provider":"claude","harness":"c x","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         let rows = load_registry_entries(&reg).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["harness"], "claude");
 
         // AC1-ERR: an empty-identity row (empty provider, no harness) still
         // bricks -- the corruption guard survives the relaxation.
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"bad","provider":"","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert!(load_registry_entries(&reg).is_err());
 
         // Whitespace-bearing identity is corruption, not an alien token.
-        fs::write(
-            &reg,
+        let reg = fresh_registry(
+            &dir,
             r#"{"schema_version":9,"agents":[{"name":"ws","provider":"a b","cwd":"/x","log_path":"/l","status":"live"}]}"#,
-        )
-        .unwrap();
+        );
         assert!(load_registry_entries(&reg).is_err());
 
         fs::remove_dir_all(&dir).ok();
-    }
 
-    #[test]
-    fn expand_eq_splits_long_options_only() {
         assert_eq!(
             expand_eq(&["--limit=5".to_string(), "w".to_string()]),
             vec!["--limit".to_string(), "5".to_string(), "w".to_string()]
@@ -7393,102 +4941,8 @@ mod tests {
         assert_eq!(expand_eq(&["a=b".to_string()]), vec!["a=b".to_string()]);
         assert_eq!(expand_eq(&["-n5".to_string()]), vec!["-n5".to_string()]);
     }
-
-    #[test]
-    fn append_agents_event_writes_python_envelope() {
-        let dir = std::env::temp_dir().join(format!(
-            "fno-cv-event-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let events = dir.join("events.jsonl");
-        append_agents_event(
-            &events,
-            "agent_resumed",
-            &[
-                ("name", Value::String("worker-A".into())),
-                ("provider", Value::String("codex".into())),
-            ],
-        );
-        let content = fs::read_to_string(&events).unwrap();
-        let line = content.trim_end();
-        // data fields first, ts + kind last; compact (no spaces).
-        assert!(line.starts_with(r#"{"name":"worker-A","provider":"codex","ts":"#));
-        assert!(line.ends_with(r#""kind":"agent_resumed"}"#));
-        let parsed: Value = serde_json::from_str(line).expect("valid JSON line");
-        assert_eq!(parsed["kind"], "agent_resumed");
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    // ---- claim sweep (x-54fa) --------------------------------------------
-
-    fn sweep_acquire(root: &std::path::Path, key: &str) {
-        let opts = crate::claims::AcquireOpts {
-            root: Some(root.to_path_buf()),
-            events_dir: Some(root.to_path_buf()),
-            ..Default::default()
-        };
-        match crate::claims::acquire(key, "test-holder", opts) {
-            crate::claims::AcquireOutcome::Acquired(_) => {}
-            other => panic!("acquire {key} failed: {other:?}"),
-        }
-    }
-
-    fn sweep_dir(root: &std::path::Path) -> PathBuf {
-        crate::claims::claims_dir_for(Some(root)).unwrap()
-    }
-
-    #[test]
-    fn claim_sweep_empty_or_missing_dir_is_empty_payload() {
-        let td = tempfile::TempDir::new().unwrap();
-        // Dir does not exist yet: empty payload, not an error (Boundaries:
-        // "must handle an empty claims directory").
-        let payload = claim_sweep_payload(&sweep_dir(td.path()));
-        assert_eq!(payload, serde_json::json!({"claims": []}));
-    }
-
-    #[test]
-    fn claim_sweep_reports_live_node_and_dispatch_claims() {
-        let td = tempfile::TempDir::new().unwrap();
-        sweep_acquire(td.path(), "node:x-ef41");
-        sweep_acquire(td.path(), "dispatch:x-ef41");
-        sweep_acquire(td.path(), "session:not-swept"); // out-of-scope prefix
-        let payload = claim_sweep_payload(&sweep_dir(td.path()));
-        let claims = payload["claims"].as_array().unwrap();
-        assert_eq!(claims.len(), 2, "session: claim must be excluded");
-        // Sorted by key: dispatch: before node:.
-        assert_eq!(claims[0]["key"], "dispatch:x-ef41");
-        assert_eq!(claims[1]["key"], "node:x-ef41");
-        for c in claims {
-            // Acquired by THIS live process => live.
-            assert_eq!(c["state"], "live");
-            assert_eq!(c["holder"], "test-holder");
-            assert_eq!(c["pid"], std::process::id());
-            assert!(c["host"].as_str().is_some_and(|h| !h.is_empty()));
-        }
-    }
-
-    #[test]
-    fn claim_sweep_excludes_corrupted_and_newer_schema_lockfiles() {
-        let td = tempfile::TempDir::new().unwrap();
-        sweep_acquire(td.path(), "node:x-good");
-        let dir = sweep_dir(td.path());
-        // Corrupted YAML under a sweep-prefixed name.
-        fs::write(dir.join("node%3Ax-bad.lock"), "{not yaml: [").unwrap();
-        // Newer schema writer: parse refuses, sweep excludes (does not crash).
-        fs::write(
-            dir.join("node%3Ax-newer.lock"),
-            "schema_version: 999\nkey: node:x-newer\nholder: h\nacquired_at: 1\npid: 1\nhost: x\n",
-        )
-        .unwrap();
-        // Non-lock and dot files are skipped.
-        fs::write(dir.join("node%3Ax-tmp.partial"), "x").unwrap();
-        let payload = claim_sweep_payload(&dir);
-        let claims = payload["claims"].as_array().unwrap();
-        assert_eq!(claims.len(), 1);
-        assert_eq!(claims[0]["key"], "node:x-good");
-    }
 }
+
+#[cfg(test)]
+#[path = "client_verbs_tests.rs"]
+mod client_verbs_tests;

@@ -1,4 +1,4 @@
-//! Daemon-side `agent.logs` streaming handler (Category C / ab-d82655d7).
+//! Daemon-side `agent.logs` streaming handler (Category C /).
 //!
 //! Honors Locked Decision #5: `fno agents logs <name> --follow` for codex/gemini
 //! reuses the same WebSocket-upgrade transport `drive` established (Wave 4)
@@ -79,8 +79,7 @@ pub async fn handle_logs(home: &AgentsHome, req: &Request, mut stream: UnixStrea
 /// the top-level `"agents"` key (Python `write_registry`); `"entries"` is the
 /// fallback for a registry last written by the Rust daemon.
 fn registry_log_path(registry_path: &Path, name: &str) -> Option<String> {
-    let bytes = std::fs::read(registry_path).ok()?;
-    let raw: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes)).ok()?;
+    let raw = crate::registry_store::read(registry_path).ok()?;
     let rows = raw
         .get("agents")
         .or_else(|| raw.get("entries"))?

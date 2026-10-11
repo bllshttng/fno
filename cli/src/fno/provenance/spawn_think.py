@@ -1,7 +1,7 @@
-"""Born-with-why: context-carrying /think spawn at node birth (x-6a10).
+"""Born-with-why: context-carrying /think spawn at node birth.
 
 This is the *mechanism* half of the node-provenance work. Its prerequisite
-x-30f6 gave every backlog node its provenance *pointers* (``source_session_id``
+ gave every backlog node its provenance *pointers* (``source_session_id``
 + ``source_harness`` + ``source_cwd`` + ``source_node_id``) captured ambiently
 at birth, plus a claude transcript resolver
 (:func:`fno.provenance.resolver.resolve_transcript`). Those pointers are inert
@@ -10,15 +10,15 @@ until something consumes them at birth. This module closes that loop.
 When the node-birth path (``fno backlog idea``) persists a generated organic
 node, :func:`maybe_spawn_think` evaluates a spawn decision *deterministically in
 code* (Locked Decision 1: never LLM-volunteered, the ambient-capture principle
-inherited from x-30f6) and, when armed:
+inherited from) and, when armed:
 
-  - **unforced birth** (x-42c5): ALWAYS surfaces a single copy-pasteable
+  - **unforced birth** ALWAYS surfaces a single copy-pasteable
     ``/think <node-id>`` handoff line - never auto-spawns - regardless of
     away/attended presence or the ``think_spawn.attended`` config. A node
     birth is the one trigger with zero human decision behind it (every
     ``fno backlog idea``/``intake``/``add``/retro-harvest call routes here),
     so it is the one trigger that must never fire a worker on its own. Prior
-    to x-42c5 an away-classified birth (a headless/spawned session filing a
+    to an away-classified birth (a headless/spawned session filing a
     node) spawned a real ``/think`` worker unconditionally - the near-miss
     that motivated this: ~20 nodes filed in one attended session with the
     gate armed, each three seconds from an unplanned worker had that session
@@ -56,9 +56,11 @@ from typing import Optional
 
 from fno import _subprocess_util
 from fno import route_resolve as _route_resolve
-from fno.agents.naming import agent_name
+from fno.rust_binary import call_binary_json
+from fno.agents.naming import dispatch_agent_name
 from fno.harness_identity import env_marks_unattended, resolve_harness_identity
 from fno.provenance.resolver import resolve_transcript
+from fno.user import display_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 _ENV_OVERRIDE = "FNO_THINK_SPAWN"
 # Test/CI seam to pin presence without faking a manifest or tty.
 _ENV_PRESENCE = "FNO_THINK_SPAWN_PRESENCE"
-# Test/CI + force seam for the attended opt-in (B, x-5d51); mirrors _ENV_OVERRIDE.
+# Test/CI + force seam for the attended opt-in (B); mirrors _ENV_OVERRIDE.
 # Otherwise read from config.think_spawn.attended (spawn|offer, default offer).
 _ENV_ATTENDED = "FNO_THINK_SPAWN_ATTENDED"
 # The away test is `harness_identity.env_marks_unattended`, shared with target
@@ -82,7 +84,7 @@ _ENV_ATTENDED = "FNO_THINK_SPAWN_ATTENDED"
 # idea before its target-state manifest exists (codex PR #9), because a thread
 # is not an attended substrate. What it no longer does is call every spawned
 # worker away: FNO_AGENT_SELF is set by all three substrates, so on its own it
-# read a pane with an operator watching as headless (x-be78).
+# read a pane with an operator watching as headless.
 
 # Decision-event kinds (registered in cli/src/fno/events/schema.yaml).
 EVENT_SPAWNED = "think_spawned"
@@ -103,14 +105,14 @@ _VALID_DECISION_EVENTS = {
 _SPAWN_ALREADY_EXISTS = "already exists"
 
 
-# A2 (x-122a): non-birth dispatch reasons. The default birth reason keeps A1
+# A2: non-birth dispatch reasons. The default birth reason keeps A1
 # byte-for-byte; the lifecycle reasons additionally require a RESOLVED transcript
 # pointer (relevance filter, Locked Decision 3) so a context-free /think never
 # fires on a high-volume lifecycle moment.
 REASON_BIRTH = "birth"
 REASON_WORK_START = "work-start"
 REASON_RETRO = "retro"
-# C (x-0a9c): the explicit conversational verb. NOT in _LIFECYCLE_REASONS: it is
+# C: the explicit conversational verb. NOT in _LIFECYCLE_REASONS: it is
 # operator-invoked (one per explicit call, no firehose), so it does not need the
 # relevance filter and may degrade to the stored triple like birth does.
 REASON_CONVERSATIONAL = "conversational"
@@ -170,7 +172,7 @@ class ThinkSeed:
     prompt: str  # multi-line; carries the transcript POINTER, never a paraphrase
     offer_line: str  # single copy-pasteable line (AC2-UI)
     resolved: bool  # did the origin transcript resolve to a real .jsonl?
-    output_path: str = ""  # where the headless worker writes its /think doc (B, x-5d51)
+    output_path: str = ""  # where the headless worker writes its /think doc (B)
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ def _settings_for(project_root: Optional[Path]):
     Honors ``project_root`` (gemini PR #9): in a multi-repo / cross-project run
     the gate must read the node's repo settings, not whatever repo the birth
     process happens to be cwd'd in. Falls back to the ambient ``load_settings``
-    when no root is given (the cmd_idea path, which defaults project_root to cwd).
+    when no root is given (the native add/idea path, which defaults project_root to cwd).
     """
     from fno.config import load_settings, load_settings_for_repo
 
@@ -203,7 +205,7 @@ def _think_spawn_resolve(
 
     Precedence (highest first):
       0. ``config.autonomy.enabled`` master switch off -> rank "autonomy".
-         Checked BEFORE the env override (x-aaaf wave 3 panic switch).
+         Checked BEFORE the env override (wave 3 panic switch).
       1. ``FNO_THINK_SPAWN`` env override (explicit force on/off) -> rank "env".
       2. ``config.think_spawn.enabled`` from the node's repo settings
          (``project_root`` when given, else the ambient cwd; local>global)
@@ -289,17 +291,26 @@ def think_spawn_on_decompose_wave0(
 
 
 def _daily_counter_path() -> Path:
-    """``~/.fno/.think-spawn-daily.json`` - the global per-day spawn counter.
-
-    Per-install (not per-project): the firehose guard bounds total bg /think
-    sessions a day regardless of which repo or node triggered them. Resolved
-    under ``global_claims_root()`` (the SAME ``$FNO_CLAIMS_ROOT``-honoring base
-    as the dispatch dedup tokens) so the counter isolates with the claims in
-    tests and travels with them in production.
+    """``~/.fno/state/think-spawn-daily.json`` - the global per-day spawn
+    counter, per-install (not per-project): the firehose guard bounds total
+    bg /think sessions a day. Resolved under ``global_claims_root()`` (the
+    same ``$FNO_CLAIMS_ROOT``-honoring base as the dispatch dedup tokens) so
+    it isolates with the claims in tests. First resolve renames the legacy
+    root spelling - the ``paths.state_runtime_file`` ladder, rebuilt here
+    because this base follows the claims root, not ``state_dir()``.
     """
     from fno.claims.io import global_claims_root
 
-    return global_claims_root() / ".fno" / ".think-spawn-daily.json"
+    base = global_claims_root() / ".fno"
+    new = base / "state" / "think-spawn-daily.json"
+    legacy = base / ".think-spawn-daily.json"
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(new)
+        except OSError:
+            return legacy
+    return new
 
 
 def _today_str() -> str:
@@ -345,11 +356,11 @@ def _attended_mode(
     *,
     env: Optional[Mapping[str, str]] = None,
 ) -> str:
-    """Resolve the attended opt-in: ``spawn`` (real bg /think) or ``offer`` (B, x-5d51).
+    """Resolve the attended opt-in: ``spawn`` (real bg /think) or ``offer`` (B).
 
     Precedence mirrors think_spawn_enabled: ``FNO_THINK_SPAWN_ATTENDED`` override,
     then ``config.think_spawn.attended`` from the node's repo settings. Fail-safe
-    to ``offer`` (byte-for-byte x-6a10): any unreadable/garbage value keeps the
+    to ``offer`` (byte-for-byte): any unreadable/garbage value keeps the
     default stderr-handoff behavior, never an unintended auto-spawn (AC4-HP).
     """
     environ = os.environ if env is None else env
@@ -397,7 +408,7 @@ def _owned_manifest_attended(project_root: Path, environ: Mapping[str, str]) -> 
     leaks a presence verdict this session does not own. Returns None when there
     is no owned manifest (caller falls back to env signal).
     """
-    # READ-ONLY (x-20f1 LD5): compares this process's id against a manifest to
+    # READ-ONLY (LD5): compares this process's id against a manifest to
     # decide ownership. The id is the PREDICATE, never the value written.
     identity = resolve_harness_identity(environ)
     if identity.harness != "claude" or not identity.session_id:
@@ -457,7 +468,7 @@ def classify_presence(
     if attended is not None:
         return "attended" if attended else "away"
 
-    # READ-ONLY (x-20f1 LD5): an attended/away verdict, not a stamp.
+    # READ-ONLY (LD5): an attended/away verdict, not a stamp.
     identity = resolve_harness_identity(environ)
     if identity.session_id and identity.harness in ("claude", "codex"):
         return "attended"
@@ -479,22 +490,22 @@ def assemble_seed(
 ) -> ThinkSeed:
     """Build a /think seed carrying the *resolved* origin pointer.
 
-    Resolves the node's x-30f6 provenance pointers to a real transcript path
+    Resolves the node's provenance pointers to a real transcript path
     via :func:`resolve_transcript`. When resolved, the seed references the
     on-disk ``.jsonl`` (the pointer); when not (foreign harness / pruned file),
     it degrades to the stored ``(harness, session_id, cwd)`` triple with
     ``resolved=False`` (AC1-EDGE) - it NEVER paraphrases the why (the exact bug
     being fixed).
 
-    ``chain_blueprint`` (x-edf7 US3): a decompose fan-out worker must not stop at
+    ``chain_blueprint`` (US3): a decompose fan-out worker must not stop at
     /think - it chains into /blueprint on the produced doc, which claims the child
     and links its plan_path (the event that flips it `ready`). A bare /think seed
     would leave the child designless/`idea`, so the prompt spells the chain out.
 
-    ``why_digest`` (x-edf7 US4): the transcribed epic intent + Locked Decisions,
+    ``why_digest`` (US4): the transcribed epic intent + Locked Decisions,
     embedded verbatim so a fan-out worker stays grounded even when the origin
     transcript is pruned/unresolved (the pointer alone would leave it designing
-    from the title). ``project_root`` (x-edf7 P1): resolve the /think OUTPUT path
+    from the title). ``project_root`` (P1): resolve the /think OUTPUT path
     from the child's OWN repo, not the ambient decompose process - a cross-repo
     (`project`/`cwd`-routed) child must write its doc in its own project, where
     the worker runs and /blueprint mutates it. Both default to the prior behavior.
@@ -584,7 +595,7 @@ def assemble_seed(
 
 
 def _plans_output_dir(project_root: Optional[Path] = None) -> Path:
-    """The plans dir the /think doc lands in (x-ff83 W1); shared with W2's sweep.
+    """The plans dir the /think doc lands in (W1); shared with W2's sweep.
 
     Delegates to :func:`fno.paths.plans_content_dir` (settings.local
     ``plansDirectory`` -> ``config.plans_dir``). ``project_root`` scopes the
@@ -648,7 +659,7 @@ def _find_node_doc(pdir: Path, node_id: str) -> Optional[Path]:
 def _think_output_path(
     node_id: str, slug: str = "", project_root: Optional[Path] = None
 ) -> str:
-    """Resolve where the headless /think worker writes its design doc (x-8af8).
+    """Resolve where the headless /think worker writes its design doc.
 
     A newly minted filename ends ``-<node_id>.md`` so a roadmap base keyed on
     the node id can find it (a reused frontmatter-claiming stub keeps its own
@@ -707,12 +718,13 @@ def _think_output_path(
 # ---------------------------------------------------------------------------
 
 
-def _worker_agent_name(node_id: str, node_slug: Optional[str], reason: str = REASON_BIRTH, invocation_suffix: Optional[str] = None) -> str:
+def _worker_agent_name(node_id: str, node_slug: Optional[str], reason: str = REASON_BIRTH, invocation_suffix: Optional[str] = None, model: Optional[str] = None) -> str:
     """Provenance-carrying bg worker name, scoped by trigger reason.
 
-    Birth keeps ``think-<node-id>-<slug>`` byte-for-byte (A1). A LIFECYCLE
-    trigger gets ``think-<node-id>-<reason>-<slug>`` so a node born + later
-    worked + retro'd dispatches a DISTINCT worker per moment - the dedup token
+ shape: ``th-th-<node-id>[-<reason>]-<slug>`` - the spawn_think
+    source stamped only by this path, the think verb as a code. A LIFECYCLE
+    trigger keeps its ``<reason>`` segment so a node born + later worked +
+    retro'd dispatches a DISTINCT worker per moment - the dedup token
     is reason-scoped, and ``fno agents spawn`` rejects a duplicate NAME, so the
     name must be reason-scoped too or the second lifecycle trigger collides and
     is wrongly skipped (codex P2).
@@ -722,16 +734,18 @@ def _worker_agent_name(node_id: str, node_slug: Optional[str], reason: str = REA
     call; without it the constant name is rejected and a later conversation can
     never re-dispatch the node even after the dedup TTL expires (codex P2). The
     canonical owner treats reason and suffix as load-bearing and spends the
-    64-char budget on the human slug alone. x-3218 moved this budgeting policy
+    64-char budget on the human slug alone. moved this budgeting policy
     out of provenance-trigger code: an over-budget required identity now raises
     instead of shaving the suffix onto a colliding name.
     """
-    return agent_name(
-        "think",
+    return dispatch_agent_name(
+        "th",
+        "th",
         node_id,
         qualifier=None if reason == REASON_BIRTH else reason,
         slug=node_slug,
         discriminator=invocation_suffix,
+        model=model,
     )
 
 
@@ -755,7 +769,7 @@ def _spawn_think_worker(
     (``--fresh``). Returns the spawn receipt's short_id. Raises
     SpawnAlreadyRunning on a name-collision and SpawnError otherwise.
     """
-    agent_name = _worker_agent_name(node_id, node_slug, reason, invocation_suffix)
+    agent_name = _worker_agent_name(node_id, node_slug, reason, invocation_suffix, model=model)
     root = Path(node_cwd) if node_cwd else None
     try:
         settings_obj = _settings_for(root)
@@ -775,6 +789,14 @@ def _spawn_think_worker(
         else None
     )
 
+    dispatch_cfg = None
+    if reason == REASON_CONVERSATIONAL:
+        from fno.agents.harness_map import _load_dispatch_cfg
+
+        dispatch_cfg = _load_dispatch_cfg(settings_obj, verb="/think")
+        allowed = dispatch_cfg.get("allowed_verbs")
+        if isinstance(allowed, list):
+            dispatch_cfg["allowed_verbs"] = [*allowed, "/think"]
     resolved = resolve_dispatch(
         harness=(provider or "").strip() or None,
         substrate=legacy_substrate,
@@ -782,6 +804,7 @@ def _spawn_think_worker(
         verb="/think",
         trigger="autonomous",
         settings=settings_obj,
+        dispatch_cfg=dispatch_cfg,
     )
     resolved_harness = resolved["harness"]
     substrate = resolved["substrate"]
@@ -790,9 +813,9 @@ def _spawn_think_worker(
     if resolved_model is None and node is not None:
         # Left at node_model's default resolution: this seam has NO grid
         # receiving end (the argv always carries an explicit --harness and
-        # never --node, so inject_spawn_defaults' grid stands down), and
+        # never --node, so the compose's grid stands down), and
         # resolve_difficulty=False here would silently drop a banded node's
-        # band instead of deferring it (x-baef round-3 finding 1).
+        # band instead of deferring it (round-3 finding 1).
         resolved_model = _route_resolve.node_model(
             node,
             provider=resolved_harness,
@@ -817,16 +840,21 @@ def _spawn_think_worker(
         cmd += ["--cwd", node_cwd]
     else:
         cmd += ["--fresh"]
-    # x-571f: a pinned node's /think worker also runs on the pin (US1 honors it
+    # a pinned node's /think worker also runs on the pin (US1 honors it
     # on the claude/bg arm). Empty/None = provider default, unchanged.
     if resolved_model:
         cmd += ["--model", resolved_model]
-    # x-dfa4: an explicit permission_mode wins; else the autonomous-dispatcher
-    # config default (config.agents.spawn_permission_mode). Both empty = unchanged.
+    # an explicit permission_mode wins; else the operator's spawn
+    # default (config.agents.defaults.permission_mode); else the built-in
+    # unattended answer.
     mode = (permission_mode or "").strip()
     if not mode:
         try:
-            mode = (settings_obj.agents.spawn_permission_mode or "").strip()
+            from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
+
+            mode = (
+                settings_obj.agents.defaults.permission_mode or ""
+            ).strip() or SPAWN_PERMISSION_BUILTIN
         except Exception:  # noqa: BLE001 - fail-safe to unset (unchanged)
             mode = ""
     if mode and (resolved_harness == "claude" or substrate == "pane"):
@@ -835,7 +863,7 @@ def _spawn_think_worker(
     # directions): a leading-flag seed must be the prompt positional.
     cmd += ["--name", agent_name, "--", rendered_prompt]
 
-    # x-42c5: tag the CAUSE of this spawn (never reached for an unforced birth -
+    # tag the CAUSE of this spawn (never reached for an unforced birth -
     # maybe_spawn_think resolves that to "offered" before this function is ever
     # called), so a future provenance question is a registry field, not a
     # timestamp-gap inference. FNO_SPAWN_TRIGGER rides the subprocess env; the
@@ -846,9 +874,11 @@ def _spawn_think_worker(
         stderr = (proc.stderr or "").strip()
         if proc.returncode == 2 and _SPAWN_ALREADY_EXISTS in stderr:
             raise SpawnAlreadyRunning(f"agent {agent_name} already exists")
+        from fno.backlog.advance import _gate_refusal_detail
+
         raise SpawnError(
             f"fno agents spawn exited {proc.returncode}: "
-            f"{(stderr or proc.stdout or '').strip()[:200]}"
+            f"{_gate_refusal_detail(stderr or proc.stdout or '')}"
         )
     short_id = _parse_short_id(proc.stdout or "")
     if short_id:
@@ -920,7 +950,7 @@ def _parse_short_id(stdout: str) -> str:
 
 
 def _claim_is_live(key: str) -> bool:
-    # A suspect claim (x-ba4b: TTL-unexpired, dead pid) counts as occupied too,
+    # A suspect claim (: TTL-unexpired, dead pid) counts as occupied too,
     # so a respawned worker's dispatch reservation still dedups.
     from fno.claims.core import claim_status
 
@@ -982,15 +1012,15 @@ def _stamp_forward(
 ) -> None:
     """Stamp the node with its spawned /think session + output pointers (Discretion 5).
 
-    Serialized under locked_mutate_graph so the forward pointer write cannot
+    Serialized under the store write lock so the forward pointer write cannot
     clobber a concurrent node update (Concurrency invariant). Best-effort: a
     stamp failure never unwinds an already-successful spawn. ``output_path`` (B,
-    x-5d51) records where the headless worker writes its /think doc so the node
+) records where the headless worker writes its /think doc so the node
     points at the artifact, not just the session.
     """
     try:
         from fno.graph.cli import _graph_path
-        from fno.graph.store import locked_mutate_graph
+        from fno.graph.store import commit_rows_via_store
 
         def mutator(entries):
             for e in entries:
@@ -1007,7 +1037,7 @@ def _stamp_forward(
                     break
             return entries
 
-        locked_mutate_graph(_graph_path(), mutator)
+        commit_rows_via_store(_graph_path(), mutator)
     except Exception as exc:  # noqa: BLE001
         _LOG.debug("spawn_think: forward stamp failed for %s: %s", node_id, exc)
 
@@ -1020,85 +1050,55 @@ def _stamp_forward(
 def on_node_born(
     node: dict,
     *,
-    project_root: Optional[Path] = None,
-    run_state: Optional[RunState] = None,
     graph_path: Optional[Path] = None,
-    persisted: bool = False,
-    quiet: bool = False,
 ) -> Optional[ThinkSpawnResult]:
-    """Single post-persist birth hook: every node-creation path routes here.
-
-    x-42c5: this call never results in a real spawn (the module docstring's
-    "unforced birth" case) - the worst outcome is a durable ``think_offered``
-    event, never an unplanned worker. Callers do not need to reason about
-    presence or config here; that decision is centralized in
-    :func:`maybe_spawn_think`.
-
-    Before v2 only ``cmd_idea`` called :func:`maybe_spawn_think` inline, so a
-    retro-harvest / intake / decompose birth carried no why forward (the
-    x-7c38 / x-6e23 gap). This wrapper gives every birth path the SAME gated,
-    bounded, non-fatal dispatch.
-
-    Three responsibilities the callers must NOT each re-implement:
-
-      * **Gate-first.** Resolve the gate before any other I/O so a default-OFF
-        install pays nothing (no graph re-read, no settings churn beyond the
-        single gate read).
-      * **Durable re-read.** ``store.ensure_slugs`` may re-slug a node inside
-        ``locked_mutate_graph``, so the seed + worker name must read the node
-        back by id post-persist (Domain Pitfall: slug re-read after persist).
-        Falls back to the passed-in node when the re-read can't find it. A
-        caller that ALREADY holds the persisted, slugged node (decompose's
-        ``by_id`` map, intake's re-read) passes ``persisted=True`` to skip the
-        redundant read.
-      * **Strictly non-fatal.** Any failure here resolves to ``None`` and never
-        raises into the node-birth path that called it (additive, opt-in).
-
-    Bulk paths (decompose children, a retro batch) thread ONE ``run_state`` so
-    the blast-radius cap bounds the whole run, not each node.
-
-    ``project_root`` is honored as-given and is NOT auto-derived from the node's
-    cwd: ``maybe_spawn_think`` uses it for BOTH the settings gate AND presence
-    classification, and presence must key off the *originating* session's cwd
-    (where its ``target-state.md`` lives), which for a worktree-born node is the
-    running cwd, not the node's durable canonical cwd. Defaulting to the node
-    cwd would make an autonomous worktree session's away-manifest invisible and
-    misclassify it as attended (codex P2). Left as ``None`` it inherits x-6a10's
-    proven ambient behavior; a caller may still pass an explicit root to scope
-    the gate.
+    """Forward the unforced birth hook to its one native owner, the
+    `fno-agents backlog birth-hook` door. The ladder lives in
+    crates/fno-agents/src/backlog/birth.rs; law d-e11b2b3e: the live Python
+    twin is deleted (2026-10-03), the door is the seam. Strictly non-fatal: a
+    missing or failing binary answers None, and the worst case is a missing
+    ``think_offered`` event, never a broken birth path. The offer line and
+    offer/skip events land inside the door process; the return value is
+    informational.
     """
+    node_id = (node or {}).get("id")
     try:
-        node_id = (node or {}).get("id")
-
-        # Gate-first: off => zero further I/O (the slug re-read below is wasted
-        # work for the default-OFF install, which is every un-opted-in install).
-        if not node_id or not think_spawn_enabled(project_root=project_root):
+        # The gate is read twice: here (so a default-OFF install pays nothing)
+        # and inside the door, which re-resolves the same config/env ladder
+        # natively before any other I/O.
+        if not node_id or not think_spawn_enabled():
             return None
+        if graph_path is None:
+            from fno.paths import graph_json
 
-        if persisted:
-            durable = node
-        else:
-            # Guarded metadata read: the think-spawn dispatch reads the born
-            # node's footnote-minted fields (title/project/cwd pins), which no
-            # external backend carries; an external selection skips the spawn
-            # through the existing additive except below.
-            from fno.tracker.metadata import read_entries
-
-            if graph_path is not None:
-                from fno.graph.store import read_graph
-
-                gp_entries: list[dict] = read_graph(graph_path)
-            else:
-                gp_entries = read_entries("provenance.spawn_think")
-            # ponytail: linear scan per born node. Bounded by the
-            # blast cap (default 5) and gated OFF by default; callers holding the
-            # durable node already pass persisted=True to skip this.
-            durable = next(
-                (e for e in gp_entries if e.get("id") == node_id),
-                node,
+            graph_path = graph_json()
+        error, result = call_binary_json(
+            "backlog",
+            [
+                "birth-hook",
+                "--graph", str(graph_path),
+                "--node-id", str(node_id),
+                "--events-path", str(_events_path(None)),
+            ],
+        )
+        if error or not isinstance(result, dict):
+            return None
+        if result.get("kind") == "offered":
+            # The door's stderr offer line is captured (and dropped) by the
+            # door call; re-render it here so the operator still sees it.
+            print(
+                f"spawn_think: OFFER PENDING (nothing spawned). "
+                f"Ask {display_name()} whether to run `{result.get('offer_line')}` now, or skip.",
+                file=sys.stderr,
             )
-        return maybe_spawn_think(
-            durable, project_root=project_root, run_state=run_state, quiet=quiet
+        return ThinkSpawnResult(
+            decision=result.get("kind", "noop"),
+            event=result.get("event"),
+            reason=result.get("reason"),
+            node_id=result.get("node_id"),
+            presence=result.get("presence"),
+            resolved=result.get("resolved"),
+            offer_line=result.get("offer_line"),
         )
     except Exception as exc:  # noqa: BLE001 - additive; never wedge node birth
         _LOG.debug("on_node_born: non-fatal dispatch failure: %s", exc)
@@ -1106,7 +1106,7 @@ def on_node_born(
 
 
 # ---------------------------------------------------------------------------
-# A2 lifecycle wrappers (x-122a) - work-start + retro-at-done
+# A2 lifecycle wrappers - work-start + retro-at-done
 # ---------------------------------------------------------------------------
 
 
@@ -1192,7 +1192,7 @@ def on_node_retro(
 
 
 # ---------------------------------------------------------------------------
-# dispatch_conversational() - the explicit conversational verb (v2 C, x-0a9c)
+# dispatch_conversational() - the explicit conversational verb (v2 C)
 # ---------------------------------------------------------------------------
 
 
@@ -1206,7 +1206,7 @@ def dispatch_conversational(
     events_path: Optional[Path] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> ThinkSpawnResult:
-    """C (x-0a9c): explicit conversational /think dispatch for a named node.
+    """C : explicit conversational /think dispatch for a named node.
 
     The operator, mid-conversation about an fno-touched node, invokes one verb
     and a bg /think picks it up with full LIVE context (US5/AC5-HP). Unlike the
@@ -1277,8 +1277,8 @@ def maybe_spawn_think(
 ) -> ThinkSpawnResult:
     """Evaluate + execute the context /think spawn for a node at a trigger moment.
 
-    ``reason`` names the trigger: ``birth`` (A1 default, byte-for-byte x-6a10),
-    ``work-start`` or ``retro`` (A2 lifecycle, x-122a). It scopes the dedup token
+    ``reason`` names the trigger: ``birth`` (A1 default, byte-for-byte),
+    ``work-start`` or ``retro`` (A2 lifecycle). It scopes the dedup token
     (``dispatch:think:<id>:<reason>`` so a node born + retro'd dispatches once per
     moment, not once total) and tags every decision event. Lifecycle reasons add
     a relevance filter (skip unless the transcript pointer resolves) so a
@@ -1319,6 +1319,14 @@ def maybe_spawn_think(
     # 1. Eligibility: a node must have a usable id.
     if not node_id:
         return skip("no-node-id")
+
+    # 1b. An UNFORCED birth trigger must never dispatch a worker: a node born
+    #     while nobody is deciding gets one durable offer, never a bg /think.
+    #     That ladder is the native `fno-agents backlog birth-hook` door now
+    #     (crates/fno-agents/src/backlog/birth.rs); this guard keeps a direct
+    #     reason=birth call from falling through to the auto-spawn tail.
+    if reason == REASON_BIRTH and not chain_blueprint:
+        return skip("unforced-birth-native")
 
     # 2. Eligibility: bulk roadmap/vision intake is excluded (Locked Decision 6).
     if node.get("roadmap_id") or node.get("vision_path"):
@@ -1383,23 +1391,16 @@ def maybe_spawn_think(
 
     # 6. Attended => offer a single handoff line by default; auto-spawn only when
     #    the operator opted in via config.think_spawn.attended: spawn (AC4-HP, B).
-    #    Default 'offer' is byte-for-byte x-6a10.
+    #    Default 'offer' is byte-for-byte.
     #
-    #    x-42c5: an UNFORCED birth trigger (reason==birth, no explicit consent)
-    #    must never silently auto-spawn, in ANY presence and regardless of the
-    #    attended-mode config - a node born while the originating session
-    #    classifies as away previously fired a real bg /think with nobody
-    #    deciding that (the near-miss this closes: ~20 nodes filed in one
-    #    session with the gate armed, each three seconds from an unplanned
-    #    worker). `chain_blueprint=True` is the existing, already-tested signal
-    #    a caller uses to mark a REASON_BIRTH-tagged call as consented (the
-    #    decompose `needs_think`/wave0 fan-out forces it, alongside its own
-    #    env override); an organic on_node_born call never sets it, so this
-    #    check alone separates "nobody decided" from "a human/king flagged
-    #    this child for design."
-    unforced_birth = reason == REASON_BIRTH and not chain_blueprint
+    # The UNFORCED birth trigger (reason==birth, no consent) no longer runs
+    # through here: its ladder is the native `fno-agents backlog birth-hook`
+    # door (crates/fno-agents/src/backlog/birth.rs), which an organic birth
+    # reaches through on_node_born. `chain_blueprint=True` stays the signal a
+    # REASON_BIRTH-tagged call is consented (the decompose needs_think/wave0
+    # fan-out forces it, alongside its own env override).
     attended_offer = presence == "attended" and _attended_mode(project_root, env=environ) == "offer"
-    if unforced_birth or attended_offer:
+    if attended_offer:
         # quiet: a machine-mode caller (e.g. `decompose --json`) suppresses the
         # human-facing offer print so it can't pollute a captured JSON stream; the
         # durable EVENT_OFFERED below still fires, so the offer survives for
@@ -1407,7 +1408,7 @@ def maybe_spawn_think(
         if not quiet:
             print(
                 f"spawn_think: OFFER PENDING (nothing spawned). "
-                f"Ask the operator whether to run `{seed.offer_line}` now, or skip.",
+                f"Ask {display_name()} whether to run `{seed.offer_line}` now, or skip.",
                 file=sys.stderr,
             )
         _emit(
@@ -1435,7 +1436,7 @@ def maybe_spawn_think(
     from fno.claims.core import CLAIM_UNAVAILABLE, acquire_claim
 
     # The dedup token carries the same per-invocation discriminator as the worker
-    # name (C/x-0a9c) so two DIFFERENT conversations dispatching the same node are
+    # name (C/) so two DIFFERENT conversations dispatching the same node are
     # independent, while a retry from the SAME invocation is still deduped.
     dispatch_key = f"dispatch:think:{node_id}:{reason}"
     if invocation_suffix:
@@ -1475,7 +1476,7 @@ def maybe_spawn_think(
         return skip("spawn-failed", presence=presence, detail=str(exc))
 
     # 8. Loop-closing forward stamp: node now points forward to its /think thread
-    #    AND the durable output path the worker writes to (B, x-5d51).
+    #    AND the durable output path the worker writes to (B).
     rs.spawned += 1
     _bump_daily_count()
     _stamp_forward(node_id, short_id, project_root, output_path=seed.output_path or None)

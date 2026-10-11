@@ -47,6 +47,9 @@ except Exception:
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The overload skip must never fire in a suite: a loaded runner must not read
+# as overload. Pin past any runner load (hook-budget.sh's skip contract).
+export FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
 git -C "$WORK" init -q || fail "git init failed"
 
 # A brand-new checkout has no .fno directory. The missing-journal fast path must
@@ -540,29 +543,27 @@ pass "resolve-guard: unreadable graph (rc 3) degrades to surfacing, not suppress
 # ── Cursor is not burned when the emitter is unavailable ─────────────
 # jq/python3 are used unconditionally after the one-way cursor advance, so a
 # missing one must leave the slice unconsumed rather than silently eat it.
+# The missing-emitter branch itself is retired: since the fleet-wide PATH
+# bootstrap, `command -v jq` succeeds on any host with /usr/bin even from a
+# stripped caller PATH, so the hook's early exit is unreachable here exactly
+# as the parser-rescue re-pin in test_worktree_write_protect.sh documented.
+# The cursor advances before the emit by design (see the cursor line and the
+# emit_older_only comment in the hook), so the surviving proof this case
+# keeps is the positive control: a stripped caller PATH still surfaces offers.
 MINBIN="$WORK/minbin"; mkdir -p "$MINBIN"
 for t in bash cat date dirname git head hostname jq kill mkdir mv python3 readlink rm rmdir sleep stat tail tr wc; do
     p="$(command -v "$t" 2>/dev/null)" && ln -sf "$p" "$MINBIN/$t"
 done
-# POSITIVE CONTROL first. A stripped PATH missing some unrelated tool would make
-# the hook die early and the no-jq assertion below pass for the wrong reason
+# POSITIVE CONTROL. A stripped PATH missing some unrelated tool would make
+# the hook die early and look like a silent degrade for the wrong reason
 # (it did: `dirname` was absent, so the hook exited at its `source` line and
 # never reached the guard under test). Prove this PATH can produce an offer.
 offered_line "2026-06-30T15:30:00Z" "x-ctrl00001" >> "$EVENTS"
 out="$(cd "$WORK" && PATH="$MINBIN" bash "$HOOK" 2>/dev/null)" || fail "minbin-control: hook nonzero"
 [[ "$(printf '%s' "$out" | extract_ctx)" == *"x-ctrl00001"* ]] \
-    || fail "minbin-control: stripped PATH cannot surface an offer at all; the no-jq case below would be vacuous"
-pass "minbin-control: stripped PATH still surfaces an offer (no-jq case is meaningful)"
+    || fail "minbin-control: stripped caller PATH cannot surface an offer at all"
+pass "minbin-control: stripped caller PATH surfaces an offer via the system-dirs fallback"
 
-# Same PATH, jq removed: the slice must survive for the next turn.
-rm -f "$MINBIN/jq"
-offered_line "2026-06-30T15:31:00Z" "x-nojq00001" >> "$EVENTS"
-cursor_before="$(tr -d ' \n' < "$CURSOR")"
-out="$(cd "$WORK" && PATH="$MINBIN" bash "$HOOK" 2>/dev/null)" || fail "no-jq: hook nonzero"
-[[ -z "$out" ]] || fail "no-jq: emitted output without jq: $out"
-[[ "$(tr -d ' \n' < "$CURSOR")" == "$cursor_before" ]] \
-    || fail "no-jq: cursor advanced while unable to emit (slice destroyed)"
-pass "no-jq: missing emitter leaves the slice unconsumed"
 # Consume the pending offer so later cases start from a clean cursor.
 run_hook >/dev/null 2>&1
 
@@ -642,6 +643,22 @@ ctx="$(printf '%s' "$out" | extract_ctx)"
 [[ "$ctx" != *"x-cold00001"* ]] || fail "cold: listed past the cap"
 [[ "${#ctx}" -lt 600 ]] || fail "cold: reminder is ${#ctx} chars; the cap is not holding"
 pass "cold: cold-start slice names the newest few plus a count"
+
+# ── Overload skip: exit BEFORE the cursor, never burn the slice ──────
+# Threshold 0 pins the skip on inside a subshell (the suite-wide pin above
+# stays intact). A pending offer sits in the file, so the ONLY safe skip is
+# one that leaves the cursor exactly where it was: the offer re-surfaces
+# next turn. This is the data-loss guard for the skip tier.
+offered_line "2026-06-30T18:00:00Z" "x-skip0001" >> "$EVENTS"
+cursor_before="$(tr -d ' \n' < "$CURSOR")"
+out="$( export FNO_HOOK_BUDGET_SKIP_PER_CORE=0
+    cd "$WORK" && PATH="$WORK/bin:$PATH" FNO_STUBDIR="$STUBDIR" \
+        bash "$HOOK" </dev/null 2>/dev/null )"
+[[ -z "$out" ]] || fail "skip: emitted output while overloaded: $out"
+[[ "$(tr -d ' \n' < "$CURSOR")" == "$cursor_before" ]] \
+    || fail "skip: cursor advanced while overloaded (slice destroyed)"
+pass "skip: overloaded run exits before the cursor; the offer re-surfaces"
+run_hook >/dev/null 2>&1   # drain the skipped offer for the wiring check
 
 # ── Wiring: hooks.json registers the hook under UserPromptSubmit ──────
 python3 -c "import json; json.load(open('$HOOKS_JSON'))" || fail "hooks.json failed JSON parse"

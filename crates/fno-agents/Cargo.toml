@@ -1,10 +1,10 @@
 [package]
 name = "fno-agents"
 # Keep in lockstep with crates/fno and cli (Python).
-version = "0.3.1"
+version = "0.4.1"
 edition = "2021"
 # MSRV: std's File::lock/lock_shared/try_lock/unlock stabilized in Rust 1.89
-# (ab-6aff100c), which let this crate drop the fs2 dependency for advisory
+#, which let this crate drop the fs2 dependency for advisory
 # flocks. Pinning the floor documents that and lets `cargo` warn on an older
 # toolchain instead of failing with a confusing "no method named lock" error.
 rust-version = "1.89"
@@ -40,9 +40,10 @@ path = "src/bin/worker.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tempfile = "3"
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
-# Cross-process region-text fingerprint for the answer queue (x-c929): the
+# Cross-process region-text fingerprint for the answer queue: the
 # daemon extractor hashes the blocked prompt's region text and the mux server
 # re-hashes its live grid to verify freshness before injecting a keystroke. A
 # std DefaultHasher is randomly seeded per-process, so the two sides would never
@@ -66,19 +67,22 @@ getrandom = "0.3"
 # polling / rustix-openpty / regex-automata, NOT winit or a GUI stack
 # (windows-sys is cfg-gated FFI, ~nothing off Windows). It gives a richer
 # cell model (Flags, NamedColor/Rgb, Dimensions) than vt100, which the
-# compositor's per-cell render needs. Replaced vt100 crate-wide (ab-3c063856
+# compositor's per-cell render needs. Replaced vt100 crate-wide (
 # review: the vt100 "dependency weight" rationale was factually wrong for 0.26).
 alacritty_terminal = "0.26"
 # Daemon runtime + IPC (Wave 3 consumers; the substrate stays runtime-agnostic).
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "io-std", "sync", "time", "signal", "macros", "process"] }
 # Cross-language advisory locking now uses std's stabilized File::lock family
-# (Rust 1.89, ab-6aff100c) -- still flock(2) under the hood, so the interop with
+# (Rust 1.89) -- still flock(2) under the hood, so the interop with
 # Python's fcntl.flock (the load-bearing cross-language coupling, US6.12, proven
 # by tests/flock_interop.rs) is unchanged. The fs2 dependency was dropped.
 # Drive (Wave 4): raw PTY bytes are not guaranteed UTF-8 across the worker RPC
 # (a JSON string field) or WS control frames; base64 keeps the transport
 # text-safe without a bespoke escape scheme.
 base64 = "0.22"
+# One store library for both binaries: schema, migration, ingest, retention.
+# The write boundary and every reader port onto this crate.
+rusqlite = { version = "0.40.2", features = ["bundled", "backup", "fallible_uint", "functions"] }
 # Drive (Wave 4): WebSocket upgrade on the supervisor socket after the
 # `agent.drive` JSON-RPC ack (LD21: tokio-tungstenite standard handshake).
 tokio-tungstenite = "0.29"
@@ -89,17 +93,31 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 # comparison matching Python's `datetime.fromisoformat`. Parsing only -- no
 # system clock needed, so the `clock` default feature is dropped.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }
-# Grid (ab-3c063856): client-side TUI compositor that tiles N watcher panes and
+# IANA zone resolution for [provider_cap] sleep_timezone: a wrong-by-
+# eight-hours reset is the measured cost, so sleep hours must resolve the
+# operator's zone, not guess an offset.
+chrono-tz = "0.10"
+# Grid: client-side TUI compositor that tiles N watcher panes and
 # promotes one to driver on Enter. Crossterm gives raw-mode, key events, cursor
 # moves, and a SIGWINCH-aware resize event.
 crossterm = { version = "0.29", features = ["event-stream"] }
 toml = "0.8"
 regex = "1"
+# The store's version-conflict digest (file_content_version) and the dedup
+# keys are SHA256 on both legs; blake3 cannot stand in for them.
+sha1 = "0.10"
+sha2 = "0.10"
+# The session_satisfied gate_state_hash is md5 on both legs (the stop hook
+# compares the digest the emitter wrote).
+md-5 = "0.10"
 # Native claims substrate (claims.rs): the lockfile records are YAML written
 # by Python's yaml.safe_dump and must round-trip under yaml.safe_load.
 # serde_yaml_ng is the maintained serde_yaml fork; transitive tree is
 # unsafe-libyaml (pure Rust), no C toolchain.
 serde_yaml_ng = "0.10"
+# Typed argv for the migrated client verbs: one derive declaration
+# per flag replaces the per-verb hand-rolled scans.
+clap = { version = "4", features = ["derive"] }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -109,11 +127,16 @@ toml = "0.8"
 # so the compile is cached; a hand-rolled indented-block reader would be a
 # third spelling of the datum.
 serde_yaml_ng = "0.10"
+# The same projection emits the judge's rule set (src/event_store/
+# events_schema.json) as JSON the validator include_str!s.
+serde_json = "1"
 
 [dev-dependencies]
-tempfile = "3"
 proptest = "1"
 # Tests feed a refusal's printed `fno mux pane kill ...` command to the real
 # parser rather than a copy of its grammar, so the two cannot drift apart.
-# Dev-only: fno never links fno-agents, it shells the binary at runtime.
+# Dev-only: fno never links fno-agents, it shells the binary at runtime. The
+# dev link also pins the vendored served-liveness copy to the fno crate's
+# module by contract test; a real dependency stays blocked on the publish
+# gate until the two crates release a synchronized 0.3.x.
 fno = { path = "../fno" }

@@ -31,9 +31,11 @@ are live.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -44,11 +46,6 @@ import typer
 #: exit path here, and a sample that never arrived inside it is a DARK arm.
 MACMON_TIMEOUT_S = 5.0
 MEMORY_PRESSURE_TIMEOUT_S = 5.0
-
-#: The lane answer's sanity cap. Per-lane costs are small; without a cap a
-#: quiet machine advertises thousands of lanes, which is a number nobody can
-#: act on and nobody should read as a promise.
-LANE_ANSWER_CAP = 64
 
 #: Per-lane seed costs (cores, GB) used when no live roster row exists to
 #: measure from. Derived from the observed resident sizes on the specifying
@@ -89,6 +86,7 @@ class LaneReading:
     per_lane_mem_gb: Optional[float] = None
     cost_source: str = ""
     refusal_reason: str = ""
+    census: dict = field(default_factory=dict)
 
     @property
     def refused(self) -> bool:
@@ -104,6 +102,7 @@ class LaneReading:
             "per_lane_mem_gb": self.per_lane_mem_gb,
             "cost_source": self.cost_source,
             "refused_reason": self.refusal_reason,
+            "census": self.census,
             "arms": [a.to_json() for a in self.arms],
         }
 
@@ -181,24 +180,43 @@ def read_memory_pressure(
     return int(match.group(1)) / 100.0, None
 
 
-def _spawn_load_arm() -> ArmReading:
-    from fno.doctor_footprint import _spawn_load_snapshot
+def _cpu_admission_arm() -> ArmReading:
+    """The CPU axis, read through the SAME seam the gate reads (one decider,
+    one sample), so the advisor can never disagree with a refusal."""
+    from fno.agents.spawn_gate import _cpu_axis
 
-    snapshot = _spawn_load_snapshot()
-    load = getattr(snapshot, "load_1m", None)
-    ceiling = getattr(snapshot, "load_ceiling", None)
-    status = getattr(snapshot, "spawn_load_status", "unavailable")
-    if load is None or ceiling is None:
-        return ArmReading("spawn load", DARK, reason="load snapshot unavailable")
+    admission = _cpu_axis()
+    if admission.axis == "cpu_instrument":
+        # Zeros the instrument never measured are not a reading; the
+        # admission's own words name why the arm is dark.
+        return ArmReading("cpu admission", DARK, reason=admission.reason)
+    load_1m = load_5m = load_15m = None
+    try:
+        load_1m, load_5m, load_15m = os.getloadavg()
+    except (OSError, AttributeError):
+        pass  # trend line only; nothing decides on load
     return ArmReading(
-        "spawn load",
+        "cpu admission",
         MEASURED,
-        value={"load_1m": round(load, 1), "ceiling": round(ceiling, 1), "status": status},
-        source="max_load_per_cpu x ncpu",
+        value={
+            "fleet_cores": round(admission.fleet_cores, 3),
+            "capacity_cores": round(admission.capacity_cores, 2),
+            "share_low": round(admission.share_low, 4),
+            "share_high": round(admission.share_high, 4),
+            "ceiling": admission.ceiling,
+            "verdict": admission.verdict,
+            "bound": admission.bound,
+            "load_15m": round(load_15m, 1) if load_15m is not None else None,
+            "load_1m": round(load_1m, 1) if load_1m is not None else None,
+            "load_5m": round(load_5m, 1) if load_5m is not None else None,
+        },
+        source="cpu_admission",
     )
 
 
-def _machine_cpu_arm(sample: Optional[dict], reason: Optional[str]) -> ArmReading:
+def _machine_cpu_arm(
+    sample: Optional[dict], reason: Optional[str], footprint: Any = None
+) -> ArmReading:
     if sample is None:
         return ArmReading("whole-machine cpu", DARK, reason=reason or "macmon dark")
     pct = sample.get("cpu_usage_pct")
@@ -212,7 +230,13 @@ def _machine_cpu_arm(sample: Optional[dict], reason: Optional[str]) -> ArmReadin
     return ArmReading(
         "whole-machine cpu",
         MEASURED,
-        value={"busy_fraction": round(busy, 3), "capacity_cores": _cpu_capacity_cores()},
+        value={
+            "busy_fraction": round(busy, 3),
+            "capacity_cores": _cpu_capacity_cores(),
+            # AC10: census rides the fleet read; unknown, never guessed.
+            "runnable": getattr(footprint, "runnable_count", None),
+            "processes": getattr(footprint, "machine_process_count", None),
+        },
         source="macmon cpu_usage_pct",
     )
 
@@ -286,25 +310,84 @@ def _power_arm(sample: Optional[dict], reason: Optional[str]) -> ArmReading:
     )
 
 
-def _fleet_cost() -> tuple[float, float, int, str]:
+def _fleet_snapshot() -> tuple[Any, Optional[list], Optional[str], int]:
+    """One footprint reading, the live rows, why they are missing, and how long
+    both took. The rows come from the reader the leak threshold uses, so the
+    two can never describe different fleets."""
+    from fno.doctor_footprint import cause_reading, live_registry_rows
+
+    started = time.monotonic()
+    reading, error = cause_reading()
+    rows, rows_error = live_registry_rows()
+    read_ms = int((time.monotonic() - started) * 1000)
+    return (None if error is not None else reading), rows, rows_error, read_ms
+
+
+def _fleet_cost(reading: Any, rows: Optional[list]) -> tuple[float, float, int, str]:
     """Per-lane CPU cores and GB, measured from the fleet's own attributed
     footprint over the live roster; the documented seed when no row is live."""
-    from fno.doctor_footprint import _roster_count, cause_reading
+    count = 0 if reading is None else len(rows or ())
+    if not count:
+        why = "footprint unavailable" if reading is None else "no live roster rows to measure"
+        return SEED_PER_LANE_CORES, SEED_PER_LANE_GB, 0, f"seed ({why})"
+    per_cpu = max(0.01, reading.fleet_cpu_cores / count)
+    per_gb = max(0.01, reading.rss_gb / count)
+    return per_cpu, per_gb, count, "measured from the live roster's attributed footprint"
 
-    reading, error = cause_reading()
-    rows, _roster_error = _roster_count()
-    if error is not None or reading is None:
-        return SEED_PER_LANE_CORES, SEED_PER_LANE_GB, 0, "seed (footprint unavailable)"
-    if not rows:
-        return (
-            SEED_PER_LANE_CORES,
-            SEED_PER_LANE_GB,
-            0,
-            "seed (no live roster rows to measure)",
-        )
-    per_cpu = max(0.01, reading.fleet_cpu_cores / rows)
-    per_gb = max(0.01, reading.rss_gb / rows)
-    return per_cpu, per_gb, rows, "measured from the live roster's attributed footprint"
+
+def _census(
+    reading: Any, rows: Optional[list], rows_error: Optional[str], read_ms: int
+) -> dict:
+    """The team census: leads, workers, tests.
+
+    Leads and workers are ROW counts, tests is a PROCESS count, never folded
+    together. The gap rides as its own field for the same reason.
+    Full rule: docs/architecture/resource-meter.md.
+    """
+    try:
+        from fno.agents.spawn_gate import probe_capacity
+
+        probe = probe_capacity()
+    except Exception:
+        probe = {}
+    share = probe.get("share")
+    census: dict[str, Any] = {
+        "leads": None, "lead_conflicts": None, "workers": None,
+        "tests": None if reading is None else reading.test_process_count,
+        "roster_rows": None if rows is None else len(rows),
+        "gate_notes": list(probe.get("warnings") or []),
+        "attribution_gap": None if reading is None else reading.attribution_gap,
+        # Top fleet consumers by program name, aggregated from the ps read
+        # this census already sits on. The panel renders them in its expanded
+        # view; a dark footprint leaves them None rather than fabricating a
+        # list.
+        "top_consumers": None,
+        "share": share,
+        # An unread count NAMES why, the rule every arm follows: without it
+        # "unknown rows" cannot be told from an incomplete registry.
+        "roster_error": rows_error,
+        "read_ms": read_ms,
+    }
+    if reading is not None:
+        from fno.footprint import top_consumers
+
+        census["top_consumers"] = top_consumers(reading.top)
+    try:
+        from fno.agents.team import gather_team
+
+        team = gather_team(rows) if rows is not None else {}
+    except Exception:
+        return census
+    leads = (team.get("summary") or {}).get("total")
+    if not isinstance(leads, int):
+        # An unreadable team nulls the role counts rather than reporting a
+        # kingless fleet from a read that saw nothing.
+        return census
+    conflicts = team.get("conflicts")
+    census["leads"] = leads
+    census["lead_conflicts"] = len(conflicts) if isinstance(conflicts, list) else None
+    census["workers"] = len(rows or ()) - leads
+    return census
 
 
 def read_lanes(
@@ -321,11 +404,15 @@ def read_lanes(
     macmon_fn = macmon_fn or read_macmon
     sample, macmon_reason = macmon_fn()
     reading = LaneReading()
-    load_arm = _spawn_load_arm()
-    cpu_arm = _machine_cpu_arm(sample, macmon_reason)
+    load_arm = _cpu_admission_arm()
+    # One fleet read serves the census, the per-lane divisor, and the machine
+    # arm's counts (AC10); taken before the refusal branch.
+    footprint, rows, rows_error, read_ms = _fleet_snapshot()
+    cpu_arm = _machine_cpu_arm(sample, macmon_reason, footprint)
     mem_arm = _memory_arm(sample, macmon_reason)
     power_arm = _power_arm(sample, macmon_reason)
     reading.arms.extend([load_arm, cpu_arm, mem_arm, power_arm])
+    reading.census = _census(footprint, rows, rows_error, read_ms)
 
     dark = [a for a in reading.arms if a.state == DARK]
     if cpu_arm.state == DARK or mem_arm.state == DARK:
@@ -338,39 +425,82 @@ def read_lanes(
         return reading
 
     assert cpu_arm.value is not None and mem_arm.value is not None  # measured arms
-    per_cpu, per_gb, rows, cost_source = _fleet_cost()
-    busy = cpu_arm.value["busy_fraction"]
-    capacity = cpu_arm.value["capacity_cores"]
-    free_cores = capacity * (1.0 - busy)
-    mem_value = mem_arm.value
-    available_gb = mem_value.get("available_gb")
-    if available_gb is None and mem_value.get("free_fraction") is not None:
-        # memory_pressure without a macmon total: the seed cost needs a GB
-        # figure, and a fraction alone cannot give one. Refusing here would
-        # contradict the arm's own "measured" state, so the seed GB total
-        # (16 GB) bounds the estimate and the output says so.
-        available_gb = round(mem_value["free_fraction"] * 16.0, 1)
-        cost_source = "seed 16 GB total x memory_pressure free fraction"
-    cpu_fits = free_cores / per_cpu
-    mem_fits = available_gb / per_gb
-    answer = int(max(0.0, min(cpu_fits, mem_fits, float(LANE_ANSWER_CAP))))
+    per_cpu, per_gb, row_count, cost_source = _fleet_cost(footprint, rows)
 
-    if (
-        isinstance(load_arm.value, dict)
-        and load_arm.value.get("status") == "exceeded"
-    ):
-        # The spawn-load ceiling is already breached: no advisory headroom on
-        # top of a breached ceiling.
+    # The lane answer IS the gate's own cap read (one decider, no second
+    # arithmetic): the probe carries the live slot count and the learned
+    # effective cap, and the CPU-share arithmetic it replaces (an answer of
+    # 15 more fit at 90% CPU) is deleted. Delegating to the Rust probe is
+    # the law (d-b6cc1a2a): Python deletes, the gate decides. When the probe
+    # cannot answer, a holding CPU axis still caps at 0 (a spawn-load breach
+    # runs the suite serial); only a silent probe AND an admitting axis
+    # refuses, because then nothing measured is holding anything back.
+    from fno.agents.spawn_gate import probe_capacity
+
+    probe = probe_capacity(only=["lanes"])
+    slots = probe.get("slots")
+    effective = probe.get("effective")
+    answer: Optional[int] = None
+    if isinstance(slots, int) and isinstance(effective, int):
+        answer = max(0, effective - int(slots))
+        cost_source += f"; probe {slots} live, effective cap {effective}"
+
+    hold_verdict = isinstance(load_arm.value, dict) and load_arm.value.get(
+        "verdict"
+    ) in ("hold", "undecidable", "refuse")
+    if load_arm.state == DARK or hold_verdict:
+        # The CPU axis is not admitting, or never answered: a dark sensor is
+        # never headroom, and neither is a hold, an undecidable band, or a
+        # refusal (AC12).
         answer = 0
-        cost_source += "; spawn-load ceiling already breached, answer capped at 0"
+        cap_why = (
+            "dark"
+            if load_arm.state == DARK
+            else str(load_arm.value.get("verdict"))
+        )
+        cost_source += f"; cpu admission {cap_why}, answer capped at 0"
+
+    if answer is None:
+        reading.refusal_reason = (
+            "the gate cannot answer the lane question: the spawn-gate probe "
+            f"carries no effective cap ({probe.get('reason') or 'gate unavailable'})"
+        )
+        return reading
 
     reading.lane_count = answer
     reading.per_lane_cpu_cores = round(per_cpu, 3)
     reading.per_lane_mem_gb = round(per_gb, 3)
     reading.cost_source = (
-        f"{cost_source} ({rows} live row(s))" if rows else cost_source
+        f"{cost_source} ({row_count} live row(s))" if row_count else cost_source
     )
     return reading
+
+
+def _census_lines(census: dict) -> list[str]:
+    """Rendered so an unread count says so: a count the reader can act on and
+    a count nobody took must never look the same."""
+    if not census:
+        return []
+    n = {k: ("unknown" if v is None else v) for k, v in census.items()}
+    lines = [
+        f"  team: {n['leads']} lead(s), {n['workers']} worker(s), "
+        f"{n['tests']} running test(s) "
+        f"({n['roster_rows']} live roster row(s), {n['read_ms']} ms)"
+    ]
+    if census.get("lead_conflicts"):
+        lines.append(
+            f"  team conflicts: {n['lead_conflicts']} scope(s) held by more than "
+            "one live role - a bare lead count hides this"
+        )
+    if census.get("roster_error"):
+        lines.append(f"  roster: {n['roster_error']} - the counts above are unread")
+    lines.extend(f"  {note}" for note in census.get("gate_notes") or [])
+    if census.get("attribution_gap"):
+        lines.append(
+            f"  attribution gap: {n['attribution_gap']} - the fleet CPU share is "
+            "an undercount, not headroom"
+        )
+    return lines
 
 
 def render(reading: LaneReading) -> str:
@@ -384,6 +514,7 @@ def render(reading: LaneReading) -> str:
                 lines.append(f"  {arm.name}: dark - {arm.reason}")
             else:
                 lines.append(f"  {arm.name}: measured ({arm.source})")
+        lines.extend(_census_lines(reading.census))
         return "\n".join(lines)
     lines.append(f"lanes: {reading.lane_count} more fit")
     for arm in reading.arms:
@@ -392,6 +523,7 @@ def render(reading: LaneReading) -> str:
         f"  per-lane cost: {reading.per_lane_cpu_cores} cores, "
         f"{reading.per_lane_mem_gb} GB - {reading.cost_source}"
     )
+    lines.extend(_census_lines(reading.census))
     return "\n".join(lines)
 
 

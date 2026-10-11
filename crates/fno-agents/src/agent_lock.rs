@@ -65,7 +65,7 @@ pub(crate) fn holder_note(home: &AgentsHome, name: &str) -> String {
 /// previous holder's line can outlive it. Naming a dead pid is the
 /// 31-hour-corpse misreading this stamp exists to end, told with more
 /// authority than the bare mtime ever had, so the reader drops it.
-fn pid_is_alive(pid: u64) -> bool {
+pub(crate) fn pid_is_alive(pid: u64) -> bool {
     if pid == 0 || pid > i32::MAX as u64 {
         return false;
     }
@@ -75,6 +75,28 @@ fn pid_is_alive(pid: u64) -> bool {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Gone means the pid is dead, a zombie, or a DIFFERENT process than the
+/// recorded incarnation. `pid_is_alive` alone calls a zombie alive (a
+/// SIGKILLed-but-unreaped holder answers kill(pid,0) with 0) and a recycled
+/// pid alive, so a lock ticket naming either never prunes and every later
+/// waiter burns its whole budget behind it. A zombie closed its fds
+/// at exit, so it can hold neither a flock nor a ticket. `recorded_start` is
+/// the start time stamped when the holder registered (the lockfile's
+/// pid + start incarnation contract); a live pid at a different start is a
+/// recycled pid. A pid that signals but probes unreadable (another uid,
+/// kernel task) stays conservatively alive.
+pub(crate) fn pid_is_gone(pid: u64, recorded_start: Option<u64>) -> bool {
+    if !pid_is_alive(pid) {
+        return true;
+    }
+    match crate::process_probe::process_bsd(pid as u32) {
+        Some((actual_start, zombie)) => {
+            zombie || recorded_start.is_some_and(|recorded| recorded != actual_start)
+        }
+        None => false,
+    }
 }
 
 /// Write this process as the lock's holder, in the shape the Python reader
@@ -108,20 +130,57 @@ fn stamp_holder(file: &std::fs::File, name: &str) {
 
 impl AgentLock {
     pub(crate) fn acquire(home: &AgentsHome, name: &str, timeout: Duration) -> Result<Self, ()> {
+        Self::acquire_inner(home, name, timeout, || {})
+    }
+
+    #[cfg(test)]
+    fn acquire_with_after_open<F>(
+        home: &AgentsHome,
+        name: &str,
+        timeout: Duration,
+        after_open: F,
+    ) -> Result<Self, ()>
+    where
+        F: FnOnce(),
+    {
+        Self::acquire_inner(home, name, timeout, after_open)
+    }
+
+    fn acquire_inner<F>(
+        home: &AgentsHome,
+        name: &str,
+        timeout: Duration,
+        after_open: F,
+    ) -> Result<Self, ()>
+    where
+        F: FnOnce(),
+    {
         let _ = std::fs::create_dir_all(home.root().join("locks"));
         let path = lock_path(home, name);
-        // truncate(false) so opening never clears a stamp the current holder
-        // wrote; the stamp is replaced only after this process wins the lock.
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(|_| ())?;
+        let open = || {
+            // truncate(false) so opening never clears a stamp the current holder
+            // wrote; the stamp is replaced only after this process wins the lock.
+            std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .map_err(|_| ())
+        };
+        let mut file = open()?;
+        after_open();
         let deadline = Instant::now() + timeout;
         loop {
             match file.try_lock() {
                 Ok(()) => {
+                    if !same_lock_inode(&file, &path) {
+                        let _ = file.unlock();
+                        if Instant::now() >= deadline {
+                            return Err(());
+                        }
+                        file = open()?;
+                        continue;
+                    }
                     stamp_holder(&file, name);
                     return Ok(Self { _file: file });
                 }
@@ -134,6 +193,24 @@ impl AgentLock {
             }
         }
     }
+}
+
+#[cfg(unix)]
+fn same_lock_inode(file: &std::fs::File, path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(opened) = file.metadata() else {
+        return false;
+    };
+    let Ok(current) = std::fs::metadata(path) else {
+        return false;
+    };
+    (opened.dev(), opened.ino()) == (current.dev(), current.ino())
+}
+
+#[cfg(not(unix))]
+fn same_lock_inode(_file: &std::fs::File, _path: &std::path::Path) -> bool {
+    true
 }
 
 impl Drop for AgentLock {
@@ -191,6 +268,35 @@ mod tests {
             assert!(at.ends_with("+00:00"), "offset, not a bare Z: {at}");
             assert_eq!(at.len(), 32, "microsecond precision, like Python: {at}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn agent_lock_revalidates_inode_after_path_replacement() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = std::env::temp_dir().join(format!("fno-lock-inode-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("locks")).unwrap();
+        let path = dir.join("locks/race.lock");
+        fs::write(&path, b"").unwrap();
+        let home = AgentsHome::at(&dir);
+
+        let lock =
+            AgentLock::acquire_with_after_open(&home, "race", Duration::from_secs(1), || {
+                fs::remove_file(&path).unwrap();
+                fs::write(&path, b"").unwrap();
+            })
+            .unwrap();
+
+        let fd_meta = lock._file.metadata().unwrap();
+        let path_meta = fs::metadata(&path).unwrap();
+        assert_eq!(
+            (fd_meta.dev(), fd_meta.ino()),
+            (path_meta.dev(), path_meta.ino())
+        );
+        drop(lock);
         let _ = fs::remove_dir_all(&dir);
     }
 

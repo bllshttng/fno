@@ -1,7 +1,7 @@
 """Attribution for the one message that defines a worker's whole task: its seed.
 
 Every a2a message sent by ``fno agents mail send`` arrives wrapped in ``<fno_mail>``, so
-a recipient can tell agent-authored text from operator-authored text and an
+a recipient can tell agent-authored text from superuser-authored text and an
 auditor can ``grep '</fno_mail>'`` a transcript to enumerate what was injected.
 The spawn seed carried no such envelope. That inverts the risk: the seed is the
 single message that defines a worker's entire task, and it was precisely the one
@@ -10,7 +10,7 @@ a worker could not attribute and an auditor could not find.
 **The envelope cannot share the payload, and that is why this is a sidecar.**
 ``skills/agent/scripts/normalize.sh:710`` classifies a payload by a LEADING
 slash (``case "$msg" in /*) payload_mode="passthrough"``), so an envelope in
-front of ``/fno:target x-1234`` destroys routing. Putting it after the verb line
+front of ``/fno:target `` destroys routing. Putting it after the verb line
 is no better: the harness REPL is a second reader we do not control, and for
 ``/fno:target <node>`` the arguments are load-bearing, so an envelope swallowed
 into them is a real failure rather than a cosmetic one.
@@ -41,7 +41,6 @@ ENV_SEED_B64 = "FNO_SEED_PROV_SEED_B64"
 ENV_FROM = "FNO_SEED_PROV_FROM"
 ENV_FROM_SESSION = "FNO_SEED_PROV_FROM_SESSION"
 ENV_HARNESS = "FNO_SEED_PROV_HARNESS"
-ENV_MODEL = "FNO_SEED_PROV_MODEL"
 ENV_NODE = "FNO_SEED_PROV_NODE"
 ENV_MSG_ID = "FNO_SEED_PROV_MSG_ID"
 
@@ -54,7 +53,6 @@ SEED_PROVENANCE_KEYS: tuple[str, ...] = (
     ENV_FROM,
     ENV_FROM_SESSION,
     ENV_HARNESS,
-    ENV_MODEL,
     ENV_NODE,
     ENV_MSG_ID,
 )
@@ -65,6 +63,14 @@ SEED_PROVENANCE_KEYS: tuple[str, ...] = (
 #: rather than truncating: a sidecar that claims to quote the seed verbatim and
 #: silently drops its tail is worse than no sidecar.
 MAX_SEED_BYTES = 16 * 1024
+
+
+def scrub_seed_provenance(environ: dict) -> None:
+    """Pop the whole seed group from a child-env dict. The floor every
+    adapter's child env crosses already runs this; these callers build a
+    child env without crossing it (a child that inherits it misattributes)."""
+    for key in SEED_PROVENANCE_KEYS:
+        environ.pop(key, None)
 
 
 def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
@@ -91,12 +97,11 @@ def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
     sidecar or none, and it has no stake in the work being launched.
     """
     from fno.agents.self_stamp import (
-        resolve_self_model,
+        resolve_self_harness,
         resolve_self_session_id,
         stamp_from,
     )
-    from fno.dispatch_flags import infer_invoking_harness
-    from fno.mail.envelope import contains_fno_mail_tag, harness_for_provider
+    from fno.mail.envelope import contains_fno_mail_tag
 
     # A seed carrying an envelope gets NO sidecar, and still launches.
     #
@@ -131,17 +136,15 @@ def build_env(seed: str, *, node: Optional[str] = None) -> dict[str, str]:
 
     from fno.inbox.store import generate_msg_id
 
-    sender_harness = infer_invoking_harness()
+    sender_harness = resolve_self_harness()
     env = {
         ENV_SEED_B64: base64.b64encode(raw).decode("ascii"),
         ENV_FROM: stamp_from(None),
         ENV_FROM_SESSION: from_session,
-        ENV_HARNESS: (
-            harness_for_provider(sender_harness) if sender_harness else "cli"
-        ),
-        ENV_MODEL: resolve_self_model(),
         ENV_MSG_ID: generate_msg_id(),
     }
+    if sender_harness:
+        env[ENV_HARNESS] = sender_harness
     if node:
         env[ENV_NODE] = node
     return env
@@ -187,8 +190,7 @@ def render_from_env(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
         return wrap_fno_mail(
             body,
             from_=(env.get(ENV_FROM) or "").strip() or "fno",
-            harness=(env.get(ENV_HARNESS) or "").strip() or "cli",
-            model=(env.get(ENV_MODEL) or "").strip() or "unknown",
+            harness=(env.get(ENV_HARNESS) or "").strip() or None,
             node=(env.get(ENV_NODE) or "").strip() or None,
             id=(env.get(ENV_MSG_ID) or "").strip() or None,
             from_session=from_session,

@@ -46,6 +46,8 @@ fn tmpdir(tag: &str) -> PathBuf {
 fn install_fake_codex(bin_dir: &Path) {
     let script = r#"#!/bin/sh
 set -e
+# The spawn's version probe gets an answer at once, as from the real CLI.
+if [ "$1" = "--version" ]; then echo "codex-cli 0.162.0"; exit 0; fi
 # Orphan-prevention test (ab-e7fdbcb6): record that a forwarded signal landed.
 if [ -n "$FAKE_CODEX_SIGINT_SENTINEL" ]; then
   trap 'printf caught > "$FAKE_CODEX_SIGINT_SENTINEL"; exit 130' INT TERM
@@ -170,7 +172,17 @@ fn dispatch_once_with_fake_codex(
     }
 
     let result = dispatch_codex_once(
-        home, name, message, from_name, cwd, yolo, timeout, None, None, None,
+        home,
+        name,
+        message,
+        from_name,
+        cwd,
+        yolo,
+        timeout,
+        None,
+        None,
+        None,
+        &[],
     );
 
     match old_path {
@@ -307,7 +319,7 @@ fn codex_create_writes_registry_entry_with_session_id() {
     );
     let registry_path = home.registry_json();
     if registry_path.exists() {
-        let body = fs::read_to_string(&registry_path).unwrap();
+        let body = registry_text(&registry_path).unwrap();
         let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
         let agents = v["agents"].as_array().map(|a| a.len()).unwrap_or(0);
         assert_eq!(agents, 0, "spawn --once must tear down the row: {}", body);
@@ -406,15 +418,14 @@ fn codex_resume_reuses_registry_reasoning_effort() {
         cwd.to_str().unwrap(),
     );
     let registry_path = home.registry_json();
-    let body = fs::read_to_string(&registry_path).unwrap();
-    fs::write(
+    let body = registry_text(&registry_path).unwrap();
+    fno_agents::registry_store::seed_raw(
         &registry_path,
         body.replace(
-            "\"status\":\"live\"",
-            "\"effort\":\"low\",\"status\":\"live\"",
+            "\"status\": \"live\"",
+            "\"effort\": \"low\", \"status\": \"live\"",
         ),
-    )
-    .unwrap();
+    );
 
     let outcome = dispatch_with_fake_codex(
         &home,
@@ -458,7 +469,7 @@ fn codex_resume_bumps_last_message_at() {
         &[("FAKE_CODEX_REPLY", "ok")],
     );
 
-    let registry_body = fs::read_to_string(home.registry_json()).unwrap();
+    let registry_body = registry_text(&home.registry_json()).unwrap();
     assert!(
         registry_body.contains("last_message_at"),
         "last_message_at should be stamped: {}",
@@ -491,7 +502,7 @@ fn codex_resume_accepts_full_session_id_and_stamps_named_row() {
 
     assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
     assert_eq!(outcome.stdout, "RECOVERY-RESUME-OK-rust");
-    let registry_body = fs::read_to_string(home.registry_json()).unwrap();
+    let registry_body = registry_text(&home.registry_json()).unwrap();
     assert!(registry_body.contains("last_message_at"), "{registry_body}");
     let registry: serde_json::Value = serde_json::from_str(&registry_body).unwrap();
     assert_eq!(registry["agents"][0]["name"], "01a03a0e");
@@ -677,7 +688,11 @@ fn codex_create_emits_agent_ask_done_event() {
         ],
     );
 
-    let events = fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+    assert!(
+        !home.events_jsonl().exists(),
+        "the ask wrote raw journal bytes"
+    );
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
     assert!(
         events.contains("agent_ask_done"),
         "events.jsonl should contain agent_ask_done: {}",
@@ -717,7 +732,7 @@ fn codex_resume_emits_followup_events() {
         &[("FAKE_CODEX_REPLY", "followed")],
     );
 
-    let events = fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
     assert!(
         events.contains("agent_followup_started"),
         "should emit followup_started: {}",
@@ -872,7 +887,7 @@ fn codex_create_empty_session_id_exits_11_and_writes_no_registry_entry() {
     // No registry write should have happened (create failed before stamping).
     let registry_path = home.registry_json();
     if registry_path.exists() {
-        let body = fs::read_to_string(&registry_path).unwrap();
+        let body = registry_text(&registry_path).unwrap();
         assert!(
             !body.contains("empty-sess"),
             "no registry entry should be written for a failed create: {}",
@@ -975,3 +990,9 @@ fn codex_create_timeout_error_references_output_jsonl() {
 // running (and thus exposed to the default SIGINT disposition) when the
 // signal lands. (Sigma-review concurrency concern; this file has prior CI
 // race history — commit e3058a3d.)
+
+fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
+    fno_agents::registry_store::read(path)
+        .map(|doc| serde_json::to_string_pretty(&doc).unwrap())
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}

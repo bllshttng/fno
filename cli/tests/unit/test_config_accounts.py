@@ -13,7 +13,6 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.config import load_settings
 from fno.config.writer import set_config_value, unset_config_value
 from fno.setup.doctor import check_accounts
 
@@ -32,7 +31,6 @@ def _write_config(tmp_path: Path, content: str) -> Path:
 def test_get_accounts_quota_defer_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _write_config(tmp_path, '[accounts.quota]\ndefer_dispatch = true\n')
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     r = runner.invoke(app, ["config", "get", "accounts.quota.defer_dispatch"])
     assert r.exit_code == 0, r.output
@@ -42,7 +40,6 @@ def test_get_accounts_quota_defer_dispatch(tmp_path: Path, monkeypatch: pytest.M
 def test_get_config_prefixed_accounts_quota_defer_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _write_config(tmp_path, '[accounts.quota]\ndefer_dispatch = true\n')
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     r = runner.invoke(app, ["config", "get", "config.accounts.quota.defer_dispatch"])
     assert r.exit_code == 0, r.output
@@ -52,7 +49,6 @@ def test_get_config_prefixed_accounts_quota_defer_dispatch(tmp_path: Path, monke
 def test_get_legacy_providers_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _write_config(tmp_path, '[accounts.quota]\ndefer_dispatch = true\n')
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     r = runner.invoke(app, ["config", "get", "providers.quota.defer_dispatch"])
     assert r.exit_code == 0, r.output
@@ -62,7 +58,6 @@ def test_get_legacy_providers_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_get_accounts_active(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cfg = _write_config(tmp_path, '[accounts]\nactive = "readyrule"\n')
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     r = runner.invoke(app, ["config", "get", "accounts.active"])
     assert r.exit_code == 0, r.output
@@ -107,7 +102,6 @@ priority = 100
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("PWD", str(tmp_path))
     monkeypatch.setenv("FNO_TEST_MODE", "1")
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     problems = check_accounts()
     assert problems == []
@@ -128,7 +122,6 @@ credentials_source = "~/.claude"
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("PWD", str(tmp_path))
     monkeypatch.setenv("FNO_TEST_MODE", "1")
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
     problems = check_accounts()
     assert len(problems) > 0
@@ -143,11 +136,14 @@ defer_dispatchh = true
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("PWD", str(tmp_path))
     monkeypatch.setenv("FNO_TEST_MODE", "1")
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
-    problems = check_accounts()
-    assert len(problems) > 0
-    assert any("accounts.quota has unknown key 'defer_dispatchh'" in p for p in problems)
+    # The unknown-key leg moved to the model-driven walker: check_accounts kept
+    # a hand-copied frozenset of accounts field names, and nothing forced it to
+    # match SettingsModel. The finding now names the file too.
+    from fno.config_readback import check_unknown_keys
+
+    problems = check_unknown_keys()
+    assert any("accounts.quota.defer_dispatchh" in p and str(cfg) in p for p in problems), problems
 
 
 def test_doctor_check_accounts_root_typo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -158,11 +154,11 @@ autto_switch = true
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("PWD", str(tmp_path))
     monkeypatch.setenv("FNO_TEST_MODE", "1")
-    load_settings.cache_clear()  # type: ignore[attr-defined]
 
-    problems = check_accounts()
-    assert len(problems) > 0
-    assert any("accounts has unknown key 'autto_switch'" in p for p in problems)
+    from fno.config_readback import check_unknown_keys
+
+    problems = check_unknown_keys()
+    assert any("accounts.autto_switch" in p and str(cfg) in p for p in problems), problems
 
 
 def test_load_providers_preserves_global_records_with_local_leaf_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

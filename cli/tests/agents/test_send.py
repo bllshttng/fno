@@ -3,9 +3,11 @@
 Covers US3 AC3-HP / AC3-ERR / AC3-UI / AC3-EDGE / AC3-FR from the design doc.
 
 Mocking strategy: all tests use use_tmpdir + write_registry to set up a
-known-good registry state. Provider calls (send_to_session, mcp_channel_reachable)
+known-good registry state. Provider calls (mcp_channel_reachable)
 are monkeypatched directly on the provider module to avoid real subprocess
-overhead, following the pattern in test_dispatch_ask.py.
+overhead. The old send_to_session socket seam is gone entirely: live
+claude delivery rides the control.sock inject, so the former socket-fail
+fixtures now exercise the real durable-fallback decision.
 """
 from __future__ import annotations
 
@@ -40,14 +42,15 @@ def _no_real_mail_inject(monkeypatch):
     monkeypatch.setattr(
         dispatch_mod, "_registered_family1_state", lambda _entry: "working"
     )
-    monkeypatch.setattr("fno.mail.envelope.fleet_has_crown", lambda: True)
 
 
 # ---------------------------------------------------------------------------
 # Helper: write a registry entry for "red" (live claude peer)
 # ---------------------------------------------------------------------------
 
-def _register_claude_peer(name: str = "red", short_id: str = "abcd1234") -> None:
+def _register_claude_peer(
+    name: str = "red", short_id: str = "abcd1234", mux: dict | None = None
+) -> None:
     """Write a single live claude AgentEntry into the registry."""
     from fno.agents.registry import AgentEntry, write_registry
 
@@ -58,8 +61,10 @@ def _register_claude_peer(name: str = "red", short_id: str = "abcd1234") -> None
             harness_session_id="abcd1234-1111-7222-8333-444455556666",
             cwd="/tmp",
             log_path="/tmp/red.log",
-            short_id=short_id,
+            # A mux row must not also carry a worker-socket key (one-live-ref).
+            short_id=short_id if mux is None else "",
             status="live",
+            mux=mux,
         )
     ])
 
@@ -122,9 +127,10 @@ def test_dispatch_send_happy_path_live_claude(
     tmp_path: Path, monkeypatch
 ) -> None:
     """AC3-HP: live claude peer + live-inject success -> 'delivered (hosted)',
-    exit 0. The turn is <fno_mail>-wrapped and injected over the control.sock; a
-    hosted delivery is self-recording (transcript), so it is NOT also queued
-    durable -- the bus is the fallback tier now (node x-1f23)."""
+    exit 0. The turn carries the delivered-mail header line and is injected
+    over the control.sock; a hosted delivery is self-recording (transcript), so
+    it is NOT also queued durable -- the bus is the fallback tier now (node
+    x-1f23)."""
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
@@ -152,26 +158,25 @@ def test_dispatch_send_happy_path_live_claude(
         message="FYI built the thing",
         provider=None,
         cwd=cwd,
-        from_name="fno",
+        from_name="fno/claude",
     )
 
     # stdout contract: "msg-<id> delivered (hosted)"
-    assert result.msg_id.startswith("msg-"), f"Bad msg_id: {result.msg_id!r}"
+    assert result.msg_id.startswith("fmail-"), f"Bad msg_id: {result.msg_id!r}"
     assert result.delivery == "hosted", f"Expected hosted, got {result.delivery!r}"
 
-    # Exactly one live delivery attempt, carrying the paired <fno_mail> envelope.
+    # Exactly one live delivery attempt, carrying the delivered-mail header
+    # line and the body.
     assert len(inject_calls) == 1
     injected = inject_calls[0]["text"]
-    assert injected.startswith("<fno_mail "), f"not wrapped: {injected[:40]!r}"
-    assert injected.rstrip().endswith("</fno_mail>")
+    header = injected.splitlines()[0]
+    assert header.startswith("`@fno/claude · fmail-"), f"not wrapped: {injected[:80]!r}"
     assert "FYI built the thing" in injected
-    # Directed send -> the recipient's short id is stamped as the envelope `to`.
-    assert 'to="abcd1234"' in injected, f"missing directed `to`: {injected[:80]!r}"
     # US1 / Locked Decision 8: the registered-agent live path carries the SAME
     # minted id as the receipt, so the recipient can reply --to it and a
     # bounded-duplicate is dedupable (codex P1 - _deliver_live is the 2nd choke
     # point, not just _name_lane_send).
-    assert f'id="{result.msg_id}"' in injected, f"missing envelope id: {injected[:100]!r}"
+    assert f" · {result.msg_id} · " in header, f"missing envelope id: {header!r}"
 
     # Bus demotion: a hosted delivery is NOT also written to the durable store.
     from fno.inbox.store import read_all_threads
@@ -181,7 +186,9 @@ def test_dispatch_send_happy_path_live_claude(
 def test_cmd_send_happy_path_stdout_format(
     tmp_path: Path, monkeypatch, runner: CliRunner
 ) -> None:
-    """AC3-HP / AC3-UI: cmd_send stdout is exactly 'msg-<id> delivered (hosted)\\n', exit 0."""
+    """AC3-HP / AC3-UI: cmd_send stdout is the JSON receipt, exit 0."""
+    import json as _json
+
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
@@ -198,15 +205,18 @@ def test_cmd_send_happy_path_stdout_format(
     cwd.mkdir()
     result = runner.invoke(
         mail_app,
-        ["send", "red", "FYI built the thing", "--cwd", str(cwd)],
+        ["send", "red", "FYI built the thing", "--cwd", str(cwd),
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 0, (result.stdout or "") + (result.stderr or "")
     out = (result.stdout or "").strip()
-    # "msg-<id> delivered (hosted)"
-    assert out.startswith("msg-"), f"stdout: {out!r}"
-    assert "delivered (hosted)" in out, f"stdout: {out!r}"
-    assert "queued" not in out, "stdout must not say 'queued' for a live delivery"
+    receipt = _json.loads(out)
+    assert set(receipt) == {"msg_id", "subject", "to", "status"}
+    assert receipt["msg_id"].startswith("fmail-"), f"stdout: {out!r}"
+    assert receipt["to"] == "red"
+    assert "delivered (hosted)" in receipt["status"], f"stdout: {out!r}"
+    assert "queued" not in receipt["status"], "stdout must not say 'queued' for a live delivery"
 
 
 @pytest.mark.parametrize(
@@ -225,8 +235,10 @@ def test_dispatch_send_stamps_registered_sender_by_canonical_handle(
 ) -> None:
     """A fresh send resolves the sender row through its mailbox address.
 
-    The CLI passes the sender's canonical handle, not its registry label. The
-    envelope must still carry the spawn-recorded harness and full session id.
+    The CLI passes the sender's canonical handle, not its registry label.
+    Both handle forms (the short id for claude and opencode, the full
+    time-ordered id for codex) resolve to the same row, and the rendered
+    header names that row.
     """
     use_tmpdir(monkeypatch, tmp_path)
 
@@ -282,8 +294,7 @@ def test_dispatch_send_stamps_registered_sender_by_canonical_handle(
     assert result.delivery == "hosted"
     assert len(captured) == 1
     envelope = captured[0]
-    assert f'harness="{wire_harness}"' in envelope
-    assert f'from_session="{sender_session}"' in envelope
+    assert envelope.splitlines()[0].startswith("`@sender-worker · fmail-")
 
 
 def test_dispatch_send_self_proof_beats_same_bucket_registry_sibling(
@@ -363,7 +374,7 @@ def test_dispatch_send_self_proof_beats_same_bucket_registry_sibling(
     assert result.delivery == "hosted"
     assert len(captured) == 1
     envelope = captured[0]
-    assert f'from_session="{own_session}"' in envelope
+    assert envelope.splitlines()[0].startswith(f"`@{own_session} · fmail-")
     assert stranger_session not in envelope
 
 
@@ -440,7 +451,7 @@ def test_dispatch_send_switchboard_identity_floored_on_self_proof_mismatch(
     args, kwargs = switchboard_calls[0]
     wrapped = args[2]
     assert kwargs["from_identity"] is None
-    assert f'from_session="{own_session}"' in wrapped
+    assert wrapped.splitlines()[0].startswith(f"`@{own_session} · fmail-")
     assert stranger_session not in wrapped
 
 
@@ -514,14 +525,14 @@ def test_dispatch_send_durable_fallback_resolves_sender_once(
     assert result.delivery == "durable"
     assert proof_calls == [canonical_handle(sender_session)]
     record = next(m for m in iter_messages() if m.id == result.msg_id)
-    assert f'from_session="{sender_session}"' in record.body
+    assert record.body.splitlines()[0].startswith("`@12345678 · fmail-")
 
 
 @pytest.mark.parametrize(
-    ("sender_harness", "sender_session", "wire_harness"),
+    ("sender_harness", "sender_session"),
     [
-        ("claude", "44444444-4444-4444-8444-444444444444", "claude-code"),
-        ("codex", "55555555-5555-7555-8555-555555555555", "codex"),
+        ("claude", "44444444-4444-4444-8444-444444444444"),
+        ("codex", "55555555-5555-7555-8555-555555555555"),
     ],
 )
 def test_dispatch_send_durable_fallback_preserves_sender_provenance(
@@ -529,7 +540,6 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
     monkeypatch,
     sender_harness: str,
     sender_session: str,
-    wire_harness: str,
 ) -> None:
     """The durable fallback carries the same proven sender as live delivery."""
     use_tmpdir(monkeypatch, tmp_path)
@@ -584,14 +594,17 @@ def test_dispatch_send_durable_fallback_preserves_sender_provenance(
 
     assert result.delivery == "durable"
     record = next(message for message in iter_messages() if message.id == result.msg_id)
-    assert f'harness="{wire_harness}"' in record.body
-    assert f'from_session="{sender_session}"' in record.body
+    # The header names the resolved sender row; the harness rides the durable
+    # record's provenance fields, no longer the text.
+    assert record.body.splitlines()[0].startswith("`@sender-worker · fmail-")
+    assert record.from_harness == sender_harness
 
 
 def test_dispatch_send_keeps_unknown_for_unprovable_sender(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A fresh send without a registry proof keeps the explicit unknown floor."""
+    """A fresh send without a registry proof keeps the honest floors: the bare
+    name as `from`, and no reply address."""
     use_tmpdir(monkeypatch, tmp_path)
 
     from fno.agents import dispatch as dispatch_mod
@@ -622,8 +635,135 @@ def test_dispatch_send_keeps_unknown_for_unprovable_sender(
     assert result.delivery == "hosted"
     assert len(captured) == 1
     envelope = captured[0]
-    assert 'harness="unknown"' in envelope
+    # x-d7cf: the harness floor retired with the attribute; an unprovable
+    # sender shows the bare name and no reply address.
+    assert envelope.startswith("`@unregistered-sender · fmail-")
     assert "from_session=" not in envelope
+
+
+def test_dispatch_send_unresolvable_sender_miss_goes_loud(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A from_name no registry row and no self identity can prove must
+    SAY so. The silent floor is how from=fno harness=unknown envelopes shipped;
+    delivery still proceeds, but the miss is loud."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    from fno.agents import dispatch as dispatch_mod
+
+    _register_claude_peer()
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_switchboard_exchange",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_mail_inject_claude",
+        lambda _recipient, text, **_kwargs: True,
+    )
+
+    from fno.agents import events as events_mod
+
+    captured: list = []
+    orig_emit = events_mod.emit
+
+    def capture_emit(kind, **kw):
+        captured.append((kind, dict(kw)))
+        orig_emit(kind, **kw)
+
+    monkeypatch.setattr(events_mod, "emit", capture_emit)
+
+    from fno.agents.dispatch import dispatch_send
+
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+    result = dispatch_send(
+        name="red",
+        message="anonymous sender",
+        provider=None,
+        cwd=cwd,
+        from_name="unregistered-sender",
+    )
+
+    assert result.delivery == "hosted"
+    assert any(
+        kind == "sender_provenance_unknown"
+        and kw.get("from_name") == "unregistered-sender"
+        for kind, kw in captured
+    ), f"sender_provenance_unknown not captured: {captured}"
+    err = capsys.readouterr().err
+    assert "unregistered-sender" in err
+    assert "provenance degrades to unknown" in err
+
+
+def test_dispatch_send_resolved_sender_stays_quiet(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Positive control: a registered sender never trips the loud miss."""
+    use_tmpdir(monkeypatch, tmp_path)
+
+    from fno.agents import dispatch as dispatch_mod
+    from fno.agents.registry import AgentEntry, write_registry
+    from fno.harness_identity import canonical_handle
+
+    sender_session = "abcd1234-1111-7222-8333-444455556666"
+    write_registry(
+        [
+            AgentEntry(
+                name="sender-worker",
+                harness="claude",
+                harness_session_id=sender_session,
+                short_id=canonical_handle(sender_session),
+                cwd=str(tmp_path),
+                log_path="",
+                status="live",
+            ),
+            AgentEntry(
+                name="red",
+                harness="claude",
+                harness_session_id="33333333-3333-4333-8333-333333333333",
+                short_id="33333333",
+                cwd=str(tmp_path),
+                log_path="",
+                status="live",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_switchboard_exchange",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_mail_inject_claude",
+        lambda _recipient, text, **_kwargs: True,
+    )
+
+    from fno.agents import events as events_mod
+
+    captured: list = []
+    orig_emit = events_mod.emit
+
+    def capture_emit(kind, **kw):
+        captured.append((kind, dict(kw)))
+        orig_emit(kind, **kw)
+
+    monkeypatch.setattr(events_mod, "emit", capture_emit)
+
+    from fno.agents.dispatch import dispatch_send
+
+    result = dispatch_send(
+        name="red",
+        message="registered sender",
+        provider=None,
+        cwd=tmp_path,
+        from_name=canonical_handle(sender_session),
+    )
+
+    assert result.delivery == "hosted"
+    assert not any(kind == "sender_provenance_unknown" for kind, _kw in captured)
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +784,7 @@ def test_dispatch_send_lock_timeout(tmp_path: Path, monkeypatch) -> None:
     # A queued message is a durable SUCCESS: cmd_send's stdout contract is one
     # receipt and exit 0 for every durable outcome, and a nonzero exit would
     # make a retry-on-failure caller enqueue the same message twice.
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="hello",
         provider=None,
@@ -687,7 +827,7 @@ def test_dispatch_send_locks_canonical_registry_name(
     monkeypatch.setattr(dispatch_mod, "hold_agent_lock", _record_lock)
     monkeypatch.setattr(dispatch_mod, "_mail_inject_claude", lambda *_args, **_k: True)
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name=address,
         message="hello",
         provider=None,
@@ -746,7 +886,7 @@ def test_dispatch_send_refuses_address_owner_change_under_lock(
     )
 
     with pytest.raises(dispatch_mod.DispatchAskError, match="changed from 'red' to 'blue'"):
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="abcd1234",
             message="hello",
             provider=None,
@@ -810,7 +950,7 @@ def test_dispatch_send_refuses_same_name_identity_change_under_lock(
     )
 
     with pytest.raises(dispatch_mod.DispatchAskError, match="recipient identity changed"):
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -893,7 +1033,7 @@ def test_dispatch_send_refuses_same_name_route_change_under_lock(
     )
 
     with pytest.raises(dispatch_mod.DispatchAskError, match="recipient identity changed"):
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -925,11 +1065,14 @@ def test_cmd_send_lock_timeout_surfaces_on_stderr(
     cwd.mkdir()
     result = runner.invoke(
         mail_app,
-        ["send", "red", "hello", "--cwd", str(cwd)],
+        ["send", "red", "hello", "--cwd", str(cwd), "--from-name", "lead"],
     )
-    assert result.exit_code == 0, result.stdout + (result.stderr or "")
-    assert len(result.stdout.splitlines()) == 1, result.stdout
-    assert "queued (durable) [agent-lock-timeout]" in result.stdout
+    assert result.exit_code == 14, result.stdout + (result.stderr or "")
+    first_line = result.stdout.splitlines()[0]
+    assert "queued (durable) [agent-lock-timeout]" in first_line, result.stdout
+    # The landing verdict rides after the receipt; the lock's own cause
+    # stays on stderr, never in the receipt line.
+    assert "NOT LANDED" in result.stdout, result.stdout
     stderr = result.stderr or ""
     # Past tense: the grace acquire only wins because the holder let go, so a
     # present-tense "lock busy ... held by" would name an owner that released.
@@ -943,7 +1086,12 @@ def test_cmd_send_lock_timeout_surfaces_on_stderr(
     # copy would call a just-killed recipient healthy.
     assert "is not live" not in stderr, stderr
     assert "fno agents resume" not in stderr, stderr
+    assert "was not attempted" in stderr, stderr
     assert "agent lock past the wait" in stderr, stderr
+    assert "proves nothing about the recipient in either direction" in stderr, (
+        "the arm's whole claim: the token proves neither health nor death "
+        f"because any verb holds the same lock: {stderr}"
+    )
     assert "a stop, an rm" in stderr, stderr
 
 
@@ -952,15 +1100,13 @@ def test_cmd_send_lock_timeout_surfaces_on_stderr(
 # ---------------------------------------------------------------------------
 
 def test_dispatch_send_durable_queued_output(tmp_path: Path, monkeypatch) -> None:
-    """AC3-UI: when peer is live but socket send fails, output says 'queued (durable)'."""
+    """AC3-UI: when the live inject misses, output says 'queued (durable)'."""
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
     from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses.claude import ProviderSocketError
     from fno.agents.harnesses._claude_session_registry import SessionLocator
 
-    # locate_session succeeds but send_to_session fails
     monkeypatch.setattr(
         claude_mod, "locate_session",
         lambda short_id, home=None: SessionLocator(
@@ -971,16 +1117,11 @@ def test_dispatch_send_durable_queued_output(tmp_path: Path, monkeypatch) -> Non
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
-    def _failing_send(sock_path: str, content: str, from_name: str) -> None:
-        raise ProviderSocketError("connection refused")
-
-    monkeypatch.setattr(claude_mod, "send_to_session", _failing_send)
-
     from fno.agents.dispatch import dispatch_send
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="FYI done",
         provider=None,
@@ -988,7 +1129,7 @@ def test_dispatch_send_durable_queued_output(tmp_path: Path, monkeypatch) -> Non
     )
 
     assert result.delivery == "durable", f"Expected durable, got {result.delivery!r}"
-    assert result.msg_id.startswith("msg-")
+    assert result.msg_id.startswith("fmail-")
 
 
 def test_dispatch_send_offline_peer_queued(tmp_path: Path, monkeypatch) -> None:
@@ -1013,7 +1154,7 @@ def test_dispatch_send_offline_peer_queued(tmp_path: Path, monkeypatch) -> None:
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="FYI done",
         provider=None,
@@ -1021,7 +1162,7 @@ def test_dispatch_send_offline_peer_queued(tmp_path: Path, monkeypatch) -> None:
     )
 
     assert result.delivery == "durable"
-    assert result.msg_id.startswith("msg-")
+    assert result.msg_id.startswith("fmail-")
 
 
 def test_dispatch_send_stale_orphaned_status_uses_live_family1(
@@ -1042,7 +1183,7 @@ def test_dispatch_send_stale_orphaned_status_uses_live_family1(
     )
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *a, **k: True)
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name="red", message="ping", provider=None, cwd=tmp_path
     )
 
@@ -1053,6 +1194,35 @@ def test_dispatch_send_stale_orphaned_status_uses_live_family1(
 def test_dispatch_send_nonlive_family1_never_attempts_live_delivery(
     tmp_path: Path, monkeypatch, state: str
 ) -> None:
+    """A claude row IN a mux pane keeps the transcript veto: the pane lane has
+    no identity check, so a stalled/done reading still skips the live attempt."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _register_claude_peer(mux={"session": "main", "pane_id": 11})
+    from fno.agents import dispatch as dispatch_mod
+
+    monkeypatch.setattr(
+        dispatch_mod, "_registered_family1_state", lambda _entry: state
+    )
+    attempts: list = []
+    monkeypatch.setattr(
+        dispatch_mod, "_deliver_live", lambda *a, **k: attempts.append(a) or True
+    )
+
+    result = dispatch_mod.dispatch_send(from_name="lead", 
+        name="red", message="ping", provider=None, cwd=tmp_path
+    )
+
+    assert result.delivery == "durable"
+    assert attempts == []
+    assert result.reason == f"transcript-{state}"
+
+
+@pytest.mark.parametrize("state", ["done", "stalled"])
+def test_dispatch_send_idle_claude_thread_tries_the_roster_lane(
+    tmp_path: Path, monkeypatch, state: str
+) -> None:
+    """A claude row with no pane ref is attempted whatever its transcript says;
+    mail-inject reads the daemon roster first, and the roster decides."""
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
     from fno.agents import dispatch as dispatch_mod
@@ -1065,12 +1235,77 @@ def test_dispatch_send_nonlive_family1_never_attempts_live_delivery(
         dispatch_mod, "_deliver_live", lambda *a, **k: attempts.append(a) or True
     )
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
+        name="red", message="ping", provider=None, cwd=tmp_path
+    )
+
+    assert result.delivery == "hosted"
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("state", ["done", "stalled"])
+def test_dispatch_send_idle_claude_thread_roster_miss_queues_durable(
+    tmp_path: Path, monkeypatch, state: str
+) -> None:
+    """When the roster refuses (not-injectable), the send demotes to durable
+    with the lane's own reason and the bus holds exactly one copy."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _register_claude_peer()
+    from fno.agents import dispatch as dispatch_mod
+
+    monkeypatch.setattr(
+        dispatch_mod, "_registered_family1_state", lambda _entry: state
+    )
+
+    def _roster_miss(*_a, reason_out=None, **_k):
+        if reason_out is not None:
+            reason_out.append("not-injectable")
+        return False
+
+    monkeypatch.setattr(dispatch_mod, "_deliver_live", _roster_miss)
+
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name="red", message="ping", provider=None, cwd=tmp_path
     )
 
     assert result.delivery == "durable"
+    assert result.reason == "not-injectable"
+
+    from fno.harness_identity import canonical_handle
+    from fno.inbox.store import read_all_threads
+
+    threads = read_all_threads(
+        canonical_handle("abcd1234-1111-7222-8333-444455556666")
+    )
+    assert len(threads) == 1
+
+
+def test_cmd_send_transcript_veto_receipt_names_the_reading(
+    runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-HP (CLI): a skipped live lane prints transcript-<state>, never a
+    bare live-miss."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _register_claude_peer(mux={"session": "main", "pane_id": 11})
+    from fno.agents import dispatch as dispatch_mod
+    from fno.cli import app
+
+    monkeypatch.setattr(
+        dispatch_mod, "_registered_family1_state", lambda _entry: "stalled"
+    )
+    attempts: list = []
+    monkeypatch.setattr(
+        dispatch_mod, "_deliver_live", lambda *a, **k: attempts.append(a)
+    )
+
+    res = runner.invoke(
+        app, ["agents", "mail", "send", "red", "hi", "--from-name", "web"]
+    )
+
+    assert res.exit_code == 14, f"exit={res.exit_code} out={res.output!r}"
     assert attempts == []
+    assert "[transcript-stalled, transcript" in res.stdout, f"stdout: {res.stdout!r}"
+    assert "live-miss" not in res.stdout, f"stdout: {res.stdout!r}"
 
 
 def test_dispatch_send_unknown_family1_attempts_confirmable_transport(
@@ -1088,7 +1323,7 @@ def test_dispatch_send_unknown_family1_attempts_confirmable_transport(
         dispatch_mod, "_deliver_live", lambda *a, **k: attempts.append(a) or True
     )
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name="red", message="ping", provider=None, cwd=tmp_path
     )
 
@@ -1120,13 +1355,17 @@ def test_cmd_send_queued_stdout_format(tmp_path: Path, monkeypatch, runner: CliR
     cwd.mkdir()
     result = runner.invoke(
         mail_app,
-        ["send", "red", "hello", "--cwd", str(cwd)],
+        ["send", "red", "hello", "--cwd", str(cwd), "--from-name", "lead"],
     )
-    assert result.exit_code == 0, (result.stdout or "") + (result.stderr or "")
+    assert result.exit_code == 14, (result.stdout or "") + (result.stderr or "")
     out = (result.stdout or "").strip()
-    assert out.startswith("msg-"), f"stdout: {out!r}"
-    assert "queued (durable)" in out, f"stdout: {out!r}"
-    assert "delivered" not in out, "stdout must not say 'delivered' for durable path"
+    import json as _json
+
+    receipt = _json.loads(out.splitlines()[0])
+    assert receipt["msg_id"].startswith("fmail-"), f"stdout: {out!r}"
+    assert "queued (durable)" in receipt["status"], f"stdout: {out!r}"
+    assert "delivered" not in receipt["status"], "stdout must not say 'delivered' for durable path"
+    assert "NOT LANDED" in out, f"the unconfirmed floor must end NOT LANDED: {out!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -1150,7 +1389,6 @@ def test_dispatch_send_200kb_body_round_trip(tmp_path: Path, monkeypatch) -> Non
         ),
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(claude_mod, "send_to_session", lambda *a, **kw: None)
 
     body = "x" * (200 * 1024)  # 200KB
 
@@ -1159,25 +1397,23 @@ def test_dispatch_send_200kb_body_round_trip(tmp_path: Path, monkeypatch) -> Non
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message=body,
         provider=None,
         cwd=cwd,
     )
 
-    assert result.msg_id.startswith("msg-")
+    assert result.msg_id.startswith("fmail-")
     threads = read_all_threads("abcd1234")
     assert len(threads) == 1
     stored_body = threads[0].messages[0].body
-    # The durable body is <fno_mail>-wrapped now (node x-1f23); the 200KB message
-    # round-trips intact inside the paired envelope.
-    assert stored_body.startswith("<fno_mail "), stored_body[:40]
-    assert stored_body.rstrip().endswith("</fno_mail>")
-    from fno.mail.envelope import FNO_MAIL_TRAILER
+    # The durable body is the delivered shape (node x-1f23): the header line,
+    # then the body. The 200KB message round-trips intact after the header.
+    first_nl = stored_body.index("\n")
+    header, inner = stored_body[:first_nl], stored_body[first_nl + 1 :]
+    assert header.startswith("`@lead · fmail-"), stored_body[:80]
 
-    inner = stored_body.split("\n", 1)[1].rsplit("\n", 1)[0]
-    inner = inner.removesuffix(f"\n{FNO_MAIL_TRAILER}")
     assert inner == body, f"Round-trip mismatch: got {len(inner)} chars"
 
 
@@ -1194,7 +1430,7 @@ def test_dispatch_send_rejects_over_1mib_body(tmp_path: Path, monkeypatch) -> No
     cwd = tmp_path / "work"
     cwd.mkdir()
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(
+        dispatch_send(from_name="lead", 
             name="red",
             message=body,
             provider=None,
@@ -1236,7 +1472,7 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="important message",
         provider=None,
@@ -1245,7 +1481,7 @@ def test_dispatch_send_demotion_preserves_envelope(tmp_path: Path, monkeypatch) 
 
     # Durable fallback, not a hard failure
     assert result.delivery == "durable"
-    assert result.msg_id.startswith("msg-")
+    assert result.msg_id.startswith("fmail-")
 
     # Exactly ONE attempt, no retry storm
     assert inject_attempt_count[0] == 1, f"Expected 1 inject attempt, got {inject_attempt_count[0]}"
@@ -1275,7 +1511,7 @@ def test_dispatch_send_unknown_agent(tmp_path: Path, monkeypatch) -> None:
     cwd = tmp_path / "work"
     cwd.mkdir()
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(
+        dispatch_send(from_name="lead", 
             name="blue",
             message="hi",
             provider=None,
@@ -1326,7 +1562,7 @@ def test_dispatch_send_codex_peer_queued_durable(tmp_path: Path, monkeypatch) ->
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="codex-agent",
         message="hey codex",
         provider=None,
@@ -1334,7 +1570,7 @@ def test_dispatch_send_codex_peer_queued_durable(tmp_path: Path, monkeypatch) ->
     )
 
     assert result.delivery == "durable"
-    assert result.msg_id.startswith("msg-")
+    assert result.msg_id.startswith("fmail-")
 
     # Envelope is in the store
     threads = read_all_threads("deadbeef")
@@ -1362,36 +1598,113 @@ def test_dispatch_send_emits_send_events(tmp_path: Path, monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(claude_mod, "send_to_session", lambda *a, **kw: None)
 
     from fno import paths
     from fno.agents.dispatch import dispatch_send
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    dispatch_send(
+    dispatch_send(from_name="lead", 
         name="red",
         message="test event emission",
         provider=None,
         cwd=cwd,
     )
 
-    events_log = paths.state_dir() / "events.jsonl"
-    assert events_log.exists(), "events.jsonl must be written"
-    body = events_log.read_text(encoding="utf-8")
+    from tests._event_rows import event_rows
 
-    assert "agent_send_started" in body, "agent_send_started not in events"
-    assert "agent_send_done" in body, "agent_send_done not in events"
+    records = event_rows(paths.state_dir() / "events.jsonl")
+    types = [r.get("kind") or r.get("type") for r in records]
+    assert "agent_send_started" in types, "agent_send_started not in events"
+    assert "agent_send_done" in types, "agent_send_done not in events"
 
-    # Verify the done event has a delivery field
-    for line in body.splitlines():
-        record = json.loads(line)
-        if record.get("kind") == "agent_send_done":
-            assert "delivery" in record, "agent_send_done must carry 'delivery' field"
-            assert record["delivery"] in ("hosted", "durable")
+    # Verify the done event has a delivery field (top level or in data)
+    for record in records:
+        if (record.get("kind") or record.get("type")) == "agent_send_done":
+            payload = {
+                **(record.get("data") or {}),
+                **{k: v for k, v in record.items() if k != "data"},
+            }
+            assert "delivery" in payload, "agent_send_done must carry 'delivery' field"
+            assert payload["delivery"] in ("hosted", "durable")
             break
     else:
-        pytest.fail("agent_send_done event not found in events.jsonl")
+        pytest.fail("agent_send_done event not found in events")
+
+
+# ---------------------------------------------------------------------------
+# Live-miss reason: waited token + done-event reason field (x-7345)
+# ---------------------------------------------------------------------------
+
+def test_run_mail_inject_records_waited_token_on_miss(monkeypatch) -> None:
+    """A parsed not-delivered outcome also records how long the probe waited.
+
+    The waited token rides the same reason list, so the done event and the
+    demotion receipt can name the spend without a second channel (x-7345).
+    """
+    from fno.agents import dispatch as dispatch_mod
+
+    class _Proc:
+        stdout = json.dumps({"delivered": False, "reason": "not-confirmed"})
+
+    monkeypatch.setattr(dispatch_mod.subprocess, "run", lambda *_a, **_k: _Proc())
+    records: list[str] = []
+    delivered = dispatch_mod._run_mail_inject(["bin", "mail-inject"], "hi", 5.0, records.append)
+    assert delivered is False
+    assert "not-confirmed" in records
+    waited = [tok for tok in records if tok.startswith("waited-")]
+    assert len(waited) == 1 and waited[0].endswith("s"), records
+
+    class _Delivered:
+        stdout = json.dumps({"delivered": True, "reason": "ok"})
+
+    monkeypatch.setattr(dispatch_mod.subprocess, "run", lambda *_a, **_k: _Delivered())
+    records.clear()
+    assert dispatch_mod._run_mail_inject(["bin", "mail-inject"], "hi", 5.0, records.append) is True
+    assert records == ["ok"], records
+
+
+def test_dispatch_send_done_event_carries_live_miss_reason(tmp_path: Path, monkeypatch) -> None:
+    """AC1/AC2 (x-7345): the done event keeps the live-lane cause.
+
+    A durable demotion carries the joined tokens (the raw cause and the wait);
+    a hosted delivery carries no reason at all.
+    """
+    use_tmpdir(monkeypatch, tmp_path)
+    _register_claude_peer()
+
+    from fno.agents import dispatch as dispatch_mod
+
+    def _miss(*_args, reason_out=None, **_kwargs):
+        if reason_out is not None:
+            reason_out.extend(["not-confirmed", "waited-32s"])
+        return False
+
+    captured: list[tuple[str, dict]] = []
+    monkeypatch.setattr(dispatch_mod, "_deliver_live", _miss)
+    monkeypatch.setattr(
+        dispatch_mod.events, "emit", lambda kind, **data: captured.append((kind, data))
+    )
+
+    result = dispatch_mod.dispatch_send(from_name="lead", 
+        name="red", message="hello", provider=None, cwd=tmp_path
+    )
+    assert result.delivery == "durable"
+    done = [data for kind, data in captured if kind == "agent_send_done"]
+    assert done, "agent_send_done not emitted"
+    assert done[-1]["delivery"] == "durable"
+    reason = done[-1].get("reason")
+    assert reason is not None and "not-confirmed" in reason and "waited-32s" in reason, done[-1]
+
+    captured.clear()
+    monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_a, **_k: True)
+    result = dispatch_mod.dispatch_send(from_name="lead", 
+        name="red", message="hello again", provider=None, cwd=tmp_path
+    )
+    assert result.delivery == "hosted"
+    done = [data for kind, data in captured if kind == "agent_send_done"]
+    assert done and done[-1]["delivery"] == "hosted"
+    assert not done[-1].get("reason"), done[-1]
 
 
 def test_dispatch_send_reports_registry_stamp_failure_after_hosted_delivery(
@@ -1420,7 +1733,7 @@ def test_dispatch_send_reports_registry_stamp_failure_after_hosted_delivery(
         lambda kind, **data: captured.append((kind, data)),
     )
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name="red",
         message="hello",
         provider=None,
@@ -1452,8 +1765,25 @@ def test_dispatch_send_registry_stamp_lock_is_bounded_after_hosted_delivery(
     from fno import paths
     from fno.agents import dispatch as dispatch_mod
     from fno.agents import registry as registry_mod
+    from fno.mail import envelope as envelope_mod
 
+    # The Rust renderer reads the registry under the SHARED flock while this
+    # fixture holds it EXCLUSIVE for the whole call, so a real render would
+    # deadlock against the contention the stamp is meant to meet. Stub it;
+    # the bound under test is the stamp's, not the renderer's.
+    from fno.mail import envelope as envelope_mod
+
+    monkeypatch.setattr(
+        envelope_mod,
+        "_render_in_rust",
+        lambda _payload: '<fno_mail from="fno">stub</fno_mail>',
+    )
     monkeypatch.setattr(dispatch_mod, "_deliver_live", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        envelope_mod,
+        "wrap_fno_mail",
+        lambda body, **_kwargs: f'<fno_mail from="fno">{body}</fno_mail>',
+    )
     registry_path = paths.agents_registry_path()
     lock_path = registry_mod._registry_lock_path(registry_path)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1461,7 +1791,7 @@ def test_dispatch_send_registry_stamp_lock_is_bounded_after_hosted_delivery(
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
     started = time.monotonic()
     try:
-        result = dispatch_mod.dispatch_send(
+        result = dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -1532,7 +1862,7 @@ def test_dispatch_send_does_not_stamp_recipient_restamped_during_delivery(
         lambda kind, **data: captured.append((kind, data)),
     )
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name="victim",
         message="hello",
         provider=None,
@@ -1595,7 +1925,7 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", restamp_then_miss)
 
-    result = dispatch_mod.dispatch_send(
+    result = dispatch_mod.dispatch_send(from_name="lead", 
         name=original_id,
         message="secret for A",
         provider=None,
@@ -1605,12 +1935,10 @@ def test_dispatch_send_queues_to_selected_session_when_live_miss_restamps(
     assert result.delivery == "durable"
     original_threads = read_all_threads(canonical_handle(original_id))
     assert len(original_threads) == 1
-    from fno.mail.envelope import FNO_MAIL_TRAILER
-
-    assert original_threads[0].messages[0].body.endswith(
-        f"secret for A\n{FNO_MAIL_TRAILER}\n</fno_mail>"
-    )
-    assert f'to="{canonical_handle(original_id)}"' in original_threads[0].messages[0].body
+    # The durable body is the delivered shape (header line, then the body),
+    # and it lives under the ORIGINAL session's thread, not the replacement.
+    assert original_threads[0].messages[0].body.endswith("\nsecret for A")
+    assert original_threads[0].messages[0].body.startswith("`@lead · ")
     assert read_all_threads(canonical_handle(replacement_id)) == []
     assert read_all_threads("victim") == []
     row = registry_mod.load_registry()[0]
@@ -1644,7 +1972,7 @@ def test_dispatch_send_refuses_durable_fallback_without_full_session_id(
     )
 
     with pytest.raises(dispatch_mod.DispatchAskError, match="no full harness session id") as exc:
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="legacy",
             message="do not misaddress",
             provider=None,
@@ -1677,7 +2005,6 @@ def test_dispatch_send_envelope_write_oserror_exit12(tmp_path: Path, monkeypatch
         ),
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(claude_mod, "send_to_session", lambda *a, **kw: None)
 
     from fno.inbox import store as store_mod
     monkeypatch.setattr(store_mod, "write_new_thread", lambda **kw: (_ for _ in ()).throw(OSError("disk full")))
@@ -1695,7 +2022,7 @@ def test_dispatch_send_envelope_write_oserror_exit12(tmp_path: Path, monkeypatch
     cwd = tmp_path / "work"
     cwd.mkdir()
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(name="red", message="hello", provider=None, cwd=cwd)
+        dispatch_send(from_name="lead", name="red", message="hello", provider=None, cwd=cwd)
 
     assert exc_info.value.exit_code == 12, f"Expected exit 12, got {exc_info.value.exit_code}"
     assert "envelope-write" in str(exc_info.value) or "envelope write" in str(exc_info.value).lower()
@@ -1729,7 +2056,7 @@ def test_dispatch_send_bus_lock_timeout_is_explicit_exit12(
     cwd = tmp_path / "work"
     cwd.mkdir()
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(name="red", message="hello", provider=None, cwd=cwd)
+        dispatch_send(from_name="lead", name="red", message="hello", provider=None, cwd=cwd)
 
     text = str(exc_info.value)
     assert exc_info.value.exit_code == 12
@@ -1765,7 +2092,7 @@ def test_cmd_send_real_bus_lock_timeout_has_no_success_receipt(
     holder = open(lock_path, "w")
     fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
     try:
-        result = runner.invoke(mail_app, ["send", "red", "hello"])
+        result = runner.invoke(mail_app, ["send", "red", "hello", "--from-name", "lead"])
     finally:
         fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
         holder.close()
@@ -1801,7 +2128,7 @@ def test_dispatch_send_alias_lock_contention_falls_back_before_delivery(
     with open(lock_path, "w") as holder:
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
         started = time.monotonic()
-        result = dispatch_mod.dispatch_send(
+        result = dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -1838,7 +2165,7 @@ def test_dispatch_send_rejects_nonterminating_registry_stamp_timeout(
     )
 
     with pytest.raises(ValueError, match="finite and non-negative"):
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -1870,7 +2197,7 @@ def test_dispatch_send_rejects_nonterminating_agent_lock_timeout(
     )
 
     with pytest.raises(ValueError, match="finite and non-negative"):
-        dispatch_mod.dispatch_send(
+        dispatch_mod.dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -1899,7 +2226,6 @@ def test_dispatch_send_envelope_write_valueerror_exit12(tmp_path: Path, monkeypa
         ),
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(claude_mod, "send_to_session", lambda *a, **kw: None)
 
     from fno.inbox import store as store_mod
     monkeypatch.setattr(store_mod, "write_new_thread", lambda **kw: (_ for _ in ()).throw(ValueError("suffix exhausted")))
@@ -1909,7 +2235,7 @@ def test_dispatch_send_envelope_write_valueerror_exit12(tmp_path: Path, monkeypa
     cwd = tmp_path / "work"
     cwd.mkdir()
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(name="red", message="hello", provider=None, cwd=cwd)
+        dispatch_send(from_name="lead", name="red", message="hello", provider=None, cwd=cwd)
 
     assert exc_info.value.exit_code == 12
 
@@ -1943,7 +2269,6 @@ def test_dispatch_send_events_carry_context_envelope(tmp_path: Path, monkeypatch
         ),
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
-    monkeypatch.setattr(claude_mod, "send_to_session", lambda *a, **kw: None)
 
     captured: list = []
     from fno.agents import events as events_mod
@@ -1971,6 +2296,7 @@ def test_dispatch_send_events_carry_context_envelope(tmp_path: Path, monkeypatch
         assert payload.get("from_name") == "tester", (
             f"agent_send_{label} from_name mismatch: {payload.get('from_name')!r}"
         )
+        assert payload.get("to_session_id") == "abcd1234-1111-7222-8333-444455556666"
 
     # started and done must share the same request_id
     import re
@@ -2028,9 +2354,11 @@ def test_us2_send_by_handle_is_session_addressed(runner, tmp_path, monkeypatch):
     from fno.mail.cli import mail_app
 
     res = runner.invoke(
-        mail_app, ["send", "fno-tgt00001", "does advance() resolve cwd?"]
+        mail_app,
+        ["send", "fno-tgt00001", "does advance() resolve cwd?",
+         "--from-name", "lead"],
     )
-    assert res.exit_code == 0, res.output
+    assert res.exit_code == 14, res.output
     assert "queued (durable)" in res.output
     # Addressed to the canonical handle, not a project.
     assert "uuid-tgt" in res.output
@@ -2147,7 +2475,7 @@ def test_legacy_registry_row_does_not_collide_with_its_live_projection(
 
     monkeypatch.setattr(dispatch_mod, "_deliver_live", capture_delivery)
 
-    result = runner.invoke(mail_app, ["send", "deadbeef", "same owner"])
+    result = runner.invoke(mail_app, ["send", "deadbeef", "same owner", "--from-name", "lead"])
 
     assert result.exit_code == 0
     assert "delivered (hosted)" in result.output
@@ -2263,7 +2591,6 @@ def test_dispatch_send_durable_stamps_live_drain_owner(tmp_path: Path, monkeypat
     _register_claude_peer()
 
     from fno.agents.harnesses import claude as claude_mod
-    from fno.agents.harnesses.claude import ProviderSocketError
     from fno.agents.harnesses._claude_session_registry import SessionLocator
 
     monkeypatch.setattr(
@@ -2276,17 +2603,12 @@ def test_dispatch_send_durable_stamps_live_drain_owner(tmp_path: Path, monkeypat
     )
     monkeypatch.setattr(claude_mod, "mcp_channel_reachable", lambda *a, **kw: False)
 
-    def _failing_send(sock_path: str, content: str, from_name: str) -> None:
-        raise ProviderSocketError("connection refused")
-
-    monkeypatch.setattr(claude_mod, "send_to_session", _failing_send)
-
     from fno.agents.dispatch import dispatch_send
     from fno.bus.log import iter_messages
 
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(name="red", message="FYI done", provider=None, cwd=cwd)
+    result = dispatch_send(from_name="lead", name="red", message="FYI done", provider=None, cwd=cwd)
 
     assert result.delivery == "durable"
     envs = [m for m in iter_messages(warn=False) if m.id == result.msg_id]
@@ -2327,7 +2649,7 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     # is that the grace acquire succeeds and the recipient is verified under
     # the lock before anything is written.
     _fail_first_lock_acquire(monkeypatch)
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="hello",
         provider=None,
@@ -2343,13 +2665,14 @@ def test_dispatch_send_agent_lock_timeout_queues_durable(
     assert "hello" in threads[0].messages[0].body
 
 
-def test_dispatch_send_agent_lock_timeout_reserves_the_pair_budget(
+def test_dispatch_send_agent_lock_timeout_leaves_no_ledger(
     tmp_path: Path, monkeypatch
 ) -> None:
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
-    from fno.agents.dispatch import DispatchAskError, dispatch_send
+    from fno import paths
+    from fno.agents.dispatch import dispatch_send
 
     body = " ".join("word" for _ in range(79))
     _fail_first_lock_acquire(monkeypatch)
@@ -2363,52 +2686,21 @@ def test_dispatch_send_agent_lock_timeout_reserves_the_pair_budget(
     )
     assert first.delivery == "durable"
     assert first.reason == "agent-lock-timeout"
-
-    with pytest.raises(DispatchAskError) as raised:
-        dispatch_send(
-            name="red",
-            message=body,
-            provider=None,
-            cwd=tmp_path,
-            lock_timeout=0.2,
-            from_name="sender",
-        )
-
-    assert raised.value.exit_code == 1
-    assert "running=79 current=79 projected=158 cap=80 window=10m" in str(
-        raised.value
+    assert not (paths.bus_dir() / "word-budget").exists(), (
+        "an ordinary send reserves nothing, even on the timeout path"
     )
 
 
-def test_dispatch_send_lock_timeout_budget_refusal_clears_dispatch_context(
+def test_dispatch_send_control_refusal_clears_dispatch_context(
     tmp_path: Path, monkeypatch
 ) -> None:
-    from contextlib import contextmanager
-
     use_tmpdir(monkeypatch, tmp_path)
     _register_claude_peer()
 
     from fno.agents import dispatch as dispatch_mod
     from fno.agents.dispatch import DispatchAskError, dispatch_send
-    from fno.agents.lock import AgentLockTimeout
 
-    real_hold = dispatch_mod.hold_agent_lock
-    calls = 0
-
-    @contextmanager
-    def _timeout_then_grace(lock_name, registry_path, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls % 2 == 1:
-            raise AgentLockTimeout(
-                name=lock_name,
-                timeout=kwargs.get("timeout", 0.1),
-            )
-        with real_hold(lock_name, registry_path, **kwargs) as handle:
-            yield handle
-
-    monkeypatch.setattr(dispatch_mod, "hold_agent_lock", _timeout_then_grace)
-    body = " ".join("word" for _ in range(79))
+    body = "control: " + " ".join("word" for _ in range(50))
 
     first = dispatch_send(
         name="red",
@@ -2432,17 +2724,18 @@ def test_dispatch_send_lock_timeout_budget_refusal_clears_dispatch_context(
         )
 
     assert raised.value.exit_code == 1
+    assert "refused: control word budget" in str(raised.value)
     assert dispatch_mod._DISPATCH_CTX.get() is None
 
 
-def test_registered_sender_normal_and_timeout_paths_share_canonical_budget(
+def test_registered_sender_normal_and_timeout_paths_write_no_ledger(
     tmp_path: Path, monkeypatch
 ) -> None:
     use_tmpdir(monkeypatch, tmp_path)
 
-    from fno.agents.dispatch import DispatchAskError, dispatch_send
+    from fno import paths
+    from fno.agents.dispatch import dispatch_send
     from fno.agents.registry import AgentEntry, write_registry
-    from fno.bus.log import iter_messages
 
     write_registry(
         [
@@ -2482,23 +2775,19 @@ def test_registered_sender_normal_and_timeout_paths_share_canonical_budget(
     assert first.delivery == "durable"
 
     _fail_first_lock_acquire(monkeypatch)
-    with pytest.raises(DispatchAskError) as raised:
-        dispatch_send(
-            name="red",
-            message=body,
-            provider=None,
-            cwd=tmp_path,
-            lock_timeout=0.2,
-            from_name="sender-worker",
-        )
-
-    assert raised.value.exit_code == 1
-    assert "running=79 current=79 projected=158 cap=80 window=10m" in str(
-        raised.value
+    second = dispatch_send(
+        name="red",
+        message=body,
+        provider=None,
+        cwd=tmp_path,
+        lock_timeout=0.2,
+        from_name="sender-worker",
     )
-    rows = [row for row in iter_messages(warn=False) if row.kind == "send"]
-    assert len(rows) == 1
-    assert rows[0].from_ == "cccccccc"
+    assert second.delivery == "durable"
+    assert second.reason == "agent-lock-timeout"
+    assert not (paths.bus_dir() / "word-budget").exists(), (
+        "neither the normal path nor the timeout path resurrects a ledger"
+    )
 
 
 def test_dispatch_send_agent_lock_timeout_without_durable_address_says_so(
@@ -2540,7 +2829,7 @@ def test_dispatch_send_agent_lock_timeout_without_durable_address_says_so(
 
     _fail_first_lock_acquire(monkeypatch)
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(
+        dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -2594,7 +2883,7 @@ def test_dispatch_send_lock_timeout_refuses_a_changed_recipient(
 
     _fail_first_lock_acquire(monkeypatch, on_first=_reclaim)
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(
+        dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider=None,
@@ -2659,8 +2948,9 @@ def test_dispatch_send_lock_timeout_keeps_sender_provenance(
     threads = read_all_threads("abcd1234")
     assert len(threads) == 1
     body = threads[0].messages[0].body
-    # The immutable return address, not just the mutable alias.
-    assert "beef5678" in body, f"sender session must survive the timeout: {body}"
+    # The header names the resolved sender row, not just the mutable alias;
+    # reply resolution maps the name back to the immutable session id.
+    assert body.splitlines()[0].startswith("`@blue · fmail-"), body[:120]
 
 
 def test_dispatch_send_lock_timeout_refuses_provider_mismatch_before_queuing(
@@ -2680,7 +2970,7 @@ def test_dispatch_send_lock_timeout_refuses_provider_mismatch_before_queuing(
 
     _fail_first_lock_acquire(monkeypatch)
     with pytest.raises(DispatchAskError) as exc_info:
-        dispatch_send(
+        dispatch_send(from_name="lead", 
             name="red",
             message="hello",
             provider="codex",
@@ -2717,7 +3007,7 @@ def test_dispatch_send_lock_timeout_names_the_holder(
     assert "pid" in stamped
 
     _fail_first_lock_acquire(monkeypatch)
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="hello",
         provider=None,
@@ -2761,20 +3051,26 @@ def _reclaim_under_lock_then_release(
         _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX)
         _P(ready_path).write_text("held")
         time.sleep(hold_seconds)
+        # The override lives ONLY for this write: the thread mutates the real
+        # process env, so a leak here would redirect every later test in the
+        # worker to a tmp registry that no longer exists.
         _os.environ["FNO_AGENTS_REGISTRY"] = registry_path
-        from fno.agents.registry import AgentEntry, write_registry
+        try:
+            from fno.agents.registry import AgentEntry, write_registry
 
-        write_registry([
-            AgentEntry(
-                name="red",
-                harness="claude",
-                harness_session_id="99999999-1111-7222-8333-444455556666",
-                cwd="/tmp",
-                log_path="/tmp/red.log",
-                short_id="99999999",
-                status="live",
-            )
-        ])
+            write_registry([
+                AgentEntry(
+                    name="red",
+                    harness="claude",
+                    harness_session_id="99999999-1111-7222-8333-444455556666",
+                    cwd="/tmp",
+                    log_path="/tmp/red.log",
+                    short_id="99999999",
+                    status="live",
+                )
+            ])
+        finally:
+            _os.environ.pop("FNO_AGENTS_REGISTRY", None)
         _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
 
 
@@ -2804,7 +3100,7 @@ def test_dispatch_send_lock_timeout_refuses_when_lock_never_frees(
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
         try:
             with pytest.raises(DispatchAskError) as exc_info:
-                dispatch_send(
+                dispatch_send(from_name="lead", 
                     name="red",
                     message="hello",
                     provider=None,
@@ -2856,7 +3152,7 @@ def test_dispatch_send_lock_timeout_sees_a_reclaim_committed_under_the_lock(
         assert ready.exists(), "contender did not take the lock"
 
         with pytest.raises(DispatchAskError) as exc_info:
-            dispatch_send(
+            dispatch_send(from_name="lead", 
                 name="red",
                 message="hello",
                 provider=None,
@@ -2945,7 +3241,7 @@ def test_dispatch_send_lock_timeout_books_the_queue_as_a_success(
     assert before[0].last_message_at is None
 
     _fail_first_lock_acquire(monkeypatch)
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red",
         message="hello",
         provider=None,
@@ -2954,16 +3250,17 @@ def test_dispatch_send_lock_timeout_books_the_queue_as_a_success(
     )
     assert result.delivery == "durable"
 
-    events_log = paths.state_dir() / "events.jsonl"
-    body = events_log.read_text(encoding="utf-8") if events_log.exists() else ""
+    from tests._event_rows import event_rows
+
+    records = event_rows(paths.state_dir() / "events.jsonl")
     done = [
-        json.loads(line)
-        for line in body.splitlines()
-        if json.loads(line).get("kind") == "agent_send_done"
+        r for r in records
+        if (r.get("kind") or r.get("type")) == "agent_send_done"
     ]
-    assert done, f"a queued send must emit agent_send_done: {body}"
-    assert done[-1]["delivery"] == "durable"
-    assert done[-1].get("reason") == "agent-lock-timeout"
+    assert done, f"a queued send must emit agent_send_done: {records}"
+    payload = {**(done[-1].get("data") or {}), **done[-1]}
+    assert payload.get("delivery") == "durable"
+    assert payload.get("reason") == "agent-lock-timeout"
 
     after = load_registry(paths.agents_registry_path())
     assert after[0].last_message_at is not None, "last_message_at must be stamped"
@@ -2988,7 +3285,7 @@ def test_dispatch_send_lock_timeout_books_an_alias_addressed_send_too(
     from fno.agents.registry import load_registry
 
     _fail_first_lock_acquire(monkeypatch)
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="abcd1234",  # the short-id, a first-class address form
         message="hello",
         provider=None,
@@ -3069,7 +3366,7 @@ def test_lock_timeout_queue_keeps_a_bus_only_row_on_its_designed_lane(
     _fail_first_lock_acquire(monkeypatch)
     cwd = tmp_path / "work"
     cwd.mkdir()
-    result = dispatch_send(
+    result = dispatch_send(from_name="lead", 
         name="red", message="hello", provider=None, cwd=cwd, lock_timeout=0.1
     )
 
@@ -3077,3 +3374,226 @@ def test_lock_timeout_queue_keeps_a_bus_only_row_on_its_designed_lane(
     assert result.reason == BUS_ONLY_POLICY, (
         f"a designed-queue row must keep its own reason, got {result.reason!r}"
     )
+
+
+
+# ---------------------------------------------------------------------------
+# AC2: `mail team` is the one writer's shim
+# ---------------------------------------------------------------------------
+
+def _team_invoke(monkeypatch, args: list[str]):
+    from fno.mail.cli import mail_app
+
+    return CliRunner().invoke(mail_app, args)
+
+
+def _team_fake_writer(
+    monkeypatch, returncode: int = 0, stdout: str = "", stderr: str = "", style_receipt=None
+):
+    """Capture the announce send subprocess; returns the list of invocations."""
+    import shutil
+    import subprocess
+
+    # CI has no fno-agents binary installed; the shim's on-PATH check must
+    # see one or every team test dies before the writer is invoked.
+    monkeypatch.setattr(
+        shutil, "which", lambda name: f"/tmp/{name}" if name == "fno-agents" else None
+    )
+
+    # The style gate rides the same binary. The writer-focused tests pass a
+    # clean stub here (they exercise the shim, not the gate); the gate's own
+    # refusal test passes the REAL door, whose fail-closed posture refuses
+    # when the environment answers with nothing usable.
+    from fno import rust_binary
+
+    if style_receipt is None:
+
+        def style_receipt(text, surface, word_cap=None):
+            return (
+                None,
+                {"exception": None, "word_count": 0, "violations": [], "report": ""},
+            )
+
+    monkeypatch.setattr(rust_binary, "style_receipt", style_receipt)
+
+    calls: list[dict[str, object]] = []
+
+    class _Proc:
+        pass
+
+    real_run = subprocess.run
+
+    def fake_run(args, **kwargs):
+        if {"doctor", "event"} <= set(args) or {"style-check", "registry-commit"} & set(args):
+            # Event emission and the style gate ride the same subprocess seam;
+            # let them reach the real binary so only true writer calls land
+            # in `calls`.
+            return real_run(args, **kwargs)
+        calls.append({
+            "args": args,
+            "input": kwargs.get("input"),
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": returncode,
+        })
+        proc = _Proc()
+        proc.returncode = returncode
+        proc.stdout = stdout
+        proc.stderr = stderr
+        return proc
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return calls
+
+
+def test_team_shim_invokes_the_one_writer_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-HP: dispatch_send is never called; one announce send runs with the
+    body on stdin and its stdout/exit relayed."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents import dispatch as dispatch_mod
+
+    def explode(**_kwargs):
+        raise AssertionError("dispatch_send must never run on the announce path")
+
+    monkeypatch.setattr(dispatch_mod, "dispatch_send", explode)
+    calls = _team_fake_writer(
+        monkeypatch,
+        stdout='{"id":"msg-test","scope":"all","audience":3}\n',
+    )
+
+    result = _team_invoke(
+        monkeypatch, ["team", "--scope", "all", "one bus line", "--json"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1, calls
+    argv = calls[0]["args"]
+    assert argv[1:3] == ["announce", "send"]
+    assert "--scope" in argv and "all" in argv
+    assert "--sender-kind" in argv
+    assert calls[0]["input"] == "one bus line"
+    assert "msg-test" in result.output
+
+
+def test_team_sender_kind_is_agent_only_for_an_owned_identity(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-HP: a resolvable owned harness identity stamps agent; a bare shell
+    (no markers) stamps operator."""
+    use_tmpdir(monkeypatch, tmp_path)
+    import fno.harness_identity as hi_mod
+
+    from fno.harness_identity import OwnedHarnessIdentity
+
+    calls = _team_fake_writer(monkeypatch)
+
+    def owned(env=None, **_kw):
+        return OwnedHarnessIdentity(
+            session_id="abcd1234-1111-2222-3333-444455556666", harness="claude"
+        )
+
+    monkeypatch.setattr(hi_mod, "resolve_owned_identity", owned)
+    _team_invoke(monkeypatch, ["team", "--scope", "all", "from a session"])
+    owned_argv = calls[-1]["args"]
+    assert owned_argv[owned_argv.index("--sender-kind") + 1] == "agent"
+
+    def empty(env=None, **_kw):
+        return OwnedHarnessIdentity(session_id=None, harness=None)
+
+    monkeypatch.setattr(hi_mod, "resolve_owned_identity", empty)
+    _team_invoke(monkeypatch, ["team", "--scope", "all", "from a shell"])
+    shell_argv = calls[-1]["args"]
+    assert shell_argv[shell_argv.index("--sender-kind") + 1] == "operator"
+
+
+def test_team_passthrough_flags_reach_the_writer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-HP: --subject / --expires / --urgent are forwarded verbatim."""
+    use_tmpdir(monkeypatch, tmp_path)
+    calls = _team_fake_writer(monkeypatch)
+
+    result = _team_invoke(
+        monkeypatch,
+        [
+            "team", "--scope", "leads", "shift change",
+            "--subject", "maintenance", "--expires", "45m", "--urgent",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    argv = calls[-1]["args"]
+    assert argv[argv.index("--subject") + 1] == "maintenance"
+    assert argv[argv.index("--expires") + 1] == "45m"
+    assert "--urgent" in argv
+
+
+def test_team_style_refusal_fires_before_the_writer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-ERR: a body failing the style lint exits non-zero and the Rust
+    writer is never invoked."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno import rust_binary
+
+    calls = _team_fake_writer(monkeypatch, style_receipt=rust_binary.style_receipt)
+    bad_body = "Stop work; report where you are."
+
+    result = _team_invoke(
+        monkeypatch, ["team", "--scope", "all", bad_body]
+    )
+
+    assert result.exit_code != 0, result.output
+    assert calls == [], "the writer must not run past a refused body"
+
+
+def test_team_body_cap_refused_before_the_writer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-ERR: an over-cap body exits non-zero before any subprocess."""
+    use_tmpdir(monkeypatch, tmp_path)
+    calls = _team_fake_writer(monkeypatch)
+
+    result = _team_invoke(
+        monkeypatch, ["team", "--scope", "all", "x" * (1024 * 1024 + 1)]
+    )
+
+    assert result.exit_code != 0, result.output
+    assert calls == []
+
+
+def test_team_writer_failure_relays_the_exit_and_stderr(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-ERR: a refused announce (authority/rate limit) surfaces as a
+    non-zero exit with the writer's own words."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _team_fake_writer(
+        monkeypatch,
+        returncode=2,
+        stderr="announce: refused: rate limit is 6 announcements per rolling hour\n",
+    )
+
+    result = _team_invoke(monkeypatch, ["team", "--scope", "all", "spam"])
+
+    assert result.exit_code == 2, result.output
+    assert "rate limit" in result.output
+
+
+def test_team_empty_scope_relays_the_writer_refusal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """AC2-EDGE: an empty scope never reports fleet-wide success."""
+    use_tmpdir(monkeypatch, tmp_path)
+    _team_fake_writer(
+        monkeypatch,
+        returncode=1,
+        stderr="announce send: no live recipients in scope 'all'\n",
+    )
+
+    result = _team_invoke(monkeypatch, ["team", "--scope", "all", "nobody home"])
+
+    assert result.exit_code == 1, result.output
+    assert "no live recipients" in result.output

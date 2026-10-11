@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from fno.registry_door import read_registry_document
 from fno.harness_identity import (
     AMBIENT_IDENTITY_ENV,
     HARNESS_SESSION_MARKERS,
@@ -17,12 +18,29 @@ from fno.harness_identity import (
     claude_transport_short_id,
     current_session_id,
     current_session_ids,
+    harness_of_session_id,
     legacy_suffix_handle,
     present_harness_markers,
     resolve_harness_identity,
     resolve_owned_identity,
     session_identity_key,
 )
+
+
+@pytest.mark.parametrize(
+    ("session_id", "expected"),
+    [
+        ("b936b571-e0aa-40ed-a07d-97acb9a87db1", "claude"),
+        ("01a06886-9405-74a1-8afd-5b67baf89604", "codex"),
+        ("01A06886-9405-74A1-8AFD-5B67BAFB9604", "codex"),
+        ("ses_7f3a9b2cAbCd1234", "opencode"),
+        ("20260823T083106Z-cx87209-9d434e", None),
+        ("8ad8e13c", None),
+        ("", None),
+    ],
+)
+def test_harness_of_session_id_reads_the_shapes_own_harness(session_id, expected):
+    assert harness_of_session_id(session_id) == expected
 
 
 @pytest.mark.parametrize(
@@ -42,15 +60,24 @@ def test_resolves_each_supported_marker(marker, session_id, harness):
     )
 
 
-def test_precedence_favors_codex_thread_id():
-    """Within ONE family, higher-precedence markers still win (thread id over
-    the legacy codex session id). Cross-family never gets here - see the
-    refusal test below."""
-    env = {
+def test_same_family_dup_resolves_and_disagreement_degrades():
+    """Within ONE family: the same id under two names (codex sets both the
+    thread id and the legacy session id) resolves normally; two DIFFERENT ids
+    of one family are a disagreement and degrade rather than pick the
+    durable-looking one by position (x-0992). Cross-family never gets here -
+    see the refusal test below."""
+    same = {
+        "CODEX_THREAD_ID": "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4",
+        "CODEX_SESSION_ID": "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4",
+    }
+    assert resolve_harness_identity(same) == HarnessIdentity(
+        "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4", "codex"
+    )
+    disagree = {
         "CODEX_THREAD_ID": "thread",
         "CODEX_SESSION_ID": "codex-session",
     }
-    assert resolve_harness_identity(env) == HarnessIdentity("thread", "codex")
+    assert resolve_harness_identity(disagree) == HarnessIdentity(None, None)
 
 
 def test_cross_family_markers_refuse_instead_of_precedence():
@@ -340,13 +367,25 @@ def test_owned_single_marker_matches_precedence(marker, session_id, harness):
 
 
 def test_owned_two_same_family_is_single_not_ambiguous():
-    """Two markers of ONE harness (both codex) agree; that is not the bug
-    shape. Precedence-first wins, byte-identical to today."""
-    env = {"CODEX_THREAD_ID": "thread", "CODEX_SESSION_ID": "session"}
+    """Two markers of ONE harness carrying the SAME id agree; that is not the
+    bug shape. The family resolves, byte-identical to today."""
+    env = {"CODEX_THREAD_ID": "thread", "CODEX_SESSION_ID": "thread"}
     owned = resolve_owned_identity(env)
     assert owned.disposition == "single"
     assert owned.harness == "codex"
     assert owned.session_id == "thread"
+
+
+def test_owned_same_family_disagreement_degrades_not_table_first():
+    """Two ids of ONE family, no proof, no collision: unresolved rather than
+    the table-first value - either marker could be the stranger's (x-0992)."""
+    env = {"CODEX_THREAD_ID": "thread", "CODEX_SESSION_ID": "session"}
+    owned = resolve_owned_identity(env)
+    assert owned.disposition == "ambiguous"
+    assert owned.session_id is None
+    assert owned.harness is None
+    assert ("CODEX_THREAD_ID", "codex", "thread") in owned.markers_present
+    assert ("CODEX_SESSION_ID", "codex", "session") in owned.markers_present
 
 
 def test_owned_disagreement_degrades_without_proof():
@@ -478,13 +517,12 @@ def _register(tmp_path, session_id, provider="codex", status="live"):
         provider=provider, session_id=session_id, cwd="/x", registry_path=reg
     )
     if status != "live":
-        import json
 
-        data = json.loads(reg.read_text())
+        data = read_registry_document(reg)[0]
         for row in data.get("agents", []):
             if row.get("name") == entry.name:
                 row["status"] = status
-        reg.write_text(json.dumps(data))
+        _replace_registry(reg, data)
     return entry.name, reg
 
 
@@ -533,13 +571,15 @@ def test_row_owning_session_id_self_row_is_not_contention(tmp_path):
     )
 
 
-def test_row_owning_session_id_self_binding_with_wrong_harness_still_owner(tmp_path):
-    """A row of a DIFFERENT harness holding the id under test is another
-    session's row even when the caller names the same id as its own: the
-    binding's harness half must agree with the row, or the id is foreign."""
+def test_row_owning_session_id_self_binding_disagreement_still_owner(tmp_path):
+    """A binding that does not fully agree leaves the row an owner. The
+    binding's harness half must match the row even when it names the id under
+    test, and a caller that proves its own id elsewhere is refused an id held
+    by a different live row: the id is foreign either way."""
     from fno.agents.registry import row_owning_session_id
 
     sid = "019fc87d-ddff-7c90-926a-6bdd7ebb186c"
+    mine = "019fc88e-aaaa-7c90-926a-6bdd7ebb186c"
     name, reg = _register(tmp_path, sid, provider="claude")
     assert (
         row_owning_session_id(
@@ -547,19 +587,70 @@ def test_row_owning_session_id_self_binding_with_wrong_harness_still_owner(tmp_p
         )
         == name
     )
+    sid2 = "019fc88e-bbbb-7c90-926a-6bdd7ebb186c"
+    name_other, reg_other = _register(tmp_path, sid2, provider="codex")
+    assert (
+        row_owning_session_id(
+            sid2, registry_path=reg_other, self_binding=("codex", mine)
+        )
+        == name_other
+    )
 
 
-def test_row_owning_session_id_self_binding_of_another_id_still_owner(tmp_path):
-    """A caller that proves its own id elsewhere is still refused an id held
-    by a different live row."""
+def test_row_owning_session_id_walk_proven_dead_pid_row_is_self(tmp_path):
+    """A restart re-registers the same row in place (same name, same session
+    id, still live) and leaves its spawn-time pid dead. When the caller's walk
+    names the row's harness family and the row pid is dead (or names this
+    process's own harness ancestor), that row is the restarted session's own,
+    never contention. Every self-blind shape survives: a walk that is silent
+    or names another family, a row whose pid leg never resolved, and a live
+    foreign pid all leave the row an owner (the round-1 P1 refusal)."""
+
     from fno.agents.registry import row_owning_session_id
 
     sid = "019fc87d-ddff-7c90-926a-6bdd7ebb186c"
-    mine = "019fc88e-aaaa-7c90-926a-6bdd7ebb186c"
-    name, reg = _register(tmp_path, sid)
+    name, reg = _register(tmp_path, sid, provider="claude")
+
+    def _set_pid(pid):
+        data = read_registry_document(reg)[0]
+        for row in data.get("agents", []):
+            if row.get("harness_session_id") == sid:
+                row["pid"] = pid
+        _replace_registry(reg, data)
+
+    _set_pid(99999999)
     assert (
         row_owning_session_id(
-            sid, registry_path=reg, self_binding=("codex", mine)
+            sid, registry_path=reg, self_binding=None, walk_harness="claude"
+        )
+        is None
+    )
+    # A silent or foreign walk keeps the refusal.
+    assert (
+        row_owning_session_id(
+            sid, registry_path=reg, self_binding=None, walk_harness=None
+        )
+        == name
+    )
+    assert (
+        row_owning_session_id(
+            sid, registry_path=reg, self_binding=None, walk_harness="codex"
+        )
+        == name
+    )
+    # A row whose pid leg never resolved keeps the refusal (fail-closed).
+    _set_pid(None)
+    assert (
+        row_owning_session_id(
+            sid, registry_path=reg, self_binding=None, walk_harness="claude"
+        )
+        == name
+    )
+    # A live foreign pid keeps the refusal: a live session owns the id.
+    _set_pid(1)
+    assert (
+        row_owning_session_id(
+            sid, registry_path=reg, self_binding=None, walk_harness="claude"
         )
         == name
     )
@@ -674,19 +765,40 @@ def test_owned_lone_foreign_marker_is_not_stamped_when_prover_contradicts():
 
 
 def test_owned_distinct_ids_in_one_proven_family_degrade():
-    """Two markers of the proven harness with DISTINCT ids (CODEX_THREAD_ID +
-    CODEX_SESSION_ID, both codex, different values) cannot be told apart: proof
-    is harness-level, not id-level. The resolver degrades rather than pick by
-    precedence, which could stamp an inherited same-family stranger id."""
+    """Two markers of the proven harness with DISTINCT ids cannot be told
+    apart: proof is harness-level, not id-level. The resolver degrades rather
+    than pick by precedence, which could stamp an inherited same-family
+    stranger id. The markers are CLAUDE's pair, not codex's: x-a409 measured
+    that codex sets CODEX_SESSION_ID to the root session and CODEX_THREAD_ID
+    per thread, so a proven codex family now resolves to the thread id - the
+    degrade law holds for families with no such per-thread marker."""
     env = {
-        "CODEX_THREAD_ID": "thread",
-        "CODEX_SESSION_ID": "session",
-        "CLAUDE_CODE_SESSION_ID": "claude-mine",
+        "CLAUDE_CODE_SESSION_ID": "mine-new",
+        "CLAUDE_SESSION_ID": "mine-old",
+        "CODEX_THREAD_ID": "foreign-thread",
     }
-    owned = resolve_owned_identity(env, prove=lambda harness, sid: harness == "codex")
+    owned = resolve_owned_identity(env, prove=lambda harness, sid: harness == "claude")
     assert owned.disposition == "ambiguous"
     assert owned.session_id is None
-    assert owned.harness == "codex"  # proven harness kept; only the id degrades
+    assert owned.harness == "claude"  # proven harness kept; only the id degrades
+
+
+def test_owned_proven_codex_family_prefers_thread_id_across_families():
+    """The same preference when a foreign family rides along: the thread id
+    still names this process, and the multi-family shape reads `proven`."""
+    root = "019cc081-de0d-7283-97cc-751c46742a07"
+    thread = "019cc082-1111-7283-97cc-751c46742a08"
+    env = {
+        "CODEX_SESSION_ID": root,
+        "CODEX_THREAD_ID": thread,
+        "CLAUDE_CODE_SESSION_ID": "inherited-claude",
+    }
+    owned = resolve_owned_identity(env, prove=lambda harness, _sid: harness == "codex")
+    assert (owned.session_id, owned.harness, owned.disposition) == (
+        thread,
+        "codex",
+        "proven",
+    )
 
 
 def test_sync_harness_aliases_unknown_suppresses_legacy_backfill():
@@ -741,12 +853,16 @@ def test_ac7_con_no_resolver_guesses_codex_for_a_disagreement():
 
 
 def test_current_session_helpers_refuse_mixed_and_fall_back_to_legacy():
-    """One family: precedence winner. Mixed canonical families: the id helper
+    """One family agreeing on one id: the id resolves. Two ids of one family
+    disagree: unresolved (x-0992). Mixed canonical families: the id helper
     refuses like the resolver instead of laundering the claude-legacy marker
     (x-b57a); the ids helper still enumerates every marker, its own job."""
-    one_family = {"CODEX_THREAD_ID": " thread ", "CODEX_SESSION_ID": "session"}
+    one_family = {"CODEX_THREAD_ID": " thread ", "CODEX_SESSION_ID": " thread "}
     assert current_session_id(one_family) == "thread"
-    assert current_session_ids(one_family) == {"thread", "session"}
+    assert current_session_ids(one_family) == {"thread"}
+    disagree = {"CODEX_THREAD_ID": " thread ", "CODEX_SESSION_ID": "session"}
+    assert current_session_id(disagree) is None
+    assert current_session_ids(disagree) == {"thread", "session"}
     mixed = {
         "CODEX_THREAD_ID": " thread ",
         "CLAUDE_CODE_SESSION_ID": "claude",
@@ -793,7 +909,7 @@ def test_ac1_hp_canonical_handle_is_first_eight():
 
 def test_legacy_suffix_handle_is_last_eight_read_only_lookup():
     """The retired last-eight address survives only as a read-only lookup so
-    pre-flip handles (e.g. a king addressed 08e8c104) still drain. It is never
+    pre-flip handles (e.g. a lead addressed 08e8c104) still drain. It is never
     generated for new mail and is NOT the canonical address."""
     assert legacy_suffix_handle("019f48e1-5b09-72a0-9bc8-6b364bcf4ae4") == "4bcf4ae4"
     assert legacy_suffix_handle("019F48E1-5B09-72A0-9BC8-6B364BCF4AE4") == "4bcf4ae4"
@@ -884,10 +1000,12 @@ def test_no_generating_surface_produces_a_retired_address(tmp_path, monkeypatch)
     for value in minted:
         assert not LEGACY_HANDLE_RE.match(value), f"{value!r} is a retired address"
 
-    # The wire envelope's from/to too - the bus columns drifted from this once.
-    body = wrap_fno_mail("hi", from_=stamp_from(None), harness="claude-code",
-                         model="m", to=canonical_handle(sid))
-    assert 'from="019f48e1"' in body and 'to="019f48e1"' in body
+    # Resolve the registered address to its wire identity; the delivered
+    # header names the sender's short 8-hex handle and mints its own id.
+    body = wrap_fno_mail(
+        "hi", from_=stamp_from(None), to=canonical_handle(sid), id="fmail-" + "0" * 12,
+    )
+    assert body.splitlines()[0].startswith("`@019f48e1 · fmail-"), body[:80]
 
 
 def test_ac4_err_legacy_suffix_is_read_only_compatibility_lookup():
@@ -1351,3 +1469,86 @@ def test_resolve_attester_identity_corroborates_the_own_id():
         # corroborated where it was readable (process) and honestly
         # env_only where it was not. Either is correct; a raise is not.
         assert witness in ("process", "env_only")
+
+
+def test_owned_collides_once_per_distinct_id_for_same_value_dups():
+    # A codex dup carrying one id on both markers must reach the collide
+    # callback once: the callback reloads the registry on every call.
+    env = {"CODEX_THREAD_ID": "same-1", "CODEX_SESSION_ID": "same-1"}
+    calls: list[tuple[str, str]] = []
+
+    def collide(harness: str, session_id: str):
+        calls.append((harness, session_id))
+        return None
+
+    owned = resolve_owned_identity(env, prove=None, collide=collide)
+
+    assert (owned.session_id, owned.harness, owned.disposition) == (
+        "same-1",
+        "codex",
+        "single",
+    )
+    assert calls == [("codex", "same-1")]
+
+
+# ---- codex thread-id preference (x-a409 AC3/AC4) ----------------------------
+
+
+def test_owned_proven_codex_family_prefers_the_thread_id():
+    """Variant E (x-a409 AC3-HP): a codex child thread carries CODEX_SESSION_ID
+    (the root session) and CODEX_THREAD_ID (this thread), differing. When the
+    process tree proves codex, the thread id names this process and resolves."""
+    root = "019cc081-de0d-7283-97cc-751c46742a07"
+    thread = "019cc082-1111-7283-97cc-751c46742a08"
+    env = {"CODEX_SESSION_ID": root, "CODEX_THREAD_ID": thread}
+    owned = resolve_owned_identity(env, prove=lambda harness, _sid: harness == "codex")
+    assert (owned.session_id, owned.harness, owned.disposition) == (
+        thread,
+        "codex",
+        "single",
+    )
+
+
+def test_owned_codex_family_conflict_without_proof_stays_ambiguous():
+    """Variant E with no prover (x-a409 AC4-ERR): the x-0992 same-family
+    degrade is unchanged - without proof either id could be the stranger's."""
+    root = "019cc081-de0d-7283-97cc-751c46742a07"
+    thread = "019cc082-1111-7283-97cc-751c46742a08"
+    env = {"CODEX_SESSION_ID": root, "CODEX_THREAD_ID": thread}
+    owned = resolve_owned_identity(env)
+    assert (owned.session_id, owned.harness, owned.disposition) == (None, None, "ambiguous")
+
+
+def test_owned_name_only_stamp_over_codex_conflict_settles_by_proof():
+    """Variant F (x-a409 AC3-HP, stamped): a name_only stamp over a same-family
+    conflict used to refuse unconditionally at the canonical branch; with a
+    prover it falls through to the marker loop, which settles by proof."""
+    root = "019cc081-de0d-7283-97cc-751c46742a07"
+    thread = "019cc082-1111-7283-97cc-751c46742a08"
+    env = {
+        "FNO_HARNESS_NAME": "codex",
+        "CODEX_SESSION_ID": root,
+        "CODEX_THREAD_ID": thread,
+    }
+    owned = resolve_owned_identity(env, prove=lambda harness, _sid: harness == "codex")
+    assert (owned.session_id, owned.harness, owned.disposition) == (
+        thread,
+        "codex",
+        "single",
+    )
+
+
+def test_owned_name_only_stamp_without_id_or_prover_still_refuses():
+    """The canonical branch keeps its refusal when nothing can settle the
+    missing id: no prover, no markers to eliminate."""
+    env = {"FNO_HARNESS_NAME": "codex"}
+    owned = resolve_owned_identity(env, prove=lambda harness, _sid: harness == "codex")
+    assert owned.disposition == "ambiguous"
+    assert owned.session_id is None
+
+
+def _replace_registry(path, document):
+    from tests._table_seed import seed_registry
+
+    document = dict(document)
+    seed_registry(document.pop("agents"), path=path, replace=True, **document)

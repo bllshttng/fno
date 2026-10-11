@@ -142,10 +142,15 @@ def test_peek_mux_pane_ref_without_session_prints_bare_id(tmp_path):
     assert "mux pane=:33" not in out.getvalue()
 
 
-def test_peek_mux_pane_refusal_names_working_surface(tmp_path):
+def test_peek_mux_pane_refusal_names_working_surface(tmp_path, monkeypatch):
     """When the mux cannot answer, the refusal names `fno mux pane read <id>`
     instead of listing unrelated peers (the 2026-08-04 false-liveness incident
     where an empty resolver result was read as proof three live workers were wedged)."""
+    # Keep the refusal deterministic: an unclassifiable read (falsifier None)
+    # is the only shape that refuses; a real gone pane falls through instead.
+    monkeypatch.setattr(
+        "fno.agents.reachability.pane_falsifier", lambda mux: None
+    )
     out, err = io.StringIO(), io.StringIO()
     rc = peek(
         "boardsort-b63a",
@@ -163,6 +168,33 @@ def test_peek_mux_pane_refusal_names_working_surface(tmp_path):
     assert "boardsort-b63a" in msg
     # Unrelated peers must not be listed as "did you mean" for a pane worker.
     assert "board-survey" not in msg
+
+
+def test_peek_gone_pane_names_the_exit_and_the_resume(tmp_path, monkeypatch):
+    """A read failure the falsifier classifies as pane-gone is a DEAD pane:
+    say so, name the resume command, and fall through to the registry row
+    instead of claiming the mux did not answer."""
+    monkeypatch.setattr(
+        "fno.agents.reachability.pane_falsifier", lambda mux: "pane-gone"
+    )
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "lead-4d9b-delivery",
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (None, ["someone-else"]),
+        projects_root=tmp_path,
+        mux_lookup=lambda h: ("main", 2277, "lead-4d9b-delivery"),
+        mux_reader=lambda sess, pane, n: (1, ""),
+    )
+    msg = err.getvalue()
+    assert "pane 2277 is gone" in msg
+    assert "fno agents resume lead-4d9b-delivery" in msg
+    assert "the mux did not answer" not in msg
+    # The fall-through continues past the pane read, so the not-found shape
+    # (no registry row in this test) is the expected exit here, not 1.
+    assert rc == 13
+    assert "peer not found in the registry: lead-4d9b-delivery" in msg
 
 
 def test_peek_mux_pane_no_row_falls_through_to_not_found(tmp_path):
@@ -1326,6 +1358,106 @@ def test_peek_resolved_but_empty_transcript_blames_neither_store_nor_idle(
     assert "no activity yet" not in out.getvalue()
 
 
+def _quiet_claude_fleet(tmp_path, monkeypatch, session_id):
+    """A row named for its agent holding a full uuid, plus its stale transcript.
+
+    The x-f715 shape: the live listing is liveness-gated, so nothing here
+    answers a live resolver, and the exact row match takes only the name
+    ("lead-harness-pi") and the full session id - the 8-hex handle hits
+    neither. The durable-store rung is the only reader left.
+    """
+    from fno import paths
+    from fno.agents.registry import AgentEntry, write_registry
+
+    proj = tmp_path / "projects" / "-tmp-proj"
+    proj.mkdir(parents=True)
+    t = proj / f"{session_id}.jsonl"
+    t.write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "quiet but present"}],
+                },
+                "timestamp": "2026-09-13T17:06:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    old = time.time() - 7200
+    os.utime(t, (old, old))
+
+    registry_path = tmp_path / "registry.json"
+    write_registry(
+        [
+            AgentEntry(
+                name="lead-harness-pi",
+                harness="claude",
+                harness_session_id=session_id,
+                status="orphaned",
+                origin="adopted",
+                cwd="/tmp/proj",
+                log_path="",
+                short_id="",
+            )
+        ],
+        path=registry_path,
+    )
+    monkeypatch.setattr(paths, "agents_registry_path", lambda: registry_path)
+
+
+def test_peek_resolves_a_quiet_session_by_short_session_id(tmp_path, monkeypatch):
+    """A session the roster, truth and mail all resolve must not read as gone.
+
+    x-f715: peek refused a short-id handle with "peer not found in the
+    registry" while three other readers resolved the same session. The refusal
+    named an absence the roster contradicted, and the role rerouted a launch
+    order on the strength of it.
+    """
+    session_id = "647b3a9c-6544-43fe-899e-704382f3d973"
+    _quiet_claude_fleet(tmp_path, monkeypatch, session_id)
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        session_id[:8],
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (None, []),
+        projects_root=tmp_path / "projects",
+        mux_lookup=lambda h: None,
+    )
+    assert rc == 0, err.getvalue()
+    assert "quiet but present" in out.getvalue()
+    assert "peer not found" not in err.getvalue()
+    assert "fno agents adopt" not in err.getvalue()
+
+
+def test_peek_follow_on_a_reachable_session_does_not_tail(tmp_path, monkeypatch):
+    """A row resolved by short id carries no live-writer proof; --follow must not block.
+
+    Same guard the recovered-row tests pin: the tail is the whole answer, and
+    liveness stays truth's verdict.
+    """
+    session_id = "647b3a9c-6544-43fe-899e-704382f3d973"
+    _quiet_claude_fleet(tmp_path, monkeypatch, session_id)
+
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        session_id[:8],
+        follow=True,
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (None, []),
+        projects_root=tmp_path / "projects",
+        mux_lookup=lambda h: None,
+    )
+    assert rc == 0
+    assert "quiet but present" in out.getvalue()
+    assert "no writer to tail" in err.getvalue()
+
+
 def test_status_events_with_nothing_to_scope_on_returns_nothing():
     """An unidentifiable session must not inherit the whole shared events file.
 
@@ -1336,3 +1468,229 @@ def test_status_events_with_nothing_to_scope_on_returns_nothing():
     from fno.agents.peek import _status_events
 
     assert _status_events(Path("/nonexistent"), "", "") == []
+
+
+# --------------------------------------------------------------------------
+# peek_grep — rank 9: transcript search with a reported count
+# --------------------------------------------------------------------------
+
+
+def _grep_transcript(tmp_path, sess, needle):
+    _claude_transcript(
+        tmp_path,
+        sess.cwd,
+        sess.session_id,
+        [
+            _user(f"working {needle} today"),
+            _assistant("unrelated reply"),
+            _user(f"again {needle} and again"),
+        ],
+    )
+
+
+def test_grep_returns_only_matching_records(tmp_path):
+    sess = _Session()
+    _grep_transcript(tmp_path, sess, "x-450f")
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "worker-x",
+        lines=10,
+        grep="x-450f",
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (sess, []),
+        projects_root=tmp_path,
+    )
+    assert rc == 0
+    body = out.getvalue()
+    assert "x-450f" in body
+    assert "unrelated reply" not in body
+    # The positive control: the count names what was searched, on stderr,
+    # keeping stdout parseable.
+    assert "2 matching record(s)" in err.getvalue()
+
+
+def test_grep_zero_hits_prints_count_and_exits_zero(tmp_path):
+    sess = _Session()
+    _grep_transcript(tmp_path, sess, "x-450f")
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "worker-x",
+        lines=10,
+        grep="absent-token",
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (sess, []),
+        projects_root=tmp_path,
+    )
+    assert rc == 0, "a measured zero is success, not failure"
+    assert "0 matching record(s)" in err.getvalue()
+    assert "no activity yet" in out.getvalue()
+
+
+def test_grep_json_stays_jsonl(tmp_path):
+    sess = _Session()
+    _grep_transcript(tmp_path, sess, "x-450f")
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "worker-x",
+        lines=10,
+        grep="x-450f",
+        json_out=True,
+        stdout=out,
+        stderr=err,
+        resolve=lambda h: (sess, []),
+        projects_root=tmp_path,
+    )
+    assert rc == 0
+    rows = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert len(rows) == 2
+    assert all(set(r) == {"role", "text"} for r in rows)
+
+
+def test_peek_all_spans_sessions_and_reports_both(tmp_path, monkeypatch):
+    """--all reads every registry session with a transcript; the summary names
+    sessions READ, so a zero-hit corpus never reads as an unsearched one."""
+    from types import SimpleNamespace
+
+    from fno.agents import registry as registry_mod
+
+    rows = [
+        SimpleNamespace(
+            harness="claude",
+            harness_session_id="sid-aaa",
+            cwd="/tmp/proj-a",
+        ),
+        SimpleNamespace(
+            harness="codex",
+            harness_session_id="sid-bbb",
+            cwd="/tmp/proj-b",
+        ),
+        SimpleNamespace(harness="claude", harness_session_id=None, cwd="/tmp"),
+    ]
+    monkeypatch.setattr(registry_mod, "load_registry", lambda p=None: rows)
+    # claude store for sid-aaa; codex needs a rollout path, so give the second
+    # row a claude transcript too by reusing the claude harness shape.
+    _claude_transcript(tmp_path, "/tmp/proj-a", "sid-aaa", [_user("hit x-450f here")])
+    rows[1].harness = "claude"
+    rows[1].cwd = "/tmp/proj-b"
+    _claude_transcript(tmp_path, "/tmp/proj-b", "sid-bbb", [_assistant("nothing here")])
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "",
+        lines=10,
+        all_sessions=True,
+        grep="x-450f",
+        stdout=out,
+        stderr=err,
+        projects_root=tmp_path,
+    )
+    assert rc == 0
+    assert "sid-aaa" in out.getvalue()
+    assert "sid-bbb" not in out.getvalue(), "a session with no hits emits no block"
+    assert "1 matching record(s) across 2 session(s)" in err.getvalue()
+
+
+def test_peek_all_without_grep_reads_every_session(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from fno.agents import registry as registry_mod
+
+    rows = [
+        SimpleNamespace(harness="claude", harness_session_id="sid-aaa", cwd="/tmp/proj-a"),
+        SimpleNamespace(harness="claude", harness_session_id="sid-bbb", cwd="/tmp/proj-b"),
+    ]
+    monkeypatch.setattr(registry_mod, "load_registry", lambda p=None: rows)
+    _claude_transcript(tmp_path, "/tmp/proj-a", "sid-aaa", [_user("alpha")])
+    _claude_transcript(tmp_path, "/tmp/proj-b", "sid-bbb", [_assistant("beta")])
+    out, err = io.StringIO(), io.StringIO()
+    rc = peek(
+        "",
+        lines=10,
+        all_sessions=True,
+        stdout=out,
+        stderr=err,
+        projects_root=tmp_path,
+    )
+    assert rc == 0
+    assert "alpha" in out.getvalue() and "beta" in out.getvalue()
+    assert "2 session(s) read" in err.getvalue()
+
+
+# --------------------------------------------------------------------------
+# the record reader's bounded tail (x-5f26)
+# --------------------------------------------------------------------------
+
+
+def _num(rec):
+    return rec["n"]
+
+
+def _numbered_jsonl(tmp_path, records):
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_records_reader_tail_returns_the_records_a_full_pass_returns(
+    tmp_path, monkeypatch
+):
+    # AC4-HP: a transcript larger than the tail window answers identically
+    # while parsing only the window.
+    from fno.agents import peek as peek_mod
+
+    monkeypatch.setattr(peek_mod, "_TAIL_BYTES", 4096)
+    path = _numbered_jsonl(tmp_path, [{"n": i, "pad": "x" * 64} for i in range(500)])
+    assert path.stat().st_size > 4096
+
+    seen: list = []
+
+    def parse(rec):
+        seen.append(rec["n"])
+        return rec["n"]
+
+    tail = peek_mod._records_from_jsonl(path, 40, parse)
+    full = peek_mod._records_from_jsonl(path, 40, _num, tail=False)
+    assert tail == full
+    assert len(tail) == 40 and tail[-1] == 499
+    assert len(seen) < 500, "the tail read must not parse every record"
+
+
+def test_records_reader_falls_back_to_the_whole_file_when_the_tail_is_thin(
+    tmp_path, monkeypatch
+):
+    # AC4-EDGE: the window holds one oversized record; the fallback answers
+    # exactly what a whole-file read answers.
+    from fno.agents import peek as peek_mod
+
+    monkeypatch.setattr(peek_mod, "_TAIL_BYTES", 4096)
+    records = [{"n": i, "pad": "x" * 64} for i in range(499)]
+    records.append({"n": 499, "pad": "x" * 8192})
+    path = _numbered_jsonl(tmp_path, records)
+
+    tail = peek_mod._records_from_jsonl(path, 40, _num)
+    full = peek_mod._records_from_jsonl(path, 40, _num, tail=False)
+    assert tail == full
+    assert len(tail) == 40 and tail[-1] == 499
+
+
+def test_records_reader_tolerates_a_seek_inside_a_line_or_character(tmp_path, monkeypatch):
+    # AC4-ERR: the seek lands mid-line and mid-multibyte-character; the
+    # fragment parses as nothing and the answer is unchanged.
+    from fno.agents import peek as peek_mod
+
+    records = [{"n": i, "pad": "x" * 32} for i in range(50)]
+    records.insert(25, {"n": -1, "pad": "é" * 40})
+    path = _numbered_jsonl(tmp_path, records)
+    raw = path.read_bytes()
+    # Seek onto the SECOND byte of the two-byte é: a torn, undecodable fragment.
+    landing = raw.index("é".encode()) + 1
+    monkeypatch.setattr(peek_mod, "_TAIL_BYTES", len(raw) - landing)
+
+    tail = peek_mod._records_from_jsonl(path, 40, _num)
+    full = peek_mod._records_from_jsonl(path, 40, _num, tail=False)
+    assert tail == full
+    assert len(tail) == 40

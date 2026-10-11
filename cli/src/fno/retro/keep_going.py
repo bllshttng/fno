@@ -1,4 +1,4 @@
-"""Autonomous keep-going engine (x-3360): classify surviving carve-out
+"""Autonomous keep-going engine : classify surviving carve-out
 follow-ups into think/build/file arms and dispatch under a shared per-day
 firehose ceiling.
 
@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from fno import _subprocess_util
-from fno.agents.naming import AgentNameError, agent_name
+from fno.agents.naming import AgentNameError, dispatch_agent_name
 from fno.provenance.spawn_think import (
     _bump_daily_count,
     _daily_cap,
@@ -70,7 +70,7 @@ def keep_going_enabled(
 
     Precedence (mirrors ``spawn_think.think_spawn_enabled``):
       0. ``config.autonomy.enabled`` master panic switch off -> disabled,
-         checked before the env override even (x-aaaf wave 3).
+         checked before the env override even (wave 3).
       1. ``FNO_KEEP_GOING`` env override (explicit force on/off).
       2. ``config.keep_going.enabled`` from the repo settings (local > global).
       3. default False.
@@ -183,11 +183,11 @@ def _spawn_target_worker(node_id: str, cwd: Optional[str]) -> bool:
     """Fire-and-forget bg ``/target --no-merge <node>`` worker (the next loop
     iteration). ``--no-merge`` because an autonomous worker lands a PR for review,
     never an auto-merge. Mirrors ``spawn_think._spawn_think_worker``: the slash
-    command rides as the prompt, ``--substrate bg`` is the detached claude thread
+    command rides as the prompt, ``--substrate thread`` is the detached claude thread
     (never ``-p``). Returns True on a spawn receipt (a short_id), False otherwise.
     """
     try:
-        name = agent_name("keepgo", node_id)
+        name = dispatch_agent_name("kg", "t", node_id, slug="follow-up")
     except AgentNameError as exc:
         # warning, not debug: the caller only prints "dispatch failed", so at
         # default level the operator cannot tell a permanent unrepresentable name
@@ -201,8 +201,12 @@ def _spawn_target_worker(node_id: str, cwd: Optional[str]) -> bool:
         cmd += ["--cwd", cwd]
     else:
         cmd += ["--fresh"]
-    cmd += ["--name", name, f"/target --no-merge {node_id}"]
-    # x-9d11: the env carrier backs the hardcoded flag - a worker that drops
+    # the spelling comes from harness_map.AUTONOMOUS_COMMAND, never a
+    # second hardcoded string that drifts.
+    from fno.agents.harness_map import AUTONOMOUS_COMMAND
+
+    cmd += ["--name", name, AUTONOMOUS_COMMAND.format(id=node_id)]
+    # the env carrier backs the hardcoded flag - a worker that drops
     # the flag post-compaction still folds the refusal at init (this lane does
     # not route through resolve_dispatch, so nobody else sets it).
     env = {**os.environ, "TARGET_NO_MERGE": "1"}

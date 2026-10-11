@@ -224,7 +224,7 @@ fno agents spawn --harness "$PROVIDER" --headless -t 300 --name "peer-$TARGET" "
 - `--name peer-$TARGET` is a throwaway handle (`--headless` tears the agent down); derive it
   from the target, e.g. `peer-pr657` or `peer-fix-ratios`.
 
-### 3b. GENERATE (routed claude -> GLM) - claude CLI as transport (x-ef41)
+### 3b. GENERATE (routed claude -> GLM) - claude CLI as transport
 
 For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), do NOT `fno agents spawn`. The claude CLI is only the transport. The review model is the routed one (GLM via z.ai).
 
@@ -297,7 +297,7 @@ Do not infer the verdict from exit code, non-empty prose, sentiment, or a hand-w
 
 Do not auto-apply. Summarize the P1/P2 findings and ask whether to address them. P3 nits are optional - call them out, let the user choose.
 
-**Termination (the round budget).** A blocking finding is cleared by fixing it. The next review covers the fix delta. Nothing else clears it on your own signature. A non-blocking finding needs no action to clear the gate. Answer it in thread or skip it. Note the skip rather than arguing with it. When the gate reports IMPOSSIBLE, stop. Do not request another review. At the round cap without a hard finding the gate FILES the remainder and the PR merges, so a fourth round is never the answer. Report the blocking findings and the two remedies to the operator. The remedies are a non-author GitHub approval on the PR, or the coverage-override label. A refused gate escalates. The round budget bounds the fno review lane's rounds exactly as it bounds peer's, and a bare `/fno:review` is the default reviewer there. Cleanup-class material (style, dead code, naming) never buys a round in either lane. That material belongs to `/fno:review cleanup`, which applies or skips with no gate weight.
+The canonical round budget and termination rule is the [review-cap gate](../SKILL.md#review-cap-gate). The budget bounds peer's rounds exactly as it bounds the lane's. A bare `/fno:review` is the default reviewer there. Cleanup-class material belongs to `/fno:review cleanup` and never buys a round.
 
 ### 6. ATTEST (only with `--attest`) - the identity-free local gate
 
@@ -311,7 +311,7 @@ The consumer requires the exact terminal JSON record, counts the syntactically d
 A valid clean verdict with zero findings emits `review_attestation` for reviewer `peer` with verdict `pass` at the current HEAD.
 A valid blocked verdict, or any invalid output, emits `fail` when possible and exits non-zero, so the gate remains unmet and loop-check reports local work to do.
 
-After any fix commit the old attestation is stale by design. The next review covers the fix delta. The round budget bounds how many rounds that loop can take (`fno do pr status` shows it). An exhausted budget is IMPOSSIBLE, not one more round.
+After a fix commit, the next review covers the fix delta. The round budget bounds how many rounds that loop can take (`fno do pr status` shows it). At the cap, the review phase is complete. Open findings stay in the PR conversation, and the PR merges on green CI. On Claude, the Skill-tool hook refuses a further round past the cap. A request that meets no hook is not refused. Read the budget first.
 
 ### 7. POST (only with `--post`) - the legacy identity-backed gate
 
@@ -375,7 +375,7 @@ review, or whose post to GitHub failed, must be reported, not papered over.
    guard honors a route for claude only.
    Layered defense: the loader rejects a bare/anthropic-routed `claude` peer at
    load (fail-early for the dominant claude author) and loop-check's gate-time
-   guard (x-c2e7) holds the gate for any same-model author - this RESOLVE refusal
+   guard holds the gate for any same-model author - this RESOLVE refusal
    is the earliest, advisory layer.
 4. **Advisory by default; explicit evidence carrier for gating.** Bare `/review peer` is advisory.
    `--attest` gates identity-free peers through a strictly validated, head-pinned local verdict and requires no GitHub identity.

@@ -18,6 +18,7 @@ import typer
 from typer.testing import CliRunner
 
 from fno.config import ReviewerDescriptor, load_settings
+from fno.paths import target_state_path
 from fno.review_capability import (
     SessionCapability,
     detect_session,
@@ -78,13 +79,11 @@ def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reviewers: str) -> 
     cfg = tmp_path / "settings.yaml"
     cfg.write_text(f"schema_version: 1\nconfig:\n  review:\n    reviewers: {reviewers}\n")
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
-    load_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     yield
-    load_settings.cache_clear()
 
 
 # --- AC1: refuse at init -----------------------------------------------------
@@ -154,7 +153,6 @@ def test_init_refuses_identity_free_peers_when_all_are_same_model(
     cfg.write_text('[review]\npeers = ["codex"]\n')
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("CODEX_THREAD_ID", "c1")
-    load_settings.cache_clear()
     with pytest.raises(typer.Exit) as exc:
         _refuse_unsatisfiable_reviewers()
     assert exc.value.exit_code == 2
@@ -170,7 +168,6 @@ def test_init_allows_identity_free_peers_with_cross_model_option(
     )
     monkeypatch.setenv("FNO_CONFIG", str(cfg))
     monkeypatch.setenv("CODEX_THREAD_ID", "c1")
-    load_settings.cache_clear()
     _refuse_unsatisfiable_reviewers()
 
 
@@ -497,7 +494,6 @@ def _invoke_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reviewers: str
         monkeypatch.delenv(var, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    load_settings.cache_clear()
     from fno.cli import app
 
     return CliRunner().invoke(app, ["do", "target", "init", "--input", "some-feature"])
@@ -565,7 +561,11 @@ def test_init_command_writes_no_state_when_it_refuses(
     )
 
     assert r.exit_code == 2
+    # Absence at BOTH resolutions: the refusal runs before the script, so if it
+    # regressed, the script would write the space path and a legacy-only check
+    # would still pass (conftest pins FNO_SPACES_DIR for this process).
     assert not (repo / ".fno" / "target-state.md").exists()
+    assert not target_state_path(repo).exists()
 
 
 def test_codex_can_satisfy_a_subagent_dispatch_gate():
@@ -690,7 +690,6 @@ def _invoke_init_apps(
         monkeypatch.delenv(var, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    load_settings.cache_clear()
     from fno.cli import app
 
     return CliRunner().invoke(app, ["do", "target", "init", "--input", "some-feature"])
@@ -747,7 +746,6 @@ def _invoke_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, review_block: 
         monkeypatch.delenv(var, raising=False)
     for k, v in (env or {}).items():
         monkeypatch.setenv(k, v)
-    load_settings.cache_clear()
     from fno.cli import app
 
     return CliRunner().invoke(app, ["do", "target", "check-review-gate"])
@@ -882,7 +880,6 @@ def test_refusal_code_is_one_click_can_never_produce(
     assert REVIEW_GATE_REFUSED not in (0, 1, 2)
 
     monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "absent.yaml"))
-    load_settings.cache_clear()
     stale = CliRunner().invoke(app, ["do", "target", "no-such-verb-x4a60"])
     assert stale.exit_code == 2
     assert stale.exit_code != REVIEW_GATE_REFUSED

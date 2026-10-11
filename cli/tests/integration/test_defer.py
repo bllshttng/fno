@@ -7,9 +7,9 @@ Covers:
 - ``--include-deferred`` flag on ``ready`` / ``next``
 - ``status`` summary surfaces a ``deferred`` count
 - ``triage`` proposal action (validate + apply)
-- Legacy ``completed_at: "deferred:<ts>"`` rows migrate to the new schema
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -18,15 +18,21 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
+from tests.conftest import run_native_create
+from tests.goldens._door import door_graph
 
 runner = CliRunner()
+
+# x-665f: the verbs are transports over the native patch door, so the module
+# needs this checkout's fno-agents build pinned for every test.
+pytestmark = pytest.mark.usefixtures("native_backlog_door")
 
 
 @pytest.fixture
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     """Fresh empty graph.json routed to tmp_path."""
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     import fno.graph._constants as gc
     import fno.graph.store as gs
 
@@ -41,11 +47,63 @@ def tmp_graph(tmp_path, monkeypatch) -> Path:
 
 
 def _invoke(*args, input=None):
-    return runner.invoke(app, list(args), input=input, catch_exceptions=False)
+    argv = list(args)
+    if "backlog" in argv:
+        index = argv.index("backlog")
+        if argv[index : index + 2] == ["backlog", "add"] and "--difficulty" not in argv:
+            argv.extend(["--difficulty", "medium"])
+    return runner.invoke(app, argv, input=input, catch_exceptions=False)
+
+
+def _native_update(g: Path, *args: str):
+    """The update leaf answers natively; drive the dev binary over the same
+    store the fixture seeded."""
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    proc = _sp.run(
+        [str(binary), "backlog", "update", *args],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": _os.environ["PATH"],
+            "HOME": str(g.parent),
+            "FNO_STATE_DIR": str(g.parent),
+            "FNO_TRACKER_BACKEND": "graph",
+        },
+        cwd=str(g.parent),
+    )
+    return proc.returncode, proc.stdout + proc.stderr
 
 
 def _read_entries(g: Path) -> list[dict]:
-    return json.loads(g.read_text()).get("entries", [])
+    # The store owns state; graph.json is a frozen export, so post-command
+    # assertions read store rows, not the file.
+    from fno.graph.store import read_graph_strict
+
+    return read_graph_strict(g)
+
+
+def _mark_done(g: Path, node_id: str) -> None:
+    """Arrange a done node straight through the store. The close itself is
+    native, and this file's subject is what a done node does downstream, not
+    the close, so the arrangement seeds the same row state a close leaves."""
+    from fno.graph.store import commit_rows_via_store
+
+    def stamp(rows):
+        for e in rows:
+            if e["id"] == node_id:
+                e["status"] = "done"
+                e["completed_at"] = "2026-04-01T00:00:00+00:00"
+        return rows
+
+    commit_rows_via_store(g, stamp)
 
 
 def _seed_with_plan(tmp_path, title: str = "Plan") -> str:
@@ -53,12 +111,9 @@ def _seed_with_plan(tmp_path, title: str = "Plan") -> str:
     plan.write_text(f"---\ncreated: 2026-05-05\ntitle: {title}\n---\n# Body\n\n\n## Files to Modify\n\n| File | Action |\n|---|---|\n| `cli/src/fno/example.py` | modify |\n")
     r = _invoke("backlog", "intake", str(plan))
     assert r.exit_code == 0, r.output
-    entries = json.loads(open(plan.parent.parent / "graph.json").read_text())["entries"] \
-        if (plan.parent.parent / "graph.json").exists() else []
-    if not entries:
-        # Resolve via the runner's graph_path (tmp_graph fixture sets it).
-        from fno.graph._constants import GRAPH_JSON
-        entries = json.loads(Path(GRAPH_JSON).read_text())["entries"]
+    from fno.graph._constants import GRAPH_JSON
+
+    entries = _read_entries(Path(GRAPH_JSON))
     return next(e["id"] for e in entries if e.get("plan_path") == str(plan))
 
 
@@ -85,7 +140,7 @@ def test_status_deferred_derived_from_field(tmp_graph, tmp_path):
 
 def test_deferred_overrides_blocked(tmp_graph, tmp_path):
     """Deferred wins over blocked-by an unresolved blocker."""
-    a = _invoke("--json", "backlog", "add", "Blocker A")
+    a = run_native_create(tmp_graph, "add", "Blocker A", "--difficulty", "medium")
     blocker_id = json.loads(a.stdout)["id"]
 
     plan = tmp_path / "blocked-plan.md"
@@ -107,63 +162,32 @@ def test_deferred_overrides_blocked(tmp_graph, tmp_path):
 def test_deferred_does_not_override_done(tmp_graph, tmp_path):
     """Done wins over deferred. A completed node stays done."""
     node_id = _seed_with_plan(tmp_path, "Plan Done")
-    _invoke("backlog", "done", node_id, "--skip-stamp")
+    _native_update(tmp_graph, node_id, "--completion-note", "done-beats-deferred fixture")
+    _mark_done(tmp_graph, node_id)
 
     entries = _read_entries(tmp_graph)
     node = next(e for e in entries if e["id"] == node_id)
     assert node.get("status") == "done"
 
-    # Force-set deferred_at via direct mutation; recompute should still pick done.
-    import fno.graph._constants as gc
-    data = json.loads(gc.GRAPH_JSON.read_text())
-    for e in data["entries"]:
-        if e["id"] == node_id:
-            e["deferred_at"] = "2026-04-30T00:00:00+00:00"
-            e["deferred_reason"] = "should not surface"
-    gc.GRAPH_JSON.write_text(json.dumps(data))
+    # Force-set deferred_at via direct store mutation; recompute should still pick done.
+    from fno.graph.store import commit_rows_via_store
+
+    def stamp_deferred(rows):
+        for e in rows:
+            if e["id"] == node_id:
+                e["deferred_at"] = "2026-04-30T00:00:00+00:00"
+                e["deferred_reason"] = "should not surface"
+        return rows
+
+    commit_rows_via_store(tmp_graph, stamp_deferred)
 
     # Trigger recompute via any mutation
-    _invoke("backlog", "add", "trigger")
+    run_native_create(tmp_graph, "add", "trigger", "--difficulty", "medium")
     entries = _read_entries(tmp_graph)
     node = next(e for e in entries if e["id"] == node_id)
     assert node.get("status") == "done", (
         f"done must beat deferred; got {node.get('status')!r}"
     )
-
-
-def test_legacy_deferred_completed_at_migrates(tmp_graph):
-    """Pre-feature rows with ``completed_at: "deferred:<ts>"`` flip to the new schema."""
-    legacy_ts = "2026-04-01T12:00:00+00:00"
-    tmp_graph.write_text(json.dumps({
-        "entries": [
-            {
-                "id": "ab-legacy42",
-                "title": "Legacy deferred row",
-                "type": "feature",
-                "priority": "p2",
-                "domain": "code",
-                "blocked_by": [],
-                "session_id": None,
-                "claimed_at": None,
-                "completed_at": f"deferred:{legacy_ts}",
-                "plan_path": "plan.md",
-                "created_at": "2026-04-01T00:00:00+00:00",
-            }
-        ]
-    }))
-
-    # Trigger recompute via any mutation.
-    _invoke("backlog", "add", "trigger migration")
-
-    entries = _read_entries(tmp_graph)
-    legacy = next(e for e in entries if e["id"] == "ab-legacy42")
-    assert legacy.get("completed_at") in (None, ""), (
-        f"legacy completed_at prefix should be cleared; got {legacy.get('completed_at')!r}"
-    )
-    assert legacy.get("deferred_at") == legacy_ts, (
-        f"deferred_at should be migrated from the prefix; got {legacy.get('deferred_at')!r}"
-    )
-    assert legacy.get("status") == "deferred"
 
 
 # ---------------------------------------------------------------------------
@@ -226,15 +250,16 @@ def test_undefer_warns_when_not_deferred(tmp_graph, tmp_path):
     )
 
 
-def test_defer_after_done_transitions_to_deferred(tmp_graph, tmp_path):
-    """Deferring an already-done node clears completed_at so the cascade flips to deferred.
-
-    Regression for Gemini external-review finding: without clearing
-    completed_at, the `done > deferred` precedence in recompute_statuses
-    would silently keep the row pinned to done.
+def test_defer_a_done_node_refuses_naming_reopen(tmp_graph, tmp_path):
+    """x-665f: leaving done is `fno backlog reopen`'s door. The old behavior
+    (deferring a done node cleared completed_at inline) is retired: the
+    merged-PR cross-check and the parent cascade live in reopen, and a
+    parallel write path that skips them is exactly the false-receipt shape
+    the patch door exists to close.
     """
     node_id = _seed_with_plan(tmp_path, "Plan Done Then Defer")
-    _invoke("backlog", "done", node_id, "--skip-stamp")
+    _native_update(tmp_graph, node_id, "--completion-note", "done-door fixture")
+    _mark_done(tmp_graph, node_id)
 
     entries = _read_entries(tmp_graph)
     node = next(e for e in entries if e["id"] == node_id)
@@ -242,22 +267,18 @@ def test_defer_after_done_transitions_to_deferred(tmp_graph, tmp_path):
     assert node.get("completed_at")
 
     r = _invoke("backlog", "defer", node_id, "--reason", "reopened, parking it")
-    assert r.exit_code == 0, r.output
+    assert r.exit_code == 2, r.output
+    assert "fno backlog reopen" in r.output
 
-    entries = _read_entries(tmp_graph)
-    node = next(e for e in entries if e["id"] == node_id)
-    assert node.get("completed_at") in (None, ""), (
-        f"completed_at must be cleared when deferring; got {node.get('completed_at')!r}"
-    )
-    assert node.get("deferred_at"), "deferred_at must be set"
-    assert node.get("status") == "deferred", (
-        f"cascade must flip to deferred after defer; got {node.get('status')!r}"
-    )
+    node = next(e for e in _read_entries(tmp_graph) if e["id"] == node_id)
+    assert node.get("completed_at"), "the done node must be untouched on refusal"
+    assert node.get("status") == "done"
 
 
 def test_triage_defer_after_done_transitions_to_deferred(tmp_graph, tmp_path):
     """Triage apply lands the same done -> deferred transition cleanly."""
     node_id = _seed_with_plan(tmp_path, "Plan Triage Done Then Defer")
+    _native_update(tmp_graph, node_id, "--completion-note", "triage defer fixture")
     _invoke("backlog", "done", node_id, "--skip-stamp")
 
     proposal = tmp_path / "p.json"
@@ -338,9 +359,9 @@ def test_deferred_excluded_from_next_default(tmp_graph, tmp_path):
     a_id = next(e["id"] for e in entries if e.get("plan_path") == str(plan_a))
     _invoke("backlog", "defer", a_id, "--reason", "stale p1")
 
-    r = _invoke("backlog", "next", "--all")
-    assert r.exit_code == 0, r.output
-    payload = json.loads(r.stdout)
+    code, out, err = door_graph(tmp_graph, "next", "--all")
+    assert code == 0, err
+    payload = json.loads(out)
     assert payload is not None
     assert payload["id"] != a_id, "deferred p1 should not be picked over ready p2"
 
@@ -370,11 +391,12 @@ def test_status_summary_shows_deferred_count(tmp_graph, tmp_path):
 def test_triage_defer_proposal_validates_and_applies(tmp_graph, tmp_path):
     """A proposal with a defer entry validates clean and applies the defer."""
     node_id = _seed_with_plan(tmp_path, "Plan Triage Defer")
-    graph = json.loads(tmp_graph.read_text())
-    graph["entries"].append(
+    # The file is a frozen mirror; the folded child seeds through the store.
+    from fno.graph.store import commit_rows_via_store
+
+    commit_rows_via_store(tmp_graph, lambda rows: rows + [
         {"id": "x-f01d", "title": "Folded", "contained_in": node_id, "status": "ready"}
-    )
-    tmp_graph.write_text(json.dumps(graph))
+    ])
 
     proposal = tmp_path / "proposal.json"
     proposal.write_text(json.dumps({
@@ -470,10 +492,10 @@ def test_triage_apply_exits_nonzero_on_drops(tmp_graph, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _seed_idea(label: str) -> str:
+def _seed_idea(g, label: str) -> str:
     """File a bare idea node and return its id."""
-    r = _invoke("--json", "backlog", "add", label)
-    assert r.exit_code == 0, r.output
+    r = run_native_create(g, "add", label, "--difficulty", "medium")
+    assert r.exit_code == 0, r.stderr
     return json.loads(r.stdout)["id"]
 
 
@@ -523,24 +545,27 @@ def test_batch_defer_dedups_repeated_ids(tmp_graph, tmp_path):
     assert node.get("status") == "deferred"
 
 
-def test_batch_defer_enters_lock_once(tmp_graph, tmp_path, monkeypatch):
-    """AC3-CON: a batch of N>1 ids enters locked_mutate_graph exactly once."""
-    import fno.graph.store as gs
+def test_batch_defer_walks_the_door_once_per_id(tmp_graph, tmp_path, monkeypatch):
+    """x-665f: a batch of N ids is N door rounds, after ONE batch-wide
+    pre-check. The pre-check (not a shared write) is what keeps the unknown-id
+    abort atomic; the door owns every write."""
+    import fno.graph.note_cli as note_cli
 
     ids = [_seed_with_plan(tmp_path, f"Lock {n}") for n in range(3)]
-    calls: list[int] = []
-    orig = gs.locked_mutate_graph
+    calls: list[tuple[str, list[str]]] = []
+    orig = note_cli.native_update
 
-    def spy(*args, **kwargs):
-        calls.append(1)
-        return orig(*args, **kwargs)
+    def spy(node_id, args, **kwargs):
+        calls.append((node_id, list(args)))
+        return orig(node_id, args, **kwargs)
 
-    monkeypatch.setattr(gs, "locked_mutate_graph", spy)
+    monkeypatch.setattr(note_cli, "native_update", spy)
 
     r = _invoke("backlog", "defer", *ids, "--reason", "stale")
     assert r.exit_code == 0, r.output
-    assert len(calls) == 1, f"batch must enter locked_mutate_graph once, got {len(calls)}"
-    # Delegation still mutated every node.
+    assert [c[0] for c in calls] == ids, f"one door round per id, got {calls}"
+    for _, args in calls:
+        assert "--status" in args and "deferred" in args
     by_id = {e["id"]: e for e in _read_entries(tmp_graph)}
     assert all(by_id[nid].get("status") == "deferred" for nid in ids)
 
@@ -578,27 +603,23 @@ def test_batch_defer_requires_at_least_one_id(tmp_graph, tmp_path):
     )
 
 
-def test_batch_defer_mixed_done_and_idea(tmp_graph, tmp_path):
-    """AC7-EDGE: a done node and an idea node both flip to deferred in one batch.
-
-    Proves completed_at is cleared per node inside the loop; the done > deferred
-    precedence would otherwise pin the done node to done.
-    """
+def test_batch_defer_with_a_done_node_refuses_naming_reopen(tmp_graph, tmp_path):
+    """x-665f: the door refuses leaving done, so a batch naming a done node
+    (first) refuses before the other ids are written."""
     done_node = _seed_with_plan(tmp_path, "Batch Done")
-    _invoke("backlog", "done", done_node, "--skip-stamp")
-    idea_node = _seed_idea("Batch Idea")
+    _native_update(tmp_graph, done_node, "--completion-note", "batch defer fixture")
+    _mark_done(tmp_graph, done_node)
+    idea_node = _seed_idea(tmp_graph, "Batch Idea")
 
     r = _invoke("backlog", "defer", done_node, idea_node, "--reason", "park")
-    assert r.exit_code == 0, r.output
+    assert r.exit_code == 2, r.output
+    assert "fno backlog reopen" in r.output
 
     by_id = {e["id"]: e for e in _read_entries(tmp_graph)}
-    for nid in (done_node, idea_node):
-        node = by_id[nid]
-        assert node.get("completed_at") in (None, ""), (
-            f"{nid} completed_at must be cleared; got {node.get('completed_at')!r}"
-        )
-        assert node.get("deferred_at")
-        assert node.get("status") == "deferred", f"{nid} status={node.get('status')!r}"
+    assert by_id[done_node].get("status") == "done"
+    assert not by_id[idea_node].get("deferred_at"), (
+        "the door refused before reaching the later id"
+    )
 
 
 def test_batch_undefer_clears_all_and_emits_per_node(tmp_graph, tmp_path, monkeypatch):
@@ -649,3 +670,75 @@ def test_batch_undefer_warns_for_non_deferred(tmp_graph, tmp_path, monkeypatch):
     assert deferred in emitted and fresh not in emitted, (
         f"event should fire only for deferred nodes; got {emitted}"
     )
+
+
+# -- undefer prints what it clears (x-6f98) --
+
+
+def test_undefer_prints_the_cleared_reason_and_any_plan_ruling(
+    tmp_graph, tmp_path, monkeypatch
+):
+    """AC5-HP (x-6f98): the reversal reads back what it erased."""
+    node_id = _seed_with_plan(tmp_path, "Ruled Out Node")
+    _invoke("backlog", "defer", node_id, "--kind", "wont_do", "--reason", "R")
+
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "plan-x-aaaa.md").write_text(
+        f"---\nclaims: x-aaaa\ntitle: T\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        f"    - id: {node_id}\n"
+        "      reason: R\n"
+        "---\n\n# T\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: plans)
+
+    r = _invoke("backlog", "undefer", node_id)
+
+    assert r.exit_code == 0, r.output
+    assert f"undefer: cleared the deferral of {node_id} (wont_do): R" in r.stderr
+    assert f"undefer: {node_id} is rejected by x-aaaa" in r.stderr
+    assert str(plans / "plan-x-aaaa.md") in r.stderr
+    assert f"Undeferred {node_id}" in r.stdout
+    node = next(e for e in _read_entries(tmp_graph) if e["id"] == node_id)
+    assert not node.get("deferred_at")
+
+
+def test_undefer_without_a_ruling_prints_no_ruling_line(tmp_graph, tmp_path, monkeypatch):
+    """AC5-EDGE: a cleared reason stands alone when no plan rejects the node."""
+    node_id = _seed_with_plan(tmp_path, "Plain Deferred")
+    _invoke("backlog", "defer", node_id, "--kind", "later", "--reason", "parked for now")
+
+    empty = tmp_path / "plans-empty"
+    empty.mkdir()
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: empty)
+
+    r = _invoke("backlog", "undefer", node_id)
+
+    assert r.exit_code == 0, r.output
+    assert (
+        f"undefer: cleared the deferral of {node_id} (later): parked for now"
+        in r.stderr
+    )
+    assert "rejected by" not in r.stderr
+
+
+def test_undefer_names_an_unreadable_plans_dir_and_still_succeeds(
+    tmp_graph, tmp_path, monkeypatch
+):
+    """AC5-EDGE: a broken scan is named, never folded into silence or a refusal."""
+    node_id = _seed_with_plan(tmp_path, "Unreadable Plans")
+    _invoke("backlog", "defer", node_id, "--reason", "stale")
+
+    missing = tmp_path / "no" / "such" / "dir"
+    monkeypatch.setattr("fno.paths.plans_content_dir", lambda project_root=None: missing)
+
+    r = _invoke("backlog", "undefer", node_id)
+
+    assert r.exit_code == 0, r.output
+    assert "plan rulings for" in r.stderr
+    assert "not read" in r.stderr
+    assert f"Undeferred {node_id}" in r.stdout

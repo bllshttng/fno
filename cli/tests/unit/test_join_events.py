@@ -41,13 +41,9 @@ def journal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _rows(journal: Path) -> list[dict[str, Any]]:
-    if not journal.exists():
-        return []
-    return [
-        json.loads(line)
-        for line in journal.read_text().splitlines()
-        if line.strip()
-    ]
+    from tests._event_rows import event_rows
+
+    return event_rows(journal)
 
 
 def test_join_emits_one_dispatched_event_carrying_the_brief_inputs(
@@ -70,7 +66,7 @@ def test_join_emits_one_dispatched_event_carrying_the_brief_inputs(
     assert row["requested"] == 3
     assert row["spawned"] == receipt["spawned"]
     assert len(row["spawned"]) == 2
-    assert row["lead"] == receipt["lead"] == "j-x-8d1d-1"
+    assert row["lead"] == receipt["lead"] == "jn-t-8d1d-1"
     assert row["bands"] == {name: "" for name in row["spawned"]}
 
 

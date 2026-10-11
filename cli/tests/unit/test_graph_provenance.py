@@ -5,6 +5,7 @@ Tests for:
 - Task 1.3: query_by_source_inbox_msg helper in load.py
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -17,9 +18,17 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _make_graph(tmp_path: Path, entries: list[dict]) -> Path:
-    """Write a graph.json with the given entries and return its path."""
+    """Write a graph.json with the given entries and return its path. Rows
+    are stamped the way the store writes them: the typed api drops a row
+    the model cannot parse, so seeds carry the required fields."""
+    complete = []
+    for e in entries:
+        row = {"type": "feature", "priority": "p2", "status": "idea", **e}
+        row.setdefault("title", e.get("id", "node"))
+        row.setdefault("slug", e.get("id", "node"))
+        complete.append(row)
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": entries}, indent=2) + "\n")
+    seed_graph(g, json.dumps({"entries": complete}, indent=2) + "\n")
     return g
 
 
@@ -100,9 +109,9 @@ def test_ac4_edge_kanban_render_does_not_crash_with_provenance_fields(tmp_path, 
     _patch_graph(monkeypatch, g)
 
     from fno.graph.render import render_graph_md
-    from fno.graph.store import read_graph
+    from fno.graph.store import read_graph_strict
 
-    entries = read_graph(g)
+    entries = read_graph_strict(g)
     out_path = tmp_path / "graph.md"
     # Must not crash
     render_graph_md(entries, path=out_path)
@@ -129,58 +138,56 @@ def test_ac4_edge_provenance_survives_save_reload(tmp_path, monkeypatch):
     ])
     _patch_graph(monkeypatch, g)
 
-    from fno.graph.store import read_graph, locked_mutate_graph
+    from fno.graph.store import read_graph_strict, commit_rows_via_store
 
     # Verify field is queryable after read
-    entries = read_graph(g)
+    entries = read_graph_strict(g)
     assert entries[0]["source_inbox_msg"] == "msg-a4f1"
 
-    # Trigger a save/reload cycle via locked_mutate_graph (identity mutation)
+    # Trigger a save/reload cycle via commit_rows_via_store (identity mutation)
     def identity(es: list[dict]) -> list[dict]:
         return es
 
-    locked_mutate_graph(g, identity)
+    commit_rows_via_store(g, identity)
 
     # Reload and verify persistence
-    reloaded = read_graph(g)
+    reloaded = read_graph_strict(g)
     assert len(reloaded) == 1
     assert reloaded[0]["source_inbox_msg"] == "msg-a4f1"
     assert reloaded[0]["source_kind"] == "from_inbox"
 
 
-def test_us6_harness_stamp_written_and_cleared(tmp_path, monkeypatch):
-    """US6: `update --locked-by X --locked-by-harness ...` stamps the holder's
-    provider + harness UUID over a stale owner; --locked-by null clears all three."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
+def test_successor_reacquire_projects_the_new_lockfile_holder(tmp_path, monkeypatch):
+    """AC13-EDGE: successor acquire replaces the released holder in the read
+    projection without a graph stamp."""
+    import os
 
-    g = _make_graph(tmp_path, [{
-        "id": "ab-harnes01", "title": "t", "plan_path": "p.md",
-        "session_id": "stale-owner", "claimed_at": "2020-01-01T00:00:00Z",
-    }])
+    from fno.claims.core import acquire_claim, release_claim
+    from fno.graph.store import read_graph_strict
+
+    g = _make_graph(tmp_path, [{"id": "x-reacq001", "title": "t", "plan_path": "p.md"}])
     _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
+    root = tmp_path / "claims"
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(root))
+    old = acquire_claim(
+        "node:x-reacq001", "target-session:old-session", pid=os.getpid(), root=root
+    )
+    assert release_claim(old.key, old.holder, root=root) is not None
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "new-session")
+    new = acquire_claim(
+        "node:x-reacq001",
+        "target-session:new-session",
+        pid=os.getpid(),
+        root=root,
+        reason="target start successor re-acquire",
+    )
 
-    r = CliRunner().invoke(C.cli, [
-        "update", "ab-harnes01", "--locked-by", "new-owner",
-        "--locked-by-harness", "claude", "--locked-by-harness-session", "uuid-9",
-    ])
-    assert r.exit_code == 0, r.output
-    node = read_graph(g)[0]
-    assert node["locked_by"] == "new-owner"          # stale owner overwritten
-    assert node["session_id"] == "new-owner"          # mirror synced
-    assert node["locked_by_harness"] == "claude"
-    assert node["locked_by_harness_session"] == "uuid-9"
-    assert node["status"] == "in_progress"
-
-    r2 = CliRunner().invoke(C.cli, ["update", "ab-harnes01", "--locked-by", "null"])
-    assert r2.exit_code == 0, r2.output
-    cleared = read_graph(g)[0]
-    assert cleared["locked_by"] is None
-    assert cleared["locked_by_harness"] is None
-    assert cleared["locked_by_harness_session"] is None
-    assert cleared["status"] == "ready"
+    row = read_graph_strict(g)[0]
+    assert row["locked_by"] == "new-session"
+    assert row["locked_by_harness_session"] == "new-session"
+    assert row["locked_at"] is not None
+    assert new.holder == "target-session:new-session"
+    assert new.reason == "target start successor re-acquire"
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +240,7 @@ def test_ac_err_existing_parent_edge_preserved():
 
 
 def test_ac_edge_parent_edge_survives_save_reload(tmp_path, monkeypatch):
-    """AC (x-30f6): source_node_id + spawned_by_* round-trip through locked_mutate_graph without loss."""
+    """AC (x-30f6): source_node_id + spawned_by_* round-trip through commit_rows_via_store without loss."""
     g = _make_graph(tmp_path, [
         {
             "id": "ab-rt000001",
@@ -249,13 +256,13 @@ def test_ac_edge_parent_edge_survives_save_reload(tmp_path, monkeypatch):
     ])
     _patch_graph(monkeypatch, g)
 
-    from fno.graph.store import read_graph, locked_mutate_graph
+    from fno.graph.store import read_graph_strict, commit_rows_via_store
 
     def identity(es: list[dict]) -> list[dict]:
         return es
 
-    locked_mutate_graph(g, identity)
-    reloaded = read_graph(g)
+    commit_rows_via_store(g, identity)
+    reloaded = read_graph_strict(g)
     assert reloaded[0]["source_node_id"] == "ab-origin02"
     assert reloaded[0]["spawned_by_session"] == "deadbeef"
     assert reloaded[0]["spawned_by_harness"] == "claude"
@@ -264,7 +271,7 @@ def test_ac_edge_parent_edge_survives_save_reload(tmp_path, monkeypatch):
 
 def test_ac_entry_model_declares_parent_edge_fields():
     """AC (x-30f6): the Entry model carries the new fields as first-class (typed, default None)."""
-    from fno.graph.types import Entry
+    from fno.graph.types import Node as Entry
 
     e = Entry(id="ab-model001", title="m")
     dumped = e.model_dump()
@@ -548,16 +555,16 @@ def test_explicit_source_node_outranks_a_stale_snapshot(tmp_path, monkeypatch):
 
 def test_build_backlog_node_stamps_ambient(monkeypatch):
     """AC-HP (2.1): _build_backlog_node merges ambient provenance with no caller arg."""
-    import fno.graph.cli as gcli
+    import fno.graph.node_builder as nb
 
-    monkeypatch.setattr(gcli, "_session_provenance", lambda cwd=None, **_kw: {
+    monkeypatch.setattr(nb, "_session_provenance", lambda cwd=None, **_kw: {
         "source_session_id": "S",
         "source_harness": "claude",
         "source_cwd": "/wt/sess",
         "source_node_id": "ab-parent01",
         "source_plan_path": "plan.md",
     })
-    node = gcli._build_backlog_node(title="child")
+    node = nb._build_backlog_node(title="child", difficulty=None)
     assert node["source_session_id"] == "S"
     assert node["source_harness"] == "claude"
     assert node["source_cwd"] == "/wt/sess"
@@ -668,23 +675,25 @@ def test_sessions_existing_list_preserved():
 
 def test_entry_model_declares_sessions_field():
     """AC (x-b6e4): Entry carries `sessions` as a first-class list, default empty."""
-    from fno.graph.types import Entry
+    from fno.graph.types import Node as Entry
 
     dumped = Entry(id="ab-model002", title="m").model_dump()
     assert dumped["sessions"] == []
 
 
 def test_sessions_survive_save_reload(tmp_path, monkeypatch):
-    """AC (x-b6e4): sessions round-trip through locked_mutate_graph unchanged + in order."""
-    rec_a = {"phase": "think", "harness": "claude", "session_id": "S1", "at": "2026-07-12T01:00:00Z"}
-    rec_b = {"phase": "blueprint", "harness": "claude", "session_id": "S1", "at": "2026-07-12T02:00:00Z"}
+    """AC (x-b6e4): sessions round-trip through commit_rows_via_store unchanged + in order."""
+    rec_a = {"phase": "think", "harness": "claude", "session_id": "S1",
+             "started_at": "2026-07-12T01:00:00Z", "ended_at": None, "ended_by": None}
+    rec_b = {"phase": "blueprint", "harness": "claude", "session_id": "S1",
+             "started_at": "2026-07-12T02:00:00Z", "ended_at": None, "ended_by": None}
     g = _make_graph(tmp_path, [{"id": "ab-rtsess01", "title": "rt", "sessions": [rec_a, rec_b]}])
     _patch_graph(monkeypatch, g)
 
-    from fno.graph.store import read_graph, locked_mutate_graph
+    from fno.graph.store import read_graph_strict, commit_rows_via_store
 
-    locked_mutate_graph(g, lambda es: es)
-    reloaded = read_graph(g)
+    commit_rows_via_store(g, lambda es: es)
+    reloaded = read_graph_strict(g)
     assert reloaded[0]["sessions"] == [rec_a, rec_b]
 
 
@@ -702,8 +711,8 @@ def _strip_observed_model(rows: list[dict]) -> list[dict]:
 
 
 def _node_sessions(g, node_id):
-    from fno.graph.store import read_graph
-    for e in read_graph(g):
+    from fno.graph.store import read_graph_strict
+    for e in read_graph_strict(g):
         if e["id"] == node_id:
             return e.get("sessions", [])
     return None
@@ -721,67 +730,13 @@ def test_append_session_record_appends(tmp_path, monkeypatch):
     )
     assert (found, added) == (True, True)
     rows = _node_sessions(g, "ab-add00001")
+    # The typed store emits the full envelope: absent timestamps come back as
+    # nulls, never as a fabricated stamp time.
     assert _strip_observed_model(rows) == [{"phase": "think", "harness": "claude",
-                                            "session_id": "S", "ended_at": "2026-07-12T03:00:00Z"}]
+                                            "session_id": "S", "started_at": None,
+                                            "ended_at": "2026-07-12T03:00:00Z", "ended_by": None}]
     # The field is present on every new row; its own behaviour is pinned below.
     assert rows[0]["observed_model"]["kind"] == "unreadable"
-
-
-def test_cli_session_close_codex_receipt_reads_back_exact_blueprint_entry(tmp_path, monkeypatch):
-    """AC1-HP: close writes and positively reads the exact Codex phase entry."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-close0001", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    for marker in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"):
-        monkeypatch.delenv(marker, raising=False)
-    monkeypatch.setenv("CODEX_THREAD_ID", "codex-full-session-b")
-
-    result = CliRunner().invoke(C.cli, [
-        "session", "close", "ab-close0001",
-        "--summary", "saved plan",
-        "--launch", "/fno:target ab-close0001",
-        "--json",
-    ])
-
-    assert result.exit_code == 0, result.output
-    receipt = json.loads(result.stdout)
-    assert receipt["phase"] == "blueprint"
-    assert receipt["harness"] == "codex"
-    assert receipt["session_id"] == "codex-full-session-b"
-    entries = [
-        row for row in read_graph(g)[0]["sessions"]
-        if row.get("phase") == "blueprint"
-        and row.get("harness") == "codex"
-        and row.get("session_id") == "codex-full-session-b"
-    ]
-    assert entries and entries[0].get("ended_at")
-
-
-def test_cli_session_close_without_identity_refuses_before_closed_receipt(tmp_path, monkeypatch):
-    """AC1-ERR: unresolved identity is a visible nonzero close refusal."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-close0002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    for marker in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID", "CODEX_THREAD_ID"):
-        monkeypatch.delenv(marker, raising=False)
-
-    result = CliRunner().invoke(C.cli, [
-        "session", "close", "ab-close0002",
-        "--summary", "saved plan",
-        "--launch", "/fno:target ab-close0002",
-    ])
-
-    assert result.exit_code != 0
-    assert "session close: no ambient identity" in result.output
-    assert not any(row.get("status") == "closed" for row in read_graph(g)[0]["sessions"])
 
 
 def test_append_session_record_same_session_two_phases(tmp_path, monkeypatch):
@@ -804,9 +759,9 @@ def test_append_session_record_dedup_preserves_first_ended_at(tmp_path, monkeypa
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
-    append_session_record(g, "ab-add00003", phase="do", harness="codex",
+    append_session_record(g, "ab-add00003", phase="execute", harness="codex",
                           session_id="S", ended_at="2026-07-12T04:00:00Z")
-    found, added = append_session_record(g, "ab-add00003", phase="do", harness="codex",
+    found, added = append_session_record(g, "ab-add00003", phase="execute", harness="codex",
                                          session_id="S", ended_at="2026-07-12T05:00:00Z")
     assert (found, added) == (True, False)
     rows = _node_sessions(g, "ab-add00003")
@@ -832,7 +787,7 @@ def test_append_session_record_unknown_node(tmp_path, monkeypatch):
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
-    found, added = append_session_record(g, "ab-missing", phase="do",
+    found, added = append_session_record(g, "ab-missing", phase="execute",
                                          harness="claude", session_id="S")
     assert (found, added) == (False, False)
 
@@ -845,9 +800,9 @@ def test_append_session_record_duplicate_fills_missing_ended_at(tmp_path, monkey
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
-    append_session_record(g, "ab-fill00001", phase="do", harness="claude",
+    append_session_record(g, "ab-fill00001", phase="execute", harness="claude",
                           session_id="S", started_at="2026-08-10T01:00:00Z")
-    found, added = append_session_record(g, "ab-fill00001", phase="do",
+    found, added = append_session_record(g, "ab-fill00001", phase="execute",
                                          harness="claude", session_id="S",
                                          ended_at="2026-08-10T02:00:00Z")
     assert (found, added) == (True, False)  # no NEW row added
@@ -864,39 +819,15 @@ def test_append_session_record_duplicate_keeps_first_started_at(tmp_path, monkey
     _patch_graph(monkeypatch, g)
     from fno.graph.store import append_session_record
 
-    append_session_record(g, "ab-fill00002", phase="do", harness="claude",
+    append_session_record(g, "ab-fill00002", phase="execute", harness="claude",
                           session_id="S", started_at="2026-08-10T01:00:00Z")
-    append_session_record(g, "ab-fill00002", phase="do", harness="claude",
+    append_session_record(g, "ab-fill00002", phase="execute", harness="claude",
                           session_id="S", started_at="2026-08-10T09:00:00Z",
                           ended_at="2026-08-10T02:00:00Z")
     rows = _node_sessions(g, "ab-fill00002")
     assert len(rows) == 1
     assert rows[0]["started_at"] == "2026-08-10T01:00:00Z"  # not overwritten
     assert rows[0]["ended_at"] == "2026-08-10T02:00:00Z"  # absent field filled
-
-
-def test_session_add_pr_no_node_names_repair(tmp_path, monkeypatch):
-    """A --pr-number that maps to no node (typical of a session killed before its
-    PR was stamped) names the two repair paths instead of leaving the operator
-    stuck in exactly the state a killed session leaves behind."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "ab-nopr0001", "title": "t", "project": "p"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-repair")
-    for m in ("CODEX_THREAD_ID", "CODEX_SESSION_ID", "GEMINI_SESSION_ID",
-              "OPENCODE_SESSION_ID", "CLAUDE_SESSION_ID"):
-        monkeypatch.delenv(m, raising=False)
-
-    r = CliRunner().invoke(
-        C.cli, ["session", "add", "--phase", "do", "--pr-number", "999", "--repo", "foo/bar"]
-    )
-    assert r.exit_code == 0, r.output  # a skip, not an error
-    assert "999" in r.output
-    assert "backlog update" in r.output and "--pr-number" in r.output
-    assert "session add <node-id>" in r.output
 
 
 @pytest.mark.parametrize("phase", ["verif", "plan", "", "DO"])
@@ -916,7 +847,7 @@ def test_append_session_record_rejects_empty_identity(tmp_path, monkeypatch, har
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00007", phase="do", harness=harness, session_id=sid)
+        append_session_record(g, "ab-add00007", phase="execute", harness=harness, session_id=sid)
 
 
 @pytest.mark.parametrize("bad_ended_at", [
@@ -932,7 +863,7 @@ def test_append_session_record_rejects_non_utc_ended_at(tmp_path, monkeypatch, b
     from fno.graph.store import append_session_record
 
     with pytest.raises(ValueError):
-        append_session_record(g, "ab-add00008", phase="do", harness="claude",
+        append_session_record(g, "ab-add00008", phase="execute", harness="claude",
                               session_id="S", ended_at=bad_ended_at)
 
 
@@ -944,11 +875,85 @@ def test_append_session_record_accepts_utc_ended_at(tmp_path, monkeypatch, good_
     """A tz-aware UTC timestamp is accepted and normalized to the canonical `...Z` form."""
     g = _make_graph(tmp_path, [{"id": "ab-add00009", "title": "t"}])
     _patch_graph(monkeypatch, g)
-    from fno.graph.store import append_session_record, read_graph
+    from fno.graph.store import append_session_record, read_graph_strict
 
-    append_session_record(g, "ab-add00009", phase="do", harness="claude",
+    append_session_record(g, "ab-add00009", phase="execute", harness="claude",
                           session_id="S", ended_at=good_ended_at)
-    assert read_graph(g)[0]["sessions"][0]["ended_at"] == stored
+    assert read_graph_strict(g)[0]["sessions"][0]["ended_at"] == stored
+
+
+# -- merge_grant: the spawner's durable merge verdict on the do row --
+
+
+_GRANT = {
+    "approved": True, "source": "config",
+    "recorded_by": "spawner", "recorded_at": "2026-08-24T12:00:00Z",
+}
+
+
+def test_merge_grant_round_trips_on_the_row(tmp_path, monkeypatch):
+    """AC9-HP: a well-formed grant lands on the row verbatim, recorded_at normalized."""
+    g = _make_graph(tmp_path, [{"id": "ab-grant001", "title": "t"}])
+    _patch_graph(monkeypatch, g)
+    from fno.graph.store import append_session_record, read_graph_strict
+
+    append_session_record(g, "ab-grant001", phase="execute", harness="claude",
+                          session_id="S", started_at="2026-08-24T11:59:00Z",
+                          merge_grant={**_GRANT, "recorded_at": "2026-08-24T12:00:00+00:00"})
+    grant = read_graph_strict(g)[0]["sessions"][0]["merge_grant"]
+    assert grant == {**_GRANT, "recorded_at": "2026-08-24T12:00:00Z"}
+
+
+@pytest.mark.parametrize("bad,frag", [
+    ("not-a-dict", "must be a mapping"),
+    ({"approved": True, "source": "config", "recorded_by": "s",
+      "recorded_at": "2026-08-24T12:00:00Z", "extra": 1}, "unknown keys"),
+    ({**_GRANT, "approved": "yes"}, "approved must be a boolean"),
+    ({**_GRANT, "source": ""}, "source must be a non-empty string"),
+    ({**_GRANT, "recorded_by": None}, "recorded_by must be a non-empty string"),
+    ({**_GRANT, "recorded_at": "yesterday"}, "ISO-8601 timestamp"),
+    ({**_GRANT, "recorded_at": "2026-08-24T12:00:00+02:00"}, "UTC timestamp"),
+])
+def test_merge_grant_malformed_is_refused(tmp_path, monkeypatch, bad, frag):
+    """AC12-ERR: a grant the resolver could not have minted is refused at write
+    time, never stored to be guessed at resolve time."""
+    g = _make_graph(tmp_path, [{"id": "ab-grant002", "title": "t"}])
+    _patch_graph(monkeypatch, g)
+    from fno.graph.store import append_session_record
+
+    with pytest.raises(ValueError, match=frag):
+        append_session_record(g, "ab-grant002", phase="execute", harness="claude",
+                              session_id="S", merge_grant=bad)
+    assert _node_sessions(g, "ab-grant002") == []
+
+
+def test_merge_grant_duplicate_fills_but_never_overwrites(tmp_path, monkeypatch):
+    """AC9-EDGE: a re-stamp cannot rewrite a recorded verdict in place. The
+    first receipt owns the row; a CHANGED posture belongs to a NEWER dispatch,
+    which is a NEWER row and wins at resolve time."""
+    g = _make_graph(tmp_path, [{"id": "ab-grant003", "title": "t"}])
+    _patch_graph(monkeypatch, g)
+    from fno.graph.store import append_session_record
+
+    refusal = {**_GRANT, "approved": False, "source": "no-merge-flag"}
+    append_session_record(g, "ab-grant003", phase="execute", harness="claude",
+                          session_id="S", merge_grant=refusal)
+    append_session_record(g, "ab-grant003", phase="execute", harness="claude",
+                          session_id="S", merge_grant=_GRANT)
+    rows = _node_sessions(g, "ab-grant003")
+    assert len(rows) == 1
+    assert rows[0]["merge_grant"] == refusal
+
+
+def test_merge_grant_absent_on_plain_rows(tmp_path, monkeypatch):
+    """Absence of the key stays the honest 'no grant was resolved at stamp time'."""
+    g = _make_graph(tmp_path, [{"id": "ab-grant004", "title": "t"}])
+    _patch_graph(monkeypatch, g)
+    from fno.graph.store import append_session_record, read_graph_strict
+
+    append_session_record(g, "ab-grant004", phase="execute", harness="claude",
+                          session_id="S", ended_at="2026-08-24T12:00:00Z")
+    assert "merge_grant" not in read_graph_strict(g)[0]["sessions"][0]
 
 
 # -- stamp_session_for_pr: resolve the unique PR-linked node (Locked Decision 9) --
@@ -1167,106 +1172,6 @@ def test_stamp_repo_scoped_matches_url_variants(tmp_path, monkeypatch, url, repo
 # -- `fno backlog session add` CLI (reuses _clear_session_env above) --
 
 
-def test_cli_session_add_pr_mode_resolves_node(tmp_path, monkeypatch):
-    """`session add --pr <n>` resolves the unique PR-linked node and stamps it."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "ab-prcli001", "title": "t", "pr_number": 1200,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/1200"},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, "bllshttng/footnote")
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1200", "--phase", "ship", "--json"])
-    assert r.exit_code == 0, r.output
-    out = json.loads(r.output)
-    assert out["node_id"] == "ab-prcli001" and out["added"] is True
-    assert read_graph(g)[0]["sessions"][0]["phase"] == "ship"
-
-
-def test_cli_session_close_blueprint_writes_completion_receipt(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "x-close001", "title": "t", "plan_path": "p.md"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-close")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "close", "x-close001",
-        "--summary", "plan is ready",
-        "--launch", "/fno:target x-close001",
-        "--json",
-    ])
-
-    assert r.exit_code == 0, r.output
-    out = json.loads(r.output)
-    assert out["status"] == "closed"
-    assert out["phase"] == "blueprint"
-    assert out["summary"] == "plan is ready"
-    assert out["launch"] == "/fno:target x-close001"
-    row = read_graph(g)[0]
-    assert row["status"] == "ready"
-    assert row["sessions"][0]["phase"] == "blueprint"
-    assert row["sessions"][0]["session_id"] == "sess-close"
-    assert "ended_at" in row["sessions"][0]
-
-
-def test_cli_session_close_refuses_without_identity(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "x-close002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "close", "x-close002",
-        "--summary", "plan is ready",
-        "--launch", "/fno:target x-close002",
-    ])
-
-    assert r.exit_code == 2
-    assert "no ambient identity" in r.output
-
-
-def test_cli_session_add_pr_repo_scopes_resolution(tmp_path, monkeypatch):
-    """AC1-HP (CLI): --repo disambiguates a pr_number that collides across repos."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "x-clifoot1", "title": "t", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/388"},
-        {"id": "ab-clifn1", "title": "u", "pr_number": 388,
-         "pr_url": "https://github.com/bllshttng/fno/pull/388"},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "388",
-        "--repo", "bllshttng/footnote", "--phase", "ship", "--json",
-    ])
-    assert r.exit_code == 0, r.output
-    assert json.loads(r.output)["node_id"] == "x-clifoot1"
-    by_id = {e["id"]: e for e in read_graph(g)}
-    assert by_id["ab-clifn1"].get("sessions", []) == []  # other repo untouched
-
-
 def _stub_slug(monkeypatch, slug):
     """Pin the auto-resolved repo slug (x-f47f US1) so tests never shell out."""
     import fno.graph._reconcile as R
@@ -1311,291 +1216,6 @@ def test_resolve_repo_slug_none_when_both_fail():
     assert resolve_current_repo_slug(runner=lambda argv, cwd: (127, "")) is None
 
 
-def test_cli_session_add_pr_ambiguous_skips_and_exits_zero(tmp_path, monkeypatch):
-    """AC3-ERR (x-f47f): an unresolvable repo + cross-repo collision is a SKIP.
-
-    Exit 0 with an ambiguous warning naming both candidates: refusing to guess is
-    the designed outcome, so the caller's Failures line must not log it as a
-    failure. Nothing is stamped.
-    """
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "ab-prcli002", "title": "t", "pr_number": 1300},
-        {"id": "ab-prcli003", "title": "u", "pr_number": 1300},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, None)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1300", "--phase", "ship"])
-    assert r.exit_code == 0, r.output
-    assert "ambiguous" in r.output and "1300" in r.output
-    assert "ab-prcli002" in r.output and "ab-prcli003" in r.output
-    assert all(e.get("sessions", []) == [] for e in read_graph(g))
-
-
-def test_cli_session_add_pr_auto_resolves_repo_slug(tmp_path, monkeypatch):
-    """US1: no --repo needed - the verb resolves this checkout's slug itself."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "x-autofoot", "title": "t", "pr_number": 480,
-         "pr_url": "https://github.com/bllshttng/footnote/pull/480"},
-        {"id": "ab-autofn", "title": "u", "pr_number": 480,
-         "pr_url": "https://github.com/bllshttng/fno/pull/480"},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, "bllshttng/footnote")
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "480", "--phase", "ship", "--json",
-    ])
-    assert r.exit_code == 0, r.output
-    assert json.loads(r.output)["node_id"] == "x-autofoot"
-    by_id = {e["id"]: e for e in read_graph(g)}
-    assert by_id["ab-autofn"].get("sessions", []) == []
-
-
-def test_cli_session_add_resolved_slug_never_falls_back_to_bare(tmp_path, monkeypatch):
-    """A url-less node is unattributable to ANY repo, and the graph is global and
-    cross-project, so a RESOLVED slug must not fall back to the bare number.
-
-    The fallback cannot tell this repo's legacy node from another project's
-    same-numbered one, and stamping the latter is the wrong-node write that repo
-    scoping exists to prevent. The cost is a legacy node going unstamped, and the
-    skip prints its reason - so it is a visible skip, not a silent one.
-    """
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-legacy01", "title": "t", "pr_number": 1500}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, "bllshttng/footnote")
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1500", "--phase", "ship"])
-    assert r.exit_code == 0, r.output
-    assert "no-node" in r.output
-    assert read_graph(g)[0].get("sessions", []) == []
-
-
-def test_cli_session_add_unresolvable_slug_still_matches_bare(tmp_path, monkeypatch):
-    """With NO slug there is nothing to scope by, so the bare number is all there
-    is - it still skips on ambiguity rather than guessing."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-legacy09", "title": "t", "pr_number": 1550}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, None)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1550", "--phase", "ship"])
-    assert r.exit_code == 0, r.output
-    assert read_graph(g)[0]["sessions"][0]["phase"] == "ship"
-
-
-def test_cli_session_add_auto_slug_never_stamps_a_foreign_repo_node(tmp_path, monkeypatch):
-    """The fallback must not stamp another repo's node.
-
-    "This repo has no node for the PR" is a normal post-merge skip. If the graph
-    holds a UNIQUE node for the same PR number belonging to a different repo,
-    dropping the auto-resolved scope would make the bare-number lookup stamp
-    that foreign node - a wrong stamp, the thing repo scoping exists to prevent.
-    """
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "ab-foreign1", "title": "t", "pr_number": 1700,
-         "pr_url": "https://github.com/bllshttng/fno/pull/1700"},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, "bllshttng/footnote")
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1700", "--phase", "ship"])
-    assert r.exit_code == 0, r.output
-    assert "no-node" in r.output
-    assert read_graph(g)[0].get("sessions", []) == []
-
-
-def test_cli_session_add_auto_slug_fallback_needs_every_candidate_unattributable(
-    tmp_path, monkeypatch
-):
-    """A mix of one legacy node and one foreign-repo node blocks the fallback:
-    the bare lookup would be ambiguous at best and wrong at worst."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [
-        {"id": "ab-legacy03", "title": "t", "pr_number": 1800},
-        {"id": "ab-foreign2", "title": "u", "pr_number": 1800,
-         "pr_url": "https://github.com/bllshttng/fno/pull/1800"},
-    ])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _stub_slug(monkeypatch, "bllshttng/footnote")
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "--pr-number", "1800", "--phase", "ship"])
-    assert r.exit_code == 0, r.output
-    assert all(e.get("sessions", []) == [] for e in read_graph(g))
-
-
-def test_cli_session_add_explicit_repo_stays_a_hard_filter(tmp_path, monkeypatch):
-    """An EXPLICIT --repo must not get the narrow-never-exclude fallback: the
-    caller asserted the repo, so a non-match is a skip, not a bare-number stamp."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-legacy02", "title": "t", "pr_number": 1600}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "1600", "--repo", "bllshttng/footnote",
-        "--phase", "ship",
-    ])
-    assert r.exit_code == 0, r.output
-    assert "no-node" in r.output
-    assert read_graph(g)[0].get("sessions", []) == []
-
-
-def test_cli_session_add_requires_node_or_pr(tmp_path, monkeypatch):
-    """Neither NODE nor --pr -> usage error; both -> usage error."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "ab-prcli004", "title": "t", "pr_number": 1400}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-pr")
-
-    assert CliRunner().invoke(C.cli, ["session", "add", "--phase", "ship"]).exit_code != 0
-    assert CliRunner().invoke(
-        C.cli, ["session", "add", "ab-prcli004", "--pr-number", "1400", "--phase", "ship"]
-    ).exit_code != 0
-
-
-def test_cli_session_add_uses_ambient_identity(tmp_path, monkeypatch):
-    """AC1-HP: `session add` defaults harness+session from ambient env; exits 0.
-    Without --ended-at the row is identity-only: no end is recorded rather than
-    the stamp-fire time, which the honest name forbids."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-cli00001", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-cli-1")
-
-    r = CliRunner().invoke(
-        C.cli,
-        ["session", "add", "ab-cli00001", "--phase", "think", "--effort", "xhigh"],
-    )
-    assert r.exit_code == 0, r.output
-    rows = read_graph(g)[0]["sessions"]
-    assert _strip_observed_model(rows) == [
-        {"phase": "think", "harness": "claude", "session_id": "sess-cli-1", "effort": "xhigh"}]
-
-
-def test_cli_session_add_duplicate_exits_zero_added_false(tmp_path, monkeypatch):
-    """duplicate -> exit 0, JSON added:false."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "ab-cli00002", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-
-    args = ["session", "add", "ab-cli00002", "--phase", "do",
-            "--harness", "codex", "--session-id", "S", "--json"]
-    r1 = CliRunner().invoke(C.cli, args)
-    assert r1.exit_code == 0, r1.output
-    assert json.loads(r1.output)["added"] is True
-    r2 = CliRunner().invoke(C.cli, args)
-    assert r2.exit_code == 0, r2.output
-    assert json.loads(r2.output)["added"] is False
-
-
-def test_cli_session_add_missing_identity_exits_nonzero_no_mutation(tmp_path, monkeypatch):
-    """AC2-ERR: no ambient identity + no explicit flags -> nonzero, no mutation, warns node+phase."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-    from fno.graph.store import read_graph
-
-    g = _make_graph(tmp_path, [{"id": "ab-cli00003", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "ab-cli00003", "--phase", "ship"])
-    assert r.exit_code != 0
-    assert "ab-cli00003" in r.output and "ship" in r.output
-    assert read_graph(g)[0].get("sessions", []) == []
-
-
-def test_cli_session_add_bad_phase_exits_nonzero(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "ab-cli00004", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "ab-cli00004", "--phase", "verif"])
-    assert r.exit_code != 0
-
-
-def test_cli_session_add_unknown_node_exits_nonzero(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{"id": "ab-cli00005", "title": "t"}])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "S")
-
-    r = CliRunner().invoke(C.cli, ["session", "add", "ab-nope", "--phase", "do"])
-    assert r.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# x-0469 - guarded do-provenance stamp: claimed_at + the identity/plan guards
-# ---------------------------------------------------------------------------
-
 def _guard_graph(tmp_path, monkeypatch, node_id="ab-guard001"):
     """A one-node graph wired into both the store and the CLI module."""
     import fno.graph.cli as C
@@ -1609,9 +1229,9 @@ def _guard_graph(tmp_path, monkeypatch, node_id="ab-guard001"):
 
 
 def _sessions(g):
-    from fno.graph.store import read_graph
+    from fno.graph.store import read_graph_strict
 
-    return read_graph(g)[0].get("sessions", [])
+    return read_graph_strict(g)[0].get("sessions", [])
 
 
 def test_started_at_lands_on_row_and_bounds_the_window(tmp_path, monkeypatch):
@@ -1620,7 +1240,7 @@ def test_started_at_lands_on_row_and_bounds_the_window(tmp_path, monkeypatch):
 
     g = _guard_graph(tmp_path, monkeypatch)
     append_session_record(
-        g, "ab-guard001", phase="do", harness="claude", session_id="S",
+        g, "ab-guard001", phase="execute", harness="claude", session_id="S",
         ended_at="2026-07-20T12:00:00Z", started_at="2026-07-20T10:00:00Z",
     )
     row = _sessions(g)[0]
@@ -1628,13 +1248,14 @@ def test_started_at_lands_on_row_and_bounds_the_window(tmp_path, monkeypatch):
     assert row["started_at"] <= row["ended_at"]
 
 
-def test_started_at_absent_leaves_the_key_off(tmp_path, monkeypatch):
-    """Legacy rows and Step 1.5 stamps stay valid: no key, not a null."""
+def test_started_at_absent_is_never_fabricated(tmp_path, monkeypatch):
+    """The typed store keeps the key always present, so the surviving contract
+    is the honest one: an absent start comes back null, never a stamp time."""
     from fno.graph.store import append_session_record
 
     g = _guard_graph(tmp_path, monkeypatch)
-    append_session_record(g, "ab-guard001", phase="do", harness="claude", session_id="S")
-    assert "started_at" not in _sessions(g)[0]
+    append_session_record(g, "ab-guard001", phase="execute", harness="claude", session_id="S")
+    assert _sessions(g)[0]["started_at"] is None
 
 
 @pytest.mark.parametrize("bad", ["2026-07-20", "2026-07-20T10:00:00-07:00", "nope"])
@@ -1644,7 +1265,7 @@ def test_started_at_rejects_non_utc_like_at(tmp_path, monkeypatch, bad):
     g = _guard_graph(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="started_at"):
         append_session_record(
-            g, "ab-guard001", phase="do", harness="claude", session_id="S", started_at=bad,
+            g, "ab-guard001", phase="execute", harness="claude", session_id="S", started_at=bad,
         )
     assert _sessions(g) == []
 
@@ -1657,7 +1278,7 @@ def test_effort_is_recorded_as_an_independent_session_axis(tmp_path, monkeypatch
     append_session_record(
         g,
         "ab-guard001",
-        phase="do",
+        phase="execute",
         harness="codex",
         session_id="S",
         effort="xhigh",
@@ -1676,43 +1297,12 @@ def test_started_at_is_not_part_of_the_idempotency_key(tmp_path, monkeypatch):
     g = _guard_graph(tmp_path, monkeypatch)
     for started in ("2026-07-20T10:00:00Z", "2026-07-20T11:00:00Z"):
         append_session_record(
-            g, "ab-guard001", phase="do", harness="claude", session_id="S",
+            g, "ab-guard001", phase="execute", harness="claude", session_id="S",
             started_at=started,
         )
     rows = _sessions(g)
     assert len(rows) == 1
     assert rows[0]["started_at"] == "2026-07-20T10:00:00Z"
-
-
-def test_require_session_mismatch_skips_with_exit_zero(tmp_path, monkeypatch):
-    """AC5-ERR: the stale-manifest squatter never stamps, and the skip is exit 0
-    so the finalize caller does not log a designed outcome as a failure."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--require-session", "SESSION-DEAD",
-    ])
-    assert r.exit_code == 0
-    assert _sessions(g) == []
-    assert "SESSION-DEAD" in r.output
-
-
-def test_require_session_match_stamps(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--require-session", "SESSION-A", "--started-at", "2026-07-20T10:00:00Z",
-    ])
-    assert r.exit_code == 0
-    rows = _sessions(g)
-    assert len(rows) == 1
-    assert rows[0]["phase"] == "do" and rows[0]["started_at"] == "2026-07-20T10:00:00Z"
 
 
 def _plan(tmp_path, claims: str) -> str:
@@ -1725,221 +1315,6 @@ def _plan_node(tmp_path, node: str) -> str:
     p = tmp_path / "plan-node.md"
     p.write_text(f"---\nstatus: ready\nnode: {node}\n---\n\n# plan\n")
     return str(p)
-
-
-def test_guard_plan_disagreement_skips_naming_both_ids(tmp_path, monkeypatch):
-    """AC8-EDGE: a plan claiming another node skips, exit 0, both ids named."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--guard-plan", _plan(tmp_path, "ab-other99"),
-    ])
-    assert r.exit_code == 0
-    assert _sessions(g) == []
-    assert "ab-other99" in r.output and "ab-guard001" in r.output
-
-
-def test_guard_plan_agreement_stamps(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--guard-plan", _plan(tmp_path, "ab-guard001"),
-    ])
-    assert r.exit_code == 0
-    assert len(_sessions(g)) == 1
-
-
-@pytest.mark.parametrize("plan_arg", ["missing.md", "no-claims"])
-def test_guard_plan_absent_evidence_is_agreement(tmp_path, monkeypatch, plan_arg):
-    """Mirror of /execute Step 1.5: an unreadable plan or an absent `claims:` is
-    agreement-unknown, and absent evidence of conflict is not conflict."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    if plan_arg == "no-claims":
-        p = tmp_path / "noclaims.md"
-        p.write_text("---\nstatus: ready\n---\n\n# plan\n")
-        plan_arg = str(p)
-    else:
-        plan_arg = str(tmp_path / plan_arg)
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do", "--guard-plan", plan_arg,
-    ])
-    assert r.exit_code == 0
-    assert len(_sessions(g)) == 1
-
-
-def test_plan_claims_reads_node_key_as_single_claim(tmp_path):
-    """330 of 807 plans carry `node:` not `claims:`. Reading only claims: left
-    G3 unevaluable on ~41% of plans; node: is now a single-value claim too."""
-    import fno.graph.cli as C
-
-    assert C._plan_claims(_plan_node(tmp_path, "x-abcd")) == {"x-abcd"}
-
-
-def test_plan_claims_unions_claims_and_node(tmp_path):
-    """Both keys present -> the union. A plan should not declare both, but the
-    read must not drop either if it does."""
-    import fno.graph.cli as C
-
-    p = tmp_path / "both.md"
-    p.write_text("---\nstatus: ready\nnode: x-1111\nclaims: [x-2222, x-3333]\n---\n\n# plan\n")
-    assert C._plan_claims(str(p)) == {"x-1111", "x-2222", "x-3333"}
-
-
-def test_guard_plan_agreement_via_node_key(tmp_path, monkeypatch):
-    """The node: key satisfies --guard-plan the same way claims: does."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--guard-plan", _plan_node(tmp_path, "ab-guard001"),
-    ])
-    assert r.exit_code == 0
-    assert len(_sessions(g)) == 1
-
-
-def test_guard_plan_with_pr_number_is_refused_not_ignored(tmp_path, monkeypatch):
-    """A silently-ignored guard on an append-only record is the failure mode this
-    whole feature exists to prevent, so the combination is rejected."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "42", "--phase", "do",
-        "--guard-plan", _plan(tmp_path, "ab-guard001"),
-    ])
-    assert r.exit_code == 2
-    assert _sessions(g) == []
-
-
-@pytest.mark.parametrize("override", [
-    ["--session-id", "SESSION-B"],
-    ["--harness", "gemini"],
-])
-def test_require_session_refuses_an_identity_override(tmp_path, monkeypatch, override):
-    """A guard a caller can satisfy by asserting its own answer is not a guard.
-    Verifying the ambient id while writing an overridden one is the same hole:
-    the row must record the identity that was actually checked."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)  # ambient is SESSION-A
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do",
-        "--require-session", "SESSION-A", *override,
-    ])
-    assert r.exit_code == 2
-    assert _sessions(g) == []
-
-
-def test_guard_plan_that_cannot_be_read_says_so(tmp_path, monkeypatch):
-    """G3 is the one guard that does not fail closed, so a plan it could not
-    evaluate must be visible. Otherwise an install whose plan_path is
-    systematically stale runs with the guard off and no signal anywhere."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    stale = str(tmp_path / "moved-away.md")
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do", "--guard-plan", stale,
-    ])
-    assert r.exit_code == 0
-    assert len(_sessions(g)) == 1  # still stamps: absent conflict is not conflict
-    assert "not evaluated" in r.output and stale in r.output
-
-
-def test_guard_plan_on_binary_file_skips_rather_than_erroring(tmp_path, monkeypatch):
-    """UnicodeDecodeError is a ValueError, so letting it escape would turn a
-    designed guard outcome into exit 2 and log a skip as a stamp failure."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _guard_graph(tmp_path, monkeypatch)
-    binary = tmp_path / "binary.md"
-    binary.write_bytes(b"\xff\xfe\x00\x01 not utf-8")
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do", "--guard-plan", str(binary),
-    ])
-    assert r.exit_code == 0
-    assert len(_sessions(g)) == 1
-
-
-def test_skip_json_carries_the_resolved_node_and_identity(tmp_path, monkeypatch):
-    """A --json consumer must not read node_id=null for a skip that had already
-    resolved the node."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    _guard_graph(tmp_path, monkeypatch)
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "ab-guard001", "--phase", "do", "--json",
-        "--guard-plan", _plan(tmp_path, "ab-other99"),
-    ])
-    assert r.exit_code == 0
-    payload = json.loads([ln for ln in r.output.splitlines() if ln.startswith("{")][-1])
-    assert payload["status"] == "skipped"
-    assert payload["node_id"] == "ab-guard001"
-    assert payload["session_id"] == "SESSION-A"
-
-
-def test_started_at_is_forwarded_on_the_pr_number_path(tmp_path, monkeypatch):
-    """A flag accepted, reported as success, and silently dropped is the failure
-    this feature refuses elsewhere; the --pr-number path must honor it too."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{
-        "id": "ab-guardpr1", "title": "t", "pr_number": 4242,
-        "pr_url": "https://github.com/o/r/pull/4242",
-    }])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "SESSION-A")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "4242", "--repo", "o/r", "--phase", "do",
-        "--started-at", "2026-07-20T10:00:00Z",
-    ])
-    assert r.exit_code == 0
-    rows = _sessions(g)
-    assert len(rows) == 1
-    assert rows[0]["started_at"] == "2026-07-20T10:00:00Z"
-
-
-def test_started_at_is_validated_on_the_pr_number_path(tmp_path, monkeypatch):
-    """It was accepted unvalidated there while the NODE path raised."""
-    from typer.testing import CliRunner
-    import fno.graph.cli as C
-
-    g = _make_graph(tmp_path, [{
-        "id": "ab-guardpr2", "title": "t", "pr_number": 4243,
-        "pr_url": "https://github.com/o/r/pull/4243",
-    }])
-    _patch_graph(monkeypatch, g)
-    monkeypatch.setattr(C, "_graph_path", lambda: g)
-    _clear_session_env(monkeypatch)
-    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "SESSION-A")
-
-    r = CliRunner().invoke(C.cli, [
-        "session", "add", "--pr-number", "4243", "--repo", "o/r", "--phase", "do",
-        "--started-at", "not-a-timestamp",
-    ])
-    assert r.exit_code == 2
-    assert _sessions(g) == []
 
 
 def test_an_explicit_source_node_reports_nothing_as_dropped(tmp_path, monkeypatch):
@@ -1987,7 +1362,7 @@ def _patch_observe(monkeypatch, *values):
 def _add(g, node_id, **kw):
     from fno.graph.store import append_session_record
     return append_session_record(
-        g, node_id, phase="do", harness="claude", session_id=_SID, **kw)
+        g, node_id, phase="execute", harness="claude", session_id=_SID, **kw)
 
 
 def test_observed_model_records_the_whole_variant_dict(tmp_path, monkeypatch):
@@ -2252,3 +1627,168 @@ def test_observed_model_not_file_backed_harness_is_not_called_prefix_shaped(tmp_
 
     assert got == {"kind": "not-file-backed"}
     assert _observe_model("gemini", "whatever-id")["kind"] == "not-file-backed"
+
+
+# ---------------------------------------------------------------------------
+# Request origin (x-1005) - birth stamping through the native transport
+# ---------------------------------------------------------------------------
+
+
+def test_origin_hp_build_stamps_native_receipt(monkeypatch):
+    """AC1-HP: the birth dict carries the transport's category and the
+    caller's evidence reference, once, at birth."""
+    import fno.graph.node_builder as nb
+
+    def fake_transport(*, source_kind, birth_channel, origin_evidence):
+        assert source_kind == "operator_request"
+        assert birth_channel == "new"
+        return "operator_request", origin_evidence
+
+    monkeypatch.setattr(nb, "stamp_request_origin", fake_transport)
+    node = nb._build_backlog_node(
+        title="Operator asked",
+        difficulty="medium",
+        source_kind="operator_request",
+        origin_evidence="brief:20260905.md",
+    )
+    assert node["request_origin"] == "operator_request"
+    assert node["origin_evidence"] == "brief:20260905.md"
+
+
+def test_origin_fail_open_stamps_unknown_and_keeps_evidence(monkeypatch):
+    """A missing binary fail-opens to unknown; the evidence reference is the
+    caller's own birth fact and never depends on the transport resolving."""
+    import fno.graph.node_builder as nb
+
+    monkeypatch.setattr("fno.rust_binary.resolve_binary", lambda: None)
+    node = nb._build_backlog_node(
+        title="Stale binary",
+        difficulty="medium",
+        origin_channel="capture_promote",
+        origin_evidence="fu-a1b2c3 source: PR#1700",
+    )
+    assert node["request_origin"] == "unknown"
+    assert node["origin_evidence"] == "fu-a1b2c3 source: PR#1700"
+
+
+def test_origin_blank_evidence_normalizes_to_none():
+    """Whitespace evidence is no evidence; the field stays None, not ''."""
+    from fno.graph.node_builder import _build_backlog_node
+
+    node = _build_backlog_node(title="Blank", difficulty="medium", origin_evidence="   ")
+    assert node["origin_evidence"] is None
+    assert node["request_origin"] == "unknown"
+
+
+def test_origin_decompose_child_record_carries_parent_evidence(monkeypatch):
+    """A decomposed child declares the automated channel and its parent as
+    the producing reference, so it never silently gains human origin."""
+    import fno.graph.node_builder as nb
+
+    captured: list[dict] = []
+
+    def fake_transport(**kwargs):
+        captured.append(kwargs)
+        return "unknown", kwargs["origin_evidence"]
+
+    monkeypatch.setattr(nb, "stamp_request_origin", fake_transport)
+    nb._build_backlog_node(
+        title="Child",
+        difficulty="medium",
+        origin_channel="decompose",
+        origin_evidence="parent:x-37af",
+    )
+    assert captured[0]["birth_channel"] == "decompose"
+    assert captured[0]["origin_evidence"] == "parent:x-37af"
+
+
+def test_origin_ac2_edge_update_never_rewrites_birth(tmp_path, monkeypatch):
+    """AC2-EDGE: updating a born node leaves its birth origin and evidence
+    byte-stable; later rulings are separate fields the update path writes."""
+    g = _make_graph(
+        tmp_path,
+        [
+            {
+                "id": "ab-origin01",
+                "title": "Born operator",
+                "status": "idea",
+                "domain": "code",
+                "project": "fno",
+                "source_kind": "operator_request",
+                "request_origin": "operator_request",
+                "origin_evidence": "fu-a1b2c3 source: PR#1700",
+            }
+        ],
+    )
+    _patch_graph(monkeypatch, g)
+
+    # The update leaf answers natively; drive the dev binary over the same
+    # store the fixture seeded.
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    proc = _sp.run(
+        [str(binary), "backlog", "update", "ab-origin01", "--details", "a later ruling"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": _os.environ["PATH"],
+            "HOME": str(tmp_path),
+            "FNO_STATE_DIR": str(tmp_path),
+            "FNO_TRACKER_BACKEND": "graph",
+        },
+        cwd=str(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr
+    from fno.graph.store import read_graph_strict
+
+    node = next(e for e in read_graph_strict(g) if e["id"] == "ab-origin01")
+    assert node["details"] == "a later ruling"
+    assert node["request_origin"] == "operator_request"
+    assert node["origin_evidence"] == "fu-a1b2c3 source: PR#1700"
+
+
+def test_origin_intake_preserves_plan_sources_without_claiming_origin(
+    tmp_path, monkeypatch
+):
+    """AC2-HP (intake half): the plan's own references land as birth evidence
+    and the category stays unknown when the plan declares no source kind."""
+    from fno.graph import _intake
+
+    plan = tmp_path / "plan.md"
+    plan.write_text("# t\n", encoding="utf-8")
+    monkeypatch.setattr(
+        _intake,
+        "resolve_node_project_and_cwd",
+        lambda *_a, **_k: (None, str(tmp_path), {"sources": ["brief-a.md", "brief-b.md"]}),
+    )
+    node = _intake._build_intake_node(
+        {"plan_path": str(plan), "title": "From plan", "priority": "p2", "deps": [], "roadmap_id": None},
+        [],
+    )
+    assert node["request_origin"] == "unknown"
+    assert node["origin_evidence"] == "brief-a.md; brief-b.md"
+
+
+def test_origin_intake_without_sources_falls_back_to_plan_path(tmp_path, monkeypatch):
+    from fno.graph import _intake
+
+    plan = tmp_path / "plan.md"
+    plan.write_text("# t\n", encoding="utf-8")
+    monkeypatch.setattr(
+        _intake,
+        "resolve_node_project_and_cwd",
+        lambda *_a, **_k: (None, str(tmp_path), {}),
+    )
+    node = _intake._build_intake_node(
+        {"plan_path": str(plan), "title": "From plan", "priority": "p2", "deps": [], "roadmap_id": None},
+        [],
+    )
+    assert node["request_origin"] == "unknown"
+    assert node["origin_evidence"] == f"plan:{plan}"

@@ -76,24 +76,20 @@ EXCLUSIVE_PRE_EXISTING: dict[str, str] = {
 #: table. Key: (file suffix, enclosing function). Value: long -> short pairs
 #: that command MUST declare. Purely additive - long flags are unchanged.
 PHASE2_LOWERCASE_MAP: dict[tuple[str, str], dict[str, str]] = {
-    ("graph/cli.py", "cmd_add"): {
-        "--priority": "-p", "--cwd": "-c", "--details": "-d", "--type": "-t",
-    },
-    # cmd_idea was unified with cmd_add (x-9ac9): it now shares add's full option
-    # set, so -d rides --details (with --description as the no-short alias),
-    # matching cmd_add above instead of idea's old --description/-d primary.
-    ("graph/cli.py", "cmd_idea"): {
-        "--details": "-d", "--priority": "-p", "--cwd": "-c",
-    },
+    # cmd_add's and cmd_idea's rows moved with the create port: the native
+    # binary owns the surface now, and their -p/-c/-d/-t pins ride the
+    # committed ADD_HELP/IDEA_HELP goldens, the only scan that can see a Rust
+    # flag decl.
     ("graph/cli.py", "cmd_intake"): {"--title": "-t", "--priority": "-p"},
-    ("graph/cli.py", "cmd_update"): {
-        "--priority": "-p", "--cwd": "-c", "--title": "-t",
-    },
+    # cmd_update's row moved with the update port: the native binary owns
+    # the surface now, and its short pins ride the committed UPDATE_HELP
+    # golden, the only scan that can see a Rust flag decl.
     ("graph/cli.py", "cmd_next"): {"--project": "-p"},
     ("graph/cli.py", "cmd_ready"): {"--project": "-p"},
-    ("graph/cli.py", "cmd_find"): {
-        "--project": "-p", "--status": "-s", "--domain": "-d",
-    },
+    # cmd_find's row moved with the find port: the native binary owns
+    # the surface now, and its -p/-s/-d pins live in
+    # test_short_flag_dispatch.py's native-find parity test, the only scan
+    # that can see a Rust flag decl.
     ("backlog/capture.py", "cmd_add"): {
         "--source": "-s", "--where": "-w", "--priority": "-p",
     },
@@ -128,9 +124,10 @@ TWO_SPELLING_SITES: dict[tuple[str, str], list[tuple[str, str]]] = {
     # ("fno/cli.py", "loop") and ("gates/cli.py", "check") removed:
     # `fno loop` became a flagless supersession stub and the `fno gate`
     # sub-app was deleted by the control-plane collapse wedge (ab-d0337fbc).
-    ("fno/cli.py", "review"): [("--session-id", "--session")],
+    # ("fno/cli.py", "review") and ("worker/cli.py", "review") removed: the
+    # sigma panel's retirement left review a refusal stub plus the
+    # --assess-assurance read, and no caller ever used the legacy spelling.
     ("graph/cli.py", "cmd_cost"): [("--session-id", "--session")],
-    ("worker/cli.py", "review"): [("--session-id", "--session")],
     ("worker/cli.py", "external"): [("--pr-number", "--pr")],
     ("retro/cli.py", "run"): [
         ("--session-id", "--session"),
@@ -321,8 +318,12 @@ def test_exclusive_pre_existing_uppercase(decls: list[Decl]) -> None:
 
 def test_agents_ask_has_phone_shorts(decls: list[Decl]) -> None:
     """AC1: `agents ask` declares -H/-c/-t for harness/cwd/timeout (Python side)."""
-    ask = {d.long: d.shorts for d in decls if d.file.endswith("agents/cli.py") and d.func == "cmd_ask"}
-    assert ask, "could not find cmd_ask options in agents/cli.py"
+    ask = {
+        d.long: d.shorts
+        for d in decls
+        if d.file.endswith(("agents/cli.py", "agents/ask_cli.py")) and d.func == "cmd_ask"
+    }
+    assert ask, "could not find cmd_ask options in agents/cli.py or agents/ask_cli.py"
     expected = {"--harness": "-H", "--cwd": "-c", "--timeout": "-t"}
     for long, short in expected.items():
         assert long in ask, f"agents ask is missing {long}"

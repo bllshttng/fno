@@ -91,7 +91,7 @@ def global_claims_dir() -> Path:
     """The GLOBAL claims directory itself (``~/.fno/claims`` by default).
 
     ``claims_dir(global_claims_root())`` spelled once. Five production call
-    sites composed those two by hand, which is the shape x-3d21 R4 rules
+    sites composed those two by hand, which is the shape R4 rules
     against: a composition is not a resolver, so nothing can hang a receipt or
     a fence on it. ``fno.paths.STATE_FILES`` names this symbol as the owner of
     the ``claims`` row.
@@ -99,78 +99,33 @@ def global_claims_dir() -> Path:
     return claims_dir(global_claims_root())
 
 
-# Claim prefixes whose identifier is a globally-unique graph node id. Node ids
-# are global (like ~/.fno/graph.json), so EVERY claim keyed on one must
-# coordinate across worktrees/repos via the global root, never a cwd-local dir.
-# - node:<id>      the canonical work-claim
-# - dispatch:<id>  the boot-window bridge token (same id space as node:)
-# - reconcile:<id> the merge-context sentinel (written in the blocker's repo,
-#                  read in the dependent's repo)
-# - session:<uuid> the single-writer guard for a claude session (G1 adopt, x-26df):
-#                  a session is durable + cross-checkout, so two project checkouts
-#                  must coordinate on the SAME lock or both could drive its
-#                  transcript (codex P1).
-# - update:fno     the machine-global installed tool env one `fno update`
-#                  reinstalls in place; every repo and session on the machine
-#                  executes from that env, so the guard must never be cwd-local.
-# - config-optout:<key> the merge-gating opt-out lease. The Rust gates
-#                  (loopcheck/finalize) resolve this prefix to the global root
-#                  too; a Python write landing anywhere else is a lease the
-#                  merge lane cannot see.
-# Keys whose identifier is a repo-local resource (walker:<repo_root>) embed
-# their own scope and are NOT listed here; they keep the cwd/env default.
-_GLOBAL_ID_PREFIXES = frozenset(
-    {"node", "dispatch", "reconcile", "session", "groom", "update", "config-optout"}
-)
-
-
-def claims_root_for(key: str) -> Path | None:
-    """Resolve the claims root for ``key`` by what its identifier refers to.
-
-    A claim keyed on a globally-unique id (``node:``/``dispatch:``/
-    ``reconcile:`` name the same global graph node; ``session:`` names a durable
-    claude session; ``groom:<date>`` names a day of the global graph, so the
-    daily pass dedups across repos) is rooted at the global
-    ($HOME / ``$FNO_CLAIMS_ROOT``) root,
-    so a writer and a reader in different repos/worktrees coordinate on the SAME
-    lock. A claim keyed on a
-    repo-local resource (``walker:<repo_root>``) or any unrecognized / colon-less
-    key returns ``None`` -> the cwd/env default resolved by :func:`claims_dir`.
-
-    This is the single source of truth the dispatch surfaces (``claims.cli``,
-    ``backlog.advance``, ``backlog.reconcile_dispatch``, ``agents.cli``)
-    delegate to, so their routing cannot drift.
-    """
-    # partition (not split) so a colon-less key equal to a prefix (e.g. the bare
-    # token "node") does NOT match -- a global-id key is always "<prefix>:<id>".
-    prefix, colon, _ = key.partition(":")
-    return global_claims_root() if colon and prefix in _GLOBAL_ID_PREFIXES else None
+# Which claims root one claim key routes to is decided by the NATIVE leg only
+# (the global-id prefix list lives once, in
+# crates/fno-agents/src/claims_root.rs; `fno-agents claim root <key>` is the
+# read for Python callers that need the path - `fno.claims.core.native_claims_root`).
+# The Python resolver and its prefix list are deleted (the port-owed dual).
 
 
 def claims_dir(root: Path | None = None) -> Path:
-    """Return the claims directory under the given repo root.
+    """Return the claims directory under the given root.
 
-    Claims are cross-worktree coordination state. Resolution order for the
-    base dir:
+    Cross-worktree coordination state. Resolution order for the base dir:
 
       1. explicit ``root`` argument (per-root claims, e.g. walker singleton),
-      2. ``$FNO_CLAIMS_ROOT`` env var (global node claims; see
-         ``CLAIMS_ROOT_ENV``),
-      3. the canonical repo root (main worktree via
-         :func:`fno.paths.resolve_canonical_repo_root`), so that claims
-         from linked worktrees and the canonical checkout land in the same
-         directory.
+      2. ``$FNO_CLAIMS_ROOT`` env var (global node claims),
+      3. the repo's space (keyed on the canonical root), so claims from every
+         worktree land in one directory and no claims dir lives in a checkout.
     """
     if root is not None:
         base: Path = root
     else:
         override = os.environ.get(CLAIMS_ROOT_ENV)
         if override:
-            base = Path(override)
-        else:
-            from fno.paths import resolve_canonical_repo_root
+            return Path(override) / CLAIMS_DIRNAME
+        from fno.paths import space_dir
 
-            base = resolve_canonical_repo_root()
+        # fno-owned state: <space>/claims directly, no nested .fno segment.
+        return space_dir() / "claims"
     return base / CLAIMS_DIRNAME
 
 
@@ -210,6 +165,12 @@ def decode_key(filename: str) -> str:
     if filename.endswith(".lock"):
         filename = filename[: -len(".lock")]
     return unquote(filename)
+
+
+def list_claim_keys(prefix: str | None = None, root: Path | None = None) -> list[str]:
+    """Keys in the authoritative native claim store."""
+    from .core import list_claims
+    return sorted(row["key"] for row in list_claims(prefix=prefix,include_stale=True,root=root))
 
 
 def claim_path(key: str, root: Path | None = None) -> Path:
@@ -301,6 +262,10 @@ def _breadcrumb_path() -> Path:
     in a linked worktree and is granted THAT directory; the main worktree is
     outside its sandbox, so a breadcrumb aimed there is silently dropped by the
     very failure it is reporting.
+
+    Deliberately NOT moved into the repo's space: it exists for the worker
+    whose access to the fno state root was just DENIED, so it stays in the
+    one root that worker demonstrably still has.
     """
     from fno.paths import resolve_repo_root
 
@@ -345,7 +310,7 @@ def _state_root_denied(path: Path) -> ClaimStateRootDenied:
     cannot report its own condition through any of them - it reports into its
     own transcript, which nothing reads. It is not voiceless, though: the same
     sandbox that took the state root left the repo writable, so the refusal is
-    written there and the king reads it from outside the sandbox. That is the
+    written there and the lead reads it from outside the sandbox. That is the
     difference between a failure that is visible and one that is not.
 
     Best effort throughout. A breadcrumb that cannot be written must never
@@ -429,48 +394,28 @@ def parse_claim_dict(raw: dict[str, Any]) -> Claim:
 
 
 def read_claim_file(path: Path) -> Claim:
-    """Read and parse a claim file.
-
-    Raises:
-        ClaimGoneAway: the file disappeared between caller-decision and read.
-        ClaimCorrupted: file is unparseable YAML or fails schema validation.
-    """
+    """Read a logical claim locator through the native table door."""
+    from .core import _native_claim
+    from .verdict import ClaimVerdictError
     try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:
-        raise ClaimGoneAway(str(path)) from exc
-
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise ClaimCorrupted(f"YAML parse failed for {path}: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ClaimCorrupted(f"claim file root is not a dict: {path}")
-
-    return parse_claim_dict(data)
+        payload = _native_claim("read-path", str(path), [])
+    except ClaimVerdictError as exc:
+        if "Corrupted" in str(exc):
+            raise ClaimCorrupted(str(exc)) from exc
+        raise
+    if payload.get("state") == "free":
+        raise ClaimGoneAway(str(path))
+    return Claim.model_validate(payload)
 
 
 def archive_claim(path: Path, ts_ms: int) -> Path:
-    """Move a (stale or force-released) claim file into the .expired/ archive.
-
-    Returns the archive path. Idempotent: a missing source file is treated
-    as already-archived. The archive name is suffixed with ts_ms so multiple
-    archives of the same key do not collide.
-    """
-    if not path.exists():
-        return path
-    key = decode_key(path.name)
-    archive = expired_archive_path(key, ts_ms, root=path.parent.parent.parent)
-    archive.parent.mkdir(parents=True, exist_ok=True)
+    """Retire the observed table generation and return its graph archive locator."""
+    del ts_ms
+    from fno.claims.core import _native_claim
     try:
-        os.rename(str(path), str(archive))
-    except FileNotFoundError:
-        # Another process may have won the race and archived to this exact
-        # path first (harmless - report its destination), or `path` vanished
-        # for an unrelated reason and nothing landed at `archive` (report the
-        # original path so a caller's existence check doesn't trust a file
-        # that was never written).
-        if not archive.exists():
-            return path
-    return archive
+        claim = read_claim_file(path)
+    except ClaimGoneAway:
+        return path
+    import json
+    receipt = _native_claim("force-release", claim.key, ["--claims-dir", str(path.parent), "--reason", "archive observed claim", "--expected-claim", json.dumps(claim.model_dump())])
+    return Path(str(receipt["path"])) if receipt.get("archived") else path

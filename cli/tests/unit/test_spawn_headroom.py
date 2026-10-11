@@ -35,8 +35,9 @@ def _wire(
     slots: int = 0,
     limits: dict | None = None,
     live: dict | None = None,
-    cap_fn=None,
     fail: bool = False,
+    cpu_verdict: str = "admit",
+    unreadable_lanes: bool = False,
 ) -> None:
     limits = limits if limits is not None else {"zai": 7, "claude": None}
     live = live if live is not None else {}
@@ -49,17 +50,33 @@ def _wire(
     monkeypatch.setattr("fno.config.load_settings", fake_load_settings)
     from fno.agents import spawn_gate
 
-    monkeypatch.setattr(
-        spawn_gate, "census", lambda: SimpleNamespace(slot_count=slots)
-    )
-    monkeypatch.setattr(
-        spawn_gate, "provider_live_count", lambda name, counted=None: live.get(name, 0)
-    )
-    monkeypatch.setattr(
-        spawn_gate,
-        "provider_lanes_cap",
-        cap_fn if cap_fn is not None else spawn_gate.provider_lanes_cap,
-    )
+    # The width reads the ONE gate's probe answer (x-6089): slots, lanes and
+    # the CPU verdict travel in one payload, stubbed here.
+    rows: list[dict] = [
+        {
+            "name": "cpu-share",
+            "measured": "1.20/12.00 cores",
+            "threshold": "50%",
+            "verdict": "pass" if cpu_verdict == "admit" else "refuse",
+            "key": "agents.max_fleet_cpu_share",
+            "note": f"test {cpu_verdict}",
+        }
+    ]
+    answer = {
+        "verdict": "accepted" if cpu_verdict == "admit" else "refused",
+        "reason": None if cpu_verdict == "admit" else "fleet_cpu_share",
+        "message": None if cpu_verdict == "admit" else f"test {cpu_verdict}",
+        "slots": slots,
+        "max_live": max_live,
+        "lanes": None
+        if unreadable_lanes
+        else {
+            name: {"cap": limits.get(name), "live": live.get(name, 0), "counted": []}
+            for name in list(limits) + [name for name in live if name not in limits]
+        },
+        "rows": rows,
+    }
+    monkeypatch.setattr(spawn_gate, "probe_capacity", lambda *a, **k: answer)
 
 
 def test_width_is_the_minimum_of_fleet_and_provider_headroom(monkeypatch):
@@ -97,6 +114,14 @@ def test_an_uncapped_provider_cannot_bound_the_width(monkeypatch):
     assert _spawn_headroom() == 10
 
 
+def test_a_non_admit_cpu_verdict_zeroes_the_width(monkeypatch):
+    """x-7783 AC10: the gate would queue (hold) or refuse (undecidable) every
+    spawn this width dispatches, so the drain returns 0 and names the axis
+    instead of manufacturing N queued spawns."""
+    _wire(monkeypatch, max_live=30, slots=0, cpu_verdict="hold")
+    assert _spawn_headroom() == 0
+
+
 def test_zero_headroom_means_full_not_error(monkeypatch):
     _wire(monkeypatch, max_live=30, slots=30, limits={})
     assert _spawn_headroom() == 0
@@ -105,6 +130,15 @@ def test_zero_headroom_means_full_not_error(monkeypatch):
 def test_an_unreadable_reading_degrades_to_one_lane_loudly(monkeypatch, caplog):
     _wire(monkeypatch, fail=True)
     assert _spawn_headroom() == 1
+
+
+def test_probe_without_lanes_fails_closed_for_binding_and_width(monkeypatch):
+    from fno.backlog.advance import _binding_provider, _spawn_budget
+
+    _wire(monkeypatch, limits={"zai": 7}, live={"zai": 3}, unreadable_lanes=True)
+    budget = _spawn_budget()
+    assert _binding_provider(None) is None
+    assert (budget.fleet, budget.vendor_remaining, budget.binding) == (0, {}, None)
 
 
 def test_parallel_max_lanes_warns_once_and_is_ignored(monkeypatch):
@@ -137,7 +171,218 @@ def test_a_harness_pin_reads_the_vendor_keyed_table(monkeypatch):
 def test_an_unpinned_read_names_the_binding_provider(monkeypatch):
     _wire(monkeypatch, max_live=30, slots=0, limits={"openai": 7, "zai": 9},
           live={"openai": 7, "zai": 1})
-    from fno.backlog.advance import _binding_provider
+    from fno.backlog.advance import _spawn_budget
 
-    assert _binding_provider() == "openai"  # 0 remaining beats zai's 8
+    budget = _spawn_budget()
+    assert (budget.binding, budget.binding_remaining) == ("openai", 0)
     assert _spawn_headroom() == 0
+
+
+def test_spawn_budget_reuses_one_probe_snapshot_for_binding(monkeypatch):
+    from fno.agents import spawn_gate
+    from fno.backlog.advance import _spawn_budget
+
+    _wire(monkeypatch, max_live=30, slots=0, limits={"openai": 7, "zai": 9})
+    answers = [
+        {
+            "verdict": "accepted",
+            "slots": 0,
+            "lanes": {
+                "openai": {"cap": 7, "live": 7},
+                "zai": {"cap": 9, "live": 1},
+            },
+            "rows": [],
+        },
+        {
+            "verdict": "accepted",
+            "slots": 0,
+            "lanes": {
+                "openai": {"cap": 7, "live": 4},
+                "zai": {"cap": 9, "live": 9},
+            },
+            "rows": [],
+        },
+    ]
+    calls = 0
+
+    def probe(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return answers[min(calls - 1, len(answers) - 1)]
+
+    monkeypatch.setattr(spawn_gate, "probe_capacity", probe)
+    budget = _spawn_budget()
+    assert (budget.binding, budget.binding_remaining) == ("openai", 0)
+    assert calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-child lanes (x-fa3a): the budget + verdict the drain and explain share
+# ---------------------------------------------------------------------------
+
+
+def test_a_child_is_priced_by_its_own_lane_not_the_binding_provider(monkeypatch):
+    """x-fa3a AC1-HP: zai (the only configured cap) sits full, the fleet has
+    room, and the child's dispatch settles on uncapped anthropic: it passes."""
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=5, limits={"zai": 20}, live={"zai": 20})
+    monkeypatch.setattr(adv, "_child_lane_vendor", lambda child, **k: "anthropic")
+    budget = adv._spawn_budget()
+    assert (budget.fleet, budget.vendor_remaining) == (25, {"zai": 0})
+    assert adv._lane_cap_verdict({"id": "x-bp"}, budget, total=0) == (False, "anthropic", None)
+
+
+def test_a_full_lane_refuses_only_its_own_children(monkeypatch):
+    """x-fa3a AC2-ERR: zai full refuses a zai child by name while a later
+    anthropic child in the same pass still dispatches."""
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=0, limits={"zai": 20}, live={"zai": 20})
+    monkeypatch.setattr(adv, "_child_lane_vendor", lambda child, **k: child["vendor"])
+    budget = adv._spawn_budget()
+    assert adv._lane_cap_verdict({"id": "x-z", "vendor": "zai"}, budget, total=0) == (True, "zai", 0)
+    assert adv._lane_cap_verdict({"id": "x-a", "vendor": "anthropic"}, budget, total=0)[0] is False
+
+
+def test_an_unresolvable_lane_keeps_the_binding_provider_rule(monkeypatch):
+    """x-fa3a AC3-EDGE: a child whose lane cannot be resolved is bounded by
+    the most constrained CONFIGURED provider, exactly as before x-fa3a."""
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=0, limits={"zai": 20}, live={"zai": 20})
+    monkeypatch.setattr(adv, "_child_lane_vendor", lambda child, **k: None)
+    budget = adv._spawn_budget()
+    assert (budget.binding, budget.binding_remaining) == ("zai", 0)
+    assert adv._lane_cap_verdict({"id": "x-u"}, budget, total=0) == (True, None, 0)
+
+
+def test_one_free_lane_serves_the_first_child_on_it_only(monkeypatch):
+    """x-fa3a AC3-EDGE: with one zai lane free, the first zai child fills and
+    the next zai child drops with the lane named and no headroom left."""
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=0, limits={"zai": 20}, live={"zai": 19})
+    monkeypatch.setattr(adv, "_child_lane_vendor", lambda child, **k: "zai")
+    budget = adv._spawn_budget()
+    assert adv._lane_cap_verdict({"id": "x-1"}, budget, total=0)[0] is False
+    budget.dispatched_by_vendor["zai"] = 1
+    assert adv._lane_cap_verdict({"id": "x-2"}, budget, total=1) == (True, "zai", 0)
+
+
+class _ProfiledAgents:
+    def __init__(self, profiles=None, defaults=None):
+        self.profiles = profiles or {}
+        self.defaults = defaults
+
+
+def _wire_profiles(monkeypatch, profiles=None, defaults=None):
+    import fno.config as _config
+
+    monkeypatch.setattr(
+        _config, "load_settings",
+        lambda: _Settings(_ProfiledAgents(profiles, defaults)),
+    )
+
+
+def _record_vendor(monkeypatch):
+    """Stub resolve_lane_vendor at its module, recording (argv, harness)."""
+    from fno.agents import spawn_defaults
+    calls = []
+
+    def fake(argv, env=None, *, harness=None):
+        calls.append((list(argv), harness))
+        return f"vendor:{harness}:{argv[-1] if argv else 'bare'}"
+
+    monkeypatch.setattr(spawn_defaults, "resolve_lane_vendor", fake)
+    return calls
+
+
+def _boom(node):
+    raise RuntimeError("unanswerable")
+
+
+def test_child_lane_resolution_pin_then_grid_then_verb_profile(monkeypatch):
+    """x-fa3a: the helper mirrors the spawn seam - pin > grid pick (priced
+    through its route) > the verb profile's own lane."""
+    from fno.backlog import advance as adv
+    from fno.agents import node_dispatch
+
+    calls = _record_vendor(monkeypatch)
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider="claude") == "vendor:claude:bare"
+    assert calls == [([], "claude")]
+
+    calls.clear()
+    monkeypatch.setattr(node_dispatch, "node_effective_verb", lambda node: "target")
+    monkeypatch.setattr(
+        adv, "_grid_lane_for",
+        lambda node, *, model, provider, verb: ("codex", "m", "openai/gpt", None, None),
+    )
+    got = adv._child_lane_vendor({"id": "x"}, model=None, provider=None)
+    assert got == "vendor:codex:openai/gpt"
+    assert calls == [(["fno", "--route", "openai/gpt"], "codex")]
+
+    calls.clear()
+    monkeypatch.setattr(
+        adv, "_grid_lane_for",
+        lambda node, *, model, provider, verb: (None, None, None, None, "grid=unarmed"),
+    )
+    monkeypatch.setattr(node_dispatch, "node_effective_verb", lambda node: "blueprint")
+    _wire_profiles(
+        monkeypatch,
+        profiles={"blueprint": SimpleNamespace(route="", model="opus", provider="")},
+    )
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider=None) == "vendor:None:opus"
+    assert calls == [(["fno", "--model", "opus"], None)]
+
+
+def test_an_unresolvable_child_lane_returns_none(monkeypatch):
+    from fno.backlog import advance as adv
+    from fno.agents import node_dispatch
+
+    monkeypatch.setattr(node_dispatch, "node_effective_verb", _boom)
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider=None) is None
+
+
+def test_a_silent_resolver_never_miskeys_the_vendor_table(monkeypatch):
+    """No overlay opinion: only a raw vendor pin scopes; a harness pin falls
+    back to the configured caps (budget) / the binding cap (child lane)."""
+    from fno.agents import spawn_defaults
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=0, limits={"zai": 20}, live={"zai": 20})
+    monkeypatch.setattr(
+        spawn_defaults, "resolve_lane_vendor", lambda argv, env=None, *, harness=None: None
+    )
+    # A harness pin with no vendor opinion keeps the configured caps binding.
+    assert adv._spawn_headroom("claude") == 0
+    assert adv._spawn_headroom("zai") == 0  # a raw vendor pin still scopes
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider="claude") is None
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider="zai") == "zai"
+
+
+def test_a_fleet_full_pass_prices_no_child_lane(monkeypatch):
+    """The fleet bound fires before the vendor resolution: a full fleet never
+    pays a grid read per refused child."""
+    from fno.backlog import advance as adv
+
+    _wire(monkeypatch, max_live=30, slots=30, limits={})
+    monkeypatch.setattr(adv, "_child_lane_vendor", _boom)
+    budget = adv._spawn_budget()
+    assert adv._lane_cap_verdict({"id": "x"}, budget, total=0) == (True, None, 0)
+
+
+def test_a_profile_with_no_routing_names_no_lane(monkeypatch):
+    """Nothing the spawn would inherit names a lane, so the child keeps the
+    binding-provider rule instead of pricing against the caller's own env."""
+    from fno.backlog import advance as adv
+    from fno.agents import node_dispatch
+
+    _record_vendor(monkeypatch)
+    monkeypatch.setattr(node_dispatch, "node_effective_verb", lambda node: None)
+    monkeypatch.setattr(
+        adv, "_grid_lane_for",
+        lambda node, *, model, provider, verb: (None, None, None, None, "grid=unarmed"),
+    )
+    _wire_profiles(monkeypatch)
+    assert adv._child_lane_vendor({"id": "x"}, model=None, provider=None) is None

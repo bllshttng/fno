@@ -1,11 +1,9 @@
-"""Terminal-node archive sweep + read-through fallback.
+"""Terminal-node archive sweep.
 
-58% of the graph is terminal (done + superseded) and every locked read/mutation
-pays for the full file. This module moves old terminal entries into a sibling
-``graph-archive.json`` (append-only, same shape) under the graph lock, keeping
-the working graph to live work. A crash between the two writes duplicates an
-entry rather than losing it (archive is written first); read-through resolves
-from the working graph first and the next sweep dedupes.
+Terminal rows (done + superseded) age out of the live board: the sweep
+stamps ``archived_at`` on them in the same store and every default read
+filters stamped rows. The pure helpers here decide WHAT gets stamped;
+``cmd_archive`` applies the stamp in its one atomic write.
 
 Never archived (an open node still points at them through a HARD edge):
   - a blocker in any open node's ``blocked_by``
@@ -13,31 +11,28 @@ Never archived (an open node still points at them through a HARD edge):
   - a ``supersedes`` / ``superseded_by`` target of an open node
 
 SOFT edges (an open node's ``related`` peer, its ``source_node_id`` origin) do
-not hold a terminal node in the working set: the sweep strips the reference on
-the open side at apply time (see :func:`release_soft_edges`) and the node
-leaves. Hard edges carry dependency or lineage that would break if the target
-vanished from the working graph; a soft edge is a navigational convenience, and
-keeping finished work pinned forever behind one was the drain failure this
-release rule fixes. Read-through fallback keeps the archived id resolvable.
+not hold a terminal node: the sweep strips the reference on the open side at
+apply time (see :func:`release_soft_edges`) and the node leaves. Keeping
+finished work pinned behind one was the drain failure this rule fixes.
+Archived ids stay resolvable through the archive-inclusive reads.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from fno.graph.statuses import is_terminal_entry
+
 Entry = dict[str, Any]
 
 
-def _is_done(e: Entry) -> bool:
-    return bool(e.get("completed_at"))
-
-
-def _is_superseded(e: Entry) -> bool:
-    return bool(e.get("superseded_by"))
-
-
 def _is_terminal(e: Entry) -> bool:
-    return _is_done(e) or _is_superseded(e)
+    # The one terminal predicate, homed in statuses: status in TERMINAL_RUNGS,
+    # superseded_by, or a non-deferred completed_at. Archive asks "closed for
+    # good", NOT "is the work done" (that is node_is_done, the status-only
+    # ruling narrowed), so an archived-set fixture stamping only
+    # completed_at is terminal here.
+    return is_terminal_entry(e)
 
 
 def _terminal_ts(e: Entry) -> Optional[str]:
@@ -196,68 +191,105 @@ def release_soft_edges(
     return patched, stripped
 
 
-def stamp_archived_at(entries: list[Entry], ts: str) -> list[Entry]:
-    """Return ``entries`` with ``archived_at`` set to ``ts`` on each (new dicts).
+# -- retirement: postmortem receipts -----------------------------------------
 
-    Pure, never mutates the input. Called once per sweep, right before the
-    entries are merged into ``graph-archive.json`` -- nothing recorded WHEN a
-    node left the working graph before this, so a "did the last sweep move
-    anything" question had no answer on the archive side either.
+#: The retro-triage trailer a landed postmortem carries (source_pr=None is the
+#: postmortem shape). A literal match keeps graph/archive free of a retro
+#: import; the trailer has one writer (retro.land) and one reader (retro.dedup).
+_POSTMORTEM_TRAILER = "retro-triage source_pr=None"
+
+
+def retire_stale_postmortems(
+    entries: list[Entry], now: datetime, max_age_days: int = 30
+) -> "tuple[list[Entry], list[Entry]]":
+    """Close postmortem receipts that aged out untriaged: ``(entries, retired)``.
+
+    finalize mints one completion-eval node per session and nothing consumed
+    them (61 open receipts, 750 near-duplicate pairs). A receipt no human
+    touched within ``max_age_days`` closes by rule (status done, a ``retired``
+    marker); the next sweep removes it like any terminal row. Queued, claimed,
+    deferred, and non-idea rows are never touched. Pure: new dicts.
     """
-    return [{**e, "archived_at": ts} for e in entries]
-
-
-def remint_archive_collisions(
-    working_ids: set[str], archive_entries: list[Entry]
-) -> tuple[list[Entry], dict[str, str]]:
-    """Remint any archive entry whose id collides with a live working-graph id.
-
-    17 such collisions exist on disk (x-f69b): the id generator only checked
-    the working graph, so a freed id got reissued while the archive still
-    held a different node under it. Reminting the LIVE id would break every
-    open reference to it today (blockers, parents, branches, worktrees, open
-    PRs); the archived side is passive history, so it moves instead and keeps
-    its old id as ``previous_id`` so a stale reference can still resolve
-    (``cmd_get``'s archive read-through checks it as a fallback).
-
-    Returns ``(patched_entries, {old_id: new_id})`` for the caller to report.
-    A no-op (empty remap) when nothing collides.
-    """
-    from fno.graph._constants import mint_node_id
-
-    reserved = set(working_ids) | {
-        nid for e in archive_entries
-        if isinstance(e, dict) and isinstance(nid := e.get("id"), str)
-    }
-    remap: dict[str, str] = {}
+    cutoff = now.timestamp() - max_age_days * 86400
     patched: list[Entry] = []
-    for e in archive_entries:
-        eid = e.get("id")
-        if isinstance(eid, str) and eid in working_ids:
-            new_id = mint_node_id(reserved)
-            reserved.add(new_id)
-            remap[eid] = new_id
-            e = {**e, "id": new_id, "previous_id": eid}
-        patched.append(e)
-    return patched, remap
+    retired: list[Entry] = []
+    for e in entries:
+        if not isinstance(e, dict) or e.get("status") != "idea":
+            patched.append(e)
+            continue
+        if e.get("queued_at") or e.get("locked_by") or e.get("completed_at"):
+            patched.append(e)
+            continue
+        if _POSTMORTEM_TRAILER not in str(e.get("details") or ""):
+            patched.append(e)
+            continue
+        created = _parse_ts(e.get("created_at"))
+        if created is None or created.timestamp() >= cutoff:
+            patched.append(e)
+            continue
+        retired.append({
+            **e,
+            "status": "done",
+            "completed_at": now.isoformat(),
+            "retired": "stale-postmortem-receipt",
+        })
+        patched.append(retired[-1])
+    return patched, retired
 
 
-def merge_into_archive(existing: list[Entry], new: list[Entry]) -> list[Entry]:
-    """Append ``new`` to ``existing`` archive entries, deduped by id (last wins).
+# -- receipt helpers ----------------------------------------------------------
 
-    Dedup makes the crash-window duplicate self-heal: an entry that a crashed
-    sweep left in both files is written once here on the next sweep.
+_ARCHIVE_SKIP_REASONS = (
+    "referenced-by-open-node",
+    "related-peer-not-archived",
+    "too-recent",
+    "no-parseable-timestamp",
+)
+
+
+def _archive_bucket_counts(skipped: list) -> dict[str, int]:
+    """Tally ``skipped`` by ``_skip`` reason, zero-filled for every known one.
+
+    Zero-fill so a 0 reads as "checked, none held", not as an unmeasured line.
+    A reason outside ``_ARCHIVE_SKIP_REASONS`` still lands in the dict, so a
+    new ``_skip`` reason shows in the receipt instead of vanishing.
     """
-    # Track first-seen order without mutating any input dict: last write wins in
-    # by_id, and the final list is rebuilt from the recorded order.
-    by_id: dict[str, Entry] = {}
-    order: list[Any] = []  # node id (str) or the entry itself (id-less)
-    for e in [*existing, *new]:
-        nid = e.get("id")
-        if isinstance(nid, str):
-            if nid not in by_id:
-                order.append(nid)
-            by_id[nid] = e
-        else:
-            order.append(e)
-    return [by_id[x] if isinstance(x, str) else x for x in order]
+    held = {reason: 0 for reason in _ARCHIVE_SKIP_REASONS}
+    for s in skipped:
+        held[s["_skip"]] = held.get(s["_skip"], 0) + 1
+    return held
+
+
+def _receipt_reason_order(held: dict[str, int]) -> list[str]:
+    extras = set(held) - set(_ARCHIVE_SKIP_REASONS)
+    return list(_ARCHIVE_SKIP_REASONS) + sorted(extras)
+
+
+def _last_sweep_line(now: datetime) -> str:
+    """Sweep freshness from the store's newest ``archived_at`` stamp.
+
+    The newest completed_at trails today by the age gate, so it reads as a
+    stall; ``archived_at`` is the honest marker. A read failure answers
+    unknown, never a clean "none": an instrument that could not read says so.
+    """
+    from datetime import timedelta
+
+    from fno.graph.store import read_archive_entries
+
+    try:
+        entries = read_archive_entries()
+    except Exception:  # noqa: BLE001 - the receipt must not crash on a bad archive
+        return "unknown (archive unreadable)"
+    if not entries:
+        return "none on record"
+    stamps = [_parse_ts(e.get("archived_at")) for e in entries if isinstance(e, dict)]
+    newest = max((t for t in stamps if t is not None), default=None)
+    if newest is None:
+        return "none stamped"
+    age = now - newest
+    text = (
+        "<1h ago" if age < timedelta(hours=1)
+        else f"{int(age.total_seconds() // 3600)}h ago" if age < timedelta(hours=48)
+        else f"{age.days}d ago"
+    )
+    return f"{newest.strftime('%Y-%m-%dT%H:%M:%SZ')} ({text})"

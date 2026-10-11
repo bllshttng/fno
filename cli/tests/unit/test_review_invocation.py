@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fno.doctor import _review_invocation_report
 from fno.events import validate
@@ -141,7 +141,7 @@ def test_doctor_survives_a_tz_naive_row_and_names_it_lost(tmp_path) -> None:
     path.write_text(
         json.dumps(
             {
-                "ts": "2026-08-25T00:00:00",
+                "ts": "2026-08-25T23:44:00",
                 "type": "review_invocation",
                 "source": "daemon",
                 "data": {
@@ -175,7 +175,7 @@ def test_doctor_names_an_old_sent_attempt_with_transport_and_receipt(tmp_path) -
     path.write_text(
         json.dumps(
             {
-                "ts": "2026-08-25T00:00:00Z",
+                "ts": "2026-08-25T23:44:00Z",
                 "type": "review_invocation",
                 "source": "daemon",
                 "data": {
@@ -202,6 +202,32 @@ def test_doctor_names_an_old_sent_attempt_with_transport_and_receipt(tmp_path) -
         and "submission unconfirmed" in line
         for line in lines
     )
+
+
+def test_doctor_ignores_sent_attempt_older_than_bounded_window(tmp_path) -> None:
+    path = tmp_path / "events.jsonl"
+    now = datetime(2026, 8, 26, tzinfo=timezone.utc)
+    path.write_text(
+        json.dumps(
+            {
+                "ts": (now - timedelta(minutes=31)).isoformat().replace("+00:00", "Z"),
+                "type": "review_invocation",
+                "source": "daemon",
+                "data": {
+                    "invocation_id": "ri-too-old",
+                    "stage": "sent",
+                    "verb": "/review",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lines = _review_invocation_report(path, now=now)
+
+    assert any("none lost in the last 15m" in line for line in lines)
+    assert all("ri-too-old" not in line for line in lines)
 
 
 def test_doctor_explicitly_reports_no_lost_attempt_after_attestation(tmp_path) -> None:
@@ -294,3 +320,44 @@ def test_parse_emits_a_react_to_em_dash_without_flag_name() -> None:
     parsed = parse_review_invocation("/fno:review high — quick pass")
     assert parsed is not None
     assert parsed["flags"] == []
+
+
+# --- the review's named target: what a hold keys on when the args name one ---
+
+
+def test_parse_names_a_pr_number_target() -> None:
+    from fno.review.invocation import parse_review_invocation
+
+    parsed = parse_review_invocation("/fno:review high --comment 1713")
+    assert parsed is not None
+    assert parsed["target"] == "1713"
+    assert parsed["pr_number"] == 1713
+    assert parsed["level"] == "high"
+    assert parsed["flags"] == ["--comment"]
+
+
+def test_parse_reads_a_pr_number_out_of_a_github_url() -> None:
+    from fno.review.invocation import parse_review_invocation
+
+    parsed = parse_review_invocation("/fno:review high --comment https://github.com/o/r/pull/7")
+    assert parsed is not None
+    assert parsed["target"] == "https://github.com/o/r/pull/7"
+    assert parsed["pr_number"] == 7
+
+
+def test_parse_names_a_branch_target_without_a_pr_number() -> None:
+    from fno.review.invocation import parse_review_invocation
+
+    parsed = parse_review_invocation("/fno:review medium feature/x-a089")
+    assert parsed is not None
+    assert parsed["target"] == "feature/x-a089"
+    assert parsed["pr_number"] is None
+
+
+def test_parse_records_no_target_when_the_args_carry_none() -> None:
+    from fno.review.invocation import parse_review_invocation
+
+    parsed = parse_review_invocation("/fno:review high --comment")
+    assert parsed is not None
+    assert parsed["target"] is None
+    assert parsed["pr_number"] is None

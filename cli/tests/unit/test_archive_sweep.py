@@ -2,21 +2,35 @@
 
 Pure logic (partition guards, age filter, dedup merge) plus the command's
 dry-run/apply behavior and `backlog get`'s read-through into the archive.
+
+Since the store port every command here rides the keeper, so the module
+needs the compiled runtime and skips whole where the smoke harness deleted
+the worker binary (the parity-test convention).
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
-import json
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
+import pytest
 
-from typer.testing import CliRunner
 
-from fno.cli import app
-from fno.graph.archive import (
-    merge_into_archive,
+requires_rust = pytest.mark.dev_build
+
+pytestmark = requires_rust
+
+import json  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from typer.testing import CliRunner  # noqa: E402
+
+from fno.cli import app  # noqa: E402
+from fno.graph.store import read_graph_strict  # noqa: E402
+from fno.graph.archive import (  # noqa: E402
+    _archive_bucket_counts,
+    _last_sweep_line,
+    _receipt_reason_order,
     partition_for_archive,
-    remint_archive_collisions,
-    stamp_archived_at,
+    retire_stale_postmortems,
 )
 
 runner = CliRunner()
@@ -84,18 +98,6 @@ def test_no_timestamp_held():
     assert skip[0]["_skip"] == "no-parseable-timestamp"
 
 
-# -- merge_into_archive (crash-window dedup) -------------------------------
-
-
-def test_merge_dedups_by_id_last_wins():
-    existing = [{"id": "x-1", "completed_at": "a"}]
-    new = [{"id": "x-1", "completed_at": "b"}, {"id": "x-2", "completed_at": "c"}]
-    merged = merge_into_archive(existing, new)
-    by_id = {e["id"]: e for e in merged}
-    assert len(merged) == 2
-    assert by_id["x-1"]["completed_at"] == "b"  # duplicate healed, last wins
-
-
 # -- command + read-through ------------------------------------------------
 
 
@@ -104,10 +106,16 @@ def _route(tmp_path, monkeypatch) -> tuple[Path, Path]:
     import fno.graph.store as gs
 
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
-    monkeypatch.setattr(gc, "GRAPH_JSON", g)
-    monkeypatch.setattr(gc, "GRAPH_MD", tmp_path / "graph.md")
-    monkeypatch.setattr(gc, "GRAPH_ARCHIVE_JSON", tmp_path / "graph-archive.json")
+    seed_graph(g, '{"entries": []}\n')
+    # _constants serves these names through module __getattr__, so they are
+    # NOT real attributes. monkeypatch.setattr would save the resolved value
+    # and its undo would setattr it back, BAKING a frozen path into the module
+    # for every later test in the process (the closure-release tests failed on
+    # exactly that). setitem undoes by deleting the key, so the lazy
+    # __getattr__ keeps answering after this test.
+    monkeypatch.setitem(vars(gc), "GRAPH_JSON", g)
+    monkeypatch.setitem(vars(gc), "GRAPH_MD", tmp_path / "graph.md")
+    monkeypatch.setitem(vars(gc), "GRAPH_ARCHIVE_JSON", tmp_path / "graph-archive.json")
     monkeypatch.setattr(gs, "GRAPH_JSON", g)
     # Seam readers (guarded metadata/display reads) resolve paths.graph_json
     # at call time; pin the resolver to the same hermetic file.
@@ -115,11 +123,35 @@ def _route(tmp_path, monkeypatch) -> tuple[Path, Path]:
     # Route paths.graph_archive_json (used by cmd_get read-through) to the temp.
     import fno.paths as p
     monkeypatch.setattr(p, "graph_json", lambda: g)
+    # The native binary (which the get/find read-backs exec) resolves the
+    # store through FNO_CONFIG's state_dir; point it at this same tmp dir.
+    (tmp_path / "config.toml").write_text(f'state_dir = "{tmp_path}"\n')
+    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "config.toml"))
     return g, tmp_path / "graph-archive.json"
 
 
+def _native_backlog(*args) -> tuple[int, str, str]:
+    """Run the native binary's backlog verb against the routed store.
+    Returns (code, stdout, stderr)."""
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    proc = _sp.run(
+        [str(binary), "backlog", *args],
+        capture_output=True,
+        text=True,
+        env={**_os.environ, "FNO_TRACKER_BACKEND": "graph"},
+    )
+    return proc.returncode, proc.stdout, proc.stderr
+
+
 def _seed(g: Path, entries: list[dict]) -> None:
-    g.write_text(json.dumps({"entries": entries}) + "\n")
+    seed_graph(g, json.dumps({"entries": entries}) + "\n")
 
 
 def test_get_read_through_resolves_archived_node(tmp_path, monkeypatch):
@@ -129,9 +161,9 @@ def test_get_read_through_resolves_archived_node(tmp_path, monkeypatch):
         {"id": "ab-arch0001", "slug": "archived-node", "title": "Old", "completed_at": "2026-01-01T00:00:00Z"}
     ]}) + "\n")
 
-    r = runner.invoke(app, ["backlog", "get", "ab-arch0001"])
-    assert r.exit_code == 0, r.output
-    out = json.loads(r.output)
+    code, stdout, stderr = _native_backlog("get", "ab-arch0001")
+    assert code == 0, stderr
+    out = json.loads(stdout)
     assert out["id"] == "ab-arch0001"
     assert out["_archived"] is True
 
@@ -139,8 +171,8 @@ def test_get_read_through_resolves_archived_node(tmp_path, monkeypatch):
 def test_get_missing_everywhere_exits_1(tmp_path, monkeypatch):
     g, _archive = _route(tmp_path, monkeypatch)
     _seed(g, [])
-    r = runner.invoke(app, ["backlog", "get", "ab-nope0001"])
-    assert r.exit_code == 1
+    code, _, _ = _native_backlog("get", "ab-nope0001")
+    assert code == 1
 
 
 def test_find_read_through_resolves_archived_node(tmp_path, monkeypatch):
@@ -155,9 +187,9 @@ def test_find_read_through_resolves_archived_node(tmp_path, monkeypatch):
          "completed_at": "2026-01-01T00:00:00Z"}
     ]}) + "\n")
 
-    r = runner.invoke(app, ["backlog", "find", "Archived Feature", "--json"])
-    assert r.exit_code == 0, r.output
-    hits = json.loads(r.output)
+    code, stdout, stderr = _native_backlog("find", "Archived Feature", "--json")
+    assert code == 0, stderr
+    hits = json.loads(stdout)
     assert [h["id"] for h in hits] == ["ab-arch0001"]
     assert hits[0]["_archived"] is True
 
@@ -169,9 +201,8 @@ def test_find_corrupt_archive_is_miss_not_crash(tmp_path, monkeypatch):
     _seed(g, [])  # working graph empty
     archive.write_text("{not json at all")
 
-    r = runner.invoke(app, ["backlog", "find", "anything", "--json"])
-    assert r.exit_code == 1
-    assert r.exception is None or isinstance(r.exception, SystemExit)
+    code, _, _ = _native_backlog("find", "anything", "--json")
+    assert code == 1
 
 
 def test_roadmap_archive_guards_across_roadmaps(tmp_path, monkeypatch):
@@ -186,7 +217,7 @@ def test_roadmap_archive_guards_across_roadmaps(tmp_path, monkeypatch):
         app, ["backlog", "archive", "--apply", "--older-than-days", "0", "--roadmap-id", "rm-A"]
     )
     assert r.exit_code == 0, r.output
-    live = {e["id"] for e in json.loads(g.read_text())["entries"]}
+    live = {e["id"] for e in read_graph_strict(g)}
     assert "ab-dep00001" in live  # held: an open node in rm-B still blocks on it
     assert not archive.exists() or "ab-dep00001" not in {
         e["id"] for e in json.loads(archive.read_text())["entries"]
@@ -209,8 +240,6 @@ def test_roadmap_restricted_held_counts_only_that_roadmap(tmp_path, monkeypatch)
 
 
 def test_receipt_passes_through_an_unknown_skip_reason():
-    from fno.graph.cli import _archive_bucket_counts, _receipt_reason_order
-
     held = _archive_bucket_counts([{"_skip": "some-future-reason"}])
     assert held["some-future-reason"] == 1
     assert held["too-recent"] == 0  # zero-fill holds for the known four
@@ -228,14 +257,9 @@ def _with_events(tmp_path, monkeypatch):
 
 
 def _events_of_type(events_path: Path, type_name: str) -> list[dict]:
-    if not events_path.exists():
-        return []
-    out = []
-    for line in events_path.read_text().splitlines():
-        ev = json.loads(line)
-        if ev.get("type") == type_name:
-            out.append(ev)
-    return out
+    from tests._event_rows import event_rows
+
+    return [ev for ev in event_rows(events_path) if ev.get("type") == type_name]
 
 
 def test_dry_run_prints_all_four_buckets_zero_filled(tmp_path, monkeypatch):
@@ -251,12 +275,13 @@ def test_dry_run_prints_all_four_buckets_zero_filled(tmp_path, monkeypatch):
 
 
 def test_apply_stamps_archived_at(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
+    g, _archive = _route(tmp_path, monkeypatch)
     _seed(g, [{"id": "ab-done0001", "completed_at": _old(40)}])
     r = runner.invoke(app, ["backlog", "archive", "--apply", "--older-than-days", "30"])
     assert r.exit_code == 0, r.output
-    entry = json.loads(archive.read_text())["entries"][0]
-    assert entry["id"] == "ab-done0001"
+    from fno.graph.store import read_archive_entries
+
+    entry = next(e for e in read_archive_entries() if e["id"] == "ab-done0001")
     assert entry.get("archived_at")  # stamped, not just moved
 
 
@@ -284,6 +309,136 @@ def test_apply_emits_swept_event_with_moved_and_held_counts(tmp_path, monkeypatc
     assert data["held_too_recent"] == 1
     assert data["held_referenced"] == 0
     assert data["older_than_days"] == 30
+
+
+# -- receipt: last-sweep freshness marker -----------------------------------
+
+
+def test_last_sweep_line_reports_newest_archived_at(tmp_path, monkeypatch):
+    from datetime import datetime as dt, timezone as tz
+
+    g, _archive = _route(tmp_path, monkeypatch)
+    _seed(g, [
+        {"id": "ab-1", "archived_at": "2026-09-09T10:00:00Z"},
+        {"id": "ab-2", "archived_at": "2026-09-10T09:00:00Z"},  # newest wins
+    ])
+    now = dt(2026, 9, 10, 12, 0, tzinfo=tz.utc)
+    line = _last_sweep_line(now)
+    assert line == "2026-09-10T09:00:00Z (3h ago)"
+
+
+def test_last_sweep_line_names_each_honest_branch(tmp_path, monkeypatch):
+    from datetime import datetime as dt, timezone as tz
+
+    now = dt(2026, 9, 10, 12, 0, tzinfo=tz.utc)
+    g, _archive = _route(tmp_path, monkeypatch)
+    _seed(g, [])
+    assert _last_sweep_line(now) == "none on record"
+
+    _seed(g, [{"id": "ab-1", "archived_at": "not-a-date"}])
+    assert _last_sweep_line(now) == "none stamped"
+
+    import fno.graph.store as store
+
+    def _unreadable(*a, **k):
+        raise RuntimeError("store gone")
+
+    monkeypatch.setattr(store, "read_archive_entries", _unreadable)
+    assert _last_sweep_line(now) == "unknown (archive unreadable)"
+
+
+def test_dry_run_receipt_carries_last_sweep_marker(tmp_path, monkeypatch):
+    g, archive = _route(tmp_path, monkeypatch)
+    _seed(g, [{"id": "ab-open0001", "plan_path": "p.md"}])
+    archive.write_text(json.dumps({"entries": [
+        {"id": "ab-1", "archived_at": "2026-09-10T09:00:00Z"},
+    ]}) + "\n")
+    r = runner.invoke(app, ["backlog", "archive"])
+    assert r.exit_code == 0, r.output
+    assert "last sweep: 2026-09-10T09:00:00Z" in r.output
+
+
+# -- retirement: stale postmortem receipts -----------------------------------
+
+
+def _pm_receipt(node_id: str, days_old: int, **extra) -> dict:
+    from datetime import timedelta, timezone as tz
+
+    created = (datetime.now(tz.utc) - timedelta(days=days_old)).isoformat()
+    return {
+        "id": node_id,
+        "status": "idea",
+        "slug": f"postmortem-doneprgreen-{node_id}",
+        "title": f"postmortem DonePRGreen: {node_id}",
+        "created_at": created,
+        "details": "gist\n\nSource: postmortem:x.md\n\n"
+                   "<!-- retro-triage source_pr=None finding_hash=ab12cd34 -->",
+        **extra,
+    }
+
+
+def test_retire_closes_only_stale_unclaimed_receipts():
+    from datetime import datetime as dt, timezone as tz
+
+    # Real now, not a fixed date: the fixture ages receipts relative to the
+    # wall clock, so a fixed cutoff goes stale as the calendar advances.
+    now = dt.now(tz.utc)
+    entries = [
+        _pm_receipt("ab-old00001", 40),                       # retired
+        _pm_receipt("ab-young0001", 5),                       # too young, stays
+        _pm_receipt("ab-claim0001", 40, locked_by="s1"),      # claimed, stays
+        _pm_receipt("ab-queued001", 40, queued_at=now.isoformat()),  # ack-pending, stays
+        _pm_receipt("ab-defer0001", 40, status="deferred"),   # human disposition, stays
+        _pm_receipt("ab-notrail01", 40, details="no trailer here"),  # not a receipt, stays
+        {"id": "ab-open0002", "status": "ready"},             # not a receipt, stays
+    ]
+    patched, retired = retire_stale_postmortems(entries, now)
+    by_id = {e["id"]: e for e in patched}
+    assert [e["id"] for e in retired] == ["ab-old00001"]
+    assert by_id["ab-old00001"]["status"] == "done"
+    assert by_id["ab-old00001"]["retired"] == "stale-postmortem-receipt"
+    assert by_id["ab-old00001"]["completed_at"]
+    assert by_id["ab-young0001"]["status"] == "idea"
+    assert by_id["ab-claim0001"]["status"] == "idea"
+    assert by_id["ab-queued001"]["status"] == "idea"
+    assert by_id["ab-defer0001"]["status"] == "deferred"
+    assert by_id["ab-notrail01"]["status"] == "idea"
+
+
+def test_apply_retires_receipts_and_reports_them(tmp_path, monkeypatch):
+    from datetime import datetime as dt, timedelta, timezone as tz
+
+    created = (dt.now(tz.utc) - timedelta(days=40)).isoformat()
+    g, _archive = _route(tmp_path, monkeypatch)
+    _seed(g, [
+        {"id": "ab-old00001", "status": "idea", "created_at": created,
+         "details": "<!-- retro-triage source_pr=None finding_hash=ab12cd34 -->"},
+        {"id": "ab-live0001", "status": "idea", "created_at": created,
+         "details": "a real idea with no trailer"},
+    ])
+    r = runner.invoke(app, ["backlog", "archive", "--apply", "--older-than-days", "30"])
+    assert r.exit_code == 0, r.output
+    assert "Retired 1 stale postmortem receipt(s)" in r.output
+    from fno.graph.api import wire_rows
+
+    live = {e["id"]: e for e in wire_rows(path=g)}
+    assert live["ab-old00001"]["status"] == "done"
+    assert live["ab-old00001"]["retired"] == "stale-postmortem-receipt"
+    assert live["ab-live0001"]["status"] == "idea"
+
+
+def test_dry_run_reports_would_retire_count(tmp_path, monkeypatch):
+    from datetime import datetime as dt, timedelta, timezone as tz
+
+    created = (dt.now(tz.utc) - timedelta(days=40)).isoformat()
+    g, _archive = _route(tmp_path, monkeypatch)
+    _seed(g, [{"id": "ab-old00001", "status": "idea", "created_at": created,
+               "details": "<!-- retro-triage source_pr=None finding_hash=ab12 -->"}])
+    r = runner.invoke(app, ["backlog", "archive"])
+    assert r.exit_code == 0, r.output
+    assert "would retire 1 stale postmortem receipt(s)" in r.output
+    live = {e["id"]: e for e in read_graph_strict(g)}
+    assert live["ab-old00001"]["status"] == "idea"  # dry-run never mutates
 
 
 def test_apply_with_nothing_to_move_still_emits_zero_moved_event(tmp_path, monkeypatch):
@@ -394,7 +549,7 @@ def test_apply_leaves_no_open_reference_to_an_archived_id(tmp_path, monkeypatch)
     def _real_old(days: int) -> str:
         return (real_now - timedelta(days=days)).isoformat()
 
-    g, archive = _route(tmp_path, monkeypatch)
+    g, _archive = _route(tmp_path, monkeypatch)
     events_path = _with_events(tmp_path, monkeypatch)
     _seed(g, [
         {"id": "x-softrel", "title": "soft held", "completed_at": _real_old(40),
@@ -405,12 +560,15 @@ def test_apply_leaves_no_open_reference_to_an_archived_id(tmp_path, monkeypatch)
     r = runner.invoke(app, ["backlog", "archive", "--apply", "--older-than-days", "30"])
     assert r.exit_code == 0, r.output
     assert "soft edges stripped from open nodes: 2" in r.output
-    working = json.loads(g.read_text())["entries"]
+    from fno.graph.api import wire_rows
+    from fno.graph.store import read_archive_entries
+
+    working = wire_rows(path=g)
     assert [e["id"] for e in working] == ["x-open"]
-    assert working[0]["related"] == []
-    assert working[0]["source_node_id"] is None
+    assert not working[0].get("related")  # the soft edge is gone
+    assert not working[0].get("source_node_id")
     # The archived side kept its own related entry (its copy leaves with it).
-    archived = json.loads(archive.read_text())["entries"]
+    archived = read_archive_entries()
     assert [e["id"] for e in archived] == ["x-softrel"]
     assert archived[0].get("related") == ["x-open"]
     # The event carries the strip count.
@@ -418,105 +576,8 @@ def test_apply_leaves_no_open_reference_to_an_archived_id(tmp_path, monkeypatch)
     assert evs[0]["data"]["moved"] == 1
     assert evs[0]["data"]["soft_edges_stripped"] == 2
     # Read-through still resolves the archived node by id.
-    r_get = runner.invoke(app, ["backlog", "get", "x-softrel"])
-    assert r_get.exit_code == 0, r_get.output
-
-
-# -- remint_archive_collisions (x-f69b) --------------------------------------
-
-
-def test_remint_no_collision_is_noop():
-    archive_entries = [{"id": "ab-arch0001", "completed_at": "2026-01-01T00:00:00Z"}]
-    patched, remap = remint_archive_collisions({"ab-live0001"}, archive_entries)
-    assert remap == {}
-    assert patched == archive_entries
-
-
-def test_remint_reissues_colliding_archive_entry_and_keeps_previous_id():
-    archive_entries = [
-        {"id": "ab-dup00001", "title": "old archived node", "completed_at": "2026-01-01T00:00:00Z"},
-        {"id": "ab-other001", "completed_at": "2026-01-01T00:00:00Z"},
-    ]
-    patched, remap = remint_archive_collisions({"ab-dup00001"}, archive_entries)
-    assert list(remap.keys()) == ["ab-dup00001"]
-    new_id = remap["ab-dup00001"]
-    reminted = next(e for e in patched if e.get("previous_id") == "ab-dup00001")
-    assert reminted["id"] == new_id
-    assert reminted["title"] == "old archived node"
-    # The untouched entry passes through unchanged.
-    other = next(e for e in patched if e["id"] == "ab-other001")
-    assert "previous_id" not in other
-
-
-def test_stamp_archived_at_sets_field_without_mutating_input():
-    entries = [{"id": "ab-1"}, {"id": "ab-2", "archived_at": "old"}]
-    stamped = stamp_archived_at(entries, "2026-08-14T00:00:00Z")
-    assert [e["archived_at"] for e in stamped] == ["2026-08-14T00:00:00Z"] * 2
-    assert "archived_at" not in entries[0]  # input untouched
-
-
-# -- fno backlog get resolves a reminted id via previous_id (x-f69b) --------
-
-
-def test_get_resolves_reminted_archive_entry_via_previous_id(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-newid001", "previous_id": "ab-oldid001", "slug": "reminted",
-         "title": "Reminted Node", "completed_at": "2026-01-01T00:00:00Z"}
-    ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "get", "ab-oldid001"])
-    assert r.exit_code == 0, r.output
-    out = json.loads(r.output)
-    assert out["id"] == "ab-newid001"
-    assert out["_archived"] is True
-
-
-# -- fno backlog archive-dedupe-ids (x-f69b) ---------------------------------
-
-
-def test_dedupe_ids_dry_run_reports_without_writing(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [{"id": "ab-dup00001", "plan_path": "p.md"}])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-dup00001", "completed_at": "2026-01-01T00:00:00Z"}
-    ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "archive-dedupe-ids"])
-    assert r.exit_code == 0, r.output
-    assert "would remint 1 archive id(s)" in r.output
-    assert "ab-dup00001" in json.loads(archive.read_text())["entries"][0]["id"]  # unwritten
-
-
-def test_dedupe_ids_apply_writes_and_keeps_previous_id(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    events_path = _with_events(tmp_path, monkeypatch)
-    _seed(g, [{"id": "ab-dup00001", "plan_path": "p.md"}])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-dup00001", "title": "old", "completed_at": "2026-01-01T00:00:00Z"}
-    ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "archive-dedupe-ids", "--apply"])
-    assert r.exit_code == 0, r.output
-    entries = json.loads(archive.read_text())["entries"]
-    assert len(entries) == 1
-    assert entries[0]["previous_id"] == "ab-dup00001"
-    assert entries[0]["id"] != "ab-dup00001"
-    evs = _events_of_type(events_path, "graph_archive_ids_reminted")
-    assert len(evs) == 1
-    assert evs[0]["data"]["remint_count"] == 1
-    assert evs[0]["data"]["remap"]["ab-dup00001"] == entries[0]["id"]
-    # A repair is not a sweep: it must never be recorded as one.
-    assert _events_of_type(events_path, "graph_archive_swept") == []
-
-
-def test_dedupe_ids_apply_with_no_collision_writes_nothing(tmp_path, monkeypatch):
-    g, archive = _route(tmp_path, monkeypatch)
-    _seed(g, [{"id": "ab-live0001", "plan_path": "p.md"}])
-    archive.write_text(json.dumps({"entries": [
-        {"id": "ab-arch0001", "completed_at": "2026-01-01T00:00:00Z"}
-    ]}) + "\n")
-    r = runner.invoke(app, ["backlog", "archive-dedupe-ids", "--apply"])
-    assert r.exit_code == 0, r.output
-    assert "No colliding archive ids found." in r.output
+    r_code, _, r_err = _native_backlog("get", "x-softrel")
+    assert r_code == 0, r_err
 
 
 # -- fno backlog album (x-a023 browse surface) -------------------------------

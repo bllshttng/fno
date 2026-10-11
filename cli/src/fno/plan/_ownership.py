@@ -15,13 +15,14 @@ BLUEPRINT_WRITE_ALLOWLIST: frozenset[str] = frozenset(
     {
         "Execution Strategy",
         "File Ownership Map",
+        "Five questions",
         "Patterns to Reuse",
         # Frontmatter keys /blueprint writes. Routed through the same allowlist
         # so the ownership model covers frontmatter writes, not just sections.
         "kill_criteria",
         "execution_mode",
         "waves",
-        # The compiled-v1 acceptance-contract stamp (x-f905): set at finalize
+        # The compiled-v1 acceptance-contract stamp: set at finalize
         # when a design promotes to ready, marking the plan as carrying strict
         # reference-resolved acceptance criteria.
         "acceptance_contract",
@@ -29,11 +30,19 @@ BLUEPRINT_WRITE_ALLOWLIST: frozenset[str] = frozenset(
         # kill_criteria: the validator requires the block, so the ownership
         # model has to permit the write that satisfies it.
         "consolidation",
-        # The difficulty band. Same rule (x-e3d1): the date-keyed gate
+        # The difficulty band. Same rule: the date-keyed gate
         # requires it on plans created after 2026-08-26, and the mint is what
         # stamps that date, so the ownership model has to permit the floor
         # band the mint writes to satisfy its own validator.
         "difficulty",
+        # The plan's join posture, manual or auto. Its reader is
+        # `hooks/helpers/init-target-state.sh` at target init, which fires
+        # `fno backlog join` on `auto`. Absent from this set the key was
+        # hand-authored or nothing, which is why one plan in 1385 carried it.
+        "join",
+        # Whether the PR may declare carve-outs. Its reader is
+        # fno.plan.fidelity, which refuses a declared exclusion on `forbidden`.
+        "carveouts",
     }
 )
 

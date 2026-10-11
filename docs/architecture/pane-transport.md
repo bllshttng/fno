@@ -4,7 +4,7 @@
 
 ## The defect, measured
 
-On 2026-08-21 an operator read a king's instruction in pane 45 and asked why it had been sent `--raw`. It had not. `fno agents mail send` returned `queued (durable) [live-miss]`. The king fell back to `fno mux pane send --text ... --submit`. The message arrived with no sender, no message id, no reply handle, and no authority footer. In the pane it is indistinguishable from the operator typing. A worker cannot tell a peer's dispatch from an operator order. The two carry different authority. A peer cannot authorize an outward action the operator did not. The footer is the only thing that says so.
+On 2026-08-21 an operator read a lead's instruction in pane 45 and asked why it had been sent `--raw`. It had not. `fno agents mail send` returned `queued (durable) [live-miss]`. The lead fell back to `fno mux pane send --text ... --submit`. The message arrived with no sender, no message id, no reply handle, and no authority footer. In the pane it is indistinguishable from the operator typing. A worker cannot tell a peer's dispatch from an operator order. The two carry different authority. A peer cannot authorize an outward action the operator did not. The footer is the only thing that says so.
 
 The same night, mail live-missed repeatedly against a codex worker under both its registry name and its full session id. The pane path landed 4 of 4. So the transport that worked was the one carrying nothing. The design call is to wrap the durable path, not to route around it.
 
@@ -34,7 +34,7 @@ The three passthroughs rely on `_already_wrapped`, which tests the FIRST tag of 
 
 Before an enveloped or forced send types anything, the lane reads the pane and asks the manifest engine whether an option prompt is showing. A showing prompt refuses the send.
 
-A `--submit` against a showing prompt dismisses the payload and selects the highlighted default. Verified specimen: a king's option-3 ruling was typed and discarded. The return registered. The worker took option 1 and filed a node an operator freeze forbade. Every surface read normal.
+A `--submit` against a showing prompt dismisses the payload and selects the highlighted default. Verified specimen: a lead's option-3 ruling was typed and discarded. The return registered. The worker took option 1 and filed a node an operator freeze forbade. Every surface read normal.
 
 A detector that never ran refuses too. An absence of a detected prompt on an instrument that never ran is not evidence of an idle pane.
 
@@ -46,21 +46,46 @@ There are THREE cases here and only two flags, which is how one of them got lost
 
 ## Receipt vocabulary
 
-Three words, and they are not interchangeable.
+Four words now, and they are not interchangeable.
 
 | Receipt | What it asserts | What it does not assert |
 |---------|-----------------|-------------------------|
-| `delivered (hosted)` | The injector confirmed the message reached the recipient's turn | Anything about what the recipient did with it |
+| `delivered (hosted)` | The injector confirmed the payload was accepted at send time | That it reached the recipient's turn, or anything about what the recipient did with it |
+| `landed` | The message id is present in the recipient's own transcript | That the agent read it or acted on it |
 | `typed (pane <id>)` | Bytes were written into that pane | That anyone read them, or that the turn was taken |
 | `queued (durable) [<reason>]` | A durable envelope exists and the named live lane missed | That the recipient is gone. `live-miss` today cannot tell a busy peer from an absent one |
 
+`delivered (hosted)` used to be read as proof the recipient's turn was reached. One message disproved that. It printed `delivered (hosted)`. It reached its recipient only because the operator pressed ESC to interrupt a busy loop. The send had confirmed nothing beyond its own injection. `landed` is the row that grew out of that gap. It is proven by grepping the recipient's own transcript for the bare message id (`fno agents mail sent --json`). It is a strictly weaker claim than the old wording implied.
+
 `typed` is deliberately not `delivered`. Bytes written to a PTY is not delivery and is certainly not action. A full payload can arrive, render, and be discarded while the return selects a prompt's default. The confirmation a pane send cannot give is the recipient's own transcript showing the text.
+
+The same rule now governs the keeper-hosted threads. A send confirms only from the hosted harness's own accepted-turn record, read past the byte boundary captured before the paste. On pi that record is the session file materialized at the first turn attempt, matched on the full envelope line. Composer echo and scrollback repaint are typing progress, never evidence. A harness with no local record (cursor-agent, agy) types the message and stays unconfirmed for the whole confirm budget. The durable floor then writes the recovery copy. A paint match on a truncated marker prefix once reported delivered for a draft that was never submitted, so the prefix matcher is gone.
 
 A thread-substrate row hosts no pane at any point in its life, so a pane send has nothing to type into and `fno mux where` correctly answers that it hosts no live pane: the dedicated thread pane, created by the first reach and never persisted, is where such a row is viewed.
 
 There is a fourth case, and it long had no receipt at all. `--submit` defaults to false. So `fno mux pane send <id> --text '<body>'` TYPES the body into the pane's prompt buffer and does not run it. A second call carrying `--submit` is what runs it. A non-submit send still prints nothing and exits clean. A confirmed submit prints `submitted` on stdout and exits 0, and an unconfirmed one exits 22 naming the failure. Before the `submitted` marker landed, `fno mux pane read` was the only evidence the text arrived, or that it was still sitting there unsubmitted.
 
-Both defaults are correct and neither changes here. A send that submitted by default is the read-back gate's own failure case. A stray submit against a showing prompt selects the highlighted default and discards the payload. What was missing is that the doc said so nowhere, while `skills/using-fno/SKILL.md` lists this verb beside mail as a handoff channel. Measured twice on 2026-08-22. A king sent a ruling to a busy pane and to an idle one. Both times it got silence and a clean exit, and had delivered nothing. That is the `queued (durable)` shape again, a transport whose surface reads normal while the message sits.
+Both defaults are correct and neither changes here. A send that submitted by default is the read-back gate's own failure case. A stray submit against a showing prompt selects the highlighted default and discards the payload. What was missing is that the doc said so nowhere, while `skills/using-fno/SKILL.md` lists this verb beside mail as a handoff channel. Measured twice on 2026-08-22. A lead sent a ruling to a busy pane and to an idle one. Both times it got silence and a clean exit, and had delivered nothing. That is the `queued (durable)` shape again, a transport whose surface reads normal while the message sits.
+
+## The audit row: who told this worker to do that
+
+On 2026-08-21 answering that question took a twenty-minute forensic sweep. The dispatch had gone through `fno mux pane send`, and the pane verb wrote nothing. The mail lane wrote an `agent_raw_inject` row for unwrapped payloads, but a direct `pane send` never crossed it. The instrument existed and covered one of the two ways to put text at a worker's prompt.
+
+Every `fno mux pane send` now writes one `agent_raw_inject` row to `~/.fno/agents/events.jsonl`, at the verb itself. Any path that reaches the prompt through the floor is audited, and a third entry point inherits the row instead of repeating the gap. The row names the pane, the resolved recipient, the calling session and pid, the payload digest and byte length, the submit outcome, and a `source`. One row per dispatch: the CR, Tab, and arrow sends that submit the payload are control bytes, not dispatches, and write no row.
+
+Provenance is DECLARED, never sniffed. `--source <label>` names the caller. The mail lane passes `mail:<msg-id>`, which joins the audit row to the bus record the id was minted for. An absent label reads `unattributed:<pid>`, which is a value an operator can act on and never a blank. The floor never inspects the payload to decide any of this. `--raw` carries both a wrapped mail body and an operator's verbatim keystrokes. No byte inspection can tell them apart.
+
+The outcome vocabulary is the verb's own exit codes: `submitted`, `delivered`, `unconfirmed`, `identity-mismatch`, `dnd`, `unanswered`, `refused`. Exit 22 records `unconfirmed` and never `delivered`: the text landed and no post-submit marker appeared, which is exactly the distinction the row exists to preserve. `confirmed` carries the same fact as a boolean.
+
+The query the row exists to answer, given a worker's registry name or session id:
+
+```bash
+RIPGREP_CONFIG_PATH= rg '"lane":"pane-send"' ~/.fno/agents/events.jsonl | RIPGREP_CONFIG_PATH= rg '<worker-name-or-id>'
+```
+
+Each hit names `source` (who dispatched), `payload` (what was sent, first 512 chars) and `ts`. The `RIPGREP_CONFIG_PATH=` prefix matters: rg honors a user config file, and a load-bearing scripted read must not inherit one. To search the recipient's own transcript instead, add `-uu` the same way. A plain `rg` over `~/.claude/projects` can return zero for a string that is present. That convention lives in `AGENTS.md`. This doc points at it rather than restating it.
+
+The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml`.
 
 ## `fno agents mail send --force`, and why it stays opt-in
 
@@ -111,6 +136,14 @@ That last one refused the spawn for a while, and it was wrong twice over. `wake_
 So this helper never refuses a spawn. It owes the caller an honest sidecar or none, and it has no stake in the work being launched.
 
 Note what this does and does not cover. Because the seed usually rides in on argv, `_send_source` (`cli/src/fno/agents/mux_spawn.py`) returns `preloaded` for an empty payload, and the `pane send --text payload --submit` arm is the RECOVERY path. So enveloping `pane send` covers every pane drive and the seed's recovery arm. The sidecar is what covers the common seed path.
+
+## The `fno_id` column answers identity, not idleness
+
+`fno mux pane ls` carries one column that says whether a pane belongs to fno, and it spent months lying in the direction that hid fno's own work. It printed `fno_id=-` for both "not an fno pane" and "an fno pane whose id never registered". Those demand opposite responses. The first is a pane to ignore or reuse. The second is a worker doing real work that every fno surface overlooks. Measured on 2026-09-02: 24 of 27 panes printed the dash, and 14 of those carried a populated fno worker `name` on the same line. That is how a live worker (pid 40859) read as untracked while a lead declared workers dead.
+
+The column now carries three states. `fno_id=<uuid>` is a resolved session id. `fno_id=unresolved:spawned-name` and `fno_id=unresolved:name-as-id` name why an fno pane's id is absent. Either the spawn captured a worker `name` but the registry join found no session id, or the identity slot holds a worker name. The dash is reserved for panes with no fno evidence at all, so an fno-spawned pane can never share it. The `--json` listing adds `fno_id_state` beside the raw `fno_id` for the same reason. `name-as-id` and a harness-valued `fno_id` are legacy states: the row's id is a footnote-minted UUID at birth now, so a new row never enters either.
+
+What the column still does not answer is whether a pane is idle or safe to reuse. That is `fno mux pane wait --quiet-ms <n>` (quiet means no new output) or the `pristine_idle_shell` field in `--json`, which is positive shell-integrated evidence. Reading the identity column as a reuse decision is the exact mistake this node's operator report describes.
 
 ## Out of scope
 

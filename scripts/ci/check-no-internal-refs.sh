@@ -27,18 +27,28 @@
 #
 # Scope (what is scanned)
 # -----------------------
-#   docs/, agents/, commands/, and the top-level AGENTS.md / README.md /
-#   CLAUDE.md / GEMINI.md - the user-facing prose surfaces.
+#   Two scopes, because the four classes do not share one:
+#
+#   prose scope: docs/, agents/, commands/, and the top-level AGENTS.md /
+#   README.md / CLAUDE.md / GEMINI.md - the user-facing prose surfaces.
+#   All three prose classes (internal-path, node-id, session-url) scan here.
+#
+#   code scope: cli/src/, crates/, hooks/, scripts/, skills/ - the node-id
+#   and session-url classes ALSO scan here (AGENTS.md principle 6 bars
+#   ticket/PR/node IDs from code comments too, and the prose scope alone
+#   never saw one). The internal-path class stays prose-only: the code tree
+#   legitimately references "internal/" (the Obsidian-gated resolver in
+#   cli/src/fno/paths.py, the worktree symlink infra in scripts/setup/,
+#   design-doc breadcrumbs in docstrings).
 #
 # Out of scope (NOT scanned)
 # --------------------------
-#   The code tree + maintainer infra: cli/, crates/, scripts/, hooks/,
-#   skills/, tests/, .claude/. There the Obsidian-gated resolver (canonical
-#   example: cli/src/fno/paths.py), the worktree symlink infra
-#   (scripts/setup/setup-worktree.sh, scripts/setup/worktree-create-hook.sh,
-#   .gitignore), test fixtures (cli/tests/), and design-doc breadcrumbs in
-#   docstrings legitimately reference "internal/". Those references are
-#   correct (gated) and are deliberately left alone.
+#   Within the code scope, TEST paths are exempt from the node-id /
+#   session-url scan: a node id inside a test fixture string is data, not a
+#   shipped breadcrumb (the same convention cli/tests/ and tests/ already
+#   had by omission). A test path is one containing /tests/ or /test/, or a
+#   basename starting test_ or ending _tests.rs or _test.py.
+#   Also never scanned: tests/, cli/tests/, .claude/.
 #
 # Allowlist (scanned-but-exempt)
 # ------------------------------
@@ -67,6 +77,7 @@ ALLOWLIST=(
     "docs/guides/cross-project-inbox.md"
     "docs/guides/reading-shipped-plans.md"
     "docs/path-config.md"
+    "docs/state-root-inventory.md"
     "docs/system-architecture.md"
     "docs/triage.md"
 )
@@ -100,6 +111,48 @@ NODE_ID_ALLOWLIST=(
     "x-aaaa"
     "x-bbbb"
     "x-cccc"
+    # The rest of the repeated-hex pool, plus its ab- twins. Same contract: a
+    # minted id is random hex, never one hex digit repeated, so these are
+    # provably synthetic. They back the format examples and fixture literals
+    # that live in non-test paths (worker-name grammar examples, plan-file
+    # name shapes, team-scope examples). Add one only if it is obviously
+    # non-real by the same argument.
+    "x-dddd"
+    "x-eeee"
+    "x-ffff"
+    # The dash-less twins of the repeated-letter pool, for examples of the
+    # compact shape the grammar accepts. Same contract: provably synthetic.
+    "xbbbb"
+    "xaaaa"
+    "x-0000"
+    "x-1111"
+    "x-2222"
+    "x-3333"
+    "x-4444"
+    "x-5555"
+    "x-6666"
+    "x-7777"
+    "x-8888"
+    "x-9999"
+    "ab-aaaaaaaa"
+    "ab-bbbbbbbb"
+    "ab-cccccccc"
+    "ab-dddddddd"
+    "ab-eeeeeeee"
+    "ab-ffffffff"
+    "ab-00000000"
+    "ab-11111111"
+    "ab-22222222"
+    "ab-33333333"
+    "ab-44444444"
+    "ab-55555555"
+    "ab-66666666"
+    "ab-77777777"
+    "ab-88888888"
+    "ab-99999999"
+    # The question-id twin, same contract: a minted id is random hex, never
+    # one hex digit repeated. Backs the question-page name examples.
+    "q-aaaaaaaa"
 )
 
 # Echo the line with every allowlisted token removed. A line carrying ONLY
@@ -116,13 +169,31 @@ strip_node_allowlist() {
 VIOLATIONS=0
 REPORT=""
 
-# Capture the file list first so a git failure (not a repo, git unavailable) is
-# a loud error, not a vacuous "no violations" pass: the `done < <(git ...)`
+# Capture the file lists first so a git failure (not a repo, git unavailable)
+# is a loud error, not a vacuous "no violations" pass: the `done < <(git ...)`
 # process-substitution form hides git's exit status from `set -e`. (review #503, gemini)
-if ! files_to_check=$(git ls-files -- 'docs/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
+if ! files_prose=$(git ls-files -- 'docs/' 'agents/' 'commands/' 'AGENTS.md' 'README.md' 'CLAUDE.md' 'GEMINI.md'); then
     echo "check-no-internal-refs: 'git ls-files' failed (not a git repo or git unavailable)" >&2
     exit 1
 fi
+if ! files_code=$(git ls-files -- 'cli/src/' 'crates/' 'hooks/' 'scripts/' 'skills/'); then
+    echo "check-no-internal-refs: 'git ls-files' failed (not a git repo or git unavailable)" >&2
+    exit 1
+fi
+
+# Test paths inside the code scope are exempt from the node-id / session-url
+# scan: a node id inside a test fixture string is data, not a breadcrumb (the
+# same convention cli/tests/ and tests/ already had by omission).
+is_test_path() {
+    local f="$1" base="${1##*/}"
+    case "$f" in
+        */tests/*|*/test/*) return 0 ;;
+    esac
+    case "$base" in
+        test_*|*_tests.rs|*_test.py) return 0 ;;
+    esac
+    return 1
+}
 
 while IFS= read -r f; do
     [[ -z "$f" ]] && continue
@@ -161,7 +232,34 @@ while IFS= read -r f; do
             VIOLATIONS=$((VIOLATIONS + 1))
         done <<< "$url_hits"
     fi
-done <<< "$files_to_check"
+done <<< "$files_prose"
+
+# Code-scope scan: node-id + session-url ONLY. The internal-path class stays
+# prose-only (the code tree legitimately references the vault symlink - see
+# the scope note in the header). Test paths are exempt.
+while IFS= read -r f; do
+    is_test_path "$f" && continue
+
+    node_hits=$(grep -nE "$NODE_ID_RE" "$f" 2>/dev/null || true)
+    if [[ -n "$node_hits" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            if grep -qE "$NODE_ID_RE" <<< "$(strip_node_allowlist "$line")"; then
+                REPORT+="[node-id] $f:$line"$'\n'
+                VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+        done <<< "$node_hits"
+    fi
+
+    url_hits=$(grep -nE "$SESSION_URL_RE" "$f" 2>/dev/null || true)
+    if [[ -n "$url_hits" ]]; then
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            REPORT+="[session-url] $f:$line"$'\n'
+            VIOLATIONS=$((VIOLATIONS + 1))
+        done <<< "$url_hits"
+    fi
+done <<< "$files_code"
 
 # competitor-name scan: a rival product's name must not ship anywhere in this
 # repo, code included, so this class walks every tracked file rather than the
@@ -188,11 +286,25 @@ if [[ -z "$competitor_terms" ]]; then
     exit 1
 fi
 
+# The competitor scan goes through assert-absent.sh: a zero with no live
+# control is a refusal, never a clean pass. `footnote` is the control token
+# (1816 hits under -Iinw across this tree, measured 2026-09-12); it runs in
+# the same argv as the probe, so it validates the tool that produces the
+# answer. rc=2 lands here as a gate failure, not a swallowed continue.
+ASSERT_ABSENT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/assert-absent.sh"
+
 while IFS= read -r term; do
     [[ -z "$term" ]] && continue
-    if ! term_hits=$(git grep -Iinw -e "$term" 2>/dev/null); then
-        continue
-    fi
+    helper_rc=0
+    helper_out=$(bash "$ASSERT_ABSENT" --control footnote --probe "$term" -- git grep -Iinw -e {}) || helper_rc=$?
+    case $helper_rc in
+        0) continue ;;
+        1) term_hits=$helper_out ;;
+        *)
+            echo "check-no-internal-refs: assert-absent refused the scan for term '$term'; a zero is never reported clean" >&2
+            exit 1
+            ;;
+    esac
     while IFS= read -r hit; do
         [[ -z "$hit" ]] && continue
         hit_file="${hit%%:*}"
@@ -242,7 +354,10 @@ fi
     echo "  NAME_ALLOWLIST in scripts/ci/check-no-internal-refs.sh with a WHY"
     echo "  comment."
     echo
-    echo "The code tree (cli/, crates/, scripts/, hooks/, skills/) is not"
-    echo "scanned; the Obsidian-gated resolver lives in cli/src/fno/paths.py."
+    echo "The internal-path class scans prose surfaces only; the code tree"
+    echo "(cli/src/, crates/, hooks/, scripts/, skills/) legitimately"
+    echo "references the vault symlink, e.g. the Obsidian-gated resolver in"
+    echo "cli/src/fno/paths.py. The node-id and session-url classes scan the"
+    echo "code tree too (test paths exempt)."
 } >&2
 exit 1

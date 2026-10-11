@@ -31,17 +31,27 @@ Delivery takes exactly one path: a live transport or the durable queue. The bus 
 
 ## The `<fno_mail>` envelope
 
-The wire format is locked in Rust (`crates/fno-agents/src/claude_drive.rs`) and rendered once in Python (`cli/src/fno/mail/envelope.py`); `test_fno_mail_envelope.py` pins the Python renderer to the Rust bytes so the two never drift.
+The wire format is rendered once in Python. `cli/src/fno/mail/envelope.py` is the sole renderer. The Rust mirror in `claude_drive.rs` was deleted as dead code once the live inject path moved to the bracketed-paste transport. The Rust injection door validates `from_rank` claims against the live registry. `test_fno_mail_envelope.py` pins the renderer's own output contract.
 
 ```
-<fno_mail from="<short-sid>" harness="<harness>" model="<model>"[ node="<id>"][ to="<short-sid>"]>
+<fno_mail from="<full-sid|handle>"[ harness="<harness>"][ from_rank="<role>"][ to="<short-sid>"][ to_rank="<role|none>"][ id="<msg-id>"][ reply_to="<msg-id>"][ node="<id>"][ origin="<origin>"]>
 message text
 </fno_mail>
 ```
 
-`from` is the sender's short 8-hex sessionId. `harness_for_provider` maps the provider to the reply vocabulary. Claude becomes `claude-code`, while Codex and Gemini keep their names. A missing or blank sender harness renders as the explicit `unknown` marker, never a vendor name. Render-time code never infers a harness from the model or any other axis. The model is a separate axis and stays independently honest. `node` and `to` are optional.
+When one is proven, `from` holds the sender's FULL session id (the collision-safe reply address), falling back to the compact handle for an unregistered sender. `id` is the load-bearing field (`reply --to`, drain dedup, `reply_to` threading). `from_rank` and `to_rank` are live roles read from the registry at render time. `to_rank="none"` means a resolved reader with no role in a titled fleet. Non-peer origins render `origin="..."` as the last attribute. An absent origin reads as peer on both the Python and Rust doors. `model` renders nowhere, and the bus record keeps it for audit. The envelope carries no footer lines of any kind: only fno writes the tag, so the tag itself marks agent text.
 
 The delivered turn records itself in the recipient transcript. The hosted audit row adds provider-neutral sender history without creating pending mail.
+
+If no session identity resolves, fixed machine arms use named senders.
+
+The PR nudge uses `pr-nudge` with scheduler origin.
+
+Without a resolved identity, events push uses `events-push`. If a session resolves, the mail CLI stamps that session. Both paths declare scheduler origin.
+
+Without a resolved identity, note pointer uses `note-pointer`. If a session resolves, it keeps the existing canonical session handle.
+
+Mux peek always names `mux-peek` as sender. It declares no operator origin. Its socket cannot prove an attended human sent the message.
 
 ## Where the envelope lands: per-harness transcript map
 
@@ -58,6 +68,8 @@ Provider-agnostic fallback: footnote tees each spawned agent's I/O to a per-agen
 ## The `mail-inject` verb
 
 `fno-agents mail-inject --session <uuid|short>` (`crates/fno-agents/src/mail_inject.rs`) is the one-shot claude live primitive `_deliver_live` shells out to. It reads the turn text from STDIN (sidestepping the argv size limit), resolves the recipient on the daemon roster, attaches to its `control.sock`, bracketed-pastes the text verbatim as raw keystrokes plus a wire-level CR, and confirms delivery by CONTENT (the injected turn's marker appearing in the recipient transcript after the inject, not mere transcript growth, because the growth proxy false-confirmed on a busy recipient whose transcript was already moving). It prints `{"delivered": bool, "reason": str}` and exits 0 when delivered. Every not-delivered reason (`not-injectable`, `no-transcript`, `attach-failed`, `not-confirmed`, ...) is a clean signal for Python to write the durable fallback.
+
+An unwrapped one-line payload rides verbatim. A payload that starts with `/fno:` or with `$fno:` names an fno verb. The verb rewrites that marker to the form of the receiving harness before delivery. A verb typed in one harness's dialect lands in the recipient's native one.
 
 ### `not-injectable` is not a liveness verdict
 
@@ -77,7 +89,8 @@ For reachability ask `fno agents truth` or the `reachability` field on `fno agen
 `fno-agents mail-inject --probe --session <uuid|short>` runs resolution ONLY and prints `{"injectable": bool, "reason": str}`, exit 0 when injectable.
 No stdin read, no attach, no keystroke, no audit record.
 Both it and the real send resolve through one `resolve_target`, so the probe cannot say yes where the send would say no.
-It is claude-only: the codex lane submits a turn with no prompt line, so a slash payload never fires there and there is no keystroke path to probe.
+
+It is claude-only: the codex lane submits a turn with no prompt line, so there is no keystroke path to probe.
 
 The front door is `fno agents mail send '<payload>' --to-self --raw --check`, which additionally checks the preconditions Python owns (a registry row, a keystroke lane) and picks the right lane before probing.
 It answers on three exits, not two: 0 `injectable: <lane>`, 1 `not-injectable: <reason>`, 3 `unmeasurable: <reason>` when the evidence could not be read (an unreadable registry, or a `fno-agents` binary absent or too old to carry `--probe`).
@@ -114,7 +127,7 @@ The crash window is closed for asleep recipients (W3).
 
 ## The relay variant
 
-The cross-session relay PTY hop (`cli/src/fno/relay/envelope.py`) frames provenance on the same `<fno_mail>` tag, but as the SINGLE-LINE, no-close transport variant: `<fno_mail from="..." harness="..."[ model="..."]> <one-line body>`. It cannot carry the paired multiline form because the PTY Enter submits on newline. It shares the tag name and `harness` vocabulary so `grep <fno_mail>` reconstructs relay hops too.
+The cross-session relay PTY hop (`cli/src/fno/relay/envelope.py`) frames provenance on the same `<fno_mail>` tag, but as the SINGLE-LINE, no-close transport variant: `<fno_mail from="..."[ harness="..."]> <one-line body>`. It cannot carry the paired multiline form because the PTY Enter submits on newline. It shares the tag name so `grep <fno_mail>` reconstructs relay hops too. The line is built by the same sole renderer as the paired form.
 
 ### Cross-harness hop (G4)
 

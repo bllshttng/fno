@@ -44,10 +44,32 @@ import typer.main
 
 # One implementation of the reinstall-window vocabulary, shared with the
 # meta-path finder that covers the function-level imports this group cannot see.
-from fno import _is_fno_module, _module_is_now_on_disk, _reinstall_hint
+from fno import _is_fno_module, _module_appears_on_disk, _reinstall_hint
 
 if TYPE_CHECKING:
     pass
+
+
+def typer_group_shape(attr: Any, info_overrides: Mapping[str, Any] | None = None) -> click.Group:
+    """The click command for a lazy entry, preserving group structure.
+
+    ``typer.main.get_command`` collapses a one-command Typer app into a bare
+    TyperCommand, which changes the invocation path from
+    ``fno <group> <sub> <args>`` to ``fno <group> <args>``. Walkers that model
+    the live surface (the verb ratchet, the collapse-map tests) must resolve
+    through the same group-preserving shape the runtime uses.
+    """
+    if isinstance(attr, typer.Typer):
+        from typer.models import TyperInfo
+
+        info = TyperInfo(attr, **(info_overrides or {}))
+        return typer.main.get_group_from_info(
+            info,
+            pretty_exceptions_short=True,
+            rich_markup_mode=None,
+            suggest_commands=True,
+        )
+    return attr
 
 
 class _CollapsedForward(click.Command):
@@ -64,7 +86,14 @@ class _CollapsedForward(click.Command):
         parent: click.Context | None = None,
         **extra: Any,
     ) -> click.Context:
-        return self._action.make_context(info_name, args, parent=parent, **extra)
+        try:
+            return self._action.make_context(info_name, args, parent=parent, **extra)
+        except click.exceptions.Exit as e:
+            # A plain-click action raises plain click's Exit for --help.
+            # Typer's vendored click main catches only its own Exit, so the
+            # raise escapes as a traceback. Translate the way click's own
+            # main() does.
+            raise SystemExit(e.exit_code) from None
 
     def invoke(self, ctx: click.Context) -> Any:
         return self._action.invoke(ctx)
@@ -206,15 +235,17 @@ class _LazyStub(click.Group):
         try:
             module = importlib.import_module(module_path)
         except ImportError as exc:
-            # Imports here happen at INVOCATION time, so `uv tool install
-            # --reinstall` (what `fno doctor update` runs) can delete and rewrite this
+            # Imports here happen at INVOCATION time, so `uv tool install`
+            # (what `fno doctor update` runs) can delete and rewrite this
             # package between process start and this line. On a box with several
             # launchd agents and live sessions, some `fno` process is nearly
             # always mid-flight during that window, so this is routine rather
             # than exotic.
             #
-            # Retry ONCE, and only after confirming on disk that what was
-            # missing is present now. That check is the whole difference between
+            # Retry ONCE, and only after the shared on-disk check says what was
+            # missing is present now -- a check that includes a bounded wait,
+            # since the rewriting installer can still be mid-flight when the
+            # first look lands. That check is the whole difference between
             # this and a hopeful sleep-retry: a genuinely stale or broken
             # install still answers "absent" and still fails below with the same
             # message, so nothing is masked. A second failure is reported
@@ -230,7 +261,7 @@ class _LazyStub(click.Group):
             if (
                 isinstance(exc, ModuleNotFoundError)
                 and _is_fno_module(name)
-                and _module_is_now_on_disk(name)
+                and _module_appears_on_disk(name)
             ):
                 try:
                     module = importlib.import_module(module_path)
@@ -254,22 +285,12 @@ class _LazyStub(click.Group):
                 f"Module {module_path!r} has no attribute {attr_name!r} "
                 f"(lazy entry for {self.name!r})"
             )
+        # Module-pinned hook: guards must be on before Click builds the tree.
+        pre = getattr(module, "_fno_pre_dispatch", None)
+        if callable(pre):
+            pre()
         if isinstance(attr, typer.Typer):
-            # Preserve group structure even for single-command apps.  Without
-            # this, ``typer.main.get_command(attr)`` collapses a one-command
-            # Typer app into a bare TyperCommand, which changes the invocation
-            # path from ``fno <group> <sub> <args>`` to ``fno <group> <args>``.
-            # ``get_group_from_info`` keeps the group + subcommand shape that
-            # ``app.add_typer`` produced under the eager-load model.
-            from typer.models import TyperInfo
-
-            info = TyperInfo(attr, **self._info_overrides)
-            self._real = typer.main.get_group_from_info(
-                info,
-                pretty_exceptions_short=True,
-                rich_markup_mode=None,
-                suggest_commands=True,
-            )
+            self._real = typer_group_shape(attr, self._info_overrides)
             if self._collapse_keep is not None:
                 self._real = collapse_click_group(
                     self._real,
@@ -296,7 +317,11 @@ class _LazyStub(click.Group):
         parent: click.Context | None = None,
         **extra: Any,
     ) -> click.Context:
-        return self._load_real().make_context(info_name, args, parent=parent, **extra)
+        try:
+            return self._load_real().make_context(info_name, args, parent=parent, **extra)
+        except click.exceptions.Exit as e:
+            # Same plain-click Exit translation as _CollapsedForward above.
+            raise SystemExit(e.exit_code) from None
 
     def invoke(self, ctx: click.Context) -> Any:
         # Defense-in-depth: although Click 8.x's ``Group.invoke`` calls

@@ -255,6 +255,50 @@ def test_single_owner_plan_is_not_reported():
     assert m.detect_shared_plan_cost_violations(entries) == []
 
 
+def test_cost_guard_skips_normalize_for_uncosted_nodes(monkeypatch):
+    """AC1: the cheap guard runs first. normalize_plan_path is a keeper round
+    trip, so normalizing before the cost check paid it for every node and
+    discarded the answer for all but the costed few."""
+    calls: list = []
+
+    def counting_normalize(p):
+        calls.append(p)
+        return os.path.normpath(p) if p else None
+
+    monkeypatch.setattr("fno.graph.store.normalize_plan_path", counting_normalize)
+    entries = [_n(f"ab-{i:04x}", plan_path="/plans/p.md", cost_usd=None) for i in range(10)]
+    entries += [
+        _n("ab-cost1", plan_path="/plans/p.md", cost_usd=1.0),
+        _n("ab-cost2", plan_path="/plans/p.md", cost_usd=2.0),
+    ]
+    violations = m.detect_shared_plan_cost_violations(entries)
+    assert calls == ["/plans/p.md", "/plans/p.md"]
+    assert len(violations) == 1 and violations[0].nodes == ["ab-cost1", "ab-cost2"]
+
+
+def test_normalize_plan_path_caches_the_keeper_round_trip(monkeypatch):
+    """AC2: the keeper fold is pure, so one request serves every repeat of the
+    same input for the life of the process."""
+    from fno.graph import store
+
+    requests: list = []
+
+    class _FakeClient:
+        def request(self, method, params):
+            requests.append(params["path"])
+            return {"path": os.path.normpath(params["path"])}
+
+    monkeypatch.setattr(store, "_client_for", lambda _graph: _FakeClient())
+    store.normalize_plan_path.cache_clear()
+    try:
+        first = store.normalize_plan_path("/plans/./p.md")
+        second = store.normalize_plan_path("/plans/./p.md")
+        assert first == second == "/plans/p.md"
+        assert requests == ["/plans/./p.md"]
+    finally:
+        store.normalize_plan_path.cache_clear()
+
+
 # --- leg 4: drain stale ----------------------------------------------------
 
 
@@ -320,7 +364,7 @@ def test_detect_stale_ideas_skips_node_with_movement():
     now = datetime(2026, 6, 8, tzinfo=timezone.utc)
     old = (now - timedelta(days=40)).isoformat()
     entries = [
-        _n("ab-live-session", status="idea", created_at=old, sessions=[{"phase": "do"}]),
+        _n("ab-live-session", status="idea", created_at=old, sessions=[{"phase": "execute"}]),
     ]
     stale = m.detect_stale_ideas(entries, 30, now=now)
     assert stale == []
@@ -515,13 +559,41 @@ def test_maintain_config_rejects_non_positive_max_failed_attempts():
         MaintainBlock(max_failed_attempts=0)
 
 
+def test_maintain_config_default_abandoned_do_row_hours():
+    from fno.config import ConfigBlock
+
+    assert ConfigBlock().backlog.maintain.abandoned_do_row_hours == 24
+
+
+def test_maintain_config_custom_abandoned_do_row_hours():
+    from fno.config import BacklogBlock
+
+    assert (
+        BacklogBlock(maintain={"abandoned_do_row_hours": 48}).maintain.abandoned_do_row_hours
+        == 48
+    )
+
+
+def test_maintain_config_rejects_non_positive_abandoned_do_row_hours():
+    import pytest
+    from pydantic import ValidationError
+
+    from fno.config import MaintainBlock
+
+    with pytest.raises(ValidationError):
+        MaintainBlock(abandoned_do_row_hours=0)
+
+
 # --- failure-streak helper (ab-5b7cf63a / #34, task 1.2) -------------------
 
 from fno.graph import failure as f  # noqa: E402
 
 
 def _fail(nid: str) -> dict:
-    return {"type": "node_failed", "data": {"unit_id": nid}}
+    return {
+        "type": "node_failed",
+        "data": {"session_id": "s", "unit_id": nid, "iteration": 1, "exit_code": 1},
+    }
 
 
 def _parked(nid: str) -> dict:
@@ -585,11 +657,22 @@ def test_streak_malformed_event_skipped(tmp_path):
     # AC2-ERR: a truncated/non-JSON line is skipped, valid lines still read.
     log = tmp_path / "events.jsonl"
     log.write_text(
-        '{"type":"node_failed","data":{"unit_id":"ab-x"}}\n'
-        '{"type":"node_failed","data":{"unit_id":"ab-x"\n'  # truncated
+        '{"ts":"2026-07-24T01:00:00Z","source":"test","type":"node_failed","data":{"unit_id":"ab-x"}}\n'
+        '{"ts":"2026-07-24T02:00:00Z","source":"test","type":"node_failed","data":{"unit_id":"ab-x"\n'  # truncated
         "not json at all\n"
-        '{"type":"node_failed","data":{"unit_id":"ab-x"}}\n'
     )
+    from fno.events.store_client import emit_envelope, native_rows
+
+    emit_envelope(
+        {
+            "ts": "2026-07-24T03:00:00Z",
+            "source": "loop",
+            "type": "node_failed",
+            "data": {"session_id": "s", "unit_id": "ab-x", "iteration": 1, "exit_code": 1},
+        },
+        log,
+    )
+    native_rows(log)  # commit the pre-store bytes; malformed lines skip
     events = f.read_events(log)
     assert len(events) == 2  # two well-formed lines survive
     assert f.consecutive_failures("ab-x", events) == 2
@@ -604,15 +687,22 @@ def test_read_events_spans_rotated_history_before_active(tmp_path):
     active = tmp_path / "events.jsonl"
     rotated = tmp_path / "events.jsonl.1"
     rotated.write_text(
-        '{"type":"node_failed","data":{"unit_id":"ab-x"}}\n'
-        '{"type":"node_failed","data":{"unit_id":"ab-x"}}\n',
+        '{"ts":"2026-07-24T01:00:00Z","source":"test","type":"node_failed","data":{"unit_id":"ab-x"}}\n'
+        '{"ts":"2026-07-24T02:00:00Z","source":"test","type":"node_failed","data":{"unit_id":"ab-x"}}\n',
         encoding="utf-8",
     )
-    active.write_text(
-        '{"type":"node_failed","data":{"unit_id":"ab-x"}}\n',
-        encoding="utf-8",
-    )
+    from fno.events.store_client import emit_envelope, native_rows
 
+    emit_envelope(
+        {
+            "ts": "2026-07-24T03:00:00Z",
+            "source": "loop",
+            "type": "node_failed",
+            "data": {"session_id": "s", "unit_id": "ab-x", "iteration": 1, "exit_code": 1},
+        },
+        active,
+    )
+    native_rows(active)  # fold the rotated generation's pre-store bytes
     events = f.read_events(active)
 
     assert f.consecutive_failures("ab-x", events) == 3
@@ -639,6 +729,10 @@ def test_read_events_consumes_rust_agents_mirror_with_custom_state_dir(tmp_path,
         json.dumps(first) + "\n" + json.dumps(second) + "\n",
         encoding="utf-8",
     )
+    from fno.events.store_client import native_rows
+
+    native_rows(configured)  # commit each journal's pre-store bytes
+    native_rows(rust_mirror)
     monkeypatch.setattr(f, "events_path", lambda: configured)
     monkeypatch.setenv("FNO_AGENTS_HOME", str(agents_home))
 
@@ -703,6 +797,54 @@ def test_detect_failure_defers_skips_non_ready_and_deferred():
 def test_detect_failure_defers_event_for_absent_node_noops():
     events = [_fail("ab-ghost")] * 5
     assert m.detect_failure_defers([_n("ab-real")], events, 3) == []
+
+
+def _advance_failed(nid: str, error: str) -> dict:
+    return {"type": "advance_failed", "data": {"node_id": nid, "error": error}}
+
+
+def test_detect_failure_defers_carries_the_advance_failed_error():
+    """AC8-HP (x-b545): the candidate carries the newest advance_failed error
+    beside the streak, so the defer reason can name the real cause."""
+    events = [
+        _fail("ab-x"),
+        _advance_failed("ab-x", "fno agents spawn exited 2: model not in slot"),
+        _fail("ab-x"),
+        _fail("ab-x"),
+    ]
+    cands = m.detect_failure_defers([_n("ab-x")], events, 3)
+    assert [(c.node_id, c.streak) for c in cands] == [("ab-x", 3)]
+    assert cands[0].error == "fno agents spawn exited 2: model not in slot"
+
+
+def test_last_advance_failed_error_stops_at_the_reset_boundary():
+    """The error reader shares consecutive_failures' window: an advance_failed
+    older than the last undefer is not the cause of the current streak."""
+    events = [
+        _advance_failed("ab-x", "stale"),
+        {"type": "node_undeferred", "data": {"unit_id": "ab-x"}},
+        _fail("ab-x"),
+    ]
+    assert f.last_advance_failed_error("ab-x", events) == ""
+
+
+def test_last_advance_failed_error_no_advance_failed_in_window():
+    """AC9-EDGE: a node_failed-only streak yields \"\" - no empty cause
+    clause is appended to the reason."""
+    events = [_fail("ab-x"), _fail("ab-x")]
+    assert f.last_advance_failed_error("ab-x", events) == ""
+
+
+def test_reason_with_cause_still_matches_the_sentinel():
+    """AC10-EDGE: the appended cause keeps the sentinel leading, so
+    is_auto_failure_deferred and the stranded-dependent surfacing hold."""
+    reason = f"{f.AUTO_FAILURE_SENTINEL} 3 consecutive failed attempts: boom"
+    entries = [
+        _n("ab-block", status="deferred", deferred_at="t", deferred_reason=reason),
+        _n("ab-dep", status="blocked", blocked_by=["ab-block"]),
+    ]
+    assert f.is_auto_failure_deferred(entries[0])
+    assert set(f.stranded_dependents(entries)["ab-block"]) == {"ab-dep"}
 
 
 # --- leg 8: validity sweep - selection + fingerprint ---------------
@@ -1046,7 +1188,6 @@ def test_cli_retro_seam_selects_comment_and_reads_region(monkeypatch, tmp_path):
     bounded merged region - all hermetic (no live gh/git)."""
     import subprocess
 
-    from fno.graph import cli
 
     comment = json.loads(_PR525_FIXTURE.read_text())
     node = {"id": "ab-retro", "details": f"finding\n{_RETRO_TRAILER}", "cwd": str(tmp_path)}
@@ -1060,7 +1201,7 @@ def test_cli_retro_seam_selects_comment_and_reads_region(monkeypatch, tmp_path):
         return subprocess.CompletedProcess(args, 1, "", "boom")
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    items = cli._validity_retro_source(node)
+    items = m._validity_retro_source(node)
     # Picked the fixture comment (its path), not the decoy.
     assert "tests/test-agents-heal-token.sh" in items["pr:review-comment"]
     assert any(k.startswith("git:merged-region:") for k in items)
@@ -1073,20 +1214,19 @@ def test_cli_retro_seam_fails_open(monkeypatch, tmp_path):
     invalid cwd each return {} so collect_evidence records `retro` unavailable."""
     import subprocess
 
-    from fno.graph import cli
 
     monkeypatch.setattr(
         subprocess, "run",
         lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "gh down"),
     )
-    assert cli._validity_retro_source(
+    assert m._validity_retro_source(
         {"id": "ab", "details": f"x\n{_RETRO_TRAILER}", "cwd": str(tmp_path)}
     ) == {}
-    assert cli._validity_retro_source(
+    assert m._validity_retro_source(
         {"id": "ab", "details": "y <!-- retro-triage source_pr=None finding_hash=abc -->",
          "cwd": str(tmp_path)}
     ) == {}
-    assert cli._validity_retro_source(
+    assert m._validity_retro_source(
         {"id": "ab", "details": f"z\n{_RETRO_TRAILER}", "cwd": "/no/such/dir"}
     ) == {}
 
@@ -1094,7 +1234,6 @@ def test_cli_retro_seam_fails_open(monkeypatch, tmp_path):
 def test_read_merged_region_rejects_traversal(monkeypatch, tmp_path):
     """CWE-22: a parent-escaping / absolute / non-str path is rejected before any
     read (gemini review). git show never runs for such a path."""
-    from fno.graph import cli
 
     called = {"git": False}
 
@@ -1105,8 +1244,8 @@ def test_read_merged_region_rejects_traversal(monkeypatch, tmp_path):
 
     monkeypatch.setattr("subprocess.run", _fake_run)
     for bad in ("../../etc/passwd", "/etc/passwd", "..", "a/../../b"):
-        assert cli._read_merged_region(str(tmp_path), bad, 1) == ""
-    assert cli._read_merged_region(str(tmp_path), 123, 1) == ""  # non-str path
+        assert m._read_merged_region(str(tmp_path), bad, 1) == ""
+    assert m._read_merged_region(str(tmp_path), 123, 1) == ""  # non-str path
     assert called["git"] is False  # never reached the subprocess
 
 
@@ -1296,6 +1435,47 @@ def test_run_validity_analysis_refuses_real_call_under_pytest(monkeypatch):
         m._run_validity_analysis([_packet("ab-x")])
 
 
+def test_run_validity_analysis_timeout_defaults_then_takes_the_budget(monkeypatch):
+    """AC6: the analyzer's subprocess timeout follows the pass budget, not the
+    120s default, when the pass is nearly out of time."""
+    import types
+
+    captured = {}
+
+    def fake_llm_call(prompt, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        return types.SimpleNamespace(stdout=json.dumps({"results": []}))
+
+    monkeypatch.setattr(m, "llm_call", fake_llm_call)
+    m._run_validity_analysis([])
+    assert captured["timeout"] == m.VALIDITY_RUN_TIMEOUT_S
+    m._run_validity_analysis([], timeout=20.0)
+    assert captured["timeout"] == 20.0
+
+
+def test_run_validity_sweep_hands_remaining_budget_to_analyzer(tmp_path, monkeypatch):
+    """AC6 wiring: run_timeout flows through the sweep into the default analyzer."""
+    now = datetime(2026, 7, 12, tzinfo=timezone.utc)
+    entries = [_idea("ab-bounded", 90, now, title="t", plan_path=None)]
+    seen = {}
+
+    def fake_analysis(packets, model=None, timeout=None):
+        seen["timeout"] = timeout
+        return {
+            p.node_id: {"classification": "keep", "confidence": 0.8,
+                        "rationale": "still good", "evidence_ids": []}
+            for p in packets
+        }
+
+    monkeypatch.setattr(m, "_run_validity_analysis", fake_analysis)
+    res = m.run_validity_sweep(
+        entries, validity_days=60, batch_size=25, out_dir=tmp_path,
+        now=now, run_timeout=20.0,
+    )
+    assert seen["timeout"] == 20.0
+    assert res.eligible == 1
+
+
 def test_run_validity_analysis_parses_stub(tmp_path, monkeypatch):
     stub = tmp_path / "stub.sh"
     stub.write_text(
@@ -1334,12 +1514,28 @@ def test_backlog_staleness_days_rejects_non_positive():
         BacklogBlock(staleness_days=0)
 
 
+def test_maintain_budget_seconds_defaults_to_300():
+    from fno.config import MaintainBlock
+
+    assert MaintainBlock().budget_seconds == 300
+
+
+def test_maintain_budget_seconds_rejects_non_positive():
+    import pytest
+    from pydantic import ValidationError
+
+    from fno.config import MaintainBlock
+
+    with pytest.raises(ValidationError):
+        MaintainBlock(budget_seconds=0)
+
+
 def test_node_has_movement_field_signals():
     now = _sr_now()
-    assert m.node_has_movement({"sessions": [{"phase": "do"}]}, now, 21)
+    assert m.node_has_movement({"sessions": [{"phase": "execute"}]}, now, 21)
     assert m.node_has_movement({"pr_number": 5}, now, 21)
     assert m.node_has_movement({"locked_by": "sess"}, now, 21)
-    assert m.node_has_movement({"claimed_at": "2026-07-18T00:00:00+00:00"}, now, 21)
+    assert m.node_has_movement({"locked_at": "2026-07-18T00:00:00+00:00"}, now, 21)
     assert not m.node_has_movement({}, now, 21)
 
 
@@ -1459,3 +1655,239 @@ def test_contained_node_is_never_stale_quarantined():
     # Same node, only containment differs.
     assert is_stale_ready(node, now, 21) is True
     assert is_stale_ready({**node, "contained_in": "x-6320"}, now, 21) is False
+
+
+def test_misharnessed_twin_detected_only_with_a_shape_correct_twin():
+    """The phantom shape: a codex v7 id stamped under harness claude while the
+    codex twin sits beside it. Detected and dropped only when the correct twin
+    exists; a lone mis-harnessed row and a shape-silent pair are left alone."""
+    codex_id = "01a06886-9405-74a1-8afd-5b67baf89604"
+    node = {
+        "id": "x-a78b",
+        "sessions": [
+            {"session_id": codex_id, "phase": "execute", "harness": "codex"},
+            {"session_id": codex_id, "phase": "execute", "harness": "claude"},
+        ],
+    }
+    twins = m.detect_misharnessed_twins([node])
+    assert [(t.node_id, t.bad_harness, t.keep_harness) for t in twins] == [
+        ("x-a78b", "claude", "codex")
+    ]
+
+    # No shape-correct twin: nothing is provably wrong, nothing reported.
+    lone = {
+        "id": "x-lone",
+        "sessions": [{"session_id": codex_id, "phase": "execute", "harness": "claude"}],
+    }
+    assert m.detect_misharnessed_twins([lone]) == []
+
+    # A shape-silent id under two harness spellings is legal, not a twin.
+    legacy = {
+        "id": "x-legacy",
+        "sessions": [
+            {"session_id": "20260823T083106Z-cx87209-9d434e", "phase": "execute",
+             "harness": "claude"},
+            {"session_id": "20260823T083106Z-cx87209-9d434e", "phase": "execute",
+             "harness": "unknown"},
+        ],
+    }
+    assert m.detect_misharnessed_twins([legacy]) == []
+
+
+def test_apply_twin_drops_drops_only_under_the_lock_recheck():
+    """The apply half: the detected twin leaves, a claimed node is skipped,
+    and a row whose correct twin left since the scan keeps both rows."""
+    codex_id = "01a06886-9405-74a1-8afd-5b67baf89604"
+    claimed_node = {
+        "id": "x-claim",
+        "sessions": [
+            {"session_id": codex_id, "phase": "execute", "harness": "codex"},
+            {"session_id": codex_id, "phase": "execute", "harness": "claude"},
+        ],
+    }
+    drops = m.detect_misharnessed_twins([claimed_node])
+    assert len(drops) == 1
+
+    applied, skipped, warnings = m.apply_twin_drops([claimed_node], drops, {"x-claim"})
+    assert applied == [] and skipped == ["x-claim"] and warnings == []
+    assert len(claimed_node["sessions"]) == 2
+
+    applied, skipped, warnings = m.apply_twin_drops([claimed_node], drops, set())
+    assert [a["node_id"] for a in applied] == ["x-claim"]
+    assert skipped == [] and warnings == []
+    assert claimed_node["sessions"] == [
+        {"session_id": codex_id, "phase": "execute", "harness": "codex"}
+    ]
+
+    # In-lock recheck: the correct twin left since the scan, so the drop is
+    # stale and BOTH-row removal must not fire (provenance never leaves).
+    stale_shape = {
+        "id": "x-claim",
+        "sessions": [{"session_id": codex_id, "phase": "execute", "harness": "claude"}],
+    }
+    applied, _, _ = m.apply_twin_drops([stale_shape], drops, set())
+    assert applied == []
+    assert stale_shape["sessions"] == [
+        {"session_id": codex_id, "phase": "execute", "harness": "claude"}
+    ]
+
+
+def test_harness_shape_fix_detected_only_without_a_shape_correct_twin():
+    """The lone mis-harness: the same codex v7 id under harness claude with NO
+    codex twin on the node. The row is the node's only record of the session,
+    so it is repaired, never dropped. A twin beside it defers to the twin leg;
+    a shape-silent id is never convicted."""
+    codex_id = "01a06886-9405-74a1-8afd-5b67baf89604"
+    lone = {
+        "id": "x-lone",
+        "sessions": [{"session_id": codex_id, "phase": "execute", "harness": "claude"}],
+    }
+    fixes = m.detect_harness_shape_fixes([lone])
+    assert [(f.node_id, f.wrong_harness, f.right_harness) for f in fixes] == [
+        ("x-lone", "claude", "codex")
+    ]
+
+    # A shape-correct twin owns the wrong row: the twin leg drops it.
+    twinned = {
+        "id": "x-twin",
+        "sessions": [
+            {"session_id": codex_id, "phase": "execute", "harness": "codex"},
+            {"session_id": codex_id, "phase": "execute", "harness": "claude"},
+        ],
+    }
+    assert m.detect_harness_shape_fixes([twinned]) == []
+
+    # Shape-silent ids (grok/pi-style fno-minted v4s) are never convicted.
+    silent = {
+        "id": "x-silent",
+        "sessions": [
+            {"session_id": "20260823T083106Z-cx87209-9d434e", "phase": "execute",
+             "harness": "claude"}
+        ],
+    }
+    assert m.detect_harness_shape_fixes([silent]) == []
+
+
+def test_apply_harness_shape_fixes_rewrites_under_the_lock_recheck():
+    """The apply half: the harness field is corrected in place, a claimed node
+    is skipped, and a row already settled since the scan is left untouched."""
+    codex_id = "01a06886-9405-74a1-8afd-5b67baf89604"
+    node = {
+        "id": "x-fix",
+        "sessions": [
+            {"session_id": codex_id, "phase": "execute", "harness": "claude",
+             "started_at": "2026-09-03T20:10:03Z"},
+        ],
+    }
+    fixes = m.detect_harness_shape_fixes([node])
+    assert len(fixes) == 1
+
+    applied, skipped, warnings = m.apply_harness_shape_fixes([node], fixes, {"x-fix"})
+    assert applied == [] and skipped == ["x-fix"] and warnings == []
+    assert node["sessions"][0]["harness"] == "claude"
+
+    applied, skipped, warnings = m.apply_harness_shape_fixes([node], fixes, set())
+    assert [a["node_id"] for a in applied] == ["x-fix"]
+    assert skipped == [] and warnings == []
+    assert node["sessions"] == [
+        {"session_id": codex_id, "phase": "execute", "harness": "codex",
+         "started_at": "2026-09-03T20:10:03Z"}
+    ]
+
+    # In-lock recheck: the row left since the scan, so nothing is rewritten.
+    applied, _, _ = m.apply_harness_shape_fixes(
+        [{"id": "x-fix", "sessions": []}], fixes, set()
+    )
+    assert applied == []
+
+
+# --- leg 9: abandoned do rows ------------------------------------------------
+
+_CLAUDE_SID = "9f06a492-1111-4222-8333-444455556666"
+_BOUND = 24 * 3600
+
+
+def _do_node(nid, sid=_CLAUDE_SID, **over):
+    base = {
+        "id": nid,
+        "title": nid,
+        "status": "in_progress",
+        "locked_by": None,
+        "cwd": "/some/worktree",
+        "sessions": [
+            {"phase": "execute", "harness": "claude", "session_id": sid,
+             "started_at": "2026-09-09T15:46:29Z"}
+        ],
+    }
+    base.update(over)
+    return base
+
+
+def _hours_after_start(hours):
+    from datetime import datetime, timezone
+
+    return datetime(2026, 9, 9, 15, 46, 29, tzinfo=timezone.utc).timestamp() + hours * 3600
+
+
+def _detect(nodes, *, hours, claimed=(), engaged_on=None):
+    return m.detect_abandoned_do_rows(
+        nodes, live_claimed=set(claimed), live_worked=engaged_on or {},
+        prover=lambda *_a, **_kw: (False, "unused", None),
+        now_s=_hours_after_start(hours), quiet_after_s=_BOUND,
+    )
+
+
+def test_detect_abandoned_do_rows_reaps_a_row_idle_past_the_bound():
+    """A live session proves nothing about this node: a 40h row with no
+    reachable worker on the node is gone."""
+    rows = _detect([_do_node("x-idle1")], hours=40)
+    assert [(r.node, r.verdict, r.reason) for r in rows] == [
+        ("x-idle1", "gone", "row idle 40h, no reachable worker on the node")
+    ]
+
+
+def test_detect_abandoned_do_rows_holds_a_row_inside_the_bound():
+    rows = _detect([_do_node("x-young")], hours=3)
+    assert [(r.verdict, r.reason) for r in rows] == [("held", "row idle 3h, inside the 24h bound")]
+
+
+def test_detect_abandoned_do_rows_holds_a_reachable_worker_on_the_node():
+    rows = _detect([_do_node("x-idle2")], hours=40, engaged_on={"x-idle2": ["worker-a"]})
+    assert [(r.verdict, r.reason) for r in rows] == [("held", "reachable worker on node worker-a")]
+
+
+def test_detect_abandoned_do_rows_idle_row_still_held_by_a_live_claim():
+    rows = _detect([_do_node("x-idle3")], hours=40, claimed={"x-idle3"},
+                   engaged_on={"x-idle3": ["worker-a"]})
+    assert [(r.verdict, r.reason) for r in rows] == [("held", "live claim")]
+
+
+def test_detect_abandoned_do_rows_skips_a_locked_node():
+    assert _detect([_do_node("x-lck01", locked_by="someone")], hours=40) == []
+
+
+def test_detect_abandoned_do_rows_owner_note_resets_the_idle_clock():
+    """A note the row's own session wrote 1h ago holds the row; a note from
+    another session does not."""
+    from datetime import datetime, timezone
+
+    note_at = datetime.fromtimestamp(_hours_after_start(39), tz=timezone.utc).isoformat()
+    node = _do_node("x-idle4", progress_notes=[
+        {"ts": note_at, "text": "still on it", "source_session_id": _CLAUDE_SID},
+    ])
+    assert [r.verdict for r in _detect([node], hours=40)] == ["held"]
+
+    node["progress_notes"][0]["source_session_id"] = "someone-else"
+    assert [r.verdict for r in _detect([node], hours=40)] == ["gone"]
+
+
+def test_abandoned_do_rows_refuses_an_unread_roster(monkeypatch):
+    """A degraded fleet read reaps nothing: the leg raises and cmd_maintain
+    reports it skipped."""
+    import pytest
+
+    from fno.claims import roster
+
+    monkeypatch.setattr(roster, "read_roster", lambda **_kw: roster.RosterReading(False, 0, {}, "probe timed out"))
+    with pytest.raises(RuntimeError, match="roster unread"):
+        m.abandoned_do_rows([_do_node("x-deg01")], set())

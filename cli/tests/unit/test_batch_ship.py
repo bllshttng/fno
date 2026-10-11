@@ -17,6 +17,8 @@ from pathlib import Path
 import pytest
 
 from fno.backlog import batch as B
+from fno.graph.store import read_graph_strict
+from tests.fixtures.graph_seed import seed_graph
 
 
 def _open(root: Path, domain: str = "code", **kw) -> dict:
@@ -53,7 +55,7 @@ def graph(tmp_path, monkeypatch):
     path = tmp_path / "graph.json"
 
     def write(entries):
-        path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+        seed_graph(path, entries)
         return path
 
     write([])
@@ -70,7 +72,7 @@ def _member_node(nid: str) -> dict:
 
 
 def _read_graph(path: Path) -> list[dict]:
-    return json.loads(path.read_text())["entries"]
+    return read_graph_strict(path)
 
 
 def test_ship_no_open_batch_is_noop(tmp_path, graph):
@@ -143,7 +145,7 @@ def test_ship_gh_create_failure_abandons_and_requeues(tmp_path, graph):
 
 # ── x-9b87: stale-base guard parity with worker/ship.py ──────────────────────
 # The batch lane opens its PR via its own `gh pr create`, so it must run the
-# same `check_stale_base` guard the /pr create + worker paths run. On stale it
+# same `check_stale_base` guard the /fno:ship pr create + worker paths run. On stale it
 # routes through the EXISTING abandon path (never `refuse`, which would wedge
 # the batch open and re-hit the same stale worktree every daemon tick).
 
@@ -223,12 +225,19 @@ def test_ship_runs_preflight_to_produce_missing_batch_receipt(
     assert any(call[:3] == ["gh", "pr", "create"] for call in gh.calls)
 
 
-def test_ship_fresh_base_creates_pr(tmp_path, graph, monkeypatch):
-    """AC: fresh worktree (behind-count 0) -> guard passes, PR created as today."""
+def test_ship_fresh_base_creates_pr_and_duplicate_refusal_abandons(
+    tmp_path, graph, monkeypatch
+):
+    """AC: fresh worktree (behind-count 0) -> guard passes, PR created as
+    today. The duplicate guard refusing routes through the EXISTING abandon
+    path, and neither push nor create fires."""
     graph([_member_node("x-1")])
     _open(tmp_path)
     B.join_batch(domain="code", node_id="x-1", root=tmp_path)
     monkeypatch.setattr("fno.pr._preflight.check_stale_base", lambda *a, **k: (0, None))
+    monkeypatch.setattr(
+        "fno.pr._preflight.check_duplicate_pr", lambda *a, **k: ""
+    )
 
     gh = FakeGh(create=_cp(0, "https://github.com/o/r/pull/501\n"))
     r = B.ship_batch(domain="code", root=tmp_path, run=gh)
@@ -236,6 +245,27 @@ def test_ship_fresh_base_creates_pr(tmp_path, graph, monkeypatch):
     assert r.action == "shipped"
     assert r.pr_number == 501
     assert any(c[:3] == ["gh", "pr", "create"] for c in gh.calls)
+
+    # The refusal posture: guard says (1, refusal) -> abandon, no push, no
+    # create, members requeued.
+    gpath = graph([_member_node("x-1"), _member_node("x-2")])
+    _open(tmp_path)
+    B.join_batch(domain="code", node_id="x-1", root=tmp_path)
+    B.join_batch(domain="code", node_id="x-2", root=tmp_path)
+    monkeypatch.setattr(
+        "fno.pr._preflight.check_duplicate_pr",
+        lambda *a, **k: "pr-create: REFUSED: an open PR already touches the same changed files",
+    )
+    gh = FakeGh()
+    r = B.ship_batch(domain="code", root=tmp_path, run=gh)
+
+    assert r.action == "abandoned"
+    assert "REFUSED" in (r.reason or "")
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in gh.calls)
+    assert not any(c[:2] == ["git", "push"] for c in gh.calls)
+    by_id = {n["id"]: n for n in _read_graph(gpath)}
+    assert by_id["x-1"]["batch"] is None
+    assert by_id["x-2"]["batch"] is None
 
 
 def test_ship_stale_guard_failopen_still_creates_pr(tmp_path, graph, monkeypatch):
@@ -247,6 +277,9 @@ def test_ship_stale_guard_failopen_still_creates_pr(tmp_path, graph, monkeypatch
     monkeypatch.setattr(
         "fno.pr._preflight.check_stale_base",
         lambda *a, **k: (0, "could not refresh origin/main; stale-base check skipped"),
+    )
+    monkeypatch.setattr(
+        "fno.pr._preflight.check_duplicate_pr", lambda *a, **k: ""
     )
 
     gh = FakeGh(create=_cp(0, "https://github.com/o/r/pull/502\n"))
@@ -337,7 +370,7 @@ class CloseableRunner:
 
     def __call__(self, cmd, *, cwd=None):
         self.calls.append(cmd)
-        if cmd[:3] == ["fno-py", "backlog", "next"]:
+        if cmd[1:3] == ["backlog", "next"]:
             return _cp(0, json.dumps(self.next_node) if self.next_node else "null")
         if cmd[:3] == ["gh", "pr", "list"]:
             return _cp(0, "[]")
@@ -383,7 +416,7 @@ class PeekFailRunner:
     """Runner whose `fno backlog next` fails (rc!=0) - a transient peek error."""
 
     def __call__(self, cmd, *, cwd=None):
-        if cmd[:3] == ["fno-py", "backlog", "next"]:
+        if cmd[1:3] == ["backlog", "next"]:
             return _cp(1, "", "graph locked")
         if cmd[:3] == ["gh", "pr", "create"]:
             raise AssertionError("must not ship on a peek error")
@@ -431,7 +464,7 @@ def test_ship_closeable_scopes_peek_to_mission(tmp_path, graph, batching_on):
     B.join_batch(domain="code", node_id="x-1", root=tmp_path)
     r = CloseableRunner(next_node=None)
     B.ship_closeable(project="fno", root=tmp_path, run=r, mission="m-42")
-    next_calls = [c for c in r.calls if c[:3] == ["fno-py", "backlog", "next"]]
+    next_calls = [c for c in r.calls if c[1:3] == ["backlog", "next"]]
     assert next_calls, "expected a next peek"
     assert "--mission" in next_calls[0] and "m-42" in next_calls[0]
 

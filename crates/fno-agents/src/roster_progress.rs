@@ -1,4 +1,4 @@
-//! Roster-progress sidecar (x-cdc7 SECOND HALF): durable per-row git evidence
+//! Roster-progress sidecar (SECOND HALF): durable per-row git evidence
 //! beside process liveness, so a live-looking worker with zero commits no
 //! longer renders the same as a healthy one.
 //!
@@ -106,7 +106,7 @@ fn is_live_ish(status: AgentStatus) -> bool {
 }
 
 /// A live-looking row with zero commits well past a reasonable grace window
-/// is exactly the row a king must be able to see: process liveness and
+/// is exactly the row a lead must be able to see: process liveness and
 /// durable progress can now disagree, and today they render identically.
 /// Pure so it is testable without a registry file or a real clock.
 pub fn is_stale_despite_liveness(

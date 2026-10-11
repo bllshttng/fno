@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+from fno.retro.classify import severity_to_difficulty
 from fno.retro.dedup import anchor_verdicts, trailer
 from fno.retro.types import TIER_INBOX, Candidate
 
@@ -29,7 +30,7 @@ MODE_INTERACTIVE = "interactive"
 
 # Injection points (real defaults below). Kept narrow so the routing logic is
 # unit-testable without a live graph.
-CreateFn = Callable[..., str]  # (title, details, priority, project, cwd, domain, queued) -> node_id
+CreateFn = Callable[..., str]  # (title, details, priority, difficulty, project, cwd, domain, queued) -> node_id
 InboxFn = Callable[[Candidate], None]
 
 
@@ -39,7 +40,7 @@ class LandResult:
     candidate: Candidate
     node_id: Optional[str] = None
     error: Optional[str] = None
-    reason: Optional[str] = None  # skip reason, e.g. "fixed-on-main" (x-a7ab 1.1)
+    reason: Optional[str] = None  # skip reason, e.g. "fixed-on-main" (1.1)
 
 
 def resolve_mode(sentinel: Optional[dict]) -> str:
@@ -57,6 +58,7 @@ def _default_create(
     title: str,
     details: str,
     priority: str,
+    difficulty: str,
     project: Optional[str],
     cwd: Optional[str],
     domain: str = "code",
@@ -75,7 +77,7 @@ def _default_create(
     """
     from fno.graph._constants import mint_node_id, validate_priority_write
     from fno.graph.cli import _build_backlog_node, _graph_path
-    from fno.graph.store import locked_mutate_graph
+    from fno.graph.store import commit_rows_via_store
 
     validate_priority_write(priority)
 
@@ -84,25 +86,31 @@ def _default_create(
     def mutator(entries):
         new_id = mint_node_id({e.get("id") for e in entries})
         new_id_holder[0] = new_id
+        # A stale sentinel id dangles neither as an edge nor as origin evidence.
+        caused = caused_by if any(e.get("id") == caused_by for e in entries) else None
         node = _build_backlog_node(
             title=title,
             project=project,
             cwd=cwd,
             priority=priority,
+            difficulty=difficulty,
+            difficulty_source="retro",
             domain=domain,
             details=details,
+            origin_channel="retro_land",
+            origin_evidence=caused,
             known_ids={e.get("id") for e in entries},
         )
         node["id"] = new_id
         if queued:
             node["queued_at"] = datetime.now(timezone.utc).isoformat()
             node["queued_reason"] = "retro-triage (interactive): awaiting human ack"
-        if caused_by and any(e.get("id") == caused_by for e in entries):
-            node["caused_by"] = caused_by
+        if caused:
+            node["caused_by"] = caused
         entries.append(node)
         return entries
 
-    locked_mutate_graph(_graph_path(), mutator)
+    commit_rows_via_store(_graph_path(), mutator)
     return new_id_holder[0] or ""
 
 
@@ -141,6 +149,7 @@ def land_candidates(
     inbox_fn: Optional[InboxFn] = None,
     caused_by: Optional[str] = None,
     anchor_scan_fn: Optional[Callable] = None,
+    dedup_entries: Optional[list] = None,
 ) -> list[LandResult]:
     """Land each candidate per mode/tier. Per-node failures are recorded (not raised)
     so partial progress persists and a re-run dedups what landed (AC4-FR)."""
@@ -154,7 +163,6 @@ def land_candidates(
     # F10: batch the filing-time anchor scan once per harvest (each PR fetched
     # once), not once per candidate (N gh round-trips, rate-limit prone).
     _anchor_verdicts = anchor_verdicts(candidates, anchor_scan_fn) if anchor_scan_fn else {}
-    born_rs = None  # one shared blast-cap across the whole harvest batch (lazy)
     for c in candidates:
         if c.uncited:
             continue  # never land an uncited candidate
@@ -167,7 +175,7 @@ def land_candidates(
             continue
 
         details = f"{c.body}\n\n{trailer(c.source_pr, c.content_hash)}"
-        # Filing-time anchor check (x-a7ab 1.1): a finding already addressed on
+        # Filing-time anchor check (1.1): a finding already addressed on
         # its source PR (fixed-on-main) is never minted. An unresolvable scan
         # fails toward filing with an anchor-unverified note (AC5-EDGE).
         if anchor_scan_fn is not None:
@@ -196,6 +204,7 @@ def land_candidates(
                 title=c.title,
                 details=details,
                 priority=c.priority,
+                difficulty=severity_to_difficulty(c.extra.get("severity")),
                 project=project,
                 cwd=node_cwd,
                 domain=domain,
@@ -210,18 +219,26 @@ def land_candidates(
             LandResult("queued" if interactive else "active", c, node_id=node_id)
         )
 
+        # The filing-time dedup net shared by every birth path (warn-only).
+        if dedup_entries:
+            try:
+                from fno.graph._intake import _warn_similar_nodes
+
+                stub = {"id": node_id, "title": c.title or "", "details": c.body or "", "domain": domain}
+                _warn_similar_nodes(stub, dedup_entries, intake_hint=False)
+            except Exception as exc:
+                print(f"dedup net failed for {node_id}: {exc}", file=sys.stderr)
+
         # Born-with-why (v2 A1): the retro-harvest birth path is the exact gap
-        # this epic fixes (x-7c38 / x-6e23 filed follow-ups with no /think). Route
+        # this epic fixes (/ filed follow-ups with no /think). Route
         # each created node through the shared hook so its why travels forward.
         # One shared RunState bounds the whole batch's blast radius; strictly
         # non-fatal + opt-in (gate OFF => complete no-op). The hook re-reads the
         # durable node by id, so the id stub is all it needs.
         try:
-            from fno.provenance.spawn_think import RunState, on_node_born
+            from fno.provenance.spawn_think import on_node_born
 
-            if born_rs is None:
-                born_rs = RunState()
-            on_node_born({"id": node_id}, run_state=born_rs)
+            on_node_born({"id": node_id})
         except Exception:  # noqa: BLE001 - additive; never wedge the harvest
             pass
 

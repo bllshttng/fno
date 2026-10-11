@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - inject agent identity
 # SessionStart hook: inject `fno whoami` output as orientation context.
 #
 # Gives every fresh session an at-a-glance view of its operating stack
@@ -8,6 +9,10 @@
 # detail that disappears; this hook fires it automatically.
 
 set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 # Skip if fno is not installed - degrade silently rather than spam every
 # session with errors in projects that don't have the plugin.
@@ -21,8 +26,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 
 # Run whoami; suppress stderr (warnings would otherwise leak into the
-# injection blob). Cap at 2s wall-clock so a hung fno never blocks
-# session start. `|| true` swallows the timeout status cleanly.
+# injection blob). Cap at 2s wall-clock so a hung fno never blocks session
+# start - the cap's duration is PINNED by the harness suite (scenario 4
+# measures the elapsed time), so this probe keeps its fixed bound rather
+# than the load-aware budget. `|| true` swallows the timeout status cleanly.
 OUTPUT=$(with_timeout 2 fno whoami 2>/dev/null || true)
 [[ -z "$OUTPUT" ]] && exit 0
 

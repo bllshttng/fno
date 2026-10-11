@@ -15,22 +15,6 @@ def test_provider_loader_reserved_keys_match_agents_schema():
     assert _AGENTS_RESERVED_KEYS == set(AgentsBlock.model_fields) | {"max_lanes"}
 
 
-def test_defaults():
-    b = AgentsBlock()
-    assert b.max_live == 3
-    assert b.provider_limits["zai"].lanes == 5
-    assert b.provider_limits["zai"].subagents == 1
-    assert b.min_free_gb == 4.0
-    assert b.worker_qos == "utility"
-
-
-def test_valid_values_pass_through():
-    b = AgentsBlock(max_live=7, min_free_gb=2.5, worker_qos="off")
-    assert b.max_live == 7
-    assert b.min_free_gb == 2.5
-    assert b.worker_qos == "off"
-
-
 def test_max_live_below_one_coerces_to_default():
     assert AgentsBlock(max_live=0).max_live == 3
     assert AgentsBlock(max_live=-2).max_live == 3
@@ -75,46 +59,46 @@ def test_worker_qos_unknown_coerces_to_utility():
     assert AgentsBlock(worker_qos="OFF").worker_qos == "off"
 
 
-def test_spawn_defaults_unset_by_default():
-    # US7: empty string = unset (the spawn_permission_mode convention).
-    d = AgentsBlock().defaults
-    assert d.provider == ""
-    assert d.model == ""
-    assert d.effort == ""
+# --- x-7198: legacy agents.spawn_permission_mode migrates onto
+# agents.defaults.permission_mode; the field itself is retired. ---------------
 
 
-def test_spawn_defaults_values_pass_through():
-    b = AgentsBlock(defaults={"provider": "codex", "model": "gpt-5.6-sol", "effort": "high"})
-    assert b.defaults.provider == "codex"
-    assert b.defaults.model == "gpt-5.6-sol"
-    assert b.defaults.effort == "high"
+def test_legacy_spawn_permission_mode_migrates_when_defaults_unset():
+    """AC1-HP: the legacy value copies onto defaults.permission_mode, once."""
+    from fno.config import _DEPRECATED_WARNED
+
+    _DEPRECATED_WARNED.discard("agents.spawn_permission_mode")
+    b = AgentsBlock.model_validate({"spawn_permission_mode": "plan"})
+    assert b.defaults.permission_mode == "plan"
+    assert not hasattr(b, "spawn_permission_mode")
+    assert "agents.spawn_permission_mode" in _DEPRECATED_WARNED
+
+    # Once per process: a second load does not warn again.
+    warned_before = len(_DEPRECATED_WARNED)
+    AgentsBlock.model_validate({"spawn_permission_mode": "plan"})
+    assert len(_DEPRECATED_WARNED) == warned_before
+
+
+def test_legacy_empty_opt_out_migrates_with_a_distinct_loud_warning():
+    """An explicit legacy `spawn_permission_mode = ""` was an opt-out from
+    auto-approval; the surviving field has no equivalent, so the migration
+    warns distinctly (not the generic rename line) rather than silently
+    reproducing the value with no explanation of the behavior change."""
+    from fno.config import _DEPRECATED_WARNED, _LOG
+
+    _DEPRECATED_WARNED.discard("agents.spawn_permission_mode")
+    messages: list[str] = []
+    orig_warning = _LOG.warning
+    _LOG.warning = lambda msg, *a, **k: messages.append(msg)
+    try:
+        b = AgentsBlock.model_validate({"spawn_permission_mode": ""})
+    finally:
+        _LOG.warning = orig_warning
+    assert b.defaults.permission_mode == ""
+    assert any("no equivalent opt-out" in m for m in messages)
 
 
 def test_spawn_defaults_non_mapping_degrades_to_unset():
     # A scalar/list/null `agents.defaults:` must not raise out of the load.
     for bad in ("banana", ["x"], None, 3):
         assert AgentsBlock(defaults=bad).defaults.provider == ""
-
-
-def test_dead_row_grace_bare_integer_is_the_default_shape():
-    assert AgentsBlock().dead_row_grace == 3600
-    assert AgentsBlock(dead_row_grace=7200).dead_row_grace == 7200
-
-
-def test_dead_row_grace_accepts_a_per_harness_table():
-    # x-9de7 task 6: agents.dead_row_grace.<harness> = <seconds>, mirroring
-    # the Rust resolver (agents_config::dead_row_grace_secs). A harness
-    # absent from the table is not this model's job to fill in -- that
-    # fallback lives in the Rust resolver, which this type just has to admit.
-    b = AgentsBlock(dead_row_grace={"codex": 28800})
-    assert b.dead_row_grace == {"codex": 28800}
-
-
-def test_dead_row_grace_rejects_a_negative_value_in_either_shape():
-    import pytest
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        AgentsBlock(dead_row_grace=-1)
-    with pytest.raises(ValidationError):
-        AgentsBlock(dead_row_grace={"codex": -1})

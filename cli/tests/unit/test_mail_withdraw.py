@@ -123,14 +123,53 @@ def test_sent_separates_hosted_audit_from_durable_unclaimed(env):
         row["id"]: (row["delivery"], row["claimed"])
         for row in rows
     } == {
-        hosted: ("hosted", True),
+        # A hosted row has no cursor, so `claimed` is `null` rather than the
+        # unconditional `true` this test used to pin (the bug this node
+        # exists to fix): `is_deliverable` used to exclude hosted rows from
+        # the unclaimed scan entirely, so "not unclaimed" always read as
+        # claimed. See `landed` for what actually proves delivery now.
+        hosted: ("hosted", None),
         durable: ("durable", False),
     }
 
+    # Hosted rows now enter the outstanding scan too (they used to be
+    # excluded by `is_deliverable`, which is why `claimed` could only ever
+    # read `true` on one). This row carries no transcript coordinates, so
+    # the landed check cannot prove it either way: unknown is not lost, and
+    # only the durable message, whose consume cursor is its evidence, stays
+    # outstanding.
     unclaimed = json.loads(
         _run("mail", "sent", "--unclaimed", "--json").stdout
     )
     assert [row["id"] for row in unclaimed] == [durable]
+
+
+def test_sent_labels_an_unprovable_hosted_row_landing_unknown(env, monkeypatch):
+    # "transcript unreadable" named a false cause: with no recipient session
+    # on the row the check never read any transcript at all. Unknown is its
+    # own state, so the label says so instead of blaming the transcript.
+    from fno.mail.cli import cmd_sent
+
+    class _Tty:
+        def __init__(self):
+            self.parts = []
+
+        def write(self, s):
+            self.parts.append(s)
+            return len(s)
+
+        def flush(self):
+            pass
+
+        def isatty(self):
+            return True
+
+    _send(MY_HANDLE, PEER, "already delivered", ts=_ts_ago(3600), delivery="hosted")
+    fake = _Tty()
+    monkeypatch.setattr("fno.mail.cli.sys.stdout", fake)
+    cmd_sent(unclaimed_only=False, from_name=None, json_out=False)
+    out = "".join(fake.parts)
+    assert "handed, landing unknown" in out
 
 
 def test_sent_does_not_call_a_just_sent_message_claimed(env):
@@ -284,7 +323,7 @@ def test_reader_2_sent_unclaimed_stops_counting_it(env):
     forever on a message the sender already retracted -- the exact symptom this
     verb exists to end."""
     from fno.config import load_settings
-    from fno.mail.cli import _sent_unclaimed
+    from fno.mail.landed import _sent_unclaimed
 
     mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
     ttl = load_settings().inbox.unclaimed_ttl
@@ -341,7 +380,7 @@ def test_withdraw_does_not_advance_the_recipient_cursor(env):
 
 def test_withdraw_does_not_delete_the_line(env):
     """Append-only is an invariant of the log, not an implementation detail:
-    `mail view` is the audit projection of the source of record, and a
+    `mail show` is the audit projection of the source of record, and a
     withdrawal that erased history would make it lie."""
     from fno.bus.log import iter_messages
 
@@ -479,3 +518,19 @@ def test_withdrawing_a_typed_message_refuses_instead_of_pretending(env):
 
     assert result.exit_code == 1
     assert "cannot be recalled" in (result.stderr or result.output)
+
+
+def test_acking_a_tombstone_names_it_a_tombstone(env):
+    """The kind filter routes a tombstone into the ack refusal branch, where
+    "already delivered (hosted)" would be false about a row that retracted mail
+    and was never delivered."""
+    from fno.bus.log import WITHDRAW_KIND, iter_messages
+
+    mid = _send(MY_HANDLE, PEER, "retract me", ts=_ts_ago(3600))
+    assert _run("mail", "withdraw", mid).exit_code == 0
+    tombstone = next(m for m in iter_messages() if m.kind == WITHDRAW_KIND)
+
+    res = _run("mail", "ack", tombstone.id, "--name", PEER)
+
+    assert res.exit_code == 2
+    assert "tombstone" in res.stderr

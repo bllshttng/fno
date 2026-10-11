@@ -13,16 +13,17 @@ from __future__ import annotations
 import json
 import subprocess
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 import typer
 
 from fno.agents import watchdog
 from fno.agents.watchdog import (
+    CONTENDED,
     GHOST,
     LEAVE,
-    REAP,
-    REROUTE,
+    SANDBOX_BLOCKED,
     Row,
     STALE,
     TailFacts,
@@ -58,18 +59,25 @@ STALE_MESSAGE_STAMP = "2026-08-15T00:00:00Z"
 def _facts(
     text: str, age_min: float = 5, role: str = "assistant", kind: str = "text"
 ) -> TailFacts:
+    del kind  # the tool-call reading left with the reap lane; kept for callers
     epoch = NOW_1840 - age_min * 60
-    return TailFacts([(epoch, text)], epoch, text, role, text, kind)
+    return TailFacts([(epoch, text)], epoch, text, role, text)
 
 
-def _run(rows, transcripts, *, claims=None, nodes=None, now_s=NOW_1840):
+def _run(rows, transcripts, *, claims=None, nodes=None, now_s=NOW_1840,
+         pr_state_for=None):
     return verdicts(
         rows,
         transcript_for=lambda sid: transcripts.get(sid),
         claim_for=lambda node: (claims or {}).get(node, {}),
         node_state_for=lambda node: (nodes or {}).get(node),
         now_s=now_s,
+        pr_state_for=pr_state_for,
     )
+
+
+def _wd(mode):
+    return SimpleNamespace(enabled=True, mode=mode, mail_to="")
 
 
 # ---------------------------------------------------------------------------
@@ -98,19 +106,241 @@ def test_healthy_injectable_row_is_leave():
     assert "does not owe a move" in v.basis
 
 
-def test_sgt_stamp_is_reroute_at_1840_and_wake_at_1850():
+def _linked_worktree_dir(tmp_path, name: str) -> str:
+    """A stand-in linked worktree: a directory whose ``.git`` is a FILE, which
+    is the one marker ``_is_linked_worktree`` reads."""
+    wt = tmp_path / name
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /tmp/elsewhere/main\n")
+    return str(wt)
+
+
+def test_two_live_rows_in_one_worktree_are_contended(tmp_path):
+    wt = _linked_worktree_dir(tmp_path, "w1")
+    a = Row("aaaa1111-0000", "w1", "working", None, wt)
+    b = Row("bbbb2222-0000", "w2", "working", None, wt)
+    vs = _run(
+        [a, b],
+        {"aaaa1111-0000": _facts("still on it"),
+         "bbbb2222-0000": _facts("still on it")},
+    )
+    assert [v.verdict for v in vs] == [CONTENDED, CONTENDED]
+    assert "2 live sessions" in vs[0].basis
+    assert "bbbb2222-0000" in vs[0].basis
+    assert "aaaa1111-0000" in vs[1].basis
+
+
+def test_one_live_row_in_a_worktree_is_not_contended(tmp_path):
+    wt = _linked_worktree_dir(tmp_path, "w1")
+    [v] = _run(
+        [Row("aaaa1111-0000", "w1", "working", None, wt)],
+        {"aaaa1111-0000": _facts("still on it")},
+    )
+    assert v.verdict == LEAVE
+
+
+def test_finished_peer_does_not_contend_the_tree(tmp_path):
+    wt = _linked_worktree_dir(tmp_path, "w1")
+    a = Row("aaaa1111-0000", "w1", "working", None, wt)
+    b = Row("bbbb2222-0000", "w2", "stopped", None, wt)
+    vs = _run(
+        [a, b],
+        # The peer is quiet past QUIET_AFTER_S with a finished tail, which is
+        # the positive not-in-the-tree reading; the live row must not report
+        # contention against it.
+        {"aaaa1111-0000": _facts("still on it"),
+         "bbbb2222-0000": _facts(FINISHED_TAIL, age_min=30)},
+    )
+    assert all(v.verdict == LEAVE for v in vs)
+
+
+def test_shared_checkout_is_coordination_not_contention(tmp_path):
+    shared = tmp_path / "canonical"
+    shared.mkdir()  # no .git file: a shared checkout, not a linked worktree
+    a = Row("aaaa1111-0000", "w1", "working", None, str(shared))
+    b = Row("bbbb2222-0000", "w2", "working", None, str(shared))
+    vs = _run(
+        [a, b],
+        {"aaaa1111-0000": _facts("still on it"),
+         "bbbb2222-0000": _facts("still on it")},
+    )
+    assert all(v.verdict == LEAVE for v in vs)
+
+
+def test_ghost_outranks_contended_and_still_counts_as_occupant(tmp_path):
+    wt = _linked_worktree_dir(tmp_path, "w1")
+    ghost = Row("aaaa1111-0000", "w1", "working", None, wt)
+    live = Row("bbbb2222-0000", "w2", "working", None, wt)
+    vs = _run([ghost, live], {"bbbb2222-0000": _facts("still on it")})
+    assert vs[0].verdict == GHOST
+    # The unreadable tail counts as occupied, so the live peer still reports
+    # the tree it is actually sharing.
+    assert vs[1].verdict == CONTENDED
+    assert "aaaa1111-0000" in vs[1].basis
+
+
+def test_contended_never_acts_at_any_apply_level(tmp_path):
+    wt = _linked_worktree_dir(tmp_path, "w1")
+    a = Row("aaaa1111-0000", "w1", "working", None, wt)
+    b = Row("bbbb2222-0000", "w2", "working", None, wt)
+    [v, _] = _run(
+        [a, b],
+        {"aaaa1111-0000": _facts("still on it"),
+         "bbbb2222-0000": _facts("still on it")},
+    )
+    assert v.verdict == CONTENDED
+    outcome, detail = apply_verdict(v, lanes="all")
+    assert outcome == watchdog.SKIPPED
+    assert "outside" in detail
+
+
+def _polling_facts(poll_events):
+    """Fresh working-tail facts carrying a hand-built pr_polls view."""
+    text = "checking the pull request"
+    return TailFacts(
+        [(NOW_1840 - 60, text)], NOW_1840 - 60, text, "assistant", text,
+        tuple(poll_events),
+    )
+
+
+def test_settled_pr_reads_upgrade_leave_to_polling_settled():
+    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    [v] = _run(
+        [row],
+        {"aaaa1111-0000": _polling_facts([
+            ("read", 1371, ""),
+            ("settled", 1371, "MERGED"),
+            ("read", 1371, ""),
+            ("read", 1371, ""),
+            ("read", 1371, ""),
+        ])},
+        pr_state_for=lambda cwd, n: "MERGED",
+    )
+    assert v.verdict == watchdog.POLLING_SETTLED
+    assert v.basis == "3 PR-status reads of #1371 after the tail read it MERGED"
+    assert v.action == "report"
+    outcome, detail = apply_verdict(v, lanes="all")
+    assert outcome == watchdog.SKIPPED
+    assert "outside" in detail
+
+
+def test_open_pr_at_any_cadence_never_polls_as_settled():
+    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    events = [("settled", 1371, "CLOSED")] + [("read", 1371, "")] * 4
+    [v] = _run(
+        [row],
+        {"aaaa1111-0000": _polling_facts(events)},
+        # The live read says OPEN (reopened): the tail's stale CLOSED marker
+        # must not outvote the current state.
+        pr_state_for=lambda cwd, n: "OPEN",
+    )
+    assert v.verdict == LEAVE
+
+
+def test_unreadable_pr_state_attests_nothing():
+    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    events = [("settled", 1371, "MERGED")] + [("read", 1371, "")] * 3
+    [v] = _run(
+        [row],
+        {"aaaa1111-0000": _polling_facts(events)},
+        pr_state_for=lambda cwd, n: None,
+    )
+    assert v.verdict == LEAVE
+
+
+def test_reads_before_the_settle_marker_do_not_count():
+    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    [v] = _run(
+        [row],
+        {"aaaa1111-0000": _polling_facts([
+            ("read", 1371, ""),
+            ("read", 1371, ""),
+            ("settled", 1371, "MERGED"),
+            ("read", 1371, ""),
+        ])},
+        pr_state_for=lambda cwd, n: "MERGED",
+    )
+    # One read after the answer arrived is a wrap-up check, not a cadence.
+    assert v.verdict == LEAVE
+
+
+def test_pr_poll_record_sees_commands_and_results_records_drop():
+    entries = [
+        # A status-read command: visible to _pr_poll_record only - the
+        # flattened records text must not suddenly carry command strings the
+        # tail classifier was never tuned for.
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "fno do pr status 1371"}},
+        ]}},
+        # The result that shows the answer arrived.
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result",
+             "content": [{"type": "text",
+                          "text": '{"pr":1371,"state":"MERGED"}'}]},
+        ]}},
+        # Prose asserting the merge: real text for the records view, but the
+        # settle marker only ever comes from a tool result's JSON.
+        {"message": {"role": "assistant", "content": [
+            {"type": "text", "text": "PR 1371 merged, moving on"},
+        ]}},
+    ]
+    facts = watchdog._facts_from_entries(entries, 10)
+    assert facts.pr_polls == (
+        ("read", 1371, ""),
+        ("settled", 1371, "MERGED"),
+    )
+    assert facts.records[2][1] == "PR 1371 merged, moving on"
+    # The command string and the tool_result body both stay invisible to the
+    # flattened records text.
+    assert facts.records[0][1] == ""
+    assert facts.records[1][1] == ""
+
+
+def test_run_sweep_carries_the_pr_state_seam_end_to_end():
+    from fno.agents import watchdog as wd
+
+    entries = [
+        {"message": {"role": "user", "content": [
+            {"type": "tool_result",
+             "content": [{"type": "text",
+                          "text": '{"pr":1371,"state":"MERGED"}'}]},
+        ]}},
+    ] + [
+        {"message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "gh pr view 1371"}},
+        ]}},
+    ] * 2
+    row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    payload, out_rows = wd.run_sweep(
+        now_s=NOW_1840,
+        rows_provider=lambda: ([row], []),
+        transcript_fn=lambda sid: wd._facts_from_entries(entries, 10),
+        claim_fn=lambda node: {},
+        graph_fn=lambda: {},
+        pr_state_fn=lambda cwd, n: "MERGED",
+    )
+    assert not payload.get("refused")
+    [v] = payload["verdicts"]
+    assert v["verdict"] == watchdog.POLLING_SETTLED
+    assert payload["counts"]["polling_settled"] == 1
+    assert out_rows[0].row_id == "aaaa1111-0000"
+
+
+def test_single_sgt_429_is_report_only_until_provider_quorum():
     row = Row("cccc3333-0000", "r1", "blocked", None, "/tmp/r1")
     # 125m silent: past classify_tail's 2h window, so the tail POSITIVELY
     # asserts the session owes its next move (stalled) - the wake gate's
     # resumability marker, not a missing-429 absence.
     [before] = _run([row], {"cccc3333-0000": _facts(RATE_LIMIT_TAIL, age_min=125)})
-    assert before.verdict == REROUTE
-    assert "18:48:21Z" in before.basis and "8m out" in before.basis
+    assert before.verdict == LEAVE
+    assert "provider quorum" in before.basis
     [after] = _run(
         [row], {"cccc3333-0000": _facts(RATE_LIMIT_TAIL, age_min=125)}, now_s=NOW_1850
     )
-    assert after.verdict == WAKE
-    assert "window passed" in after.basis
+    assert after.verdict == LEAVE
+    assert "429 window passed; return owned by provider-cap" in after.basis
 
 
 def test_unparseable_reset_stamp_is_leave_never_wake():
@@ -198,7 +428,7 @@ def test_chatty_attach_cannot_push_a_live_window_out_of_scope():
     assert epoch == datetime(2026, 8, 16, 18, 48, 21, tzinfo=timezone.utc).timestamp()
 
 
-def test_old_passed_plus_new_live_429_is_reroute_not_wake():
+def test_old_passed_plus_new_live_429_waits_for_provider_quorum():
     row = Row("eeee5555-0000", "r2", "blocked", None, "/tmp/r2")
     old = "API Error: 429 rate limit, window resets at 02:10:00 SGT"
     facts = TailFacts(
@@ -207,81 +437,10 @@ def test_old_passed_plus_new_live_429_is_reroute_not_wake():
         f"{old} {RATE_LIMIT_TAIL}",
         "assistant",
         RATE_LIMIT_TAIL,
-        "text",
     )
     [v] = _run([row], {"eeee5555-0000": facts})
-    assert v.verdict == REROUTE
-    assert "18:48:21Z" in v.basis
-
-
-def test_identity_joins_on_claim_holder_not_name():
-    # Two rows whose NAMES both carry node x-9d11, but the recorded manifest
-    # node differs (x-2222 vs none). Only the claim/manifest join may decide.
-    rows = [
-        Row("eeee1111-0000", "target-x-9d11-alpha", "working", "x-2222", "/tmp/a",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead"),
-        Row("ffff2222-0000", "target-x-9d11-beta", "working", None, "/tmp/b"),
-    ]
-    transcripts = {r.row_id: _facts(FINISHED_TAIL, age_min=200) for r in rows}
-    vs = _run(
-        rows,
-        transcripts,
-        claims={"x-2222": {"state": "live", "holder": "target-session:zzzz9999-0000"}},
-    )
-    by_name = {v.name: v for v in vs}
-    assert by_name["target-x-9d11-alpha"].verdict == REAP
-    assert "claim held by zzzz9999-0000" in by_name["target-x-9d11-alpha"].basis
-    # The same-name row with no recorded node and no transcript for the OTHER
-    # holder is untouched by the claim it never joined.
-    assert by_name["target-x-9d11-beta"].verdict == LEAVE
-
-
-def test_node_done_reaps_and_own_claim_does_not():
-    rows = [
-        Row("aaaa1111-0000", "w1", "working", "x-done", "/tmp/w1",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead"),
-        Row("bbbb2222-0000", "w2", "working", "x-mine", "/tmp/w2"),
-    ]
-    transcripts = {r.row_id: _facts(FINISHED_TAIL, age_min=200) for r in rows}
-    vs = _run(
-        rows,
-        transcripts,
-        claims={"x-mine": {"state": "live", "holder": "target-session:bbbb2222-0000"}},
-        nodes={"x-done": {"status": "done"}},
-    )
-    assert vs[0].verdict == REAP and "node x-done done" in vs[0].basis
-    # Holding your own claim is ownership, not a reap reason.
-    assert vs[1].verdict == LEAVE
-
-
-def test_done_node_but_executing_leaves_not_reaps():
-    # The c696fddd case (king ruling 2026-08-17): re-tasked after its PR
-    # merged, basis transcript, last event a tool call 0 minutes ago. A done
-    # node proves the old task ended and proves nothing about re-tasking.
-    rows = [Row("c696fddd-0000", "t-xb56a", "working", "x-b56a", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"c696fddd-0000": _facts("tool_use Bash", age_min=0, kind="tool")},
-        nodes={"x-b56a": {"status": "done"}},
-    )
     assert v.verdict == LEAVE
-    # The tool-call guard answers first now; both readings say the same
-    # thing, that this session is mid-task.
-    assert "tool call" in v.basis
-
-
-def test_done_node_quiet_on_a_tool_call_still_leaves():
-    # Quiet past the idle threshold but the LAST event is a tool call: the
-    # session may be re-tasked and waiting on something long. Never reap on
-    # tool activity.
-    rows = [Row("c696fddd-0000", "t-xb56a", "working", "x-b56a", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"c696fddd-0000": _facts("tool_use Bash", age_min=60, kind="tool")},
-        nodes={"x-b56a": {"status": "done"}},
-    )
-    assert v.verdict == LEAVE
-    assert "tool call" in v.basis
+    assert "provider quorum" in v.basis
 
 
 def test_stopped_row_is_wakeable():
@@ -291,7 +450,7 @@ def test_stopped_row_is_wakeable():
 
 
 def test_wake_age_ceiling_buckets_old_rows_as_stale_not_wake():
-    # The king's measured case: a session stopped 87852 minutes (61 days) is
+    # The lead's measured case: a session stopped 87852 minutes (61 days) is
     # not recovery - dead node, stale branch, stale context. Past the 1d
     # ceiling the row is a needs-human bucket and never reaches an action
     # lane, not even under --apply=all.
@@ -304,28 +463,66 @@ def test_wake_age_ceiling_buckets_old_rows_as_stale_not_wake():
     assert outcome == watchdog.SKIPPED
 
 
-def test_deliverable_reaps_regardless_of_age():
-    # King ruling 2026-08-17: the deliverable read outranks the age ceiling.
-    # A row whose node is done with its PR merged reaps at any age; age
-    # decides what to do with an UNKNOWN row, never a finished one.
-    rows = [Row("e65d5fff-0000", "t-xd214-mail-raw-onto-rpc", "blocked",
-                "x-d214", "/canonical", origin="spawn",
-                last_message_at=STALE_MESSAGE_STAMP, probe="dead")]
-    [v] = _run(
-        rows,
-        {"e65d5fff-0000": _facts("blocked mid turn", age_min=87852)},
-        nodes={"x-d214": {"status": "done", "pr_url": "https://github.com/pull/891"}},
-    )
-    assert v.verdict == REAP
-    assert "node x-d214 done" in v.basis
-
-
 def test_no_deliverable_ages_into_stale():
     # x-35cc reads status idea: no deliverable, so the ceiling is the test.
     rows = [Row("ab12cd34-0000", "t-x35cc", "stopped", "x-35cc", "/tmp")]
     [v] = _run(rows, {"ab12cd34-0000": _facts("stopped mid turn", age_min=61 * 1440)},
                nodes={"x-35cc": {"status": "idea"}})
     assert v.verdict == STALE
+
+
+def test_done_node_row_past_the_ceiling_is_spent_not_stale():
+    # The measured re-nag shape: a session whose node shipped, quiet past the
+    # wake ceiling. The work is over; filing it stale asked a human to triage
+    # a finished row that can never age out of the ask.
+    rows = [Row("dddd4444-0000", "k1", "stopped", "abc12345", "/tmp/k1")]
+    [v] = _run(rows, {"dddd4444-0000": _facts("stopped mid turn", age_min=61 * 1440)},
+               nodes={"abc12345": {"status": "done"}})
+    assert v.verdict == watchdog.SPENT
+    assert v.action == "none"
+    assert "node abc12345 done" in v.basis
+    assert "needs a human" not in v.basis
+    outcome, _ = apply_verdict(v, lanes="all")
+    assert outcome == watchdog.SKIPPED
+
+
+def test_done_tail_row_past_the_ceiling_is_spent_even_when_the_graph_fails():
+    # A tail carrying a promise is positive completion evidence: the node
+    # read failing (or the node being unknown) must not send the row to the
+    # needs-human ask.
+    rows = [Row("dddd4444-0000", "k1", "stopped", "abc12345", "/tmp/k1")]
+
+    def broken(_node):
+        raise RuntimeError("graph unreadable")
+
+    [v] = _run(
+        rows,
+        {"dddd4444-0000": _facts(
+            "<promise>MISSION COMPLETE: PR is green</promise>", age_min=61 * 1440
+        )},
+        nodes={"abc12345": None},
+    )
+    assert v.verdict == watchdog.SPENT
+    assert "tail reads done" in v.basis
+
+    [v2] = verdicts(
+        rows,
+        transcript_for=lambda sid: _facts(
+            "<promise>MISSION COMPLETE: PR is green</promise>", age_min=61 * 1440
+        ),
+        claim_for=lambda node: {},
+        node_state_for=broken,
+        now_s=NOW_1840,
+    )
+    assert v2.verdict == watchdog.SPENT
+
+
+def test_stalled_open_row_past_the_ceiling_stays_stale():
+    rows = [Row("dddd4444-0000", "k1", "stopped", "abc12345", "/tmp/k1")]
+    [v] = _run(rows, {"dddd4444-0000": _facts("stopped mid turn", age_min=61 * 1440)},
+               nodes={"abc12345": {"status": "ready"}})
+    assert v.verdict == STALE
+    assert "needs a human" in v.basis
 
 
 def test_ledger_join_finds_nodes_for_manifest_less_rows(monkeypatch, tmp_path):
@@ -351,7 +548,7 @@ def test_ledger_join_finds_nodes_for_manifest_less_rows(monkeypatch, tmp_path):
 
 def test_no_parseable_evidence_never_wakes():
     # A tail with no parseable timestamp is the "basis no-evidence" row the
-    # king caught marked wake: absence of evidence must never reach an action.
+    # lead caught marked wake: absence of evidence must never reach an action.
     facts = TailFacts([(None, "stopped mid turn")], None, "stopped mid turn",
                       "assistant", "stopped mid turn")
     rows = [Row("eeee6666-0000", "n1", "stopped", None, "/tmp/n1")]
@@ -385,21 +582,6 @@ def test_busy_row_without_transcript_is_ghost():
     rows = [Row("ffff6666-0000", "b1", "busy", None, "/tmp/b1")]
     [v] = _run(rows, {})
     assert v.verdict == GHOST
-
-
-def test_generated_no_session_holder_never_reaps():
-    # A generated holder ({stamp}-{pid junk}-{hex}, target_cli's fallback for
-    # a context with no session env) is an operator/daemon context, not
-    # another live session; stop+rm on its say-so destroys the wrong row.
-    rows = [Row("aaaa1111-0000", "w1", "working", "x-op", "/tmp/w1")]
-    transcripts = {r.row_id: _facts("ok") for r in rows}
-    [v] = _run(
-        rows,
-        transcripts,
-        claims={"x-op": {"state": "live",
-                         "holder": "target-session:20260816T184000Z-cl123-1a2b3c"}},
-    )
-    assert v.verdict == LEAVE
 
 
 # ---------------------------------------------------------------------------
@@ -493,13 +675,13 @@ def test_untimestamped_continue_record_does_not_confirm_wake(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
     assert not watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", before_epoch
+        "dddd4444-0000", "/tmp/k1", "continue", before_epoch, agent="claude"
     )
 
 
 def test_wake_lane_only_wakes_even_with_lanes_all_available():
-    reroute = Verdict("cccc3333-0000", "r1", "blocked", REROUTE, "429", "redispatch")
-    outcome, _ = apply_verdict(reroute, lanes="wake", cwd="/tmp/r1")
+    ghost = Verdict("cccc3333-0000", "r1", "blocked", GHOST, "429", "report")
+    outcome, _ = apply_verdict(ghost, lanes="wake", cwd="/tmp/r1")
     assert outcome == watchdog.SKIPPED
 
 
@@ -516,7 +698,7 @@ def test_wake_confirmation_requires_the_exact_message(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
     assert not watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", before
+        "dddd4444-0000", "/tmp/k1", "continue", before, agent="claude"
     )
 
 
@@ -538,36 +720,8 @@ def test_wake_confirmation_scans_past_the_classification_tail(monkeypatch):
     )
     monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **k: facts)
     assert watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", marker - 60
+        "dddd4444-0000", "/tmp/k1", "continue", marker - 60, agent="claude"
     )
-
-
-def test_tail_window_bounds_the_role_triple_too(monkeypatch, tmp_path):
-    """last_role/last_text/last_kind must come from inside the same
-    max_records window as the records they are classified against. A triple
-    read from an arbitrarily older record pairs a stale text with a fresh
-    age, and reap's tool gate can fire on an ancient tool call."""
-    import fno.provenance.observed as obs
-
-    lines = [{
-        "timestamp": "2026-08-16T15:00:00Z",
-        "message": {"role": "assistant",
-                    "content": [{"type": "text", "text": "ancient turn"}]},
-    }]
-    for i in range(80):
-        lines.append({"timestamp": f"2026-08-16T1{i % 2}:{i:02d}:00Z",
-                      "text": f"progress {i}"})
-    path = tmp_path / "t.jsonl"
-    path.write_text("\n".join(json.dumps(x) for x in lines))
-    monkeypatch.setattr(obs, "resolve_transcript_path", lambda *a, **k: path)
-
-    facts = watchdog.tail_facts("sid", "/tmp")
-    assert len(facts.records) == watchdog._TAIL_RECORDS
-    assert facts.records[-1][1] == "progress 79"
-    # The ancient role-bearing record fell outside the window, so the triple
-    # reads empty rather than stale.
-    assert facts.last_role is None and facts.last_text == ""
-    assert facts.last_kind is None
 
 
 def test_rows_without_a_session_id_are_skipped_loudly(monkeypatch, tmp_path):
@@ -593,162 +747,258 @@ def test_rows_without_a_session_id_are_skipped_loudly(monkeypatch, tmp_path):
     assert any("no session id" in w for w in warnings)
 
 
-def test_reap_refuses_on_unpushed_commits_with_count_named(tmp_path):
-    import os
+def test_fleet_rows_includes_live_nonclaude_registry_rows(monkeypatch, tmp_path):
+    """The Claude roster is not the fleet: live Codex rows still join by node."""
+    from fno.agents import registry as registry_mod
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.registry import AgentEntry
 
-    repo = tmp_path / "reap-me"
-    repo.mkdir()
-    def git(*args):
-        subprocess.run(["git", "-C", str(repo), *args], check=True,
-                       capture_output=True)
-    git("init", "-q", "-b", "main")
-    git("config", "user.email", "t@example.com")
-    git("config", "user.name", "t")
-    (repo / "f.txt").write_text("one\n")
-    git("add", "f.txt")
-    git("commit", "-q", "-m", "one")
-    bare = tmp_path / "up.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-    git("remote", "add", "origin", str(bare))
-    git("push", "-q", "-u", "origin", "main")
-    (repo / "g.txt").write_text("two\n")
-    git("add", "g.txt")
-    git("commit", "-q", "-m", "two")
-    assert os.environ.get("GIT_DIR") is None  # sanity: repo-local git only
-
-    refusal = watchdog.worktree_refusal(str(repo))
-    assert refusal is not None and "1 unpushed commit(s)" in refusal
-
-    v = Verdict("eeee1111-0000", "w1", "working", REAP, "node x done", "stop+rm")
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd=str(repo), reap_enabled=True
+    row = AgentEntry(
+        name="codex-thread",
+        harness="codex",
+        harness_session_id="thread-535c",
+        cwd=str(tmp_path),
+        log_path="",
+        status="live",
+        origin="spawn",
+        node="x-535c",
     )
-    assert outcome == "refused" and "1 unpushed commit(s)" in detail
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **_k: ([], []))
+
+    rows, warnings = watchdog.fleet_rows()
+
+    assert warnings == []
+    assert rows == [
+        Row("thread-535c", "codex-thread", "working", "x-535c", str(tmp_path), "codex")
+    ]
 
 
-def test_reap_applies_on_clean_worktree(tmp_path, monkeypatch):
-    repo = tmp_path / "clean"
-    repo.mkdir()
-    def git(*args):
-        subprocess.run(["git", "-C", str(repo), *args], check=True,
-                       capture_output=True)
-    git("init", "-q", "-b", "main")
-    git("config", "user.email", "t@example.com")
-    git("config", "user.name", "t")
-    (repo / "f.txt").write_text("one\n")
-    git("add", "f.txt")
-    git("commit", "-q", "-m", "one")
-    bare = tmp_path / "up2.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
-    git("remote", "add", "origin", str(bare))
-    git("push", "-q", "-u", "origin", "main")
+def test_registry_live_row_reaches_the_wake_lane(monkeypatch, tmp_path):
+    """A registry status folds through the shared mapper, so a live codex
+    worker with a stalled tail is WAKE material, never a silent LEAVE."""
+    from fno.agents import registry as registry_mod
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.registry import AgentEntry
 
-    stopped = []
-    cwds = []
-    def runner(argv, **kw):
-        stopped.append(argv)
-        cwds.append(kw.get("cwd"))
-        return _Proc(0)
-    v = Verdict("eeee1111-0000", "w1", "working", REAP, "node x done", "stop+rm")
-    # The delete-target guard has its own test below; this one exercises
-    # the mechanism past it. The receipt gate has its own tests too.
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(watchdog, "_persist_reap_receipt", lambda rid: (True, "staged"))
-    outcome, _ = apply_verdict(
-        v, lanes="all", cwd=str(repo), runner=runner, reap_enabled=True
+    row = AgentEntry(
+        name="codex-thread",
+        harness="codex",
+        harness_session_id="thread-535c",
+        cwd=str(tmp_path),
+        log_path="",
+        status="live",
+        origin="spawn",
+        node="x-535c",
     )
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **_k: ([], []))
+
+    rows, _warnings = watchdog.fleet_rows()
+    assert [r.state for r in rows] == ["working"]
+
+    # 130m: past classify_tail's 2h window, so the tail reads stalled - the
+    # same shape the stopped-row wake test pins.
+    [v] = _run(rows, {"thread-535c": _facts("mid task", age_min=130)})
+    assert v.verdict == WAKE
+
+
+def test_verdict_carries_the_rows_harness():
+    """The apply lanes re-read the transcript through the verdict, so the
+    verdict carries the same agent the row resolved its own read with."""
+    row = Row("thread-535c", "codex-thread", "working", None, "/tmp/w1", "codex")
+    [v] = _run([row], {})
+    assert v.verdict == GHOST
+    assert v.agent == "codex"
+    claude_row = Row("aaaa1111-0000", "w1", "working", None, "/tmp/w1")
+    [cv] = _run([claude_row], {})
+    assert cv.agent == "claude"
+
+
+def test_sweep_reads_each_rows_transcript_under_that_rows_harness(monkeypatch, tmp_path):
+    """A codex row's tick read resolves the codex transcript store, so its
+    facts are real and the row is never a ghost."""
+    from fno.agents import provider_outage as po
+    from fno.agents import registry as registry_mod
+
+    rows = [Row("thread-535c", "codex-thread", "working", None, str(tmp_path), "codex")]
+    monkeypatch.setattr(watchdog, "fleet_rows", lambda timeout=None: (rows, []))
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
+    monkeypatch.setattr(po, "journal_path", lambda: tmp_path / "po.json")
+
+    seen: list[str] = []
+
+    def fake_tail_entries(sid, cwd, *, agent):
+        seen.append(agent)
+        return [{
+            "type": "assistant",
+            "timestamp": "2026-08-16T18:39:00Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": "mid task"}]},
+        }]
+
+    monkeypatch.setattr(watchdog, "tail_entries", fake_tail_entries)
+    payload, _out = watchdog.run_sweep(
+        now_s=NOW_1840, claim_fn=lambda key: {}, graph_fn=lambda: {},
+    )
+    assert seen == ["codex"]
+    [v] = payload["verdicts"]
+    assert v["verdict"] != GHOST
+
+
+def test_apply_wake_confirms_through_the_verdicts_harness(monkeypatch):
+    """The claude wake-landed proof re-reads the transcript under the
+    verdict's own harness key, so a claude wake confirms at the claude
+    store. Codex rows take a different receipt (see the daemon-receipt
+    test below): resume exits 0 there only when the daemon accepted the
+    turn, so no transcript re-read runs for them."""
+    v = Verdict("aaaa1111-0000", "claude-worker", "blocked", WAKE, "silent", "resume", "claude")
+    reads: list[str] = []
+    calls = {"n": 0}
+
+    def fake_tail_facts(sid, cwd, *, agent, max_records=None):
+        reads.append(agent)
+        calls["n"] += 1
+        epoch = NOW_1840 - 60 if calls["n"] == 1 else NOW_1840
+        return TailFacts(
+            [(epoch, watchdog.WAKE_MESSAGE)], epoch,
+            watchdog.WAKE_MESSAGE, "user", watchdog.WAKE_MESSAGE,
+        )
+
+    monkeypatch.setattr(watchdog, "tail_facts", fake_tail_facts)
+    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
     assert outcome == "applied"
-    assert any("stop" in " ".join(a) for a in stopped)
-    assert any("rm" in " ".join(a) for a in stopped)
-    # Both lifecycle calls resolve in the row's worktree, not the caller's.
-    assert cwds == [str(repo), str(repo)]
-    # rm is never forced: claude rm's own refusal on a dirty worktree is a
-    # safety feature the lane leans on.
-    assert not any("--force" in " ".join(a) for a in stopped)
+    assert reads == ["claude", "claude"]
 
 
-def test_reroute_delegates_to_the_full_failover(monkeypatch):
-    # These exercise the failover mechanism PAST the shared-manifest
-    # guard, which has its own test.
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    seen = {}
+def test_apply_wake_codex_row_accepts_resumes_own_daemon_receipt(monkeypatch):
+    """A codex thread wake that exits 0 is delivered: the daemon accepted
+    the turn, which is the same receipt mail trusts. The transcript
+    re-confirm must not run - a lagging rollout write would read as a
+    refusal on a delivered wake and invite a duplicate turn."""
+    v = Verdict("thread-9", "codex-worker", "blocked", WAKE, "silent", "resume", "codex")
 
-    def fake_failover(candidate, err):
-        seen["cwd"] = candidate.cwd
-        seen["name"] = candidate.name
-        seen["swap"] = getattr(err, "triggers_swap", None)
-        return "swapped"
+    monkeypatch.setattr(watchdog, "tail_facts", lambda *a, **kw: None)
 
-    # The tail must classify swap-class or the lane refuses before delegating.
-    monkeypatch.setattr(
-        watchdog, "tail_facts", lambda sid, cwd: _facts(RATE_LIMIT_TAIL, age_min=125)
+    def _no_confirm(*a, **kw):
+        raise AssertionError("the transcript confirm must not run for codex")
+
+    monkeypatch.setattr(watchdog, "confirm_wake_landed", _no_confirm)
+    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
+    assert outcome == "applied"
+    assert "delivery receipt (codex)" in detail
+
+
+def test_apply_wake_refusal_carries_resumes_own_receipt_line(monkeypatch):
+    """AC5-HP (x-6ac3): resume's exit 0 was the false receipt, so its own
+    before -> after line belongs in the refusal detail the next operator
+    reads, without re-running anything."""
+    v = Verdict("aaaa1111-0000", "w1", "blocked", WAKE, "silent", "resume", "claude")
+    monkeypatch.setattr(watchdog, "confirm_wake_landed", lambda *a, **kw: False)
+    runner = lambda cmd, **kw: SimpleNamespace(
+        returncode=0,
+        stderr="",
+        stdout="w1 (aaaa1111-0000): Needs input -> Working\n",
     )
-    v = Verdict("cccc3333-0000", "r1", "blocked", REROUTE, "429", "redispatch")
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/tmp/r1", failover_fn=fake_failover
-    )
-    assert outcome == "applied", detail
-    # The lifecycle address is the SESSION ID, not the display name: a
-    # registry-less row's name is claude's friendly label with no registry
-    # row behind it, so a stop by name cannot use the session-store fallback.
-    assert seen == {"cwd": "/tmp/r1", "name": "cccc3333-0000", "swap": True}
-
-
-def test_reroute_refuses_when_no_alternate_is_armed(monkeypatch):
-    # These exercise the failover mechanism PAST the shared-manifest
-    # guard, which has its own test.
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(
-        watchdog, "tail_facts", lambda sid, cwd: _facts(RATE_LIMIT_TAIL, age_min=125)
-    )
-
-    def exhausted(candidate, err):
-        return "queue-exhausted"
-
-    v = Verdict("cccc3333-0000", "r1", "blocked", REROUTE, "429", "redispatch")
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/tmp/r1", failover_fn=exhausted
-    )
-    # Refusing beats a stop/respawn loop onto the same capped account.
-    assert outcome == "refused" and "queue-exhausted" in detail
-
-
-def test_reroute_receipts_tell_the_truth(monkeypatch):
-    """The receipt must not lie about an action already taken: on
-    rotated-no-worker the stop and the node-claim force-release may already
-    have run, and notified means a human ping, not a delivery."""
-    # These exercise the failover mechanism PAST the shared-manifest
-    # guard, which has its own test.
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(
-        watchdog, "tail_facts", lambda sid, cwd: _facts(RATE_LIMIT_TAIL, age_min=125)
-    )
-    v = Verdict("cccc3333-0000", "r1", "blocked", REROUTE, "429", "redispatch")
-
-    def returning(outcome_value):
-        def fn(candidate, err):
-            return outcome_value
-        return fn
-
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/tmp/r1", failover_fn=returning("rotated-no-worker")
-    )
+    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
     assert outcome == "refused"
-    assert "no replacement spawned" in detail and "Re-check" in detail
-    assert "left as-is" not in detail
+    assert "Needs input -> Working" in detail
 
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/tmp/r1", failover_fn=returning("notified")
-    )
-    # "partial" not "reported": the provider HAS rotated, and the lane-skip
-    # word is dropped by every caller.
-    assert outcome == "partial"
-    assert "human notified" in detail
 
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/tmp/r1", failover_fn=returning("no-swap")
+def test_apply_wake_refusal_unchanged_when_resume_prints_nothing(monkeypatch):
+    """AC5-EDGE (x-6ac3): a silent resume keeps today's text with no
+    trailing separator."""
+    v = Verdict("aaaa1111-0000", "w1", "blocked", WAKE, "silent", "resume", "claude")
+    monkeypatch.setattr(watchdog, "confirm_wake_landed", lambda *a, **kw: False)
+    runner = lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/x", runner=runner)
+    assert outcome == "refused"
+    assert detail == (
+        f"resume reported success but {watchdog.WAKE_MESSAGE!r} is not in "
+        "the transcript after the wake"
     )
-    assert outcome == "refused" and "left as-is" in detail
+
+
+def test_a_transcript_read_without_an_agent_refuses():
+    """The silent claude default was the defect: an omitted agent is a bind
+    error, never a wrong-file read."""
+    with pytest.raises(TypeError):
+        watchdog.tail_facts("sid", "/tmp")
+    with pytest.raises(TypeError):
+        watchdog.tail_entries("sid", "/tmp")
+
+
+def test_harness_for_session_answers_from_the_registry(monkeypatch):
+    import fno.agents.watchdog as wd
+
+    monkeypatch.setattr(
+        wd, "_harness_by_session", lambda registry_path: {"thread-9": "codex"}
+    )
+    assert wd.harness_for_session("thread-9") == "codex"
+    assert wd.harness_for_session("not-in-the-registry") == "claude"
+
+
+def test_harness_for_session_survives_an_unreadable_registry(monkeypatch):
+    import fno.agents.watchdog as wd
+    from fno.agents import registry as registry_mod
+
+    def boom():
+        raise OSError("registry locked")
+
+    monkeypatch.setattr(registry_mod, "load_registry", boom)
+    wd._harness_by_session.cache_clear()
+    try:
+        assert wd.harness_for_session("any-session") == "claude"
+    finally:
+        wd._harness_by_session.cache_clear()
+
+
+def test_a_transcriptless_harness_ghost_names_the_harness():
+    """opencode/agy keep no per-session transcript, so their ghost is a fact
+    about the harness, not a fault in the row."""
+    row = Row("oc-1234", "oc-worker", "working", None, "/tmp/w1", "opencode")
+    [v] = _run([row], {})
+    assert v.verdict == GHOST
+    assert v.basis == "harness opencode keeps no per-session transcript, unmeasurable"
+
+
+def test_a_codex_row_with_a_genuinely_missing_transcript_still_ghosts_by_id():
+    row = Row("thread-535c", "codex-worker", "working", None, "/tmp/w1", "codex")
+    [v] = _run([row], {})
+    assert v.verdict == GHOST
+    assert v.basis == "no transcript for thread-535c"
+
+
+def test_fleet_rows_skips_a_name_only_nonclaude_row_loudly(monkeypatch, tmp_path):
+    """A row carrying only a name cannot resolve a transcript or a claim, so a
+    name-based row id is never minted for it: it would silently drop a live
+    same-named row at the dedup. Named loudly with its node attribution
+    (x-ae54), and its node reads worked through the unmeasurable fold."""
+    from fno.agents import registry as registry_mod
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.registry import AgentEntry
+
+    row = AgentEntry(
+        name="codex-thread",
+        harness="codex",
+        harness_session_id=None,
+        cwd=str(tmp_path),
+        log_path="",
+        status="live",
+        origin="spawn",
+        node="x-535c",
+    )
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **_k: ([], []))
+
+    rows, warnings = watchdog.fleet_rows()
+
+    assert rows == []
+    named = [w for w in warnings if "unmeasurable-row: " in w]
+    assert len(named) == 1
+    assert "node=x-535c" in named[0]
+    assert "name=codex-thread" in named[0]
 
 
 # ---------------------------------------------------------------------------
@@ -765,328 +1015,6 @@ def test_reroute_receipts_tell_the_truth(monkeypatch):
 # /fno:think worker never reaches. Nothing tells those workers to stop.
 
 RETIRE_GRACE = 900
-
-
-def _retire_run(rows, transcripts, *, now_s=NOW_1840, grace=RETIRE_GRACE, node_state=None):
-    """The classifier with an EXPLICIT grace: reading the machine's real config
-    inside a unit test makes the verdict depend on the developer's settings.
-    ``node_state`` injects the graph read; None keeps the empty graph every
-    pre-change caller saw."""
-    return verdicts(
-        rows,
-        transcript_for=lambda sid: transcripts.get(sid),
-        claim_for=lambda node: {},
-        node_state_for=node_state if node_state is not None else (lambda node: None),
-        now_s=now_s,
-        retire_grace_s_value=grace,
-    )
-
-
-def _spawned(row_id="dddd4444-0000", name="bp-worker", state="idle"):
-    """A row footnote spawned, carrying the literal every spawn birth site
-    writes. Retire keys on that positive value, so a fixture that invents its
-    own spelling would test a lane no live row can enter."""
-    return Row(row_id, name, state, None, "/tmp/bp", "spawn")
-
-
-def test_a_finished_spawned_worker_past_the_grace_retires():
-    row = _spawned()
-    [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)})
-    assert v.verdict == watchdog.RETIRE
-    assert v.action == "stop"
-    assert "declared itself done" in v.basis
-    assert "worktree and row survive" in v.basis
-
-
-def test_retire_stops_and_removes_nothing():
-    """The whole reason this lane can be armed where reap cannot: one stop, no
-    rm, and the receipt names the undo."""
-    calls = []
-
-    def runner(argv, **kw):
-        calls.append(list(argv))
-        return _Proc(0)
-
-    v = Verdict("dddd4444-0000", "bp-worker", "idle", watchdog.RETIRE,
-                "worker declared itself done", "stop")
-    outcome, detail = apply_verdict(v, lanes="all", cwd="/tmp/bp", runner=runner)
-
-    assert outcome == "applied"
-    assert len(calls) == 1, "retire is exactly one call"
-    assert "stop" in " ".join(calls[0])
-    assert not any("rm" in a for a in calls[0]), "retire never removes anything"
-    assert "resume" in detail, "the receipt must name the undo"
-
-
-def test_a_pending_tool_call_never_retires():
-    """A transcript's last record can be the assistant turn that ISSUED a tool
-    call, which means the tool has not returned. A worker twenty minutes into a
-    build, a `gh pr checks --watch` or a full test run is silent to every other
-    read here, and if that same turn mentioned a promise the tail classifies
-    `done` and this lane stops it mid-call. reap refuses on the same reading."""
-    row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-    facts = _facts("Running the suite. " + FINISHED_TAIL, age_min=20, kind="tool")
-    [v] = _retire_run([row], {row.row_id: facts})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_a_question_after_a_prose_mention_still_holds_the_row():
-    """The tag appears in prose in this repo routinely, and a worker can mention
-    it and THEN ask its question. A span-deleting strip matched from that FIRST
-    mention to the only closing tag, took the question with it, and retired the
-    row with the question stranded."""
-    text = (
-        "The loop keys on <promise> here.\n"
-        "Should I widen it to <watching> too?\n"
-        "<promise>MISSION COMPLETE</promise>"
-    )
-    assert watchdog._question_pending(_facts(text, age_min=20)) is True
-    row = Row("dddd4444-0000", "bp-worker", "idle", None, "/tmp/bp", "spawn")
-    [v] = _retire_run([row], {row.row_id: _facts(text, age_min=20)})
-    assert v.verdict != watchdog.RETIRE, "the question outlives the promise"
-
-
-def test_a_bare_prose_mention_alone_is_not_a_question():
-    """The other direction of the same read: over-detection costs a slot that
-    never gets reclaimed, so the cut may not answer yes on a mention alone."""
-    text = "The loop keys on <promise> here.\n" + FINISHED_TAIL
-    assert watchdog._question_pending(_facts(text, age_min=20)) is False
-
-
-def test_retire_is_outside_the_wake_lane():
-    """--apply is documented as the one action that cannot destroy work, and
-    retire stops a session, so it needs --apply-all."""
-    v = Verdict("dddd4444-0000", "bp-worker", "idle", watchdog.RETIRE, "b", "stop")
-    outcome, detail = apply_verdict(v, lanes="wake")
-    assert outcome == watchdog.SKIPPED
-    assert "outside" in detail
-
-
-def test_a_promise_that_also_asks_a_question_never_retires():
-    """classify_tail returns on its FIRST match - watching, then promise, then
-    question - so a turn that both promises and asks classifies `done` and never
-    `your-move`. That is the modal shape here: a blueprint worker mails its plan
-    and asks the operator one thing in the same turn. Retiring it strands the
-    question, so the predicate asks again rather than trusting the classifier's
-    single answer."""
-    row = _spawned()
-    tail = f"{FINISHED_TAIL}\nOne thing before I stop: should the grace stay 900?"
-    [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-    assert "question the operator owes" in v.basis
-
-
-def test_a_question_asked_before_the_promise_never_retires():
-    """The REAL shape, and the one the ordering above does not cover. The worker
-    is instructed to emit its promise last (skills/target/references/
-    pre-promise.md), so a turn that asks and then finishes ends on `>`, not on
-    `?`. Reading `endswith("?")` against the raw text answers False on exactly
-    the population `_question_pending` exists for, and the row retires with the
-    question stranded."""
-    row = _spawned()
-    tail = "Plan mailed. Should I open the PR too?\n<promise>MISSION COMPLETE</promise>"
-    [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-    assert "question the operator owes" in v.basis
-
-
-def test_tag_stripping_never_hides_a_pending_question():
-    """The over-strip risk the tag regex introduces, pinned in both directions.
-
-    Stripping terminal tags to find the real end of a turn can eat the question
-    it was meant to expose. An UNCLOSED `<promise>` was the live case: stripping
-    only the tag left its body behind as the apparent end of the turn, so a turn
-    that genuinely ended on a question answered "nothing pending" and the worker
-    retired with the operator still owing an answer.
-
-    The false direction matters as much: over-stripping into a permanent "a
-    question is pending" would stop the lane firing at all.
-    """
-    ask = "Should I open the PR?"
-    for tail, pending in (
-        (f"{ask}\n<promise>DONE</promise>", True),
-        (f"{ask}\n<promise>DONE", True),               # unclosed: body is promise content
-        (f"{ask}\n<promise/>", True),
-        (f'{ask}\n<watching reason="ci" pr="1">', True),
-        ("<promise>DONE</promise>\nOne more thing?", True),
-        ("All green.\n<promise>DONE</promise>", False),
-        ("All done, nothing pending.", False),
-        ("<watching>x</watching>\nStill ok?\n<promise>D</promise>", True),
-        # A bare prose mention consumes to end of text when stripped, so this
-        # shape is caught by the RAW read instead. Agents working on this repo
-        # write the tag in prose routinely; without the raw read the row retires
-        # with the operator's question unanswered.
-        ("the loop keys on <promise> here. Should I widen it?", True),
-        ("I mentioned <watching> above. Ready to merge?", True),
-        # And the raw read must not invent a question where there is none.
-        ("the loop keys on <promise> here. Widening it now.", False),
-    ):
-        facts = _facts(tail, age_min=20)
-        assert watchdog._question_pending(facts) is pending, tail
-
-
-def test_a_clean_promise_with_no_question_still_retires():
-    """The counterweight: stripping the terminal tags must not invent a question
-    where there is none, or the lane never fires at all."""
-    row = _spawned()
-    for tail in (
-        FINISHED_TAIL,
-        "All done, PR is green.\n<promise>MISSION COMPLETE</promise>",
-    ):
-        [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=20)})
-        assert v.verdict == watchdog.RETIRE, tail
-
-
-def test_a_promise_carrying_a_help_tag_never_retires():
-    row = _spawned()
-    tail = f"{FINISHED_TAIL}\n<help reason='blocked'>needs a ruling</help>"
-    [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-    assert "question the operator owes" in v.basis
-
-
-def test_a_working_or_watching_tail_never_retires_at_any_age():
-    """Silence is a reading about the last write, never a verdict about whether
-    the work is over. Only a session that SAID it finished is retirable."""
-    for tail in ("still on it", "<watching>pr 42</watching>"):
-        row = _spawned()
-        [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=24 * 60)})
-        assert v.verdict != watchdog.RETIRE, tail
-
-
-def test_grace_zero_disarms_the_lane():
-    row = _spawned()
-    [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)}, grace=0)
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_inside_the_grace_never_retires():
-    """The follow-up window is the point: a worker that just delivered can still
-    be asked one more thing."""
-    row = _spawned()
-    [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=5)})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_an_unjoined_or_operator_row_never_retires():
-    """Only the positive `spawn` stamp retires. `operator` is a session a human
-    started by hand, `adopted` is one the harness-store healer found already
-    running (routinely an operator's own terminal), and None is a row the
-    registry join did not answer for. An unanswered read is never a verdict."""
-    for origin in ("operator", "adopted", None):
-        row = Row("dddd4444-0000", "operator-session", "idle", None, "/tmp/bp", origin)
-        [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=24 * 60)})
-        assert v.verdict != watchdog.RETIRE, origin
-
-
-def test_an_unreadable_transcript_never_retires():
-    row = _spawned()
-    [v] = _retire_run([row], {})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_a_row_whose_process_is_gone_never_retires():
-    """Retire exists to reclaim a LIVE slot. A stopped process holds none, so
-    stopping it again frees nothing and the receipt's promised undo is false."""
-    for state in ("stopped", "exited", "killed"):
-        row = Row("dddd4444-0000", "bp-worker", state, None, "/tmp/bp", "spawn")
-        [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)})
-        assert v.verdict != watchdog.RETIRE, state
-
-
-def test_the_retirable_set_accounts_for_every_live_state_claude_has():
-    """`_RETIRABLE_STATES` is hand-kept, so something has to make it track the
-    harness. Nothing else does: a new claude status that `_LIVE_STATUS_INPUT`
-    maps folds to a canonical word `_row_state` returns with an EMPTY drift
-    warning, and a word absent from the set simply stops being classified. The
-    lane would go quiet on that population and the slot leak would come back
-    with nothing said.
-
-    So every canonical word claude's live vocabulary folds to must be either
-    retirable or listed here as a deliberate exclusion. Adding a status without
-    deciding which fails this test."""
-    from fno.agents.harnesses.claude import _LIVE_STATUS_INPUT
-
-    # Deliberately NOT retirable, each for a reason `_RETIRABLE_STATES` records.
-    excluded = {"blocked"}
-
-    folded = {
-        watchdog._CANONICAL_STATE.get(mapped, mapped.lower())
-        for mapped in _LIVE_STATUS_INPUT.values()
-    }
-    unaccounted = folded - watchdog._RETIRABLE_STATES - excluded
-    assert not unaccounted, (
-        "claude gained live state(s) "
-        + ", ".join(sorted(unaccounted))
-        + "; decide whether retire acts on them and update _RETIRABLE_STATES "
-        "or this test's exclusion list"
-    )
-    # The exclusion list is itself a claim about the harness: a word that is no
-    # longer live must not sit here looking like a considered decision.
-    assert excluded <= folded, "an exclusion naming a state claude no longer emits"
-
-
-def test_a_live_pane_painting_done_still_retires():
-    """The counterweight to the test above, and the reason retire keys on
-    the stopped words rather than `_TERMINAL_STATES`. `Done` is a member of
-    claude's own KNOWN_LIVE_STATUSES, so a pane wearing it is ALIVE - a worker
-    that finished and parked, which is this lane's entire target population.
-    Excluding it reads as caution and silently empties the lane."""
-    for state in sorted(watchdog._RETIRABLE_STATES):
-        row = Row("dddd4444-0000", "bp-worker", state, None, "/tmp/bp", "spawn")
-        [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)})
-        assert v.verdict == watchdog.RETIRE, state
-
-
-def test_an_unmeasurable_state_never_retires():
-    """The state guard is POSITIVE membership, and this is why. `_row_state`
-    returns "" for a row carrying no state under either alias, and returns an
-    unmapped new spelling verbatim. Neither is a stopped word, so a negative
-    test admits both - and claude has already renamed that field once, when
-    every row read "". Under a negative test the next rename turns one
-    --apply-all into a fleet-wide stop of every row whose tail carries a
-    promise, live workers included."""
-    for state in ("", "Some New Spelling", "compacting", "completed"):
-        row = Row("dddd4444-0000", "bp-worker", state, None, "/tmp/bp", "spawn")
-        [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)})
-        assert v.verdict != watchdog.RETIRE, state
-
-
-def test_a_row_needing_input_never_retires():
-    """`blocked` is claude's `Needs input`, and a worker that has finished does
-    not need input - so the row is one a human owes something to, the opposite
-    of what this lane reclaims. `_question_pending` cannot cover it: that reads
-    the assistant's own text and a permission prompt is not assistant text.
-    Stopping such a session takes the prompt away from the operator."""
-    row = Row("dddd4444-0000", "bp-worker", "blocked", None, "/tmp/bp", "spawn")
-    [v] = _retire_run([row], {row.row_id: _facts(FINISHED_TAIL, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_an_unmarked_row_never_retires():
-    """The spawn marker must be MEASURED, not derived from a missing field.
-    `store_fallback` adopts any session it finds in the claude store - exactly
-    the shape of an operator's own session the SessionStart hook never
-    registered. Reading its origin as "worker" because the field is absent, or
-    because it merely is not `operator`, would let --apply-all stop the
-    operator's own terminal.
-
-    The positive control rides along on purpose: without it every assertion
-    here would still pass if the fixture stopped reaching the lane at all."""
-    # `adopted`, and never the row's `status`. Keying on status was a hole:
-    # status is a LIVENESS stamp that `fno agents reconcile` flips back to
-    # "live" as soon as the session answers a probe, so the guard survived
-    # exactly one pass and the adopted operator terminal then read as a worker.
-    # `origin` is written once at registration and nothing flips it.
-    facts = {"dddd4444-0000": _facts(FINISHED_TAIL, age_min=20)}
-    for origin in (None, "adopted", "something-new"):
-        row = Row("dddd4444-0000", "adopted-session", "idle", None, "/tmp/bp", origin)
-        [v] = _retire_run([row], facts)
-        assert v.verdict != watchdog.RETIRE, origin
-
-    control = Row("dddd4444-0000", "bp-worker", "idle", None, "/tmp/bp", "spawn")
-    [v] = _retire_run([control], facts)
-    assert v.verdict == watchdog.RETIRE
 
 
 def test_every_registry_row_is_born_with_an_origin_and_a_substrate():
@@ -1159,8 +1087,10 @@ def test_every_registry_row_is_born_with_an_origin_and_a_substrate():
                 continue
             seen += 1
             body = []
+            indent = len(line) - len(line.lstrip())
             for later in lines[i + 1:]:
-                if later.strip() in ("}", "};", "})", "}),"):
+                later_indent = len(later) - len(later.lstrip())
+                if later_indent == indent and later.strip() in ("}", "};", "})", "}),"):
                     break
                 body.append(later)
             joined = "\n".join(body)
@@ -1182,156 +1112,6 @@ def test_every_registry_row_is_born_with_an_origin_and_a_substrate():
     )
 
 
-def test_arming_the_lane_never_demotes_the_stale_escalation():
-    """A retire near-miss is a LEAVE, and a LEAVE returned above the wake
-    ceiling deleted the escalation for the rows that most need a human. Measured
-    on review: a spawned row owing the operator an answer and quiet 13h read
-    `stale / needs a human` with the lane off, and `leave / none` with it armed.
-    The verdict must not depend on whether the lane is armed."""
-    row = Row("dddd4444-0000", "bp-worker", "blocked", None, "/tmp/bp", "spawn")
-    tail = f"{FINISHED_TAIL}\nShould the grace stay 900?"
-    facts = {row.row_id: _facts(tail, age_min=13 * 60)}
-
-    [off] = _retire_run([row], facts, grace=0)
-    [armed] = _retire_run([row], facts, grace=RETIRE_GRACE)
-
-    assert off.verdict == STALE
-    assert armed.verdict == STALE, "arming the lane must not hide a needs-human row"
-    assert "needs a human" in armed.basis
-
-
-def test_arming_the_lane_replaces_the_stale_escalation_with_an_action():
-    """The other half, and the one the test above cannot see because it pins
-    `blocked`. `working` is the only state in both the wake lane and
-    `_RETIRABLE_STATES`, so arming retire DOES change that row's verdict.
-
-    That is allowed, and the invariant is narrower than "the verdict must not
-    depend on whether the lane is armed". A stale escalation says a human should
-    look. When the tail closes a promise and owes no question, there is nothing
-    to look at, so arming must replace the escalation with an ACTION - never
-    with `leave`, which is the silence the near-miss ordering bug produced."""
-    row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-    facts = {row.row_id: _facts(FINISHED_TAIL, age_min=13 * 60)}
-
-    [off] = _retire_run([row], facts, grace=0)
-    [armed] = _retire_run([row], facts, grace=RETIRE_GRACE)
-
-    assert off.verdict == STALE
-    assert armed.verdict == watchdog.RETIRE
-    assert armed.action == "stop", "an escalation may become an action, never silence"
-
-
-def test_a_decorated_question_still_holds_the_row():
-    """A closing question is rarely bare. Agents write it bold, quoted or
-    parenthesised, and `endswith("?")` answered no for every one of those - so
-    the row retired with the operator's question stranded, which is the single
-    outcome this predicate exists to prevent."""
-    for closing in (
-        "**Do you want me to cover the migration path too?**",
-        '"Should the grace stay 900?"',
-        "(shall I widen it?)",
-        "Should the grace stay 900?",
-    ):
-        text = f"Plan delivered.\n{closing}\n{FINISHED_TAIL}"
-        assert watchdog._question_pending(_facts(text, age_min=20)) is True, closing
-        row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-        [v] = _retire_run([row], {row.row_id: _facts(text, age_min=20)})
-        assert v.verdict != watchdog.RETIRE, closing
-
-
-def test_a_quoted_promise_never_retires_and_a_real_one_still_does():
-    """Thirty-four files in this repo carry a literal closing promise tag, this
-    module among them. A worker summarising a diff to one of them quotes the
-    closed block, and every read below answers as if it had declared itself
-    done. The lane ships armed, so that stops a live session by default.
-
-    Both directions are pinned here. The lane must still act on a real promise
-    that happens to sit near quoted material, or the fix would close the leak by
-    emptying the lane."""
-    promise = "<promise>PR is green and reviewed</promise>"
-    cases = {
-        "plain": (promise, True),
-        "fenced": (f"Diff:\n```\n{promise}\n```\nStill working.", False),
-        "tilde fenced": (f"Diff:\n~~~\n{promise}\n~~~\nStill working.", False),
-        "inline span": (f"The tag is `{promise}` here.", False),
-        # A turn that opens a fence and stops is a worker cut off mid-quote, so
-        # everything after the opener is quoted. Requiring the closing fence read
-        # this as a declaration.
-        "unterminated fence": (f"Diff:\n```\n{promise}\n", False),
-        "quote then real": (f"```\n{promise}\n```\n{promise}", True),
-        "real then quote": (f"{promise}\n```\n{promise}\n```", True),
-    }
-    for name, (text, should_retire) in cases.items():
-        row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-        [v] = _retire_run([row], {row.row_id: _facts(text, age_min=20)})
-        retired = v.verdict == watchdog.RETIRE
-        assert retired is should_retire, f"{name}: retired={retired}"
-
-
-def test_a_prose_mention_of_the_tag_never_retires():
-    """`classify_tail` answers `done` on any `<promise` in the last turn, prose
-    mention included, and agents working on this repo write the tag in prose
-    routinely. Reading that single answer stopped a live worker whose turn only
-    said it was widening something. The done half asks for the CLOSED block, the
-    same way the question half already refuses to trust a bare mention."""
-    row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-    text = "the loop keys on <promise> here. Widening it now."
-    [v] = _retire_run([row], {row.row_id: _facts(text, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_a_turn_cut_off_mid_promise_never_retires():
-    """An unclosed tag means the turn was cut off while writing its promise,
-    which is not a worker calmly declaring itself finished. Refusing costs a
-    slot that stays held; acting stops a session that never said it was done."""
-    row = Row("dddd4444-0000", "bp-worker", "working", None, "/tmp/bp", "spawn")
-    [v] = _retire_run([row], {row.row_id: _facts("<promise>MISSION COMPL", age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_an_open_429_window_never_retires():
-    """A session waiting out a rate limit is silent and is NOT finished. Retire
-    sits above the reroute lane, so without this it stops exactly the rows
-    reroute exists to move onto a fresh account, and stops them without
-    rotating anything. `reap_decision` refuses on the same reading."""
-    row = Row("dddd4444-0000", "bp-worker", "blocked", None, "/tmp/bp", "spawn")
-    tail = f"{FINISHED_TAIL}\n{RATE_LIMIT_TAIL}"
-    [v] = _retire_run([row], {row.row_id: _facts(tail, age_min=20)})
-    assert v.verdict != watchdog.RETIRE
-    assert v.verdict == REROUTE, "the row belongs to reroute, not retire"
-
-
-def test_the_predicate_is_the_only_route_to_a_retire_verdict():
-    """The sibling of the reap version of this test, and for the same reason: a
-    guard on one of N paths is decorative. Every condition retire refuses on -
-    terminal state, open 429, pending question, grace - lives in
-    `retire_decision`, so a second construction site is a bypass of all four."""
-    import inspect
-
-    source = inspect.getsource(watchdog._verdict_one)
-    assert source.count("RETIRE,") == 1, (
-        "a second RETIRE verdict site bypasses retire_decision"
-    )
-    assert "retire_decision(" in source
-
-
-def test_reap_outranks_retire_on_the_same_row():
-    """Precedence: ghost > reap > retire. A row that satisfies both takes the
-    more specific verdict, so the reap lane's config freeze still governs it."""
-    row = Row("eeee5555-0000", "w1", "idle", "x-1", "/tmp/w1", "spawn",
-              STALE_MESSAGE_STAMP, "dead")
-    monkey_nodes = {"x-1": {"status": "done"}}
-    [v] = verdicts(
-        [row],
-        transcript_for=lambda sid: _facts(FINISHED_TAIL, age_min=20),
-        claim_for=lambda node: {},
-        node_state_for=lambda node: monkey_nodes.get(node),
-        now_s=NOW_1840,
-        retire_grace_s_value=RETIRE_GRACE,
-    )
-    assert v.verdict == REAP
-
-
 # ---------------------------------------------------------------------------
 # Retire on EITHER the worker's own closed promise OR external proof the work
 # landed (node done AND its PR merged). Both halves of the external marker are
@@ -1349,179 +1129,6 @@ RECAP_TAIL = (
 MERGED_NODE = {"status": "done", "merge_status": "merged"}
 
 
-def _shipped_row(row_id="dddd4444-0000", name="think-worker"):
-    """A spawned row bound to a node whose PR has merged - the population the
-    twelve hand-reaped rows of 2026-09-01 came from. The node id is the
-    allowlisted synthetic token, never a real one."""
-    return Row(row_id, name, "idle", "x-aaaa", "/tmp/bp", "spawn")
-
-
-def test_shipped_work_basis_requires_both_done_and_merged():
-    basis = watchdog._shipped_work_basis(_shipped_row(), lambda n: dict(MERGED_NODE))
-    assert basis == "node x-aaaa done and its PR merged"
-
-
-def test_shipped_work_basis_refuses_done_without_merge_status():
-    """460 done nodes on the reference graph, 42 of them carrying no
-    merge_status: done alone would stop rows whose work never shipped."""
-    assert watchdog._shipped_work_basis(_shipped_row(), lambda n: {"status": "done"}) == ""
-    assert (
-        watchdog._shipped_work_basis(
-            _shipped_row(), lambda n: {"status": "done", "merge_status": "draft"}
-        )
-        == ""
-    )
-
-
-def test_shipped_work_basis_refuses_a_raising_read():
-    def boom(node):
-        raise RuntimeError("graph unreadable")
-
-    assert watchdog._shipped_work_basis(_shipped_row(), boom) == ""
-
-
-def test_shipped_work_basis_refuses_a_crowned_row():
-    """The same exclusion reap_decision records: a king spans many nodes, so
-    resolving its row to ONE node's status mis-buckets it."""
-    row = Row(
-        "dddd4444-0000", "king", "idle", "x-aaaa", "/tmp/bp", "spawn", crowned=True
-    )
-    assert watchdog._shipped_work_basis(row, lambda n: dict(MERGED_NODE)) == ""
-
-
-def test_shipped_work_retires_without_a_promise():
-    """THE REPRO: a think/blueprint worker whose node is done and whose PR is
-    merged ends on a recap with no <promise>, so it fell through both lanes
-    and held a live slot forever (twelve rows reaped by hand, 2026-09-01). The
-    graph is the positive marker about the WORK that the tail cannot speak."""
-    row = _shipped_row()
-    [v] = _retire_run(
-        [row],
-        {row.row_id: _facts(RECAP_TAIL, age_min=20)},
-        node_state=lambda n: dict(MERGED_NODE),
-    )
-    assert v.verdict == watchdog.RETIRE
-    assert v.action == "stop"
-    assert "x-aaaa" in v.basis and "merged" in v.basis
-
-
-def test_a_shipped_row_retasked_by_the_operator_never_retires():
-    """A trailing USER turn is an operator re-task or answer: it clears any
-    stale assistant marker, and the row owes its next move. The shipped marker
-    reads only a turn the worker itself ended, so a re-tasked row refuses
-    exactly as the promise path always did."""
-    row = _shipped_row()
-    [v] = _retire_run(
-        [row],
-        {row.row_id: _facts("Archive the worktree when you can.", age_min=20, role="user")},
-        node_state=lambda n: dict(MERGED_NODE),
-    )
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_shipped_without_merge_status_keeps_todays_refusal():
-    """The merge half is load-bearing: a done node with no merge_status is the
-    42-row population whose work may never have shipped. Today's refusal,
-    unchanged."""
-    row = _shipped_row()
-    [v] = _retire_run(
-        [row],
-        {row.row_id: _facts(RECAP_TAIL, age_min=20)},
-        node_state=lambda n: {"status": "done"},
-    )
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_a_shipped_row_parked_on_watching_never_retires():
-    """A `<watching>` tail is an armed external wait the row is still in play
-    on, whatever the graph says: reconcile can mark the node done and merged
-    while the worker is still parked waiting on a check, and stopping it kills
-    the wait it is parked on."""
-    row = _shipped_row()
-    facts = _facts('<watching reason="ci" pr="9" timeout="30m">', age_min=20)
-    [v] = _retire_run(
-        [row],
-        {row.row_id: facts},
-        node_state=lambda n: dict(MERGED_NODE),
-    )
-    assert v.verdict != watchdog.RETIRE
-
-
-def test_a_shipped_row_ending_on_a_question_still_holds():
-    """A worker whose PR merged and who then asked the operator something still
-    owes an answer; stopping it strands the question. The basis names the
-    reading that actually decided it: a question-tail classifies your-move,
-    never done."""
-    facts = _facts(
-        "Node x-aaaa shipped. Should I also archive the worktree?", age_min=20
-    )
-    answer, basis = watchdog.retire_decision(
-        _shipped_row(),
-        facts=facts,
-        now_s=NOW_1840,
-        grace_s=RETIRE_GRACE,
-        node_state_for=lambda n: dict(MERGED_NODE),
-    )
-    assert answer is False
-    assert "your-move" in basis
-    assert "question the operator owes" in basis
-
-
-def test_a_shipped_row_mid_tool_call_never_retires():
-    """The c696fddd case: a row re-tasked after its PR merged is mid tool call
-    and must not be stopped."""
-    facts = _facts(RECAP_TAIL, age_min=20, kind="tool")
-    answer, _ = watchdog.retire_decision(
-        _shipped_row(),
-        facts=facts,
-        now_s=NOW_1840,
-        grace_s=RETIRE_GRACE,
-        node_state_for=lambda n: dict(MERGED_NODE),
-    )
-    assert answer is False
-
-
-def test_one_rotation_per_sweep_across_reroute_rows(monkeypatch):
-    """_default_failover mutates the GLOBAL active provider and its storm cap
-    is per row, so eight blocked rows would walk the whole account queue in
-    one --apply-all. The sweep rotates once, like the recovery sweep."""
-    # These exercise the failover mechanism PAST the shared-manifest
-    # guard, which has its own test.
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(
-        watchdog, "tail_facts", lambda *a, **k: _facts(RATE_LIMIT_TAIL, age_min=125)
-    )
-    calls = []
-
-    def failover(candidate, err):
-        calls.append(candidate.name)
-        return "swapped"
-
-    rotation = watchdog.RotationBudget()
-    rows = [
-        Verdict(f"cccc333{i}-0000", f"r{i}", "blocked", REROUTE, "429", "redispatch")
-        for i in range(4)
-    ]
-    outcomes = [
-        apply_verdict(
-            v, lanes="all", cwd=f"/tmp/r{i}",
-            failover_fn=failover, rotation=rotation,
-        )
-        for i, v in enumerate(rows)
-    ]
-    assert len(calls) == 1, calls
-    assert outcomes[0][0] == "applied"
-    for outcome, detail in outcomes[1:]:
-        # "held", not the silent lane-skip word: an action was withheld and
-        # the operator has to see that rows 2 and 3 did nothing.
-        assert outcome == "held"
-        assert "already rotated this sweep" in detail
-    # With no budget passed the caller keeps the old per-row behavior.
-    calls.clear()
-    apply_verdict(rows[0], lanes="all", cwd="/tmp/r0", failover_fn=failover)
-    assert len(calls) == 1
-
-
 def test_wake_confirmation_polls_for_the_flushed_turn(monkeypatch):
     """resume returns when the live STATE reads working, before the injected
     turn is flushed, so a one-shot read reports a landed wake as refused."""
@@ -1536,7 +1143,7 @@ def test_wake_confirmation_polls_for_the_flushed_turn(monkeypatch):
     monkeypatch.setattr(watchdog, "tail_facts", fake_tail)
     slept = []
     assert watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", NOW_1840 - 600,
+        "dddd4444-0000", "/tmp/k1", "continue", NOW_1840 - 600, agent="claude",
         attempts=6, interval_s=0.01, sleep=slept.append,
     )
     assert slept, "a polling confirm must have waited at least once"
@@ -1546,54 +1153,55 @@ def test_wake_confirmation_polls_for_the_flushed_turn(monkeypatch):
         watchdog, "tail_facts", lambda *a, **k: _facts("stopped mid turn")
     )
     assert not watchdog.confirm_wake_landed(
-        "dddd4444-0000", "/tmp/k1", "continue", NOW_1840 - 600,
+        "dddd4444-0000", "/tmp/k1", "continue", NOW_1840 - 600, agent="claude",
         attempts=3, interval_s=0.0, sleep=lambda _s: None,
     )
 
 
-def test_shared_checkout_rows_never_inherit_one_manifest_node(
+def test_persisted_registry_node_precedes_manifest_and_ledger_fallbacks(
     monkeypatch, tmp_path
 ):
-    """Under worktree.policy = never every session runs in the canonical
-    checkout and reads the SAME graph_node_id. A done node must not make every
-    quiet sibling reapable, so the manifest decides only for a LINKED worktree
-    and the session-keyed ledger decides otherwise."""
+    """A spawn-stamped node is row identity, not a name-derived fallback."""
     from fno.agents import registry as registry_mod
     from fno.agents.harnesses import claude as claude_mod
+    from fno.agents.registry import AgentEntry
     import fno.paths as paths_mod
 
     shared = tmp_path / "canonical"
-    (shared / ".fno").mkdir(parents=True)
-    (shared / ".git").mkdir()  # a canonical checkout: .git is a DIRECTORY
-    (shared / ".fno" / "target-state.md").write_text("graph_node_id: x-done\n")
-
-    linked = tmp_path / "wt"
-    (linked / ".fno").mkdir(parents=True)
-    (linked / ".git").write_text("gitdir: /elsewhere\n")  # linked: a FILE
-    (linked / ".fno" / "target-state.md").write_text("graph_node_id: x-mine\n")
-
+    (shared / ".git").mkdir(parents=True)
     ledger = tmp_path / "ledger.json"
-    ledger.write_text(json.dumps({"entries": [
-        {"graph_node_id": "x-done", "sessions": ["aaaa1111-0000"]},
-    ]}))
+    ledger.write_text(json.dumps({"entries": []}))
     monkeypatch.setattr(paths_mod, "ledger_json", lambda: ledger)
     monkeypatch.setattr(
-        registry_mod, "load_registry", lambda: (_ for _ in ()).throw(OSError())
+        registry_mod,
+        "load_registry",
+        lambda: [
+            AgentEntry(
+                name="spawned-worker",
+                harness="claude",
+                harness_session_id="dddd4444-0000",
+                cwd=str(shared),
+                log_path="",
+                created_at="2026-09-01T00:00:00Z",
+                status="exited",
+                origin="spawn",
+                node="x-cafe",
+            )
+        ],
     )
-    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: ([
-        {"sessionId": "aaaa1111-0000", "state": "working", "cwd": str(shared)},
-        {"sessionId": "bbbb2222-0000", "state": "working", "cwd": str(shared)},
-        {"sessionId": "cccc3333-0000", "state": "working", "cwd": str(linked)},
-    ], []))
+    monkeypatch.setattr(
+        claude_mod,
+        "claude_agents_rows",
+        lambda **k: ([{
+            "sessionId": "dddd4444-0000",
+            "state": "done",
+            "cwd": str(shared),
+        }], []),
+    )
 
     rows, _warnings = watchdog.fleet_rows()
-    by_id = {r.row_id: r for r in rows}
-    # The ledger names the one session that really ran the node.
-    assert by_id["aaaa1111-0000"].node == "x-done"
-    # Its sibling on the same checkout inherits nothing.
-    assert by_id["bbbb2222-0000"].node is None
-    # A linked worktree still reads its own manifest.
-    assert by_id["cccc3333-0000"].node == "x-mine"
+
+    assert rows[0].node == "x-cafe"
 
 
 def test_a_manual_sweep_never_certifies_the_cadence(monkeypatch, tmp_path):
@@ -1639,6 +1247,34 @@ def test_sweep_file_stamps_recoverable_count_and_preserves_it_on_manual_sweep(
     assert second["last_tick_epoch"] == first["last_tick_epoch"]
 
 
+def test_ac12_obs_sweep_payload_and_receipt_include_measured_provider_outages(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "watchdog-sweep.json"
+    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
+    measured = {
+        "instrument": "measured",
+        "breakers": [{"provider": "zai", "account": "acct-a"}],
+        "counts": {"open": 1},
+        "refusals": [],
+    }
+    rows = [Row("aaaa1111-0000", "w1", "working", None, "/tmp")]
+    payload, _ = watchdog.run_sweep(
+        now_s=NOW_1840,
+        rows_provider=lambda: (rows, []),
+        transcript_fn=lambda sid: _facts("ok"),
+        claim_fn=lambda node: {},
+        graph_fn=lambda: {},
+        provider_outage_fn=lambda: measured,
+    )
+    assert payload["provider_outages"] == measured
+    watchdog.write_sweep_file(
+        "tick", payload["counts"], NOW_1840,
+        provider_outages=payload["provider_outages"],
+    )
+    assert json.loads(path.read_text())["provider_outages"] == measured
+
+
 def test_stopped_row_survives_claude_agents_json(monkeypatch):
     from fno.agents.harnesses import claude as claude_mod
 
@@ -1664,7 +1300,10 @@ def test_stopped_row_survives_claude_agents_json(monkeypatch):
     ids = {r.get("id") for r in rows}
     assert "baf9409a" in ids and "51f36553" in ids  # stopped row survives
     assert all(r.get("kind") != "interactive" for r in rows)
-    assert live_map["baf9409a"]["live_status"] == "stopped"
+    # x-8bfb: "stopped" is a terminal claude state carrying no live turn, same
+    # axis as "failed" - it now maps onto the output vocabulary instead of
+    # passing through raw, and the mapping is quiet rather than a WARN.
+    assert live_map["baf9409a"]["live_status"] == "Done"
     assert live_map["51f36553"]["live_status"] == "Working"
     assert warnings == []
 
@@ -1686,6 +1325,12 @@ def test_sweep_payload_shape():
     assert payload["generated_at"] == "2026-08-16T18:40:00Z"
     assert payload["verdicts"][0]["verdict"] == LEAVE
     assert payload["terminal_harness_rows"] == 3
+    assert payload["provider_outages"] == {
+        "instrument": "unknown",
+        "breakers": [],
+        "counts": {"provider_outage_collector_missing": 1},
+        "refusals": [{"reason": "provider_outage_collector_missing", "count": 1}],
+    }
     # Rows ride along index-aligned so apply lanes can reach each cwd.
     assert out_rows == rows
 
@@ -2120,6 +1765,298 @@ def test_recoverable_apply_defers_remaining_candidates_when_budget_is_spent(tmp_
     assert [result["outcome"] for result in results] == ["deferred", "deferred"]
     assert all("next tick" in result["detail"] for result in results)
 
+def test_ac12_obs_sweep_file_never_invents_measured_provider_evidence(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "watchdog-sweep.json"
+    monkeypatch.setattr(watchdog, "sweep_path", lambda: path)
+
+    watchdog.write_sweep_file("tick", {LEAVE: 1}, NOW_1840)
+
+    stored = json.loads(path.read_text())
+    assert stored["provider_outages"] == {
+        "instrument": "unknown",
+        "breakers": [],
+        "counts": {"provider_outage_report_missing": 1},
+        "refusals": [{"reason": "provider_outage_report_missing", "count": 1}],
+    }
+
+
+def test_ac1_det_production_collector_joins_explicit_registry_route_identity(
+    monkeypatch, tmp_path
+):
+    fup = (
+        "API Error: Request rejected (429): Fair Usage Policy; "
+        "submit a request to restore access"
+    )
+    paths = {}
+    entries = []
+    rows = []
+    for index in (1, 2):
+        sid = f"session-{index}"
+        path = tmp_path / f"{sid}.jsonl"
+        path.write_text(json.dumps({
+            "type": "assistant",
+            "timestamp": "2026-08-16T18:39:30Z",
+            "isApiErrorMessage": True,
+            "apiErrorStatus": 429,
+            "message": {"role": "assistant", "content": fup},
+        }) + "\n", encoding="utf-8")
+        paths[sid] = path
+        entries.append(SimpleNamespace(
+            harness_session_id=sid,
+            harness="claude",
+            route_provider_id="anthropic",
+            account_record_id="acct-a",
+            cwd=str(tmp_path),
+        ))
+        rows.append(Row(sid, f"worker-{index}", "working", "x-abcd", str(tmp_path)))
+
+    report = watchdog.measure_provider_outages(
+        rows,
+        now_s=NOW_1840,
+        entries_provider=lambda: entries,
+        transcript_path_for=lambda identity: paths[identity.session_id],
+        journal=tmp_path / "provider-outages.json",
+    )
+
+    assert report["instrument"] == "measured"
+    assert report["breakers"][0]["provider"] == "anthropic"
+    assert report["breakers"][0]["account"] == "acct-a"
+
+
+def test_ac4_err_production_collector_missing_axes_is_count_bearing_unknown(tmp_path):
+    rows = [Row("session-1", "worker", "working", "x-abcd", str(tmp_path))]
+    report = watchdog.measure_provider_outages(
+        rows,
+        now_s=NOW_1840,
+        entries_provider=lambda: [SimpleNamespace(
+            harness_session_id="session-1", harness="claude", cwd=str(tmp_path),
+        )],
+        journal=tmp_path / "provider-outages.json",
+    )
+    assert report["instrument"] == "unknown"
+    assert report["breakers"] == []
+    assert report["counts"] == {"unknown_route_identity": 1}
+
+
+def test_ac1_det_production_collector_persists_exact_pane_fallback_before_vote(
+    tmp_path,
+):
+    fup = (
+        "API Error: Request rejected (429): Fair Usage Policy; "
+        "submit a request to restore access"
+    )
+    rows = []
+    entries = []
+    reads = []
+    for index in (1, 2):
+        sid = f"agy-session-{index}"
+        rows.append(Row(sid, f"agy-{index}", "working", "x-abcd", str(tmp_path)))
+        entries.append(SimpleNamespace(
+            harness_session_id=sid,
+            harness="agy",
+            route_provider_id="zai",
+            account_record_id="acct-a",
+            cwd=str(tmp_path),
+            mux={"session": "stable-session", "pane_id": 40 + index},
+        ))
+
+    def pane_read(session, pane_id):
+        reads.append((session, pane_id))
+        return fup
+
+    journal = tmp_path / "provider-outages.json"
+    snapshots = tmp_path / "pane-snapshots"
+    report = watchdog.measure_provider_outages(
+        rows,
+        now_s=NOW_1840,
+        entries_provider=lambda: entries,
+        transcript_path_for=lambda _identity: None,
+        pane_read_fn=pane_read,
+        pane_snapshot_dir=snapshots,
+        journal=journal,
+    )
+
+    assert report["instrument"] == "measured"
+    assert report["breakers"][0]["row_ids"] == ["agy-session-1", "agy-session-2"]
+    assert reads == [("stable-session", 41), ("stable-session", 42)]
+    stored = [json.loads(path.read_text()) for path in snapshots.glob("*.json")]
+    assert len(stored) == 2
+    assert all(item["observed_at"] == NOW_1840 for item in stored)
+    assert {(item["mux_session"], item["pane_id"]) for item in stored} == {
+        ("stable-session", "41"), ("stable-session", "42"),
+    }
+    assert all(item["provider"] == "zai" and item["account"] == "acct-a" for item in stored)
+
+
+def test_ac1_det_readable_transcript_is_not_duplicated_as_a_pane_vote(tmp_path):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({
+        "type": "assistant",
+        "timestamp": "2026-08-16T18:39:30Z",
+        "isApiErrorMessage": True,
+        "apiErrorStatus": 429,
+        "message": {"role": "assistant", "content": "API Error 429: Fair Usage Policy"},
+    }) + "\n", encoding="utf-8")
+    entry = SimpleNamespace(
+        harness_session_id="session-1", harness="claude",
+        route_provider_id="zai", account_record_id="acct-a", cwd=str(tmp_path),
+        mux={"session": "stable-session", "pane_id": 9},
+    )
+    reads = []
+
+    report = watchdog.measure_provider_outages(
+        [Row("session-1", "claude", "working", "x-abcd", str(tmp_path))],
+        now_s=NOW_1840,
+        entries_provider=lambda: [entry],
+        transcript_path_for=lambda _identity: transcript,
+        pane_read_fn=lambda *args: reads.append(args) or "API Error 429: Fair Usage Policy",
+        pane_snapshot_dir=tmp_path / "snapshots",
+        journal=tmp_path / "provider-outages.json",
+    )
+
+    assert report["counts"]["accepted"] == 1
+    assert reads == []
+
+
+def test_ac1_det_shape_unsupported_row_votes_once_through_the_pane(tmp_path):
+    """A row whose transcript shape has no parser refuses the transcript lane
+    BY NAME and votes once through its pane - the pane is the only instrument
+    that can see a 429 on that row. Without the fallback, every non-claude
+    pane row reads as a named refusal and the quorum never hears it."""
+    entry = SimpleNamespace(
+        harness_session_id="session-1", harness="agy",
+        route_provider_id="zai", account_record_id="acct-a", cwd=str(tmp_path),
+        mux={"session": "stable-session", "pane_id": 9},
+    )
+    reads = []
+
+    report = watchdog.measure_provider_outages(
+        [Row("session-1", "agy", "working", "x-abcd", str(tmp_path))],
+        now_s=NOW_1840,
+        entries_provider=lambda: [entry],
+        transcript_path_for=lambda _identity: tmp_path / "absent.jsonl",
+        pane_read_fn=lambda *args: reads.append(args) or "API Error 429: Fair Usage Policy",
+        pane_snapshot_dir=tmp_path / "snapshots",
+        journal=tmp_path / "provider-outages.json",
+    )
+
+    assert report["instrument"] == "measured"
+    assert report["counts"]["accepted"] == 1
+    assert len(reads) == 1  # one pane read, never a duplicated vote
+
+
+def test_production_measure_applies_validated_outage_policy_settings(tmp_path):
+    from fno.config import RecoveryBlock
+
+    fup = "API Error: Request rejected (429): Fair Usage Policy"
+    entries = []
+    rows = []
+    paths = {}
+    for index in (1, 2):
+        sid = f"session-{index}"
+        transcript = tmp_path / f"{sid}.jsonl"
+        transcript.write_text(json.dumps({
+            "type": "assistant", "timestamp": "2026-08-16T18:39:30Z",
+            "isApiErrorMessage": True, "apiErrorStatus": 429,
+            "message": {"role": "assistant", "content": fup},
+        }) + "\n")
+        paths[sid] = transcript
+        entries.append(SimpleNamespace(
+            harness_session_id=sid, harness="claude", route_provider_id="zai",
+            account_record_id="acct-a", cwd=str(tmp_path), mux=None,
+        ))
+        rows.append(Row(sid, sid, "working", "x-abcd", str(tmp_path)))
+
+    report = watchdog.measure_provider_outages(
+        rows,
+        now_s=NOW_1840,
+        settings=SimpleNamespace(recovery=RecoveryBlock(provider_outage_quorum=3)),
+        entries_provider=lambda: entries,
+        transcript_path_for=lambda identity: paths[identity.session_id],
+        journal=tmp_path / "provider-outages.json",
+    )
+    assert report["breakers"] == []
+
+
+def test_ac6_edge_one_transcript_read_per_tick(monkeypatch, tmp_path):
+    """x-581b AC6-EDGE: one tick reads and parses each transcript at most once.
+
+    The default sweep path shares one parsed tail between the outage
+    evidence collector and the tail classifier; before the sharing, both
+    legs opened and parsed the same file. The counting fake sits at the read
+    seam (tail_entries), not a timing measurement, and both consumers must
+    have run: the provider report is measured from that parse and the
+    verdicts are classified from it.
+    """
+    from fno.agents import provider_outage as po
+    from fno.agents import registry as registry_mod
+
+    rows = [
+        Row("aaaa1111-0000", "w1", "working", None, str(tmp_path)),
+        Row("bbbb2222-0000", "w2", "working", None, str(tmp_path)),
+    ]
+    monkeypatch.setattr(watchdog, "fleet_rows", lambda timeout=None: (rows, []))
+
+    def record(text, *, is_error=False, status=None):
+        return {
+            "type": "assistant",
+            "timestamp": "2026-08-16T18:39:00Z",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
+            "isApiErrorMessage": is_error,
+            "apiErrorStatus": status,
+        }
+
+    entries_by_sid = {
+        "aaaa1111-0000": [
+            record("429 quota", is_error=True, status=429),
+            record("continuing"),
+        ],
+        "bbbb2222-0000": [record("healthy")],
+    }
+    reads: list[str] = []
+
+    def counting_tail_entries(sid, cwd, *, agent="claude"):
+        reads.append(sid)
+        return entries_by_sid.get(sid)
+
+    monkeypatch.setattr(watchdog, "tail_entries", counting_tail_entries)
+    monkeypatch.setattr(
+        registry_mod,
+        "load_registry",
+        lambda: [
+            SimpleNamespace(
+                harness="claude", harness_session_id="aaaa1111-0000",
+                route_provider_id="zai", account_record_id="acct-a",
+                cwd=str(tmp_path), mux=None,
+            ),
+            SimpleNamespace(
+                harness="claude", harness_session_id="bbbb2222-0000",
+                route_provider_id="zai", account_record_id="acct-a",
+                cwd=str(tmp_path), mux=None,
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        po, "journal_path", lambda: tmp_path / "provider-outages.json"
+    )
+
+    payload, _out_rows = watchdog.run_sweep(
+        now_s=NOW_1840,
+        claim_fn=lambda key: {},
+        graph_fn=lambda: {},
+    )
+
+    # The AC itself: each transcript read exactly once, not once per consumer.
+    assert reads == ["aaaa1111-0000", "bbbb2222-0000"]
+    # The outage leg actually consumed the shared parse: the 429 record and
+    # both healthy records were accepted as evidence from it.
+    assert payload["provider_outages"]["instrument"] == "measured"
+    assert payload["provider_outages"]["counts"]["accepted"] == 3
+    # The classifier leg ran off the same entries, not a second read.
+    assert len(payload["verdicts"]) == 2
+
 
 def test_cli_prints_the_terminal_harness_row_count(monkeypatch, capsys):
     from fno.agents import cli as agents_cli
@@ -2280,16 +2217,16 @@ def test_mail_digest_sends_on_change_and_skips_when_unchanged(monkeypatch, tmp_p
         return _Proc(0, stdout="msg-1 delivered (hosted)\n")
 
     payload = _payload_two_rows()
-    ok, receipt = watchdog.mail_digest(payload, "king", runner=runner)
+    ok, receipt = watchdog.mail_digest(payload, "lead", runner=runner)
     assert ok and "delivered" in receipt
-    assert sent and "mail" in " ".join(sent[0]) and "king" in sent[0]
+    assert sent and "mail" in " ".join(sent[0]) and "lead" in sent[0]
 
     # Same signature as the stored sweep: no second send, no spam.
     watchdog.write_sweep_file(
         "tick", payload["counts"], NOW_1840, watchdog.verdict_signature(payload)
     )
     sent.clear()
-    ok2, detail2 = watchdog.mail_digest(payload, "king", runner=runner)
+    ok2, detail2 = watchdog.mail_digest(payload, "lead", runner=runner)
     assert ok2 and "unchanged" in detail2
     assert sent == []
 
@@ -2372,7 +2309,7 @@ def test_terminal_harness_residue_mails_even_when_every_verdict_is_leave(
         "counts": {LEAVE: 1},
         "terminal_harness_rows": 1,
     }
-    ok, receipt = watchdog.mail_digest(payload, "king", runner=runner)
+    ok, receipt = watchdog.mail_digest(payload, "lead", runner=runner)
     assert ok and "delivered" in receipt
     assert sent and "terminal harness rows: 1" in sent[0][-1]
 
@@ -2423,55 +2360,6 @@ def test_event_lane_suppresses_unchanged_rows(monkeypatch, tmp_path):
     assert fresh == {"dddd4444-0000"}
 
 
-def test_json_liveness_carries_watchdog_freshness(monkeypatch, tmp_path):
-    """`pr-watch status --json` and the doctor read liveness_report_live, and
-    that dict is the ONLY surface they see: a sweep starved while the pr_watch
-    tick stayed healthy must read loud there, not only in the human status
-    lines. The threshold is two CONFIGURED intervals, not the fixed default."""
-    import os
-    import time as _time
-    from types import SimpleNamespace
-    from fno.pr_watch import _install
-
-    sweep = tmp_path / "watchdog-sweep.json"
-    sweep.write_text(json.dumps({"source": "tick", "at": "x", "counts": {}}))
-    # 3x a 600s interval: stale under any plausible clock skew.
-    os.utime(sweep, (_time.time() - 1800,) * 2)
-    monkeypatch.setattr(watchdog, "sweep_path", lambda: sweep)
-    monkeypatch.setattr(_install, "_LAUNCH_AGENTS_DIR", tmp_path)
-    monkeypatch.setattr(_install, "_launchctl_is_loaded", lambda: False)
-    settings = SimpleNamespace(
-        pr_watch=SimpleNamespace(enabled=True, interval_seconds=600),
-        recovery=SimpleNamespace(watchdog="report", enabled=True),
-        autonomy=SimpleNamespace(enabled=True),
-    )
-    monkeypatch.setattr("fno.config.load_settings", lambda: settings)
-
-    report = _install.liveness_report_live()
-    assert report["watchdog"]["stale"] is True
-    assert report["watchdog"]["source"] == "tick"
-
-    # And the reader shares the TICK's condition, all three parts of it. The
-    # master panic switch stops the sweep, so a freshness alarm about that
-    # silence is an alarm about a deliberate decision - it used to fire
-    # forever.
-    settings.autonomy.enabled = False
-    assert "watchdog" not in _install.liveness_report_live()
-    settings.autonomy.enabled = True
-    settings.recovery.enabled = False
-    assert "watchdog" not in _install.liveness_report_live()
-
-    # Lane off: no freshness verdict manufactured for a lane nobody armed.
-    monkeypatch.setattr(
-        "fno.config.load_settings",
-        lambda: SimpleNamespace(
-            pr_watch=settings.pr_watch,
-            recovery=SimpleNamespace(watchdog="off"),
-        ),
-    )
-    assert "watchdog" not in _install.liveness_report_live()
-
-
 def test_failed_send_keeps_the_gate_open(monkeypatch, tmp_path):
     """A digest that failed to deliver must not advance the change gate: the
     stamp stays the PREVIOUS signature so the next sweep retries instead of
@@ -2484,14 +2372,14 @@ def test_failed_send_keeps_the_gate_open(monkeypatch, tmp_path):
     monkeypatch.setattr(watchdog, "sweep_path", lambda: tmp_path / "watchdog-sweep.json")
 
     ok, receipt, stamp = watchdog.mail_gate(
-        _payload_two_rows(), "king", runner=lambda *a, **k: _Proc(1, stderr="boom")
+        _payload_two_rows(), "lead", runner=lambda *a, **k: _Proc(1, stderr="boom")
     )
     assert not ok
     assert stamp == "old-sig"
 
     # Delivered: the current signature advances the gate.
     ok2, _, stamp2 = watchdog.mail_gate(
-        _payload_two_rows(), "king", runner=lambda *a, **k: _Proc(0)
+        _payload_two_rows(), "lead", runner=lambda *a, **k: _Proc(0)
     )
     assert ok2 and stamp2 == watchdog.verdict_signature(_payload_two_rows())
 
@@ -2514,7 +2402,7 @@ def _refused_payload():
 
 
 def test_zero_row_roster_refuses_instead_of_sweeping_clean():
-    """King report 2026-08-17: after a binary update the roster read 0 rows
+    """Lead report 2026-08-17: after a binary update the roster read 0 rows
     against an intact registry. A sweep over that writes counts={} and a
     fresh mtime, indistinguishable from a healthy quiet fleet. Zero rows must
     refuse: the payload says why and classifies nothing."""
@@ -2541,9 +2429,9 @@ def test_refused_sweep_writes_no_file_and_advances_no_gate(monkeypatch, tmp_path
         fired.append(argv)
         return _Proc(0)
 
-    ok, receipt = watchdog.mail_digest(payload, "king", runner=runner)
+    ok, receipt = watchdog.mail_digest(payload, "lead", runner=runner)
     assert not ok and payload["refused"] in receipt
-    ok2, receipt2, stamp = watchdog.mail_gate(payload, "king", runner=runner)
+    ok2, receipt2, stamp = watchdog.mail_gate(payload, "lead", runner=runner)
     assert not ok2 and stamp == "prev"
     assert fired == []  # nothing sent: zero rows read is not zero rows found
 
@@ -2651,196 +2539,6 @@ def test_the_sweep_buys_the_whole_fleet_not_the_interactive_budget(monkeypatch):
     assert spent["timeout"] > claude_mod._AGENTS_JSON_TIMEOUT_DEFAULT
 
 
-def test_a_shared_worktree_row_probed_dead_is_reapable_and_the_tree_is_held(
-    monkeypatch,
-):
-    """The guard split (x-ad13): the ROW is metadata, the TREE is a checkout.
-
-    Measured on the live fleet: two sessions working one linked worktree,
-    both resolving one node, and the co-tenancy guard refusing every row on
-    every tree - on this project every session shares one checkout. The
-    co-tenancy fact now guards the WORKTREE branch at apply (the tally rides
-    the verdict's ``cotenants`` field down to ``_apply_reap``), never the
-    row verdict: a row on a shared tree, positively probed dead, earns REAP,
-    and the apply holds the destructive step instead.
-    """
-    rows = [
-        Row("aaaa1111-0000", "quiet", "working", "x-done", "/wt/x-bcb5",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead"),
-        Row("bbbb2222-0000", "busy", "working", "x-done", "/wt/x-bcb5",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP),
-    ]
-    vs = _run(
-        rows,
-        {
-            "aaaa1111-0000": _facts(FINISHED_TAIL, age_min=30),
-            "bbbb2222-0000": _facts("tool_use Bash", age_min=0, kind="tool"),
-        },
-        nodes={"x-done": {"status": "done"}},
-    )
-    # Probed dead with a done node: reapable even though a peer shares the
-    # tree. The verdict carries the tally for the apply lane.
-    assert vs[0].verdict == REAP, vs[0].basis
-    assert vs[0].cotenants == 1
-    # The busy co-tenant is not reapable - its own tail says it is mid-task,
-    # which is a fact about the ROW, never about the tree.
-    assert vs[1].verdict != REAP
-
-    # The worktree branch: the apply holds the rm and the tree is not
-    # touched - no stop, no rm reaches the runner while a peer stands in it.
-    monkey_flags = {"ran": False}
-
-    def runner(argv, **kwargs):
-        monkey_flags["ran"] = True
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    v = Verdict("aaaa1111-0000", "quiet", "working", REAP,
-                "node x-done done", "stop+rm", cotenants=1)
-    outcome, detail = watchdog._apply_reap(v, cwd="/wt/x-bcb5", runner=runner)
-    assert outcome == "refused" and "share /wt/x-bcb5" in detail
-    assert "not touched" in detail
-    assert monkey_flags["ran"] is False, "the destructive step ran on a shared tree"
-
-
-def test_a_shared_worktree_row_probed_alive_or_unknown_is_refused_and_names_it():
-    """The probe gate, named (x-ad13): on the same shared tree, a row the
-    probe reports ALIVE refuses as NO, and a row the probe cannot answer
-    refuses as UNKNOWN. Neither is ever a YES; the basis names which."""
-    shared = {
-        "aaaa1111-0000": _facts(FINISHED_TAIL, age_min=30),
-    }
-    nodes = {"x-done": {"status": "done"}}
-    for probe, expect in (("alive", "leave"), ("unknown", "stale")):
-        row = Row("aaaa1111-0000", "quiet", "working", "x-done", "/wt/x-bcb5",
-                  origin="spawn", last_message_at=STALE_MESSAGE_STAMP,
-                  probe=probe)
-        [v] = _run([row], shared, nodes=nodes)
-        assert v.verdict == expect, (probe, v.verdict, v.basis)
-        assert "liveness probe" in v.basis, (probe, v.basis)
-        assert probe in v.basis
-
-
-def test_a_king_shaped_row_is_never_reaped():
-    """The measured hazard the guard split was blocked on (x-ad13).
-
-    `king-footnote-g4`, 2026-08-31: a live process, a stale ``exited_at``,
-    a quiet heartbeat, the shared canonical checkout, a done node - every
-    read this predicate had had a positive answer for except the one that
-    asks whether the worker is still running. Relax the old co-tenancy
-    guard without the probe gate and the first sweep reaps two live kings.
-    The probe gate is what makes the split landable, so this exact shape
-    must refuse forever.
-    """
-    row = Row("aaaa1111-0000", "king-footnote-g4", "working", "x-4c87",
-              "/shared/canonical", origin="spawn",
-              last_message_at=STALE_MESSAGE_STAMP, probe="alive")
-    [v] = _run(
-        [row],
-        {"aaaa1111-0000": _facts(FINISHED_TAIL, age_min=120)},
-        nodes={"x-4c87": {"status": "done"}},
-    )
-    assert v.verdict != REAP, v.basis
-    assert "probe positively reports the worker alive" in v.basis, v.basis
-    # The stop lane reads the same probe: retire must not stop a live king
-    # either, however done its tail reads.
-    assert v.verdict != watchdog.RETIRE, v.basis
-
-
-def test_a_crowned_row_is_never_reaped_on_a_node_done_basis():
-    """A king spans many nodes; one node's ``done`` says nothing about the
-    crown. Measured 2026-08-31: all 14 ledger hits resolved to done nodes,
-    including two live kings - the node-done basis selects crowned rows
-    first. With the probe death proof STAGED (the stricter setup, so the
-    crown rule is isolated from the probe gate), a crowned row still refuses
-    where its uncrowned twin reaps."""
-    common = dict(
-        state="working", node="x-4c87", cwd="/shared/canonical",
-        origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead",
-    )
-    king = Row("aaaa1111-0000", "king-footnote-g4", crowned=True, **common)
-    worker = Row("bbbb2222-0000", "plain-worker", crowned=False, **common)
-    quiet = _facts(FINISHED_TAIL, age_min=120)
-    nodes = {"x-4c87": {"status": "done"}}
-
-    answer, basis = _decide(king, facts=quiet, nodes=nodes)
-    assert answer == watchdog.REAP_NO, basis
-    # The refusal is the deliverable's, not any later guard's: the node-done
-    # basis was never minted for a crowned row.
-    assert basis == "", basis
-
-    answer, basis = _decide(worker, facts=quiet, nodes=nodes)
-    assert answer == watchdog.REAP_YES and "node x-4c87 done" in basis
-
-
-def test_a_crown_does_not_block_the_claim_basis():
-    """The crown bars only the NODE-DONE basis. Another live session
-    holding the node's claim is a fact about THIS row's deliverable and
-    still registers as the basis; the row then answers on the rest of its
-    reads, here a full yes since every one of them passes."""
-    row = Row("aaaa1111-0000", "king-footnote-g4", "working", "x-4c87",
-              "/shared/canonical", origin="spawn",
-              last_message_at=STALE_MESSAGE_STAMP, probe="dead", crowned=True)
-    quiet = _facts(FINISHED_TAIL, age_min=120)
-    answer, basis = _decide(
-        row, facts=quiet,
-        claims={"x-4c87": {"state": "live", "holder": "target-session:zzzz9999-0000"}},
-    )
-    assert answer == watchdog.REAP_YES and "claim held by" in basis
-
-
-def test_probe_liveness_positive_markers_only(monkeypatch):
-    """The group 1 probe's vocabulary, pinned: positive markers answer
-    alive/dead, silence answers unknown - never a guess in either
-    direction. The pid leg is delegated to ``spawn_gate._pid_alive`` (the
-    one reader that knows the incarnation-token units), so it is staged at
-    that seam; this test pins the probe's own read of the answers."""
-    class Entry:
-        def __init__(self, pid=None, start=None, exited_at=None, beat=None,
-                     ttl_ms=None):
-            self.pid = pid
-            self.pid_start_time = start
-            self.exited_at = exited_at
-            self.inside_leg = (
-                None if beat is None
-                else {**beat, **({"ttl_ms": ttl_ms} if ttl_ms is not None else {})}
-            )
-
-    import fno.agents.spawn_gate as spawn_gate
-
-    # pid leg: a matching incarnation is a positive LIFE marker...
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, start: True)
-    assert watchdog._probe_liveness(Entry(pid=4242, start=100000)) == "alive"
-    # ...a gone-or-recycled process is a POSITIVE death proof...
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, start: False)
-    assert watchdog._probe_liveness(Entry(pid=4242, start=999999)) == "dead"
-    # ...and an unreadable probe is silence, never death: the heartbeat rung
-    # still gets its say.
-    monkeypatch.setattr(spawn_gate, "_pid_alive", lambda pid, start: None)
-    beat = {"received_at": "2026-08-31T08:00:00Z"}
-    assert watchdog._probe_liveness(Entry(
-        pid=4242, start=1, exited_at="2026-08-31T00:42:40Z", beat=beat,
-    )) == "alive"
-    assert watchdog._probe_liveness(Entry(pid=4242, start=1)) == "unknown"
-    monkeypatch.undo()
-
-    # heartbeat leg: received STRICTLY LATER than exited_at proves the row
-    # advanced past its own exit stamp...
-    assert watchdog._probe_liveness(Entry(
-        exited_at="2026-08-31T00:42:40Z", beat=beat)) == "alive"
-    # ...a beat that predates the exit stamp proves nothing...
-    assert watchdog._probe_liveness(Entry(
-        exited_at="2026-08-31T09:00:00Z", beat=beat)) == "unknown"
-    # ...and a TTL'd beat past its window is not a marker.
-    assert watchdog._probe_liveness(Entry(
-        exited_at="2026-08-31T00:42:40Z", beat=beat, ttl_ms=1000)) == "unknown"
-
-    # Silence on every rung is unknown - a row with no pid, no heartbeat
-    # and no exit stamp is UNPROVEN, never dead.
-    assert watchdog._probe_liveness(Entry()) == "unknown"
-    assert watchdog._probe_liveness(None) == "unknown"
-
-
 def test_ledger_join_reads_the_singular_session_key_without_spreading_it(
     monkeypatch, tmp_path
 ):
@@ -2888,49 +2586,6 @@ def test_row_state_survives_an_alias_rename_and_odd_casing():
     assert watchdog._row_state({})[1]
 
 
-def test_a_failed_rm_after_a_successful_stop_reports_rather_than_refuses(
-    monkeypatch,
-):
-    """"refused" means "declined to act". The stop already landed, so that
-    receipt lies about a session which is now dead, and a reader who retries
-    it sends a stop to a stopped session."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(watchdog, "_persist_reap_receipt", lambda rid: (True, "staged"))
-    seen = []
-
-    def runner(argv, **kwargs):
-        seen.append(argv[-2])
-        failed = argv[-2] == "rm"
-        return subprocess.CompletedProcess(
-            argv, 1 if failed else 0, "", "registry locked" if failed else ""
-        )
-
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x-done done", "stop+rm")
-    outcome, detail = watchdog._apply_reap(v, cwd="/wt/x", runner=runner)
-    assert seen == ["stop", "rm"]
-    assert outcome == "partial"
-    assert "already stopped" in detail and "never re-run this as a stop" in detail
-
-
-def test_store_only_row_reap_names_the_scope_mismatch_not_just_an_exit_code(
-    monkeypatch,
-):
-    """24 of 43 enumerated rows are store-only, so reap's registry-scoped
-    resolution returns exit 2 permanently. A bare exit code reads as
-    transient and invites a retry loop."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-
-    def stop_not_found(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 2, "", "")
-
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x-done done", "stop+rm")
-    outcome, detail = watchdog._apply_reap(v, cwd="/wt/x", runner=stop_not_found)
-    assert outcome == "refused"
-    assert "registry" in detail, detail
-
-
 def test_the_roster_warns_before_it_outgrows_its_budget(monkeypatch):
     """A fixed budget against a growing fleet fails silently on the day the
     fleet crosses it, and the resulting refusal reads as a broken fleet
@@ -2952,7 +2607,12 @@ def test_the_roster_warns_before_it_outgrows_its_budget(monkeypatch):
 def test_a_fast_roster_probe_stays_quiet(monkeypatch):
     """The warning is a headroom signal, not a per-sweep banner."""
     from fno.agents.harnesses import claude as claude_mod
+    from fno.agents import registry as registry_mod
 
+    # fleet_rows also warns about registry rows, and the registry lives in the
+    # HOME sandbox one earlier test in this worker may have written to. Without
+    # this the empty assertion below measures that leftover, not the probe.
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
     clock = iter([1000.0, 1000.5])
     monkeypatch.setattr(watchdog.time, "time", lambda: next(clock))
     monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: ([], []))
@@ -2988,18 +2648,18 @@ def test_a_bounded_caller_spends_its_own_budget_not_the_lanes(monkeypatch):
     assert spent["timeout"] == 1.0
 
 
-def test_the_second_spelling_of_blocked_reaches_every_lane():
+def test_the_second_spelling_of_blocked_reaches_the_quorum_hold():
     """claude spells one state two ways and the lane knew only one.
 
     `busy` was folded onto working by hand; its sibling `needs input` was
-    missed, so a row wearing it could never ghost, reroute or wake - it fell
-    to leave while looking healthy. The fold now comes from the harness map,
-    so this pins the behaviour rather than the table.
+    missed, so a row wearing it could bypass the explicit provider-quorum
+    hold. The fold now comes from the harness map, so this pins the behaviour
+    rather than the table.
     """
     from fno.agents.harnesses.claude import _LIVE_STATUS_INPUT
 
     # Every input spelling claude maps onto "Needs input" must reach the
-    # reroute lane. Enumerating the map is the point: a new spelling added
+    # quorum hold. Enumerating the map is the point: a new spelling added
     # there fails this test instead of silently falling to leave.
     blocked_spellings = [
         raw for raw, out in _LIVE_STATUS_INPUT.items() if out == "Needs input"
@@ -3010,76 +2670,8 @@ def test_the_second_spelling_of_blocked_reaches_every_lane():
         assert (state, warning) == ("blocked", ""), raw
         row = Row("cccc3333-0000", "r1", state, None, "/tmp/r1")
         [v] = _run(row and [row], {"cccc3333-0000": _facts(RATE_LIMIT_TAIL)})
-        assert v.verdict == REROUTE, f"{raw} never reached reroute"
-
-
-def test_reap_never_fires_on_an_unreadable_transcript():
-    """An absence has two explanations and this lane cannot tell them apart.
-
-    tail_facts returns None both for a session that never wrote a transcript
-    and for one it could not READ (resolver miss, OSError, moved path).
-    Reaping on that deletes a clean worktree every time the read fails.
-    """
-    rows = [Row("aaaa1111-0000", "w1", "idle", "x-done", "/wt/solo")]
-    [v] = _run(rows, {}, nodes={"x-done": {"status": "done"}})
-    # STALE, not LEAVE: leave says the row was read and is healthy. An
-    # unanswered read is a different fact and it belongs to a human.
-    assert v.verdict == STALE
-    assert "not evidence" in v.basis
-
-
-def test_occupancy_is_read_from_the_transcript_not_the_roster():
-    """The roster is the store this module exists because it lies.
-
-    The measured 2026-08-15 inversion had claude report a WORKING session as
-    done. Keying occupancy on that field let a live row count as zero, so its
-    quiet sibling reaped the tree the live one was mid-task in. Occupancy now
-    asks the transcript, and anything it cannot read counts as occupied.
-    """
-    # A live sibling by TRANSCRIPT, while its roster state says stopped.
-    # Since x-ad13 the tally guards the WORKTREE branch, so it rides the
-    # REAP verdict's ``cotenants`` field instead of refusing the verdict:
-    # the transcript, not the roster, still decides who occupies the tree.
-    rows = [
-        Row("aaaa1111-0000", "quiet", "working", "x-done", "/wt/one",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead"),
-        Row("bbbb2222-0000", "live-but-reads-stopped", "stopped", "x-done", "/wt/one",
-            origin="spawn", last_message_at=STALE_MESSAGE_STAMP),
-    ]
-    vs = _run(
-        rows,
-        {
-            "aaaa1111-0000": _facts(FINISHED_TAIL, age_min=120),
-            "bbbb2222-0000": _facts("still working", age_min=0),
-        },
-        nodes={"x-done": {"status": "done"}},
-    )
-    assert vs[0].verdict == REAP, vs[0].basis
-    assert vs[0].cotenants == 1, vs[0].cotenants
-
-    # An UNREADABLE sibling transcript also holds the tree: absence is not
-    # evidence that the sibling left.
-    vs = _run(
-        rows,
-        {"aaaa1111-0000": _facts(FINISHED_TAIL, age_min=120)},
-        nodes={"x-done": {"status": "done"}},
-    )
-    assert vs[0].verdict == REAP, vs[0].basis
-    # The unreadable sibling still counts as occupied (absence is not
-    # evidence it left), so the tally that rides the verdict is 1.
-    assert vs[0].cotenants == 1, vs[0].cotenants
-
-    # Two genuinely quiet rows have nobody to protect, so the lane still works.
-    vs = _run(
-        rows,
-        {
-            "aaaa1111-0000": _facts(FINISHED_TAIL, age_min=120),
-            "bbbb2222-0000": _facts(FINISHED_TAIL, age_min=120),
-        },
-        nodes={"x-done": {"status": "done"}},
-    )
-    assert vs[0].verdict == REAP, vs[0].basis
-    assert vs[0].cotenants == 0, vs[0].cotenants
+        assert v.verdict == LEAVE, f"{raw} never reached the quorum hold"
+        assert "provider quorum" in v.basis
 
 
 def test_the_roster_refusal_carries_its_cause(monkeypatch, tmp_path, capsys):
@@ -3113,9 +2705,9 @@ def test_a_watchdog_event_uses_a_source_the_schema_accepts(tmp_path, monkeypatch
         "watchdog_verdict",
         {"row_id": "aaaa1111-0000", "name": "w1", "verdict": WAKE, "basis": "b"},
     )
-    written = (tmp_path / "events.jsonl")
-    assert written.exists(), "the event was swallowed, not written"
-    record = json.loads(written.read_text().splitlines()[-1])
+    from tests._event_rows import event_rows
+
+    record = event_rows(tmp_path / "events.jsonl")[-1]
     assert record["type"] == "watchdog_verdict"
     assert record["source"] == "daemon"
 
@@ -3123,160 +2715,6 @@ def test_a_watchdog_event_uses_a_source_the_schema_accepts(tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 # The reap predicate: one gate, and every failed read is UNKNOWN
 # ---------------------------------------------------------------------------
-
-def _decide(row, *, facts=None, nodes=None, claims=None,
-            node_state_for=None, claim_for=None, now_s=NOW_1840):
-    return watchdog.reap_decision(
-        row,
-        facts=facts,
-        node_state_for=node_state_for or (lambda n: (nodes or {}).get(n)),
-        claim_for=claim_for or (lambda n: (claims or {}).get(n, {})),
-        now_s=now_s,
-        quiet_after_s=watchdog.REAP_QUIET_AFTER_S,
-    )
-
-
-def test_every_failed_read_is_unknown_and_unknown_never_reaps():
-    """The structural rule, stated once as a test.
-
-    Eight findings over three rounds were one defect: a reading about one
-    thing used as a verdict about another, usually an ABSENCE read as a
-    positive answer. Fixing them site by site converged on nothing. This
-    pins the shape instead: whatever fails, the answer is UNKNOWN, and the
-    only way to YES is through the positive markers, ending in a POSITIVE
-    death proof from the probe (x-ad13).
-    """
-    row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo",
-              origin="spawn", last_message_at=STALE_MESSAGE_STAMP)
-    quiet = _facts(FINISHED_TAIL, age_min=120)
-
-    def boom(_n):
-        raise OSError("store unreadable")
-
-    # A raising node store is not "not done".
-    answer, basis = _decide(row, facts=quiet, node_state_for=boom)
-    assert answer == watchdog.REAP_UNKNOWN and "unreadable" in basis
-
-    # A raising claim store is not "unclaimed".
-    answer, basis = _decide(row, facts=quiet, nodes={"x-done": {"status": "x"}},
-                            claim_for=boom)
-    assert answer == watchdog.REAP_UNKNOWN and "unreadable" in basis
-
-    # A missing transcript is not "finished".
-    answer, _ = _decide(row, facts=None, nodes={"x-done": {"status": "done"}})
-    assert answer == watchdog.REAP_UNKNOWN
-
-    # An unparseable last event is not "quiet".
-    blind = TailFacts([(None, "x")], None, "x", "assistant", "x", "text")
-    answer, _ = _decide(row, facts=blind, nodes={"x-done": {"status": "done"}})
-    assert answer == watchdog.REAP_UNKNOWN
-
-    # A silent probe is not death (x-ad13).
-    answer, basis = _decide(row, facts=quiet, nodes={"x-done": {"status": "done"}})
-    assert answer == watchdog.REAP_UNKNOWN
-    assert "probe is silent" in basis
-
-    # All three markers present, plus a POSITIVE death proof, and only then.
-    answer, basis = _decide(row._replace(probe="dead"), facts=quiet,
-                            nodes={"x-done": {"status": "done"}})
-    assert answer == watchdog.REAP_YES
-    assert "quiet" in basis
-
-
-def test_the_predicate_is_the_only_route_to_a_reap_verdict():
-    """A guard on one of N paths is decorative. This asserts there is one
-    path: no reap verdict exists that the predicate did not authorize."""
-    import inspect
-
-    source = inspect.getsource(watchdog._verdict_one)
-    # The single REAP construction in the classifier is the one guarded by
-    # the predicate's YES. Any second one is a bypass.
-    assert source.count("REAP,") == 1, (
-        "a second REAP verdict site bypasses reap_decision"
-    )
-    assert "reap_decision(" in source
-
-
-def test_reap_ships_frozen_and_the_freeze_is_at_the_funnel(monkeypatch):
-    """Wake and reroute are recoverable; a reap deletes a worktree and a
-    wrong one is not undoable. So reap classifies but does not execute until
-    an operator arms it, and the freeze lives at the one funnel rather than
-    in whichever CLI flag happens to expose the lane today."""
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x-done done", "stop+rm")
-
-    def never(*a, **k):
-        raise AssertionError("a frozen reap must not run a lifecycle command")
-
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/wt/solo", runner=never, reap_enabled=False
-    )
-    assert outcome == "frozen"
-    assert "watchdog_reap" in detail
-
-    # Armed, it reaches the mechanism (and stops there on the clean-tree gate).
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: "1 unpushed commit(s)")
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/wt/solo", runner=never, reap_enabled=True
-    )
-    assert outcome == "refused" and "unpushed" in detail
-
-
-def test_unreadable_config_is_never_permission_to_delete(monkeypatch):
-    """The one switch whose wrong answer deletes a worktree fails closed."""
-    import fno.config as config_mod
-
-    def boom():
-        raise OSError("settings.yaml is a directory")
-
-    monkeypatch.setattr(config_mod, "load_settings", boom)
-    assert watchdog._reap_execution_enabled() is False
-
-
-def test_reap_refuses_a_cwd_it_cannot_prove_is_a_worktree(monkeypatch):
-    """`claude rm` removes "session record + worktree", and the ledger join
-    means cwd is routinely a repo ROOT: a worktree.policy = "never" project,
-    or a bg session in the canonical checkout. Whether that arm scopes its
-    delete is an external binary's undocumented behaviour, and being wrong
-    costs the main checkout."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: False)
-
-    def never(*a, **k):
-        raise AssertionError("rm must not run against a canonical checkout")
-
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x-done done", "stop+rm")
-    outcome, detail = watchdog._apply_reap(v, cwd="/repos/main", runner=never)
-    assert outcome == "refused"
-    assert "not a linked worktree" in detail
-
-
-def test_a_session_still_in_play_is_never_reaped():
-    """Silence is a reading about the last write, never a verdict that the
-    work is over. A worker parked on <watching>, one holding a question, and
-    one waiting out a rate limit are all silent and all still in play."""
-    row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo",
-              origin="spawn", last_message_at=STALE_MESSAGE_STAMP, probe="dead")
-    nodes = {"x-done": {"status": "done"}}
-
-    parked = _facts("<watching>ci</watching>", age_min=200)
-    [v] = _run([row], {"aaaa1111-0000": parked}, nodes=nodes)
-    assert v.verdict != REAP and "watching" in v.basis
-
-    asking = _facts("Which branch should I target?", age_min=200)
-    [v] = _run([row], {"aaaa1111-0000": asking}, nodes=nodes)
-    assert v.verdict != REAP and "your-move" in v.basis
-
-    # Silence inside a live 429 window is the rate limit, not a finished job.
-    [v] = _run([row], {"aaaa1111-0000": _facts(RATE_LIMIT_TAIL, age_min=200)},
-               nodes=nodes)
-    assert v.verdict != REAP
-
-    # A session that died mid-turn still reaps: the deliverable ruling says
-    # a done node reaps at any age, and a stalled tail owes a move nobody is
-    # coming to make.
-    [v] = _run([row], {"aaaa1111-0000": _facts("half a sentence", age_min=200)},
-               nodes=nodes)
-    assert v.verdict == REAP and "stalled" in v.basis
 
 
 def test_a_hand_run_sweep_does_not_report_the_cadence_stale(tmp_path, monkeypatch):
@@ -3295,110 +2733,6 @@ def test_a_hand_run_sweep_does_not_report_the_cadence_stale(tmp_path, monkeypatc
     assert dead["stale"] is True, dead
 
 
-def test_a_filtered_hand_run_keeps_the_rows_it_filtered_out():
-    """Stamping only the subset silently retracts every filtered-out row, so
-    the next tick re-emits all of them."""
-    merged = watchdog.union_signature("a:wake;b:ghost", "b:ghost;c:reap")
-    assert merged == "a:wake;b:ghost;c:reap"
-    assert watchdog.union_signature("", "a:wake") == "a:wake"
-
-
-def test_reroute_refuses_a_shared_manifest_it_would_respawn_from(monkeypatch):
-    """`_redispatch` re-derives the node from the cwd's target-state manifest,
-    which is the read fleet_rows refuses to trust for identity: on a canonical
-    checkout every session reads the same node. Acting on it force-releases a
-    claim another live session may hold, then spawns a duplicate onto it."""
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: False)
-
-    def never(*a, **k):
-        raise AssertionError("failover must not run against a shared manifest")
-
-    v = Verdict("cccc3333-0000", "r1", "blocked", REROUTE, "429 resets", "redispatch")
-    outcome, detail = apply_verdict(
-        v, lanes="all", cwd="/repos/main", failover_fn=never
-    )
-    assert outcome == "refused"
-    assert "not a linked worktree" in detail
-
-
-def test_a_row_claiming_working_still_wakes_when_its_tail_stalled():
-    """The measured case, 2026-08-18: a row read live and `working` while its
-    last transcript message was an API error 56 minutes old. The lane never
-    touched it; woken by hand it opened a PR fifteen minutes later.
-
-    A state word is what a session CLAIMS, and this module exists because
-    that claim lies. Candidacy is the state; the wake itself still needs the
-    tail to say the session owes a move.
-    """
-    row = Row("aaaa1111-0000", "t-live-but-dead", "working", None, "/wt/w1")
-    dead = _facts("API Error 500: internal server error", age_min=180)
-    [v] = _run([row], {"aaaa1111-0000": dead})
-    assert v.verdict == WAKE, v.basis
-    assert "180m silent" in v.basis
-
-    # But candidacy is not the whole story, and this is the half the ruling's
-    # own evidence lands on. `classify_tail` only calls a tail stalled past
-    # STALLED_AFTER_S, which is two hours, so the measured row at 56 minutes
-    # is still `working` to the classifier and this lane leaves it. Adding
-    # `working` here makes that row reachable; it does not make it reachable
-    # at 56 minutes. Anyone expecting the sweep to catch it sooner has to
-    # move that threshold, not this set.
-    [early] = _run(
-        [row],
-        {"aaaa1111-0000": _facts("API Error 500: internal server error", age_min=56)},
-    )
-    assert early.verdict == LEAVE
-    assert "does not owe a move" in early.basis
-
-    # And the claim cuts both ways: a working row whose tail is still moving
-    # is left alone, so the state word never wakes anything on its own.
-    [healthy] = _run([row], {"aaaa1111-0000": _facts("mid refactor", age_min=1)})
-    assert healthy.verdict == LEAVE
-
-    # A working row with NO transcript stays a ghost: that lane outranks wake
-    # and a row with nothing to read must never reach an action.
-    [ghost] = _run([row], {})
-    assert ghost.verdict == GHOST
-
-
-def test_only_the_lane_skip_is_silent(monkeypatch, tmp_path):
-    """Callers used to list which outcomes were worth printing, and three
-    receipts were swallowed by that list in turn. The default is surface now,
-    so an outcome cannot go silent by not being listed."""
-    import contextlib
-    import io as _io
-
-    from fno.agents import cli as agents_cli
-
-    verdicts = [
-        Verdict("aaaa1111-0000", "held-row", "blocked", REROUTE, "429", "redispatch"),
-        Verdict("bbbb2222-0000", "frozen-row", "working", REAP, "node done", "stop+rm"),
-    ]
-    rows = [Row(v.row_id, v.name, v.state, None, "/tmp/w") for v in verdicts]
-    payload = {"generated_at": "x", "verdicts": [v._asdict() for v in verdicts],
-               "counts": {REROUTE: 1, REAP: 1}, "warnings": []}
-    monkeypatch.setattr(watchdog, "run_sweep", lambda **kw: (payload, rows))
-    monkeypatch.setattr(watchdog, "write_sweep_file", lambda *a, **k: None)
-    monkeypatch.setattr(watchdog, "_last_events_signature", lambda: "")
-    monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
-    monkeypatch.setattr(
-        watchdog, "mail_gate", lambda *a, **k: (True, "no recipient", "")
-    )
-    monkeypatch.setattr(
-        watchdog, "apply_verdict",
-        lambda v, **kw: ("held", "reroute held: already rotated this sweep")
-        if v.verdict == REROUTE else ("frozen", "reap classified but not executed"),
-    )
-
-    err = _io.StringIO()
-    with contextlib.redirect_stderr(err):
-        agents_cli.cmd_watchdog(json_out=False, apply=False, apply_all=True,
-                                only=None, mail_to=None)
-    text = err.getvalue()
-    assert "held" in text and "already rotated" in text, text
-    assert "frozen" in text, text
-
-
 # ---------------------------------------------------------------------------
 # the unclaimed advisory (x-cd1e)
 # ---------------------------------------------------------------------------
@@ -3415,20 +2749,6 @@ def test_a_live_row_on_an_unclaimed_node_is_flagged():
     )
     assert v.verdict == UNCLAIMED
     assert "node x-76d1 carries NO claim while this row is live" in v.basis
-
-
-def test_the_advisory_never_becomes_an_action():
-    """The worker is fine; the record is wrong. A wake, a reroute or a reap on
-    this row would all be wrong, so the action lanes must refuse it."""
-    rows = [Row("cccc3333-0001", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = _run(
-        rows,
-        {"cccc3333-0001": _facts("still going", age_min=2)},
-        claims={"x-76d1": {"state": "free"}},
-    )
-    assert v.action == "none"
-    outcome, _detail = apply_verdict(v, lanes="all")
-    assert outcome != "applied"
 
 
 def test_a_claimed_node_reads_leave_exactly_as_before():
@@ -3453,27 +2773,6 @@ def test_an_unresolved_node_is_never_flagged():
         claims={"x-76d1": {"state": "free"}},
     )
     assert v.verdict == LEAVE
-
-
-def test_an_unreadable_claim_is_not_a_finding():
-    """An advisory that fires on an unreadable store trains its reader to
-    ignore it."""
-    def _boom(_node):
-        raise RuntimeError("claims root gone")
-
-    rows = [Row("cccc3333-0004", "t-worker", "working", "x-76d1", "/tmp/w")]
-    [v] = verdicts(
-        rows,
-        transcript_for=lambda sid: _facts("still going", age_min=2),
-        claim_for=_boom,
-        node_state_for=lambda node: None,
-        now_s=NOW_1840,
-    )
-    # STALE, not LEAVE: the existing reap predicate already refuses to render
-    # an unanswered read as a healthy row. What matters here is that it is not
-    # reported as an unclaimed node.
-    assert v.verdict == STALE
-    assert v.verdict != UNCLAIMED
 
 
 @pytest.mark.parametrize("state", ["done", "completed", "exited", "killed", "stopped"])
@@ -3562,230 +2861,263 @@ def test_the_advisory_reaches_the_digest():
     assert "t-worker" in digest_text(payload)
 
 
+def test_codex_sandbox_denial_is_a_reap_verdict(monkeypatch):
+    rows = [
+        Row("cccc3333-0011", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    [v] = _run(
+        rows,
+        {
+            "cccc3333-0011": _facts(
+                '<help reason="Codex sandbox blocks Git writes" '
+                'evidence=".git/refs/heads/feature/x-sandbox.lock: '
+                'Operation not permitted">'
+            )
+        },
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict == SANDBOX_BLOCKED
+    assert v.action == "reap"
+    assert "sandbox" in v.basis.lower()
+
+
+def test_sandbox_verdict_carries_the_rows_agent(monkeypatch):
+    """The verdict rides the row's own agent, so a reader of v.agent resolves
+    the codex transcript store, never the claude default."""
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    rows = [
+        Row("cccc3333-0018", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    [v] = _run(
+        rows,
+        {
+            "cccc3333-0018": _facts(
+                '<help reason="Codex sandbox blocks Git writes" '
+                'evidence=".git/refs/heads/feature/x-sandbox.lock: '
+                'Operation not permitted">'
+            )
+        },
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict == SANDBOX_BLOCKED
+    assert v.agent == "codex"
+
+
+def test_sandbox_basis_carries_the_bounded_help_tag(monkeypatch):
+    """The evidence in the basis is the matched help tag, never the whole
+    transcript slice it was found in."""
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    long_tail = (
+        '<help reason="Codex sandbox blocks Git writes" '
+        'evidence=".git/refs/heads/feature/x-sandbox.lock: '
+        'Operation not permitted">'
+    )
+    rows = [
+        Row("cccc3333-0019", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    [v] = _run(
+        rows,
+        {"cccc3333-0019": _facts(long_tail + " " + "padding " * 400)},
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict == SANDBOX_BLOCKED
+    assert long_tail in v.basis
+    assert "padding" not in v.basis
+
+
+def test_codex_sandbox_denial_in_user_text_is_not_reaped(monkeypatch):
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    rows = [
+        Row("cccc3333-0013", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    [v] = _run(
+        rows,
+        {
+            "cccc3333-0013": _facts(
+                '<help reason="Codex sandbox blocks Git writes" '
+                'evidence=".git/refs/heads/feature/x-sandbox.lock: '
+                'Operation not permitted">',
+                role="user",
+            )
+        },
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict != SANDBOX_BLOCKED
+    assert v.action == "none"
+
+
+def test_codex_response_item_is_normalized_for_distress_reads():
+    facts = watchdog._facts_from_entries(
+        [
+            {
+                "timestamp": "2026-08-16T18:40:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": ".git/refs/heads/feature/x.lock: Operation not permitted",
+                        }
+                    ],
+                },
+            }
+        ],
+        40,
+    )
+    assert facts is not None
+    assert facts.last_role == "assistant"
+    assert "Operation not permitted" in facts.last_text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '<help reason="Codex sandbox blocks Git writes" '
+        'evidence=".git/refs/heads/feature/x.lock: Operation not permitted',
+        '<help evidence=".git/refs/heads/feature/x.lock"> '
+        'Operation not permitted',
+        '<help reason="data-evidence=.git/refs/heads/feature/x.lock: '
+        'Operation not permitted">',
+        '<help reason="evidence=.git/refs/heads/feature/x.lock: '
+        'Operation not permitted">',
+    ],
+)
+def test_incomplete_or_mismatched_help_evidence_is_not_reaped(text, monkeypatch):
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    rows = [
+        Row("cccc3333-0014", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    [v] = _run(
+        rows,
+        {"cccc3333-0014": _facts(text)},
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict != SANDBOX_BLOCKED
+    assert v.action == "none"
+
+
+def test_claude_row_with_same_text_is_not_a_codex_sandbox_reap():
+    rows = [Row("cccc3333-0016", "t-claude", "working", "x-sandbox", "/tmp/w")]
+    [v] = _run(
+        rows,
+        {
+            "cccc3333-0016": _facts(
+                '<help reason="Codex sandbox blocks Git writes" '
+                'evidence=".git/refs/heads/feature/x.lock: '
+                'Operation not permitted">'
+            )
+        },
+        claims={"x-sandbox": {"state": "free"}},
+    )
+    assert v.verdict != SANDBOX_BLOCKED
+    assert v.action == "none"
+
+
+@pytest.mark.parametrize(
+    "claims,commit_count,guard_text",
+    [
+        ({"x-sandbox": {"state": "live", "holder": "target-session:other"}}, 0, "claim"),
+        ({"x-sandbox": {"state": "free"}}, 2, "commit"),
+    ],
+)
+def test_codex_sandbox_denial_stays_when_a_guard_holds(
+    monkeypatch, claims, commit_count, guard_text
+):
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: commit_count)
+    rows = [
+        Row("cccc3333-0012", "t-sandbox", "working", "x-sandbox", "/tmp/w", "codex")
+    ]
+    [v] = _run(
+        rows,
+        {
+            "cccc3333-0012": _facts(
+                '<help reason="Codex sandbox blocks Git writes" '
+                'evidence=".git/refs/heads/feature/x-sandbox.lock: '
+                'Operation not permitted">'
+            )
+        },
+        claims=claims,
+    )
+    assert v.verdict != SANDBOX_BLOCKED
+    assert v.action == "none"
+    assert guard_text in v.basis.lower()
+
+
+@pytest.mark.parametrize(
+    "claim,commit_count,guard_text",
+    [
+        ({"state": "live", "holder": "target-session:new"}, 0, "claim"),
+        ({"state": "free"}, 1, "commit"),
+    ],
+)
+def test_sandbox_reap_rechecks_guards_before_removal(
+    monkeypatch, claim, commit_count, guard_text
+):
+    calls = []
+    monkeypatch.setattr(watchdog, "_claim_view", lambda node: claim)
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: commit_count)
+    v = Verdict(
+        "cccc3333-0015",
+        "t-sandbox",
+        "working",
+        SANDBOX_BLOCKED,
+        "Codex sandbox blocked Git writes",
+        "reap",
+    )
+
+    outcome, detail = apply_verdict(
+        v,
+        lanes="all",
+        cwd="/tmp/w",
+        node="x-sandbox",
+        runner=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert outcome == "held"
+    assert guard_text in detail
+    assert calls == []
+
+
+def test_sandbox_reap_requires_current_distress_before_removal(monkeypatch):
+    monkeypatch.setattr(watchdog, "_claim_view", lambda node: {"state": "free"})
+    monkeypatch.setattr(watchdog, "_branch_commit_count", lambda cwd: 0)
+    monkeypatch.setattr(
+        watchdog,
+        "tail_facts",
+        lambda *args, **kwargs: _facts("ordinary assistant completion"),
+    )
+    calls = []
+    v = Verdict(
+        "cccc3333-0017",
+        "t-sandbox",
+        "working",
+        SANDBOX_BLOCKED,
+        "Codex sandbox blocked Git writes",
+        "reap",
+    )
+
+    outcome, detail = apply_verdict(
+        v,
+        lanes="all",
+        cwd="/tmp/w",
+        node="x-sandbox",
+        runner=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert outcome == "refused"
+    assert "current transcript" in detail
+    assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # x-944f: the two reap protectors
 # ---------------------------------------------------------------------------
 
 # 30 minutes before NOW_1840, so it is INSIDE REAP_RECENT_MESSAGE_S (2h).
 RECENT_MESSAGE_STAMP = "2026-08-16T18:10:00Z"
-
-
-def test_an_operator_row_is_refused_and_the_basis_names_origin():
-    """Rule 3: a session a human started by hand is never reaped.
-
-    Every other precondition is satisfied on purpose - node done, sole
-    occupant, transcript present, tail finished, quiet for hours, stamp
-    stale. The ONLY thing standing between this row and a deleted worktree
-    is `origin`, which is what makes the assertion about `origin` and not
-    about the fixture.
-    """
-    row = Row("aaaa1111-0000", "hand-started", "working", "x-done", "/wt/solo",
-              origin="operator", last_message_at=STALE_MESSAGE_STAMP)
-
-    answer, basis = _decide(
-        row,
-        facts=_facts(FINISHED_TAIL, age_min=200),
-        nodes={"x-done": {"status": "done"}},
-    )
-
-    assert answer == watchdog.REAP_NO
-    assert "origin=operator" in basis
-    # By IDENTITY against the module constant, never a copy of its wording: a
-    # duplicated literal here would stay green while the emitted rule drifted.
-    assert watchdog.REAP_PROTECTION_RULES["origin"] in basis
-
-
-def test_the_operator_refusal_outranks_every_later_read():
-    """The origin protector answers FIRST, so it holds even when the reads
-    below it cannot run at all. An operator row with no transcript is still
-    refused for being an operator's, not for the missing transcript."""
-    row = Row("aaaa1111-0000", "hand-started", "working", "x-done", "/wt/solo",
-              origin="operator")
-
-    answer, basis = _decide(row, facts=None, nodes={"x-done": {"status": "done"}})
-
-    assert answer == watchdog.REAP_NO
-    assert "origin=operator" in basis
-
-
-def test_the_three_origin_values_reach_three_different_verdicts():
-    """`None`, "spawn" and "operator" are THREE facts, not two.
-
-    Collapsing never-recorded into not-an-operator is the defect this node was
-    filed against, and the first cut of this predicate committed it: only
-    "operator" refused, so `None` fell through to the delete exactly like a
-    known worker. Each value now reaches a verdict the others cannot.
-
-    "adopted" is the fourth, and it lands with `None` on purpose: the healers
-    that mint those rows observed a session already running and never observed
-    who started it. Naming the non-answer must not turn it into an answer.
-    """
-    expected = {
-        "operator": watchdog.REAP_NO,
-        None: watchdog.REAP_UNKNOWN,
-        "adopted": watchdog.REAP_UNKNOWN,
-        "spawn": watchdog.REAP_YES,
-    }
-    for origin, want in expected.items():
-        row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo",
-                  origin=origin, last_message_at=STALE_MESSAGE_STAMP,
-                  probe="dead")
-        answer, basis = _decide(
-            row,
-            facts=_facts(FINISHED_TAIL, age_min=200),
-            nodes={"x-done": {"status": "done"}},
-        )
-        assert answer == want, f"origin={origin!r} gave {answer}: {basis}"
-
-
-def test_an_adopted_row_survives_its_recency_stamp_going_stale():
-    """The reachable case the first cut of this predicate would have deleted.
-
-    `mint_adopted_entry` writes its marker beside a FRESH `last_message_at`,
-    and adopt takes in both a session a human started by hand and a footnote
-    orphan. Inside the window the stamp protects the row. This asserts what
-    happens AFTER it goes stale, which is where the two protectors used to fall
-    silent together and hand over a worktree nobody could prove was a worker's.
-
-    Both spellings, because the fleet carries both: a row minted before the
-    healers stamped anything reads None, and one minted since reads "adopted".
-    They are the same non-answer and must reach the same refusal.
-    """
-    for origin, said in ((None, "was never recorded"), ("adopted", "reads adopted")):
-        adopted = Row("aaaa1111-0000", "adopted-external", "working", "x-done",
-                      "/wt/solo", origin=origin,
-                      last_message_at=STALE_MESSAGE_STAMP)
-
-        answer, basis = _decide(
-            adopted,
-            facts=_facts(FINISHED_TAIL, age_min=200),
-            nodes={"x-done": {"status": "done"}},
-        )
-
-        assert answer == watchdog.REAP_UNKNOWN, origin
-        assert said in basis, basis
-        assert watchdog.REAP_PROTECTION_RULES["origin"] in basis
-
-
-def test_the_unrecorded_origin_read_never_silences_a_more_specific_refusal():
-    """The same late placement the recency read needed, for the same reason.
-
-    Put up beside the early operator read, this answers first on every refusal
-    and the specific guards below it stop speaking. Each row here carries an
-    unrecorded origin, so an early read would have swallowed all three.
-    """
-    quiet = _facts(FINISHED_TAIL, age_min=200)
-    nodes = {"x-done": {"status": "done"}}
-    row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/shared",
-              origin=None, last_message_at=STALE_MESSAGE_STAMP)
-
-    # A silent probe still does not outrank the origin read (x-ad13): the
-    # probe is the LAST gate, so the ownership silence speaks first.
-    _, basis = _decide(row, facts=quiet, nodes=nodes)
-    assert "origin" in basis and "probe" not in basis
-
-    _, basis = _decide(row, facts=_facts("<watching>ci</watching>", age_min=200),
-                       nodes=nodes)
-    assert "watching" in basis
-
-    _, basis = _decide(row, facts=None, nodes=nodes)
-    assert "no transcript to read" in basis
-
-
-def test_a_recent_message_protects_and_the_basis_names_recency_and_the_age():
-    """Rule 2: liveness is last-message recency, not a pid.
-
-    The transcript reads FINISHED and hours quiet, which is exactly what a
-    dead process looks like to this lane. A message landed 30m ago anyway.
-    The operator drives sessions by hand in ways no probe observes, so the
-    stamp refuses the reap whatever any pid says.
-    """
-    row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo",
-              origin="spawn", last_message_at=RECENT_MESSAGE_STAMP)
-
-    answer, basis = _decide(
-        row,
-        facts=_facts(FINISHED_TAIL, age_min=200),
-        nodes={"x-done": {"status": "done"}},
-    )
-
-    assert answer == watchdog.REAP_NO
-    assert watchdog.REAP_PROTECTION_RULES["recency"] in basis
-    # The MEASURED age, so a human auditing the refusal can check the window
-    # rather than take the verdict's word for it.
-    assert "30m ago" in basis
-
-
-def test_an_unreadable_stamp_is_unknown_and_never_reaps():
-    """Absent has two causes - nothing stamped it, the session never spoke -
-    and this lane cannot tell them apart, so it answers UNKNOWN like every
-    other unreadable read here. Asserted as the UNKNOWN verdict, which is a
-    positive marker, never as the absence of a reap."""
-    for stamp in (None, "", "not-a-timestamp"):
-        row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo",
-                  origin="spawn", last_message_at=stamp)
-        answer, basis = _decide(
-            row,
-            facts=_facts(FINISHED_TAIL, age_min=200),
-            nodes={"x-done": {"status": "done"}},
-        )
-        assert answer == watchdog.REAP_UNKNOWN, f"stamp={stamp!r}: {basis}"
-        assert watchdog.REAP_PROTECTION_RULES["recency"] in basis
-
-
-def test_the_recency_read_never_silences_a_more_specific_refusal():
-    """The protector runs LAST, and this is what that position buys.
-
-    Placed earlier it answered first on every refusal, so a row refused for a
-    shared worktree reported "recency unproven" instead - the specific guard
-    still ran and could never speak. Each row here has an unreadable stamp,
-    so an early read would have swallowed all three.
-    """
-    quiet = _facts(FINISHED_TAIL, age_min=200)
-    nodes = {"x-done": {"status": "done"}}
-    row = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/shared",
-              origin="spawn")
-
-    # A silent probe still does not outrank the recency read (x-ad13): the
-    # probe is the LAST gate, so the unreadable stamp speaks first.
-    _, basis = _decide(row, facts=quiet, nodes=nodes)
-    assert "recency is unproven" in basis and "probe" not in basis
-
-    # A tail still in play still names the tail.
-    _, basis = _decide(row, facts=_facts("<watching>ci</watching>", age_min=200),
-                       nodes=nodes)
-    assert "watching" in basis
-
-    # An unreadable transcript still names the transcript.
-    _, basis = _decide(row, facts=None, nodes=nodes)
-    assert "no transcript to read" in basis
-
-
-def test_fleet_rows_carries_both_protectors_off_the_registry_row():
-    """The two fields were always one line away in `fleet_rows`, and
-    discarding them is why every reap decision was made without them. A
-    protector the predicate cannot see is not a protector."""
-    assert "origin" in watchdog.Row._fields
-    assert "last_message_at" in watchdog.Row._fields
-    # Defaulted, so an older construction site keeps working and the default
-    # is the honest never-recorded rather than a fabricated "spawn".
-    blank = Row("aaaa1111-0000", "w1", "working", "x-done", "/wt/solo")
-    assert blank.origin is None
-    assert blank.last_message_at is None
-
-
-def test_origin_is_on_the_shared_list_row_contract():
-    """A field the reap lane REFUSES on has to be readable by the human
-    auditing that refusal. It was rendered by nobody, so the refusal was
-    unauditable. The contract file is what pins both serializers to it."""
-    import json as _json
-    import pathlib as _pathlib
-
-    contract = _json.loads(
-        (_pathlib.Path(watchdog.__file__).resolve().parents[4]
-         / "schemas" / "agents-list-row.json").read_text()
-    )
-    assert "origin" in contract["required"]
 
 
 # ---------------------------------------------------------------------------
@@ -3806,6 +3138,7 @@ def _probe(
     *,
     pid_alive=None,
     transcript_age_s=None,
+    last_activity_basis=None,
     claim_state=None,
     stored_exited=False,
 ):
@@ -3813,6 +3146,7 @@ def _probe(
         handle=handle,
         pid_alive=pid_alive,
         transcript_age_s=transcript_age_s,
+        last_activity_basis=last_activity_basis,
         claim_state=claim_state,
         stored_exited=stored_exited,
     )
@@ -3954,6 +3288,48 @@ def test_ac2_live_pid_defeats_any_stored_terminal_word():
 def test_ac2_fresh_transcript_defeats_stored_state_too():
     assert uw.owner_verdict(_probe(transcript_age_s=30.0)) == "live"
     assert uw.owner_verdict(_probe(transcript_age_s=30.0, claim_state="stale")) == "live"
+
+
+# --- x-dead: the owner verdict routes through the shared predicate ---------
+
+
+def test_xdead_resumed_worker_dead_pid_fresh_transcript_reads_live():
+    # A harness resume kills the recorded pid while the session keeps writing
+    # (x-a613); the fresh transcript outranks the corpse, exactly as the
+    # claims layer's witness heals a resumed holder.
+    assert uw.owner_verdict(_probe(pid_alive=False, transcript_age_s=30.0)) == "live"
+
+
+def test_xdead_mtime_basis_is_never_positive_evidence():
+    # Measured 2026-09-11: a transcript mtime read 2h33m past its newest
+    # record because the file is touched with no record appended. An
+    # active-looking age taken from a file stamp reads UNKNOWN.
+    assert uw.owner_verdict(_probe(transcript_age_s=30.0, last_activity_basis="mtime")) == "unknown"
+
+
+def test_xdead_claim_holder_counts_with_a_stale_registry_cwd():
+    # Task 0.3 proof (the x-b7f8 shape): the registry row records the SPAWN
+    # directory, so the cwd join contributes no handle; the live claim's
+    # holder is the second occupancy source and keeps the tree owned.
+    probe = _probe(handle="spawn-handover:t-b7f8-worker", pid_alive=True)
+    snap = uw.classify(
+        _uw_obs(worktrees=[_wt_obs("/w/x-b7f8", dirty=3, node_id="x-b7f8", probes=[probe])])
+    )
+    assert snap.findings == ()
+    assert snap.dimensions[uw.KIND_DIRTY].state == uw.MEASURED
+
+
+def test_xdead_true_positive_keeps_its_clearing_verb():
+    # x-77db, measured: the one genuinely ownerless dirty tree of the five
+    # the watchdog reported that hour. The fix must not suppress it; the
+    # finding carries the target verb because the GONE was positive.
+    snap = uw.classify(
+        _uw_obs(worktrees=[_wt_obs("/w/x-77db", dirty=4, node_id="x-77db")])
+    )
+    [finding] = snap.findings
+    assert finding.kind == uw.KIND_DIRTY
+    assert "no live owner" in finding.basis
+    assert "/fno:target x-77db" in finding.clear_command
 
 
 def test_ac2_unreadable_liveness_is_unknown_not_ownerless():
@@ -4209,21 +3585,38 @@ def test_ac5_clean_worktrees_do_not_emit():
     assert snap.dimensions[uw.KIND_DIRTY].state == uw.MEASURED
 
 
-# --- AC6: ownerless open PRs older than 24h -------------------------------
+# --- AC6: ownerless open PRs (an unknown owner read waits 24h) -------------
 
 
 def test_ac6_pr_age_boundary_and_verb():
+    # The owner question comes first: a PR whose owner set reads gone emits
+    # at any age, so the young gone-owner PR lands beside the old one and the
+    # 24h boundary now governs only the unknown-owner wait.
     old = _pr_obs(101, opened_epoch=NOW_1840 - 24 * 3600 - 1)
-    exact = _pr_obs(102, opened_epoch=NOW_1840 - 24 * 3600)
     young = _pr_obs(103, opened_epoch=NOW_1840 - 3600)
-    snap = uw.classify(_uw_obs(prs=[old, exact, young]))
+    snap = uw.classify(_uw_obs(prs=[old, young]))
 
-    [finding] = snap.findings
-    assert finding.kind == uw.KIND_PR
-    assert finding.pr_number == 101
-    assert finding.clear_command == "/fno:pr check 101"
-    assert "pull/101" in finding.basis
-    assert finding.age_s == pytest.approx(24 * 3600 + 1)
+    assert {finding.pr_number for finding in snap.findings} == {101, 103}
+    by_number = {finding.pr_number: finding for finding in snap.findings}
+    assert all(f.kind == uw.KIND_PR for f in snap.findings)
+    assert all(
+        f.clear_command == f"/fno:ship pr check {f.pr_number}" for f in snap.findings
+    )
+    assert "pull/101" in by_number[101].basis
+    assert by_number[101].age_s == pytest.approx(24 * 3600 + 1)
+
+
+def test_ac6_a_young_unknown_owner_waits_and_an_old_one_goes_unknown():
+    young_unknown = _pr_obs(110, opened_epoch=NOW_1840 - 3600, probes=[_probe()])
+    snap = uw.classify(_uw_obs(prs=[young_unknown]))
+    assert snap.findings == ()
+    assert snap.dimensions[uw.KIND_PR].state == uw.MEASURED
+
+    old_unknown = _pr_obs(111, opened_epoch=NOW_1840 - 25 * 3600, probes=[_probe()])
+    snap2 = uw.classify(_uw_obs(prs=[old_unknown]))
+    assert snap2.findings == ()
+    assert snap2.dimensions[uw.KIND_PR].state == uw.UNKNOWN_DIM
+    assert "owner liveness unreadable for pr 111" in snap2.dimensions[uw.KIND_PR].warning
 
 
 def test_ac6_merged_live_owned_and_unreadable_prs_do_not_emit():
@@ -4356,39 +3749,10 @@ def test_ac9_census_both_callers_route_through_one_producer():
     assert "_uw.build_report" in tick and "_uw.publish_report" in tick
 
 
-def test_ac9_census_no_session_predicates_on_the_report_path():
-    """The retired session-bookkeeping vocabulary cannot reach the report:
-    the escalation module carries no stale marker and no reap instruction,
-    and the report modules own none of the forbidden metric spellings."""
-    escalate = _source("cli/src/fno/agents/stale_escalate.py")
-    assert "watchdog-stale" not in escalate
-    assert "--only stale" not in escalate
-    assert "reap it or resume it" not in escalate
-
-
 def _function_body(src: str, name: str) -> str:
     start = src.index(f"def {name}(")
     nxt = src.find("\ndef ", start + 1)
     return src[start : nxt if nxt != -1 else len(src)]
-
-
-def test_census_the_report_metric_owns_only_the_fresh_ref_spelling():
-    """Positive marker first: origin/main..HEAD appears in the metric's
-    source. Then the absence: none of the three forbidden spellings (the
-    stale-tracking-ref form, its short form, and the remotes-not form) may
-    appear in the metric module or the report-path functions of the
-    watchdog. The reap lane's own worktree check keeps its internal
-    spelling; it is not on this path."""
-    report_src = _source("cli/src/fno/agents/unfinished_work.py")
-    assert "origin/main..HEAD" in report_src
-    wd_src = _source("cli/src/fno/agents/watchdog.py")
-    report_region = (
-        _function_body(wd_src, "write_sweep_file")
-        + _function_body(wd_src, "unfinished_mail_gate")
-    )
-    for forbidden in ("@{upstream}", "@{u}", "HEAD --not --remotes"):
-        assert forbidden not in report_src
-        assert forbidden not in report_region
 
 
 def test_ac9_budget_spent_before_scanning_reads_unknown_never_clean(tmp_path):
@@ -4419,7 +3783,7 @@ def test_ac9_manual_and_tick_stamps_agree_for_one_snapshot(tmp_path, monkeypatch
     (source, tick epoch) differs."""
     import fno.paths as paths_mod
 
-    sweep_file = tmp_path / "watchdog-sweep.json"
+    sweep_file = tmp_path / "state" / "watchdog-sweep.json"
     monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
     monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -4477,7 +3841,7 @@ def test_report_write_preserves_the_verdict_lanes_stamps(tmp_path, monkeypatch):
     --apply run re-mails an unchanged verdict digest."""
     import fno.paths as paths_mod
 
-    sweep_file = tmp_path / "watchdog-sweep.json"
+    sweep_file = tmp_path / "state" / "watchdog-sweep.json"
     monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
     monkeypatch.setattr(watchdog, "emit_event", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -4598,9 +3962,12 @@ def test_claim_view_without_a_state_word_reads_unknown_not_excluded():
     assert snap.dimensions[uw.KIND_STARTED].state == uw.UNKNOWN_DIM
 
 
-def test_publish_withholds_the_durable_question_on_an_incomplete_scan(
-    tmp_path, monkeypatch
-):
+def test_publish_escalates_what_an_incomplete_scan_reached(tmp_path, monkeypatch):
+    """An incomplete scan escalates the findings it DID reach and names the
+    dimensions it could not. Withholding the whole ask was permanent, not
+    transient: the common cause is a deleted worktree root whose fetch fails
+    on every future run, so the lane went mute forever while stdout kept
+    printing the findings under exit 0."""
     import fno.paths as paths_mod
 
     monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
@@ -4610,10 +3977,13 @@ def test_publish_withholds_the_durable_question_on_an_incomplete_scan(
     )
     from fno.agents import stale_escalate as _se
 
-    called = []
-    monkeypatch.setattr(
-        _se, "escalate_unfinished", lambda f, **kw: called.append(1) or ("recorded", "q")
-    )
+    called: list[dict] = []
+
+    def _record(findings, **kw):
+        called.append({"findings": list(findings), **kw})
+        return ("recorded", "q-1")
+
+    monkeypatch.setattr(_se, "escalate_unfinished", _record)
 
     snap = uw.classify(
         _uw_obs(graph_ok=False, nodes=[_node_obs("x-1", touched_epoch=NOW_1840 - 3600)])
@@ -4623,8 +3993,24 @@ def test_publish_withholds_the_durable_question_on_an_incomplete_scan(
     uw.publish_report(
         snap, source="manual", now_s=NOW_1840, mail_to="", log=notes.append
     )
-    assert called == []
-    assert any("incomplete scan" in note for note in notes)
+    assert len(called) == 1
+    assert uw.KIND_STARTED in called[0]["unknown_dimensions"]
+    assert any("incomplete:" in note for note in notes)
+
+
+def test_incomplete_question_text_names_the_unread_dimensions():
+    from fno.agents import stale_escalate as se
+
+    finding = uw.Finding(
+        kind=uw.KIND_DIRTY,
+        subject="/tmp/w1",
+        basis="dirty and ownerless",
+        clear_command="fno agents workspace worktree cleanup",
+    )
+    text = se.question_text([finding], "k1", [uw.KIND_STARTED])
+    assert "INCOMPLETE" in text and uw.KIND_STARTED in text
+    # A complete scan says nothing about completeness.
+    assert "INCOMPLETE" not in se.question_text([finding], "k1")
 
 
 def test_manual_report_and_tick_share_one_fleet_scope(monkeypatch):
@@ -4668,12 +4054,12 @@ def _receipt_row(**over):
     from types import SimpleNamespace as ns
 
     row = ns(
-        name="king-mux",
+        name="lead-mux",
         short_id="kingmux",
         harness="claude",
         harness_session_id="019cdddd-0000-7000-8000-000000000009",
-        cwd="/wt/king",
-        log_path="/tmp/king-mux.log",
+        cwd="/wt/lead",
+        log_path="/tmp/lead-mux.log",
         created_at="2026-08-30T10:00:00Z",
     )
     for k, v in over.items():
@@ -4681,148 +4067,218 @@ def _receipt_row(**over):
     return row
 
 
-def test_reap_receipt_is_built_from_the_row_with_the_capability_table_resume(
-    monkeypatch, tmp_path
-):
-    """The receipt's fields come from the registry row, and the resume
-    command is rendered from the capability table - the same single source
-    `fno whoami ledger` reads - never a hardcoded string."""
-    import fno.agents.registry as registry_mod
+def test_outcome_event_never_files_a_half_landed_action_as_a_refusal():
+    """watchdog_refused reads "declined to act". A partial outcome changed the
+    fleet - a rotated provider, a stopped session - so filing it there logs it
+    as if nothing happened, and the reader who trusts that leaves it
+    unattended. One fold so three emit sites cannot disagree."""
+    assert watchdog.outcome_event("applied") == "watchdog_applied"
+    assert watchdog.outcome_event(watchdog.PARTIAL) == "watchdog_partial"
+    assert watchdog.outcome_event("refused") == "watchdog_refused"
+    assert watchdog.outcome_event("held") == "watchdog_refused"
+
+
+def test_watchdog_partial_is_a_declared_event_type():
+    """The emitted type must exist in the schema or emit_event swallows it
+    and the lane writes nothing at all."""
+    from pathlib import Path
+
+    import yaml
+
+    from fno import events as events_mod
+
+    schema = yaml.safe_load(
+        (Path(events_mod.__file__).parent / "schema.yaml").read_text()
+    )
+    names = {e["name"] for e in schema["event_types"]}
+    assert {"watchdog_applied", "watchdog_partial", "watchdog_refused"} <= names
+
+
+def test_unfinished_mail_gate_mails_an_incomplete_scan(tmp_path, monkeypatch):
+    """A withheld incomplete scan reads "retry next sweep", but a deleted
+    worktree root fails the same way forever. The digest names every unread
+    dimension, so the mail carries its own shortfall."""
     import fno.paths as paths_mod
 
-    monkeypatch.setattr(
-        registry_mod, "load_registry", lambda path=None: [_receipt_row()]
-    )
-    monkeypatch.setattr(paths_mod, "agents_registry_path", lambda: tmp_path / "reg.json")
-    monkeypatch.setattr(paths_mod, "agents_home_dir", lambda: tmp_path)
-    monkeypatch.setattr(paths_mod, "ledger_json", lambda: tmp_path / "no-ledger.json")
-
-    ok, detail = watchdog._persist_reap_receipt("king-mux")
-
-    assert ok, detail
-    receipt = json.loads((tmp_path / "reap-receipts" / detail.split("/")[-1]).read_text())
-    assert receipt["resume"] == (
-        f"claude --resume {_receipt_row().harness_session_id}"
-    )
-    assert receipt["harness"] == "claude"
-    assert receipt["harness_session_id"] == _receipt_row().harness_session_id
-    assert receipt["cwd"] == "/wt/king"
-    assert receipt["log_path"] == "/tmp/king-mux.log"
-    assert receipt["row_name"] == "king-mux"
-    assert "ledger" not in receipt, "no ledger entry exists; none may be invented"
-
-
-def test_reap_receipt_names_the_harness_with_no_capability_row(monkeypatch, tmp_path):
-    """grok ships a readiness manifest, not a capability row: no declared
-    resume form, so the receipt cannot be built and the row never reaps."""
-    import fno.agents.registry as registry_mod
-    import fno.paths as paths_mod
-
-    monkeypatch.setattr(
-        registry_mod,
-        "load_registry",
-        lambda path=None: [_receipt_row(harness="grok")],
-    )
-    monkeypatch.setattr(paths_mod, "agents_registry_path", lambda: tmp_path / "reg.json")
-    monkeypatch.setattr(paths_mod, "agents_home_dir", lambda: tmp_path)
-    monkeypatch.setattr(paths_mod, "ledger_json", lambda: tmp_path / "no-ledger.json")
-
-    ok, detail = watchdog._persist_reap_receipt("king-mux")
-
-    assert not ok
-    assert "grok" in detail
-
-
-def test_apply_reap_refuses_when_the_receipt_cannot_be_staged(monkeypatch):
-    """The gate sits before the stop: a row whose receipt cannot be written
-    keeps its registry row and nothing runs against it."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    monkeypatch.setattr(
-        watchdog, "_persist_reap_receipt", lambda rid: (False, "no resumable identity")
-    )
-    ran = []
-
-    def runner(argv, **kwargs):
-        ran.append(argv)
-        return subprocess.CompletedProcess(argv, 0, "", "")
-
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x done", "stop+rm")
-    outcome, detail = watchdog._apply_reap(v, cwd="/wt/x", runner=runner)
-    assert outcome == "refused" and "no resumable identity" in detail
-    assert ran == [], "nothing may run against a row the gate held"
-
-
-def test_reap_receipt_ignores_a_ledger_row_whose_sessions_is_a_string(
-    monkeypatch, tmp_path
-):
-    """`sid in "string"` is a substring test; only a real list of session ids
-    may match, or a malformed ledger row donates its node/pr to a receipt."""
-    import fno.agents.registry as registry_mod
-    import fno.paths as paths_mod
-
-    ledger = tmp_path / "ledger.json"
-    ledger.write_text(
-        json.dumps(
-            {"entries": [{"graph_node_id": "x-impostor", "sessions": "x-king-mux-sessions"}]}
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(registry_mod, "load_registry", lambda path=None: [_receipt_row()])
-    monkeypatch.setattr(paths_mod, "agents_registry_path", lambda: tmp_path / "reg.json")
-    monkeypatch.setattr(paths_mod, "agents_home_dir", lambda: tmp_path)
-    monkeypatch.setattr(paths_mod, "ledger_json", lambda: ledger)
-
-    ok, detail = watchdog._persist_reap_receipt("king-mux")
-
-    assert ok, detail
-    receipt = json.loads(
-        (tmp_path / "reap-receipts" / detail.split("/")[-1]).read_text()
-    )
-    assert "ledger" not in receipt
-
-
-def test_apply_reap_restages_the_receipt_between_stop_and_rm(monkeypatch):
-    """rm removes the identity; the receipt written immediately before it must
-    describe the row as it is at rm time, not as it was at classification."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    order = []
+    monkeypatch.setattr(paths_mod, "state_dir", lambda: tmp_path)
+    monkeypatch.setattr(watchdog, "_last_unfinished_signature", lambda: "")
+    sent: list[str] = []
     monkeypatch.setattr(
         watchdog,
-        "_persist_reap_receipt",
-        lambda rid: order.append("stage") or (True, "staged"),
+        "_send_machine_report",
+        lambda to, body, runner=None: sent.append(body) or (True, "sent"),
     )
 
-    def runner(argv, **kwargs):
-        order.append(argv[-2])
-        return subprocess.CompletedProcess(argv, 0, "", "")
+    # Incomplete AND carrying findings: the dimension that read is the news,
+    # the dimension that did not is the caveat.
+    finding = uw.Finding(
+        kind=uw.KIND_DIRTY,
+        subject="/tmp/w1",
+        basis="dirty and ownerless",
+        clear_command="fno agents workspace worktree cleanup",
+    )
+    snap = uw.Snapshot(
+        generated_at="2026-08-16T18:40:00Z",
+        findings=(finding,),
+        dimensions={
+            uw.KIND_STARTED: uw.DimensionState(uw.UNKNOWN_DIM, 0, "graph unreadable"),
+            uw.KIND_DONE_AHEAD: uw.DimensionState(uw.UNKNOWN_DIM, 0, "graph unreadable"),
+            uw.KIND_DIRTY: uw.DimensionState(uw.MEASURED, 1, None),
+            uw.KIND_PR: uw.DimensionState(uw.UNKNOWN_DIM, 0, "graph unreadable"),
+        },
+        warnings=("started_free_claim: graph unreadable",),
+        complete=False,
+    )
+    assert snap.complete is False and snap.findings
+    ok, receipt, stamp = watchdog.unfinished_mail_gate(snap, "someone")
+    assert ok, receipt
+    assert len(sent) == 1
+    assert f"{uw.KIND_STARTED}={uw.UNKNOWN_DIM}" in sent[0]
+    assert stamp == uw.snapshot_signature(snap)
 
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x done", "stop+rm")
-    outcome, _ = watchdog._apply_reap(v, cwd="/wt/x", runner=runner)
-    assert outcome == "applied"
-    assert order == ["stage", "stop", "stage", "rm"]
+
+def test_an_attributable_no_sid_row_is_advisory_and_named(monkeypatch):
+    """A live registry row with no harness session id but a node attribution
+    rides an advisory line naming the row, so the worked overlay can skip the
+    one row instead of refusing the measure for every node (x-ae54)."""
+    from types import SimpleNamespace
+
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents import registry as registry_mod
+
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: ([], []))
+    row = SimpleNamespace(
+        harness="codex", status="live", harness_session_id=None,
+        session_id=None, short_id=None, name="bp-a238-lead-brief",
+        node="x-a238", cwd="/tmp/nowhere",
+    )
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
+    rows, warnings = watchdog.fleet_rows()
+    assert rows == []
+    advisory = [w for w in warnings if "unmeasurable-row: " in w]
+    assert len(advisory) == 1
+    assert "node=x-a238" in advisory[0]
+    assert "name=bp-a238-lead-brief" in advisory[0]
+    assert not any("carried no session id" in w for w in warnings)
 
 
-def test_apply_reap_holds_the_rm_when_the_restage_fails(monkeypatch):
-    """A receipt that cannot be re-staged after the stop is 'partial': the
-    row stays, and the detail says the session is already stopped."""
-    monkeypatch.setattr(watchdog, "worktree_refusal", lambda cwd: None)
-    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda cwd: True)
-    calls = {"n": 0}
+def test_an_unattributable_no_sid_row_still_warns_blocking(monkeypatch):
+    """Without a node attribution the row is unknowable liveness: the
+    blocking warning stays, so read_roster fails closed (x-ae54 posture)."""
+    from types import SimpleNamespace
 
-    def gate(rid):
-        calls["n"] += 1
-        return (calls["n"] == 1, "staged" if calls["n"] == 1 else "identity changed")
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents import registry as registry_mod
 
-    monkeypatch.setattr(watchdog, "_persist_reap_receipt", gate)
-    ran = []
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: ([], []))
+    row = SimpleNamespace(
+        harness="codex", status="live", harness_session_id=None,
+        session_id=None, short_id=None, name="bp-ghost", node=None,
+        cwd="/tmp/nowhere",
+    )
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [row])
+    rows, warnings = watchdog.fleet_rows()
+    assert rows == []
+    assert any("carried no session id" in w for w in warnings)
 
-    def runner(argv, **kwargs):
-        ran.append(argv[-2])
-        return subprocess.CompletedProcess(argv, 0, "", "")
 
-    v = Verdict("aaaa1111-0000", "w1", "working", REAP, "node x done", "stop+rm")
-    outcome, detail = watchdog._apply_reap(v, cwd="/wt/x", runner=runner)
-    assert outcome == "partial" and "already stopped" in detail
-    assert ran == ["stop"], "a held rm must never run"
+def test_a_claude_no_sid_row_in_a_linked_worktree_is_attributed(monkeypatch):
+    """The claude-side twin: cwd names a linked worktree, so the row rides the
+    same advisory attribution instead of the blocking count."""
+    from fno.agents.harnesses import claude as claude_mod
+    from fno.agents import registry as registry_mod
+    import fno.recovery as recovery_mod
+
+    monkeypatch.setattr(registry_mod, "load_registry", lambda: [])
+    monkeypatch.setattr(claude_mod, "claude_agents_rows", lambda **k: (
+        [{"sessionId": "", "name": "t-ae54-worker", "cwd": "/repo/.claude/worktrees/x-ae54",
+          "state": "working"}],
+        [],
+    ))
+    monkeypatch.setattr(watchdog, "_is_linked_worktree", lambda _cwd: True)
+    monkeypatch.setattr(recovery_mod, "_node_id_from_worktree", lambda _cwd: "x-ae54")
+    rows, warnings = watchdog.fleet_rows()
+    assert rows == []
+    advisory = [w for w in warnings if "unmeasurable-row: " in w]
+    assert len(advisory) == 1
+    assert "harness=claude node=x-ae54 name=t-ae54-worker" in advisory[0]
+
+
+def test_stale_reset_default_report_carries_provider_outages(monkeypatch, capsys):
+    """The default -J surface carries the outage instrument - open
+    breakers and every refusal reason with a count - without reaching for
+    --only. A failed measurement lands as a named unknown, never a missing
+    key, and the human lines carry the same numbers."""
+    import json as _json
+    from collections import defaultdict
+    from pathlib import Path as _Path
+    from types import SimpleNamespace
+
+    from fno.agents import cli as agents_cli
+    from fno.agents import keeper_lane as keeper_lane_mod
+    from fno.agents import unfinished_work as uw_mod
+
+    measured = {
+        "instrument": "measured",
+        "breakers": [{
+            "provider": "zai", "account": "zai", "kind": "fair_usage_policy",
+            "outage_epoch": 1.0, "reset_at": 2.0,
+        }],
+        "counts": {"accepted": 2},
+        "refusals": [{"reason": "evidence_stale", "age_s": 900, "count": 1}] * 7,
+    }
+    monkeypatch.setattr(watchdog, "fleet_rows", lambda **kw: ([], []))
+    monkeypatch.setattr(
+        watchdog, "measure_provider_outages",
+        lambda rows, *, now_s, **kw: measured,
+    )
+    monkeypatch.setattr(uw_mod, "report_roots", lambda: [_Path("/w")])
+    monkeypatch.setattr(
+        uw_mod, "build_report",
+        lambda roots, *, now_s, **kw: SimpleNamespace(
+            findings=[],
+            dimensions=defaultdict(
+                lambda: SimpleNamespace(state="unreadable", count=None, warning=None)
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        uw_mod, "publish_report",
+        lambda snapshot, *, source, now_s, mail_to, log=None: {
+            "warnings": [], "counts": {},
+        },
+    )
+
+    class _Lane:
+        broken = False
+
+        def render(self):
+            return "keeper lane: ok"
+
+        def to_json(self):
+            return {}
+
+    monkeypatch.setattr(keeper_lane_mod, "discover", lambda: _Lane())
+
+    agents_cli._run_unfinished_report(now=0.0, json_out=True, mail_to="")
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["provider_outages"] == measured
+
+    agents_cli._run_unfinished_report(now=0.0, json_out=False, mail_to="")
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert "provider outage open: zai/zai kind=fair_usage_policy reset_at=2.0" in text
+    assert "provider-outage refusals (evidence_stale=7)" in text
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no registry")
+
+    monkeypatch.setattr(watchdog, "measure_provider_outages", _boom)
+    agents_cli._run_unfinished_report(now=0.0, json_out=True, mail_to="")
+    payload = _json.loads(capsys.readouterr().out)
+    assert payload["provider_outages"]["instrument"] == "unknown"
+    assert (
+        payload["provider_outages"]["refusals"][0]["reason"]
+        == "provider_outage_measure_failed"
+    )
+    assert "no registry" in payload["provider_outages"]["refusals"][0]["detail"]

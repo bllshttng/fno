@@ -1,115 +1,30 @@
-"""Report fold + graduation (US3): AC2-HP, AC6-HP."""
+"""Report graduation and the native summary reader (d-b6cc1a2a).
+
+The fold lives native in `crates/fno-agents/src/evals_trend/` and is tested
+there (windows, staleness, variant compare, graduation, corrupt-line
+tolerance). Python keeps the graduation rewrite and the summary reader;
+these tests pin the reader's mapping and the forwarder argv contract.
+"""
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from fno.evals import history as _history
 from fno.evals.cli import evals_app
 from fno.evals.report import (
     GraduateError,
-    build_report,
     evals_health_summary,
     graduate_task_file,
-    graduation_candidates,
-    load_rows,
 )
 
 runner = CliRunner()
 
 
-def _row(task_id: str, tier: str, passed: bool) -> dict:
-    return {"task_id": task_id, "tier": tier, "pass": passed}
+# --- graduation (unchanged semantics) ---------------------------------------
 
-
-# AC2-HP: a task run 3 times with 2 passes -> pass@1 = 2/3, pass^3 False, flake.
-def test_pass_k_report() -> None:
-    rows = [_row("t", "capability", True), _row("t", "capability", False),
-            _row("t", "capability", True)]
-    report = build_report(rows)
-    task = report["tasks"][0]
-    assert task["runs"] == 3 and task["passes"] == 2
-    assert task["pass_at_1"] == pytest.approx(2 / 3, abs=1e-4)
-    assert task["pass_k"] is False
-    assert task["flake"] is True
-    assert "t" in report["flakes"]
-
-
-def test_regression_alarm_fires_below_100() -> None:
-    rows = [_row("r", "regression", True), _row("r", "regression", False)]
-    report = build_report(rows)
-    assert report["regression_alarm"] == ["r"]
-
-
-def test_regression_alarm_silent_at_100() -> None:
-    rows = [_row("r", "regression", True), _row("r", "regression", True)]
-    assert build_report(rows)["regression_alarm"] == []
-
-
-def test_graduated_task_excludes_pre_graduation_failures() -> None:
-    """codex P2: after a capability task graduates, its old capability failures
-    must NOT count in the regression pass rate / fire a false alarm."""
-    rows = [
-        _row("t", "capability", False),  # pre-graduation hill failure
-        _row("t", "capability", True),
-        _row("t", "capability", True),
-        _row("t", "regression", True),   # first post-graduation run, green
-    ]
-    report = build_report(rows)
-    assert report["regression_alarm"] == []  # no false alarm
-    task = report["tasks"][0]
-    assert task["tier"] == "regression"
-    assert task["runs"] == 1 and task["passes"] == 1  # only the post-graduation run
-    assert report["tiers"]["regression"]["pass_rate"] == 1.0
-
-
-def test_regression_alarm_still_fires_on_real_post_graduation_failure() -> None:
-    rows = [
-        _row("t", "capability", True),
-        _row("t", "regression", True),
-        _row("t", "regression", False),  # real regression after graduation
-    ]
-    assert build_report(rows)["regression_alarm"] == ["t"]
-
-
-def test_no_data() -> None:
-    assert build_report([])["no_data"] is True
-
-
-def test_tier_pass_rate() -> None:
-    rows = [_row("a", "regression", True), _row("b", "regression", False)]
-    report = build_report(rows)
-    assert report["tiers"]["regression"]["pass_rate"] == 0.5
-
-
-def test_since_folds_recent_only(tmp_path: Path) -> None:
-    hp = tmp_path / "h.jsonl"
-    for _ in range(5):
-        _history.append_row(hp, _row("t", "regression", False))
-    for _ in range(2):
-        _history.append_row(hp, _row("t", "regression", True))
-    rows = load_rows(hp, since=2)
-    assert len(rows) == 2 and all(r["pass"] for r in rows)
-
-
-def test_graduation_candidates_last_n_pass() -> None:
-    rows = [_row("cap", "capability", False)] + [_row("cap", "capability", True)] * 3
-    assert graduation_candidates(rows, n=3) == ["cap"]
-
-
-def test_graduation_needs_n_runs() -> None:
-    rows = [_row("cap", "capability", True), _row("cap", "capability", True)]
-    assert graduation_candidates(rows, n=3) == []
-
-
-def test_graduation_skips_regression_tier() -> None:
-    rows = [_row("r", "regression", True)] * 3
-    assert graduation_candidates(rows, n=3) == []
-
-
-# AC6-HP: graduate rewrites the YAML tier, preserving comments.
 def test_graduate_task_file_rewrites_tier(tmp_path: Path) -> None:
     p = tmp_path / "cap.yaml"
     p.write_text("# a comment\nid: cap\ntier: capability  # hill\ngrade:\n  - {kind: exit, command: pytest}\n",
@@ -131,32 +46,143 @@ def test_evals_health_summary_none_without_history(tmp_path: Path) -> None:
     assert evals_health_summary(tmp_path / "absent.jsonl") is None
 
 
-def test_evals_health_summary(tmp_path: Path) -> None:
+# --- the summary reader: a thin mapping of the native payload ---------------
+
+def _payload(**overrides) -> dict:
+    """One native summary payload, defaults valid and fresh."""
+    base = {
+        "regression_alarm": ["r"],
+        "regressed": [],
+        "regression_pass_rate": 0.5,
+        "flake_count": 1,
+        "row_count": 2,
+        "never_ran": False,
+        "age_days": 1.0,
+        "stale": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def _stub_summary(monkeypatch: pytest.MonkeyPatch, payload) -> None:
+    """Pin the native summary read so the test never spawns a binary."""
+    monkeypatch.setattr("fno.evals.report._native_summary", lambda _p, _d: payload)
+
+
+def test_evals_health_summary_maps_the_native_payload(tmp_path, monkeypatch) -> None:
+    _stub_summary(monkeypatch, _payload())
     hp = tmp_path / "h.jsonl"
-    _history.append_row(hp, _row("r", "regression", True))
-    _history.append_row(hp, _row("r", "regression", False))
+    hp.touch()
+    summary = evals_health_summary(hp, stale_days=7)
+    assert summary is not None
+    assert summary["regression_alarm"] == ["r"]
+    assert summary["regressed"] == []
+    assert summary["regression_pass_rate"] == 0.5
+    assert summary["flake_count"] == 1
+    assert summary["window_days"] == 7
+    assert summary["age_days"] == 1.0
+    assert summary["stale"] is False
+    assert summary["never_ran"] is False
+
+
+def test_health_summary_none_when_row_count_zero(tmp_path, monkeypatch) -> None:
+    _stub_summary(monkeypatch, _payload(row_count=0))
+    hp = tmp_path / "h.jsonl"
+    hp.touch()
+    assert evals_health_summary(hp) is None
+
+
+def test_health_summary_none_when_door_unreachable(tmp_path, monkeypatch) -> None:
+    """An unreachable native fold degrades to None, never a Python re-fold."""
+    _stub_summary(monkeypatch, None)
+    hp = tmp_path / "h.jsonl"
+    hp.touch()
+    assert evals_health_summary(hp) is None
+
+
+def test_health_summary_stale_days_resolves_from_config(tmp_path, monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_summary(_p: Path, stale_days: int):
+        seen["stale_days"] = stale_days
+        return _payload()
+
+    class _Evals:
+        stale_days = 2
+
+    class _Settings:
+        evals = _Evals()
+
+    monkeypatch.setattr("fno.evals.report.load_settings", lambda: _Settings())
+    monkeypatch.setattr("fno.evals.report._native_summary", fake_summary)
+    hp = tmp_path / "h.jsonl"
+    hp.touch()
     summary = evals_health_summary(hp)
     assert summary is not None
-    assert summary["flake_count"] == 1
-    assert summary["regression_pass_rate"] == 0.5
-    assert summary["regression_alarm"] == ["r"]
+    assert summary["window_days"] == 2
+    assert seen["stale_days"] == 2
 
 
-# --- CLI ---
+# --- CLI forwarders: argv contract + exit propagation -----------------------
 
-def test_report_cli_regression_alarm_exit_4(tmp_path: Path) -> None:
+def _forwarder_fakes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, returncode: int = 0) -> dict:
+    from fno import rust_binary
+
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: tmp_path / "fno-agents")
+    captured: dict = {}
+
+    def fake_run(argv, check=False, **kw):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, returncode)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return captured
+
+
+def test_forwarder_refuses_without_the_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fno import rust_binary
+
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    for leaf in ("report", "trend"):
+        res = runner.invoke(evals_app, [leaf])
+        assert res.exit_code == 2
+        assert "binary was not found" in res.output
+
+
+def test_forwarder_argv_composition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Evals:
+        stale_days = 9
+
+    class _Settings:
+        evals = _Evals()
+
+    monkeypatch.setattr("fno.config.load_settings", lambda: _Settings())
     hp = tmp_path / "h.jsonl"
-    _history.append_row(hp, _row("r", "regression", False))
-    res = runner.invoke(evals_app, ["report", "--history", str(hp)])
+    monkeypatch.setattr("fno.paths.evals_history", lambda: hp)
+    captured = _forwarder_fakes(monkeypatch, tmp_path)
+    for leaf, mode in (("report", "report"), ("trend", "trend")):
+        captured.clear()
+        res = runner.invoke(evals_app, [leaf, "--json", "--since", "5"])
+        assert res.exit_code == 0
+        argv = captured["argv"]
+        assert argv[0] == str(tmp_path / "fno-agents")
+        assert argv[1] == "evals-trend"
+        assert argv[argv.index("--mode") + 1] == mode
+        assert argv[argv.index("--history") + 1] == str(hp)
+        assert argv[argv.index("--stale-days") + 1] == "9"
+        assert "--json" in argv
+        assert argv[argv.index("--since") + 1] == "5"
+
+
+def test_forwarder_exit_code_propagation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fno.paths.evals_history", lambda: tmp_path / "h.jsonl")
+    captured = _forwarder_fakes(monkeypatch, tmp_path, returncode=4)
+    res = runner.invoke(evals_app, ["report"])
     assert res.exit_code == 4
-    assert "REGRESSION ALARM" in res.stdout
+    assert captured["argv"][1] == "evals-trend"
 
 
-def test_report_cli_no_data_exit_0(tmp_path: Path) -> None:
-    res = runner.invoke(evals_app, ["report", "--history", str(tmp_path / "none.jsonl")])
-    assert res.exit_code == 0
-    assert "no_data" in res.stdout
-
+# --- graduate CLI (unchanged) -----------------------------------------------
 
 def test_graduate_cli(tmp_path: Path) -> None:
     d = tmp_path / "bank"
@@ -175,3 +201,19 @@ def test_graduate_cli_unknown_id_exit_1(tmp_path: Path) -> None:
                                 encoding="utf-8")
     res = runner.invoke(evals_app, ["graduate", "nope", "--bank", str(d)])
     assert res.exit_code == 1
+
+
+# --- regression guards from the port (d-b6cc1a2a) ---------------------------
+
+def test_fold_symbols_are_gone_from_python() -> None:
+    """The fold (windows, staleness, compare, row reading) lives in Rust now;
+    the Python module must not carry a second implementation (law d-b6cc1a2a)."""
+    import fno.evals.report as report_module
+    import fno.evals.history as history_module
+
+    for gone in ("compare_windows", "window_rows", "graduation_candidates",
+                 "compare_variants", "_pair_verdict", "_common_rev",
+                 "build_report", "_stats", "_by_task", "TaskStat",
+                 "load_rows", "_parse_ts", "_native_summary_reads"):
+        assert not hasattr(report_module, gone)
+    assert not hasattr(history_module, "iter_rows_tolerant")

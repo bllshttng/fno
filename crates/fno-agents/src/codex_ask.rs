@@ -1,4 +1,4 @@
-//! Client-side `codex exec` ask path (ab-0429c6e1).
+//! Client-side `codex exec` ask path.
 //!
 //! `codex` is a one-shot `codex exec --json` subprocess (NOT a PTY agent):
 //! it emits a JSONL stream to stdout, the Rust client drains and parses it,
@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 
 use crate::claude_ask::emit_event;
 use crate::paths::AgentsHome;
-use crate::provider::normalize_codex_command;
-use crate::state::{load_registry, update_registry};
+use crate::provider::render_verb_seed;
+use crate::state::{find_keyed_mut, load_registry, update_registry};
 use crate::AgentStatus;
 
 // ===========================================================================
@@ -79,12 +79,18 @@ pub fn inject_from_name(prompt: &str, from_name: &str) -> String {
 ///
 /// `--sandbox` is an `exec`-subcommand flag, so these tokens go AFTER `exec`.
 /// The approval policy is a SEPARATE global flag, see [`approval_flag`].
-/// Mirror of `codex.py::sandbox_flag`.
+/// The bounded arm pins network access: workspace-write alone denies AF_UNIX,
+/// which takes out both `gh` and the graph keeper socket.
 pub fn sandbox_flag(yolo: bool) -> Vec<String> {
     if yolo {
         vec!["--dangerously-bypass-approvals-and-sandbox".to_string()]
     } else {
-        vec!["--sandbox".to_string(), "workspace-write".to_string()]
+        vec![
+            "--sandbox".to_string(),
+            "workspace-write".to_string(),
+            "-c".to_string(),
+            crate::codex_posture::BOUNDED_NETWORK_OVERRIDE.to_string(),
+        ]
     }
 }
 
@@ -122,6 +128,65 @@ pub fn sandbox_flag_resume(yolo: bool) -> Vec<String> {
     }
 }
 
+/// First codex that ships `--dangerously-bypass-hook-trust`; an older clap
+/// parser rejects the unknown flag and aborts the spawn.
+const HOOK_TRUST_FLAG_MIN_VERSION: &str = "0.148.0";
+
+/// `--dangerously-bypass-hook-trust` for every fno-launched codex worker:
+/// codex 0.148+ skips a new or changed hook until a human trusts it, and a
+/// plugin install never trusts, so a worker would run without fno's guards and
+/// Stop hook. Only hook review is skipped; sandbox and approval stay as the
+/// posture set them. Valid on `codex`, `exec`, `exec resume` and `resume`.
+/// Mirror of `codex.py::codex_hook_trust_args`.
+pub fn hook_trust_flag() -> Vec<String> {
+    // `FNO_CODEX_VERSION` pins the answer, and the Python twin reads the same
+    // key, so a run that sets it gets one argv from both runtimes. Empty
+    // means unknown, so the flag is omitted.
+    if let Ok(pinned) = std::env::var("FNO_CODEX_VERSION") {
+        return hook_trust_tokens(pinned_version(&pinned).as_deref());
+    }
+    // Unit tests swap fake codex binaries onto PATH, and the probe below is
+    // cached once per process, so a probe here would make exact-argv tests
+    // depend on test order. `hook_trust_tokens` carries the logic under test.
+    if cfg!(test) {
+        return Vec::new();
+    }
+    // The bare PATH `codex` is what every argv here launches, not
+    // `FNO_CODEX_BIN`. Only an answer is cached: a probe that timed out on a
+    // loaded machine must not strip the flag for the life of the daemon.
+    static INSTALLED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let installed = match INSTALLED.get() {
+        Some(version) => Some(version.clone()),
+        None => crate::codex_daemon_readiness::cli_version_of("codex")
+            .map(|version| INSTALLED.get_or_init(|| version).clone()),
+    };
+    hook_trust_tokens(installed.as_deref())
+}
+
+/// The first `major.minor.patch` run in a `FNO_CODEX_VERSION` pin, the same
+/// match the Python twin's regex makes, so both runtimes read one pin alike.
+pub(crate) fn pinned_version(raw: &str) -> Option<String> {
+    raw.split(|c: char| !c.is_ascii_digit() && c != '.')
+        .find_map(|token| {
+            let parts: Vec<&str> = token.split('.').collect();
+            (parts.len() >= 3 && parts[..3].iter().all(|p| !p.is_empty()))
+                .then(|| parts[..3].join("."))
+        })
+}
+
+pub(crate) fn hook_trust_tokens(installed: Option<&str>) -> Vec<String> {
+    let supported = installed
+        .and_then(|v| {
+            crate::codex_daemon_readiness::compare_versions(v, HOOK_TRUST_FLAG_MIN_VERSION)
+        })
+        .is_some_and(|order| order != std::cmp::Ordering::Less);
+    if supported {
+        vec!["--dangerously-bypass-hook-trust".to_string()]
+    } else {
+        vec![]
+    }
+}
+
 /// Build the create argv: `codex exec --json -C <cwd> --skip-git-repo-check <sandbox> <full_prompt>`.
 /// `full_prompt` should already have been built via `inject_from_name`.
 /// The subprocess cwd is NOT set via Popen(cwd=...) on the create path
@@ -133,6 +198,7 @@ pub fn build_argv_create(
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
+    harness_args: &[String],
 ) -> Vec<String> {
     // Approval is a GLOBAL flag and must precede `exec`; sandbox is an `exec`
     // flag and follows it. See `approval_flag` / `sandbox_flag`.
@@ -145,7 +211,7 @@ pub fn build_argv_create(
         cwd.to_string_lossy().to_string(),
         "--skip-git-repo-check".to_string(),
     ]);
-    // x-b6e2: a user `--add-dir` grants extra write access on `codex exec`.
+    // a user `--add-dir` grants extra write access on `codex exec`.
     // codex's own cwd rides `-C` (separate flag), so this is purely additive -
     // no collision. Empty/None = unchanged argv.
     if let Some(d) = add_dir.filter(|d| !d.is_empty()) {
@@ -169,8 +235,9 @@ pub fn build_argv_create(
     if !yolo {
         argv.extend(crate::provider::codex_git_writable_args(cwd));
         argv.extend(crate::provider::codex_plan_writable_args(cwd));
+        argv.extend(crate::provider::codex_cache_writable_args());
     }
-    // x-c772: an explicit --model is forwarded to `codex exec --model <m>`
+    // an explicit --model is forwarded to `codex exec --model <m>`
     // (empty/None = codex default). Exact passthrough, no fuzzy resolution.
     if let Some(m) = model.filter(|m| !m.is_empty()) {
         argv.push("--model".to_string());
@@ -181,6 +248,10 @@ pub fn build_argv_create(
         argv.push(format!("model_reasoning_effort={effort}"));
     }
     argv.extend(sandbox_flag(yolo));
+    argv.extend(hook_trust_flag());
+    // Fenced `--` tokens the operator typed (codex maps -c/--config and
+    // --add-dir here), before the prompt fence like every other flag.
+    argv.extend(harness_args.iter().cloned());
     // Behind `--` like the Python twins: a leading-flag seed must be the
     // prompt positional, not a codex flag.
     argv.push("--".to_string());
@@ -213,6 +284,7 @@ pub fn build_argv_resume(
         "--skip-git-repo-check".to_string(),
     ]);
     argv.extend(sandbox_flag_resume(yolo));
+    argv.extend(hook_trust_flag());
     if !yolo {
         argv.extend(crate::provider::codex_sandbox_config_args_resume(cwd));
     }
@@ -327,7 +399,7 @@ pub enum CodexAskError {
     /// Non-transient OSError at Popen time (not NotFound) — exit 1.
     OsError { message: String },
     /// Operator SIGINT (Ctrl-C) forwarded to the codex group — exit 130.
-    /// Mirrors Python's KeyboardInterrupt -> CPython exit 130 (ab-e7fdbcb6).
+    /// Mirrors Python's KeyboardInterrupt -> CPython exit 130.
     Interrupted,
 }
 
@@ -431,7 +503,7 @@ fn open_tee(log_path: &Path) -> Result<std::fs::File, CodexAskError> {
     })
 }
 
-// SIGINT forwarding (ab-e7fdbcb6 / cv-cfdb7a56) now lives in the shared
+// SIGINT forwarding (/ cv-cfdb7a56) now lives in the shared
 // `subprocess_ask` module so codex and gemini share one implementation. See
 // `crate::subprocess_ask::{SigintForwarder, ask_interrupted}`.
 
@@ -451,6 +523,7 @@ fn run_codex(
     popen_cwd: Option<&Path>,
     agent_self: Option<&str>,
     bound_session_id: Option<&str>,
+    route_env: &[(String, String)],
 ) -> Result<CodexResult, CodexAskError> {
     use std::process::{Command, Stdio};
 
@@ -460,12 +533,17 @@ fn run_codex(
     // structured CodexAskError::TeeOpen rather than a raw panic.
     let tee_fh = open_tee(output_path)?;
 
-    // QoS (x-c5cc): every codex child is an fno-spawned worker process —
+    // QoS: every codex child is an fno-spawned worker process —
     // exec-wrap at background priority (identity when worker_qos=off).
     let argv =
         crate::spawn_gate::qos_wrap(popen_cwd.unwrap_or_else(|| Path::new(".")), argv.to_vec());
     let mut cmd = Command::new(&argv[0]);
     cmd.args(&argv[1..]);
+    // a resumed followup carries its route's env (key + provider
+    // stamp) in the child env - the argv cannot hold a secret.
+    for (key, value) in route_env {
+        cmd.env(key, value);
+    }
     cmd.stdin(Stdio::null()); // LD11
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped()); // merged below via thread
@@ -501,7 +579,7 @@ fn run_codex(
     let pid = child.id();
 
     // Forward operator Ctrl-C to the codex process group for the lifetime of
-    // this call (ab-e7fdbcb6). Dropped at function end, after the child is
+    // this call. Dropped at function end, after the child is
     // reaped, which restores the prior SIGINT disposition. codex is
     // `setpgid(0, 0)`, so its pgid equals its pid.
     let _sigint_guard = crate::subprocess_ask::SigintForwarder::install(pid);
@@ -662,7 +740,7 @@ fn run_codex(
     let duration_ms = started.elapsed().as_millis() as u64;
     let was_timed_out = watchdog.timed_out();
 
-    // Operator Ctrl-C (ab-e7fdbcb6 / cv-cfdb7a56): the SIGINT-forwarding
+    // Operator Ctrl-C (/ cv-cfdb7a56): the SIGINT-forwarding
     // handler (installed via `_sigint_guard`) already relayed the signal to
     // the codex process group and set this flag. Fail with `Interrupted` (exit
     // 130) BEFORE the timeout / no-session / exit-code checks so a Ctrl-C'd
@@ -758,10 +836,11 @@ pub fn codex_create(
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
+    harness_args: &[String],
 ) -> Result<CodexResult, CodexAskError> {
-    let effective_prompt = normalize_codex_command(prompt);
+    let effective_prompt = render_verb_seed(prompt, "codex");
     let full_prompt = inject_from_name(&effective_prompt, from_name);
-    // ab-994222ee: the create/exec path is the autonomous headless lane. codex
+    // the create/exec path is the autonomous headless lane. codex
     // exec is treated as possibly-blocking, so default to no-prompt
     // (--dangerously-bypass-approvals-and-sandbox); config.agents.codex.headless_yolo=false opts back in.
     let eff = crate::agents_config::effective_yolo(
@@ -783,12 +862,34 @@ pub fn codex_create(
             message,
         });
     }
-    let argv = build_argv_create(cwd, &full_prompt, eff, model, reasoning_effort, add_dir);
-    run_codex(&argv, output_path, timeout, true, None, agent_self, None)
+    let argv = build_argv_create(
+        cwd,
+        &full_prompt,
+        eff,
+        model,
+        reasoning_effort,
+        add_dir,
+        harness_args,
+    );
+    run_codex(
+        &argv,
+        output_path,
+        timeout,
+        true,
+        None,
+        agent_self,
+        None,
+        &[],
+    )
 }
 
 /// Spawn `codex exec resume <session_id> --json ...` from `cwd`.
 /// Resume does NOT accept `--cd`; cwd is pinned via `Command::current_dir`.
+/// `route` carries the row's re-resolved codex route: its tokens are
+/// spliced right after `codex` and its env (key + provider stamp) rides the
+/// child env, so a followed-up headless worker reaches the same routed
+/// endpoint it was minted on.
+#[allow(clippy::too_many_arguments)]
 pub fn codex_resume(
     session_id: &str,
     cwd: &Path,
@@ -799,10 +900,11 @@ pub fn codex_resume(
     timeout: Option<Duration>,
     reasoning_effort: Option<&str>,
     agent_self: Option<&str>,
+    route: Option<&crate::codex_route::CodexRoute>,
 ) -> Result<CodexResult, CodexAskError> {
-    let effective_prompt = normalize_codex_command(prompt);
+    let effective_prompt = render_verb_seed(prompt, "codex");
     let full_prompt = inject_from_name(&effective_prompt, from_name);
-    // ab-994222ee: a resumed autonomous worker is the same headless risk class.
+    // a resumed autonomous worker is the same headless risk class.
     let eff = crate::agents_config::effective_yolo(
         yolo,
         crate::agents_config::headless_yolo_enabled("codex", cwd),
@@ -819,7 +921,11 @@ pub fn codex_resume(
             message,
         });
     }
-    let argv = build_argv_resume(cwd, session_id, &full_prompt, eff, reasoning_effort);
+    let mut argv = build_argv_resume(cwd, session_id, &full_prompt, eff, reasoning_effort);
+    if let Some(route) = route {
+        crate::codex_route::splice_route(&mut argv, route);
+    }
+    let route_env: Vec<(String, String)> = route.map(|r| r.env.clone()).unwrap_or_default();
     run_codex(
         &argv,
         output_path,
@@ -828,6 +934,7 @@ pub fn codex_resume(
         Some(cwd),
         agent_self,
         Some(session_id),
+        &route_env,
     )
 }
 
@@ -1030,6 +1137,7 @@ pub fn dispatch_codex_once(
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
+    harness_args: &[String],
 ) -> AskOutcome {
     use crate::claude_ask::py_repr;
 
@@ -1104,6 +1212,7 @@ pub fn dispatch_codex_once(
         model,
         reasoning_effort,
         add_dir,
+        harness_args,
     );
     if inner.exit_code != 0 {
         // create failed; dispatch_create only writes the registry post-success,
@@ -1161,6 +1270,7 @@ fn dispatch_create(
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     add_dir: Option<&str>,
+    harness_args: &[String],
 ) -> AskOutcome {
     let output_path = derive_log_path(home, name);
     let timeout_sec = timeout.unwrap_or(DEFAULT_FOLLOWUP_TIMEOUT);
@@ -1176,6 +1286,7 @@ fn dispatch_create(
         model,
         reasoning_effort,
         add_dir,
+        harness_args,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -1221,11 +1332,11 @@ fn dispatch_create(
 
     // Build the registry entry.
     use crate::state::RegistryEntry;
-    // The spawning session's ambient identity (x-132c): dispatch_create runs
+    // The spawning session's ambient identity: dispatch_create runs
     // in the CLIENT process that inherited the spawning session's env.
-    let (parent_session, parent_harness, parent_cwd) = crate::claims::ambient_parent_edge();
+    let spawned_by = crate::spawn_lineage::ambient_lineage();
     let new_entry = RegistryEntry {
-        // x-98ab: client-side mint - this process inherited the spawning
+        // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn
         // is for.
         node: std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty()),
@@ -1234,13 +1345,13 @@ fn dispatch_create(
         name: name.to_string(),
         short_id: String::new(),
         legacy_provider: String::new(),
-        // x-d285: codex accounts are not the claude account axis; unknown.
+        // codex accounts are not the claude account axis; unknown.
         launch_account: None,
         related_session_id: None,
         provider: Some("openai".to_string()),
         model: None,
         model_basis: None,
-        // v23 (x-2019): the request beside the effect. The codex lane resolves
+        // v23: the request beside the effect. The codex lane resolves
         // no vendor flag, so the provider request stays None; model and
         // reasoning effort ride through verbatim even though the observed
         // `model` axis stays unset until a verified read stamps it.
@@ -1251,9 +1362,13 @@ fn dispatch_create(
             .map(str::to_string),
         effort: reasoning_effort.map(str::to_string),
         harness: Some("codex".to_string()),
-        harness_session_id: Some(session_id.clone()),
         predecessor_session_ids: Vec::new(),
         forked_from_session_id: None,
+        // v25: the route axes this lane actually used. Codex's ambient auth
+        // is the account it positively pinned nothing past, so "default".
+        route_provider_id: Some("openai".to_string()),
+        model_name: model.filter(|m| !m.is_empty()).map(str::to_string),
+        account_record_id: Some("default".to_string()),
         cwd: cwd.to_string_lossy().to_string(),
         project_root: String::new(),
         session_id: None,
@@ -1262,9 +1377,6 @@ fn dispatch_create(
         // later reader has to guess at.
         origin: Some("spawn".to_string()),
         spawn_trigger: None,
-        spawned_by_session: parent_session,
-        spawned_by_harness: parent_harness,
-        spawned_by_cwd: parent_cwd,
         legacy_claude_short_id: None,
         claude_session_uuid: None,
         messaging_socket_path: None,
@@ -1277,7 +1389,7 @@ fn dispatch_create(
         // live and immediately promotable/visible in `grid --all`, and the row
         // records a resumable session (codex resume <uuid>). It is NOT a
         // permanent Live: `reconcile` settles a finished ask to `Exited` by
-        // process-liveness alone (plan ab-70faa65b, Locked Decision #1 -- a
+        // process-liveness alone (plan, Locked Decision #1 -- a
         // surviving session file is "resumable", not "running", so it must not
         // keep the row `live`). promote is unaffected because admit_promote
         // admits a settled `Exited` exec source (see admit_promote_exited_source_
@@ -1297,13 +1409,14 @@ fn dispatch_create(
         exited_at: None,
         mux: None,
         screen_state: None,
-        crown_level: None,
-        crown_scope: None,
-        crown_grantor: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
         route_settings_path: None,
-        fno_id: None,
         delivery_policy: None,
         sandbox_posture: None,
+        git_grant: None,
+        ..RegistryEntry::new(Some(session_id.clone()), spawned_by)
     };
 
     match update_registry(registry_path, |reg| {
@@ -1439,6 +1552,61 @@ fn dispatch_resume(
     );
 
     let timeout_sec = timeout.unwrap_or(DEFAULT_FOLLOWUP_TIMEOUT);
+    // a routed headless row re-resolves its route from today's config
+    // before the followup runs. A route the row names but config cannot
+    // rebuild refuses with exit 2 - the code every route-composition refusal
+    // already uses - and no codex process starts.
+    let route = match crate::codex_route::row_route_identity(
+        entry.harness.as_deref(),
+        entry.route_provider_id.as_deref(),
+        entry.model_name.as_deref(),
+    ) {
+        Err(reason) => {
+            let msg = format!(
+                "registry entry {name:?} was launched on a codex route and it cannot \
+                 be restored ({reason}); not following up on codex's default provider. \
+                 rm the row and re-ask to recreate it on today's route"
+            );
+            emit_event(
+                events,
+                "agent_followup_failed",
+                &[
+                    ("stage", "codex-route".into()),
+                    ("name", name.into()),
+                    ("provider", "codex".into()),
+                    ("codex_session_id", session_id.clone().into()),
+                ],
+            );
+            return AskOutcome::err(msg, 2);
+        }
+        Ok(None) => None,
+        Ok(Some((p, m))) => {
+            let r = crate::codex_route::resolve_codex_route(&registered_cwd, &p, &m);
+            match r {
+                Ok(route) => Some(route),
+                Err(e) => {
+                    let msg = format!(
+                        "registry entry {name:?} was launched on codex route {p:?} and it \
+                         cannot be restored ({}); not following up on codex's default \
+                         provider",
+                        e.message()
+                    );
+                    emit_event(
+                        events,
+                        "agent_followup_failed",
+                        &[
+                            ("stage", "codex-route".into()),
+                            ("name", name.into()),
+                            ("provider", "codex".into()),
+                            ("codex_session_id", session_id.clone().into()),
+                            ("returncode", 2.into()),
+                        ],
+                    );
+                    return AskOutcome::err(msg, 2);
+                }
+            }
+        }
+    };
     let result = match codex_resume(
         &session_id,
         &registered_cwd,
@@ -1449,6 +1617,7 @@ fn dispatch_resume(
         Some(timeout_sec),
         entry.effort.as_deref(),
         Some(name),
+        route.as_ref(),
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -1477,9 +1646,12 @@ fn dispatch_resume(
         }
     };
 
-    // Stamp status=live + last_message_at on success.
+    // Stamp status=live + last_message_at on success, keyed on the row's
+    // identity captured before the write, so a same-name
+    // replacement between resolve and write cannot receive this stamp.
+    let key = ("codex".to_string(), Some(session_id.clone()));
     if let Err(e) = update_registry(registry_path, |reg| {
-        if let Some(en) = reg.find_mut(name) {
+        if let Some(en) = find_keyed_mut(reg, &key, name) {
             en.status = AgentStatus::Live;
             en.last_message_at = Some(now_iso());
         }

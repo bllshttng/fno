@@ -6,7 +6,7 @@ footnote sits on top of Claude Code's authentication. When you drive the loop wi
 
 1. **Claude Code OAuth.** If you have signed into Claude Code (`claude login` or via the desktop app), footnote uses that session. Recommended for solo founders and interactive use.
 2. **`ANTHROPIC_API_KEY` environment variable.** If set, this overrides the OAuth path. Use for CI, scripts, or when you explicitly want to bill an API account separately from your interactive Claude.ai account.
-3. **Other agent runtimes.** If you have configured megawalk's drivers to use alternative LLM hosts, those runtimes have their own authentication. See driver-specific docs.
+3. **Other agent runtimes.** The loop's exec-shim drivers (`scripts/lib/driver-*.sh`) can point at alternative LLM hosts. Those runtimes do their own authentication. See driver-specific docs.
 
 ## Multi-account warning
 
@@ -33,5 +33,6 @@ If any of these are misconfigured, the run will fail with a clear error in the r
 - No footnote-internal credentials. There is no footnote cloud service.
 - No credentials sent to third-party services other than the agent runtime you have configured.
 - No telemetry beyond what Anthropic and GitHub already collect for their products.
+- Local cost telemetry stays local. fno can ingest Claude Code's OpenTelemetry records into a receiver on 127.0.0.1 and store exact per-request cost in `~/.fno/agents/otel/otel.db`. Nothing leaves this machine. Turn it off with `[telemetry] claude_otel = false` in config.toml. See `docs/architecture/cost-accuracy.md`.
 
 See `docs/security-posture.md` for the broader trust model.

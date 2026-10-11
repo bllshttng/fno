@@ -1,11 +1,18 @@
-"""Public projection selection and Markdown compatibility.
+"""Public projection selection, Markdown compatibility, and the local board
+render handoff.
 
-HTML authoring belongs exclusively to :mod:`fno.graph.render_html`.
+The local board page is written by the native front binary (`fno
+board-render`): the served web backlog page with the rows embedded, so the
+file opens from disk with no server and can never drift from the served
+board. This module resolves the configured targets and hands them over; it
+no longer authors any HTML itself.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -13,8 +20,89 @@ from fno.graph.render import (
     _project_key,
     make_kanban_classifiers,
 )
-from fno.graph.render_html import PUBLIC_BACKLOG_STATUSES, group_for
 from fno.graph.statuses import derived_status
+
+# The statuses a PUBLIC backlog page shows. The local board shows every row.
+PUBLIC_BACKLOG_STATUSES = ("in_progress", "ready", "blocked", "idea")
+
+
+def load_render_entries(entries: list[dict] | None = None) -> list[dict]:
+    """Overlay archive on a guarded display read or the canonical graph seam."""
+    from fno.graph.store import entries_with_archive, read_graph_with_archive
+
+    return read_graph_with_archive() if entries is None else entries_with_archive(entries)
+
+
+# The one leak vocabulary: only classes that reveal the operator's machine
+# or agent runs. Node ids and PR numbers are ruled public and stay in
+# titles. The Rust write-time title gate (crates/fno-agents title_gate.rs)
+# is a byte-for-byte port, so the probe and the gate can never drift into
+# disagreeing about what counts as a leak.
+LEAK_PATTERNS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("home-path", re.compile(r"(?:~/(?:[^\s]+)|/(?:Users|home)/[^\s/]+(?:/[^\s]+)?)")),
+    (
+        "session-id",
+        re.compile(
+            r"\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|ses-[A-Za-z0-9_-]+)\b",
+            re.I,
+        ),
+    ),
+)
+
+
+def public_title_leaks(entries: list[dict]) -> list[tuple[str, str, tuple[str, ...]]]:
+    """Return every public-title offender and every matched leak class."""
+    offenders: list[tuple[str, str, tuple[str, ...]]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").replace("\n", " ").strip()
+        classes = tuple(name for name, pattern in LEAK_PATTERNS if pattern.search(title))
+        if classes:
+            offenders.append((str(entry.get("id") or "?"), title, classes))
+    return offenders
+
+
+def omit_leaky_rows(
+    entries: list[dict], project: str
+) -> tuple[list[dict], list[tuple[str, str, tuple[str, ...]]]]:
+    """Drop rows whose public title matches a leak class, warn once with the
+    count, and return the publishable rest with the omitted offenders. One
+    leaky row costs its own row only; the page still publishes."""
+    offenders = public_title_leaks(public_projection_entries(entries, project))
+    if not offenders:
+        return entries, []
+    dropped = {node_id for node_id, _, _ in offenders}
+    classes = sorted({cls for _, _, found in offenders for cls in found})
+    print(
+        f"Warning: omitted {len(offenders)} public row(s) from the "
+        f"{project} roadmap render: title matched {', '.join(classes)}; "
+        "the rest published.",
+        file=sys.stderr,
+    )
+    return [e for e in entries if str(e.get("id") or "?") not in dropped], offenders
+
+
+def atomic_write_documents(documents: dict[Path, str]) -> None:
+    """Stage every document before replacing any destination."""
+    staged: list[tuple[Path, str]] = []
+    try:
+        for path, content in documents.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            staged.append((path, temp))
+        for path, temp in staged:
+            os.replace(temp, path)
+    except Exception:
+        for _path, temp in staged:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+        raise
+
 
 if TYPE_CHECKING:
     from fno.config import RenderTargetConfig
@@ -117,59 +205,82 @@ def public_backlog_entries(
     ]
 
 
-def _backlog_sections_for(items: list[dict]) -> list[tuple[str, list[dict]]]:
-    groups: dict[str, list[dict]] = {}
-    status_order = {status: index for index, status in enumerate(PUBLIC_BACKLOG_STATUSES)}
-    for entry in items:
-        groups.setdefault(group_for(entry), []).append(entry)
-    for sorted_items in groups.values():
-        sorted_items.sort(
-            key=lambda entry: (
-                status_order.get(derived_status(entry), 99),
-                str(entry.get("priority") or "p2"),
-                str(entry.get("title") or "").lower(),
-            )
-        )
-    return [(name, groups[name]) for name in sorted(groups)]
+def _load_obsidian_vault() -> str | None:
+    """Read ``config.obsidian.vault`` from the GLOBAL config file directly.
+
+    Walks the config.toml-first global candidates via ``read_global_block``.
+    Deliberately bypasses ``load_settings()`` because that loader walks
+    project-local-first and stops at the first match: a backlog mutation
+    fired from a project whose own ``.fno/settings.yaml`` lacks an obsidian
+    block would otherwise render the global board with vault=None, zeroing
+    out every Obsidian deep link.
+    """
+    try:
+        from fno.config_io import read_global_block
+
+        obs = read_global_block("obsidian") or {}
+        if not obs.get("enabled"):
+            return None
+        vault = obs.get("vault")
+        return str(vault) if vault else None
+    except Exception:
+        return None
 
 
-def _backlog_sections(entries: list[dict], project: str) -> list[tuple[str, list[dict]]]:
-    return _backlog_sections_for(public_backlog_entries(entries, project))
+_VAULT_TOPLEVEL_DIRS = ("internal/",)
 
 
-def render_public_roadmap_html(
-    entries: list[dict],
-    project: str,
-    cols: dict[str, list[dict]] | None = None,
-    *,
-    all_projects: bool = False,
-) -> str:
-    from fno.graph.render_html import render_public_sections_html
-    if cols is None:
-        cols = _columns(entries, project, all_projects=all_projects)
-    sections = [(label, cols[column]) for column, label in _PUBLIC_COLUMNS]
-    return render_public_sections_html(
-        sections, title=f"{project} roadmap", projection="roadmap"
-    )
+def canonicalize_plan_path(plan_path: str | None, vault: str | None = None) -> str | None:
+    """Normalize a plan_path to a vault-relative form.
+
+    Tolerates the shapes that have shown up in graph.json: canonical
+    (``internal/...``), vault-prefixed (the vault name is stripped when
+    supplied), and worktree-rooted (the LAST ``/internal/`` occurrence).
+    Returns the canonical form or None when the path has no recognizable
+    vault-relative segment.
+    """
+    if not plan_path:
+        return None
+    p = plan_path.strip()
+    if not p:
+        return None
+    if p.startswith(_VAULT_TOPLEVEL_DIRS):
+        return p
+    if vault:
+        needle = f"/{vault}/"
+        idx = p.rfind(needle)
+        if idx != -1:
+            stripped = p[idx + len(needle):]
+            if stripped.startswith(_VAULT_TOPLEVEL_DIRS):
+                return stripped
+    best_idx = -1
+    for marker in _VAULT_TOPLEVEL_DIRS:
+        idx = p.rfind(f"/{marker}")
+        if idx > best_idx:
+            best_idx = idx
+    if best_idx != -1:
+        return p[best_idx + 1:]
+    return None
 
 
-def render_public_backlog_html(
-    entries: list[dict],
-    project: str,
-    backlog_entries: list[dict] | None = None,
-    *,
-    all_projects: bool = False,
-) -> str:
-    from fno.graph.render_html import render_public_sections_html
+def obsidian_url(vault: str, plan_path: str) -> str | None:
+    """Build an ``obsidian://open?vault=...&file=...`` deep link.
 
-    if backlog_entries is None:
-        backlog_entries = public_backlog_entries(
-            entries, project, all_projects=all_projects
-        )
-    return render_public_sections_html(
-        _backlog_sections_for(backlog_entries),
-        title=f"{project} backlog",
-        projection="backlog",
+    Returns None when the plan_path has no recognizable vault-relative
+    segment, or does not point at a markdown file.
+    """
+    import urllib.parse
+
+    canonical = canonicalize_plan_path(plan_path, vault=vault)
+    if canonical is None:
+        return None
+    p = canonical.rstrip("/")
+    if not p.endswith(".md"):
+        return None
+    target = p[:-3]
+    return (
+        f"obsidian://open?vault={urllib.parse.quote(vault, safe='')}"
+        f"&file={urllib.parse.quote(target, safe='/')}"
     )
 
 
@@ -194,29 +305,19 @@ def _state_file_collisions(path: Path) -> list[str]:
             # default row rather than be refused and then overwritten anyway.
             gc.GRAPH_ARCHIVE_JSON,
             gc.LEDGER_JSON,
-            # the sha256 sidecar, the corruption-recovery backup, and the
+            # the corruption-recovery backup (the pre-relocation sibling and
+            # the backups/ copy current keepers write), and the
             # flock whose inode an os.replace would swap out from under the
             # mutation mutex
-            Path(str(gc.GRAPH_JSON) + ".sha256"),
             Path(str(gc.GRAPH_JSON) + ".bak"),
             Path(str(gc.GRAPH_JSON) + ".lock"),
+            Path(gc.GRAPH_JSON.parent / "backups" / (Path(gc.GRAPH_JSON).name + ".bak")),
         ):
             if resolved == Path(state_path).resolve():
                 hits.append(str(state_path))
         return hits
     except Exception:
         return []
-
-
-def GRAPH_HTML_PATH() -> Path:
-    from fno.graph._constants import GRAPH_HTML
-
-    return Path(GRAPH_HTML)
-
-
-def render_one_target(target: "RenderTargetConfig", entries: list[dict]) -> None:
-    """Render exactly one configured target. Never raises."""
-    render_configured_targets(entries, _only=target)
 
 
 def _default_targets() -> "list[RenderTargetConfig]":
@@ -239,7 +340,7 @@ def _configured_targets() -> "list[RenderTargetConfig]":
     """Read ``config.backlog.render_targets`` from the GLOBAL config file.
 
     Goes through ``read_global_block`` (config.toml-first candidates) for the
-    same recorded reason as ``render_html._load_obsidian_vault``: this runs
+    same recorded reason as ``_load_obsidian_vault``: this runs
     right after ``locked_mutate_graph`` commits and ``load_settings()`` stops
     at a project-local file that would shadow the operator's global list.
     Every failure degrades to ``[]`` with a warning instead of raising into
@@ -409,99 +510,123 @@ def canonical_target() -> "RenderTargetConfig | None":
     return None
 
 
-def render_configured_targets(
-    entries: list[dict],
-    *,
-    skip_canonical: bool = False,
-    _only: "RenderTargetConfig | None" = None,
-) -> None:
-    """Render every configured backlog projection (x-9415). Called from
-    ``locked_mutate_graph`` AFTER graph.json is written, so it must never
-    raise: a failing operator target warns and is skipped, never wedging the
-    mutation. The leak gate stays fail-closed - a refusal leaves the target
-    byte-unchanged and names every offender; it still only skips the target.
+def render_public_backlog_html(project: str, out_path: str) -> bool:
+    """Write the public open-work page through the native front binary.
 
-    ``skip_canonical`` omits the canonical board, which the caller has already
-    written under the flock via ``render_one_target``.
+    Selection and the title gate run inside ``fno board-render``'s public
+    mode, beside the output allowlist; this handoff carries only the path
+    and the project scope. True when the render wrote.
     """
-    from fno.graph.render_html import (
-        atomic_write_documents,
-        leak_offender_lines,
-        public_title_leaks,
-    )
+    import json
+    import subprocess
 
-    from fno.graph.render_html import render_graph_html
+    from fno.rust_binary import resolve_front_binary
 
-    canonical = GRAPH_HTML_PATH().resolve() if skip_canonical else None
-    for target in ([_only] if _only is not None else _configured_targets()):
-        out = Path(os.path.expanduser(target.path))
-        if canonical is not None and out.resolve() == canonical:
-            continue
-        scope, all_projects = _target_scope(target)
-        scoped_entries = [
-            e for e in entries if _scope_matches(e, scope, all_projects=all_projects)
-        ]
-        if not all_projects and not scoped_entries:
-            # Zero matching entries is the typo'd-project signature: leave the
-            # operator's last good board byte-unchanged rather than replace it
-            # with an empty projection. A project whose entries exist but are
-            # all done/private still renders its valid empty projection below.
+    binary = resolve_front_binary()
+    if binary is None:
+        print("Warning: public backlog HTML render skipped: the native fno binary was not found",
+              file=sys.stderr)
+        return False
+    request = json.dumps({"targets": [{"path": os.path.expanduser(out_path)}],
+                          "public": {"project": project}})
+    try:
+        done = subprocess.run([str(binary), "board-render"], input=request,
+                              capture_output=True, text=True, timeout=600)
+    except Exception as exc:  # noqa: BLE001 - the caller turns False into exit 1
+        print(f"Warning: public backlog HTML render failed: {exc}", file=sys.stderr)
+        return False
+    if done.returncode != 0:
+        err = (done.stderr or "").strip()
+        if "unknown field" in err:
+            err += " (the installed fno predates the public board render; run `fno doctor update --rust`)"
+        print(f"Warning: public backlog HTML render failed: {err[:300]}", file=sys.stderr)
+        return False
+    return True
+
+
+def render_local_targets() -> int:
+    """Write every configured ``local`` board target through the native front
+    binary and return the count of failures.
+
+    The page is the served web backlog with the rows embedded, written by
+    ``fno board-render`` (JSON request on stdin, JSON receipt on stdout): one
+    gather serves every target, so a four-target config reads the store once.
+    The ``roadmap``/``backlog`` HTML projections were the second board this
+    surface retired; such rows warn and skip with that reason instead of
+    rendering. Like every post-publish render, never raises.
+    """
+    try:
+        targets = _configured_targets()
+    except Exception as exc:  # noqa: BLE001 - a render pass never fails the write
+        print(f"Warning: local board render skipped: {exc}", file=sys.stderr)
+        return 1
+    local, retired = [], []
+    for target in targets:
+        if target.projection == "local":
+            local.append({
+                "path": os.path.expanduser(target.path),
+                "scope": _target_scope(target)[0],
+            })
+        else:
+            retired.append(target)
+    for target in retired:
+        print(
+            f"Warning: render target {target.path}: projection "
+            f"{target.projection!r} is retired; the web backlog page replaces "
+            "the rendered boards (fno mux serve --web / fno backlog view)",
+            file=sys.stderr,
+        )
+    if not local:
+        return 0
+    try:
+        from fno.rust_binary import VerbUnavailable, resolve_front_binary
+
+        binary = resolve_front_binary()
+        if binary is None:
+            raise VerbUnavailable("the native fno binary was not found")
+        import json
+        import subprocess
+
+        request = json.dumps({"targets": local, "vault": _load_obsidian_vault()})
+        done = subprocess.run(
+            [str(binary), "board-render"],
+            input=request,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except Exception as exc:  # noqa: BLE001 - every target failed together
+        print(f"Warning: local board render failed: {exc}", file=sys.stderr)
+        return len(local)
+    if done.returncode != 0:
+        err = (done.stderr or "").strip()
+        if "No such command 'board-render'" in err or "No such command \"board-render\"" in err:
+            # The installed front binary predates the verb: an install-lag
+            # degradation, not a failed render. Name the remedy once and let
+            # the keeper's next settled tick retry after the update.
             print(
-                f"Warning: render target {out} matches no graph entry with "
-                f"project {scope!r}; target left unchanged "
-                "(check the project name)",
+                "Warning: local board render skipped: the installed fno "
+                "predates board-render; run `fno doctor update --rust`",
                 file=sys.stderr,
             )
-            continue
-        try:
-            if target.projection == "local":
-                # Local is the explicit private projection: it keeps ids,
-                # details, plan paths, and Obsidian links and never enters the
-                # public title gate.
-                render_graph_html(
-                    entries,
-                    out,
-                    project=scope,
-                    all_projects=all_projects,
-                )
-                continue
-            if target.projection == "roadmap":
-                # One _columns pass feeds both the gate's render set and the
-                # renderer (the manual verb derives it internally).
-                cols = _columns(entries, scope, all_projects=all_projects)
-                render_set = [e for items in cols.values() for e in items]
-                html = render_public_roadmap_html(
-                    entries, scope, cols=cols, all_projects=all_projects
-                )
-            else:
-                render_set = public_backlog_entries(
-                    entries, scope, all_projects=all_projects
-                )
-                html = render_public_backlog_html(
-                    entries,
-                    scope,
-                    backlog_entries=render_set,
-                    all_projects=all_projects,
-                )
-            offenders = public_title_leaks(render_set)
-            if offenders:
-                # Fail closed, before any write: the public file stays
-                # byte-unchanged while the already-written graph.json and the
-                # remaining targets are untouched by this refusal.
-                print(
-                    f"Warning: public title leak gate refused {out}: "
-                    f"{len(offenders)} offending title(s); target left unchanged",
-                    file=sys.stderr,
-                )
-                for line in leak_offender_lines(offenders):
-                    print(line, file=sys.stderr)
-                continue
-            atomic_write_documents({out: html})
-        except Exception as exc:
-            # Wide on purpose, unlike store.py's OSError-only render handlers:
-            # graph.json is already committed and a bad operator target must
-            # never fail `fno backlog update`. The type name keeps bugs visible.
-            print(
-                f"Warning: render target {out} failed: {type(exc).__name__}: {exc}",
-                file=sys.stderr,
-            )
+            return 0
+        print(
+            f"Warning: board render exited {done.returncode}: {err[:300]}",
+            file=sys.stderr,
+        )
+    failures = 0
+    try:
+        receipt = json.loads(done.stdout or "{}")
+    except Exception:  # noqa: BLE001 - an unreadable receipt counts every target
+        print(f"Warning: board render receipt was unreadable: {(done.stdout or '')[:200]}",
+              file=sys.stderr)
+        return len(local)
+    failures += len(receipt.get("failed", []))
+    for row in receipt.get("failed", []):
+        print(
+            f"Warning: render target {row.get('path')} failed: {row.get('error')}",
+            file=sys.stderr,
+        )
+    return failures
+
+

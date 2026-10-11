@@ -4,22 +4,20 @@ Read a gate only when its trigger fires. The dispatch table in SKILL.md ("## Gat
 
 ## Plan-level dispatch hold
 
-When named evidence must exist before work starts or merges, author one `dispatch_hold` mapping in frontmatter. Add non-blank `reason`, `release_when`, and `set_by` strings. Add an ISO `review_on` date. The mapping's presence is the hold. The review date prompts review and never releases work. Every dispatcher and merger reads the same declaration. If the declaration is malformed or unreadable, the action fails closed. After an authorized operator confirms `release_when`, remove the mapping to lift the hold. Never copy the hold into graph status or a private dispatcher file.
+Trigger: named evidence must exist before this plan dispatches or merges. The Gates table in SKILL.md routes here. This gate carried a body and no table row until 2026-09-02. Nothing routed to it and no plan ever set the key. Meanwhile `finalize.rs`, `ladder.py`, `target_cli.py`, `git-protection.py` and `validate-plan.sh` all read it. A gate body with no trigger row is unreachable, whatever it says.
+
+When named evidence must exist before work starts or merges, author one `dispatch_hold` mapping in frontmatter. Add non-blank `reason`, `release_when`, and `set_by` strings. Add an ISO `review_on` date. The mapping's presence is the hold. The review date prompts review and never releases work. Every dispatcher and merger reads the same declaration. If the declaration is malformed or unreadable, the action fails closed. After the plan is written, the authorized-merge `hold-set` op authors the same block receipted (pipe the JSON payload to `fno-agents authorized-merge`). After an authorized ruling confirms `release_when`, the `hold-release` op with `evidence` lifts the hold. Never copy the hold into graph status or a private dispatcher file.
 
 ## Plan Claims Ingestion (MANDATORY when input is a node id)
 
 Before any other classifier runs, check if the argument is an existing graph
 node ID. `parse-claims-arg.sh` recognizes the config-agnostic node-id shape
 `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$` - the configured `id_prefix`/`id_hex_width`
-(e.g. `x-8af8`) and the legacy `ab-<8hex>` alike, never a hard-coded `ab-` only.
+(e.g. ``) and the legacy `ab-<8hex>` alike, never a hard-coded `ab-` only.
 A node id never collides with file paths or raw descriptions, so this check is
 cheap and goes first.
 
-When the argument matches, the rendered plan MUST declare `claims: <node-id>`
-in its frontmatter so `fno backlog intake` updates the existing idea-state
-node in place rather than creating a duplicate (see
-`cli/src/fno/graph/_intake.py::_resolve_claim`). Without the claim,
-every adopted spec compounds the dangling-idea-node cleanup debt.
+When the argument matches, the rendered plan MUST declare `claims: <node-id>` in its frontmatter so `fno backlog intake` updates the existing node in place, in any state, rather than creating a duplicate (see `cli/src/fno/graph/_intake.py::_resolve_claim`). Without the claim, every adopted spec compounds the dangling-idea-node cleanup debt.
 
 **Classify and resolve.** Run this BEFORE the failure-mode path classifier
 below so an ab-id never falls through to "design-doc path":
@@ -34,6 +32,24 @@ if [[ -n "${CLAIMS_ID:-}" ]]; then
   # ARG now carries the seed text; CLAIMS_ID carries the claim target.
 fi
 ```
+
+**Take the node claim.** Right after `CLAIMS_ID` resolves, read the claim. A live or suspect claim means a caller covers this run (the subagent wrapper, a spawn-handover worker, a role): print the holder and open nothing. Otherwise open the claim and keep the holder, so an early halt can release exactly that holder. Keep `BLUEPRINT_STARTED_AT` as well. The close passes it on, so a run that plans under another holder's claim still records its start.
+
+```bash
+OPENED_HOLDER=""
+BLUEPRINT_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [[ -n "${CLAIMS_ID:-}" ]]; then
+  CLAIM_STATE="$(fno agents claim status "node:$CLAIMS_ID" --json | jq -r '.state')"
+  if [[ "$CLAIM_STATE" == "live" || "$CLAIM_STATE" == "suspect" ]]; then
+    echo "blueprint: node:$CLAIMS_ID already held by $(fno agents claim status "node:$CLAIMS_ID" --json | jq -r '.holder'). Planning under that claim."
+  else
+    OPEN_RECEIPT="$(fno backlog session open "$CLAIMS_ID" --json)" || exit 1
+    OPENED_HOLDER="$(printf '%s' "$OPEN_RECEIPT" | jq -r '.holder')"
+  fi
+fi
+```
+
+**Halt release.** With `OPENED_HOLDER` set, every halt after this block and before `session close` runs `fno agents claim release "node:$CLAIMS_ID" --holder "$OPENED_HOLDER"`. Never pass `--stamp-do`. The halts in scope are the Consolidation Gate halt, the validate-and-finalize failure, and the post-write claims refusal.
 
 After resolution, the plan body proceeds as if the user had pasted the
 node's title plus details directly. The classifier below sees a raw
@@ -116,14 +132,103 @@ Do NOT auto-insert a citation to silence the gate: as with Failure Mode
 Ingestion, the point is to force schema thinking into the plan, not to paper
 over its absence.
 
+## No new Python (plans that write cli/src/fno Python)
+
+Trigger: a Files to Modify row, a File Ownership Map row, or a task `surface` names a path under `cli/src/fno` ending `.py`.
+
+All new code lands in Rust under `crates/`. No new Python goes into `cli/src/fno`. A Python edit is a port or a deletion.
+
+Start the row's Action cell with one of three words:
+
+- `Port` - the behavior moves to `crates/`. The same table names the `crates/` row it lands in.
+- `Delete` - the row removes Python and adds none.
+- `Grant d-XXXXXXXX +N` - cite a live approval. Its subject must be the plan's node, or its decision text must name this row's path. General laws, including the Python repair law, do not approve a change by themselves. A row can cite a general law with its approval. The gate reads every cited id. Use `+N` for added lines. The gate sums Grant rows against `config.blueprint.python_repair_added_lines` (default 30). A Grant without `+N` is a finding.
+
+Before writing a Grant row, run `fno backlog decisions <node>` and find the approval. If none exists, ask the lead with `fno inbox outstanding ask "<question>" --node <node>`. Stop before validation. The scope gate warns on plans created on or before its gate date.
+
+Any other action, such as `Modify` or `Create`, plans new Python. Move that change to `crates/` before you write the plan. A path cited only in prose writes nothing, so it does not trigger the gate.
+
+`scripts/validate-plan.sh` refuses a plan that breaks this rule. A plan created before the gate shipped gets a warning. `scripts/ci/check-file-budget.sh` stays as the push-time backstop. It refuses a change that adds more Python lines than the budget allows, and deletions do not offset the count. The budget is a backstop, not a budget to plan against. Never state a net delta under it as the reason a Python row is fine.
+
+## Code Index Audit (every plan - step 2-index)
+
+A plan built on node text can send a worker after work that already shipped. The gate checks that the planner asked the code indexes a repo holds. It never checks what an index answered. Detection is the validator's bundled sibling `lib/code-index-detect.sh`. The gate audits the checkout of the plan's node. It reads the node with `fno backlog get <id> --strict --field _resolved_cwd`. A plan saved in a notes vault is checked against the code it plans. A plan with no readable node falls back to the git root of its own directory. A repo with no provider prints nothing, and a plan with `providers: []` plus the audit section is clean. No index is not a refusal.
+
+The plan must carry:
+
+- a `code_index:` frontmatter block with `main_sha:` (the 7-to-40-hex sha the plan read) and `providers:` (a list, or `[]`)
+- one `- name: <name>` entry per provider detection prints for the plan's repo, whatever its status
+- `status:` (`answered` | `unavailable` | `error`) and `fresh:` (`yes` | `no` | `unknown`) on every entry. A finalized `true` or `false` reads as `yes` or `no`, since finalize re-serializes YAML
+- `## Existence audit` as the plan's first `##` heading, with at least one table row
+- a verdict cell starting `exists`, `absent`, `partial` or `unanswered` on every row
+- an `absent` row's evidence stating the confirming search (`after <exact command>`)
+
+The refusals, verbatim:
+
+```
+frontmatter carries no code_index: block - run the planner's step 2-index, then record main_sha (the origin/main sha you read) and providers (one entry per index, or [])
+code_index.main_sha is missing or not a 7-to-40-hex sha - write the origin/main sha the plan read, e.g. main_sha: 9817805bf5e8
+code_index.providers is missing - list one entry per index asked (with status and fresh), or providers: [] when no index is present
+code index <name> is present (<manifest path>) and the plan does not record asking it. Ask it by role and record it under code_index.providers, with status unavailable or error if the ask failed
+provider <name> in code_index.providers is not a valid provider name - write the name exactly as the manifest declares it, lowercase letters, digits and dashes
+provider <name> has no readable status: - set status: answered, unavailable or error
+provider <name> has no readable fresh: - set fresh: yes, no or unknown (unknown when the manifest has no fresh probe)
+the first ## heading is '<heading>' - the audit is the plan's first section: ## Existence audit, one row per claim, each with a verdict cell
+Existence audit row <n> has no verdict cell - start one cell with exists, absent, partial or unanswered
+Existence audit row <n> reads absent but its evidence names no confirming search - an index never makes a zero trustworthy, so the evidence cell states 'after <exact command>'
+```
+
+Graduated like the No New Python gate. A plan created after 2026-09-17 errors. An older plan, or one with no readable date, warns. Quick plans are not exempt: the node asked for a gate, not advice. Why the confirmation rule exists: [graph-search.md](../../../docs/graph-search.md). The provider manifests a user can add: [code-index-providers.md](../../../docs/code-index-providers.md).
+
+## Answerer Enumeration Gate (graduated, every plan that changes a read, write, or feed)
+
+A plan that fixes one site of a question asked at several sites ships the symptom again as PR two. This gate makes the plan count the answerers before the PRs do. The protocol that fills the block lives in [answerer-enumeration.md](answerer-enumeration.md): the four steps, the sweep rules, the quote-the-expression rule, and the worked example. This section is the gate contract, modeled on the Schema Citation Gate above.
+
+### Trigger
+
+The plan changes a read, a write, or a feed: any site where the code answers a question the plan also touches. The planner runs the protocol as step 2b-bis, before the Consolidation Gate. The order is load-bearing: enumerating answerers finds sibling SITES, consolidation finds sibling NODES. A question with four answerers often already has two nodes filed against it. Sweeping first is what lets 2d see them.
+
+### Detection
+
+The gate reads the plan's `surface:` frontmatter block. The schema is [quick-template.md](quick-template.md). A missing block on a plan created after 2026-09-03 is the failure. A missing block on a pre-gate plan warns until backfilled, the same posture `consolidation:` took. A block that is present but malformed errors at every size. The validator refuses:
+
+- a `question:` without a question mark
+- a `count:` that disagrees with the answerer list
+- dispositions outside the principle 9 vocabulary plus `out-of-scope`
+- an `out-of-scope` answerer with no reason
+- a changed answerer with no `reads` or `emits`
+- a `count_after` above `count`
+- a `control:` naming a path no listed answerer sits at
+- a changed answerer's symbol read in another tree at a file no answerer names. Post-gate plans only: the tree gate date is 2026-09-14. Quick and older plans warn. A symbol with more than 10 unlisted files warns as vocabulary.
+
+### Satisfaction
+
+Every answerer of one question carries a disposition: `dual-logic`, `shared-vocabulary`, `generated-artifact`, or `out-of-scope` with a reason. Every changed answerer quotes the expression it evaluates, with its line, and names what that feed emits, measured. The count is stated. `count_after` says in a number whether this plan shrinks it.
+
+### Enforcement, graduated by size
+
+- **Full / L plans -> fail closed.** Refuse with the offender and the candidates named:
+
+  ```
+  Plan changes {answerer} but names no feed for it. Quote the expression it
+  evaluates, with its line, and what that feed emits, measured.
+  ```
+
+  ```
+  Question {question} has {n} answerers; the plan disposes of {m}. Every answerer
+  is dual-logic, shared-vocabulary, generated-artifact, or out-of-scope with a
+  reason. Undisposed: {list}.
+  ```
+
+- **Quick / -S plans -> warn, proceed.** Small blast radius does not justify blocking. The reason is the schema gate's own: small work does not earn a block. A missing block warns. A malformed block still errors, because an author who did the work did it wrong.
+
+Do NOT auto-insert a block to silence the gate. The point is to force the enumeration into the plan, not to paper over its absence.
+
 ## Executor Lock Transcription (when a design doc supplies a Locked Decision)
 
-When a design doc carries a frontend or mixed surface, `/blueprint` runs the
-structural surface detector (`references/detect-surface.sh`) and captures the
-executor decision as a Locked Decisions entry (see
-`references/executor-routing-prompt.md`). `/blueprint` transcribes that lock
-into the plan's frontmatter so the operator's three-tier resolver honors it
-without a runtime surface-inference fallback.
+When a design doc carries a frontend or mixed surface, `/blueprint` runs `references/detect-surface.sh`. The detector captures the executor decision as a Locked Decisions entry. See `references/executor-routing-prompt.md`.
+
+`/blueprint` copies that lock to plan frontmatter. The `waves` resolver honors it without runtime surface inference.
 
 Transcription is purely mechanical: same Locked Decisions input yields the
 same frontmatter output. No LLM judgment in this step.
@@ -143,12 +248,11 @@ Then:
 - **`tdd` or `impeccable`** - write `executor: <value>` to the plan `.md`
   frontmatter (the single doc is the only plan shape). Replace any existing
   `# executor:` comment from the template; never duplicate the key.
-- **`mixed`** - write `executor: tdd` at plan level (the safe default), then
-  emit `executor: impeccable` task blocks for any task whose file list
-  matches the operator's locked surface-inference patterns
-  (`**/*.tsx`, `**/*.jsx`, `components/**`, `routes/**`, `src/styles/**`).
-  This mirrors the operator resolver and keeps cost honest: impeccable runs
-  only where it earns its keep.
+- **`mixed`** - both signals fire.
+  - Set plan-level `executor: tdd` as the safe default.
+  - When task files match the user's locked surface patterns, add `executor: impeccable`.
+  - Patterns: `**/*.tsx`, `**/*.jsx`, `components/**`, `routes/**`, and `src/styles/**`.
+  - The `waves` resolver follows these patterns. Run impeccable only where it earns its keep.
 - **Empty** - write nothing. The runtime surface-inference fallback handles
   the plan correctly. No prompt; no warning.
 
@@ -186,7 +290,7 @@ since the previous invocation, re-transcribe: the parser is deterministic
 and the frontmatter overwrite is idempotent. Stale executor fields are
 the worst-case outcome; this guard prevents them.
 
-## Model Pin Transcription (x-571f: when a plan supplies a model)
+## Model Pin Transcription (: when a plan supplies a model)
 
 A plan can pin the model its dispatchers launch the node's worker on. Like the
 executor lock, the choice is made once at planning time; `/blueprint`
@@ -241,17 +345,15 @@ DIFFICULTY="$(awk '/^---[[:space:]]*$/{c++; next} c==1 && /^difficulty:/{sub(/^d
 
 `fno backlog update --difficulty` validates the band (`high|medium|low`). An invalid value exits non-zero and leaves the node unchanged (surface it, do not fabricate a band). The retired `--model-tier` spelling exits 2 with a message naming `--difficulty`.
 
-## Blueprint Provenance Stamp (x-b6e4)
+## Blueprint Provenance Stamp
 
 Blueprint provenance is written by the identity-guarded `fno backlog session close` transaction and verified by an exact graph readback before the Blueprint handoff. Plan binding is artifact-only and never claims that the Blueprint phase completed.
 
 ## PRODUCT.md Prereq Check (when executor: impeccable is locked)
 
-When `/blueprint` generates a plan that locks `executor: impeccable` at the plan
-level OR via per-task overrides, it MUST check for a valid PRODUCT.md before
-the auto-intake step. This is the spec-time half of the defense-in-depth
-prereq strategy (decision 3a); the runtime half lives in the operator
-dispatch gate (Phase 03).
+When `/blueprint` locks `executor: impeccable` at plan or task level, it MUST check for a valid PRODUCT.md before auto-intake.
+
+This is the spec-time half of the defense-in-depth prerequisite strategy (decision 3a). The runtime half lives in the `waves` dispatch gate (Phase 03).
 
 Run the check script after writing the plan files but before collision check
 and auto-intake:
@@ -462,6 +564,53 @@ The same shape and fail-closed rules as `done_probes`: block form or
 single-line inline list, at most 3, a 60s native timeout, 127/non-zero/timeout
 all fail closed with the command and code named.
 
+### The main-ci repair proof
+
+A node that repairs a red main closes on its merge while main is still red unless its plan says otherwise. The built-in proof covers exactly that case. A repair plan declares it as one close_probes entry, and the node stays open until main's own verdict turns green on a commit containing the fix.
+
+```yaml
+close_probes:
+  - "fno-agents probe-run main-ci --workflow cli-ci --node <id>"
+```
+
+It resolves the node's merged PR and merge commit, then reads the newest completed verdict for that exact workflow on main. When that verdict is `success` on a head containing the merge commit, the proof exits 0. Any other answer exits nonzero with one named word: `red`, `pending`, `absent`, `stale`, `ambiguous`, or `unreadable`. The close verbs keep the node open, quoting that word in the refusal. A workflow renamed between the fix landing and the proof reads `absent`, which fails closed until the plan's probe is edited. Nothing is inferred from prose: a plan that declares no probe closes exactly as before.
+
+## Join posture (step 3, every plan carrying an `## Execution Strategy`)
+
+Ask the author who hands out the plan's remaining waves. Record the answer as one frontmatter key:
+
+```yaml
+join: manual | auto   # default manual
+```
+
+`manual` waits for a person or a titled `/fno:lead` lead to hand the remaining waves out with `fno backlog join <node>`. That is today's behavior for every plan, so an author who does not answer changes nothing. `auto` means `fno do target init` hands the remainder to `fno backlog join`, at init, in the holder's worktree.
+
+The gate runs after the Execution Strategy is enriched and before `validate-plan.sh`. The key therefore lands in the same save the validator then reads. `join` sits in `BLUEPRINT_WRITE_ALLOWLIST`, so the write is permitted. Its reader is `hooks/helpers/init-target-state.sh` at target init.
+
+**Print the measured width beside the question.** The answer is only meaningful with it. `auto` on a width-1 plan hands out nothing, and `manual` on a width-6 plan parks five lanes.
+
+```bash
+FNO_ROOT="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}"
+[[ -z "${FNO_PYTHON:-}" && -f "$FNO_ROOT/scripts/lib/fno-python.sh" ]] \
+  && source "$FNO_ROOT/scripts/lib/fno-python.sh" && fno_python_init "$FNO_ROOT"
+WIDTH=$(PYTHONPATH="$FNO_ROOT/cli/src${PYTHONPATH:+:$PYTHONPATH}" \
+  "${FNO_PYTHON:-python3}" -m fno.backlog.join_trigger width "$PLAN_PATH" 2>/dev/null); WIDTH_RC=$?
+```
+
+**Resolve the interpreter; do not call bare `python3`.** A stock `python3` cannot import `fno` (verified: `ModuleNotFoundError`), so a bare call makes `WIDTH_RC` 1 on every plan. The gate then takes the unmeasured row every time and records `manual` without ever printing the width it exists to print - a gate that looks like it ran and measured nothing. `init-target-state.sh` resolves `$FNO_PYTHON` and sets `PYTHONPATH` for exactly this reason, and the snippet above is that same resolution.
+
+That is the same canonical probe `init-target-state.sh` shells out to. When the plan cannot be measured, it exits 1 and prints nothing. Otherwise it prints the measured int and exits 0. Branch on the exit code, never on the empty string:
+
+| Probe result | What the gate does |
+|---|---|
+| exit 0, width 2 or more | ask the author, printing the width, and write the chosen value |
+| exit 0, width 1 | write `join: manual` without asking, because there is nothing to hand out |
+| exit 1 (unmeasured) | write `join: manual` and say the width is unmeasured, naming the plan path |
+
+**An absent answer is never a width of one.** The probe exits 1 rather than printing a number. That is precisely so a caller can tell an unmeasured plan from a narrow one. A gate that collapsed the two records `manual` while reporting a measurement it never made. Name the unmeasured width in the receipt.
+
+**Do NOT add a config key for a global default.** Adoption follows the step. A plan key that no `/blueprint` step asks for stays unadopted. `consolidation` reached 428 plans and `executor` reached 421, both with a step. The posture key reached 1 with no step. The step is the mechanism. A config default only moves the same decision to a file no plan author reads.
+
 ## Collision check (step 3a; skip with `no-collision-check`)
 
 After writing the plan but before auto-intake, scan pending plans on the
@@ -478,12 +627,11 @@ was compared - that is NOT a clean result. Fill in the plan's
 `## File Ownership Map` (or `## Files to Modify`) table and re-run before
 adopting.
 
-If any entry in `collisions` has `severity: "high"`, present
-them via AskUserQuestion before adopting - unless `fno do target status` shows
-`authority: full` on the `attended` line (a live `/target beastmode` session), in
-which case take the `recommended_action` for each entry, append one
-`## Autonomous Decisions` entry naming the collision and the action, and
-continue without prompting:
+If any entry in `collisions` has `severity: "high"`, take the first branch that fits and adopt or stop by it:
+
+- **Beastmode.** `fno do target status` shows `authority: full` on the `attended` line (a live `/target beastmode` session). Take the `recommended_action` for each entry, append one `## Autonomous Decisions` entry naming the collision and the action, and continue without prompting.
+- **Nobody can answer.** This session has no AskUserQuestion tool: a codex thread, a subagent, a headless or spawned run. Never ask in chat and wait, because nobody reads that chat and the plan never adopts. Take option 1. After intake, run `fno backlog update <new-id> --acknowledge-collisions <ids>` with every high entry's `with_node_id`. Then run one `fno backlog note <new-id> "collision disposition: proceeded unattended; <id>: <n> shared files, recommended <action>; ..."`, so whoever reads the node can still absorb or supersede.
+- **A person can answer.** Present the entries via AskUserQuestion before adopting, as the block below shows, and apply the choice:
 
 > Your plan touches files also touched by these in-flight plans:
 >
@@ -586,3 +734,19 @@ could be claimed by surfaces owned by multiple peers and the canonical
 owner is ambiguous, emit `<help reason="cross-project-disambiguation"
 evidence="<file path>">` and skip those sends rather than multi-peer
 blasting.
+
+## Five questions and the judge (2a-bis answers, step 3 judge call)
+
+Every plan answers five questions before designing, into a `## Five questions` section (schema: `quick-template.md`). Each answer is a named thing or the word `none`. The word `none` is a claim, judged like any other.
+
+1. **Persona**: who hits this, what do they do today instead, and what does it cost them per week? Name the person: user, titled lead, worker session, or plugin user. Tie the cost to a source the plan cites.
+2. **Surface fit**: which existing verb, skill or config does this extend? Name it, or name the one you searched for and why it does not cover this.
+3. **Uncovered case**: which realistic input or state breaks the design as written? Two sessions at once, a moved index or branch, an empty or stale input the plan already relies on.
+4. **Deletable**: what can you delete and still ship the stated goal?
+5. **Duplication**: which existing module already implements this, or can be extended so the feature falls out? Name a module and a relationship. Advice to consider consolidation is not an answer.
+
+After step 3's validate-and-finalize, `fno doctor observer judge --plan "$PLAN_PATH" --node "$CLAIMS_ID"` grades the plan with one isolated model call per reader. The call is advisory and level-gated. At `config.loops.blueprint_judge.level = "report"` (the default) it prints `skipped level=report` and spends nothing. At `assisted` (or with `--force`) it judges and prints each fail with its quoted reason. A plan with no `## Five questions` section prints `unanswered` and makes no model call. That is a coverage gap, not a fail.
+
+The judge asks a plan the dimensions its node's kind calls for. Every plan gets the shared readers: surface_fit, deletable, duplication, epic_fit, mission_fit and code_truth. A feature, epic or roadmap node also gets the product readers: `persona`, `uncovered_case`, `customer_fit`, `competitive_fit`, `ship_quality` and `partner_challenge`. The last three are the competitive read, the AI ship-quality read and the partner challenge questions. A bug node gets the cause readers instead of the product pack. They ask whether the plan reproduced the failure (`reproduced`) and named a root cause (`root_cause`). They also ask whether it checked the sibling callers (`sibling_callers`) and whether a test proves the fix (`regression_test`). `competitive_fit` reads `PRODUCT.md` the way `customer_fit` does, so an `## Alternatives` section there is what it argues from. epic_fit reads the parent epic and its siblings. mission_fit reads the nearest vision_path ancestors and `config.project.vision`. code_truth reads the plan's own line citations, resolved on disk. A missing source, or a missing lens file, is a coverage gap and not a fail. A source reader's fail quotes its source. A fail that quotes nothing real stays a gap.
+
+On a fail: revise the plan once, or write a one-line disposition under that question in `## Five questions`. Never loop, and never block intake. The judge has not been calibrated against the user's own judgment yet. It informs a human decision instead of replacing one. The pass criteria live only in the judge's own lens files, which the planner never reads. Never copy them into a skill or a plan.

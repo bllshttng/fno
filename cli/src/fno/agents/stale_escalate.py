@@ -1,10 +1,9 @@
-"""Escalate the watchdog's unfinished-work findings to one durable operator question.
+"""The machine-lane channel shim: one ``verb_call("fleet-task", ...)``.
 
-Replaces the stale-session question: a session row no verb can clear is
-noise, and a durable question made of noise trains its reader to ignore the
-channel. The ask now names each finding identity and the one command that
-clears it, deduped on outcome identity so a finding that only aged does not
-re-ask.
+The reconcile fold for the machine writers (heal, pr-nudge, the watchdog
+lanes) lives in ``crates/fno-agents/src/fleet_task.rs``; Python sends one
+payload and returns the outcome. ``already_asked`` and ``dedupe_key``
+survive here for the writers that stay questions.
 """
 from __future__ import annotations
 
@@ -34,7 +33,7 @@ def _unique(findings):
     )
 
 
-def question_text(findings, key: str) -> str:
+def question_text(findings, key: str, unknown_dimensions=()) -> str:
     unique = _unique(findings)
     shown = [
         f"{f.kind} {f.subject}: {f.basis} -> clear: {f.clear_command}"
@@ -42,19 +41,24 @@ def question_text(findings, key: str) -> str:
     ]
     if len(unique) > MAX_LISTED_ROWS:
         shown.append(f"and {len(unique) - MAX_LISTED_ROWS} more")
+    # An incomplete scan escalates what it DID reach and names what it did
+    # not. Withholding the whole ask instead made the sweep permanently mute
+    # wherever a deleted worktree root can never be fetched again.
+    caveat = ""
+    if unknown_dimensions:
+        caveat = (
+            f" The scan was INCOMPLETE - {', '.join(sorted(unknown_dimensions))} "
+            f"went unread, so more findings may exist."
+        )
     return (
         f"[{MARKER}:{key}] The fleet watchdog found {len(unique)} "
         f"unfinished-work finding(s). Each names the one command that clears "
-        f"it. Findings: {'; '.join(shown)}"
+        f"it.{caveat} Findings: {'; '.join(shown)}"
     )
 
 
 def _ask_line(findings) -> str:
-    unique = _unique(findings)
-    if not unique:
-        return "fno agents watchdog"
-    first = unique[0]
-    return first.clear_command
+    return _unique(findings)[0].clear_command
 
 
 def already_asked(root: Path, key: str, *, marker: str = MARKER) -> "str | None":
@@ -73,37 +77,66 @@ def already_asked(root: Path, key: str, *, marker: str = MARKER) -> "str | None"
     return None
 
 
+def reconcile_channel(
+    pairs, *, root: Path, session_id: "str | None", cwd: Path,
+    marker: str, subject: str, identities: "list[str]",
+    question, ask, asker: "str | None" = None,
+) -> "tuple[str, str]":
+    """Reconcile ONE lane's fleet task to the measured ``pairs`` through the
+    Rust fleet-task door: same key is a duplicate, a changed set supersedes,
+    an empty set closes. ``question``/``ask`` are callables taking the
+    dedupe ``key``; outcome in ``none | duplicate | asked | closed``. A
+    failed transport raises the ``verb_call`` refusal and writes nothing."""
+    from fno.rust_binary import verb_call
+
+    key = dedupe_key(identities)
+    answer = verb_call(
+        "fleet-task",
+        {
+            "op": "reconcile",
+            "lane": marker,
+            "key": key,
+            "cwd": str(cwd),
+            "text": question(key),
+            "run": ask(key),
+            "empty": not pairs,
+        },
+    )
+    return (answer["outcome"], answer.get("id", ""))
+
+
 def escalate_unfinished(
     findings,
     *,
     root: Path,
     session_id: "str | None",
     cwd: Path,
+    unknown_dimensions=(),
 ) -> "tuple[str, str]":
     if not findings:
-        return ("none", "")
-
-    import secrets
-
-    from fno.events import operator_question
-    from fno.outstanding.core import append_question_event
+        outcome, qid = reconcile_channel(
+            [],
+            root=root,
+            session_id=session_id,
+            cwd=cwd,
+            marker=MARKER,
+            subject="unfinished-work",
+            identities=[],
+            question=lambda _key: "",
+            ask=lambda _key: "",
+        )
+        return ("none", "") if outcome == "none" else (outcome, qid)
 
     unique = _unique(findings)
-    key = dedupe_key([f"{f.kind}:{f.subject}" for f in unique])
-    existing = already_asked(root, key)
-    if existing:
-        return ("duplicate", existing)
-
-    qid = f"q-{secrets.token_hex(4)}"
-    append_question_event(
-        operator_question(
-            question_id=qid,
-            question=question_text(unique, key),
-            session_id=session_id,
-            cwd=str(cwd),
-            ask=f"clear the top finding first: {_ask_line(unique)}",
-            source="daemon",
-        ),
-        root,
+    outcome, qid = reconcile_channel(
+        unique,
+        root=root,
+        session_id=session_id,
+        cwd=cwd,
+        marker=MARKER,
+        subject="unfinished-work",
+        identities=[f"{f.kind}:{f.subject}" for f in unique],
+        question=lambda key: question_text(unique, key, unknown_dimensions),
+        ask=lambda _key: f"clear the top finding first: {_ask_line(unique)}",
     )
-    return ("recorded", qid)
+    return ("recorded", qid) if outcome == "asked" else (outcome, qid)

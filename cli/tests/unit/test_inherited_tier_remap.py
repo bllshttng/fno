@@ -46,7 +46,7 @@ ZAI_ENV = {
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
 }
 
-BASE = ["spawn", "--name", "w", "--substrate", "bg", "hi"]
+BASE = ["spawn", "--name", "w", "--substrate", "thread", "hi"]
 
 
 def test_unrouted_tier_alias_under_a_remap_is_caught():
@@ -506,14 +506,17 @@ def test_a_hand_composed_foreign_route_is_never_cleared(capsys):
 
 def test_an_unrouted_scrub_clears_a_coherent_claim_and_says_so(capsys):
     # A spawn composing no route inherits the shell's pin otherwise; the
-    # clear names the ONE remedy chain that selects a model deliberately.
+    # notice is true whether or not --model was typed: it never
+    # calls a pinned child unrouted nor prescribes the flag it already used.
     env = {"ANTHROPIC_MODEL": "claude-opus-4-8"}
     dropped = scrub_incoherent_model_env_and_notify(env, routed=False)
     assert dropped == ()
     assert "ANTHROPIC_MODEL" not in env
     notice = capsys.readouterr().err
     assert "fno: cleared ANTHROPIC_MODEL" in notice
-    assert "config.agents.profiles" in notice
+    assert "The child's model comes from its --model flag" in notice
+    assert "unrouted" not in notice
+    assert "Select one with --model" not in notice
 
 
 def test_a_routed_scrub_leaves_ambient_claims_to_the_overlay(capsys):

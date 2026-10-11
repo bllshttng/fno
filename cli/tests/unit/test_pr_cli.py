@@ -6,18 +6,136 @@ propagates its exit code (the old "forwards to pr-merge.sh" assertions are
 retired - the bash is gone).
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
+import fcntl
+import hashlib
 import re
 import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
 from fno.pr import _merge, _quota
 
 runner = CliRunner()
+
+
+def _replace_path_on_first_flock(monkeypatch, module, lock_path: Path):
+    real_flock = module.fcntl.flock
+    replaced = False
+
+    def racing_flock(handle, operation):
+        nonlocal replaced
+        if not replaced and operation & fcntl.LOCK_EX:
+            replaced = True
+            lock_path.unlink()
+            lock_path.touch()
+        return real_flock(handle, operation)
+
+    monkeypatch.setattr(module.fcntl, "flock", racing_flock)
+    return real_flock
+
+
+def _assert_locked(real_flock, lock_path: Path) -> None:
+    with lock_path.open("a") as contender:
+        try:
+            real_flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        real_flock(contender, fcntl.LOCK_UN)
+        raise AssertionError(f"protected section entered without locking {lock_path}")
+
+
+def test_plan_doc_lock_revalidates_inode_after_path_replacement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fno.plan import locking
+
+    locks_dir = tmp_path / "locks"
+    plan = tmp_path / "plan.md"
+    digest = hashlib.sha1(str(plan.resolve()).encode()).hexdigest()
+    lock_path = locks_dir / f"plan-{digest}.lock"
+    locks_dir.mkdir()
+    lock_path.touch()
+    monkeypatch.setattr(locking.paths, "locks_dir", lambda: locks_dir)
+    real_flock = _replace_path_on_first_flock(monkeypatch, locking, lock_path)
+
+    with locking.plan_doc_lock(plan, timeout=1):
+        _assert_locked(real_flock, lock_path)
+
+
+def test_plan_doc_lock_replacement_loop_honors_timeout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fno.plan import locking
+
+    locks_dir = tmp_path / "locks"
+    plan = tmp_path / "plan.md"
+    digest = hashlib.sha1(str(plan.resolve()).encode()).hexdigest()
+    lock_path = locks_dir / f"plan-{digest}.lock"
+    locks_dir.mkdir()
+    lock_path.touch()
+    monkeypatch.setattr(locking.paths, "locks_dir", lambda: locks_dir)
+    real_flock = locking.fcntl.flock
+    attempts = 0
+
+    def replace_each_time(handle, operation):
+        nonlocal attempts
+        if operation & fcntl.LOCK_EX:
+            attempts += 1
+            if attempts > 2:
+                raise AssertionError("inode replacement loop ignored timeout")
+            lock_path.unlink()
+            lock_path.touch()
+        return real_flock(handle, operation)
+
+    ticks = iter([0.0, 2.0])
+    monkeypatch.setattr(locking.fcntl, "flock", replace_each_time)
+    monkeypatch.setattr(
+        locking,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _seconds: None),
+    )
+
+    with pytest.raises(TimeoutError, match=r"plan_doc_lock: .* busy > 1s"):
+        with locking.plan_doc_lock(plan, timeout=1):
+            pass
+    assert attempts == 1
+
+
+def test_graphql_quota_lock_revalidates_inode_after_path_replacement(
+    tmp_path: Path, monkeypatch
+) -> None:
+    lock_path = tmp_path / "github-graphql-quota.lock"
+    lock_path.touch()
+    real_flock = _replace_path_on_first_flock(monkeypatch, _quota, lock_path)
+    monkeypatch.setattr(_quota, "admit", lambda argv: None)
+    monkeypatch.setattr(_quota, "record_refusal", lambda stderr: None)
+    monkeypatch.setattr(_quota, "resolve_real_gh", lambda: "/usr/bin/gh")
+    monkeypatch.setattr(_quota, "delegate_environment", lambda: {})
+
+    def checked_runner(argv, **kwargs):
+        _assert_locked(real_flock, lock_path)
+        if argv[-2:] == ["api", "rate_limit"]:
+            return _quota.Result(
+                0,
+                '{"resources":{"graphql":{"remaining":5000,"reset":0}}}',
+                "",
+            )
+        return _quota.Result(0, '{"data":{}}', "")
+
+    result = _quota.execute_graphql(
+        "discretionary",
+        ["api", "graphql", "-f", "query={viewer{login}}"],
+        runner=checked_runner,
+        lock_path=lock_path,
+    )
+    assert result.ok
 
 
 def test_pr_info_prints_rest_metadata(monkeypatch):
@@ -54,108 +172,32 @@ def test_pr_info_prints_rest_metadata(monkeypatch):
     }
 
 
-def test_pr_list_prints_rest_summaries(monkeypatch):
-    from fno.pr import _rest
+def test_pr_list_forwards_to_the_existing_rust_action(monkeypatch):
+    import subprocess
 
-    monkeypatch.setattr(
-        _rest,
-        "list_prs_rest",
-        lambda slug, **kwargs: (
-            [
-                {
-                    "number": 930,
-                    "state": "OPEN",
-                    "title": "Quota reserve",
-                    "headRefName": "feature/x",
-                    "url": "https://github.com/o/r/pull/930",
-                }
-            ],
-            "",
-        ),
-    )
-    result = runner.invoke(app, ["do", "pr", "list", "--repo", "o/r"])
-    assert result.exit_code == 0
-    assert json.loads(result.stdout)[0]["headRefName"] == "feature/x"
+    import fno.rust_binary
+
+    seen = {}
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: Path("/fake/fno-agents"))
+
+    def fake_run(argv, check):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=4)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(app, ["do", "pr", "list", "--state", "closed", "--repo", "o/r"])
+    assert seen["argv"] == ["/fake/fno-agents", "pr-heal", "list", "--state", "closed", "--repo", "o/r"]
+    assert result.exit_code == 4
 
 
-def test_pr_list_exposes_open_node_binding_verdicts(monkeypatch, tmp_path):
-    from fno import paths
+def test_pr_list_names_the_missing_binary(monkeypatch):
+    import fno.rust_binary
 
-    graph_path = tmp_path / "graph.json"
-    graph_path.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {"id": "x-1111", "status": "ready"},
-                    {"id": "x-2222", "status": "ready", "pr_number": 931},
-                ]
-            }
-        )
-    )
-    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
-
-    from fno.pr import _rest
-
-    monkeypatch.setattr(
-        _rest,
-        "list_prs_rest",
-        lambda slug, **kwargs: (
-            [
-                {"number": 930, "state": "OPEN", "title": "missing", "headRefName": "feature/x-1111", "url": "https://github.com/o/r/pull/930"},
-                {"number": 931, "state": "OPEN", "title": "bound", "headRefName": "feature/x-2222", "url": "https://github.com/o/r/pull/931"},
-                {"number": 932, "state": "OPEN", "title": "untracked", "headRefName": "feature/no-node", "url": "https://github.com/o/r/pull/932"},
-                {"number": 933, "state": "OPEN", "title": "ambiguous", "headRefName": "feature/x-1111-x-2222", "url": "https://github.com/o/r/pull/933"},
-            ],
-            "",
-        ),
-    )
-
-    result = runner.invoke(app, ["do", "pr", "list", "--repo", "o/r"])
-
-    assert result.exit_code == 0
-    rows = {row["number"]: row for row in json.loads(result.stdout)}
-    assert rows[930]["node_id"] == "x-1111"
-    assert rows[930]["node_binding"] == "missing"
-    assert rows[931]["node_id"] == "x-2222"
-    assert rows[931]["node_binding"] == "bound"
-    assert rows[932]["node_id"] is None
-    assert rows[932]["node_binding"] == "untracked"
-    assert rows[933]["node_id"] is None
-    assert rows[933]["node_binding"] == "ambiguous"
-
-
-def test_pr_list_preserves_rows_when_binding_graph_is_unreadable(monkeypatch, tmp_path):
-    from fno import paths
-
-    graph_path = tmp_path / "graph.json"
-    graph_path.write_text("not-json")
-    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
-
-    from fno.pr import _rest
-
-    monkeypatch.setattr(
-        _rest,
-        "list_prs_rest",
-        lambda slug, **kwargs: (
-            [
-                {
-                    "number": 930,
-                    "state": "OPEN",
-                    "title": "still visible",
-                    "headRefName": "feature/x-1111",
-                    "url": "https://github.com/o/r/pull/930",
-                }
-            ],
-            "",
-        ),
-    )
-
-    result = runner.invoke(app, ["do", "pr", "list", "--repo", "o/r"])
-
-    assert result.exit_code == 0
-    row = json.loads(result.stdout)[0]
-    assert row["title"] == "still visible"
-    assert "graph binding read failed" in row["node_binding_error"]
+    monkeypatch.setattr(fno.rust_binary, "resolve_binary", lambda: None)
+    result = runner.invoke(app, ["do", "pr", "list"])
+    assert result.exit_code == 127
+    assert "fno do pr list" in result.stderr
+    assert "FNO_AGENTS_BIN" in result.stderr
 
 
 def test_graphql_exec_rejects_public_coverage_purpose():
@@ -288,6 +330,10 @@ def _fake_gh(tmp_path: Path, monkeypatch) -> Path:
     gh.chmod(0o755)
     monkeypatch.setattr(_quota, "resolve_real_gh", lambda: str(gh))
     monkeypatch.setattr(_quota, "quota_lock_path", lambda: tmp_path / "quota.lock")
+    # The full exec path now admits against the real fleet ledger; keep the
+    # hermetic door shut (admit -> None, refusals recorded nowhere).
+    monkeypatch.setattr(_quota, "admit", lambda argv: None)
+    monkeypatch.setattr(_quota, "record_refusal", lambda stderr: None)
     return rec
 
 
@@ -305,7 +351,7 @@ def test_the_exact_refusal_printed_command_returns_a_query_result(tmp_path, monk
 
 
 def test_flag_first_route_argv_is_refused_at_the_cli(tmp_path, monkeypatch):
-    """The king's shape: flags after -- with no command word must refuse."""
+    """The lead's shape: flags after -- with no command word must refuse."""
     rec = _fake_gh(tmp_path, monkeypatch)
     result = runner.invoke(
         app,
@@ -353,7 +399,7 @@ def test_closure_trailer_warns_on_a_dropped_malformed_extra_id(monkeypatch, tmp_
     from fno import paths
 
     graph_path = tmp_path / "graph.json"
-    graph_path.write_text(json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
+    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
     monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
 
     result = runner.invoke(
@@ -362,7 +408,112 @@ def test_closure_trailer_warns_on_a_dropped_malformed_extra_id(monkeypatch, tmp_
     assert result.exit_code == 0
     assert "warning: dropping malformed --extra id(s)" in result.output
     assert "not-an-id" in result.output
-    assert "Backlog-Closure: x-1111" in result.output
+    assert "Fixes x-1111" in result.output
+
+
+def test_closure_trailer_bare_invocation_resolves_from_branch(monkeypatch, tmp_path):
+    """The bare verb resolves the node the branch names and renders."""
+    from fno import paths
+    import fno.pr.closure as closure_mod
+
+    graph_path = tmp_path / "graph.json"
+    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
+    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
+    monkeypatch.setattr(
+        closure_mod,
+        "resolve_branch_node_id",
+        lambda known_ids, cwd=None, runner=None: "x-1111",
+    )
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
+
+    assert result.exit_code == 0
+    assert "Fixes x-1111" in result.output
+
+
+def test_closure_trailer_bare_invocation_refusal_is_loud(monkeypatch):
+    """A bare-verb resolution failure exits NONZERO naming the reason - the
+    legacy silent-empty contract is what shipped trailer-less PR 2080."""
+    import fno.pr.closure as closure_mod
+
+    def _raise(known_ids, cwd=None, runner=None):
+        raise closure_mod.BranchResolutionError(
+            "branch 'main' names 0 real node(s); pass the node explicitly instead"
+        )
+
+    monkeypatch.setattr(closure_mod, "resolve_branch_node_id", _raise)
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
+
+    assert result.exit_code == 1
+    assert "main" in result.output
+    assert "pass the node explicitly" in result.output
+
+
+def test_closure_trailer_unresolvable_node_stays_silent(monkeypatch, tmp_path):
+    """AC3-HP: an unresolvable NODE prints nothing and exits 0 - the
+    documented contract, unchanged. Unresolvable here is the not-well-formed
+    case: explicit mode renders any well-formed id without a graph-membership
+    check (unknown ids red the CI gate at open, by design)."""
+    from fno import paths
+
+    graph_path = tmp_path / "graph.json"
+    seed_graph(graph_path, json.dumps({"entries": [{"id": "x-1111", "status": "ready"}]}))
+    monkeypatch.setattr(paths, "graph_json", lambda: graph_path)
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer", "not-an-id"])
+
+    assert result.exit_code == 0
+    assert result.output == ""
+
+
+def test_closure_trailer_dead_reader_exits_4_and_names_the_read(monkeypatch):
+    """AC3-ERR: a read that raises is not an unresolvable node. This used to
+    be a bare `except Exception: return` - print nothing, exit 0 - so a dead
+    keeper answered exactly like a missing node and three PRs sat red on the
+    closure gate with no named cause."""
+    import fno.graph.api as api_mod
+
+    def _dead(path):
+        raise RuntimeError("keeper exited immediately with code -9")
+
+    monkeypatch.setattr(api_mod, "wire_rows", _dead)
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
+
+    assert result.exit_code == 4
+    assert "graph read failed" in result.output
+    assert "keeper exited immediately with code -9" in result.output
+    assert "Backlog-Closure" not in result.output
+
+
+def test_closure_trailer_bare_mode_dead_reader_exits_4_not_1(monkeypatch):
+    """AC3-BARE: branch-resolution refusals keep exit 1; a failed graph read
+    exits 4 with the reader named. The two refusals stay separable."""
+    import fno.graph.api as api_mod
+
+    def _dead(path):
+        raise RuntimeError("store unreadable")
+
+    monkeypatch.setattr(api_mod, "wire_rows", _dead)
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer"])
+
+    assert result.exit_code == 4
+    assert "store unreadable" in result.output
+
+
+def test_closure_trailer_external_backend_explicit_node_stays_silent(monkeypatch):
+    """AC3-EDGE: an external tracker with an explicit node prints nothing and
+    exits 0 - graph.json is not the delivery record there, unchanged."""
+    import fno.tracker as tracker_mod
+
+    monkeypatch.setattr(tracker_mod, "active_backend_name", lambda: "linear")
+
+    result = runner.invoke(app, ["do", "pr", "closure-trailer", "x-1111"])
+
+    assert result.exit_code == 0
+    assert result.output == ""
 
 
 def test_global_receipt_path_uses_pinned_accessor(monkeypatch, tmp_path):

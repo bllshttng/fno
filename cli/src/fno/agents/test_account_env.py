@@ -278,17 +278,20 @@ def test_mesh_env_wrapper_sets_block_cap(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_seal_pins_our_roots_when_home_moves(monkeypatch) -> None:
+def test_seal_pins_our_roots_when_home_moves(monkeypatch, tmp_path) -> None:
     """The harness credential follows the override; footnote's roots do not."""
     monkeypatch.setenv("HOME", "/real/home")
     monkeypatch.delenv("FNO_AGENTS_HOME", raising=False)
     monkeypatch.delenv("FNO_CLAIMS_ROOT", raising=False)
+    # The parent's state root, pinned inside the hermetic sandbox (x-fc25).
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
 
     sealed = seal_state_root({"HOME": "/accounts/zai-1/home"})
 
     assert sealed["HOME"] == "/accounts/zai-1/home"
     assert sealed["FNO_AGENTS_HOME"] == "/real/home/.fno/agents"
     assert sealed["FNO_CLAIMS_ROOT"] == "/real/home"
+    assert sealed["FNO_STATE_DIR"] == str(tmp_path / "state")
 
 
 def test_seal_is_a_noop_without_a_home_move(monkeypatch) -> None:
@@ -304,17 +307,19 @@ def test_seal_is_a_noop_when_home_is_unchanged(monkeypatch) -> None:
     assert sealed == {"HOME": "/real/home", "X": "1"}
 
 
-def test_seal_never_overrides_an_explicit_pin(monkeypatch) -> None:
+def test_seal_never_overrides_an_explicit_pin(monkeypatch, tmp_path) -> None:
     """A caller who meant to redirect a root is not second-guessed."""
     monkeypatch.setenv("HOME", "/real/home")
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
     sealed = seal_state_root(
         {"HOME": "/accounts/zai-1/home", "FNO_CLAIMS_ROOT": "/sandbox"}
     )
     assert sealed["FNO_CLAIMS_ROOT"] == "/sandbox"
 
 
-def test_seal_does_not_mutate_its_input(monkeypatch) -> None:
+def test_seal_does_not_mutate_its_input(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", "/real/home")
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path / "state"))
     src = {"HOME": "/accounts/zai-1/home"}
     seal_state_root(src)
     assert src == {"HOME": "/accounts/zai-1/home"}
@@ -324,3 +329,89 @@ def test_home_is_a_state_root_key() -> None:
     """The set names the axis; a future key gets added here, not at a call site."""
     assert "HOME" in STATE_ROOT_ENV_KEYS
     assert "CLAUDE_CONFIG_DIR" not in STATE_ROOT_ENV_KEYS
+
+
+# --- AC2-ERR: a pin whose root serves another account -----------------------
+
+MAKERS = {"account_uuid": "acc-makers", "organization_uuid": "org-1"}
+READYRULE = {
+    "account_uuid": "acc-readyrule",
+    "organization_uuid": "org-1",
+    "email": "readyrule@x",
+}
+
+
+def _serves(monkeypatch, principal: dict) -> None:
+    """Make the credential root prove out as ``principal``, offline."""
+    from fno.adapters.providers import binding, managed
+
+    monkeypatch.setattr(binding, "credential_blobs", lambda *_: ["blob"])
+    monkeypatch.setattr(managed, "slot_principal", lambda _b: (principal, None))
+
+
+def test_config_dir_pin_serving_another_account_is_refused(
+    tmp_path: Path, providers_root: Path, monkeypatch
+) -> None:
+    """A login being PRESENT in the dir says nothing about whose login it is."""
+    from fno.adapters.providers import managed
+
+    cfg = tmp_path / "claude-alt"
+    cfg.mkdir()
+    (cfg / ".credentials.json").write_text("{}")
+    repo = _write_settings(
+        tmp_path,
+        [{"id": "makers", "name": "Makers", "harness": "claude",
+          "auth": "managed", "config_dir": str(cfg)}],
+    )
+    managed.write_record_principal("makers", MAKERS, providers_root)
+    _serves(monkeypatch, READYRULE)
+
+    with pytest.raises(AccountResolutionError) as exc:
+        resolve_account_overlay("makers", repo_root=repo, providers_root=providers_root)
+
+    assert "account_identity_mismatch" in str(exc.value)
+    assert "readyrule@x" in str(exc.value)
+
+
+def test_managed_active_pin_serving_another_account_is_refused(
+    tmp_path: Path, providers_root: Path, monkeypatch
+) -> None:
+    """The stamp agrees. An out-of-band `claude /login` is what makes it wrong."""
+    from fno.adapters.providers import managed
+
+    repo = _write_settings(
+        tmp_path,
+        [{"id": "makers", "name": "Makers", "harness": "claude", "auth": "managed"}],
+    )
+    _stamp_active(providers_root, "makers")
+    managed.write_record_principal("makers", MAKERS, providers_root)
+    _serves(monkeypatch, READYRULE)
+
+    with pytest.raises(AccountResolutionError) as exc:
+        resolve_account_overlay("makers", repo_root=repo, providers_root=providers_root)
+
+    assert "account_identity_mismatch" in str(exc.value)
+
+
+def test_an_unprovable_identity_does_not_ground_the_launch(
+    tmp_path: Path, providers_root: Path, monkeypatch
+) -> None:
+    """unknown forbids a receipt naming the account, never the launch itself."""
+    from fno.adapters.providers import binding, managed
+
+    repo = _write_settings(
+        tmp_path,
+        [{"id": "makers", "name": "Makers", "harness": "claude", "auth": "managed"}],
+    )
+    _stamp_active(providers_root, "makers")
+    managed.write_record_principal("makers", MAKERS, providers_root)
+    monkeypatch.setattr(binding, "credential_blobs", lambda *_: ["blob"])
+    monkeypatch.setattr(
+        managed, "slot_principal", lambda _b: (None, "profile-unavailable")
+    )
+
+    ov = resolve_account_overlay(
+        "makers", repo_root=repo, providers_root=providers_root
+    )
+
+    assert ov.lane == "managed-active"

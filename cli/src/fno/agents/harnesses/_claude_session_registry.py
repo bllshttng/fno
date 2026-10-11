@@ -1,6 +1,6 @@
 """Read-only helpers over claude 2.1.143's session + jobs filesystem layout.
 
-US2 (ab-8b90e793) reverse-engineered three external surfaces from the
+US2 reverse-engineered three external surfaces from the
 ``claude`` binary that have no documented schema. The provider adapter
 imports them through this thin wrapper so a future replacement (MCP
 channel server, daemon-backend wake) only needs to swap this module
@@ -26,9 +26,8 @@ rather than touching ``harnesses.claude``:
   from rows whose ``state`` is in the terminal-or-needs-input set when
   ``output.result`` is missing.
 
-All paths derive from :func:`pathlib.Path.home`, so tests can pin
-``HOME`` via :func:`monkeypatch.setenv` and avoid touching real claude
-state.
+All paths derive from :func:`_claude_roots` (HOME's root first, never
+replaced, then an ambient ``CLAUDE_CONFIG_DIR``, each account's dir).
 
 This module is read-only: a future schema drift in claude is detected
 either by ``locate_session`` returning ``None`` (jobId moved or kind
@@ -43,7 +42,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from fno.harness_identity import claude_transport_short_id
 
@@ -90,14 +89,26 @@ class StateSnapshot:
     intent: Optional[str] = None
 
 
-def _sessions_dir() -> Path:
-    """Return ``~/.claude/sessions`` resolved against the current HOME."""
-    return Path.home() / ".claude" / "sessions"
+def _claude_roots() -> list[Path]:
+    roots = [Path.home() / ".claude"]
+    roots += [Path(v) for v in [os.environ.get("CLAUDE_CONFIG_DIR")] if v]
+    try:
+        from fno.adapters.providers.loader import load_providers
+        records = load_providers().records
+        roots += [Path(r.config_dir) for r in records if r.harness == "claude" and r.config_dir]
+    except Exception:  # noqa: BLE001 - an unreadable config leaves the ambient roots
+        pass
+    return roots
+
+
+def session_dirs() -> list[Path]:
+    return list(dict.fromkeys((root / "sessions").resolve() for root in _claude_roots()))
 
 
 def _jobs_dir_for(short_id: str) -> Path:
-    """Return ``~/.claude/jobs/<short-id>`` resolved against the current HOME."""
-    return Path.home() / ".claude" / "jobs" / short_id
+    """``jobs/<short-id>`` under the first root that has it, else HOME's."""
+    dirs = [root / "jobs" / short_id for root in _claude_roots()]
+    return next((d for d in dirs if d.is_dir()), dirs[0])
 
 
 def _daemon_dir() -> Path:
@@ -134,7 +145,7 @@ def roster_live(short_id: str) -> bool:
 
 
 def roster_sessions() -> list[dict]:
-    """Live claude sessions from the daemon roster, shaped for discover (x-605c).
+    """Live claude sessions from the daemon roster, shaped for discover.
 
     Each ``workers[*]`` row yields a discover-compatible dict
     ``{session_id, short_id, pid, cwd, status, agent}``. Lenient like
@@ -144,7 +155,7 @@ def roster_sessions() -> list[dict]:
     a durable floor, never a wrong delivery. A bg worker leaves no pid-sidecar, so
     this is the only source that surfaces it (the send-resolve bug this fixes).
 
-    The pid is resolved to the process that IS the session (x-3f84 W2): the
+    The pid is resolved to the process that IS the session (W2): the
     daemon's recorded pid for a bg row names the PTY HOST, so each row joins
     through the rendezvous socket farm before leaving here. A join miss keeps
     the recorded pid -- an operator-run interactive session has no rv socket
@@ -204,10 +215,6 @@ def locate_session(short_id: str) -> Optional[SessionLocator]:
     JSON files in ``sessions/`` are skipped silently — a single junk
     file should not deny lookup of healthy entries.
     """
-    sessions = _sessions_dir()
-    if not sessions.exists():
-        return None
-
     # Two-pass: collect all bg matches first, then prefer one with a
     # non-null socket. A supervisor respawn (claude auto-update, Domain
     # Pitfall 11) can leave the dead pid's session file behind with
@@ -215,7 +222,7 @@ def locate_session(short_id: str) -> Optional[SessionLocator]:
     # sharing the same jobId — returning None on the first hit would
     # orphan the user even though the live session is reachable.
     null_socket_seen = False
-    for entry_path in sorted(sessions.glob("*.json")):
+    for entry_path in (p for d in session_dirs() for p in sorted(d.glob("*.json"))):
         try:
             raw = json.loads(entry_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -272,12 +279,8 @@ def resolve_session_uuid(short_id: str) -> Optional[str]:
     Returns ``None`` when no matching bg session file carries a non-empty
     ``sessionId``, or when ``~/.claude/sessions`` does not exist.
     """
-    sessions = _sessions_dir()
-    if not sessions.exists():
-        return None
-
     fallback: Optional[str] = None
-    for entry_path in sorted(sessions.glob("*.json")):
+    for entry_path in (p for d in session_dirs() for p in sorted(d.glob("*.json"))):
         try:
             raw = json.loads(entry_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError, UnicodeDecodeError):
@@ -336,12 +339,35 @@ def _parse_state(state_path: Path) -> StateSnapshot:
     )
 
 
+SEED_WAIT_S = 5.0
+
+
+def seed_unverified_reason(
+    short_id: str, env: Optional[Mapping[str, str]] = None, timeout_s: float = SEED_WAIT_S
+) -> Optional[str]:
+    """``None`` once job state holds the ``intent`` claude writes before ``--bg``
+    returns, else why not. Only an account overlay's CLAUDE_CONFIG_DIR moves the root."""
+    cfg = (env or {}).get("CLAUDE_CONFIG_DIR")
+    jobs_dir = Path(cfg) / "jobs" / short_id if cfg else _jobs_dir_for(short_id)
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            intent = read_state_json(jobs_dir).intent
+            if isinstance(intent, str) and intent.strip():
+                return None
+        except (OSError, json.JSONDecodeError):
+            pass
+        if time.monotonic() >= deadline:
+            return f"{jobs_dir / 'state.json'} records no prompt after {timeout_s:g}s"
+        time.sleep(0.2)
+
+
 def read_timeline_tail(jobs_dir: Path, offset: int) -> str:
     """Read ``<jobs_dir>/timeline.jsonl`` from ``offset`` and concatenate
     ``text`` fields from terminal-or-needs-input rows.
 
-    The byte offset is the baseline captured before ``send_to_session``;
-    everything appended since contributes to the tail. Lines whose
+    The byte offset is the baseline captured before the send whose reply
+    is being awaited; everything appended since contributes to the tail. Lines whose
     ``state`` is outside :data:`_TERMINAL_STATES` are dropped (running
     rows describe in-flight tool calls, not the reply). Lines that
     fail to parse as JSON are skipped so a partial write at the tail
@@ -385,3 +411,30 @@ def read_timeline_tail(jobs_dir: Path, offset: int) -> str:
             chunks.append(piece)
 
     return "".join(chunks)
+
+
+def revive_proof_or_refuse(name: str, short_id: str) -> None:
+    """Block until a revival fork proves it came up; the poll, and the stop
+    it applies to a fork that never came up, run in the fno-agents binary
+    (``revive-proof``, lock-free - the caller holds the per-agent flock)."""
+    if not (verdict := _revive_proof_verdict(short_id)).get("ok"):
+        from fno.agents.dispatch import DispatchAskError
+        raise DispatchAskError(
+            f"revival fork {short_id} never came up: {verdict.get('reason')}. "
+            f"Spawn a fresh worker instead of resuming.",
+            exit_code=1,
+        )
+
+
+def _revive_proof_verdict(short_id: str) -> dict:
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:  # a degraded install stands the gate down
+        return {"ok": True}
+    import subprocess
+
+    cmd = [str(binary), "claude-birth-exec", "revive-proof", "--short-id", short_id]
+    return json.loads(
+        subprocess.run(cmd, stdout=subprocess.PIPE, text=True, timeout=90).stdout
+    )

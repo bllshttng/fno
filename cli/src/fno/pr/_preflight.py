@@ -6,7 +6,7 @@ rebase+repush cycle. ``fno workspace worktree ensure`` bases new worktrees off
 ``origin/main``, but the EnterWorktree and manual-worktree paths bypass it, so
 guard at PR-creation time where every path converges.
 
-One implementation (:func:`check_stale_base`), two call sites: the ``/pr create``
+One implementation (:func:`check_stale_base`), two call sites: the ``/fno:ship pr create``
 router shells ``fno do pr base-check``; ``fno agents worker ship`` imports the function
 directly. The bypass and the staleness rule live only here so both sites behave
 identically.
@@ -24,6 +24,7 @@ import logging
 import os
 import re
 import stat
+import subprocess
 import sys
 from pathlib import Path
 from typing import Iterator, Mapping, Optional, Tuple
@@ -77,6 +78,8 @@ _PREFLIGHT_BASE_SCOPE = frozenset(
 # is "every required leg present, nothing unknown added" rather than equality.
 _PREFLIGHT_OPTIONAL_SCOPE = frozenset(
     {
+        "file-budget:fno",
+        "lead-arms:fno",
         "squads-leak-guard:fno",
         "tracker-gates:fno",
     }
@@ -184,6 +187,38 @@ def hosted_workflow_state(cwd: Path) -> str:
         return "unavailable"
 
 
+def _journal_lines(path: Path) -> "tuple[list[str], int] | None":
+    """Envelope lines for one journal plus its corrupt-line count, or None
+    when the journal could not be read at all.
+
+    Committed rows carry the history: a receipt committed through the store
+    leaves no byte trace in the journal. The raw bytes are still scanned for
+    lines the store never imported, because a not-json line is corrupt
+    evidence and the verdict over it must read fail-closed."""
+    import json as _json
+
+    from fno.events.store_client import native_rows
+
+    committed = native_rows(path)
+    try:
+        raw = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        raw = None
+    malformed = 0
+    for line in raw or []:
+        if not line.strip():
+            continue
+        try:
+            _json.loads(line)
+        except _json.JSONDecodeError:
+            malformed += 1
+    if committed is not None:
+        return committed, malformed
+    if raw is None:
+        return None
+    return raw, malformed
+
+
 def _verification_decision_all(candidate_sha: str, event_paths: list[Path]) -> dict:
     """Select the newest valid receipt across deduped, unordered journals."""
     from fno.events import ValidationError, validate
@@ -206,11 +241,12 @@ def _verification_decision_all(candidate_sha: str, event_paths: list[Path]) -> d
         seen_paths.add(path_key)
         if not path.exists():
             continue
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError):
+        fetched = _journal_lines(path)
+        if fetched is None:
             unreadable += 1
             continue
+        lines, raw_malformed = fetched
+        malformed += raw_malformed
         for line in lines:
             line = line.strip()
             if not line:
@@ -386,7 +422,7 @@ def verification_decision(candidate_sha: str, event_paths: list[Path]) -> dict:
 
 def verification_event_paths(*, cwd: Optional[str] = None) -> tuple[list[Path], list[str]]:
     """Return event journals plus discovery errors that make coverage uncertain."""
-    from fno.paths import global_events_json, ledger_json
+    from fno.paths import global_events_json, ledger_json, project_log
 
     repo = Path(cwd or os.getcwd()).resolve()
     errors: list[str] = []
@@ -396,7 +432,10 @@ def verification_event_paths(*, cwd: Optional[str] = None) -> tuple[list[Path], 
     except (OSError, ValueError) as exc:
         root = repo
         errors.append(f"repository root discovery failed: {exc}")
-    paths = [global_events_json(), root / ".fno" / "events.jsonl"]
+    # project_log, not a hand-built checkout path: the coverage reader resolves
+    # the space journal, so a hand-built path scans a dead file and reports
+    # every PR unreviewed.
+    paths = [global_events_json(), project_log("events.jsonl", project_root=root)]
     try:
         raw = json.loads(ledger_json().read_text(encoding="utf-8"))
         if isinstance(raw, list):
@@ -425,7 +464,7 @@ def verification_event_paths(*, cwd: Optional[str] = None) -> tuple[list[Path], 
                         raise ValueError(f"ledger {field} is invalid: {exc}") from exc
             delivery_root = normalized_roots.get("root_path")
             if delivery_root is not None:
-                paths.append(delivery_root / ".fno" / "events.jsonl")
+                paths.append(project_log("events.jsonl", project_root=delivery_root))
             canonical = normalized_roots.get("canonical_root_path")
             if canonical is not None:
                 salvage = canonical / ".fno" / "salvage"
@@ -481,14 +520,14 @@ def next_verification_generation(*, cwd: str, candidate_sha: str) -> int:
             if key in seen_paths:
                 continue
             seen_paths.add(key)
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except FileNotFoundError:
-                continue
-            except (OSError, UnicodeError) as exc:
+            fetched = _journal_lines(path)
+            if fetched is None:
                 if skip_unreadable:
                     continue
-                raise ValueError(f"receipt journal unreadable: {path}: {exc}") from exc
+                raise ValueError(f"receipt journal unreadable: {path}")
+            lines, raw_malformed = fetched
+            if raw_malformed:
+                raise ValueError(f"receipt journal malformed: {path}: {raw_malformed} unparseable line(s)")
             for line in lines:
                 if not line.strip():
                     continue
@@ -653,10 +692,10 @@ def rebase_equivalent_evidence(
             if path_key in seen_paths:
                 continue
             seen_paths.add(path_key)
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeError):
+            fetched = _journal_lines(path)
+            if fetched is None:
                 continue
+            lines = fetched[0]
             for line in lines:
                 line = line.strip()
                 if not line:
@@ -943,3 +982,15 @@ def run_base_check(base: str = BASE_DEFAULT, *, cwd: Optional[str] = None) -> in
     if msg:
         sys.stderr.write(msg.rstrip("\n") + "\n")
     return code
+
+
+def check_duplicate_pr(cwd: str, base: str, title: str) -> str:
+    """The pr-create guard's refusal text, or '' when the create proceeds."""
+    from fno.rust_binary import resolve_binary
+    try:
+        cmd = [str(resolve_binary() or "fno-agents"), "pr-create",
+               "--check-only", "--title", title, "--base", base, "--cwd", cwd]
+        result = run(cmd, timeout=180)
+    except (ToolMissing, subprocess.TimeoutExpired):
+        return ""
+    return result.stderr.strip() if result.returncode == 3 else ""

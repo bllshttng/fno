@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test suite for the agy Stop-hook adapter (hooks/agy-target-stop-hook.sh).
+# Test suite for the agy Stop-hook adapter (hooks/footnote-agy-target-stop-hook.sh).
 #
 # The adapter is a thin translator over `fno-agents loop-check` for agy's
 # Gemini-family wire format: camelCase stdin, decision:"continue" to KEEP WORKING,
@@ -22,12 +22,17 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-HOOK="${REPO_ROOT}/hooks/agy-target-stop-hook.sh"
+HOOK="${REPO_ROOT}/hooks/footnote-agy-target-stop-hook.sh"
+LEGACY_HOOK="${REPO_ROOT}/hooks/agy-target-stop-hook.sh"
 
 PASS=0; FAIL=0; SKIP_COUNT=0
 log()  { printf '[agy] %s\n' "$*"; }
 pass() { PASS=$((PASS+1)); printf '[agy] PASS: %s\n' "$*"; }
-fail() { FAIL=$((FAIL+1)); printf '[agy] FAIL: %s\n' "$*" >&2; }
+fail() {
+    FAIL=$((FAIL+1))
+    printf '[agy] FAIL: %s\n' "$*" >&2
+    [[ -z "${HOOK_STDERR:-}" ]] || printf '[agy] stderr: %s\n' "$HOOK_STDERR" >&2
+}
 skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[agy] SKIP: %s\n' "$*" >&2; }
 
 [[ -f "$HOOK" ]] || { fail "hook not found at $HOOK"; exit 1; }
@@ -39,8 +44,28 @@ command -v bash >/dev/null 2>&1 || { skip "bash not on PATH"; exit 77; }
 # Sets: TMP_DIR HOME_DIR TRANSCRIPT_FILE STATE_FILE
 setup_env() {
     TMP_DIR="$(mktemp -d)"
+
+# Same resolution order as scripts/lib/events.sh: checkout build first, PATH
+# second. The store commit is the write boundary: the pinned journal keeps no
+# byte trace, so emission asserts read committed rows through the verb and
+# jq -r unwraps the escaped envelope strings back to plain JSON lines.
+ROWS_BIN="${FNO_BIN:-}"
+if [[ -z "$ROWS_BIN" ]]; then
+    for _profile in debug release; do
+        if [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]]; then
+            ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"
+            break
+        fi
+    done
+fi
+[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+
+committed_rows() {
+    [[ -n "$ROWS_BIN" ]] || return 0
+    "$ROWS_BIN" doctor event rows --events "${TMP_DIR}/.fno/events.jsonl" 2>/dev/null | jq -r '.[]' 2>/dev/null
+}
     HOME_DIR="${TMP_DIR}/home"
-    mkdir -p "${TMP_DIR}/.fno" "${HOME_DIR}/.fno"
+    mkdir -p "${TMP_DIR}/.fno" "${HOME_DIR}/.fno" "${TMP_DIR}/bin"
     TRANSCRIPT_FILE="${TMP_DIR}/transcript.jsonl"
     printf '{"role":"model","parts":[{"text":"hello"}]}\n' > "$TRANSCRIPT_FILE"
     STATE_FILE="${TMP_DIR}/.fno/target-state.md"
@@ -51,10 +76,25 @@ created_at: 2026-06-27T00:00:00Z
 attended: false
 ---
 STATE
+    # Pin `fno-agents state path` into the sandbox (x-3227 review, T6): the
+    # real verb answers the SPACES slice of whatever cwd it runs in, so an
+    # ambient binary scatters the adapter's events journal outside TMP_DIR.
+    cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${TMP_DIR}/bin/fno-agents"
+    chmod 755 "${TMP_DIR}/bin/fno-agents"
 }
 cleanup() { rm -rf "${TMP_DIR:-/nonexistent}" 2>/dev/null || true; }
 
-make_stub() { cat > "$1"; chmod +x "$1"; }
+# Every stub answers the rules transport with an allow: a leg stubs only the
+# leg it tests, and the hook's rules call must not read as that leg's verdict.
+make_stub() {
+    { printf '%s
+' '#!/usr/bin/env bash'
+      printf '%s
+' 'if [[ "${1:-}" == "hook" ]]; then echo {}; exit 0; fi'
+      cat
+    } > "$1"
+    chmod +x "$1"
+}
 safe_path() { echo "/usr/bin:/bin:/usr/sbin:/sbin"; }
 
 # run_hook <cwd> <stdin_json> [env KEY=VALUE ...] -> sets HOOK_STDOUT, HOOK_RC, HOOK_STDERR
@@ -65,7 +105,7 @@ run_hook() {
     HOOK_RC=0
     HOOK_STDOUT=$(
         cd "$cwd" || exit 1
-        env "$@" bash "$HOOK" <<< "$input_json" 2>"$err_file"
+        env FNO_TEST_SPACE="${TMP_DIR}/.fno" PATH="${TMP_DIR}/bin:$(safe_path)" "$@" bash "$HOOK" <<< "$input_json" 2>"$err_file"
     ) || HOOK_RC=$?
     HOOK_STDERR="$(cat "$err_file")"; rm -f "$err_file"
 }
@@ -88,6 +128,25 @@ log "T1: no state file -> allow {}"
     rm -rf "$TMP_DIR" 2>/dev/null || true
 }
 
+# ── T13: an existing agy hooks.json path still reaches the branded adapter ───
+log "T13: legacy adapter path remains valid during setup migration"
+{
+    TMP_DIR="$(mktemp -d)"; HOME_DIR="${TMP_DIR}/home"
+    mkdir -p "${TMP_DIR}/.fno" "${HOME_DIR}/.fno"
+    TR="${TMP_DIR}/t.jsonl"; printf '{"role":"model","parts":[{"text":"x"}]}\n' > "$TR"
+    INPUT="{\"transcriptPath\":\"${TR}\",\"fullyIdle\":true,\"conversationId\":\"legacy-path\"}"
+    CURRENT_HOOK="$HOOK"; HOOK="$LEGACY_HOOK"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}"
+    HOOK="$CURRENT_HOOK"
+    if [[ "$HOOK_RC" -eq 0 && "$(stdout_decision)" == "<none>" ]] \
+        && printf '%s' "$HOOK_STDOUT" | jq -e . >/dev/null 2>&1; then
+        pass "T13: legacy path forwards to the branded adapter"
+    else
+        fail "T13: legacy adapter path failed; rc=$HOOK_RC stdout=$HOOK_STDOUT"
+    fi
+    cleanup
+}
+
 # ── T2: fullyIdle false -> continue, binary NOT called ────────────────────────
 log "T2: fullyIdle false -> continue (bg tasks live)"
 {
@@ -96,6 +155,9 @@ log "T2: fullyIdle false -> continue (bg tasks live)"
     STUB="${TMP_DIR}/fno-agents"
     make_stub "$STUB" <<STUB
 #!/usr/bin/env bash
+# state path now routes through FNO_AGENTS_BIN too (x-271c); only a
+# loop-check invocation may mark.
+if [[ "\$1" == "state" ]]; then exit 1; fi
 touch "${MARKER}"
 echo '{"decision":"allow","termination_reason":"DonePRGreen","message":"x"}'
 STUB
@@ -124,11 +186,11 @@ log "T3: binary missing -> bounded-continue x3 then give-up {}"
         run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENTS_BIN=/nonexistent"
         [[ "$(stdout_decision)" == "continue" ]] || { fail "T3: fire#$i expected continue, got $HOOK_STDOUT"; t3=false; }
     done
-    grep -q 'loop_check_binary_missing' "${TMP_DIR}/.fno/events.jsonl" 2>/dev/null || { fail "T3: binary_missing event not emitted"; t3=false; }
+    committed_rows | grep -q 'loop_check_binary_missing' || { fail "T3: binary_missing event not emitted"; t3=false; }
     # A 4th consecutive fire exceeds MAX_UNAVAIL_RETRIES -> loud give-up allow.
     run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENTS_BIN=/nonexistent"
     { [[ "$(stdout_decision)" == "<none>" ]] && printf '%s' "$HOOK_STDOUT" | jq -e . >/dev/null 2>&1; } || { fail "T3: 4th fire expected {} give-up, got $HOOK_STDOUT"; t3=false; }
-    grep -q 'loop_check_unavailable_giveup' "${TMP_DIR}/.fno/events.jsonl" 2>/dev/null || { fail "T3: give-up event not emitted"; t3=false; }
+    committed_rows | grep -q 'loop_check_unavailable_giveup' || { fail "T3: give-up event not emitted"; t3=false; }
     [[ "$t3" == true ]] && pass "T3: binary missing -> bounded-continue x3 then give-up {} + events"
     cleanup
 }
@@ -178,13 +240,17 @@ log "T6: loop-check garbage -> continue + event"
     STUB="${TMP_DIR}/fno-agents"
     make_stub "$STUB" <<'STUB'
 #!/usr/bin/env bash
+if [[ "${1:-} ${2:-}" == "state path" && -n "${FNO_TEST_SPACE:-}" ]]; then
+    printf '%s\n' "${FNO_TEST_SPACE}/${3:-}"
+    exit 0
+fi
 echo 'not json at all'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c6\"}"
     run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
     t6=true
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T6: expected continue, got $HOOK_STDOUT"; t6=false; }
-    grep -q 'loop_check_gh_error' "${TMP_DIR}/.fno/events.jsonl" 2>/dev/null || { fail "T6: gh_error event not emitted"; t6=false; }
+    committed_rows | grep -q 'loop_check_gh_error' || { fail "T6: gh_error event not emitted"; t6=false; }
     [[ "$t6" == true ]] && pass "T6: garbage -> continue (retry) + event"
     cleanup
 }

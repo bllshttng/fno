@@ -80,10 +80,8 @@ name: agent-name
 description: Short description of what this agent does and when to use it.
 model: sonnet
 color: cyan
-tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash"]
+tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "Skill"]
 disallowedTools: ["Task", "WebSearch", "WebFetch"]
-skills:
-  - fno:tdd
 ---
 
 You are agent-name - a disciplined [role]. Your job is to [primary responsibility].
@@ -116,7 +114,7 @@ You are running in a **subagent context** with limited resources. Be efficient:
 | `color` | string | No | Terminal color for agent output |
 | `tools` | list | Yes | Allowed tools (whitelist) |
 | `disallowedTools` | list | No | Explicitly blocked tools (blacklist) |
-| `skills` | list | No | Skills this agent can invoke |
+| `skills` | list | No | Do not use. `claude --agent` and `fno agents spawn --agent` load nothing from it. Load a skill from the body with the Skill tool, and list `Skill` in `tools`. |
 
 ### Model Selection by Agent Role
 
@@ -387,7 +385,7 @@ When a target agent encounters something not in the plan, these rules determine 
 
 ## Promise Tag Pattern
 
-Autonomous loops (target, megawalk) complete when the output contains a `<promise>` tag. This is the only mechanism for signaling loop completion.
+Autonomous loops (target) complete on a `<promise>` tag in the output. This is the only mechanism for signaling loop completion.
 
 ### Format
 
@@ -475,9 +473,6 @@ model: sonnet                       # Required: haiku|sonnet|opus
 color: cyan                         # Optional: terminal output color
 tools: ["Read", "Write", ...]       # Required: allowed tools
 disallowedTools: ["Task", ...]      # Optional: blocked tools
-skills:                             # Optional: invokable skills
-  - fno:tdd
-  - fno:write-tests
 ---
 ```
 

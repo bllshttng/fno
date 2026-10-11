@@ -1,5 +1,7 @@
 # fno agents — registry and dispatch substrate
 
+> **Partly retired.** The `dispatch_ask` orchestrator and the Python ask legs are gone: the ask-adapter port moved them to the Rust runtime (2026-09-02). `ask` now auto-routes to the `fno-agents` binary, and `--to-project` resolves in Python before that exec. The registry, locking, spawn and send material below is current.
+
 Storage and dispatch primitives for the `fno agents` subsystem. The registry remembers which named agent belongs to which provider; the dispatch layer routes `fno agents ask` to the right provider adapter under a per-agent lock. Everything else in the subsystem (follow-up, list/logs, lifecycle verbs, the codex and gemini providers, the MCP channel) builds on this layer.
 
 ## Why this exists
@@ -50,8 +52,6 @@ The registry on disk is one JSON file at `state_dir() / "agents" / "registry.jso
   ]
 }
 ```
-
-`config.paths.agents_registry_path` in `config.toml` overrides the default location for users with non-standard `state_dir` setups.
 
 ### Three optional session-id fields
 
@@ -125,6 +125,28 @@ The lock-path computation rejects path separators and `..` segments in the agent
 | No | None | `ValueError` — need a provider for a new agent |
 
 `ProviderMismatchError` carries the agent name, recorded provider, and requested provider in its message so the CLI can surface a useful error without the caller doing detective work.
+
+## Worker name vocabulary
+
+Every dispatch path mints its worker name through one contract in `cli/src/fno/agents/naming.py` (`dispatch_agent_name`). Shell and Rust callers use `fno agents name --source <code> --verb <code>`:
+
+```
+[<source>-]<verb>-<identity>[-<qualifier>][-<slug>][-<discriminator>]
+```
+
+- **Source** names who launched the worker. The codes:
+- `ab` active-backlog daemon, `ac` merge continuation, `rd` reconcile de-stub.
+- `th` spawn_think, `pm` post-merge judgment, `pw` pr-watch, `rec` recovery.
+- `kg` keep-going, `gr` groom, `ro` restart revive, `ev` evals, `kl` lead loop.
+- `oh` outage handoff, `sh` self-handoff, `ex` foreign wave, `jn` backlog join.
+- An attended operator or lead launch carries no source. The name then starts with the verb. A source the bridge does not know refuses with exit 3 before spawn.
+- **Verb** names what it runs: `t` target, `bp` blueprint, `r` research/review, `th` think, `f` fix. `--verb` also accepts the work-verb word (`/target`, `blueprint`, ...). An unknown word refuses. Nothing defaults to `t`.
+- **Identity** is the full configured node id (`x-aaaa`, never a bare hex tail, because prefixes are per-project config). A non-node workload uses a typed identity: `backlog` (groom), `evals`, or `session-<handle>` for a nodeless resume. A PR-scoped worker carries `pr-<n>` as a qualifier.
+- **Budget**: source, verb, identity, qualifier, and discriminator are required. Only the human slug gives way to the 64-character runtime limit. An unrepresentable identity refuses before spawn.
+
+Legacy names (`target-<node>-*`, `think-<node>-*`, `reconcile-*`, `j-*`) still resolve through the read-side fallbacks in `parse_node_id` / `parse_worker_mission` and the reaper's legacy prefix path. This is the legacy-read window. Recovery and restart preserve the predecessor name as a registry alias on the new row.
+
+The inventory is ratcheted. `fno agents autonomy provenance` prints every path with its codes and the positive marker `dispatch provenance: 17/17 coded`. When a registered path loses its code, `scripts/ci/check-autonomy-registry.sh` fails CI.
 
 ## Events
 

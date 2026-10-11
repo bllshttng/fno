@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: multi-event - attest completed code review
 # Emit the code-review attestation with the CLASSIFIED finding record.
 # Claude and Codex expose different structured completion surfaces, so this
 # shared producer handles all reachable paths:
@@ -11,7 +12,7 @@
 #      FORKED subagent. Inside a fork the code-review skill's own
 #      instructions can forbid calling ReportFindings ("this review's
 #      output contract is the JSON block above" - confirmed live by
-#      running this exact PR's own self-review, x-e97b, whose finding
+#      running this exact PR's own self-review, whose finding
 #      caught trigger 1 alone as dead on arrival for that path), so its
 #      result surfaces only in the subagent's final text.
 #
@@ -38,6 +39,10 @@
 # recognize emits nothing AND never calls the classifier, so the reviewers
 # gate holds rather than clearing on evidence that never arrived.
 set -euo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 input="$(cat)"
 event="$(printf '%s' "$input" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
@@ -97,7 +102,7 @@ case "$event" in
     # THREE independent signals identify this as a code-review completion, any
     # one sufficient. Signals 1 and 3 are string matches on things the tool
     # does not mandate; signal 2 is the one that always holds, and it is why
-    # this branch stopped being decorative (x-bcb5).
+    # this branch stopped being decorative.
     #
     # Measured live on 2026-08-17, one `Skill(skill="code-review")` fork:
     # SubagentStop DOES fire (target-subagent-guard.sh logged its
@@ -154,7 +159,7 @@ case "$event" in
     fi
 
     # 3. The message's own shape: "## Review findings" OPENING the message, a
-    #    shape two live self-reviews produced (x-e97b). ReportFindings
+    #    shape two live self-reviews produced. ReportFindings
     #    mandates no header, so this was never sound on its own; it is kept
     #    because it costs nothing and still covers a harness that populates
     #    neither of the above. Opening-anchor, not line-anchor: an unrelated
@@ -220,7 +225,7 @@ else:
       # otherwise be mistaken for the review's findings.
       findings_payload="$findings"
     elif [[ -n "${message//[[:space:]]/}" ]]; then
-      # The fork ANSWERED, and its answer is not machine-readable (x-c446).
+      # The fork ANSWERED, and its answer is not machine-readable.
       #
       # Falling through to silence here made a review that found real bugs
       # byte-identical at the gate to a review that never ran, and four
@@ -294,10 +299,85 @@ esac
 
 [[ -n "$findings_payload" ]] || exit 0
 
-# Emit from the SESSION cwd, not the plugin root: a worktree session pins its
-# own HEAD, and the event log is per-checkout.
+# Emit from the checkout the review hold named, not a foreign session cwd. The
+# hold is the one resolver of the review target; this hook reads it instead of
+# deriving a second answer from whichever checkout delivered the stop event.
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [[ -n "$cwd" ]] || exit 0
+
+session="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+held_claim=""
+if [[ -n "$session" ]]; then
+  if ! claims_json="$("${FNO:-fno}" agents claim list --prefix review:branch: --json 2>/dev/null)"; then
+    echo "code-review-attest: review target claim could not be read; refusing attestation; retry from the PR's worktree" >&2
+    exit 2
+  fi
+  if ! jq -e 'type == "array"' <<<"$claims_json" >/dev/null 2>&1; then
+    echo "code-review-attest: review target claim was malformed; refusing attestation; retry from the PR's worktree" >&2
+    exit 2
+  fi
+  if ! jq -e --arg holder "review-session:$session" '
+    all(.[]; type == "object")
+    and all(.[]; (.holder != $holder) or (
+      (.key | type == "string" and startswith("review:branch:") and length > 14)
+      and (.expired | type == "boolean")
+      and (.acquired_at | type == "number")
+      and (.metadata | type == "object")
+      and (.metadata.head_sha | type == "string")
+      and (.metadata.invocation_id | type == "string")
+    ))
+  ' <<<"$claims_json" >/dev/null 2>&1; then
+    echo "code-review-attest: review target claim row was malformed; refusing attestation; retry from the PR's worktree" >&2
+    exit 2
+  fi
+  held_claim="$(printf '%s' "$claims_json" | jq -c --arg holder "review-session:$session" '
+    [ .[] | select(.holder == $holder and ((.expired // false) | not)) ]
+    | sort_by(.acquired_at // 0) | .[-1] // empty
+  ' 2>/dev/null || true)"
+fi
+
+held_branch="$(printf '%s' "$held_claim" | jq -r '.key // empty' 2>/dev/null || true)"
+held_branch="${held_branch#review:branch:}"
+held_head="$(printf '%s' "$held_claim" | jq -r '.metadata.head_sha // empty' 2>/dev/null || true)"
+held_invocation="$(printf '%s' "$held_claim" | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
+if [[ -n "$held_branch" ]]; then
+  current_branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  target_cwd="$cwd"
+  if [[ "$current_branch" != "$held_branch" ]]; then
+    target_cwd="$(git -C "$cwd" worktree list --porcelain 2>/dev/null \
+      | awk -v target="refs/heads/$held_branch" '
+          /^worktree / { path=substr($0, 10) }
+          /^branch / && substr($0, 8) == target { print path; exit }
+        ' || true)"
+  fi
+  target_head="$(git -C "$target_cwd" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -z "$target_cwd" ]]; then
+    reason="target_not_checked_out"
+  elif [[ -z "$target_head" || "$target_head" != "$held_head" ]]; then
+    reason="target_head_moved"
+  else
+    cwd="$target_cwd"
+    reason=""
+  fi
+  if [[ -n "$reason" ]]; then
+    refusal_data="$(jq -cn \
+      --arg invocation_id "$held_invocation" \
+      --arg stage refused \
+      --arg verb "/code-review" \
+      --arg reason "$reason" \
+      --arg branch "$held_branch" \
+      --arg head_sha "$held_head" \
+      '{invocation_id:$invocation_id,stage:$stage,verb:$verb,reason:$reason,branch:$branch,head_sha:$head_sha}' \
+      2>/dev/null || true)"
+    if [[ -n "$refusal_data" ]]; then
+      "${FNO:-fno}" doctor event emit -t review_invocation -s daemon -d "$refusal_data" \
+        >/dev/null 2>&1 || true
+    fi
+    "${FNO:-fno}" do pr review-hold release --branch "$held_branch" >/dev/null 2>&1 || true
+    echo "code-review-attest: review target $held_branch is $reason at ${held_head:0:8}; run the review from the PR's worktree, or fno do target start <node>" >&2
+    exit 2
+  fi
+fi
 cd "$cwd"
 reviewed_head="$(git rev-parse HEAD 2>/dev/null || true)"
 [[ -n "$reviewed_head" ]] || reviewed_head="unavailable"
@@ -333,9 +413,11 @@ fi
 # The one positive line naming what was classified: a run where the
 # classifier never fired is visibly different from one that classified zero.
 if [[ "$unparseable" == "1" ]]; then
-  echo "code-review-attest: review output was not machine-readable (no json fence, not \"(none)\"); attesting verdict=fail output_contract=prose_unparseable; reviewed head $reviewed_head"
+  # Status goes to stderr: a Codex Stop handler's stdout must be one JSON
+  # object or nothing, and this hook runs first in that group.
+  echo "code-review-attest: review output was not machine-readable (no json fence, not \"(none)\"); attesting verdict=fail output_contract=prose_unparseable; reviewed head $reviewed_head" >&2
 else
-  echo "code-review-attest: classified $total finding(s): $blocking blocking, $nonblocking non-blocking; reviewed head $reviewed_head; findings held"
+  echo "code-review-attest: classified $total finding(s): $blocking blocking, $nonblocking non-blocking; reviewed head $reviewed_head; findings held" >&2
 fi
 
 if bash "$script_dir/../skills/review/scripts/emit-attestation.sh" code-review "$verdict" \

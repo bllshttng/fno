@@ -1,6 +1,6 @@
 """fno.recovery — Layer-2 provider-failover and close-surfacing for bg sessions.
 
-ORIGIN (x-f47c): a background ``/target`` session whose turn ended on an
+ORIGIN : a background ``/target`` session whose turn ended on an
 *abnormal* termination (``API Error: Connection closed mid-response``, a dropped
 stream, an empty response) was resumed by nothing. The stream closed cleanly, so
 Claude Code's stuck-stream watchdog treated it as not-stuck, and the footnote
@@ -10,7 +10,7 @@ stopped until the ~1h reaper killed the process, leaving the backlog node stuck
 (hosted on the ``pr_watch`` launchd tick, independent of any session) that
 re-injected a resume nudge over Claude Code's messaging socket.
 
-THE SOCKET NUDGE NO LONGER DELIVERS (x-d93d, observed live 2026-08-09). Current
+THE SOCKET NUDGE NO LONGER DELIVERS (observed live 2026-08-09). Current
 Claude Code (verified on 2.1.226) holds every cross-session message sent to a
 ``bypassPermissions`` session for manual review (the ``crossSessionInbound``
 guard). footnote's bg ``/target`` sessions ARE bypassPermissions (unattended
@@ -19,19 +19,20 @@ The listener's ``fromMode`` attestation field would lift the hold, but reading
 it is gated behind an internal, default-off GrowthBook flag footnote cannot
 enable, so attestation is not a supported contract; and the only documented
 escape (``crossSessionInbound: "accept"``) accepts every un-attested peer, which
-is not footnote's setting to make. See ``harnesses.claude._build_envelope``.
+is not footnote's setting to make. See the BG8 envelope contract in
+``crates/fno-agents/src/claude_ask.rs`` (``build_cross_session_container``).
 
 So this module is NOT an auto-resume watchdog anymore: it cannot inject a resume
 into a stuck bypass session, and pretending otherwise would ship a daemon that
 silently no-ops while every held nudge raised an operator dialog. What survives:
 
-- **Provider failover (x-7abe).** A swap-class death (rate-limit / quota / auth
+- **Provider failover.** A swap-class death (rate-limit / quota / auth
   / 5xx) rotates the active provider and respawns a fresh ``claude --bg``
   worker (``--resume`` or ``/target``) on the new account. A fresh process's
   seed is a CLI arg, NOT a socket inject, so it is not held. This is the one
   live autonomous recovery path.
 
-- **Close-surfacing (x-a76d).** A session whose MISSION finished (node ``done``
+- **Close-surfacing.** A session whose MISSION finished (node ``done``
   or PR shipped) but whose process still lingers is surfaced ONCE for the
   operator to close (retro, then /stop), not told to "keep going" over a held
   socket. The operator wants finished sessions off the view, not re-opened.
@@ -45,9 +46,9 @@ so "has-been-quiet" is NOT the discriminator: bg-ness is. Under-coverage (a
 footnote bg session missing from the registry) stays the safe failure.
 
 Transcript truth owns liveness (``session_truth``; frozen ``state.json`` is
-phase metadata only). The socket write is the shipped
-``harnesses.claude.send_to_session`` (same transport as ``fno agents mail`` /
-dispatch); the state read is ``_claude_session_registry``.
+phase metadata only). The state read is ``_claude_session_registry``; the
+socket-inject send that once rode ``harnesses.claude.send_to_session`` was
+ported to the Rust runtime with the rest of the ask adapters.
 
 The held-socket resume is intentionally NOT replaced here by a speculative
 respawn-for-every-stuck-session. ``_redispatch`` / ``_respawn_bg_resume``
@@ -67,12 +68,11 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from fno import _subprocess_util
-from fno.agents.harnesses.claude import ProviderSocketError
+from fno.adapters.providers.error_taxonomy import ErrorClass
 
 # The error the real send seam raises; aliased so callers/tests have one name.
-_SendError = ProviderSocketError
 
-# Decision constants returned by :func:`classify`.
+# Decision constants returned by:func:`classify`.
 NUDGE = "nudge"
 NUDGE_CLOSE = "nudge-close"
 SKIP_NEEDS_INPUT = "skip-needs-input"
@@ -83,16 +83,15 @@ NOT_STALE = "not-stale"
 # motivating repro (b78039cc, a human typed it); the agent re-enters its turn
 # loop on any user message. This is now ONLY the CLI-arg seed passed to a fresh
 # ``claude --bg --resume <uuid>`` (the failover/revive path); it is NOT a socket
-# inject. The held socket nudge was removed in x-d93d: a bypassPermissions
-# recipient (which every autonomous /target worker is, via the
-# ``spawn_permission_mode`` default) holds every cross-session message by design.
+# inject. The held socket nudge was removed in: a bypassPermissions
+# recipient (which every autonomous /target worker is, via the built-in
+# unattended default) holds every cross-session message by design.
 CONTINUE_MESSAGE = "keep going"
 # A finished-but-lingering session is surfaced to the operator to CLOSE (run its
 # retro, then /stop), not to resume. Routed over an OS notification, not the
-# held socket (x-a76d): the operator wants these off the view, not re-opened.
+# held socket: the operator wants these off the view, not re-opened.
 CLOSE_MESSAGE = "mission complete but still open - run retro then /stop to close"
 FROM_NAME = "fno-recovery"
-REDISPATCH_PARTIAL = "partial"
 
 
 class _Outcome(str):
@@ -105,10 +104,10 @@ class _Outcome(str):
     the absence trap, in the one event whose job is to say what happened.
 
     A ``str`` subclass rather than a tuple, deliberately: every existing
-    ``== "rotated-no-worker"`` comparison, every ``in (...)`` membership test,
-    and every injected ``failover_fn`` that returns a plain string keep working
-    untouched. Read the reason with ``getattr(outcome, "reason", "")``, which
-    answers "" for a plain string and needs no isinstance branch.
+    ``== "rotated-no-worker"`` comparison and every ``in (...)`` membership
+    test keeps working untouched. Read the reason with
+    ``getattr(outcome, "reason", "")``, which answers "" for a plain string
+    and needs no isinstance branch.
     """
 
     reason: str
@@ -125,15 +124,6 @@ def _gave_up(reason: str) -> _Outcome:
 
 
 class _Failed(int):
-    """A falsy ``_redispatch`` result that says which step missed.
-
-    ``_redispatch`` answers ``True`` / ``REDISPATCH_PARTIAL`` / falsy, and
-    every caller tests it with ``is True`` or a truth check. An ``int``
-    subclass valued 0 keeps all of that exact: it is falsy, it equals
-    ``False``, and it is never ``is True``. The reason rides along so the
-    caller can name the branch instead of reporting a bare no.
-    """
-
     reason: str
 
     def __new__(cls, reason: str) -> "_Failed":
@@ -158,13 +148,13 @@ def classify(
 ) -> str:
     """Classify from family-1 transcript truth; state.json is phase metadata.
 
-    ``mission_complete`` is the family-2 half (x-5583): family 1 calls any
+    ``mission_complete`` is the family-2 half : family 1 calls any
     terminal ``<promise>`` done, so on its own it lets a worker that promised
     and then died abnormally suppress recovery AND failover forever. Only an
     explicit ``False`` - positive evidence of an unfinished mission - relaxes
     that to the staleness gate (resume). An explicit ``True`` (the mission
     actually shipped, but the process still lingers) flips to :data:`NUDGE_CLOSE`
-    once idle (x-a76d): the operator wants finished sessions off the view, not
+    once idle : the operator wants finished sessions off the view, not
     re-opened. ``None`` (unverifiable) keeps the terminal skip (fail closed).
     """
     del updated_at, now
@@ -205,13 +195,16 @@ class Candidate:
     sock_path: str
     jobs_dir: object  # pathlib.Path; opaque here so tests can pass a tmp_path
     # cwd + name come from the registry row. They are unused on the nudge path
-    # and only carried for the failover re-dispatch (x-7abe): the worktree cwd
+    # and only carried for the failover re-dispatch: the worktree cwd
     # holds the node's target-state.md, and the name is the handle for
     # ``fno agents stop``. Both default None so nudge-path callers/tests need not
     # supply them.
     cwd: Optional[str] = None
     name: Optional[str] = None
     session_id: Optional[str] = None
+    # The CALLER's attributed account for the quota-lock write. Never the
+    # process-global active one: a refusal belongs to the launch account.
+    launch_account: Optional[str] = None
     agent: str = "claude"
 
 
@@ -227,7 +220,7 @@ class _SnapshotView:
     updated_at: Optional[str]
     # The dead session's last ``output.result`` text. For an out-of-usage death
     # it carries the provider error ("API Error: ... rate limit ...") that the
-    # failover branch classifies (x-7abe). None on the nudge path / older tests.
+    # failover branch classifies. None on the nudge path / older tests.
     output_result: Optional[str] = None
 
 
@@ -262,6 +255,7 @@ def iter_candidates(registry_entries: Iterable, locate_fn: Callable) -> list[Can
             cwd=getattr(entry, "cwd", None), name=getattr(entry, "name", None),
             session_id=(getattr(entry, "harness_session_id", None)
                         or getattr(entry, "cc_session_id", None) or short_id),
+            launch_account=getattr(entry, "launch_account", None),
         ))
     return out
 
@@ -281,7 +275,7 @@ def _capped_key(short_id: str) -> str:
 
 
 def _close_key(short_id: str) -> str:
-    """Sentinel: a close-surface has fired once for this id (x-a76d)."""
+    """Sentinel: a close-surface has fired once for this id."""
     return f"close:{short_id}"
 
 
@@ -295,6 +289,12 @@ def _refused_key(short_id: str, error_class: str) -> str:
     return f"refused:{short_id}:{error_class}"
 
 
+def _quota_key(short_id: str) -> str:
+    """Sentinel: the sweep-time quota lock was decided once for this id.
+    Same flat counts dict, same collision-free prefix rule."""
+    return f"quota-locked:{short_id}"
+
+
 def recovery_sweep(
     now: datetime,
     cfg,
@@ -305,38 +305,24 @@ def recovery_sweep(
     read_state_fn: Callable,
     truth_fn: Callable[[Candidate], dict],
     liveness_fn: Callable[[str], bool],
-    failover_fn: Optional[Callable[["Candidate", object], str]] = None,
     mission_complete_fn: Optional[Callable[["Candidate"], Optional[bool]]] = None,
     notify_close_fn: Optional[Callable[["Candidate"], bool]] = None,
 ) -> None:
-    """Classify each candidate and act: failover, close-surface, held-surface, or stay silent.
+    """Classify each candidate and act: close-surface, held-surface, or stay silent.
 
     Every decision that *matters* emits at most one event:
-      - ``failover_swapped`` when an out-of-usage session rotates providers,
-      - ``failover_blocked{reason}`` when a swap is wanted but storm-capped
-        (thrash). A queue-exhausted result (no alternate) is NOT blocked - it
-        falls through to the held-by-design surface below,
       - ``recovery_close_notify`` once when a finished-but-lingering /target
-        worker is surfaced to the operator to close (x-a76d),
+        worker is surfaced to the operator to close,
       - ``recovery_skipped{reason}`` when a session is deliberately spared
         (``needs-input``) or, for a node-bound stuck worker, surfaced once as
-        ``held-by-design`` (x-d93d: the socket nudge cannot reach a bypass
+        ``held-by-design`` (: the socket nudge cannot reach a bypass
         recipient, so the worker is stuck-but-not-auto-resumable).
     A not-yet-stale / done-and-not-lingering session is silent so healthy ticks
     do not spam the log. All I/O is injected so this is unit-testable offline.
 
-    ``failover_fn`` (x-7abe) is the only way the failover branch activates: a
-    stale session whose last error is a *swap-class* one (rate-limit / quota /
-    auth / 5xx) routes to provider failover INSTEAD of surfacing - the failover
-    respawns a fresh ``claude --bg`` (a CLI-arg seed, not a socket inject), so it
-    is not held. A connection-drop (non-swap class) is not failover-eligible.
-
-    At most ONE provider rotation fires per sweep tick (``rotated`` guard): a
-    swap mutates the *global* active provider, so a second candidate evaluated
-    after it would have its error mis-attributed to the already-swapped-to
-    provider (codex P2).
+    Provider failover lives in the provider-cap actor ; this sweep
+    records quota locks and surfaces the strand but moves nothing.
     """
-    rotated = False  # one provider rotation per tick (P2: global active mutation)
     for c in candidates:
         snap = read_state_fn(c.jobs_dir)
         truth = truth_fn(c)
@@ -376,10 +362,31 @@ def recovery_sweep(
                     # True when the epoch is the NAMED window plus the
                     # observation time rather than a stamp the body resolved.
                     # A derived epoch is a bound, so a consumer knows a later
-                    # probe supersedes it (x-763a).
+                    # probe supersedes it.
                     "reset_is_derived": _err.reset_is_derived,
                     "reset_stamp_unparsed": _err.reset_stamp_unparsed,
                     "excerpt": _err.body_excerpt,
+                })
+
+            # Guards: corroboration, the quota class, the once-per-worker
+            # sentinel, and record_quota_lock refusing an unattributed
+            # account. The event fires even when nothing was written.
+            if (refusal_acts
+                    and _err.error_class is ErrorClass.PROVIDER_4XX_QUOTA
+                    and not counts.get(_quota_key(c.short_id))):
+                from fno.agents.quota_lock import record_quota_lock
+
+                counts[_quota_key(c.short_id)] = True
+                _wrote = record_quota_lock(
+                    c.launch_account, _err.body_excerpt, resets_at=_err.resets_at,
+                )
+                emit("provider_quota_locked", {
+                    "short_id": c.short_id,
+                    "account": _wrote,
+                    "attributed": _wrote is not None,
+                    "source": _source,
+                    "resets_at": _err.resets_at,
+                    "reset_is_derived": _err.reset_is_derived,
                 })
 
         truth_state = str(truth.get("state") or "unknown")
@@ -425,81 +432,17 @@ def recovery_sweep(
         if decision != NUDGE:
             # SKIP_TERMINAL / NOT_STALE: nothing to say.
             continue
-
-        # Out-of-usage failover (x-7abe): a swap-class death means the provider
-        # is rate-limited/quota'd, so rotate + re-dispatch instead of nudging the
-        # same dead provider. Checked before the nudge cap (failover has its own
-        # per-phase storm-cap inside attempt_swap) and before liveness (a swap
-        # re-dispatches a fresh session, it does not need the dead socket).
-        if failover_fn is not None and not rotated:
-            # Same evidence the hoisted check already resolved, so a
-            # transcript-sourced refusal reaches failover on the path a death
-            # does. The failover stays HERE, below the staleness gate, on
-            # purpose: the event says "it refused" and fires immediately, while
-            # acting on it wants the second signal that the worker has also
-            # stopped producing turns. Stopping a live worker that retried
-            # through a transient throttle costs more than a tick of patience.
-            err = refusal[0] if (refusal is not None and refusal_acts) else None
-            if err is not None:
-                outcome = failover_fn(c, err)
-                if outcome in (
-                    "swapped", "rotated-no-worker", "notified", REDISPATCH_PARTIAL,
-                ):
-                    # Either way the global active provider rotated, so no
-                    # further swap this tick.
-                    rotated = True
-                    # Honest event: redispatched=True only when a replacement
-                    # worker actually started (codex P1 — a swallowed spawn
-                    # failure must NOT report a phantom redispatch).
-                    redispatched = outcome in ("swapped", REDISPATCH_PARTIAL)
-                    emit("failover_swapped", {
-                        "short_id": c.short_id,
-                        "redispatched": redispatched,
-                        # An abandonment that does not say which branch it
-                        # took is indistinguishable from every other one.
-                        # "unknown" only when a custom failover_fn returned
-                        # a plain string, never from a branch in this file.
-                        "reason": (
-                            "" if redispatched
-                            else getattr(outcome, "reason", "") or "unknown"
-                        ),
-                    })
-                    if outcome == REDISPATCH_PARTIAL:
-                        emit("failover_blocked", {
-                            "short_id": c.short_id,
-                            "reason": "partial-owner-stamp",
-                        })
-                        continue
-                    if outcome != "rotated-no-worker":
-                        # "swapped" (worker/thread respawned) and "notified" (US4/US5:
-                        # the human got the exact resume command for a session we
-                        # could not auto-revive) are both terminal for this session -
-                        # nudging a swapped-away/exhausted session just re-hits the
-                        # dead provider, which is exactly what failover avoids.
-                        continue
-                    # "rotated-no-worker": the swap landed on a provider we
-                    # cannot bg-redispatch a /target onto (non-claude) or the
-                    # spawn failed; fall through to the held-by-design surface so
-                    # the stuck session is not left silent (codex P1).
-                elif outcome == "blocked-thrash":
-                    # Storm-cap reached: genuine churn, deliberate bounded stop.
-                    emit("failover_blocked", {"short_id": c.short_id, "reason": outcome})
-                    continue
-                # "queue-exhausted" (no alternate provider exists — the common
-                # single-provider case) and "no-swap" (controller declined): fall
-                # through to the held-by-design surface. Nothing can be swapped
-                # to and the socket nudge cannot reach a bypass recipient, so the
                 # honest action is to surface the stuck session once for the
                 # operator.
 
-        # x-d93d: the recipient is a bypass bg /target worker
-        # (``spawn_permission_mode`` default), so a socket nudge is held by
+        # the recipient is a bypass bg /target worker (the built-in
+        # unattended default), so a socket nudge is held by
         # Claude Code's ``crossSessionInbound`` guard and would stack an operator
         # dialog without recovering anything. Do NOT send. A node-bound worker
         # that is genuinely stuck is surfaced (bounded by ``max_nudges``, then
         # ``recovery_capped``); a node-less bg thread (an ask/relay worker, or a
         # ``--bg`` session a human has attached to and drives interactively) is
-        # none of recovery's mission and stays silent (x-a76d scope fix).
+        # none of recovery's mission and stays silent (x-aaaa scope fix).
         if not c.cwd or _worktree_is_node_less(c.cwd):
             continue
         n = counts.get(c.short_id, 0)
@@ -525,7 +468,7 @@ def recovery_sweep(
 def _counts_path() -> Path:
     from fno import paths
 
-    return paths.state_dir() / "recovery-nudges.json"
+    return paths.state_runtime_file("recovery-nudges.json")
 
 
 def load_counts() -> dict:
@@ -575,7 +518,7 @@ def _safe_read_state(jobs_dir):
 
 
 # ---------------------------------------------------------------------------
-# Out-of-usage provider failover (x-7abe)
+# Out-of-usage provider failover
 #
 # This wires the already-built+tested failover engine
 # (``adapters/providers/error_taxonomy`` + ``failover.FailoverController``) into
@@ -760,143 +703,22 @@ def _worktree_is_node_less(cwd: str) -> bool:
 def _node_is_done(node: str) -> bool:
     """True iff ``node`` resolves in the graph and is already ``done``.
 
-    Guards the respawn against a node that raced to completion (x-370f AC1-EDGE):
+    Guards the respawn against a node that raced to completion (AC1-EDGE):
     re-dispatching a finished node would spawn a worker with nothing to do. Any
     load miss (absent / corrupt graph, unknown id) degrades to False so the
     respawn proceeds — the claim + spawn path is the real backstop, not this read.
+    The WORK-done read itself is the one shared reader, ``node_is_done``.
     """
     try:
-        from fno.graph.load import load_graph
+        from fno.graph.store import GRAPH_JSON, _readback_row
+        from fno.graph.statuses import node_is_done
 
-        for entry in load_graph():
-            if entry.get("id") == node:
-                return entry.get("status") == "done"
+        entry, _ = _readback_row(GRAPH_JSON, node)
+        return node_is_done(entry) if entry is not None and not entry.get("archived_at") else False
     except Exception:  # noqa: BLE001 - a status read must never crash the sweep
         return False
-    return False
 
 
-def _node_size(node: str) -> Optional[str]:
-    """The node's ``--size`` (S/M/L), or None.
-
-    Size is already on every node and is already the operator's own
-    simple-versus-complex split, which is why the chain is keyed on it rather
-    than on a second classification nobody maintains. An unreadable graph
-    returns None and the caller reads the ``default`` chain.
-    """
-    try:
-        from fno.graph.load import load_graph
-
-        for entry in load_graph():
-            if entry.get("id") == node:
-                return str(entry.get("size") or "") or None
-    except Exception:  # noqa: BLE001 - a size read must never crash the sweep
-        return None
-    return None
-
-
-def _emit_recovery_event(event_type: str, data: dict) -> None:
-    """Append one canonical event from a non-sweep code path.
-
-    ``_default_failover`` is called as an injected ``failover_fn`` and returns a
-    string; it has no ``emit`` seam. The chain walk still has to say why it
-    stopped, because a silent refusal to spawn is indistinguishable from a
-    fleet with nothing to do - which is the whole failure this node exists to
-    end. Best-effort: a failed emit never breaks the walk.
-    """
-    try:
-        from fno.events import _build, append_event
-        from fno.paths import state_dir
-
-        append_event(_build(event_type, "daemon", data), state_dir() / "events.jsonl")
-    except Exception:  # noqa: BLE001 - a lost event never breaks a recovery arm
-        pass
-
-
-def _chain_redispatch(candidate: "Candidate", *, reason: str) -> str:
-    """Walk the node's fallback chain one link, or stop and say why.
-
-    Reached at the two points where failover used to give up: a swap that
-    landed somewhere ``/target`` cannot bg-run, and a queue with no alternate
-    account left. Account rotation stays chain position ZERO - same-vendor
-    headroom is cheaper than a vendor swap and it already works - so this only
-    runs after that has been tried.
-
-    Returns the same outcome vocabulary the caller already speaks:
-    ``"swapped"`` when a fresh worker started, ``"rotated-no-worker"`` when
-    nothing was spawned.
-    """
-    cwd = getattr(candidate, "cwd", None)
-    node = _node_id_from_worktree(cwd) if cwd else None
-    if not node:
-        return _gave_up("node-missing")
-
-    from fno import fleet_state
-    from fno.agents.spawn_defaults import (
-        link_id,
-        link_to_spawn_flags,
-        resolve_fallback_chain,
-    )
-
-    if _node_is_done(node):
-        # The walk's memory exists to stop ONE node relapping its own links. A
-        # finished node that kept it would read "all-tried" forever and hold on
-        # some unrelated future cap, so the walk is dropped with the node. Done
-        # here rather than in ``_redispatch``: that path is reached on every
-        # respawn and must stay free of state-root I/O.
-        fleet_state.clear_node(node)
-        return _gave_up("node-done")
-
-    tried = fleet_state.links_tried(node)
-    try:
-        # Rooted at the CANDIDATE's worktree. The roster is global and a
-        # candidate can belong to another project, whose chain, whose settings
-        # and whose provider health are all different from the daemon's.
-        chain = resolve_fallback_chain(
-            _node_size(node), exclude=tried, repo_root=cwd,
-        )
-    except Exception as exc:  # noqa: BLE001 - a malformed chain REFUSES, loudly
-        # Locked Decision 11. Degrading open here would spawn a worker at an
-        # unintended vendor and bill it, so the worker stays alive, the node
-        # stays claimed, and the config error is named.
-        _emit_recovery_event("failover_exhausted", {
-            "node": node,
-            "short_id": candidate.short_id,
-            "links_tried": ",".join(tried),
-            "reason": f"chain-malformed: {exc}"[:400],
-        })
-        return _gave_up("chain-malformed")
-
-    if not chain:
-        _emit_recovery_event("failover_exhausted", {
-            "node": node,
-            "short_id": candidate.short_id,
-            "links_tried": ",".join(tried),
-            "reason": "all-tried" if tried else "chain-empty",
-        })
-        return _gave_up("all-tried" if tried else "chain-empty")
-
-    link = chain[0]
-    # Recorded BEFORE the spawn, not after: a link whose spawn dies half-way
-    # must still count as tried, or the next tick walks into the same failing
-    # vendor again and the chain loops. A chain that loops is a worse failure
-    # than a chain that ends.
-    fleet_state.record_link(node, link_id(link))
-    # No emit here. The sweep emits exactly one `failover_swapped` for the
-    # "swapped" outcome, and a second one from in here would record two swaps
-    # for one replacement worker. Which link was taken stays readable in the
-    # walk this just wrote, and `failover_exhausted` names them all when the
-    # chain ends.
-    redispatched = _redispatch(candidate, flags=link_to_spawn_flags(link))
-    if redispatched is True:
-        return "swapped"
-    if redispatched == REDISPATCH_PARTIAL:
-        return REDISPATCH_PARTIAL
-    return _gave_up(getattr(redispatched, "reason", "") or "spawn-failed")
-
-
-# spawn_think names a birth pass ``think-<node>-<slug>`` and every other pass
-# ``think-<node>-<reason>-<slug>`` over this closed vocabulary
 # (provenance/spawn_think.py). Only a birth pass is certified by ``plan_path``.
 _NON_BIRTH_THINK_REASONS = ("work-start", "retro", "conversational")
 
@@ -918,7 +740,7 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
 
         parsed = parse_worker_mission(candidate.name)
         # Manifest first: the runtime wrote it, so unlike a worker name (a mere
-        # convention - `tgt-x-4175-liveness` ships) it cannot drift. The one
+        # convention - `tgt-x-aaaa-liveness` ships) it cannot drift. The one
         # exception is a positively think-named worker: it writes no manifest of
         # its own but spawns with --cwd on the node's canonical root, where an
         # unrelated /target session's manifest can sit. Reading that would
@@ -936,10 +758,10 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
         else:
             return None
 
-        from fno.graph.load import load_graph
+        from fno.graph.store import GRAPH_JSON, _readback_row
 
-        entry = next((e for e in load_graph() if e.get("id") == node_id), None)
-        if entry is None:
+        entry, _ = _readback_row(GRAPH_JSON, node_id)
+        if entry is None or entry.get("archived_at"):
             return None
         if kind == "think":
             # Only a BIRTH pass is certified by the node's artifacts (spawn_think:
@@ -949,7 +771,15 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
             # predate the worker and prove nothing about THIS invocation. Claiming
             # completion from them would re-open the very suppression this fixes,
             # so they read unverifiable until an ownership lease can date them.
-            tail = (candidate.name or "")[len(f"think-{node_id}-"):]
+            name_str = candidate.name or ""
+            if name_str.startswith(f"think-{node_id}-"):
+                tail = name_str[len(f"think-{node_id}-"):]
+            else:
+                # canonical shape: the reason opens the parsed tail.
+                from fno.agents.naming import parse_dispatch_agent_name
+
+                dname = parse_dispatch_agent_name(name_str)
+                tail = dname.tail if dname and dname.node == node_id else ""
             if any(tail == r or tail.startswith(f"{r}-")
                    for r in _NON_BIRTH_THINK_REASONS):
                 return None
@@ -958,20 +788,20 @@ def mission_complete(candidate: "Candidate") -> Optional[bool]:
         if kind == "think":
             return bool(str(entry.get("plan_path") or "").strip())
         # A PR existing is the completion floor - red CI and pending bots are
-        # pr_watch's and /fno:pr check's beat, not the watchdog's (LD 4).
+        # pr_watch's and /fno:ship pr check's beat, not the watchdog's (LD 4).
         return bool(entry.get("pr_number") or entry.get("pr_url"))
     except Exception:  # noqa: BLE001 - a probe must never crash the sweep
         return None
 
 
 def _release_lane_slot(node: str, cwd: str) -> None:
-    """Free a dead lane's parallel-lane slot (parallel mode x-42d5, G4).
+    """Free a dead lane's parallel-lane slot (parallel mode, G4).
 
     Called only when the respawn did NOT start: a successful respawn keeps the
     slot for the new worker's target-init reconcile, and a post-init slot is
     pid-anchored so it frees itself on worker death anyway. What this shortens
     is the dispatch-time (pre-init, TTL-anchored) slot's linger - while it is
-    live, ``select_lane_fill`` skips the node as "owned by a peer lane", so
+    live, the native lane-fill door skips the node as "owned by a peer lane", so
     without the release a failed respawn would leave the node unselectable for
     up to the slot TTL. Best-effort, mirroring the force-release shell-out.
     """
@@ -980,8 +810,13 @@ def _release_lane_slot(node: str, cwd: str) -> None:
 
     log = logging.getLogger(__name__)
     try:
+        from fno.rust_binary import resolve_binary
+
+        binary = resolve_binary()
+        if binary is None:
+            raise RuntimeError("no fno-agents binary")
         rel = subprocess.run(
-            [*_subprocess_util.fno_py_cmd(), "agents", "claim", "release", "--lane", node],
+            [str(binary), "claim", "lane-release", "--lane", node],
             cwd=cwd, capture_output=True, timeout=30, check=False,
         )
         if rel.returncode != 0:
@@ -993,28 +828,29 @@ def _release_lane_slot(node: str, cwd: str) -> None:
         log.warning("recovery: lane-release failed for %s: %s", node, exc)
 
 
-def _clear_dead_owner(node: str, cwd: str) -> bool:
-    """Clear a stopped worker's graph pointer, surfacing any failed cleanup."""
-    import logging
-    import subprocess
-
+def _alias_predecessor(new_name: Optional[str], old_name: Optional[str]) -> None:
+    """Best-effort: keep the predecessor name addressable on the successor row."""
+    if not (new_name and old_name):
+        return
     try:
-        cleared = subprocess.run(
-            [*_subprocess_util.fno_py_cmd(), "backlog", "update", node,
-             "--locked-by", "null"],
-            cwd=cwd, capture_output=True, timeout=30, check=False,
-        )
-        if cleared.returncode == 0:
-            return True
-        logging.getLogger(__name__).warning(
-            "recovery: could not clear dead owner for %s (exit %s)",
-            node, cleared.returncode,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logging.getLogger(__name__).warning(
-            "recovery: could not clear dead owner for %s: %s", node, exc,
-        )
-    return False
+        from fno.agents.registry import append_row_alias
+
+        append_row_alias(new_name, old_name)
+    except Exception:  # noqa: BLE001 - aliasing is best-effort
+        pass
+
+
+def _recovery_agent_name(
+    predecessor: Optional[str], node_or_session: str, short: str
+) -> Optional[str]:
+    """The ``rec-<verb>-<node-or-session>-<short>`` recovery name, or None when
+    the mint refuses; the verb parses from the predecessor (legacy spellings
+    resolve in the binary, else t)."""
+    from fno.agents.naming import mint_or_none, parse_dispatch_agent_name
+
+    parsed = parse_dispatch_agent_name(predecessor or "")
+    verb = parsed.verb if parsed else "t"
+    return mint_or_none("rec", verb, node_or_session, slug=short)
 
 
 def _redispatch(
@@ -1023,14 +859,14 @@ def _redispatch(
     pre_spawn: Optional[Callable[[], bool]] = None,
     flags: Optional[Sequence[str]] = None,
 ) -> "bool | str | _Failed":
-    """Stop the rate-limited session and respawn ``/target`` on the now-active
-    (swapped) provider, continuing in the SAME worktree (work-so-far lives in the
-    branch's atomic commits there). Returns True iff a replacement worker was
-    actually launched and its graph ownership was stamped. Returns
-    :data:`REDISPATCH_PARTIAL` when the worker launched but its ownership stamp
-    failed, so callers surface the incomplete transition without spawning a
-    second replacement.
+    """Legacy non-outage stop and respawn on an already selected route.
 
+    Quorum-backed provider outages belong to the provider-cap actor ;
+    this helper has neither exact source-death proof nor a durable attempt
+    journal and is not an outage migration seam.
+
+    Stop the rate-limited session and respawn ``/target`` on the now-active
+    (swapped) provider, continuing in the SAME worktree (work-so-far lives in the
     With no ``flags``, the caller guarantees the new active provider's cli is
     ``claude``, so the substrate is ``bg`` (claude-only) and ``--harness claude``
     selects the now-active claude record the swap installed in settings.yaml.
@@ -1043,7 +879,7 @@ def _redispatch(
     ``--substrate bg`` for a non-claude harness - a real difference in the spawn
     call, not a naming change.
 
-    Ordered reuse-first sequence (x-370f residual 1): stop the worker, then
+    Ordered reuse-first sequence (residual 1): stop the worker, then
     ``fno agents claim force-release`` the node claim (the verified reliability gap —
     ``stop`` alone does NOT free the claim, per the auto-continue-wedge finding,
     so without this the respawn's ``target init`` refuses on the held claim and
@@ -1066,8 +902,11 @@ def _redispatch(
         # Raced to completion: nothing to continue, so do not re-dispatch.
         return _Failed("node-done")
     name = getattr(candidate, "name", None)
-    agent = f"failover-{candidate.short_id}"
-    old_worker_stopped = False
+    agent = _recovery_agent_name(name, node, candidate.short_id)
+    if agent is None:
+        # A stale/missing binary unmints this candidate; report it as the
+        # candidate's failure, never crash the sweep.
+        return _Failed("name-unmintable")
     try:
         if name:
             # Kill the rate-limited worker. This does NOT free its node claim.
@@ -1089,7 +928,7 @@ def _redispatch(
                     # owns that half.
                     killed = subprocess.run(
                         [*_subprocess_util.fno_py_cmd(), "mux", "pane", "kill",
-                         "--session", m.group(1), m.group(2)],
+                         "--server", m.group(1), m.group(2)],
                         cwd=cwd, capture_output=True, timeout=30, check=False,
                     )
                     if killed.returncode != 0:
@@ -1100,7 +939,6 @@ def _redispatch(
                     # then spawning would put two /target workers on one node. Bail to
                     # the nudge to preserve the at-most-one-worker invariant (codex P2).
                     return _Failed("stop-failed")
-            old_worker_stopped = True
         # Free the dead session's node claim so the respawn can re-claim it.
         # force-release is idempotent (a claim already self-released by a late
         # worker is success), so this also covers the stop/self-release race.
@@ -1112,8 +950,6 @@ def _redispatch(
         if rel.returncode != 0:
             # Claim still held → a spawn would refuse on it. Bail so the caller
             # nudges instead of reporting a respawn that cannot start.
-            if old_worker_stopped:
-                _clear_dead_owner(node, cwd)
             return _Failed("claim-held")
         # US3 managed auto-switch: materialize the swapped-to account into the
         # shared slot HERE - after the exhausted worker is stopped (so it no
@@ -1123,56 +959,35 @@ def _redispatch(
         # ANOTHER live session / store failure) aborts the respawn: free the lane
         # slot and bail to the nudge, same as a spawn failure.
         if pre_spawn is not None and not pre_spawn():
-            if old_worker_stopped:
-                _clear_dead_owner(node, cwd)
             _release_lane_slot(node, cwd)
             return False
         # --provider claude: the swap already installed the new claude record as
         # active in settings.yaml, so the kind is what spawn needs. no-merge: an
         # autonomous worker lands a PR for review, never auto-merges.
         axis = list(flags) if flags else ["--harness", "claude", "--substrate", "bg"]
+        # the spelling comes from harness_map.AUTONOMOUS_COMMAND, never
+        # a second hardcoded string that drifts.
+        from fno.agents.harness_map import AUTONOMOUS_COMMAND
+
         proc = subprocess.run(
             [*_subprocess_util.fno_py_cmd(), "agents", "spawn", *axis,
              "--cwd", cwd, "--name", agent,
-             f"/target --no-merge {node}"],
-            # x-9d11: the env carrier backs the flag - a replacement worker
+             AUTONOMOUS_COMMAND.format(id=node)],
+            # the env carrier backs the flag - a replacement worker
             # that drops the flag post-compaction still folds the refusal at
             # init (this respawn lane does not route through resolve_dispatch).
             cwd=cwd, capture_output=True, timeout=60, check=False,
             env={**os.environ, "TARGET_NO_MERGE": "1"},
         )
         if proc.returncode != 0:
-            # No replacement worker started: the node claim is already freed
-            # (above), so clear the stopped worker's graph pointer and free any
-            # dispatch-time lane slot or lane-fill keeps skipping the node as
-            # peer-owned until the slot TTL (G4).
-            if old_worker_stopped:
-                _clear_dead_owner(node, cwd)
             _release_lane_slot(node, cwd)
             return False
-        try:
-            stamped = subprocess.run(
-                [*_subprocess_util.fno_py_cmd(), "backlog", "update", node,
-                 "--locked-by", agent],
-                cwd=cwd, capture_output=True, timeout=30, check=False,
-            )
-            stamp_ok = stamped.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            stamp_ok = False
-        if not stamp_ok:
-            # A worker exists, so this is not a spawn miss. Clear the corpse
-            # pointer when possible and return a distinct outcome; False would
-            # invite another failover spawn onto the same branch.
-            _clear_dead_owner(node, cwd)
-            return REDISPATCH_PARTIAL
+        _alias_predecessor(agent, name)
         return True
     except (OSError, subprocess.SubprocessError):
         # Non-fatal: the swap already landed; never let a respawn miss crash the
         # sweep for the rest of this tick.
-        if old_worker_stopped:
-            _clear_dead_owner(node, cwd)
         return False
-
 
 def _auto_switch_enabled(repo_root: Optional[str] = None) -> bool:
     """``config.providers.auto_switch`` (default False), read from the dead
@@ -1231,7 +1046,7 @@ def _materialize_managed_switch(record_id: str, repo_root: Optional[str] = None)
 # A failover swap rotates the active account, but a node-LESS bg thread (a
 # footnote-launched ``claude --bg`` session whose cwd has no target-state.md - an
 # ask/relay worker, a bare bg thread) has no node for ``_redispatch`` to /target.
-# Revival maps the session kind to an action (epic x-e4a7 revival table):
+# Revival maps the session kind to an action (epic revival table):
 #   - transcript visible to the new account -> respawn ``claude --bg --resume
 #     <uuid> "keep going"`` under the new env (US4).
 #   - transcript NOT visible (unshared two-dir) -> notify the human with the exact
@@ -1385,7 +1200,11 @@ def _respawn_bg_resume(
 
     cwd = getattr(candidate, "cwd", None)
     name = getattr(candidate, "name", None)
-    agent = f"revive-{candidate.short_id}"
+    # Nodeless resume: a typed session identity, never a fabricated node.
+    agent = _recovery_agent_name(name, f"session-{candidate.short_id}", candidate.short_id)
+    if agent is None:
+        # A stale/missing binary unmints the resume; the caller notifies.
+        return False
     if not name:
         # No name to stop the dead thread by. The node-less path has no claim +
         # `target init` backstop against a double (unlike _redispatch), so a blind
@@ -1409,6 +1228,8 @@ def _respawn_bg_resume(
             argv += ["--cwd", cwd]
         argv += ["--name", agent, CONTINUE_MESSAGE]
         proc = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=60, check=False)
+        if proc.returncode == 0:
+            _alias_predecessor(agent, name)
         return proc.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1445,127 +1266,6 @@ def _revive_bg_thread(
     return _Outcome("notified", "resume-spawn-failed")
 
 
-def _default_failover(candidate: "Candidate", error) -> str:
-    """Real ``failover_fn``: rotate the active provider via the shipped controller.
-
-    Returns one of:
-      - ``"swapped"``           rotated AND a replacement worker started,
-      - ``"rotated-no-worker"`` rotated but no worker (swapped onto a non-claude
-                                provider /target cannot bg-run, or the spawn
-                                failed) — the caller nudges as a fallback,
-      - ``"blocked-thrash"`` / ``"queue-exhausted"`` / ``"no-swap"``.
-
-    ``phase_id`` is keyed on the dead session's short_id so the controller's
-    per-phase storm-cap bounds how many times one stuck session rotates. Every
-    failure mode degrades to ``"no-swap"`` (the caller then nudges defensively)
-    rather than crashing the sweep.
-    """
-    from fno.adapters.providers.failover import FailoverController, SwapDecision
-    from fno.adapters.providers.loader import read_active_provider_atomic
-    from fno.adapters.providers.dispatch import _default_settings_path
-    from fno import paths
-
-    try:
-        settings_path = _default_settings_path()
-        active = read_active_provider_atomic(settings_path=settings_path).id
-        state_path = paths.state_dir() / "failover-state.json"
-        ctrl = FailoverController(
-            settings_path=settings_path, state_path=state_path,
-            phase_id=f"{candidate.short_id}:recovery",
-        )
-        # This sweep never lets attempt_swap materialize eagerly: the candidate
-        # is a still-live exhausted worker that pins the shared slot until
-        # _redispatch stops it below, so an eager switch() here would hit that
-        # live pin and return BLOCKED_PINNED before the worker is ever stopped
-        # - silently defeating the swap. The sweep does its OWN materialize,
-        # correctly ordered post-stop, via _redispatch's / _revive_bg_thread's
-        # pre_spawn hook (_materialize_managed_switch below), gated on the same
-        # auto_switch opt-in. materialize_managed=False here just tells
-        # attempt_swap to flip the routing pointer (accounts.active) and leave
-        # slot materialization to that later, correctly-ordered step.
-        repo_root = getattr(candidate, "cwd", None)
-        result = ctrl.attempt_swap(
-            current_provider_id=active, error=error,
-            materialize_managed=False,
-        )
-    except Exception:  # noqa: BLE001 - failover must never break the sweep
-        return "no-swap"
-
-    if result.decision is SwapDecision.SWAPPED:
-        # The swap installed result.new_provider_id as the active record. Re-read
-        # to get its cli KIND + auth strategy (codex P1: new_provider_id is a
-        # record id like "claude-secondary", NOT the "claude"/"codex" kind spawn
-        # wants).
-        try:
-            snap = read_active_provider_atomic(settings_path=settings_path)
-        except Exception:  # noqa: BLE001
-            return _gave_up("active-record-unreadable")
-        # A non-claude swap cannot bg-redispatch a /target (the Rust client
-        # rejects --substrate bg for it), so this used to dead-end here and fall
-        # through to the held-by-design no-op - which recovery.py records as a
-        # documented no-op for every bypassPermissions recipient, and every
-        # autonomous worker is one. Codex sat completely unused all session. The
-        # chain reaches the harness axis that dead end refused.
-        if snap.harness != "claude":
-            return _chain_redispatch(candidate, reason="swap-not-bg-runnable")
-        # repo_root was already resolved above, before attempt_swap, so the
-        # materialize_managed gate and every downstream auto_switch check
-        # here read the same value.
-        managed = getattr(snap, "auth", None) == "managed"
-        # US4: a node-less bg thread (a live worktree with NO target-state
-        # manifest) has no /target to redispatch; resume its transcript under the
-        # new account instead, or notify when it is not visible there. Gate on
-        # confirmed manifest absence (not "no node id"): a missing cwd, an
-        # unreadable/transiently-unreachable manifest, and a real node-bound worker
-        # all stay on the node-bound path below (its _redispatch handles the miss
-        # -> nudge), so a transient .fno read failure never misroutes a worker into
-        # revival.
-        if repo_root and _worktree_is_node_less(repo_root):
-            return _revive_bg_thread(candidate, snap, repo_root, managed=managed)
-        # A managed record shares ONE credential slot, so the swap only flipped
-        # the routing pointer - the slot still holds the exhausted account's
-        # creds. The replacement must read the NEW account's creds, so the slot is
-        # materialized as _redispatch's pre_spawn step (AFTER the exhausted worker
-        # is stopped, so it no longer pins the slot; BEFORE the replacement
-        # spawns). Gate on auto_switch BEFORE stopping: a disarmed managed swap
-        # leaves the worker alive for the bounded nudge rather than stopping it
-        # for a switch that will not happen. oauth_dir/api_key records need no
-        # materialization (env-var switch at spawn), so they redispatch as before.
-        if managed:
-            if not _auto_switch_enabled(repo_root):
-                return _gave_up("auto-switch-disarmed")
-            redispatched = _redispatch(
-                candidate,
-                pre_spawn=lambda: _materialize_managed_switch(snap.id, repo_root),
-            )
-            if redispatched is True:
-                return "swapped"
-            if redispatched == REDISPATCH_PARTIAL:
-                return REDISPATCH_PARTIAL
-            return _gave_up(
-                getattr(redispatched, "reason", "") or "spawn-failed"
-            )
-        redispatched = _redispatch(candidate)
-        if redispatched is True:
-            return "swapped"
-        if redispatched == REDISPATCH_PARTIAL:
-            return REDISPATCH_PARTIAL
-        return _gave_up(getattr(redispatched, "reason", "") or "spawn-failed")
-    if result.decision is SwapDecision.BLOCKED_THRASH:
-        return "blocked-thrash"
-    if result.decision is SwapDecision.QUEUE_EXHAUSTED:
-        # The single-account case, and the case the operator actually lives in.
-        # The account queue is chain position zero and it has now answered
-        # "nothing left"; the harness-and-model chain is what comes next. A
-        # chain that yields nothing falls back to the original outcome, so a
-        # fresh install with no configured chain behaves exactly as today.
-        outcome = _chain_redispatch(candidate, reason="queue-exhausted")
-        if outcome in ("swapped", REDISPATCH_PARTIAL):
-            return outcome
-        return "queue-exhausted"
-    return "no-swap"
-
-
 def _prune_keep(key: str, live: set) -> bool:
     """Keep a counts entry only while its session is still a live candidate."""
     if key.startswith("refused:"):
@@ -1574,7 +1274,7 @@ def _prune_keep(key: str, live: set) -> bool:
         # here every refusal key survives forever and the counts file grows
         # unbounded.
         return key.split(":")[1] in live
-    for prefix in ("capped:", "close:"):
+    for prefix in ("capped:", "close:", "quota-locked:"):
         if key.startswith(prefix):
             return key[len(prefix):] in live
     return key in live
@@ -1615,7 +1315,6 @@ def run_recovery_sweep(
     liveness_fn: Optional[Callable] = None,
     load_counts_fn: Optional[Callable] = None,
     save_counts_fn: Optional[Callable] = None,
-    failover_fn: Optional[Callable] = None,
     mission_complete_fn: Optional[Callable] = None,
     notify_close_fn: Optional[Callable[["Candidate"], bool]] = None,
 ) -> int:
@@ -1651,11 +1350,6 @@ def run_recovery_sweep(
             )
     load_counts_fn = load_counts_fn or load_counts
     save_counts_fn = save_counts_fn or save_counts
-    # Default-on in production: the failover branch activates whenever a stale
-    # session's last error is swap-class. With a single configured provider the
-    # controller returns QUEUE_EXHAUSTED (a bounded stop), so wiring it on by
-    # default is safe (x-7abe).
-    failover_fn = failover_fn or _default_failover
     mission_complete_fn = mission_complete_fn or mission_complete
     notify_close_fn = notify_close_fn or _notify_close
 
@@ -1670,7 +1364,6 @@ def run_recovery_sweep(
         read_state_fn=read_state_fn,
         truth_fn=truth_fn,
         liveness_fn=liveness_fn,
-        failover_fn=failover_fn,
         mission_complete_fn=mission_complete_fn,
         notify_close_fn=notify_close_fn,
     )

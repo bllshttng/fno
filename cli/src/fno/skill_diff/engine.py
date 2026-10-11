@@ -28,16 +28,29 @@ LOCAL_MAXIMA_WINDOW = 3
 
 
 def read_events_tolerant(path: Path) -> list[dict]:
-    """Read events.jsonl skipping corrupt lines (AC3-ERR).
+    """Read committed events, skipping unreadable rows (AC3-ERR).
 
-    The shared ``read_events`` raises on the first bad line; a standing loop
-    tick must never crash on one malformed append (mirrors fold.py's tolerant
-    readers). A skipped line is logged, not silently swallowed.
+    The store commit is the write boundary: committed rows are the history,
+    and the raw file only serves a pre-store legacy read. The shared
+    ``read_events`` raises on the first bad line; a standing loop tick must
+    never crash on one malformed append (mirrors fold.py's tolerant readers).
+    A skipped line is logged, not silently swallowed.
     """
+    from fno.events.store_client import native_rows
+
     path = Path(path)
+    committed = native_rows(path)
+    if committed is not None:
+        out: list[dict] = []
+        for lineno, raw in enumerate(committed, start=1):
+            try:
+                out.append(json.loads(raw))
+            except json.JSONDecodeError as exc:
+                _LOG.warning("skill-diff: skipping corrupt events.jsonl line %d: %s", lineno, exc)
+        return out
     if not path.exists():
         return []
-    out: list[dict] = []
+    out = []
     # Iterate line-by-line rather than read_text().splitlines() - events.jsonl is
     # append-only and grows without bound, so we never hold the whole file.
     with path.open(encoding="utf-8") as fh:
@@ -67,7 +80,7 @@ def unprocessed_runs(events: list[dict], skill_id: str) -> list[str]:
 
     A run_complete carrying a ``skill_ref`` FIELD is a REPLAY/candidate eval (an
     eval-after-merge re-run, or a manual ``fno doctor observer replay``), never a bare
-    sweep - it must NOT trigger the proposer (x-ed13 Locked Decision 5), else a
+    sweep - it must NOT trigger the proposer (Locked Decision 5), else a
     closed loop re-opens: propose -> merge -> eval-after-merge -> propose ...
     Only sweeps (no ``skill_ref`` field at all) are candidate triggers.
 
@@ -286,11 +299,11 @@ def build_pr_body(
 if __name__ == "__main__":  # pragma: no cover - smoke self-check
     evs = [
         {"type": "skill_eval_run_complete", "data": {"run_id": "r1", "skill_id": "fno:blueprint",
-         "failure_ranking": [{"dimension": "structural_validity", "fail_count": 2}]}},
+         "failure_ranking": [{"dimension": "collision_free", "fail_count": 2}]}},
         {"type": "skill_eval_finding", "data": {"run_id": "r1", "skill_id": "fno:blueprint",
-         "dimension": "structural_validity", "verdict": "fail"}},
+         "dimension": "collision_free", "verdict": "fail"}},
         {"type": "skill_eval_finding", "data": {"run_id": "r1", "skill_id": "fno:blueprint",
-         "dimension": "structural_validity", "verdict": "fail", "tool_fault": True}},
+         "dimension": "collision_free", "verdict": "fail", "tool_fault": True}},
     ]
     assert unprocessed_runs(evs, "fno:blueprint") == ["r1"]
     # A replay/candidate eval run_complete is NOT a trigger - by FIELD presence,
@@ -304,7 +317,7 @@ if __name__ == "__main__":  # pragma: no cover - smoke self-check
     assert unprocessed_runs(evs_ref, "fno:blueprint") == ["r1"]  # both after-runs excluded
     assert len(findings_for_run(evs, "r1")) == 1  # tool_fault excluded
     assert has_actionable_findings(evs, "r1")
-    assert top_dimension(evs, "r1") == "structural_validity"
+    assert top_dimension(evs, "r1") == "collision_free"
     evs.append({"type": "skill_diff_noop", "data": {"run_id": "r1", "skill_id": "fno:blueprint"}})
     assert unprocessed_runs(evs, "fno:blueprint") == []  # now handled
     print("engine ok")

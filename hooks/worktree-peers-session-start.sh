@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - worktree peers session start
 # Shared SessionStart carrier for the worktree peer overlap advisory.
 #
 # One path for both harness manifests: Claude registers this carrier directly
@@ -15,6 +16,10 @@
 # or [fno-overlap-count-unavailable]).
 
 set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BODY_ONLY=0
@@ -112,7 +117,71 @@ CACHE_MAX_AGE_S=900
 # still no cache file past this grace period means the last background
 # sweep hung, crashed, or was killed - not that it is still running.
 _SWEEP_GRACE_S=300
-_CACHE_FILE="$SCRIPT_DIR/../.fno/.worktree-stranded-cache.json"
+# Where the two files below live. `$SCRIPT_DIR/../.fno` is right for a real
+# session: the cache is per-checkout. It is wrong under a test runner, where
+# executing this hook writes the checkout's own state root, which is live state
+# on a developer box and a hand-built `<root>/.fno/<file>` path either way.
+#
+# `FNO_TEST_HERMETIC=1` declares a sandboxed process root, and the pytest
+# conftest chain stamps it with `HOME` inside the sandbox, so honouring it here
+# redirects every test caller at once. Three test files execute this hook
+# through `session-start.sh`; fixing the hook covers them and the next one.
+# `0` is ambient on purpose and keeps the checkout path.
+_STRANDED_DIR="$SCRIPT_DIR/../.fno"
+if [[ "${FNO_TEST_HERMETIC:-}" == "1" ]]; then
+  # Through the emitted stub, never a bare `$HOME/.fno`:
+  # scripts/ci/check-no-hardcoded-paths.sh bars that spelling in hooks/, and it
+  # caught this exact line.
+  #
+  # Read in a SUBSHELL, so only STATE_DIR crosses back. The stub exports
+  # STATE_DIR, LATCHES_DIR, WORKTREES_BASE and CONFIG_FILE,
+  # and its own header says it is config-blind. Sourcing it here put those
+  # built-in defaults into the environment of every child this hook spawns,
+  # and other hooks do read them: context-nudge.sh reads ${STATE_DIR} and
+  # ${LATCHES_DIR} straight from the environment.
+  _PATHS_STUB="$SCRIPT_DIR/../scripts/lib/paths.sh"
+  _STRANDED_DIR=""
+  if [[ -f "$_PATHS_STUB" ]]; then
+    _STRANDED_DIR="$(
+      REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+      # shellcheck source=/dev/null
+      source "$_PATHS_STUB" >/dev/null 2>&1
+      printf '%s' "${STATE_DIR:-}"
+    )"
+  fi
+  if [[ -z "$_STRANDED_DIR" ]]; then
+    # NEVER fall back to the checkout path. That is the write this branch
+    # exists to prevent, and a harness that copies only hooks/ into a sandbox
+    # would silently reintroduce it while believing it was hermetic. A temp
+    # dir loses the cache between runs, which costs a sweep and nothing else.
+    #
+    # Keyed by the sandbox HOME, not by uid alone. A uid-only path is stable
+    # across every repository and every run for one user, so its cache and its
+    # 15-minute refresh stamp outlive the run that wrote them: one run then
+    # shows another repository's stranded rows, or suppresses its own refresh
+    # against a stamp it never wrote.
+    #
+    # The WHOLE path, not its leaf. Sandbox roots are named by their purpose
+    # under a per-run parent, so leaves repeat across runs while the parent
+    # does not: two concurrent runs both holding a HOME that ends `/home`
+    # would share one key again, which is the collision this key exists to
+    # end. Substitution, not a subprocess, because this is a hot hook path.
+    _STRANDED_KEY="${HOME//\//_}"
+    _STRANDED_DIR="${TMPDIR:-/tmp}/fno-stranded-$(id -u)-${_STRANDED_KEY:-nohome}"
+    echo "worktree-peers: $_PATHS_STUB is missing under FNO_TEST_HERMETIC=1; using $_STRANDED_DIR rather than the checkout state root" >&2
+  fi
+  mkdir -p "$_STRANDED_DIR" 2>/dev/null || true
+fi
+# State-root tidiness: in the ambient branch _STRANDED_DIR IS the state
+# root, so the cache and stamp land under state/. The hermetic branches
+# keep their flat layout; tests pin it.
+if [[ "${FNO_TEST_HERMETIC:-}" == "1" ]]; then
+  _STRANDED_BASE="$_STRANDED_DIR"
+else
+  _STRANDED_BASE="$_STRANDED_DIR/state"
+fi
+mkdir -p "$_STRANDED_BASE" 2>/dev/null || true
+_CACHE_FILE="$_STRANDED_BASE/.worktree-stranded-cache.json"
 # A dedicated stamp, not the cache file's own mtime: the window must be
 # claimed (stamp touched) BEFORE the background sweep launches, the same
 # up-front-claim pattern reconcile-throttle.sh uses, so a second SessionStart
@@ -120,7 +189,7 @@ _CACHE_FILE="$SCRIPT_DIR/../.fno/.worktree-stranded-cache.json"
 # also kicking its own ~100s sweep. Touching the CACHE FILE itself to claim
 # would truncate the stale-but-valid JSON a concurrent session's read (lines
 # below) might be mid-parse of.
-_STAMP_FILE="$SCRIPT_DIR/../.fno/.worktree-stranded-refresh-stamp"
+_STAMP_FILE="$_STRANDED_BASE/.worktree-stranded-refresh-stamp"
 # _reconcile_mtime, not a third hand-rolled `stat -f || stat -c`: GNU `stat -f`
 # means --file-system, not a format flag, so it SUCCEEDS on Linux and prints
 # garbage instead of failing - the `||` fallback to `stat -c %Y` never fires,
@@ -177,11 +246,52 @@ else
   stranded_lines+=('- stranded sweep skipped: fno or jq unavailable. [fno-stranded-sweep-incomplete]')
 fi
 
+# Checkout staleness: the session's OWN checkout, only when it IS the
+# canonical one and sits behind origin. Every session in a stale checkout
+# runs old hooks, guards and fno source. The probe is wall-clock bounded (5s)
+# and network-free (no fetch: every worktree fetch updates the shared
+# origin/* refs); a timeout is the one failure that speaks, so an incomplete
+# read never looks clean. A linked worktree is behind by design and stays
+# silent.
+checkout_lines=()
+top="$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null)"
+if [[ -n "$top" ]] \
+  && [[ "$(git -C "$top" rev-parse --absolute-git-dir 2>/dev/null)" == "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]] \
+  && command -v fno-agents >/dev/null 2>&1 \
+  && command -v jq >/dev/null 2>&1; then
+  # The probe's exit code carries the answer (124 reads as behind-unknown),
+  # so it keeps its FIXED bound from before the load-aware budget: a 1s
+  # budget measured a fork miss on a loaded runner that turned a real
+  # verdict into a 124.
+  answer="$(jq -n --arg c "$top" '{canonical:$c}' | with_timeout 5 fno-agents canonical-check)"
+  checkout_rc=$?
+  if (( checkout_rc == 124 )); then
+    checkout_lines+=('- checkout staleness probe timed out. [fno-checkout-behind-unknown]')
+  elif (( checkout_rc == 0 )); then
+    head_branch="$(printf '%s' "$answer" | jq -r '.head_branch // empty' 2>/dev/null)"
+    default_branch="$(printf '%s' "$answer" | jq -r '.default_branch // empty' 2>/dev/null)"
+    behind="$(printf '%s' "$answer" | jq -r '.behind // 0' 2>/dev/null)"
+    if [[ -n "$head_branch" && "$head_branch" == "$default_branch" ]] && (( behind > 0 )); then
+      checkout_lines+=("- This checkout is ${behind} commit(s) behind origin/${default_branch}; its hooks, guards and fno source are ${behind} commit(s) old. Sync: git -C ${top} pull --ff-only [fno-checkout-behind]")
+    fi
+    blocking_line="$(printf '%s' "$answer" | jq -r '
+      .blocking as $b
+      | select(($b|type)=="array" and ($b|length)>0)
+      | "Fast-forward blocked by uncommitted: "
+        + ($b[0:5] | join(", "))
+        + (if ($b|length)>5 then ", (+" + (($b|length)-5|tostring) + " more)" else "" end)
+    ' 2>/dev/null)"
+    if [[ -n "$blocking_line" ]]; then
+      checkout_lines+=("- ${blocking_line}. Commit or stash them before the sync. [fno-checkout-ff-blocked]")
+    fi
+  fi
+fi
+
 # The `${arr[@]+"${arr[@]}"}` form, not a bare `"${arr[@]}"`: bash 3.2 (the
 # macOS system bash this hook runs under) treats element-expansion of an
 # EMPTY array as an unbound variable under `set -u`, and peer_lines is
 # routinely empty when there is no live peer.
-lines=("${peer_lines[@]+"${peer_lines[@]}"}" "${stranded_lines[@]+"${stranded_lines[@]}"}")
+lines=("${peer_lines[@]+"${peer_lines[@]}"}" "${stranded_lines[@]+"${stranded_lines[@]}"}" "${checkout_lines[@]+"${checkout_lines[@]}"}")
 (( ${#lines[@]} > 0 )) || exit 0
 
 if (( BODY_ONLY )); then

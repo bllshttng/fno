@@ -20,18 +20,23 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, NamedTuple, Optional
 
-from fno.king.lane import LaneItem, LaneRead, open_items, parked_items, read_lane
+from fno.lead.lane import LaneItem, LaneRead, open_items, parked_items, read_lane
 
 # Rows rendered before the footer takes over. A growing pile should read as a
 # number, not as a wall - a block that scrolls the operator's screen gets
 # skipped, which is the failure this verb exists to fix.
 RENDER_CAP = 3
 QUESTION_RENDER_CAP = 10
+# A rendered entry is a pointer, not the evidence. The full body is one `-J`
+# away; a 2000-character row in a 10-row budget is how the short asks got
+# buried (law d-59af3235's own rationale). Measured 2026-09-12: human-authored
+# bodies run a 929-character median, so this cap binds on most rows by design.
+QUESTION_BODY_CAP = 240
 
 EVENTS_NAME = "events.jsonl"
-# `retro sweep-carveouts` skips this kind; /fno:pr merged owns it.
+# `retro sweep-carveouts` skips this kind; /fno:ship pr merged owns it.
 BACKFILL_KIND = "backfill"
 QUESTION_EVENT = "operator_question"
 QUESTION_CLOSED_EVENT = "operator_question_closed"
@@ -40,8 +45,12 @@ QUESTION_CLOSED_EVENT = "operator_question_closed"
 QUESTION_MARKER = "operator_question"
 # SessionStart has a 1.5s hook budget. Reachability may scan multi-gigabyte
 # harness stores, so the report gives it one bounded slice and renders an
-# explicit unknown for anything that cannot finish in time.
-LIVENESS_BUDGET_SECONDS = 0.05
+# explicit unknown for anything that cannot finish in time. The slice is a
+# ceiling, not a sleep: the pipe answers the moment the forked child sends.
+# The child is a fork of a possibly multi-threaded process, which alone can
+# cost more than 50ms on a loaded machine, so the ceiling sits at 0.5s --
+# under the SessionStart budget, over the worst fork.
+LIVENESS_BUDGET_SECONDS = 0.5
 
 
 class OutstandingError(Exception):
@@ -74,6 +83,7 @@ class Question:
     ask: Optional[str] = None
     options: tuple[str, ...] = ()
     blocks: tuple[str, ...] = ()
+    subject: Optional[str] = None
     live: Optional[bool] = None
 
     def as_dict(self, *, rank: Optional[int] = None) -> "dict[str, Any]":
@@ -88,6 +98,7 @@ class Question:
             "ask": self.ask,
             "options": list(self.options),
             "blocks": list(self.blocks),
+            "subject": self.subject,
             "live": self.live,
             "rank": rank,
         }
@@ -115,6 +126,17 @@ class Capture:
         }
 
 
+class VerdictRow(NamedTuple):
+    """One open prove-it FAIL verdict : claimed outcome did not hold."""
+
+    node: str
+    report: str
+    verdict: str
+    claim: str
+    status: Optional[str] = None
+    mtime: Optional[str] = None
+
+
 @dataclass(frozen=True)
 class Outstanding:
     carveout_total: int
@@ -126,6 +148,9 @@ class Outstanding:
     capture_row_total: int = 0
     lane: "list[LaneItem]" = field(default_factory=list)
     lane_parked: int = 0
+    #: Open prove-it FAIL verdicts, plus the reader's failure: surfaced, never a silent zero.
+    verdicts: "list[VerdictRow]" = field(default_factory=list)
+    verdicts_error: Optional[str] = None
     #: The one project-scoped leg names its root; the machine-wide legs name
     #: their stores, so a zero in any stream is diagnosable instead of
     #: silently meaning either "clean" or "read from the wrong place".
@@ -133,12 +158,8 @@ class Outstanding:
 
     @property
     def empty(self) -> bool:
-        return (
-            self.carveout_total == 0
-            and not self.questions
-            and not self.captures
-            and not self.lane
-        )
+        clean = not (self.carveout_total or self.questions or self.captures or self.lane or self.verdicts)
+        return clean and self.verdicts_error is None
 
     def as_dict(self) -> "dict[str, Any]":
         by_project: "dict[str, int]" = {}
@@ -175,6 +196,11 @@ class Outstanding:
                 "parked": self.lane_parked,
                 "items": [{"text": i.text, "line": i.line} for i in self.lane],
             },
+            "verdicts": {
+                "total": len(self.verdicts),
+                "error": self.verdicts_error,
+                "items": [v._asdict() for v in self.verdicts],
+            },
         }
 
 
@@ -198,15 +224,16 @@ def events_path(root: Path) -> Path:
 
 
 def _iter_question_lines(fh: "Iterable[str]") -> "Iterator[str]":
-    """Yield only the lines that can possibly be a question event.
+    """Yield only the lines that can possibly be a question or decision event.
 
     The substring test runs per line as it is read, so neither the whole file
-    nor the whole filtered set is ever held beyond what the fold needs. Both
-    question types share ``QUESTION_MARKER``, so a line without it cannot be
-    one of ours and skipping it changes no outcome.
+    nor the whole filtered set is ever held beyond what the fold needs. Our
+    rows carry one of two markers, so a line without either cannot be ours
+    and skipping it changes no outcome. Callers that read only asks and
+    closes ignore decision rows by type.
     """
     for line in fh:
-        if QUESTION_MARKER in line:
+        if QUESTION_MARKER in line or "operator_decision" in line:
             yield line
 
 
@@ -237,6 +264,35 @@ def append_question_event(event: dict[str, Any], root: Path) -> None:
 
 def _read_question_events(path: Path, *, missing_hint: bool) -> "list[dict[str, Any]]":
     """Read valid question envelopes, distinguishing absent from unreadable."""
+    # The store commit is the write boundary: with a store beside the index,
+    # committed rows are the whole history and the raw check never runs.
+    from fno.events.store_client import native_rows, store_db_path
+
+    committed = native_rows(path, include_rejected=True)
+    if committed is not None:
+        events: "list[dict[str, Any]]" = []
+        for line in committed:
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("type") not in {
+                QUESTION_EVENT,
+                QUESTION_CLOSED_EVENT,
+                "operator_decision",
+            }:
+                continue
+            data = rec.get("data")
+            if isinstance(data, dict) and data.get("question_id"):
+                events.append(rec)
+        if not events and not store_db_path(path).exists() and not path.exists():
+            if missing_hint:
+                print(
+                    f"outstanding: question index {path} is missing; run "
+                    "`fno inbox outstanding reindex` to recover project questions.",
+                    file=sys.stderr,
+                )
+        return events
     try:
         path.stat()
     except FileNotFoundError:
@@ -256,22 +312,22 @@ def _read_question_events(path: Path, *, missing_hint: bool) -> "list[dict[str, 
     except OSError as exc:
         raise OutstandingError(f"cannot read question index {path}: {exc}") from exc
 
-    events: "list[dict[str, Any]]" = []
+    events = []
     try:
-        with path.open(encoding="utf-8") as fh:
-            for line in _iter_question_lines(fh):
-                try:
-                    rec = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(rec, dict) or rec.get("type") not in {
-                    QUESTION_EVENT,
-                    QUESTION_CLOSED_EVENT,
-                }:
-                    continue
-                data = rec.get("data")
-                if isinstance(data, dict) and data.get("question_id"):
-                    events.append(rec)
+        for line in _iter_question_lines(path.read_text(encoding="utf-8").splitlines()):
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("type") not in {
+                QUESTION_EVENT,
+                QUESTION_CLOSED_EVENT,
+                "operator_decision",
+            }:
+                continue
+            data = rec.get("data")
+            if isinstance(data, dict) and data.get("question_id"):
+                events.append(rec)
     except (OSError, UnicodeDecodeError) as exc:
         raise OutstandingError(f"cannot read question index {path}: {exc}") from exc
     return events
@@ -320,9 +376,7 @@ def _resolve_question_liveness(
                 pass
             send.close()
 
-    process = context.Process(
-        target=resolve_all, name="fno-question-liveness", daemon=True
-    )
+    process = context.Process(target=resolve_all, name="fno-question-liveness", daemon=True)
     process.start()
     send.close()
     answers: "dict[str, bool]" = {}
@@ -353,7 +407,8 @@ def read_open_questions(
 ) -> "list[Question]":
     """Fold ``operator_question`` minus ``operator_question_closed``.
 
-    Ranked by liveness, blocked nodes, age, then id. A malformed line is SKIPPED, never raised, inheriting
+    Ranked by liveness lane, then newest first (blocked nodes break same-second
+    ties). A malformed line is SKIPPED, never raised, inheriting
     ``read_carveouts``' rule: one bad row must not cost the others. A missing
     index reads as no questions with a recovery hint; an unreadable one fails.
     """
@@ -379,6 +434,7 @@ def read_open_questions(
                 ask=data.get("ask") or None,
                 options=tuple(data.get("options") or ()),
                 blocks=tuple(data.get("blocks") or ()),
+                subject=data.get("subject") or None,
             )
         elif rec.get("type") == QUESTION_CLOSED_EVENT:
             qid = data.get("question_id")
@@ -392,23 +448,28 @@ def read_open_questions(
         clock=clock,
         resolver=resolver,
     )
-    open_qs = [
-        replace(q, live=False if not q.asker else resolved.get(q.asker))
-        for q in open_qs
-    ]
-    # A stale asker never outranks a reachable one, even when it blocks more.
-    # Within each liveness lane, unblock the most nodes first, then honor the
-    # questions that have waited longest. No auto-expiry: age only ranks.
-    open_qs.sort(
-        key=lambda q: (
-            q.live is not True,
-            -len(q.blocks),
-            not bool(q.ts),
-            q.ts,
-            q.id,
-        )
-    )
+    open_qs = [replace(q, live=False if not q.asker else resolved.get(q.asker)) for q in open_qs]
+    # Newest first inside a lane. An ask filed minutes ago is the one a human
+    # can still act on, and blocks drops below recency because the 19 rows
+    # carrying it were all filed before 09-08 and held the whole 10-row window
+    # against every ask filed since. An empty ts sorts last: "" loses under
+    # reverse.
+    open_qs.sort(key=lambda q: (q.ts, -len(q.blocks), q.id), reverse=True)
+    open_qs.sort(key=lambda q: q.live is not True)
     return open_qs
+
+
+def read_answered_questions() -> "list[dict[str, Any]]":
+    """Read actionable answers through the native history-aware join."""
+    from fno.events.store_client import read_projection
+
+    return read_projection(questions_path(), "--answered-questions", {})
+
+
+def read_question_events() -> "list[dict[str, Any]]":
+    """Every question-journal record (ask, close, decision), oldest-first:
+    the positional stream an answer-suppression fold replays."""
+    return _read_question_events(questions_path(), missing_hint=False)
 
 
 def _capture_project_roots(root: Path) -> "list[Path]":
@@ -417,16 +478,25 @@ def _capture_project_roots(root: Path) -> "list[Path]":
     The graph is the one machine-wide store (``~/.fno/graph.json``), and its
     entries carry the ``cwd``/``source_cwd`` each node was worked from, so it
     is the measured-fact enumeration of sibling projects - no second registry.
-    Dead or missing roots degrade to zero captures in the fold below, and a
-    corrupt or absent graph reads as this project alone.
+    The read goes through the store api, never the file. Dead or missing roots
+    degrade to zero captures in the fold below, and a corrupt or absent store
+    reads as this project alone.
     """
     roots = {Path(root).resolve()}
     try:
         backend = os.environ.get("FNO_TRACKER_BACKEND") or "graph"
         if backend == "graph":
             from fno import paths
+            from fno.graph.store import _client_for
 
-            payload = json.loads(paths.graph_json().read_text(encoding="utf-8"))
+            # The keeper's read op is the store's raw arm: unlike the typed
+            # `api.nodes` it never drops a row the node model cannot carry,
+            # which this enumeration must not do - a legacy row's cwd is as
+            # real a project root as a typed row's. The path resolves at call
+            # time so the seam the tests pin (`paths.graph_json`) picks the
+            # store up.
+            gpath = paths.graph_json()
+            payload = _client_for(gpath).read(gpath)
             entries = payload.get("entries", []) if isinstance(payload, dict) else payload
             locations = (
                 (entry.get("cwd"), entry.get("source_cwd"))
@@ -485,10 +555,15 @@ def _question_journals(root: Path) -> "list[Path]":
     """Every graph-named project journal, deduped by physical file."""
     seen: "set[tuple[int, int]]" = set()
     journals: "list[Path]" = []
+    from fno.events.store_client import store_db_path
+
     for project_root in _capture_project_roots(root):
         path = events_path(project_root)
+        # The store commit is the write boundary: a journal whose bytes were
+        # never written still owns a readable store beside it.
+        probe = path if path.exists() else store_db_path(path)
         try:
-            stat = path.stat()
+            stat = probe.stat()
         except OSError:
             continue
         key = (stat.st_dev, stat.st_ino)
@@ -678,9 +753,6 @@ def _read_open_captures_with_counts(root: Path) -> "tuple[list[Capture], int, in
     return captures, file_total, row_total
 
 
-def read_open_captures(root: Path) -> "list[Capture]":
-    """Return the open capture rows from the machine-wide project fold."""
-    return _read_open_captures_with_counts(root)[0]
 
 
 def collect(root: Path, *, lane: "LaneRead | None" = None) -> Outstanding:
@@ -706,6 +778,7 @@ def collect(root: Path, *, lane: "LaneRead | None" = None) -> Outstanding:
     lane_read = lane if lane is not None else read_lane()
     if lane_read.error:
         raise OutstandingError(lane_read.error)
+    verdicts, verdicts_error = _read_open_verdicts()
     return Outstanding(
         carveout_total=len(rows),
         carveout_by_kind=by_kind,
@@ -716,8 +789,34 @@ def collect(root: Path, *, lane: "LaneRead | None" = None) -> Outstanding:
         capture_row_total=capture_row_total,
         lane=open_items(lane_read),
         lane_parked=len(parked_items(lane_read)),
+        verdicts=verdicts,
+        verdicts_error=verdicts_error,
         carveout_root=str(Path(root)),
     )
+
+
+def _read_open_verdicts() -> "tuple[list[VerdictRow], Optional[str]]":
+    """Open prove-it FAIL rows from the Rust reader, or why it could not be
+    read. A failed call never raises: that would blank the questions leg."""
+    from fno.rust_binary import VerbUnavailable, verb_call
+
+    try:
+        payload = verb_call("prove-it-verdicts", {})
+    except (VerbUnavailable, OSError, ValueError) as exc:
+        return [], str(exc)
+    rows = [
+        VerdictRow(
+            node=str(r.get("node") or ""),
+            report=str(r.get("report") or ""),
+            verdict=str(r.get("verdict") or "FAIL"),
+            claim=str(r.get("claim") or ""),
+            status=r.get("status"),
+            mtime=r.get("mtime"),
+        )
+        for r in payload.get("rows") or []
+        if r.get("open")
+    ]
+    return rows, None
 
 
 def _age_days(ts: str) -> Optional[int]:
@@ -735,7 +834,7 @@ def _plural(n: int, word: str) -> str:
 
 
 def render(
-    outstanding: Outstanding, *, session_id: Optional[str] = None, crowned: bool = False
+    outstanding: Outstanding, *, session_id: Optional[str] = None, promoted: bool = False
 ) -> str:
     """Render the human block. Empty string when nothing is outstanding.
 
@@ -751,10 +850,10 @@ def render(
     any session's share to three rows plus a count, which is what the short
     render was for, so the branch bought nothing that the cap does not.
 
-    The crown splits the RENDER, never the READ. Every session prints the lane
-    count and top item; only a crowned session also gets the action line.
+    The role splits the RENDER, never the READ. Every session prints the lane
+    count and top item; only a promoted session also gets the action line.
     Gating the read itself would reproduce the defect this block exists to
-    fix - most sessions are not crowned, so the lane would stay invisible in
+    fix - most sessions are not promoted, so the lane would stay invisible in
     the common case and nobody would read it again.
     """
     if outstanding.empty:
@@ -768,7 +867,7 @@ def render(
             head += f" {outstanding.lane_parked} parked."
         lines.append(head)
         lines.append(f"  {outstanding.lane[0].text}")
-        if crowned:
+        if promoted:
             lines.append(
                 '  File one with: fno backlog idea "<text>", then stamp `-> <id>` '
                 "onto its line, or park it with `-> parked: <reason>`."
@@ -776,9 +875,7 @@ def render(
         lines.append("")
 
     if outstanding.carveout_total:
-        split = ", ".join(
-            f"{n} {kind}" for kind, n in sorted(outstanding.carveout_by_kind.items())
-        )
+        split = ", ".join(f"{n} {kind}" for kind, n in sorted(outstanding.carveout_by_kind.items()))
         head = f"{_plural(outstanding.carveout_total, 'carve-out')} unharvested"
         if outstanding.carveout_root:
             head += f" from {outstanding.carveout_root}"
@@ -796,7 +893,7 @@ def render(
         # shape) and nothing else ever tells a human what to run.
         #
         # Route by kind. `retro sweep-carveouts` SKIPS backfill rows entirely
-        # (they belong to /fno:pr merged), so prescribing it against a
+        # (they belong to /fno:ship pr merged), so prescribing it against a
         # backfill-only ledger sends the operator to a verb that clears
         # nothing and reports the same count on every later session.
         sweepable = sum(
@@ -807,7 +904,7 @@ def render(
                 "  Clear with: fno backlog retro sweep-carveouts (preview), --apply to file and consume."
             )
         if outstanding.carveout_by_kind.get(BACKFILL_KIND):
-            lines.append("  Backfill rows are handled by /fno:pr merged, not by the sweep.")
+            lines.append("  Backfill rows are handled by /fno:ship pr merged, not by the sweep.")
         lines.append("")
 
     if outstanding.questions:
@@ -815,8 +912,19 @@ def render(
         lines.append(f"{_plural(len(outstanding.questions), 'open question')} awaiting you.")
 
         shown = outstanding.questions[:QUESTION_RENDER_CAP]
+        body_trimmed = False
+
+        def _one_line(text: str) -> "tuple[str, bool]":
+            """First line only, truncated at QUESTION_BODY_CAP with an ellipsis
+            that says it truncated. Returns (line, was_trimmed)."""
+            line = text.split("\n", 1)[0].strip()
+            cut = len(line) > QUESTION_BODY_CAP
+            if cut:
+                line = line[: QUESTION_BODY_CAP - 1] + "…"
+            return line, cut
 
         def append_question(q: Question, *, stale_row: bool = False) -> None:
+            nonlocal body_trimmed
             label = "[this session] " if q in mine else ""
             where = q.node or (Path(q.cwd).name if q.cwd else None)
             details = [where] if where else []
@@ -824,9 +932,13 @@ def render(
                 age = _age_days(q.ts)
                 details.append(f"{_plural(age, 'day')} old" if age is not None else "age unknown")
             suffix = f"  ({'; '.join(details)})" if details else ""
-            lines.append(f"  {label}{q.id}  {q.question}{suffix}")
-            if q.ask:
-                lines.append(f"    Action: {q.ask}")
+            body, cut = _one_line(q.question)
+            action, action_cut = _one_line(q.ask) if q.ask else (None, False)
+            if cut or action_cut or "\n" in q.question or (q.ask and "\n" in q.ask):
+                body_trimmed = True
+            lines.append(f"  {label}{q.id}  {body}{suffix}")
+            if action:
+                lines.append(f"    Action: {action}")
 
         group_order: "list[str | bool | None]" = []
         grouped: "dict[str | bool | None, list[Question]]" = {}
@@ -860,10 +972,28 @@ def render(
                 "answering still records the decision."
             )
         if len(outstanding.questions) > QUESTION_RENDER_CAP:
+            lines.append(f"  Showing {len(shown)} of {len(outstanding.questions)} open questions.")
+        lines.append('  Answer with: fno inbox outstanding clear <id> --answer "..."')
+        if body_trimmed:
             lines.append(
-                f"  Showing {len(shown)} of {len(outstanding.questions)} open questions."
+                "  Rows are trimmed to one line; read a full question with: fno inbox outstanding -J"
             )
-        lines.append("  Answer with: fno inbox outstanding clear <id> --answer \"...\"")
+        lines.append("")
+
+    if outstanding.verdicts:
+        lines.append(f"{_plural(len(outstanding.verdicts), 'prove-it FAIL verdict')} with no ruling.")
+        for v in outstanding.verdicts[:RENDER_CAP]:
+            claim = v.claim.split("\n", 1)[0].strip()
+            if len(claim) > 100:
+                claim = claim[:99] + "…"
+            where = f" ({v.status})" if v.status else ""
+            lines.append(f"  {v.node}{where}: {claim}")
+            lines.append(f"    Read: {v.report}")
+        lines.append("  Rule with: fno inbox decide <node> naming the report, or re-run /fno:review prove-it.")
+        lines.append("")
+
+    if outstanding.verdicts_error:
+        lines.append(f"prove-it verdicts could not be read ({outstanding.verdicts_error}).")
         lines.append("")
 
     if outstanding.captures:

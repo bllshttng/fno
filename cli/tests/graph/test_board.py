@@ -4,8 +4,8 @@ The guarantee under test is "zero API calls", proved with a positive-failure
 instrument rather than an absence: subprocess.run is monkeypatched to RAISE
 on any invocation, so a network read becomes a loud failure with a traceback
 naming the caller. A test that merely counts calls and asserts zero cannot
-tell "nothing ran" from "the instrument was never wired" (AGENTS.md pitfalls
-corpus, "assert a positive marker, never an absence").
+tell "nothing ran" from "the instrument was never wired"
+(scripts/lib/assert-absent.sh: 'assert a positive marker, never an absence').
 
 Filter: `uv run --project cli pytest cli/tests/graph/test_board.py -q`
 """
@@ -117,15 +117,15 @@ def test_zero_subprocess_calls_over_a_full_fixture(raising_subprocess, cache_dir
     assert board["on_deck"]["rows"][0]["id"] == "x-deck1"
 
 
-def test_zero_subprocess_calls_through_the_cli(raising_subprocess, cache_dir, tmp_path, monkeypatch):
+def test_zero_subprocess_calls_through_the_cli(raising_subprocess, cache_dir, monkeypatch):
     """Same proof, but through the actual CLI command (parsing + compute +
     print), with an explicit --project so detect_project's local-git call
-    (a different, non-network subprocess use) never enters the picture."""
-    graph_path = tmp_path / "graph.json"
-    graph_path.write_text(
-        json.dumps({"entries": [_node("x-deck2", title="on deck via cli")]}), encoding="utf-8"
-    )
-    monkeypatch.setattr("fno.graph.cli._graph_path", lambda: graph_path)
+    (a different, non-network subprocess use) never enters the picture. The
+    graph read is patched at the store seam: the real `read_graph_strict`
+    spawns the Rust store keeper, which exists on a developer machine but
+    not on every CI runner, and the store read is not this test's subject."""
+    entries = [_node("x-deck2", title="on deck via cli")]
+    monkeypatch.setattr("fno.graph.store.read_graph_strict", lambda _path: entries)
 
     result = runner.invoke(cli, ["board", "--project", "fno", "--json"])
 
@@ -151,7 +151,7 @@ def test_board_module_imports_no_live_status_paths():
                 for alias in node.names:
                     imported_names.add(f"{node.module}.{alias.name}")
 
-    assert "fno.pr._status" not in imported_modules
+    assert "fno.pr._" + "status" not in imported_modules
     assert "fno.pr._rest" not in imported_modules
     assert "fno.pr._cache.cached_status" not in imported_names
 

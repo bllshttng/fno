@@ -1,6 +1,6 @@
-"""Status-sink fanout: the dumb dispatcher (x-2057).
+"""Status-sink fanout: the dumb dispatcher.
 
-Layer 2 of the status-breakpoints protocol. Workers emit x-dbaf protocol-family
+Layer 2 of the status-breakpoints protocol. Workers emit protocol-family
 events (``task_started`` / ``task_done`` / ``blocked`` / ``run_summary``) once to
 ``.fno/events.jsonl`` and never know sinks exist. This module sweeps that log on
 a tick and routes each event to configured external sinks per a per-sink filter.
@@ -10,9 +10,10 @@ Correctness spine (see the plan's Locked Decisions):
     ``.fno/status-sinks/<name>.cursor`` - a byte offset dies at the 8MB rotation;
     the RFC3339-Z ``ts`` string is rotation-proof. Worktrees sharing one journal
     therefore share the cursor and tick lock too.
-  - **Rotation catch-up:** ``events.jsonl`` renames to ``events.jsonl.1`` (single
-    generation). When a cursor predates the active file's first line the tick
-    drains ``.1`` first, so a rotation between ticks is transparent.
+  - **Store-first:** the committed event rows answer the pass (every retained
+    generation included), so a journal rename between ticks is transparent for
+    any journal with a store; the rotated-file drain remains only for
+    store-less legacy journals.
   - **One shared pass** from ``min(cursors)``, evaluating each line against every
     sink in memory - not one file pass per sink.
   - **At-least-once:** a sink's cursor advances past an event only after that
@@ -69,8 +70,10 @@ class SinkResult:
 class TickResult:
     sinks: list[SinkResult] = field(default_factory=list)
     skipped_lines: int = 0
+    rows_read: int = 0  # status rows the pass read; 0 on an unchanged store
     locked_out: bool = False  # another tick held the per-project lock; skipped
     lease_lost: bool = False  # lock was stolen; cursor persistence was aborted
+    undeliverable_sinks: "tuple[str, ...]" = ()  # enabled sinks' url unresolved; no read attempted
 
 
 # ── event stream (rotation-aware, skip-and-count) ───────────────────────────
@@ -99,51 +102,6 @@ def _parse_line(line: str) -> Optional[dict[str, Any]]:
     return obj if _utc_timestamp(obj["ts"]) is not None else None
 
 
-def _read_events(path: Path, since_ts: Optional[str]) -> "tuple[list[dict[str, Any]], int]":
-    """Return (events with ts >= since_ts, malformed_line_count) from one file.
-
-    The bound is INCLUSIVE so a boundary event sharing the cursor's second is
-    still seen; the per-sink ``(ts, n)`` tiebreak decides whether it is new (see
-    _run_locked). Streams line-by-line; a malformed / ts-less line is skipped and
-    counted (digest.rs posture), never fatal.
-    """
-    events: list[dict[str, Any]] = []
-    skipped = 0
-    since_key = _timestamp_key(since_ts) if since_ts is not None else None
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for raw in fh:
-                ev = _parse_line(raw)
-                if ev is None:
-                    if raw.strip():
-                        skipped += 1
-                    continue
-                if since_key is None or _timestamp_key(ev["ts"]) >= since_key:
-                    events.append(ev)
-    except FileNotFoundError:
-        return [], 0
-    except (OSError, UnicodeDecodeError):
-        # A permission error or a corrupt (non-utf8) byte mid-read must not crash
-        # the tick; return what parsed so far (the cursor simply does not advance
-        # past the unread tail, which retries next tick).
-        return events, skipped
-    return events, skipped
-
-
-def _first_ts(active: Path) -> Optional[str]:
-    """The ts of the active file's first parseable line, or None if empty/absent.
-    Used to decide whether the rotated ``.1`` could still hold un-cursored events."""
-    try:
-        with active.open("r", encoding="utf-8") as fh:
-            for raw in fh:
-                ev = _parse_line(raw)
-                if ev is not None:
-                    return str(ev["ts"])
-    except FileNotFoundError:
-        return None
-    return None
-
-
 def _active_inode(active: Path) -> int:
     """The active file's inode, or -1 (a sentinel distinct from any real inode) when
     absent/unstatable, so 'appeared' and 'vanished' both read as a change."""
@@ -153,7 +111,9 @@ def _active_inode(active: Path) -> int:
         return -1
 
 
-def _stream_since(active: Path, since_ts: Optional[str]) -> "tuple[list[dict[str, Any]], int]":
+def _stream_since(
+    active: Path, since_ts: Optional[str], after_seq: Optional[int] = None
+) -> "tuple[list[dict[str, Any]], int, Optional[int]]":
     """Rotation-stable read: snapshot the active file's inode around the read pass.
     A worker rotating the log mid-pass (``events.jsonl`` -> ``.1`` + a fresh active)
     can put old content in both files and inflate the same-``ts`` occurrence index,
@@ -161,39 +121,30 @@ def _stream_since(active: Path, since_ts: Optional[str]) -> "tuple[list[dict[str
     changed (or the file appeared/vanished) between the stats, discard and re-run
     the pass ONCE; a second racing rotation returns anyway - at-least-once tolerates
     the duplicate, only the index inflation had a loss path."""
-    result: "tuple[list[dict[str, Any]], int]" = ([], 0)
+    result: "tuple[list[dict[str, Any]], int, Optional[int]]" = ([], 0, None)
     for _ in range(2):
         ino_before = _active_inode(active)
-        result = _stream_pass(active, since_ts)
+        result = _stream_pass(active, since_ts, after_seq)
         if _active_inode(active) == ino_before:
             break  # no rotation raced this pass; its counts are trustworthy
     return result
 
 
-def _stream_pass(active: Path, since_ts: Optional[str]) -> "tuple[list[dict[str, Any]], int]":
-    """One read pass: all events with ts >= since_ts, draining the rotated ``.1``
-    first ONLY when the cursor predates the active file's first line (else ``.1`` is
-    fully covered and re-scanning its up-to-8MB tail every tick is wasted IO).
-    Rotated history is prepended so the returned list stays ts-ordered (both files
-    are individually ordered and ``.1`` is strictly older)."""
-    active_events, active_skipped = _read_events(active, since_ts)
-    rotated = active.with_name(active.name + ".1")
-    if not rotated.exists():
-        return active_events, active_skipped
-    active_first = _first_ts(active)
-    # Skip .1 only when the cursor is STRICTLY inside the active file. On equality
-    # (since_ts == active_first) a second was split across the rotation boundary,
-    # so .1 still holds same-ts events whose occurrence index must be counted
-    # ahead of the active file's - dropping .1 here would reset the index to 0 and
-    # mis-align it against the cursor's n, losing same-second events (codex peer).
-    if (
-        since_ts is not None
-        and active_first is not None
-        and _timestamp_key(since_ts) > _timestamp_key(active_first)
-    ):
-        return active_events, active_skipped
-    rotated_events, rotated_skipped = _read_events(rotated, since_ts)
-    return rotated_events + active_events, active_skipped + rotated_skipped
+def _stream_pass(
+    active: Path, since_ts: Optional[str], after_seq: Optional[int] = None
+) -> "tuple[list[dict[str, Any]], int, Optional[int]]":
+    """Read actionable status rows through the native stream owner. With a
+    store, only rows committed past ``after_seq`` come back, plus the store's
+    high-water seq as the next scan cursor; a store-less journal answers no
+    seq and is read whole."""
+    from fno.events.store_client import read_projection
+
+    query: "dict[str, Any]" = {"since_ts": since_ts, "after_seq": after_seq}
+    if since_ts:
+        # SQL-level window bound; the fold applies since_ts only post-read.
+        query["since_ms"] = int(_timestamp_key(since_ts).timestamp() * 1000)
+    rows, skipped, *high = read_projection(active, "--status-stream", query)
+    return rows, skipped, (high[0] if high else None)
 
 
 def _eof_cursor(active: Path) -> "tuple[str, int]":
@@ -222,6 +173,15 @@ def _eof_cursor(active: Path) -> "tuple[str, int]":
     return last_ts, count
 
 
+def _fresh_floor(active: Path) -> "tuple[str, int]":
+    """Fresh-sink floor on a store-backed journal: wall-clock now. A store
+    answers with every retained generation, so the file-EOF floor ("", 0)
+    reads as "from the epoch" over the store. Store-less keeps the read."""
+    if (active.parent / "events.db").exists():
+        return (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), 0)
+    return _eof_cursor(active)
+
+
 # ── cursor io (atomic) ──────────────────────────────────────────────────────
 
 
@@ -236,6 +196,11 @@ def _cursor_path(name: str, project_root: Optional[Path]) -> Path:
 
 def _errors_path(name: str, project_root: Optional[Path]) -> Path:
     return _state_dir(project_root) / f"{name}.errors.jsonl"
+
+
+# One store seq per journal, shared by every sink, rides the cursor file
+# format as ("", seq). The dot keeps it apart from any sink name.
+_SCAN = ".scan"
 
 
 def _read_cursor(name: str, project_root: Optional[Path]) -> "Optional[tuple[str, int]]":
@@ -313,6 +278,12 @@ def run_tick(
     enabled = [s for s in sinks if s.enabled]
     if not enabled:
         return TickResult()  # clean no-op: no cursor writes, no lock churn
+    if not any(_sink_configured(s) for s in enabled):
+        # Every enabled sink's url is unresolved (e.g. url_env unset): dispatch
+        # would short-circuit and hold the scan cursor, so every later tick
+        # rereads the whole journal. Skip before any read; the sink's stored
+        # cursor resumes the backlog once the url resolves.
+        return TickResult(undeliverable_sinks=tuple(s.name for s in enabled))
 
     lock = _TickLock(project_root)
     if not lock.acquire():
@@ -331,21 +302,33 @@ def _run_locked(
     verify_lease: Callable[[], bool],
 ) -> TickResult:
     active = paths.project_log("events.jsonl", project_root=project_root)
-    eof = _eof_cursor(active)  # (ts, count_at_ts) - the fresh-sink floor
+    scan = (_read_cursor(_SCAN, project_root) or (None, None))[1]
+    cursors = {s.name: _read_cursor(s.name, project_root) for s in sinks}
+    fresh = {name: cur is None for name, cur in cursors.items()}
 
     # Each sink's starting (ts, n) cursor: a fresh sink (no file) starts at EOF so
     # no history is replayed; an existing sink resumes from its stored cursor.
-    fresh: dict[str, bool] = {}
-    start: dict[str, tuple[str, int]] = {}
-    for s in sinks:
-        cur = _read_cursor(s.name, project_root)
-        fresh[s.name] = cur is None
-        start[s.name] = cur if cur is not None else eof
+    # With a scan seq EOF is now, a real ts that survives a lost scan cursor.
+    eof = ("", 0)
+    if scan is not None:
+        eof = (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"), 0)
+    elif any(fresh.values()):
+        eof = _fresh_floor(active)  # (ts, count_at_ts) - the fresh-sink floor
+    start = {name: cur if cur is not None else eof for name, cur in cursors.items()}
 
     # Read from the oldest cursor ts INCLUSIVE so every sink sees its own same-ts
     # boundary events; the per-sink (ts, n) tiebreak below decides what is new.
     min_ts = min((c[0] for c in start.values()), key=_timestamp_key)
-    events, skipped = _stream_since(active, min_ts)
+    events, skipped, high = _stream_since(active, min_ts, scan)
+    if scan is None and high is not None and events:
+        # A first store-backed pass: the journal EOF can predate the store's
+        # newest rows, so a fresh sink starts at the store's EOF instead.
+        last_ts = max((e["ts"] for e in events), key=_timestamp_key)
+        last = _timestamp_key(last_ts)
+        store_eof = (last_ts, sum(1 for e in events if _timestamp_key(e["ts"]) == last))
+        for name in start:
+            if fresh[name] and _timestamp_key(start[name][0]) < last:
+                start[name] = store_eof
     # Setup migration appends a worktree segment after the canonical tail, so
     # append order is not necessarily timestamp order. The cursor compares by
     # timestamp; process a stable timestamp ordering so an older migrated row
@@ -407,9 +390,17 @@ def _run_locked(
     # silent re-delivery storm. A fresh sink persists its EOF floor even with zero
     # dispatch so the next tick never backfills.
     if not dry_run:
+        # A held (short-circuited) sink re-reads this window, so the seq stays.
+        # Past an advance no same-ts peer remains, so counts restart at 0.
+        # Cursors land first: a crash between the writes re-delivers.
+        advance = high is not None and high != scan
+        advance = advance and not any(state[s.name].short_circuited for s in sinks)
         for s in sinks:
             st = state[s.name]
-            if st.dispatched or st.dropped or fresh[s.name]:
+            cursor = st.new_cursor
+            if advance and cursor[1]:  # type: ignore[index]
+                cursor = (cursor[0], 0)  # type: ignore[index]
+            if st.dispatched or st.dropped or fresh[s.name] or cursor != st.new_cursor:
                 if not verify_lease():
                     return TickResult(
                         sinks=[state[item.name] for item in sinks],
@@ -417,13 +408,20 @@ def _run_locked(
                         lease_lost=True,
                     )
                 try:
-                    _write_cursor(s.name, st.new_cursor, project_root)  # type: ignore[arg-type]
+                    _write_cursor(s.name, cursor, project_root)  # type: ignore[arg-type]
                 except OSError as exc:
+                    advance = False  # a stale count must not meet the next window
                     _log_error(s.name, project_root, {
                         "sink": s.name, "reason": f"cursor write failed: {exc}",
                         "class": "cursor_write_failed"})
+        if advance and high is not None and verify_lease():
+            try:
+                _write_cursor(_SCAN, ("", high), project_root)
+            except OSError:
+                pass  # the next tick re-reads this window; ts cursors dedupe
 
-    return TickResult(sinks=[state[s.name] for s in sinks], skipped_lines=skipped)
+    return TickResult(
+        sinks=[state[s.name] for s in sinks], skipped_lines=skipped, rows_read=len(events))
 
 
 # ── per-project tick lock ───────────────────────────────────────────────────
@@ -508,20 +506,19 @@ class _HttpResult:
     retry_after: Optional[float] = None
 
 
-def _post_json(url: str, body: dict[str, Any], timeout: float) -> _HttpResult:
-    """POST a JSON body. A connect-class failure (timeout / DNS / refused) returns
+def _post_data(url: str, data: bytes, content_type: str, timeout: float) -> _HttpResult:
+    """POST raw bytes. A connect-class failure (timeout / DNS / refused) returns
     status=None; an HTTP error response returns its status code."""
     import urllib.error
     import urllib.request
 
-    data = json.dumps(body).encode("utf-8")
     try:
         req = urllib.request.Request(
             url, data=data, method="POST",
             # Discord's webhook API 403s the stdlib default `Python-urllib/x.y`
             # User-Agent (anti-abuse); an explicit UA is required or every send
             # short-circuits forever. Any descriptive string passes.
-            headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT},
+            headers={"Content-Type": content_type, "User-Agent": _USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             code = resp.getcode()
@@ -542,6 +539,18 @@ def _post_json(url: str, body: dict[str, Any], timeout: float) -> _HttpResult:
         return _HttpResult(ok=False, status=None)  # connect-class
 
 
+def _post_json(url: str, body: dict[str, Any], timeout: float) -> _HttpResult:
+    """POST a JSON body (failure classes: _post_data)."""
+    return _post_data(url, json.dumps(body).encode("utf-8"), "application/json", timeout)
+
+
+def _post_raw(url: str, text: str, timeout: float) -> _HttpResult:
+    """POST the text verbatim as the body (text/plain). This is the ntfy shape:
+    with the topic in the URL the body IS the raw message, and a JSON envelope
+    would be shown to the reader literally."""
+    return _post_data(url, text.encode("utf-8"), "text/plain", timeout)
+
+
 # 4xx codes that are a fixable/transient operator or timeout condition, not a
 # permanent client error: a bad baked-in secret (401/403) or a request timeout
 # (408) should hold the cursor and retry (mirroring 429), not silently DROP every
@@ -549,8 +558,15 @@ def _post_json(url: str, body: dict[str, Any], timeout: float) -> _HttpResult:
 _TRANSIENT_4XX = frozenset((401, 403, 408, 429))
 
 
-def _deliver(url: str, body: dict[str, Any], fanout: StatusFanoutConfig) -> "tuple[str, str]":
+def _deliver(
+    url: str,
+    body: dict[str, Any],
+    fanout: StatusFanoutConfig,
+    raw: Optional[str] = None,
+) -> "tuple[str, str]":
     """Retry/failure-class driver shared by the webhook adapters.
+
+    ``raw`` mode posts the raw text and ignores ``body``.
 
     - 4xx except 401/403/408/429 -> DROPPED immediately (permanent; advance past it).
     - connect-class / 5xx / 401 / 403 / 408 / 429 -> bounded retry, then
@@ -560,7 +576,10 @@ def _deliver(url: str, body: dict[str, Any], fanout: StatusFanoutConfig) -> "tup
     attempts = max(1, fanout.retries + 1)
     result = _HttpResult(ok=False)
     for i in range(attempts):
-        result = _post_json(url, body, float(fanout.http_timeout_secs))
+        if raw is not None:
+            result = _post_raw(url, raw, float(fanout.http_timeout_secs))
+        else:
+            result = _post_json(url, body, float(fanout.http_timeout_secs))
         if result.ok:
             return DELIVERED, ""
         if result.status is not None and 400 <= result.status < 500 and result.status not in _TRANSIENT_4XX:
@@ -588,7 +607,7 @@ def _resolve_url(sink: StatusSinkConfig) -> "tuple[Optional[str], Optional[str]]
     ``url_env`` resolves from the process env first, then ``~/.fno/.env`` - the
     daemon shells the tick with its own env, which never saw the operator's
     ``export``, so a file fallback is what makes an unattended ``url_env`` sink
-    deliver (x-0128). Process env wins so an exported value is unchanged."""
+    deliver. Process env wins so an exported value is unchanged."""
     if sink.url:
         return sink.url, None
     if sink.url_env:
@@ -598,6 +617,16 @@ def _resolve_url(sink: StatusSinkConfig) -> "tuple[Optional[str], Optional[str]]
             return val, None
         return None, f"url_env {sink.url_env} unset (checked process env and ~/.fno/.env)"
     return None, "no url configured"
+
+
+def _sink_configured(sink: StatusSinkConfig) -> bool:
+    """A sink this tick could deliver through: a webhook whose url resolves
+    now (``url``, process env, then ~/.fno/.env), or a type that needs no url.
+    An enabled webhook with an unresolved url_env is not configured work."""
+    if sink.type not in ("json-webhook", "text-webhook"):
+        return True
+    url, _ = _resolve_url(sink)
+    return url is not None
 
 
 # ── adapter router + adapters ───────────────────────────────────────────────
@@ -683,18 +712,24 @@ def _dispatch_text_webhook(
     sink: StatusSinkConfig, event: dict[str, Any], fanout: StatusFanoutConfig
 ) -> "tuple[str, str]":
     """Render ``template`` against the event and POST ``{field: rendered}``. One
-    adapter serves Discord (``content``) / Slack-incoming (``text``) / ntfy via
-    the configurable ``field``. A Discord-shaped post (``field == "content"``)
+    adapter serves Discord (``content``) / Slack-incoming (``text``) via the
+    configurable ``field``. ``raw_body = True`` posts the rendered text verbatim
+    instead - the ntfy shape, where a topic-in-URL body IS the raw message
+    (ntfy parses JSON bodies only on its root URL, so an envelope reaches the
+    reader as literal JSON). A Discord-shaped post (``field == "content"``)
     sends ``allowed_mentions: {"parse": []}`` so a worker-influenced reason
-    containing ``@everyone`` cannot ping the server. For any non-Discord field the
-    rendered text is defanged - ``<!`` -> ``&lt;!`` - so Slack's broadcast tokens
-    (``<!channel>`` / ``<!here>`` / ``<!everyone>`` / ``<!subteam^...>``) render as
-    literal text instead of pinging the workspace (Slack shows ``&lt;`` as ``<``,
-    so the visible text is unchanged; ntfy is plain text and unaffected)."""
+    containing ``@everyone`` cannot ping the server. In JSON mode any non-Discord
+    field has its rendered text defanged - ``<!`` -> ``&lt;!`` - so Slack's
+    broadcast tokens (``<!channel>`` / ``<!here>`` / ``<!everyone>`` /
+    ``<!subteam^...>``) render as literal text instead of pinging the workspace
+    (Slack shows ``&lt;`` as ``<``, so the visible text is unchanged); raw mode
+    posts before that point, so a plain-text channel shows the text verbatim."""
     url, err = _resolve_url(sink)
     if url is None:
         return SHORT_CIRCUIT, err or "no url"
     rendered = _render_template(sink.template, event)
+    if sink.raw_body:
+        return _deliver(url, {}, fanout, raw=rendered)
     if sink.field != "content":
         rendered = rendered.replace("<!", "&lt;!")
     body: dict[str, Any] = {sink.field: rendered}
@@ -757,9 +792,10 @@ def _append_plan_progress(plan_path: str, text: str, project_root: Path) -> None
 def _dispatch_backlog_progress(
     sink: StatusSinkConfig, event: dict[str, Any], project_root: Path
 ) -> "tuple[str, str]":
-    """On ``task_done`` / ``run_summary`` carrying a ``node``: append a timestamped
-    progress note to the graph node AND to its plan doc's ``## Progress`` section.
-    Other kinds / node-less events are a no-op (advance the cursor)."""
+    """On ``task_done`` / ``run_summary`` carrying a ``node``: record the row in
+    permanent history (: never the human current state) AND append to the
+    plan doc's ``## Progress`` section. Other kinds / node-less events are a
+    no-op (advance the cursor)."""
     if event.get("type") not in ("task_done", "run_summary"):
         return DELIVERED, ""
     node_id = event.get("node")
@@ -767,20 +803,45 @@ def _dispatch_backlog_progress(
         return DELIVERED, ""
 
     from fno import paths as _paths
-    from fno.graph.store import append_progress_note
 
     text = _progress_line(event)
-    note = {"ts": event.get("ts", ""), "text": text}
     try:
-        found, plan_path = append_progress_note(_paths.graph_json(), node_id, note)
+        receipt = _machine_note(_paths.graph_json(), node_id, event.get("type"), text)
     except Exception as exc:  # a graph write failure is a real (droppable) failure
         return DROPPED, f"graph note failed: {exc}"
-    if not found:
-        return DROPPED, f"node {node_id} not found in graph"
+    if receipt is None:
+        return DROPPED, f"node {node_id} not found in graph or write refused"
     # Plan-doc append is best-effort and never fails the delivery.
+    plan_path = None
+    try:
+        from fno.graph import api as graph_api
+
+        row = graph_api.node(node_id)
+        plan_path = getattr(row, "plan_path", None)
+    except Exception:  # noqa: BLE001 - the plan stamp never fails the delivery
+        plan_path = None
     if plan_path:
-        _append_plan_progress(plan_path, f"{note['ts']} {text}", project_root)
+        _append_plan_progress(plan_path, f"{event.get('ts', '')} {text}", project_root)
     return DELIVERED, ""
+
+
+def _machine_note(graph_path, node_id: str, kind, text: str) -> "dict | None":
+    """One machine record through the native note action (history-only).
+    ``None`` on a refused write or a missing node."""
+    import subprocess as _sp
+
+    from fno.graph.note_cli import _receipt
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        return None
+    argv = [str(binary), "backlog", "note", "--graph", str(graph_path), "--stdin", "--json",
+            "--quiet", "--node", str(node_id), "--machine", str(kind)]
+    proc = _sp.run(argv, input=text, text=True, check=False, capture_output=True)
+    if proc.returncode != 0:
+        return None
+    return _receipt(proc.stdout)
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -812,11 +873,17 @@ def tick_cmd(
     if result.locked_out:
         typer.echo("status-fanout: another tick holds the lock; skipped")
         return
-    if not result.sinks:
-        typer.echo("status-fanout: no enabled sinks (no-op)")
-        return
+    # The daemon ticks every few seconds: an idle pass prints nothing.
+    if not result.sinks and dry_run:
+        if result.undeliverable_sinks:
+            typer.echo("status-fanout: no deliverable sink (url unresolved; no-op): "
+                       + ", ".join(result.undeliverable_sinks))
+        else:
+            typer.echo("status-fanout: no enabled sinks (no-op)")
     verb = "would-send" if dry_run else "dispatched"
     for sr in result.sinks:
+        if not (dry_run or sr.matched or sr.dropped or sr.short_circuited):
+            continue
         sent = sr.matched if dry_run else sr.dispatched
         extra = " short-circuited" if sr.short_circuited else ""
         typer.echo(

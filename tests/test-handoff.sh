@@ -10,7 +10,7 @@
 #  6. one capability escalation already spent -> parked chain-exhausted
 #  7. context percentage does not trigger or block explicit escalation
 #  8. transcript-probe readability does not trigger or block escalation
-#  9. restore_failed - verify fails, archive restore impossible -> exit 12
+#  9. claim contended at release - strict release refuses, custody restored -> exit 10
 #
 # Poll timeouts are made tiny via env overrides:
 #   HANDOFF_VERIFY_TIMEOUT / HANDOFF_VERIFY_INTERVAL
@@ -124,6 +124,39 @@ check_file_exists() {
   fi
 }
 
+# The node claim's state in a sandbox home's claim table ("free" when none).
+claim_state() {
+  FNO_CLAIMS_ROOT="$1" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
+from fno.claims.core import claim_status
+from pathlib import Path
+print(claim_status('node:${NODE_ID}', root=Path('$1')).get('state') or 'free')
+" 2>/dev/null || echo unreadable
+}
+
+check_claim_held() {
+  local desc="$1" state
+  state="$(claim_state "$2")"
+  if [ "$state" != "free" ] && [ "$state" != "unreadable" ]; then
+    echo "PASS: $desc"
+    pass=$((pass+1))
+  else
+    echo "FAIL: $desc (node claim is $state under $2)"
+    fail=$((fail+1))
+  fi
+}
+
+check_claim_free() {
+  local desc="$1" state
+  state="$(claim_state "$2")"
+  if [ "$state" = "free" ]; then
+    echo "PASS: $desc"
+    pass=$((pass+1))
+  else
+    echo "FAIL: $desc (node claim is $state under $2)"
+    fail=$((fail+1))
+  fi
+}
+
 check_file_absent() {
   local desc="$1" path="$2"
   if [ ! -e "$path" ]; then
@@ -184,7 +217,26 @@ check_log_absent() {
 #   $SANDBOX/scenario/                      (per-scenario marker files)
 # ---------------------------------------------------------------------------
 TMPDIR_BASE="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_BASE"' EXIT
+# A keeper spawned inside a scenario can still be writing its store files when
+# the last assertion lands, and one late sqlite WAL write makes the cleanup rm
+# fail the whole step. Kill every process rooted in the tree first. The trap
+# pins the status before cleaning: the observed failure shape is the script
+# exiting nonzero from INSIDE its own EXIT trap after a green summary, which
+# the fail-fast runner then reports as a step red with no failing assertion.
+cleanup_handoff() {
+  rc=$?
+  # A scenario whose set -e / set +e pair straddles an early return leaves
+  # errexit on at exit: the first failing cleanup command (pkill with no
+  # match) would then abort the trap and red a green summary.
+  set +e
+  if [[ -n "${TMPDIR_BASE:-}" ]]; then
+    pkill -9 -f "$TMPDIR_BASE" 2>/dev/null
+    sleep 0.5
+    rm -rf "$TMPDIR_BASE"
+  fi
+  exit "$rc"
+}
+trap cleanup_handoff EXIT
 
 NODE_ID="ab-12345678"
 SESSION_ID="20260605T120000Z-12345-abc"
@@ -197,7 +249,13 @@ TEST_NODE_SLUG="test-node"
 TEST_CHILD_SESSION="00000000-0000-0000-0000-000000abc123"
 TEST_CAPABILITY_NONCE="capability-nonce-for-tests"
 expected_child_name() {
-  printf 'target-%s-%s-g2' "$NODE_ID" "$TEST_NODE_SLUG"
+  # The successor name contract IS the x-84b2 vocabulary, so the expectation
+  # is computed by the same bridge handoff.sh mints with - a stub answer here
+  # would test a second copy of the shape.
+  PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
+from fno.agents.naming import dispatch_agent_name
+print(dispatch_agent_name('sh', 't', '$NODE_ID', slug='$TEST_NODE_SLUG', discriminator='g2'))
+"
 }
 capability_digest() {
   local sbx="$1"
@@ -207,10 +265,15 @@ capability_digest() {
 
 make_sandbox() {
   local name="$1"
+  # Optional: the holder the node claim is seeded with. Defaults to the run
+  # id holder the fixture manifest names. Scenario 19 overrides it to pin
+  # that the prepare leg releases with the MANIFEST's recorded owner.
+  local claim_holder="${2:-target-session:${SESSION_ID}}"
   local sbx="$TMPDIR_BASE/$name"
   mkdir -p "$sbx/.fno/artifacts/handoff" \
            "$sbx/stub-bin" \
-           "$sbx/scenario"
+           "$sbx/scenario" \
+           "$sbx/home"
 
   # Fixture plan file
   cat > "$sbx/plan.md" <<'PLANEOF'
@@ -253,6 +316,19 @@ CONFIGEOF
 
   CALL_LOG="$sbx/call-log"
   touch "$CALL_LOG"
+
+  # Production truth: the manifest exists because target init holds the node
+  # claim. The prepare leg releases that claim IN-PROCESS (never through the
+  # stubbed CLI, whose lines this harness logs) and refuses when it cannot
+  # prove custody, so the sandbox seeds the real claim in the claims root the
+  # prepare leg reads: run_handoff defaults HOME to $sbx/home and handoff.sh
+  # pins FNO_CLAIMS_ROOT to HOME.
+  FNO_CLAIMS_ROOT="$sbx/home" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
+from fno.claims.core import acquire_claim
+from pathlib import Path
+acquire_claim('node:${NODE_ID}', holder='${claim_holder}',
+              pid_unavailable=True, ttl_ms=3_600_000, root=Path('${sbx}/home'))
+" >/dev/null 2>&1 || true
 
   # Default stub responses
   echo "0"  > "$sbx/scenario/fno-ask-rc"
@@ -305,6 +381,12 @@ fi
 if [ "$subcmd1 $subcmd2" = "plan rung" ]; then
   echo "deprecated plan root reached" >&2
   exit 2
+fi
+
+if [ "$subcmd1 $subcmd2" = "agents name" ]; then
+  # Name minting is the contract under test, not a scenario input: delegate
+  # to the real implementation exactly like `do plan rung` above.
+  exec env PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -m fno.cli agents name "${@:3}"
 fi
 
 case "$subcmd1 $subcmd2" in
@@ -460,6 +542,10 @@ STUBEOF
 run_handoff() {
   # run_handoff <sandbox> <boundary> [extra-args...]
   # Runs script from sandbox cwd so relative PLAN_PATH resolves correctly.
+  # A hard wall-clock bound wraps every case: the script's own poll loops are
+  # timeout-bounded, but a case that wedges anywhere else (a stub that blocks,
+  # a binary that never answers) once ran away unbounded and grew a 20 GB
+  # set -x trace. 180s covers the slowest legitimate case many times over.
   local sbx="$1" boundary="$2"
   shift 2
 
@@ -472,14 +558,14 @@ run_handoff() {
       FNO_DIR=".fno" \
       HANDOFF_VERIFY_TIMEOUT="${HANDOFF_VERIFY_TIMEOUT:-10}" \
       HANDOFF_VERIFY_INTERVAL="${HANDOFF_VERIFY_INTERVAL:-1}" \
-      HOME="${HANDOFF_TEST_HOME:-$HOME}" \
+      HOME="${HANDOFF_TEST_HOME:-$sbx/home}" \
       HANDOFF_CAPABILITY_NONCE="$TEST_CAPABILITY_NONCE" \
       HANDOFF_CAPABILITY_EXPECTED_CWD="$sbx" \
       HANDOFF_CAPABILITY_EXPECTED_ROOT="$sbx" \
       CLAUDE_CODE_SESSION_ID="test-claude-sid" \
       CODEX_THREAD_ID="" CODEX_SESSION_ID="" GEMINI_SESSION_ID="" \
       PATH="$sbx/stub-bin:$PATH" \
-      bash "$SCRIPT" --harness claude --model opus "$@" 2>&1
+      timeout 180 bash "$SCRIPT" --harness claude --model opus "$@" 2>&1
     )
   else
     output=$(
@@ -489,18 +575,22 @@ run_handoff() {
       FNO_DIR=".fno" \
       HANDOFF_VERIFY_TIMEOUT="${HANDOFF_VERIFY_TIMEOUT:-10}" \
       HANDOFF_VERIFY_INTERVAL="${HANDOFF_VERIFY_INTERVAL:-1}" \
-      HOME="${HANDOFF_TEST_HOME:-$HOME}" \
+      HOME="${HANDOFF_TEST_HOME:-$sbx/home}" \
       HANDOFF_CAPABILITY_NONCE="$TEST_CAPABILITY_NONCE" \
       HANDOFF_CAPABILITY_EXPECTED_CWD="$sbx" \
       HANDOFF_CAPABILITY_EXPECTED_ROOT="$sbx" \
       CLAUDE_CODE_SESSION_ID="test-claude-sid" \
       CODEX_THREAD_ID="" CODEX_SESSION_ID="" GEMINI_SESSION_ID="" \
       PATH="$sbx/stub-bin:$PATH" \
-      bash "$SCRIPT" --harness claude --model opus 2>&1
+      timeout 180 bash "$SCRIPT" --harness claude --model opus 2>&1
     )
   fi
   handoff_rc=$?
   set -e
+  # The prepare leg's release is IN-PROCESS (never a stubbed CLI call), so its
+  # receipt lives in stdout, not the call log. Persist the output so ordering
+  # assertions can span both streams.
+  printf '%s\n' "$output" > "$sbx/output-log"
 }
 
 # ---------------------------------------------------------------------------
@@ -534,13 +624,18 @@ check_contains "AC1-HP: output contains 'delegated'" "delegated" "$output"
 check_contains "AC1-HP: output contains node id" "$NODE_ID" "$output"
 check_contains "AC1-HP: output contains generation=2" "generation=2" "$output"
 
-# Ordering assertions from call log
-check_log_order "AC1-HP: dispatch acquire BEFORE release" \
-  "$CALL_LOG" "claim acquire dispatch:" "claim release node:"
-check_log_order "AC1-HP: spawn BEFORE release" \
-  "$CALL_LOG" "agents spawn" "claim release node:"
+# Ordering assertions. The parent claim release is IN-PROCESS now (the prepare
+# leg), invisible to the stubbed CLI's call log, so its receipt is the
+# `prepare:` line in the output log plus the state of the seeded claim file.
+check_log_order "AC1-HP: dispatch acquire BEFORE target seed" \
+  "$CALL_LOG" "claim acquire dispatch:" "agents mail"
 check_log_order "AC1-HP: spawn BEFORE target seed" \
   "$CALL_LOG" "agents spawn" "agents mail"
+check_log_order "AC1-HP: release receipt BEFORE delegated commit" \
+  "$SBX/output-log" "prepare: archived manifest and released node:" "delegated $NODE_ID"
+
+# The prepare leg released the seeded node claim in-process (strict).
+check_claim_free "AC1-HP: node claim released in-process" "$SBX/home"
 
 # Parent manifest archived and replaced by the child-bound target manifest.
 check_file_exists "AC1-HP: child target-state.md present" \
@@ -580,10 +675,10 @@ set -e
 check_contains "H1-HP: delegated event has source=target" '"source":"target"' "$delegated_source"
 check_log_order "capability: spawn BEFORE truth" \
   "$CALL_LOG" "agents spawn" "agents truth"
-check_log_order "capability: truth BEFORE parent claim release" \
-  "$CALL_LOG" "agents truth" "claim release node:"
-check_log_order "target execution: parent release BEFORE raw seed" \
-  "$CALL_LOG" "claim release node:" "agents mail"
+check_log_order "capability: truth BEFORE dispatch reservation" \
+  "$CALL_LOG" "agents truth" "claim acquire dispatch:"
+check_log_order "capability: dispatch reservation BEFORE raw seed" \
+  "$CALL_LOG" "claim acquire dispatch:" "agents mail"
 check_contains "destination name uses full node id and slug" \
   "child=$(expected_child_name)" "$output"
 delegated_row=$(grep '"type":"delegated"' "$SBX/.fno/events.jsonl" 2>/dev/null | tail -1)
@@ -609,7 +704,7 @@ run_handoff "$SBX" "capability"
 check_exit "capability nonce mismatch parks" "10" "$handoff_rc"
 check_contains "capability nonce mismatch names probe stage" "capability_probe" "$output"
 check_file_exists "capability nonce mismatch keeps parent manifest" "$SBX/.fno/target-state.md"
-check_log_absent "capability nonce mismatch keeps parent claim" "$CALL_LOG" "claim release node:"
+check_claim_held "capability nonce mismatch keeps parent claim" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Scenario 1c: transcript-observed model must match the configured model
@@ -626,7 +721,7 @@ run_handoff "$SBX" "capability"
 check_exit "observed model mismatch parks" "10" "$handoff_rc"
 check_contains "observed model mismatch names probe stage" "capability_probe" "$output"
 check_file_exists "observed model mismatch keeps parent manifest" "$SBX/.fno/target-state.md"
-check_log_absent "observed model mismatch keeps parent claim" "$CALL_LOG" "claim release node:"
+check_claim_held "observed model mismatch keeps parent claim" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Scenario 1d: registration and prompt liveness do not replace readiness
@@ -643,7 +738,7 @@ run_handoff "$SBX" "capability"
 check_exit "readiness without positive marker parks" "10" "$handoff_rc"
 check_contains "readiness mismatch names capability stage" "capability_probe" "$output"
 check_file_exists "readiness mismatch keeps parent manifest" "$SBX/.fno/target-state.md"
-check_log_absent "readiness mismatch keeps parent claim" "$CALL_LOG" "claim release node:"
+check_claim_held "readiness mismatch keeps parent claim" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Scenario 1e: delivered seed without child claim/manifest proof rolls back
@@ -709,8 +804,7 @@ check_exit "AC1-ERR: exits 10 (parked)" "10" "$handoff_rc"
 check_contains "AC1-ERR: output contains 'parked'" "parked" "$output"
 
 # Capability failure occurs before any parent ownership mutation.
-check_log_absent "AC1-ERR: spawn failure does not release parent claim" \
-  "$CALL_LOG" "claim release node:"
+check_claim_held "AC1-ERR: spawn failure does not release parent claim" "$SBX/home"
 
 # Manifest restored to .fno/
 check_file_exists "AC1-ERR: target-state.md restored to .fno/" \
@@ -787,7 +881,7 @@ check_contains "AC1-EDGE: output contains 'parked'" "parked" "$output"
 
 # Zero claim mutations: no claim acquire/release in log
 check_log_absent "AC1-EDGE: no claim acquire" "$CALL_LOG" "claim acquire"
-check_log_absent "AC1-EDGE: no claim release" "$CALL_LOG" "claim release"
+check_claim_held "AC1-EDGE: claim untouched" "$SBX/home"
 
 # Manifest untouched
 check_file_exists "AC1-EDGE: target-state.md still in .fno/" \
@@ -808,6 +902,7 @@ run_handoff "$SBX" "blueprint-do"
 check_exit "double-handoff: exits 10 (parked)" "10" "$handoff_rc"
 check_contains "double-handoff: output contains 'parked'" "parked" "$output"
 check_log_absent "double-handoff: no claim acquire" "$CALL_LOG" "claim acquire"
+check_claim_held "double-handoff: claim untouched" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Scenario 6: the explicit one-rung escalation is already spent
@@ -825,6 +920,7 @@ check_exit "gen-cap: exits 10 (parked)" "10" "$handoff_rc"
 check_contains "gen-cap: output contains 'parked'" "parked" "$output"
 check_contains "gen-cap: reason mentions chain-exhausted" "chain-exhausted" "$output"
 check_log_absent "gen-cap: no claim acquire" "$CALL_LOG" "claim acquire"
+check_claim_held "gen-cap: claim untouched" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Context fixtures remain only as controls proving explicit escalation ignores
@@ -840,8 +936,10 @@ arm_probe() {
   printf 'claude_session_id: probe-sid\n' >> "$sbx/.fno/target-state.md"
   if [ -n "$line" ]; then
     local enc="${sbx//[\/.]/-}"
-    mkdir -p "$sbx/.claude/projects/$enc"
-    printf '%s\n' "$line" > "$sbx/.claude/projects/$enc/probe-sid.jsonl"
+    # run_handoff defaults HOME to $sbx/home, so the probe's transcript lives
+    # under that root (the encoded segment is the session cwd, not HOME).
+    mkdir -p "$sbx/home/.claude/projects/$enc"
+    printf '%s\n' "$line" > "$sbx/home/.claude/projects/$enc/probe-sid.jsonl"
   fi
 }
 
@@ -861,7 +959,7 @@ SBX="$(make_sandbox s7)"
 arm_probe "$SBX" "$(probe_line 300000)"
 
 CALL_LOG="$SBX/call-log"
-HANDOFF_TEST_HOME="$SBX" run_handoff "$SBX" "capability"
+run_handoff "$SBX" "capability"
 
 check_exit "explicit escalation ignores context percentage" "0" "$handoff_rc"
 check_contains "explicit escalation reaches delegated transaction" "delegated" "$output"
@@ -875,64 +973,49 @@ echo "=== Scenario 8: transcript is not an escalation prerequisite ==="
 SBX="$(make_sandbox s8)"
 
 CALL_LOG="$SBX/call-log"
-HANDOFF_TEST_HOME="$SBX" run_handoff "$SBX" "capability"
+run_handoff "$SBX" "capability"
 
 check_exit "explicit escalation does not require a context transcript" "0" "$handoff_rc"
 check_contains "transcript-independent escalation delegates" "delegated" "$output"
 
 # ---------------------------------------------------------------------------
-# Scenario 9: restore_failed
-# ask succeeds, list never returns live (timeout), mv restore is blocked.
-# We simulate restore failure by making .fno/ a read-only dir after
-# archive so mv back cannot write.
+# Scenario 9: claim contended at release
+# The archive + exact release is python-owned, so a competing holder is seeded
+# straight into the claims root. Strict release must RAISE on the holder
+# mismatch, the manifest must be restored, and the run must park instead of
+# handing off a node this session no longer verifiably holds.
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== Scenario 9: restore_failed ==="
+echo "=== Scenario 9: claim contended at prepare release ==="
 SBX="$(make_sandbox s9)"
-rm -f "$SBX/scenario/activate-child"
-
-# We need to intercept AFTER the archive mv succeeds but BEFORE restore.
-# Strategy: put a shadow `mv` in stub-bin that fails only when the
-# destination is .fno/target-state.md (the restore direction).
-# First run: archive works (src=.fno/target-state.md -> dst in artifacts)
-# Second run (restore): src=artifacts/... -> dst=.fno/target-state.md -> fail
-cat > "$SBX/stub-bin/mv" <<'MVSTUB'
-#!/usr/bin/env bash
-# Shadow mv: fail only when restoring target-state.md (dst ends in target-state.md
-# but src does NOT start with .fno/target-state.md).
-# Bash 3.2 compat: use for loop to get last arg; use /bin/mv for the real move.
-first_arg="$1"
-last_arg=""
-for _a in "$@"; do last_arg="$_a"; done
-case "$last_arg" in
-  *target-state.md)
-    case "$first_arg" in
-      *target-state.md) /bin/mv "$@" ;;  # archive: src IS state file -> allow
-      *)                exit 1 ;;         # restore: dst is state file, src is not -> block
-    esac
-    ;;
-  *) /bin/mv "$@" ;;
-esac
-MVSTUB
-chmod +x "$SBX/stub-bin/mv"
+# Replace the correctly-held seed with a foreign holder's claim.
+FNO_CLAIMS_ROOT="$SBX/home" PYTHONPATH="$FNO_SRC" "$FNO_PYTHON" -c "
+from fno.claims.core import acquire_claim, force_release_claim
+from pathlib import Path
+force_release_claim('node:${NODE_ID}', 'test reseed', root=Path('${SBX}/home'))
+acquire_claim('node:${NODE_ID}', holder='target-session:another-session',
+              pid_unavailable=True, ttl_ms=3_600_000, root=Path('${SBX}/home'))
+" >/dev/null 2>&1
 
 CALL_LOG="$SBX/call-log"
-HANDOFF_VERIFY_TIMEOUT=3 HANDOFF_VERIFY_INTERVAL=1 run_handoff "$SBX" "blueprint-do"
+HANDOFF_VERIFY_TIMEOUT=10 HANDOFF_VERIFY_INTERVAL=1 run_handoff "$SBX" "blueprint-do"
 
-check_exit "restore-failed: exits 12" "12" "$handoff_rc"
-check_contains "restore-failed: output contains 'handoff-restore-failed'" "handoff-restore-failed" "$output"
+check_exit "claim-contended: exits 10 (parked)" "10" "$handoff_rc"
+check_contains "claim-contended: output reports prepare failure" "prepare failed" "$output"
 
-# Archive must still be present (helper keeps it in place per spec)
-check_file_exists "restore-failed: archived manifest still present" \
-  "$SBX/${PLAN_REL}.artifacts/target-state-${SESSION_ID}.md"
+# Custody restored: the live manifest is back and the foreign claim untouched.
+check_file_exists "claim-contended: parent manifest restored" \
+  "$SBX/.fno/target-state.md"
+check_claim_held "claim-contended: foreign claim left intact" "$SBX/home"
 
-# handoff_failed event emitted (with reason=restore_failed)
+# handoff_failed event emitted once, naming the live holder it found.
 set +e
 failed_events=$(grep '"type":"handoff_failed"' "$SBX/.fno/events.jsonl" 2>/dev/null | wc -l | tr -d ' ')
-restore_reason=$(grep '"type":"handoff_failed"' "$SBX/.fno/events.jsonl" 2>/dev/null | grep -o '"reason":"[^"]*"' | head -1)
+contended_detail=$(grep '"type":"handoff_failed"' "$SBX/.fno/events.jsonl" 2>/dev/null | grep -o '"detail":"[^"]*"' | head -1)
 set -e
-check_eq "restore-failed: handoff_failed event emitted" "1" "$failed_events"
-check_contains "restore-failed: reason is restore_failed" "restore_failed" "$restore_reason"
+check_eq "claim-contended: handoff_failed event emitted" "1" "$failed_events"
+check_contains "claim-contended: event names the live holder" \
+  "another-session" "$contended_detail"
 
 # ---------------------------------------------------------------------------
 # Scenario 11: C1 - claim-lost on verify-fail unwind (re-acquire fails)
@@ -1023,7 +1106,10 @@ check_contains "stray-fence: reached explicit delegation" \
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Scenario 11: unterminated frontmatter (AC1-EDGE) ==="
-SBX="$(make_sandbox s11)"
+# Unique sandbox name: the C1 scenario above also used "s11" and its exit-12
+# unwind leaves an archive whose bytes differ from this scenario's fixture -
+# the exact-archive collision guard refuses the reuse (correctly).
+SBX="$(make_sandbox s11r)"
 cat > "$SBX/.fno/target-state.md" <<EOF
 ---
 session_id: ${SESSION_ID}
@@ -1203,8 +1289,12 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "=== Scenario 19: Codex thread-owned claim handoff ==="
-SBX="$(make_sandbox s19)"
 CODEX_HOLDER="target-session:019f48e1-e641-7170-9ea9-921f07021967"
+# Seed the claim under the codex thread holder; the manifest below records the
+# same owner. The prepare leg releases with the MANIFEST's recorded holder, so
+# the strict release succeeds only if it did not substitute the run id - a
+# substitution would raise a holder mismatch and park.
+SBX="$(make_sandbox s19 "$CODEX_HOLDER")"
 sed -i.bak \
   "s|target_claim_holder: \"target-session:${SESSION_ID}\"|target_claim_holder: \"${CODEX_HOLDER}\"|" \
   "$SBX/.fno/target-state.md"
@@ -1213,11 +1303,7 @@ printf '%s\n' "$CODEX_HOLDER" > "$SBX/scenario/expected-holder"
 run_handoff "$SBX" "blueprint-do"
 check_exit "codex-holder: exits 0" "0" "$handoff_rc"
 check_contains "codex-holder: delegates successfully" "delegated" "$output"
-check_contains "codex-holder: release uses recorded thread owner" \
-  "--holder ${CODEX_HOLDER}" "$(cat "$SBX/call-log")"
-check_not_contains "codex-holder: release never substitutes run id" \
-  "claim release node:${NODE_ID} --holder target-session:${SESSION_ID}" \
-  "$(cat "$SBX/call-log")"
+check_claim_free "codex-holder: recorded-owner release confirmed (claim gone)" "$SBX/home"
 
 # ---------------------------------------------------------------------------
 # Scenario 6: x-3ad5 - the plan-status gate accepts the canonical in_review

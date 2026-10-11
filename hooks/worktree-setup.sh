@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# WorktreeCreate hook: install deps, copy env, symlink .fno/, verify baseline
+# fno hook: WorktreeCreate - worktree setup
+# WorktreeCreate hook: relocate, copy env, link shared state, install deps
 #
 # CC fires this INSTEAD of its default git worktree behavior.
 # The hook receives JSON on stdin with the worktree name and (usually) path.
@@ -14,20 +15,14 @@
 #             any Agent dispatch using isolation: worktree.
 #   - exit:   0 on success; non-zero falls back to CC's default worktree flow.
 #
-# NOTE: The /speculate skill calls this script manually (not via CC hook)
-# because it creates multiple worktrees in parallel via git directly.
-# If this hook's behavior changes, update the copy at
-# skills/speculate/scripts/worktree-setup.sh to match - the two files are
-# intentional duplicates for portability.
-#
-# DIVERGENCE (worktrees_base migration, x-33e9): the relocation logic in
-# block 0 below (honor config.paths.worktrees_base, else leave harness-native)
-# is intentionally HOOK-ONLY and must NOT be copied to the /speculate
-# duplicate. /speculate deliberately materializes its parallel variations at
-# .claude/worktrees/<name> (a sanctioned exception, like the cross-project
-# pipeline); relocating those to a configured base would break it. The rest of
-# the two files stay in sync.
+# Relocation is hook-only. Linking and the worktree.* config reads go through
+# scripts/lib/worktree-config.sh, the same lib `worktree-manager.sh setup`
+# (/speculate) uses, so every creation path gets one link set.
 set -euo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 # Read stdin JSON from CC (contains worktree name, branch, path context).
 # Prefer an explicit `path` field from the harness over $(pwd) - if CC ever
@@ -44,19 +39,63 @@ fi
 # the second precedence impl the worktree rule forbids.
 _gate_repo="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | sed 's|/\.git$||')"
 _WT_POLICY=""
+_WT_BASE=""
 if [[ -n "$_gate_repo" ]] && command -v fno >/dev/null 2>&1; then
     # `|| true` is load-bearing: under `set -euo pipefail` a failing fno
     # (stale binary lacking `worktree policy`, misconfigured, etc.) would
     # abort the hook and skip all setup. The old inline `[[ ]]` read absorbed
     # this; the hoisted assignment does not.
-    _WT_POLICY="$( (fno agents workspace worktree policy --repo "$_gate_repo" 2>/dev/null || fno workspace worktree policy --repo "$_gate_repo" 2>/dev/null) | head -1 | tr -d '[:space:]' || true)"
+    # stdout is exactly two clean lines (policy word, base=<path>); the
+    # resolver's deprecation notes go to stderr, never parsed here.
+    _WT_POLICY_OUT="$( (fno agents workspace worktree policy --repo "$_gate_repo" 2>/dev/null || fno workspace worktree policy --repo "$_gate_repo" 2>/dev/null) || true)"
+    _WT_POLICY="$(printf '%s\n' "$_WT_POLICY_OUT" | head -1 | tr -d '[:space:]')"
+    _WT_BASE="$(printf '%s\n' "$_WT_POLICY_OUT" | sed -n 's/^base=//p' | head -1)"
+fi
+
+# Session-keyed create-attempt cap: a worker must never sit in worktree
+# ceremony with no ceiling. Count every create request (a payload carrying a
+# `name`); a SUCCESSFUL create deletes the latch, so only repeated failing
+# ceremony accumulates. Past the cap, abort the supported way - exit 0 with
+# EMPTY stdout; non-zero would fall back to CC's default flow and create the
+# very worktree being refused.
+_CAP_SESSION=""
+if command -v jq >/dev/null 2>&1; then
+    _CAP_SESSION="$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)"
+fi
+if [[ -z "$_CAP_SESSION" ]] && command -v python3 >/dev/null 2>&1; then
+    _CAP_SESSION="$(printf '%s' "$HOOK_INPUT" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError):
+    d = {}
+print(d.get("session_id", "") or "")
+' 2>/dev/null || true)"
+fi
+_CAP_LATCH=""
+if [[ -n "$_WT_NAME" && -n "$_CAP_SESSION" ]] && command -v fno >/dev/null 2>&1; then
+    _cap_stub="$(fno config paths shell-stub 2>/dev/null || true)"
+    # shellcheck source=/dev/null
+    [ -n "$_cap_stub" ] && [ -f "$_cap_stub" ] && . "$_cap_stub" 2>/dev/null || true
+    _CAP_LATCH_DIR="${LATCHES_DIR:-${STATE_DIR:-$HOME/.fno}/latches}"
+    mkdir -p "$_CAP_LATCH_DIR" 2>/dev/null || true
+    find "$_CAP_LATCH_DIR" -maxdepth 1 -name '.worktree-create-*' -mtime +2 -delete 2>/dev/null || true
+    _CAP_LATCH="$_CAP_LATCH_DIR/.worktree-create-$_CAP_SESSION"
+    _ATTEMPTS="$(cat "$_CAP_LATCH" 2>/dev/null || true)"
+    case "$_ATTEMPTS" in ''|*[!0-9]*) _ATTEMPTS=0 ;; esac
+    _ATTEMPTS=$((_ATTEMPTS + 1))
+    printf '%s' "$_ATTEMPTS" > "$_CAP_LATCH" 2>/dev/null || true
+    if [[ "$_ATTEMPTS" -gt 3 ]]; then
+        echo "WorktreeCreate: create attempt $_ATTEMPTS for repo '${_gate_repo:-unknown}' in session ${_CAP_SESSION:0:12}; capping worktree ceremony at 3 attempts. Fix: FNO_WORKTREE_POLICY=never, or declare work.workspaces.<slug>.projects[].worktree for this repo." >&2
+        exit 0
+    fi
 fi
 
 if [[ -z "$WORKTREE_PATH" ]]; then
     # No .path from CC is normal (the contract lists only `name`). $(pwd) is a
     # safe fallback only in a linked worktree; on the canonical checkout emitting
     # it would defeat isolation - edits land on main while every signal says
-    # isolated (x-ab78 WAVE 1). Refuse via exit 0 + empty stdout (the supported
+    # isolated (WAVE 1). Refuse via exit 0 + empty stdout (the supported
     # abort: non-zero falls back to CC's default flow and creates the very
     # worktree refused). Detection mirrors hooks/helpers/check-impl-location.sh:
     # equal absolute --git-dir/--git-common-dir (incl. both-empty) = canonical.
@@ -119,65 +158,27 @@ MAIN_REPO=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | 
 # If we can't find the main repo, let CC handle it
 [[ -n "$MAIN_REPO" ]] || exit 1
 
-# Read config from settings.yaml if available.
-# Source paths.sh for typed path vars; the global tier is the per-user file, never CONFIG_FILE (ab-5d6c3d47).
-if command -v fno >/dev/null 2>&1; then
-    PATHS_SH="$(fno config paths shell-stub 2>/dev/null || true)"
-    [[ -f "$PATHS_SH" ]] && source "$PATHS_SH" 2>/dev/null || true
+# One worktree.* reader and one linker, shared with worktree-manager.sh.
+_WT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/lib/worktree-config.sh"
+if [[ -f "$_WT_LIB" ]]; then
+    # shellcheck source=../scripts/lib/worktree-config.sh
+    source "$_WT_LIB"
+else
+    wt_config() { echo "$2"; }
+    wt_link() { echo "Note: $_WT_LIB missing; shared state not linked" >&2; }
 fi
-SETTINGS=""
-for cfg in "$MAIN_REPO/.fno/config.toml" "${FNO_GLOBAL_SETTINGS_PATH:-$HOME/.fno/config.toml}"; do
-    if [[ -f "$cfg" ]]; then
-        SETTINGS="$cfg"
-        break
-    fi
-done
 
-# Helper: read a worktree config value from settings
-wt_config() {
-    local key="$1"
-    local default="$2"
-    local val=""
-    if [[ -n "$SETTINGS" ]] && command -v yq >/dev/null 2>&1; then
-        # Flat config.toml: worktree keys live under the [worktree] table.
-        val=$(yq -p toml -r ".worktree.${key} // \"\"" "$SETTINGS" 2>/dev/null)
-    fi
-    if [[ -n "$val" && "$val" != "null" ]]; then
-        echo "$val"
-    else
-        echo "$default"
-    fi
-}
-
-# 0. Worktree relocation: honor config.paths.worktrees_base (OSS-neutral).
-#
-# Resolution order (x-33e9, worktrees_base migration):
-#   1. config.paths.worktrees_base set -> relocate to <base>/<repo>/<name>.
-#   2. else worktree.use_conductor_canonical: true (DEPRECATED back-compat)
-#      -> relocate to ~/conductor/workspaces/<repo>/<name>.
-#   3. else (unset) -> harness-native: leave the worktree where Claude Code
-#      placed it (`<repo>/.claude/worktrees/<name>`). No relocation. That dir
-#      is gitignored, so rg/Grep already skip it - the old "inside-checkout is
-#      always forbidden" redirect is retired; harness-native is now the default.
-#
-# `worktrees_base` is read as the RAW config field (empty when unset) via
-# `fno config get`. The paths.sh `WORKTREES_BASE` var always carries the
-# ~/.fno/worktrees default, so it cannot distinguish "unset" from "set to the
-# default" - the distinction that decides relocate-vs-leave-in-place.
-WT_BASE_RAW=""
-if command -v fno >/dev/null 2>&1; then
-    WT_BASE_RAW="$(fno config get config.paths.worktrees_base 2>/dev/null || true)"
-fi
-[[ "$WT_BASE_RAW" == "null" ]] && WT_BASE_RAW=""
-USE_CANONICAL="$(wt_config "use_conductor_canonical" "false")"
-
+# 0. Worktree relocation: the RESOLVED policy decides, never a raw config
+# read. `fno agents workspace worktree policy` - the same resolver
+# `worktree ensure` uses - is the one location answer, so an explicit
+# config.paths.worktrees_base relocates here exactly as it does on the
+# autonomous dispatch path (setting the key alone is sufficient; the old
+# raw-key read here made the two paths disagree). external relocates to the
+# resolved base; harness-native stays where Claude Code placed the worktree
+# (`<repo>/.claude/worktrees/<name>`), no relocation.
 RELOCATE_BASE=""
-if [[ -n "$WT_BASE_RAW" ]]; then
-    # Config stores ~ literally; expand a leading ~ to $HOME.
-    RELOCATE_BASE="${WT_BASE_RAW/#\~/$HOME}"
-elif [[ "$USE_CANONICAL" == "true" ]]; then
-    echo "Note: worktree.use_conductor_canonical is DEPRECATED; set config.paths.worktrees_base: ~/conductor/workspaces instead." >&2
-    RELOCATE_BASE="$HOME/conductor/workspaces"
+if [[ "$_WT_POLICY" == "external" && -n "$_WT_BASE" ]]; then
+    RELOCATE_BASE="$_WT_BASE"
 fi
 
 # Worktree name (from stdin; fall back to the path basename, e.g. when the
@@ -263,14 +264,11 @@ for envfile in "${ENV_FILES[@]}"; do
     fi
 done
 
-# 2. Symlink .fno/ from main repo (shared state)
-if [[ -d "$MAIN_REPO/.fno" && ! -L "$WORKTREE_PATH/.fno" && ! -e "$WORKTREE_PATH/.fno" ]]; then
-    ln -s "$MAIN_REPO/.fno" "$WORKTREE_PATH/.fno" || true
-    echo "Symlinked .fno/" >&2
-fi
+# 2. Link shared state (vault, .claude agents/commands/skills, harness dirs).
+wt_link "$WORKTREE_PATH" "$MAIN_REPO"
 
 # 3. Auto-detect and install deps (skip if already present)
-# Set worktree.auto_install: false in .fno/settings.yaml to skip dep
+# Set worktree.auto_install = false in .fno/config.toml to skip dep
 # installation entirely. Useful when target creates many worktrees of the same
 # project — each fresh .venv otherwise materializes its own resolved deps in
 # the uv cache (45GB+ bloat at scale).
@@ -311,13 +309,23 @@ if [[ "$SKIP_VERIFY" != "true" ]]; then
     fi
 fi
 
-# 5. Log lifecycle event
+# 5. Log lifecycle event (the worktree log lives in the repo's space)
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-echo "{\"ts\":\"$TS\",\"action\":\"created\",\"path\":\"$WORKTREE_PATH\"}" >> "$MAIN_REPO/.fno/worktree-log.jsonl" 2>/dev/null
+WLOG=$(fno-agents state path worktree-log 2>/dev/null || true)
+if [[ -z "$WLOG" ]]; then
+    WLOG="$MAIN_REPO/.fno/worktree-log.jsonl"
+fi
+mkdir -p "$(dirname "$WLOG")" 2>/dev/null || true
+echo "{\"ts\":\"$TS\",\"action\":\"created\",\"path\":\"$WORKTREE_PATH\"}" >> "$WLOG" 2>/dev/null || true
 
 echo "Worktree ready: $WORKTREE_PATH" >&2
 
 # CC contract: emit the absolute worktree path on stdout as the sole success
 # signal. Everything else in this hook logs to stderr so stdout stays clean.
+# The successful create ends this ceremony episode, and the latch's writer
+# owns its lifetime, so the session starts over clean.
+if [[ -n "$_CAP_LATCH" ]]; then
+    rm -f "$_CAP_LATCH" 2>/dev/null || true
+fi
 echo "$WORKTREE_PATH"
 exit 0

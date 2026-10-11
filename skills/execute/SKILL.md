@@ -1,11 +1,12 @@
 ---
 name: execute
-description: "Execute a plan. Routes between a lightweight single-session executor (flat, default) and full wave orchestration (waves, alias operator). Use when: 'do this plan', 'execute the plan', 'run the waves'."
-argument-hint: "[flat|waves|operator] <plan-path>"
-requires:
-  binaries:
-    - "fno >= 0.1"
-    - "git >= 2.0"
+description: Execute an approved plan in a flat run or coordinated waves.
+argument-hint: "[flat|waves] <plan-path>"
+metadata:
+  requires:
+    binaries:
+      - "fno >= 0.1"
+      - "git >= 2.0"
 ---
 
 <!-- style-exception: mechanical verb rename preserves pre-existing prose -->
@@ -27,21 +28,21 @@ This is a **router**, not a monolith. It parses the first argument token as a mo
 
 ## Step 0: Location preflight (before any write)
 
-`/execute` writes code. Before resolving the mode, consult the shared location verdict (the SAME one `/target` and `/fix` use, so the canonical-main rule never drifts). Resolve the plugin root portably so the helper is found on non-Claude surfaces too (where `CLAUDE_PLUGIN_ROOT` is unset and the project checkout is NOT the fno plugin): try `CLAUDE_PLUGIN_ROOT`, then `CODEX_PLUGIN_ROOT`, then the persisted `~/.fno/plugin-root` pointer (written by `session-start.sh`), then the git root.
+`/execute` writes code. Before resolving the mode, consult the shared location verdict (the SAME one `/target` and `/fix` use, so the canonical-main rule never drifts). Resolve the plugin root portably so the helper is found on non-Claude surfaces too. On those, `CLAUDE_PLUGIN_ROOT` is unset and the project checkout is not the fno plugin. Try `CLAUDE_PLUGIN_ROOT`, then `CODEX_PLUGIN_ROOT`, then the persisted `~/.fno/install/plugin-root` pointer (written by `session-start.sh`), then the git root.
 
 ```bash
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cat "$HOME/.fno/plugin-root" 2>/dev/null || git rev-parse --show-toplevel 2>/dev/null)}}"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${CODEX_PLUGIN_ROOT:-$(cat "$HOME/.fno/install/plugin-root" 2>/dev/null || git rev-parse --show-toplevel 2>/dev/null)}}"
 LOC_HELPER="$PLUGIN_ROOT/hooks/helpers/check-impl-location.sh"
 [[ -f "$LOC_HELPER" ]] && bash "$LOC_HELPER" || echo "verdict=ok"
 ```
 
-If the output carries `verdict=canonical-protected` AND `TARGET_LOCATION_OK` is not `main-acknowledged`, REFUSE: do not resolve the mode, do not write. Name the branch (from the `branch=` line) and print the exact escape, then stop:
+If the output carries `verdict=canonical-protected` AND `TARGET_LOCATION_OK` is not `main-acknowledged`, REFUSE: do not resolve the mode, do not write. Name the branch (from the `branch=` line) and print the exact escape, then stop. The authorized-worktree path is the primary escape; the in-place branch and the acknowledge override are the last resorts:
 
 ```
 /execute refused: canonical checkout on '<branch>' (sibling terminals share .fno/).
-  worktree:  wt=$(fno agents workspace worktree ensure --repo . --name <slug> --harness <yours>) && cd "$wt"
-  branch:    git checkout -b feature/<slug>
-  override:  re-run with TARGET_LOCATION_OK=main-acknowledged
+  worktree:  wt=$(fno agents workspace worktree ensure --repo . --name <slug> --harness <yours>) && cd "$wt"   # for a bound node, `fno do target start <node>` does this
+  branch:    git checkout -b feature/<slug>          # in place, last resort
+  override:  re-run with TARGET_LOCATION_OK=main-acknowledged   # last resort
 ```
 
 Otherwise (`verdict=ok`, a linked worktree, or the helper absent) continue to Step 1.
@@ -69,15 +70,11 @@ The default mode `flat` takes a **plan path**. The `waves` mode (and its one-rel
 
 ## Step 1.5: do provenance is stamped at claim release
 
-The `do` lifecycle row is no longer stamped here. It is written when the session
-releases its node claim at a finished terminal (`DonePRGreen`, `DoneAdvisory`,
-`DoneDelivery`, `NoWork`): `started_at` from the claim's acquire time, `ended_at`
-at the release instant - a true per-session hold window, the operator's "who
-touched this node, and for how long". This is the third code choke point (ship =
-pr_number, blueprint = plan_path, do = claim release), so a direct CLI call or a
-non-Claude worker that skips this skill still gets the row. A session that stops
-without finishing (PR open, more work coming) keeps holding the claim and lands
-no `do` window yet; `fno-agents finalize` remains the ship-terminal backstop.
+The `do` lifecycle row is no longer stamped here. The session writes it upon releasing its claim at a finished terminal: `DonePRGreen`, `DoneAdvisory`, `DoneDelivery`, or `NoWork`. `started_at` uses claim acquisition time. `ended_at` uses release time. This records a per-session hold window: how long a user touched the node.
+
+This is the third code choke point. Ship writes `pr_number`. Blueprint writes `plan_path`. Claim release writes `do`. If a direct CLI call or non-Claude worker skips this skill, the row still records.
+
+A session that stops before finishing keeps the claim and has no `do` window yet. This includes an open PR or more work ahead. `fno-agents finalize` remains the ship-terminal backstop.
 
 ## Step 2: flat mode (lightweight single-session, default)
 

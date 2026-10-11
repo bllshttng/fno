@@ -8,6 +8,12 @@
 #   soft-outside-hooks: `--soft` flag in cli/ or skills/ (allowed under hooks/)
 #   unwrapped-set-gate: `bash .../set-gate.sh ...` not wrapped in
 #                       `if !`/`||`/`&&` and not under `set -e` at file scope
+#   gate-lane-journal:  a hand-built <root>/.fno/events.jsonl under
+#                       cli/src/fno/pr/ or cli/src/fno/review/
+#   events-file-pin:    a hook script pinning EVENTS_FILE to a .fno/events.jsonl
+#                       literal (the $PWD guess that bypassed the store resolver)
+#   event-fn-raw-append: an event-named Rust function opening a raw append
+#                       (the variable-path shape rule 5 cannot see)
 #
 # Exit codes:
 #   0  clean
@@ -115,6 +121,132 @@ done < <(
         | grep -v '/tests/' \
         || true
 )
+
+# Rule 4: gate-lane-journal
+# The merge-gate lane must resolve its event journal through fno.paths
+# (project_log / project_events_json): a hand-built <root>/.fno/events.jsonl
+# here is what read a migrated-away file and reported covered PRs unreviewed.
+# Scoped to these two directories on purpose: the remaining production sites
+# are a per-lane paydown, and their live count is named below so the debt is
+# read rather than inferred.
+HAND_BUILT_JOURNAL='\.fno["'"'"' /,()]{0,10}events\.jsonl'
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    echo "hand-built project journal at $hit" >&2
+    remediation "resolve through fno.paths project_log(\"events.jsonl\", project_root=...) or project_events_json() instead"
+    violations=$((violations + 1))
+done < <(
+    grep -rEn "$HAND_BUILT_JOURNAL" \
+        --include='*.py' \
+        cli/src/fno/pr cli/src/fno/review 2>/dev/null \
+        || true
+)
+
+# Rule 5: stdlib-jsonl-append
+# The store is the write boundary in every language. A stdlib append that
+# NAMES an events journal is a second authoritative writer even when it
+# hides behind a helper: Python `open(..., "a")` and Rust
+# `OpenOptions::new().append(true)` over an events.jsonl path are both
+# refused. `hook-events.jsonl` stays allowlisted: it is the pre-runtime
+# diagnostic a hook writes before the native binary can answer, and no
+# runtime gate or reader ever consumes it.
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    echo "stdlib events append at $hit: production code must not open an event journal for append" >&2
+    remediation "commit through the native store (fno.events.append_event / EventEmitter / _append_bounded_event) instead"
+    violations=$((violations + 1))
+done < <(
+    grep -rEn 'open\([^)]*events\.jsonl[^)]*"[aA]"|OpenOptions::new\(\)[^;]*events\.jsonl|\.append\(true\)[^;]*events\.jsonl|events\.jsonl[^;]*\.append\(true\)' \
+        --include='*.py' --include='*.rs' \
+        cli/src crates hooks scripts 2>/dev/null \
+        | grep -v '/tests/' \
+        | grep -v 'test' \
+        | grep -v 'scripts/lint/events-discipline.sh' \
+        | grep -v 'hook-events\.jsonl' \
+        || true
+)
+
+# Rule 6: jsonl-rotation
+# Rotation was the JSONL-era size guard: the store keeps full history in
+# bounded rows, so renaming a live journal aside can only orphan rows a
+# reader needs.
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    echo "events rotation at $hit: renaming an events journal aside is retired" >&2
+    remediation "let the store hold the history; delete the rotation branch"
+    violations=$((violations + 1))
+done < <(
+    grep -rEn '(mv|rename)[^|;]*events\.jsonl[^|;]*\.1|events\.jsonl[^|;]*(mv|rename)[^|;]*\.1' \
+        --include='*.sh' --include='*.py' --include='*.rs' \
+        cli/src crates hooks scripts skills 2>/dev/null \
+        | grep -v '/tests/' \
+        | grep -v 'scripts/lint/events-discipline.sh' \
+        | grep -v 'events-discipline:allow' \
+        || true
+)
+
+# Rule 7: events-file-pin
+# The guard hooks bypassed the store resolver by pinning
+# EVENTS_FILE="$PWD/.fno/events.jsonl" when the cwd looked like a project
+# root. Only scripts/lib/events.sh (the transport itself) may assign the
+# variable, and only from a resolver.
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    echo "events file pin at $hit: a hook guessed the journal path instead of resolving it" >&2
+    remediation "let scripts/lib/events.sh resolve via fno-agents state path events, or pin FNO_EVENTS_PATH to the exact journal"
+    violations=$((violations + 1))
+done < <(
+    grep -rEn '^[[:space:]]*_?EVENTS_FILE="(\$PWD|[^"]*\.fno)/events\.jsonl"' \
+        --include='*.sh' \
+        hooks/ scripts/ 2>/dev/null \
+        | grep -v 'scripts/lib/events.sh' \
+        || true
+)
+
+# Rule 8: event-fn-raw-append
+# Rule 5 only sees a literal events.jsonl in the open() call; the surviving
+# legs hid the path behind a variable. An event-named function that opens a
+# raw append is that shape, whatever the indirection, unless the line
+# carries an explicit events-discipline:allow marker. The window is 40 lines
+# (claude_ask::emit_event's open sat 23 lines below its fn) and hits at or
+# past the file's first `mod tests` are skipped so in-file fixtures stay
+# legal without new allow markers.
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    file="${hit%%:*}"
+    lineno="${hit#*:}"
+    lineno="${lineno%%:*}"
+    window_end=$((lineno + 40))
+    test_start=$(grep -n '^mod tests' "$file" 2>/dev/null | cut -d: -f1 | head -1)
+    if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
+        continue
+    fi
+    if sed -n "${lineno},${window_end}p" "$file" 2>/dev/null | grep -q 'OpenOptions::new()'; then
+        echo "event fn raw append at $file:$lineno: an event-named function must commit through the store" >&2
+        remediation "use crate::event_store::append_envelope (or EventEmitter); mark events-discipline:allow only for a test fixture writer"
+        violations=$((violations + 1))
+    fi
+done < <(
+    grep -rnE 'fn [a-z_]*event[a-z_]*\(' \
+        --include='*.rs' \
+        crates/ 2>/dev/null \
+        | grep -v '/tests/' \
+        | grep -v 'events-discipline:allow' \
+        || true
+)
+
+# The debt outside the gate lane, same pattern: real hand-built sites (hooks
+# today) that stay legal until their own lane sweeps them.
+remaining_hand_built=$(
+    grep -rEn "$HAND_BUILT_JOURNAL" \
+        --include='*.py' --include='*.rs' --include='*.sh' \
+        cli/src crates hooks scripts 2>/dev/null \
+        | grep -v '/tests/' \
+        | grep -vE '^cli/src/fno/(pr|review)/' \
+        | grep -v 'scripts/lint/events-discipline.sh' \
+        | grep -c . || true
+)
+printf '  note: %s hand-built journal site(s) or references remain outside the gate lane; sweep them lane by lane\n' "$remaining_hand_built" >&2
 
 if [[ $violations -gt 0 ]]; then
     echo "events-discipline: $violations violation(s) found" >&2

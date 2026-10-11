@@ -169,6 +169,27 @@ def _capture_subprocess_env(monkeypatch, module) -> dict:
     return captured
 
 
+def test_no_child_env_carries_the_node_receipt(tmp_path: Path, monkeypatch) -> None:
+    """The seam's derivation receipt is fno-internal: a spawned child never
+    sees FNO_NODE_REASON, on either transport shape (dict scrub or env -u)."""
+    from fno.agents.harnesses import claude as claude_mod
+
+    monkeypatch.setenv("FNO_NODE_REASON", "x-gone names no readable backlog row")
+    captured = _capture_subprocess_env(monkeypatch, claude_mod)
+
+    cwd = tmp_path / "wd"
+    cwd.mkdir()
+    claude_mod.headless_create(message="hi", cwd=cwd)
+
+    explicit_envs = [env for _argv, env in captured["calls"] if env is not None]
+    assert explicit_envs, "headless spawn inherited the parent env with no scrub"
+    child_env = explicit_envs[-1]
+    assert "FNO_NODE_REASON" not in child_env
+
+    flags = ambient_identity_env_unset_args()
+    assert "FNO_NODE_REASON" in flags
+
+
 def test_bg_spawn_scrubs_inherited_identity(tmp_path: Path, monkeypatch) -> None:
     """AC5 (bg substrate): a `claude --bg` child sheds every ambient identity
     marker its parent carried. The operator's spawned-reviewer lane uses
@@ -375,3 +396,16 @@ def test_scrub_list_covers_the_measured_codex_identity_env() -> None:
     flags = ambient_identity_env_unset_args()
     for name in measured:
         assert name in flags, f"{name} missing from the env -u strip flags"
+
+
+def test_worker_environment_drops_the_spawn_trigger() -> None:
+    """The floor drops the spawn cause with the identity: a worker must never
+    inherit its parent's FNO_SPAWN_TRIGGER, or its own later spawns would wear
+    the parent's dispatcher label. A gh-less PATH keeps the probe hermetic."""
+    from fno.setup.github_cli import worker_environment
+
+    result = worker_environment(
+        {"PATH": "/definitely-not-a-bin-dir", "FNO_SPAWN_TRIGGER": "dispatch:ac"}
+    )
+    assert result["PATH"] == "/definitely-not-a-bin-dir"
+    assert "FNO_SPAWN_TRIGGER" not in result

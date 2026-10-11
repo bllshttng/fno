@@ -1,4 +1,4 @@
-//! The serve-HTTP opencode worker lane (x-d9f9): `spawn --harness opencode
+//! The serve-HTTP opencode worker lane : `spawn --harness opencode
 //! --substrate bg` as a real, unattended, persistent provider.
 //!
 //! opencode hosts two unattended shapes before this module: the headless
@@ -28,7 +28,7 @@
 //! - `opencode run --attach <url> --session <id> [--command ...]` drives one
 //!   turn on the shared serve with native command-template expansion. The
 //!   spawn launches that as a detached writer and returns immediately: no
-//!   template text is duplicated into this crate (x-de43 keeps biting anyone
+//!   template text is duplicated into this crate (keeps biting anyone
 //!   who routes a slash command as prose). The attach writer prints NOTHING on
 //!   stdout (verified live; `--format json` is dead on this path) - structured
 //!   capture is the serve's own message readback (`GET /session/:id/message`,
@@ -75,7 +75,24 @@ pub struct ServeHandle {
 /// the headless lane and every other fno worker lane; without it every tool
 /// call that opencode does not allow by config evaluates to `ask`, and an
 /// unanswered ask is a hang, not a refusal.
-const SERVE_CONFIG_JSON: &str = r#"{"permission":{"*":"allow"}}"#;
+///
+/// The key is contract-specific: 1.x reads a `permission` MAP; 2.x reads an
+/// ordered `permissions` RULE LIST (Config.md "Permissions", rule shape
+/// `{action, resource, effect}`), so a v2 serve handed the 1.x map reads no
+/// rules and every tool call lands on `ask` - a hang, not a refusal.
+const SERVE_CONFIG_JSON_V1: &str = r#"{"permission":{"*":"allow"}}"#;
+const SERVE_CONFIG_JSON_V2: &str =
+    r#"{"permissions":[{"action":"*","resource":"*","effect":"allow"}]}"#;
+
+/// The serve config for the contract the serve binary reports. One bounded
+/// `--version`; an unknown version renders the 2.x posture, matching the
+/// installer's v2-default.
+fn serve_config_json(bin: &str) -> &'static str {
+    match crate::opencode_install::classify_contract(bin) {
+        (crate::opencode_install::OpencodeContract::V2, _) => SERVE_CONFIG_JSON_V2,
+        (crate::opencode_install::OpencodeContract::V1, _) => SERVE_CONFIG_JSON_V1,
+    }
+}
 
 /// Budgets: how long to wait for a fresh serve to print its port, and the
 /// per-call HTTP timeouts. A serve boot is a node CLI start (~1-2s measured);
@@ -83,6 +100,7 @@ const SERVE_CONFIG_JSON: &str = r#"{"permission":{"*":"allow"}}"#;
 const SERVE_BOOT_BUDGET: Duration = Duration::from_secs(15);
 const HTTP_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
+const STEER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 // ===========================================================================
 // Minimal HTTP/1.1 client (loopback, `Connection: close`)
@@ -338,7 +356,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         if let Some(parent) = config.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("mkdir for serve config: {e}"))?;
         }
-        std::fs::write(&config, SERVE_CONFIG_JSON)
+        std::fs::write(&config, serve_config_json("opencode"))
             .map_err(|e| format!("write serve config {:?}: {e}", config))?;
         // Fresh token per serve: Basic-auth material for every request (the serve
         // is booted with OPENCODE_SERVER_PASSWORD), generated from /dev/urandom.
@@ -471,6 +489,26 @@ fn permission_rules_for(dirs: &[String]) -> serde_json::Value {
     serde_json::json!(rules)
 }
 
+/// The 2.x twin of [`permission_rules_for`], same `<dir>` + `<dir>/*`
+/// boundary pair. v2's session PATCH (openapi.json `session.update`) accepts
+/// a `permissions` rule list shaped `{action, resource, effect}`, so the
+/// grant ports 1:1: `external_directory` allow rows with the dir and its
+/// `/*` boundary as `resource` (Permissions.md "Directories"; `~`/`$HOME`
+/// expand at load, so absolute paths pass through raw).
+fn permission_rules_for_v2(dirs: &[String]) -> serde_json::Value {
+    let mut rules = Vec::new();
+    for d in dirs.iter().filter(|d| !d.is_empty()) {
+        for pattern in [d.clone(), format!("{d}/*")] {
+            rules.push(serde_json::json!({
+                "action": "external_directory",
+                "resource": pattern,
+                "effect": "allow",
+            }));
+        }
+    }
+    serde_json::json!(rules)
+}
+
 /// The detached-writer argv: `opencode run --attach <serve> --session <sid>`
 /// with the one-shot lane's own tail builder. No `--format json`: the attach
 /// writer prints NOTHING on stdout (verified live - the flag is dead there);
@@ -499,6 +537,63 @@ fn writer_argv(
     argv
 }
 
+/// Start one detached attach writer for an existing serve session. Launch and
+/// steering both use this path so command templating, permissions, logging,
+/// and process-group setup cannot drift between the two entry points.
+fn spawn_attach_writer(
+    serve: &ServeHandle,
+    session_id: &str,
+    message: &str,
+    model: Option<&str>,
+    cwd: &Path,
+    log_path: &Path,
+    opencode_bin: &str,
+    name: &str,
+) -> Result<u32, String> {
+    let mut argv = writer_argv(serve, session_id, message, model);
+    argv[0] = opencode_bin.to_string();
+    let argv = crate::spawn_gate::qos_wrap(cwd, argv);
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let out = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path);
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.stdin(Stdio::null());
+    if let Ok(fh) = out {
+        cmd.stdout(Stdio::from(fh));
+        if let Ok(err_fh) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+        {
+            cmd.stderr(Stdio::from(err_fh));
+        }
+    }
+    cmd.current_dir(cwd);
+    // opencode resolves its project from $PWD, not the process cwd.
+    cmd.env("PWD", cwd);
+    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", Some(session_id));
+    cmd.env_remove("NO_COLOR");
+    cmd.env_remove("FORCE_COLOR");
+    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn()
+        .map(|child| {
+            let pid = child.id();
+            std::mem::forget(child);
+            pid
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// Orchestrate one `spawn --harness opencode --substrate bg`: validate,
 /// fail-closed registry + collision check, ensure the shared serve, mint a
 /// session bound to the worker cwd, record the computed writable-dirs grant as
@@ -513,6 +608,7 @@ pub fn dispatch_opencode_serve(
     cwd: &Path,
     model: Option<&str>,
     effort: Option<&str>,
+    node: Option<&str>,
 ) -> AskOutcome {
     dispatch_opencode_serve_inner(
         home,
@@ -522,6 +618,7 @@ pub fn dispatch_opencode_serve(
         cwd,
         model,
         effort,
+        node,
         crate::claude_ask::state_dirs_from_env(),
         "opencode",
     )
@@ -539,6 +636,7 @@ fn dispatch_opencode_serve_inner(
     cwd: &Path,
     model: Option<&str>,
     effort: Option<&str>,
+    node: Option<&str>,
     state_dirs: Vec<String>,
     opencode_bin: &str,
 ) -> AskOutcome {
@@ -599,12 +697,11 @@ fn dispatch_opencode_serve_inner(
     };
 
     // Session minted on the shared serve, bound to the worker cwd.
-    let effective_message = if message.is_empty() { "hello" } else { message };
-    let full_prompt = if effective_message.starts_with('/') {
-        effective_message.to_string()
-    } else {
-        format!("[from: {from_name}]\n\n{effective_message}")
-    };
+    let effective_message = crate::provider::render_verb_seed(
+        if message.is_empty() { "hello" } else { message },
+        "opencode",
+    );
+    let full_prompt = crate::opencode_ask::opencode_envelope(&effective_message, from_name);
     let create_path = format!(
         "/session?directory={}",
         encode_query_path(&cwd.to_string_lossy())
@@ -660,11 +757,20 @@ fn dispatch_opencode_serve_inner(
     // The serve-level config already allows; these rules are the scoped
     // record, so a merge failure is a named note, not a dead spawn.
     if !state_dirs.is_empty() {
+        let contract = crate::opencode_install::classify_contract("opencode").0;
+        let body = match contract {
+            crate::opencode_install::OpencodeContract::V2 => {
+                serde_json::json!({"permissions": permission_rules_for_v2(&state_dirs)})
+            }
+            crate::opencode_install::OpencodeContract::V1 => {
+                serde_json::json!({"permission": permission_rules_for(&state_dirs)})
+            }
+        };
         match http_json(
             &serve.base_url,
             "PATCH",
             &format!("/session/{session_id}"),
-            Some(&serde_json::json!({"permission": permission_rules_for(&state_dirs)})),
+            Some(&body),
             Some(&serve.token),
             HTTP_CALL_TIMEOUT,
         ) {
@@ -696,87 +802,50 @@ fn dispatch_opencode_serve_inner(
         .open(&log_path)
         .is_ok();
 
-    // Detached writer, LAUNCHED BEFORE the registry row (claude bg's order):
-    // the row then carries the writer's pid as its liveness axis, and a launch
-    // failure leaves no row and no session - never a wedged worker name. The
-    // writer streams the turn's JSON events to the log, then exits; the serve
-    // keeps the session, so a dead writer is a capture gap, not a dead worker.
-    // argv[0] is the writer executable: PATH-resolved `opencode` in
-    // production, the test stub's absolute path under test. Swapped BEFORE
-    // qos_wrap so the QoS prefix (taskpolicy/nice) stays argv[0].
-    let mut argv = writer_argv(&serve, &session_id, &full_prompt, model);
-    argv[0] = opencode_bin.to_string();
-    let argv = crate::spawn_gate::qos_wrap(cwd, argv);
-    let writer_pid = {
-        use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
-        let out = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path);
-        let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..]);
-        cmd.stdin(Stdio::null());
-        if let Ok(fh) = out {
-            cmd.stdout(Stdio::from(fh));
-            if let Ok(err_fh) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
-                cmd.stderr(Stdio::from(err_fh));
-            }
-        }
-        cmd.current_dir(cwd);
-        crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", Some(&session_id));
-        // A shell exporting both color knobs (NO_COLOR + FORCE_COLOR, common
-        // in prompt frameworks) crashes the opencode writer at module load
-        // (assertion trace in its color init, seen live 2026-08-23). The
-        // writer streams to a log file, where color is noise anyway. Strip
-        // both so the child starts from the CLI's own default.
-        cmd.env_remove("NO_COLOR");
-        cmd.env_remove("FORCE_COLOR");
-        // The writer attaches to an authenticated serve; the run client reads
-        // its password from this env (`-p` is the flag spelling).
-        cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
-        unsafe {
-            cmd.pre_exec(|| {
-                libc::setsid();
-                Ok(())
-            });
-        }
-        match cmd.spawn() {
-            Ok(child) => {
-                let pid = child.id();
-                std::mem::forget(child);
-                pid
-            }
-            Err(e) => {
-                // No row exists yet; the minted session is the only leftover,
-                // so remove it rather than leaving an unreachable session.
-                let _ = delete_session(&serve.base_url, &serve.token, &session_id);
-                let code = if e.kind() == std::io::ErrorKind::NotFound {
-                    13
-                } else {
-                    2
-                };
-                let msg = if e.kind() == std::io::ErrorKind::NotFound {
-                    "opencode binary not found on PATH (writer launch; session removed)".to_string()
-                } else {
-                    format!("opencode writer spawn failed: {e}")
-                };
-                emit_event(
-                    &events,
-                    "agent_ask_failed",
-                    &[
-                        ("stage", "writer-launch".into()),
-                        ("name", name.into()),
-                        ("provider", "opencode".into()),
-                        ("error", msg.clone().into()),
-                    ],
-                );
-                return AskOutcome::err(msg, code);
-            }
+    // Detached writer, launched before the registry row. The serve owns the
+    // session after this process exits, so its pid is capture metadata only.
+    // Effort lands as opencode's variant for ONE model key, so with effort set
+    // and no caller model the turn must run the same default the variant was
+    // written under, never opencode's own ambient default.
+    let writer_model = model.filter(|m| !m.is_empty()).or(if effort.is_some() {
+        Some(OPENCODE_DEFAULT_MODEL)
+    } else {
+        None
+    });
+    let writer_pid = match spawn_attach_writer(
+        &serve,
+        &session_id,
+        &full_prompt,
+        writer_model.as_deref(),
+        cwd,
+        &log_path,
+        opencode_bin,
+        name,
+    ) {
+        Ok(pid) => pid,
+        Err(error) => {
+            let _ = delete_session(&serve.base_url, &serve.token, &session_id);
+            let code = if error.contains("No such file") {
+                13
+            } else {
+                2
+            };
+            let msg = if code == 13 {
+                "opencode binary not found on PATH (writer launch; session removed)".to_string()
+            } else {
+                format!("opencode writer spawn failed: {error}")
+            };
+            emit_event(
+                &events,
+                "agent_ask_failed",
+                &[
+                    ("stage", "writer-launch".into()),
+                    ("name", name.into()),
+                    ("provider", "opencode".into()),
+                    ("error", msg.clone().into()),
+                ],
+            );
+            return AskOutcome::err(msg, code);
         }
     };
 
@@ -786,12 +855,17 @@ fn dispatch_opencode_serve_inner(
     // against the concurrency cap while its turn runs and the row retires
     // when the writer exits (the store-membership probe alone could never
     // retire it - serve sessions persist after the work is done).
-    let (parent_session, parent_harness, parent_cwd) = crate::claims::ambient_parent_edge();
+    let spawned_by = crate::spawn_lineage::ambient_lineage();
     let new_entry = RegistryEntry {
-        // x-98ab: client-side mint - this process inherited the spawning
+        // client-side mint - this process inherited the spawning
         // session's env, so the exported FNO_NODE names the node THIS spawn
         // is for.
-        node: std::env::var("FNO_NODE").ok().filter(|v| !v.is_empty()),
+        // v25: the route axes this lane actually used - opencode is both
+        // harness and provider axis here, its auth is ambient, so "default".
+        route_provider_id: Some("opencode".to_string()),
+        model_name: model.filter(|m| !m.is_empty()).map(str::to_string),
+        account_record_id: Some("default".to_string()),
+        node: node.filter(|v| !v.is_empty()).map(str::to_string),
         // The serve-hosted worker lane (a detached run --attach writer behind
         // a shared serve): the public "thread" name for the local bg
         // selector.
@@ -799,7 +873,7 @@ fn dispatch_opencode_serve_inner(
         name: name.to_string(),
         short_id: session_id.clone(),
         legacy_provider: String::new(),
-        // x-d285: non-claude harness; the account axis does not apply.
+        // non-claude harness; the account axis does not apply.
         launch_account: None,
         related_session_id: None,
         provider: Some("opencode".to_string()),
@@ -808,12 +882,11 @@ fn dispatch_opencode_serve_inner(
             .filter(|m| !m.is_empty())
             .map(|_| "requested".to_string()),
         effort: effort.map(str::to_string),
-        // v23 (x-2019): the request beside the effect; verbatim as typed.
+        // v23: the request beside the effect; verbatim as typed.
         requested_model: model.filter(|m| !m.is_empty()).map(str::to_string),
         requested_provider: None,
         requested_effort: effort.filter(|v| !v.is_empty()).map(str::to_string),
         harness: Some("opencode".to_string()),
-        harness_session_id: Some(session_id.clone()),
         predecessor_session_ids: Vec::new(),
         forked_from_session_id: None,
         cwd: cwd.to_string_lossy().to_string(),
@@ -821,9 +894,6 @@ fn dispatch_opencode_serve_inner(
         session_id: Some(session_id.clone()),
         origin: Some("spawn".to_string()),
         spawn_trigger: None,
-        spawned_by_session: parent_session,
-        spawned_by_harness: parent_harness,
-        spawned_by_cwd: parent_cwd,
         legacy_claude_short_id: None,
         claude_session_uuid: None,
         messaging_socket_path: None,
@@ -835,8 +905,11 @@ fn dispatch_opencode_serve_inner(
         status: AgentStatus::Live,
         last_message_at: None,
         created_at: now_iso(),
-        pid: Some(writer_pid),
-        pid_start_time: crate::daemon::process_start_time(writer_pid),
+        // The writer is one turn's transport and exits after delivery. The
+        // serve session is the durable worker, so do not make writer PID the
+        // row's liveness signal.
+        pid: None,
+        pid_start_time: None,
         keeper_child_pid: None,
         log_path: log_file_created.then(|| log_path.to_string_lossy().to_string()),
         last_reconciled_at: None,
@@ -844,13 +917,14 @@ fn dispatch_opencode_serve_inner(
         exited_at: None,
         mux: None,
         screen_state: None,
-        crown_level: None,
-        crown_scope: None,
-        crown_grantor: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
         route_settings_path: None,
-        fno_id: None,
         delivery_policy: None,
         sandbox_posture: None,
+        git_grant: None,
+        ..RegistryEntry::new(Some(session_id.clone()), spawned_by)
     };
     let registry_path = home.registry_json();
     match update_registry(&registry_path, |reg| {
@@ -901,17 +975,27 @@ fn dispatch_opencode_serve_inner(
         }
     }
 
-    emit_event(
-        &events,
-        "agent_spawned",
-        &[
-            ("name", name.into()),
-            ("provider", "opencode".into()),
-            ("harness", "opencode".into()),
-            ("session_id", session_id.clone().into()),
-            ("serve_url", serve.base_url.clone().into()),
-        ],
+    // The birth carries the same lineage the row was minted with, so the
+    // journal and the registry can never disagree about who the parent is.
+    let birth = crate::spawn_edge::birth_event(
+        name,
+        &crate::spawn_lineage::ambient_lineage(),
+        serde_json::json!({
+            "provider": "opencode",
+            "harness": "opencode",
+            "session_id": session_id.clone(),
+            "serve_url": serve.base_url.clone(),
+            "node": node.unwrap_or_default(),
+        }),
     );
+    let no_fields = serde_json::Map::new();
+    let fields: Vec<(&str, serde_json::Value)> = birth
+        .as_object()
+        .unwrap_or(&no_fields)
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+    emit_event(&events, "agent_spawned", &fields);
     AskOutcome::ok_reply(
         serde_json::json!({
             "ok": true,
@@ -919,6 +1003,9 @@ fn dispatch_opencode_serve_inner(
             "session_id": session_id,
             "short_id": session_id,
             "serve_url": serve.base_url.clone(),
+            // The generated serve config writes `{"permission":{"*":"allow"}}`;
+            // the receipt NAMES that posture instead of leaving it unnamed.
+            "permission_posture": "explicit allow-all (serve config permission.{*}=allow)",
             "durability": "daemon-owned",
             "incarnation": format!("{}:{}", serve.pid, serve.pid_start.unwrap_or_default()),
             "endpoint": serve.base_url,
@@ -968,6 +1055,61 @@ pub fn fetch_session(
     serde_json::from_str(&body).map_err(|e| format!("session body parse: {e}"))
 }
 
+/// Read liveness for a serve row from the serve's session endpoint. A 404 is
+/// a definitive absent session; an unreadable state file, unreachable server,
+/// or malformed response is UNKNOWN and must not be converted to dead.
+pub fn serve_session_reachable(session_id: &str, timeout: Duration) -> Result<bool, String> {
+    serve_session_reachable_in(&AgentsHome::from_env(), session_id, timeout)
+}
+
+fn serve_session_reachable_in(
+    home: &AgentsHome,
+    session_id: &str,
+    timeout: Duration,
+) -> Result<bool, String> {
+    if !crate::provider::is_opencode_session_id(session_id) {
+        return Err(format!("malformed opencode session id {session_id:?}"));
+    }
+    let raw = std::fs::read_to_string(serve_state_path(&home))
+        .map_err(|e| format!("serve state unreadable: {e}"))?;
+    let state: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("serve state parse: {e}"))?;
+    let base_url = state
+        .get("base_url")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "serve state has no base_url".to_string())?;
+    let token = state
+        .get("token")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "serve state has no token".to_string())?;
+    let (status, body) = http_json(
+        base_url,
+        "GET",
+        &format!("/session/{session_id}"),
+        None,
+        Some(token),
+        timeout,
+    )?;
+    if status == 404 {
+        return Ok(false);
+    }
+    if status != 200 {
+        return Err(format!(
+            "GET session answered {status}: {}",
+            tail_reason(&body, status)
+        ));
+    }
+    let session: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("session body parse: {e}"))?;
+    if session.get("id").and_then(|value| value.as_str()) == Some(session_id) {
+        Ok(true)
+    } else {
+        Err(format!("session readback id does not match {session_id}"))
+    }
+}
+
 /// `GET /session/:id/message` as parsed JSON (structured capture readback).
 pub fn fetch_messages(
     base_url: &str,
@@ -991,6 +1133,274 @@ pub fn fetch_messages(
     serde_json::from_str(&body).map_err(|e| format!("messages body parse: {e}"))
 }
 
+/// Send one turn to an already-minted serve session and confirm it by a new
+/// message id in the serve readback. The writer's exit is not delivery proof.
+pub fn steer_existing_session(
+    home: &AgentsHome,
+    session_id: &str,
+    message: &str,
+    cwd: &Path,
+    model: Option<&str>,
+    timeout: Duration,
+) -> Result<String, String> {
+    steer_existing_session_with_binary(home, session_id, message, cwd, model, timeout, "opencode")
+}
+
+fn steer_existing_session_with_binary(
+    home: &AgentsHome,
+    session_id: &str,
+    message: &str,
+    cwd: &Path,
+    model: Option<&str>,
+    timeout: Duration,
+    opencode_bin: &str,
+) -> Result<String, String> {
+    if !crate::provider::is_opencode_session_id(session_id) {
+        return Err(format!(
+            "opencode serve steering refused session {session_id:?}: expected a full ses_<alnum> id"
+        ));
+    }
+    let serve = ensure_serve(home)?;
+    let before = fetch_messages(&serve.base_url, &serve.token, session_id)?;
+    let log_path = home
+        .root()
+        .join("agents")
+        .join("logs")
+        .join(format!("steer-{session_id}.jsonl"));
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("steering log directory: {e}"))?;
+    }
+    spawn_attach_writer(
+        &serve,
+        session_id,
+        message,
+        model,
+        cwd,
+        &log_path,
+        opencode_bin,
+        "fno-opencode-steer",
+    )
+    .map_err(|error| {
+        format!("opencode serve steering writer launch failed for session {session_id}: {error}")
+    })?;
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last_seen = latest_message_id(&before);
+    while std::time::Instant::now() < deadline {
+        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, session_id) {
+            if let Some(id) = new_message_id_after(&messages, &before) {
+                return Ok(id);
+            }
+            last_seen = latest_message_id(&messages);
+        }
+        std::thread::sleep(STEER_POLL_INTERVAL);
+    }
+    Err(format!(
+        "opencode serve steering UNKNOWN for session {session_id}: no new message within {}s; last message id {}",
+        timeout.as_secs(),
+        last_seen.as_deref().unwrap_or("<none>")
+    ))
+}
+
+/// Resolve a full opencode serve row and steer it. This is the shared mail
+/// entry point; callers cannot supply a URL or cwd that disagrees with the row.
+pub fn steer_registered_session(
+    session_id: &str,
+    message: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let home = AgentsHome::from_env();
+    let registry =
+        load_registry(&home.registry_json()).map_err(|e| format!("registry read failed: {e}"))?;
+    let entry = registry
+        .entries
+        .iter()
+        .find(|entry| {
+            entry.harness_name() == "opencode"
+                && (entry.harness_session_id.as_deref() == Some(session_id)
+                    || entry.session_id.as_deref() == Some(session_id))
+        })
+        .ok_or_else(|| {
+            format!("opencode serve steering refused: no row for session {session_id}")
+        })?;
+    if entry.substrate.as_deref() != Some("thread") {
+        return Err(format!(
+            "opencode serve steering refused session {session_id}: row is not a serve thread"
+        ));
+    }
+    let cwd = Path::new(&entry.cwd);
+    if !cwd.is_dir() {
+        return Err(format!(
+            "opencode serve steering refused session {session_id}: cwd {} is not a directory",
+            cwd.display()
+        ));
+    }
+    steer_existing_session(
+        &home,
+        session_id,
+        message,
+        cwd,
+        entry.model.as_deref(),
+        timeout,
+    )
+}
+
+/// Handle `fno agents ask` for a serve row. Steering confirms the new stored
+/// message, then this wrapper waits for a new assistant message and returns its
+/// text so ask callers receive the reply rather than the writer receipt.
+pub fn ask_registered_session(
+    home: &AgentsHome,
+    name: &str,
+    message: &str,
+    from_name: &str,
+    model: Option<&str>,
+    timeout: Duration,
+) -> AskOutcome {
+    let registry = match load_registry(&home.registry_json()) {
+        Ok(registry) => registry,
+        Err(error) => return AskOutcome::err(format!("registry read failed: {error}"), 12),
+    };
+    let Some(entry) = registry.find_name_or_full_session_id(name) else {
+        return AskOutcome::err(format!("agent {name:?} has no registry row"), 13);
+    };
+    if entry.harness_name() != "opencode" || entry.substrate.as_deref() != Some("thread") {
+        return AskOutcome::err(format!("agent {name:?} is not an opencode serve thread"), 2);
+    }
+    let Some(session_id) = entry
+        .harness_session_id
+        .as_deref()
+        .or(entry.session_id.as_deref())
+    else {
+        return AskOutcome::err(
+            format!("agent {name:?} is an opencode serve row with no full session id"),
+            2,
+        );
+    };
+    let cwd = Path::new(&entry.cwd);
+    if !cwd.is_dir() {
+        return AskOutcome::err(
+            format!(
+                "agent {name:?} recorded cwd {} is not a directory",
+                cwd.display()
+            ),
+            13,
+        );
+    }
+    let rendered = crate::provider::render_verb_seed(message, "opencode");
+    let full_prompt = crate::opencode_ask::opencode_envelope(&rendered, from_name);
+    let serve = match ensure_serve(home) {
+        Ok(serve) => serve,
+        Err(error) => return AskOutcome::err(error, 13),
+    };
+    let before = match fetch_messages(&serve.base_url, &serve.token, session_id) {
+        Ok(messages) => messages,
+        Err(error) => return AskOutcome::err(error, 12),
+    };
+    if let Err(error) = steer_existing_session(
+        home,
+        session_id,
+        &full_prompt,
+        cwd,
+        model.or(entry.model.as_deref()),
+        timeout,
+    ) {
+        return AskOutcome::err(error, 12);
+    }
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, session_id) {
+            if let Some(reply) = new_assistant_text_after(&messages, &before) {
+                return AskOutcome::ok_reply(reply);
+            }
+        }
+        std::thread::sleep(STEER_POLL_INTERVAL);
+    }
+    AskOutcome::err(
+        format!(
+            "opencode serve ask UNKNOWN for session {session_id}: no new assistant reply within {}s",
+            timeout.as_secs()
+        ),
+        12,
+    )
+}
+
+fn latest_message_id(messages: &serde_json::Value) -> Option<String> {
+    messages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("info"))
+        .filter_map(|info| info.get("id"))
+        .filter_map(|id| id.as_str())
+        .last()
+        .map(str::to_string)
+}
+
+fn new_assistant_text_after(
+    messages: &serde_json::Value,
+    high_water: &serde_json::Value,
+) -> Option<String> {
+    let prior = high_water
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("info"))
+        .filter_map(|info| info.get("id"))
+        .filter_map(|id| id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    messages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| {
+            message
+                .get("info")
+                .and_then(|info| info.get("role"))
+                .and_then(|role| role.as_str())
+                == Some("assistant")
+        })
+        .filter(|message| {
+            message
+                .get("info")
+                .and_then(|info| info.get("id"))
+                .and_then(|id| id.as_str())
+                .is_some_and(|id| !prior.contains(id))
+        })
+        .filter_map(|message| message.get("parts"))
+        .filter_map(|parts| parts.as_array())
+        .flat_map(|parts| parts.iter())
+        .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+        .map(str::to_string)
+        .next()
+}
+
+/// Return the first message id that was not present at the caller's
+/// high-water mark. A non-empty response is not delivery evidence: the id is
+/// the serve's positive marker for a newly stored message.
+fn new_message_id_after(
+    messages: &serde_json::Value,
+    high_water: &serde_json::Value,
+) -> Option<String> {
+    let prior = high_water
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("info"))
+        .filter_map(|info| info.get("id"))
+        .filter_map(|id| id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    messages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("info"))
+        .filter_map(|info| info.get("id"))
+        .filter_map(|id| id.as_str())
+        .find(|id| !prior.contains(id))
+        .map(str::to_string)
+}
+
 /// `DELETE /session/:id` - best-effort teardown; an error is returned, not
 /// panicked on, so a caller can still finish its other cleanup.
 pub fn delete_session(base_url: &str, token: &str, session_id: &str) -> Result<(), String> {
@@ -1012,6 +1422,184 @@ pub fn delete_session(base_url: &str, token: &str, session_id: &str) -> Result<(
     }
 }
 
+// ===========================================================================
+// The archive op: a history-preserving active-surface removal
+// ===========================================================================
+
+/// The opencode version the archive op was measured against (v1.14.50,
+/// 2026-09-08). `PATCH /session/{id}` with `{"time":{"archived":<epoch_ms>}}`
+/// answers 200, a separate GET still returns the session with the field set
+/// and its messages intact, and `session.list` drops it from the active
+/// listing. Below this version the field is UNVERIFIED, not known-absent, so a
+/// caller skips instead of guessing: an older serve that ignored the field
+/// would turn a retirement that works today into one that holds its row
+/// forever. Above [`OPENCODE_V2_FLOOR`] the argument binds upward: the 2.x
+/// HTTP API is a different contract, and an unverified version is skipped,
+/// not guessed at.
+pub const ARCHIVE_MIN_VERSION: (u32, u32, u32) = (1, 14, 50);
+
+/// First opencode 2.x release. The archive op was measured against the 1.x
+/// HTTP API only, so a serve at or above this version is skipped and told why.
+pub const OPENCODE_V2_FLOOR: (u32, u32, u32) = (2, 0, 0);
+
+/// What one archive attempt measured. `Survived` is an outcome, not an error:
+/// the write was accepted and the stored record still carries no
+/// `time.archived`, which is a positive finding about the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArchiveOutcome {
+    Archived,
+    AlreadyArchived,
+    Gone,
+    Survived,
+}
+
+/// Compare the leading three dotted integers of `reported` against `min`.
+/// Anything before the first digit is skipped (`opencode v2.0.19`, bare
+/// `1.18.33`); an unparseable version answers false: a version nobody can
+/// read is not evidence of a supported one.
+pub(crate) fn version_at_least(reported: &str, min: (u32, u32, u32)) -> bool {
+    let trimmed = reported.trim();
+    let from_digit = match trimmed.find(|c: char| c.is_ascii_digit()) {
+        Some(i) => &trimmed[i..],
+        None => "",
+    };
+    let nums: Vec<u32> = from_digit
+        .split('.')
+        .take(3)
+        .map(|part| {
+            part.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+        })
+        .filter_map(|digits| digits.parse::<u32>().ok())
+        .collect();
+    nums.len() == 3 && (nums[0], nums[1], nums[2]) >= min
+}
+
+fn is_archived(body: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("time")
+                .and_then(|time| time.get("archived"))
+                .cloned()
+        })
+        .is_some_and(|value| !value.is_null())
+}
+
+/// The recorded serve, when it answers health AND reports a version carrying
+/// the archive op. Returns `None` for every other case, including a missing
+/// state file and an unreadable one.
+///
+/// It never boots a serve: a GC sweep must not start a server as a side
+/// effect. One health read answers both questions, because the health body
+/// carries the version, and one read is the right budget here - a false
+/// "unhealthy" only skips the archive, which is what the caller did before
+/// this op existed. The three-attempt [`serve_healthy`] belongs to the spawn
+/// path, where the unhealthy branch SIGTERMs the serve.
+pub fn archive_capable_serve(home: &AgentsHome) -> Option<ServeHandle> {
+    let raw = std::fs::read_to_string(serve_state_path(home)).ok()?;
+    let state: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let base_url = state.get("base_url")?.as_str()?.to_string();
+    let token = state.get("token")?.as_str()?.to_string();
+    if base_url.is_empty() || token.is_empty() {
+        return None;
+    }
+    let (status, body) = http_json(
+        &base_url,
+        "GET",
+        "/global/health",
+        None,
+        Some(&token),
+        HEALTH_TIMEOUT,
+    )
+    .ok()?;
+    if status != 200 {
+        return None;
+    }
+    let health: serde_json::Value = serde_json::from_str(&body).ok()?;
+    if health.get("healthy") != Some(&serde_json::Value::Bool(true)) {
+        return None;
+    }
+    let version = health.get("version")?.as_str()?.to_string();
+    if !version_at_least(&version, ARCHIVE_MIN_VERSION) {
+        return None;
+    }
+    if version_at_least(&version, OPENCODE_V2_FLOOR) {
+        eprintln!(
+            "opencode serve reports {version}; the archive op is measured on 1.14.50 up to but not including 2.0.0, so it is skipped"
+        );
+        return None;
+    }
+    Some(ServeHandle {
+        base_url,
+        token,
+        pid: state.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        pid_start: state
+            .get("pid_start")
+            .and_then(|v| v.as_u64())
+            .filter(|start| *start > 0),
+    })
+}
+
+/// Archive one session: stamp `time.archived` and read the STORED record back.
+///
+/// The PATCH response body is the server's own projection of a write it has
+/// not necessarily persisted, so the second GET is the positive marker. An
+/// `Err` here means the attempt could not be judged; a write that was accepted
+/// and left the session unarchived answers [`ArchiveOutcome::Survived`].
+pub fn archive_session(
+    base_url: &str,
+    token: &str,
+    session_id: &str,
+) -> Result<ArchiveOutcome, String> {
+    let path = format!("/session/{session_id}");
+    let (status, body) = http_json(base_url, "GET", &path, None, Some(token), HTTP_CALL_TIMEOUT)?;
+    if status == 404 {
+        return Ok(ArchiveOutcome::Gone);
+    }
+    if status != 200 {
+        return Err(format!(
+            "GET session answered {status}: {}",
+            tail_reason(&body, status)
+        ));
+    }
+    if is_archived(&body) {
+        return Ok(ArchiveOutcome::AlreadyArchived);
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .map_err(|e| format!("clock before the epoch: {e}"))?;
+    let (status, body) = http_json(
+        base_url,
+        "PATCH",
+        &path,
+        Some(&serde_json::json!({"time": {"archived": now_ms}})),
+        Some(token),
+        HTTP_CALL_TIMEOUT,
+    )?;
+    if status != 200 && status != 204 {
+        return Err(format!(
+            "PATCH archive answered {status}: {}",
+            tail_reason(&body, status)
+        ));
+    }
+    let (status, body) = http_json(base_url, "GET", &path, None, Some(token), HTTP_CALL_TIMEOUT)?;
+    if status != 200 {
+        return Err(format!(
+            "archive readback answered {status}: {}",
+            tail_reason(&body, status)
+        ));
+    }
+    if is_archived(&body) {
+        Ok(ArchiveOutcome::Archived)
+    } else {
+        Ok(ArchiveOutcome::Survived)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1029,13 +1617,24 @@ mod tests {
     }
 
     #[test]
-    fn permission_rules_cover_dir_children_and_no_siblings() {
+    fn permission_rules_and_serve_config_follow_the_contract() {
+        let base =
+            std::env::temp_dir().join(format!("fno-ocserve-contract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let stub = |name: &str, version: &str| {
+            crate::write_exec_stub(&base, name, &format!("#!/bin/sh\necho '{version}'\n"))
+        };
+        let v1 = stub("oc-v1", "1.18.33");
+        let v2 = stub("oc-v2", "2.0.19");
+        // 1.x: TWO rules per dir, exact + children. opencode's `*` is `.*`
+        // (crosses `/`), so the pair covers the dir, its top-level files
+        // (graph.json), and nested state - while a single `<dir>*` would also
+        // have matched the sibling `/Users/x/.fno-backup`. The serve config is
+        // byte-identical to the shipped 1.x posture, and the grant keeps the
+        // 1.x pattern-row shape.
         let rules = permission_rules_for(&["/Users/x/.fno".to_string()]);
         let arr = rules.as_array().unwrap();
-        // TWO rules per dir: exact + children. opencode's `*` is `.*` (crosses
-        // `/`), so the pair covers the dir, its top-level files (graph.json),
-        // and nested state - while a single `<dir>*` would also have matched
-        // the sibling `/Users/x/.fno-backup`.
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["pattern"], "/Users/x/.fno");
         assert_eq!(arr[1]["pattern"], "/Users/x/.fno/*");
@@ -1048,6 +1647,29 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+        assert_eq!(
+            serve_config_json(v1.to_str().unwrap()),
+            SERVE_CONFIG_JSON_V1
+        );
+        // 2.x: the config carries the ordered `permissions` list (one
+        // allow-all rule, no `permission` key) and the grant rows carry the
+        // v2 `{action, resource, effect}` shape over the same dir boundary.
+        assert_eq!(
+            serve_config_json(v2.to_str().unwrap()),
+            SERVE_CONFIG_JSON_V2
+        );
+        let grant = permission_rules_for_v2(&["/state".to_string()]);
+        let arr = grant.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["action"], "external_directory");
+        assert_eq!(arr[0]["resource"], "/state");
+        assert_eq!(arr[1]["resource"], "/state/*");
+        for rule in arr {
+            assert_eq!(rule["effect"], "allow");
+            assert!(rule.get("permission").is_none());
+            assert!(rule.get("pattern").is_none());
+        }
+        assert!(permission_rules_for_v2(&[]).as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -1058,7 +1680,7 @@ mod tests {
             pid: 1,
             pid_start: None,
         };
-        // Slash command rides --command (x-de43). No --format json: the attach
+        // Slash command rides --command. No --format json: the attach
         // writer prints nothing on stdout (verified live), so the flag is dead.
         assert_eq!(
             writer_argv(&serve, "ses_abc123", "/fno:target --no-merge x-1", None),
@@ -1094,6 +1716,23 @@ mod tests {
                 "do the thing"
             ]
         );
+    }
+
+    #[test]
+    fn steering_readback_requires_a_message_id_after_high_water_mark() {
+        let before = serde_json::json!([
+            {"info": {"id": "msg_old"}, "parts": []}
+        ]);
+        let after = serde_json::json!([
+            {"info": {"id": "msg_old"}, "parts": []},
+            {"info": {"id": "msg_new"}, "parts": []}
+        ]);
+
+        assert_eq!(
+            new_message_id_after(&after, &before).as_deref(),
+            Some("msg_new")
+        );
+        assert_eq!(new_message_id_after(&before, &before), None);
     }
 
     #[test]
@@ -1149,6 +1788,8 @@ mod tests {
                     let body_start = req.split_once("\r\n\r\n").map(|(_, b)| b.to_string());
                     let (status, body) = if line.starts_with("GET /global/health") {
                         ("200 OK", "{\"healthy\":true}".to_string())
+                    } else if line.starts_with("GET /session/") {
+                        ("200 OK", format!("{{\"id\":\"{sid}\"}}"))
                     } else if line.starts_with("POST /session?") {
                         (
                             "200 OK",
@@ -1224,6 +1865,32 @@ mod tests {
     }
 
     #[test]
+    fn serve_session_reachability_uses_session_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = home(dir.path());
+        let fake = FakeServe::start("ses_reachable123");
+        std::fs::write(
+            serve_state_path(&h),
+            serde_json::json!({
+                "base_url": fake.base_url(),
+                "token": "test-token"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert!(
+            serve_session_reachable_in(&h, "ses_reachable123", Duration::from_secs(2)).unwrap()
+        );
+        assert!(fake
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "GET /session/ses_reachable123 HTTP/1.1"));
+    }
+
+    #[test]
     fn healthy_legacy_state_without_pid_start_is_reused() {
         let dir = tempfile::tempdir().unwrap();
         let h = home(dir.path());
@@ -1274,10 +1941,7 @@ mod tests {
 
         // A stub writer binary: the injected seam points argv[0] at it, so no
         // PATH mutation and no real `opencode` run.
-        let stub = dir.path().join("opencode-stub");
-        std::fs::write(&stub, "#!/bin/sh\nsleep 60\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stub = crate::write_exec_stub(dir.path(), "opencode-stub", "#!/bin/sh\nexit 0\n");
 
         let cwd = dir.path().join("w");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -1291,6 +1955,7 @@ mod tests {
             &cwd,
             None,
             None,
+            Some("x-aaaa"),
             vec![state_dir.to_string_lossy().to_string()],
             &stub.to_string_lossy(),
         );
@@ -1299,16 +1964,19 @@ mod tests {
         let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
         assert_eq!(receipt["session_id"], "ses_dispatchtest1");
         assert_eq!(receipt["ok"], true);
-        // The registry row exists with the harness session bound AND the
-        // writer's pid as its liveness axis (spawn-gate cap + reconcile).
+        let registry = crate::state::load_registry(&h.registry_json()).unwrap();
+        assert_eq!(registry.entries[0].node.as_deref(), Some("x-aaaa"));
+        // The registry row exists with the harness session bound. The
+        // short-lived writer is not the worker's liveness axis.
         let reg = load_registry(&h.registry_json()).unwrap();
         let row = reg.find("wk-serve").expect("row appended");
         assert_eq!(row.harness.as_deref(), Some("opencode"));
         assert_eq!(row.harness_session_id.as_deref(), Some("ses_dispatchtest1"));
-        let writer_pid = row.pid.expect("writer pid on the row");
-        assert!(row.pid_start_time.is_some(), "pid start-time captured");
-        // The stub writer sleeps; do not leak it past the test.
-        unsafe { libc::kill(writer_pid as i32, libc::SIGKILL) };
+        assert!(row.pid.is_none(), "writer pid must not define liveness");
+        assert!(
+            row.pid_start_time.is_none(),
+            "writer start time must be absent"
+        );
         // The permission merge carried the external_directory rules.
         let requests = fake.requests.lock().unwrap();
         assert!(
@@ -1348,6 +2016,7 @@ mod tests {
             Path::new("/tmp"),
             None,
             None,
+            None,
             Vec::new(),
             "opencode",
         );
@@ -1370,6 +2039,7 @@ mod tests {
             Path::new("/tmp"),
             None,
             None,
+            None,
             Vec::new(),
             "opencode",
         );
@@ -1381,3 +2051,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "opencode_archive_tests.rs"]
+mod opencode_archive_tests;

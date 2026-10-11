@@ -1,41 +1,39 @@
 # Codex Provider Guide
 
 footnote ships one native Codex marketplace identity, `footnote`, and one plugin identity, `fno@footnote`.
-The release and dev channels select the source behind that identity; they never install side-by-side plugin names.
+The plugin installs from the filtered stage of your checkout: git-tracked files only, never build output or worktrees.
 
-## Plugin Channels
+## Plugin Install
 
-Use the release channel for normal Codex sessions.
-It installs `fno@footnote` from the Git-backed `bllshttng/footnote` marketplace and keeps the version in `.codex-plugin/plugin.json` authoritative.
-
-```bash
-fno config setup codex-plugin --channel release
-```
-
-Use the dev channel while changing plugin content locally.
-It installs `fno@footnote` from the durable canonical checkout rather than a disposable feature worktree.
+`fno config plugin install codex` converges Codex onto your checkout in one step.
+The installed identity is the dev one, because the source is a local stage.
+Run it from the durable canonical checkout for everyday use.
+For local plugin work, run it from your feature worktree instead.
 
 ```bash
-fno config setup codex-plugin --channel dev
+fno config plugin install codex
 ```
+
+A git-marketplace release install for Codex is not available yet.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
-Refresh removes and re-adds the selected copy through Codex, which deterministically rebuilds its cache without changing release version files.
+`--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.
 
 ```bash
-fno config setup codex-plugin --channel dev --refresh
+fno config plugin install codex --force
 ```
 
-Setup first validates the requested marketplace and plugin in an isolated temporary `CODEX_HOME`, leaving the working channel untouched when the candidate is invalid.
+Install first validates the requested marketplace and plugin in an isolated temporary `CODEX_HOME`, leaving the working install untouched when the candidate is invalid.
 It then replaces the source behind `footnote`, verifies the installed version and complete loadable payload, and writes the channel marker only after that verification succeeds.
-Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes; a rollback failure is persisted and reported distinctly by `fno doctor`.
-Setup also migrates and removes legacy `footnote-dev` registrations, `fno@footnote-dev`, and their cache.
-An already-correct selection is a no-op unless `--refresh` is present.
+Every failed live switch restores the previous marketplace registration, plugin, and exact marker bytes.
+A rollback failure is persisted and reported distinctly by `fno doctor`.
+Install also migrates and removes legacy `footnote-dev` registrations, `fno@footnote-dev`, and their cache.
+An already-correct install is a no-op unless `--force` is present.
 Every mutation can require hook approval and takes effect in a new Codex session.
 Blocking `cli-ci` installs Codex 0.145 and runs the isolated real-binary containment and rollback regressions on every affected pull request.
 
 `fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness.
-It compares the selected channel's loadable source payload with `CODEX_HOME/plugins/cache/<marketplace>/fno/<version>` and gives the exact refresh command for wrong-channel, missing-cache, version-mismatch, and payload-drift findings.
+It compares the installed loadable source payload with `CODEX_HOME/plugins/cache/<marketplace>/fno/<version>` and gives the exact refresh command for wrong-channel, missing-cache, version-mismatch, and payload-drift findings.
 
 The verified payload preserves one loaded set of:
 
@@ -123,11 +121,13 @@ accounted for.
 For dev-only skill symlinks:
 
 ```bash
-./scripts/setup.sh --provider codex
+./scripts/setup.sh --provider codex --skills-source development
 ```
 
 This populates `.agents/skills/plugin--fno--*` without replacing the native plugin
-marketplace fixture.
+marketplace fixture. The explicit `--skills-source development` matters: with an
+installed plugin present, plain `--provider codex` resolves `auto` to installed
+mode and removes these symlinks instead of creating them.
 
 ## Custom Agents
 
@@ -164,6 +164,69 @@ transcript marker, then runs
 carries claim heartbeat/context monitoring, compact handoff hooks, subagent
 guards, and the PreToolUse state/git protection guards.
 
+Codex provider goals are a separate controller surface. The provider goal receipt proves the objective and continuation owner; the Footnote `Stop` receipt separately proves that the loop hook can drive the next turn. Treat the verified provider goal as primary continuation state, but never infer Stop from it. A readable quiet state parks by pausing the goal and preserving its objective; it does not clear the goal or create a replacement session. Codex returns the thread id, objective, and status; Footnote derives the continuation owner from the exact role scope or target session in its controller receipt.
+
+Continuation proof has five separate receipts: packaged capability, machine
+plugin installation, exact-session lifecycle readiness, the correlated Stop
+decision, and the useful consumer action. A plugin cache, a native goal, a
+global arms row, daemon acceptance, or a user-shaped message proves only its
+own layer. The consumer proof must join the full thread id, turn id,
+correlation id, continuation owner, action hash, and exactly one user message.
+
+Every Codex `Stop` handler must exit 0 with empty stdout or one Stop JSON object. Exit 2 with non-empty stderr is a block. Plain text fails the hook, and `cli/tests/hooks/test_codex_stop_output_contract.py` enforces it.
+
+Raw mail to an app-server Codex thread is not a prompt-line transport. Declared
+native non-review commands such as `/compact`, `/model`, and `/status` are
+refused with the controller replacement. Ordinary wrapped text continues over
+the turn transport, and `/review` continues over structured `review/start`.
+Use provider-backed compact and goal receipts. Manual Escape followed by
+`/compact` is a fallback only for a measured mux-hosted pane.
+
+The exact-session command journey is opt-in and must use disposable sessions
+and the isolated roots below. A Codex thread run covers paused-to-active goal
+resume, goal readback, timeout retry idempotency, and provider compaction. An
+attached pane run covers busy refusal, pending-composer preservation, and the
+`/rc` picker. Pane proofs require `FNO_EMPTY_COMPOSER_EXPECT` as an anchored
+line regex that matches the blank prompt before typing, plus an
+`FNO_SCREEN_EXPECT_*` regex absent before and present after the command. The
+controller refuses a short selector, identity mismatch, unreadable registry,
+non-empty composer, or any root outside this private set. It opens a new portal
+only for an interactive attach row and closes only its own portal after the
+terminal receipt. Verified provider command receipts retain the readback under
+`provider_receipt`; goal pause and resume receipts include token budget, tokens
+used, and elapsed time, and refuse when those counters regress.
+
+```bash
+FNO_HOME=/private/tmp/fno-continuation-proof \
+FNO_AGENTS_HOME=/private/tmp/fno-continuation-proof/agents \
+FNO_CLAIMS_ROOT=/private/tmp/fno-continuation-proof/claims \
+FNO_SPACES_DIR=/private/tmp/fno-continuation-proof/spaces \
+HOME=/private/tmp/fno-continuation-proof/home \
+CODEX_HOME=/private/tmp/fno-continuation-proof/codex \
+bash scripts/diagnostics/harness-command-control-smoke.sh \
+  --session <full-disposable-session-id> --harness <codex|claude>
+```
+
+The independent continuation probe creates its own private Git repository,
+`CODEX_HOME`, and FNO state. It sends one initial prompt and never sends mail
+or queue input. The current runner measures the independent Stop-to-nonce
+journey, but does not collect provider goal/window, quiet-park/wake, or repeated
+boundary receipts yet. It exits blocked without writing a full verification
+receipt; it never fills those fields from expected constants. The verifier
+accepts only the current receipt schema and rejects older synthetic receipts.
+
+```bash
+python3 scripts/diagnostics/codex-lead-continuation-smoke.py --run
+python3 scripts/diagnostics/codex-lead-continuation-smoke.py \
+  --verify-latest --max-age-hours 24
+```
+
+The verifier reports one primary failure class and its failed reader for
+missing plugin/session refresh, disabled hooks, stale lifecycle markers,
+identity misses, malformed or rejected Stop output, explicit park, and wake
+refusals. The observed Escape plus `/compact` sequence is interruption and
+compaction-boundary evidence only; it is not autonomous continuation proof.
+
 Do not copy the full Claude hook manifest into Codex. Codex does not support every
 Claude lifecycle event in `hooks/hooks.json`; `WorktreeCreate`, `CwdChanged`,
 `FileChanged`, `SessionEnd`, and `StopFailure` are intentionally excluded here.
@@ -188,6 +251,8 @@ dispatch receives a prose brief through an owned-PTY `pane` or a one-shot `headl
 spawn; it is never sent a Claude slash command and is never reported as `claude --bg`.
 
 ## Dependency Model
+
+The shared daemon is visible three ways, and each is a different claim. `thread/loaded/list` names the id (daemon listing). `thread/read` answers with the same id and history (same-id read, what the upgrade transaction verifies). The id opening in ChatGPT mobile Remote Control with a new message loading (operator visibility, read by a person after merge). A test that proves the first two has not proven the third.
 
 Core dependencies:
 

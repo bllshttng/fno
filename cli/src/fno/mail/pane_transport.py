@@ -11,7 +11,7 @@ command that wraps it, and FAILS CLOSED when that call cannot run -- there is no
 bare-paste fallback, because a silent fallback rebuilds the unattributed send
 this module exists to close, and does so exactly when something is already wrong.
 
-Neither caller renders an envelope of its own: node x-1904 deleted the Rust
+Neither caller renders an envelope of its own: node deleted the Rust
 mirror of :mod:`fno.mail.envelope` as dead code and this module does not
 reintroduce one.
 
@@ -33,7 +33,7 @@ from typing import Callable, Optional
 #: seed's own read (`_submit_spawn_seed`), so both look at the same window.
 GATE_FRAME_LINES = 40
 
-#: x-f579: undeclared harnesses whose not-prompt-gated note has printed once
+#: : undeclared harnesses whose not-prompt-gated note has printed once
 #: this process. Repeats are suppressed (see the comment at the print).
 _UNDECLARED_NOTED: set[str] = set()
 
@@ -46,8 +46,9 @@ class PaneSendRefused(Exception):
 class PaneIdentity:
     """One registry row's identity for a pane, resolved as a single snapshot.
 
-    The budget keys the pair on ``session_id`` (the full id, collision-proof
-    for time-ordered codex siblings), the envelope addresses ``handle``, and
+    The control ledger keys the pair on ``session_id`` (the full id,
+    collision-proof for time-ordered codex siblings), the envelope addresses
+    ``handle``, and
     the identity gate pins ``name``/``fno_id``. Resolving them together from
     ONE registry read is what makes a pane reassignment between resolve and
     gate a refusal instead of a stale-attribution send.
@@ -82,14 +83,12 @@ def resolve_pane_identity(session: str, pane_id: int) -> Optional[PaneIdentity]:
 
 
 def _already_wrapped(text: str) -> bool:
-    """True when ``text`` already carries an attribution container.
+    """True when ``text`` already carries an attribution container: a delivered
+    header, a legacy ``<fno_mail>`` envelope or a ``<cross-session-message>``
+    follow-up (re-wrapping one would nest attribution inside attribution)."""
+    from fno.mail.envelope import mail_shape
 
-    Both the ``<fno_mail>`` a2a envelope and the ``<cross-session-message>``
-    peer-follow-up container mark their sender, so re-wrapping either would
-    nest one attribution inside another (and ``wrap_fno_mail`` refuses a body
-    holding an ``<fno_mail>`` tag anyway).
-    """
-    return text.lstrip().startswith(("<fno_mail", "<cross-session-message"))
+    return mail_shape([text])[0]["framing"] != "bare"
 
 
 def _pane_entry(session: str, pane_id: int):
@@ -184,7 +183,7 @@ def _identity_receipt_refusal(
                 "mux",
                 "pane",
                 "read",
-                "--session",
+                "--server",
                 str(session),
                 str(pane_id),
                 "--lines",
@@ -206,7 +205,8 @@ def _identity_receipt_refusal(
         return f"pane {pane_id} identity receipt names the wrong pane", None
     actual_name = payload.get("pane_name")
     actual_fno_id = payload.get("registry_fno_id")
-    if actual_name != expected_name or actual_fno_id != expected_fno_id:
+    # The uuid is the identity; the label may lag a rename.
+    if actual_fno_id != expected_fno_id:
         return (
             f"pane {pane_id} identity mismatch: addressed {expected_name} "
             f"({expected_fno_id}) pane hosts {actual_name or '<unknown>'} "
@@ -232,7 +232,7 @@ def prompt_refusal(
     """Read the pane and return a refusal reason when it is showing an option prompt.
 
     A ``--submit`` against a showing prompt dismisses the payload and selects the
-    highlighted default. Measured specimen: a king's option-3 ruling was typed,
+    highlighted default. Measured specimen: a lead's option-3 ruling was typed,
     discarded, and the worker took option 1 and filed a node an operator freeze
     forbade. So an enveloped send that skipped this check would gain the ability
     to invert a ruling while every surface reads normal.
@@ -267,7 +267,7 @@ def prompt_refusal(
     from fno.agents.harness_map import capabilities_or_undeclared
 
     if not capabilities_or_undeclared(harness)["declared"]:
-        # x-f579: an undeclared harness has NO manifest to evaluate, by
+        # an undeclared harness has NO manifest to evaluate, by
         # definition, so the detector cannot run for it ever. The undeclared
         # lane's contract gives mail by pane-send anyway (submit_keys=enter,
         # the visible-failure default the spawn receipt names), so the gate
@@ -288,7 +288,7 @@ def prompt_refusal(
         try:
             frame = _run_mux(
                 [
-                    "mux", "pane", "read", "--session", str(session), str(pane_id),
+                    "mux", "pane", "read", "--server", str(session), str(pane_id),
                     "--lines", str(GATE_FRAME_LINES),
                 ],
                 runner,
@@ -355,7 +355,7 @@ def wrap(
     ``resolve_harness_identity`` and never ``--from-self``: both stamp the shared
     ambient id.
 
-    ``msg_id`` lets a caller that also charges the word budget share ONE
+    ``msg_id`` lets a caller that also charges the control ledger share ONE
     identity between the envelope and the ledger entry; unset, an id is minted
     here.
     """
@@ -367,27 +367,22 @@ def wrap(
             "submit keystroke."
         )
     from fno.agents.self_stamp import (
-        resolve_self_model,
+        resolve_self_harness,
         resolve_self_session_id,
         stamp_from,
     )
-    from fno.dispatch_flags import infer_invoking_harness
     from fno.inbox.store import generate_msg_id
     from fno.mail.envelope import (
         ForgedEnvelopeError,
-        harness_for_provider,
         wrap_fno_mail,
     )
 
-    sender_harness = infer_invoking_harness()
+    sender_harness = resolve_self_harness()
     try:
         return wrap_fno_mail(
             text,
             from_=stamp_from(sender),
-            # "cli" is the honest no-harness value: harness_for_provider renders
-            # a MISSING provider as "unknown", never a vendor guess.
-            harness=harness_for_provider(sender_harness) if sender_harness else "cli",
-            model=resolve_self_model(),
+            harness=sender_harness,
             to=to,
             # The collision-safe reply address rides the typed envelope too: a
             # pane drive is exactly the message a recipient most needs to answer.
@@ -448,7 +443,7 @@ def prepare(
         # module's refusal exists not to commit.
         from fno.agents.harness_map import capabilities_or_undeclared
 
-        # x-f579: the posture answers "enter" for an undeclared harness, so
+        # the posture answers "enter" for an undeclared harness, so
         # this stays the ordinary attribution refusal rather than a
         # capability-table raise - mail by pane-send stays reachable.
         if capabilities_or_undeclared(resolved).get("submit_keys") == ["unsupported"]:

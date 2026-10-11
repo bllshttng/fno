@@ -1,5 +1,5 @@
 """Resolve a session token against its harness's OWN store and adopt store-only
-sessions when the fno registry misses (x-9cc5).
+sessions when the fno registry misses.
 
 The registry is a cache of reality, not a gate in front of it. A session with no
 roster row -- reaped after a terminal stop, or never spawn-created -- was
@@ -17,7 +17,7 @@ Three rules keep it from guessing:
   refuses with the candidate list; git's ambiguous-short-SHA posture.
 - **Never live** -- a store row proves the session EXISTS, never that it is
   running, so the adopted row is ``orphaned``. Store membership must not
-  resurrect a dead session into lane caps or live anycast (the x-830c lesson).
+  resurrect a dead session into lane caps or live anycast (the lesson).
 - **Project confinement** -- a store hit is adopted only into the CALLER's
   project. The probes scan machine-wide (a transcript store is global), and
   before this rule a bare handle from a foreign repo healed into scope and got
@@ -26,8 +26,9 @@ Three rules keep it from guessing:
   (NOT toplevel -- footnote is worktree-first, so toplevel differs per worktree
   and would refuse canonical->worktree traffic), then refuse. An out-of-project
   hit is refused with the candidate named, copying the ambiguity posture; an
-  explicit ``cross_project`` flag is the only override (a spawn into a foreign
-  repo). The confinement lives here and batch callers must route verified hits
+  explicit ``cross_project`` flag overrides it, and a full session id needs
+  no flag (it is globally unique). The confinement lives here and batch
+  callers must route verified hits
   through :func:`confine_store_hits`; ``resume`` does not adopt store hits (it
   matches loaded registry entries via ``resolve_agent_in``), so it is uncovered
   by design.
@@ -49,6 +50,11 @@ from fno.harness_identity import claude_transport_short_id, session_handle_tier
 
 if TYPE_CHECKING:
     from fno.agents.registry import AgentEntry
+
+# `fno agents rm` stamps removed sessions in rm_tombstones.json beside the
+# registry; the healer refuses to re-adopt them inside this window.
+RM_TOMBSTONE_FILENAME = "rm_tombstones.json"
+RM_TOMBSTONE_GRACE_SECS = 86_400
 
 # Session-shaped tokens only. Eight alphanumeric characters can be an OpenCode
 # tail even when they look like a friendly name, so those tokens share the store
@@ -316,6 +322,10 @@ def _project_identity(cwd: Optional[str]) -> "tuple[Optional[str], Optional[str]
             from fno.inbox.store import ProjectIdentificationError, resolve_project
 
             pid = resolve_project(cwd=Path(cwd))
+        except ImportError:
+            # The import itself failed (module or dep missing); naming
+            # ProjectIdentificationError here would raise UnboundLocalError.
+            pid = None
         except ProjectIdentificationError:
             pid = None
         except Exception:  # noqa: BLE001 - membership must degrade, never crash the verb
@@ -369,13 +379,14 @@ def confine_store_hits(
     """Filter ``hits`` to the caller's project; refuse when none is in-project.
 
     The refused posture copies ambiguity: an out-of-project candidate is named,
-    never silently adopted and woken. Returns ``hits`` unchanged when confinement
-    does not apply -- ``cross_project`` set, or the scope is itself not a known
-    project (no settings project and not a git repo), in which case there is no
-    "across" to protect and the historical behavior stands. Raises
-    :class:`AgentResolutionError` (``ambiguous=True``) on the refuse.
+    never silently adopted and woken. A full session id waives the flag: it is
+    globally unique. Returns ``hits`` unchanged when confinement does not
+    apply -- ``cross_project`` set, a full-id token, or the scope is itself
+    not a known project. Raises :class:`AgentResolutionError` on the refuse.
     """
-    if cross_project:
+    from fno.harness_identity import harness_of_session_id
+
+    if cross_project or harness_of_session_id(token) is not None:
         return hits
     scope = scope_cwd or os.getcwd()
     # The scope is invariant across the batch, and _project_identity spawns a
@@ -442,7 +453,13 @@ def _transcript_last_write(hit: "StoreHit") -> Optional[str]:
     resolves to its SHARED SQLite store, whose mtime is the last write by ANY
     session; stamping that would be a plausible, near-always-wrong answer that
     nothing downstream could falsify. A null the receipt explains is better.
+
+    The stamp is the newest TIMESTAMPED entry over the whole file, not the
+    mtime : ``row_contradiction`` cross-checks it against truth's
+    ``last_event_at``, so both must come from the same field; no timestamped
+    entry falls back to the mtime, truth's own labelled fallback.
     """
+    from fno.agents.session_truth import newest_entry_epoch
     from fno.provenance.resolver import resolve_transcript
 
     try:
@@ -462,15 +479,34 @@ def _transcript_last_write(hit: "StoreHit") -> Optional[str]:
             return None
         if resolved.kind != "jsonl":
             return None
-        mtime = Path(resolved.transcript_path).stat().st_mtime
+        epoch = newest_entry_epoch(Path(resolved.transcript_path), tail_bytes=None)
+        if epoch is None:
+            epoch = Path(resolved.transcript_path).stat().st_mtime
     except Exception:  # noqa: BLE001 - a stamp is a nicety; adoption still lands
         return None
     return (
-        datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
+        datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")
     )
+
+
+def _recent_rm_tombstone(harness, session_id, registry_path) -> Optional[int]:
+    """The session's in-window rm stamp (epoch secs), else None."""
+    path = registry_path
+    if path is None:
+        from fno.paths import agents_registry_path
+        path = agents_registry_path()
+    try:
+        raw = json.loads((path.parent / RM_TOMBSTONE_FILENAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    now = int(datetime.datetime.now().timestamp())
+    stamps = [r.get("removed_at") for r in raw if isinstance(raw, list) and isinstance(r, dict)
+              and r.get("harness") == harness and r.get("session_id") == session_id]
+    return next((int(t) for t in stamps if isinstance(t, (int, float))
+                 and now - t <= RM_TOMBSTONE_GRACE_SECS), None)
 
 
 def adopt_store_hit(
@@ -493,11 +529,19 @@ def adopt_store_hit(
     address the real harness session.
     """
     from fno.agents.registry import (
-        AgentEntry,
         AgentResolutionError,
+        mint_agent_entry,
         register_existing_session,
     )
 
+    if _recent_rm_tombstone(hit.harness, hit.session_id, registry_path) is not None:
+        raise AgentResolutionError(
+            f"session {hit.session_id} ({hit.harness}) was removed by `fno agents rm` "
+            f"inside the grace window ({RM_TOMBSTONE_GRACE_SECS // 3600}h); it is not "
+            "re-adopted from the harness store. Re-spawn the work, or wait out the "
+            "window to adopt it deliberately.",
+            ambiguous=True,
+        )
     # claude's transport key is the 8-hex jobId (`claude attach <jobId>`), NOT
     # the full UUID that HARNESS_SESSION_ID_FIELDS would otherwise write there.
     short_id = hit.short_id if hit.harness == "claude" else ""
@@ -532,22 +576,24 @@ def adopt_store_hit(
             f"could not register it ({exc}); the row will appear on a later "
             "resolution.\n"
         )
-        # The adopting session vouches for this row, and this fallback copy
-        # reaches the caller without passing register_session's parent stamping.
+        # The adopting session VOUCHED for this row (LD3); this
+        # fallback copy skips register_session, stating the same split itself.
         from fno.agents.dispatch import _capture_parent_edge
 
-        _sb_session, _sb_harness, _sb_cwd = _capture_parent_edge()
-        return AgentEntry(
+        _sb_session = _capture_parent_edge()[0]
+        return mint_agent_entry(
+            harness_session_id=hit.session_id,
+            spawned_by_session=None,
+            spawned_by_harness=None,
+            spawned_by_cwd=None,
+            lineage_reason=None,
             name=_fallback_name(hit.session_id),
             cwd=hit.cwd,
             log_path=log_path,
             harness=hit.harness,
-            harness_session_id=hit.session_id,
             status="orphaned",
             short_id=short_id,
-            spawned_by_session=_sb_session,
-            spawned_by_harness=_sb_harness,
-            spawned_by_cwd=_sb_cwd,
+            adopted_by_session=_sb_session,
             # Same fact as the registered row above, and it has to be stated
             # here too: this one is handed straight back to the caller when
             # registration fails, so it reaches a reader without ever passing

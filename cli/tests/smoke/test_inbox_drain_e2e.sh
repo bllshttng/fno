@@ -24,7 +24,7 @@ YAML
 # ahead of anything we set. Redirect HOME instead so `state_dir()` resolves
 # here and not to the developer's ~/.fno.
 export HOME="$WORK"
-echo '{"_lock_version": 1, "entries": []}' > "$WORK/.fno/graph.json"
+printf '{"entries": []}\n' | uv run --project "$CLI_DIR" python "$CLI_DIR/tests/fixtures/graph_seed.py" "$WORK/.fno/graph.json"
 
 # Triage stub returning a deterministic create_node plan.
 STUB="$WORK/triage_stub.sh"
@@ -39,7 +39,7 @@ chmod +x "$STUB"
 # (so drain's _git_root() / cwd resolves against $WORK/.fno/).
 FNO_INBOX_ROOT="$INBOX_ROOT" uv run --project "$CLI_DIR" fno-py agents mail send \
   --to-project "$PROJECT" --from-name "sender-proj" --kind heads-up \
-  --body "please file as a graph node"
+  --body "file this as a graph node"
 FNO_INBOX_ROOT="$INBOX_ROOT" uv run --project "$CLI_DIR" fno-py agents mail send \
   --to-project "$PROJECT" --from-name "sender-proj" --kind question \
   --body "do we proceed with the rollback"
@@ -66,9 +66,10 @@ print(f'ok: heads-up={actions[\"heads-up\"]} question={actions[\"question\"]} fy
 
 # The heads-up's node really landed. Asserting only the drain's self-reported
 # `created_node` above would pass against a graph that was never written.
-WORK="$WORK" python3 -c "
-import json, os
-entries = json.load(open(os.path.join(os.environ['WORK'], '.fno', 'graph.json')))['entries']
+WORK="$WORK" uv run --project "$CLI_DIR" python3 -c "
+import os
+from fno.graph.store import read_graph_strict
+entries = read_graph_strict(os.path.join(os.environ['WORK'], '.fno', 'graph.json'))
 assert len(entries) == 1, entries
 node = entries[0]
 assert node['title'] == 'Stubbed node', node
@@ -81,7 +82,12 @@ if [[ -f "$WORK/.fno/convo-signals.jsonl" ]]; then
   echo "FAIL: fyi wrote convo-signals.jsonl (capture was removed)" >&2
   exit 1
 fi
-WAKE_FILES=$(find "$WORK/.fno/wake-signals" -name 'wake-*.json' 2>/dev/null | wc -l | tr -d ' ')
+WAKE_DIR=$(FNO_INBOX_ROOT="$INBOX_ROOT" uv run --project "$CLI_DIR" python3 -c "
+from pathlib import Path
+from fno.wake.signal import signals_dir
+print(signals_dir(Path('$WORK')))
+")
+WAKE_FILES=$(find "$WAKE_DIR" -name 'wake-*.json' 2>/dev/null | wc -l | tr -d ' ')
 if [[ "$WAKE_FILES" -lt 1 ]]; then
   echo "FAIL: question did not drop a wake-signal" >&2
   exit 1

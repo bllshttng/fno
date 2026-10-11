@@ -4,7 +4,7 @@
 # The agents SKILL derives whether to show the billed-launch confirm prompt
 # from normalize.sh's emitted fields plus the config knob `config.agents.confirm`.
 # This helper centralizes that decision so the policy is deterministic and
-# testable rather than LLM-prose-only (ab-27541df5, Claude's Discretion 3). It
+# testable rather than LLM-prose-only (Claude's Discretion 3). It
 # reads only config (read-only) and has no side effects.
 #
 # Inputs (flags; all optional, sensible defaults):
@@ -16,11 +16,11 @@
 #   --permission-mode <m>  effective harness permission mode (default empty).
 #                          bypassPermissions is a gate bypass -> caveat, so the
 #                          warning survives even when --yolo was mapped to it for
-#                          claude (normalize clears YOLO in that case, x-d235).
+#                          claude (normalize clears YOLO in that case).
 #   --allow-merge <0|1>    -m/--allow-merge in effect   (default 0)
 #   --yes <0|1>            -y/--yes in effect           (default 0)
 #
-# spawn is a FREE lane (ab-994222ee): a worker lands a PR for review, nothing is
+# spawn is a FREE lane: a worker lands a PR for review, nothing is
 # billed or destructive, so it does NOT confirm by default. config.agents.confirm
 # is repurposed from "confirm spawn (default on)" to an opt-in "confirm even the
 # free lanes": `always` confirms; `auto` (default) and `never` skip. chat (billed
@@ -67,16 +67,18 @@ done
 
 # ---- resolve posture (bounded read; degrade toward safety) -------------------
 default_reader() {
-  # The read is local-file-only today, but a bounded call costs nothing. macOS
-  # ships no `timeout`; fall back to gtimeout, then a bare call (never let a
-  # missing timeout binary force a degrade and disable the knob entirely).
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 5 fno config get config.agents.confirm
-  elif command -v gtimeout >/dev/null 2>&1; then
-    gtimeout 5 fno config get config.agents.confirm
-  else
-    fno config get config.agents.confirm
-  fi
+  # The read is local-file-only today, but a bounded call costs nothing. The
+  # bound is the skill-local with_timeout copy bundled from
+  # scripts/lib/with-timeout.sh via skill-bundles.yaml: stock macOS
+  # ships no coreutils timeout, and the old timeout/gtimeout/bare chain ended
+  # in an UNBOUNDED call. A missing helper degrades the read (rc 1), never
+  # drops the bound.
+  local lib
+  lib="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/lib/with-timeout.sh"
+  [[ -f "$lib" ]] || return 1
+  # shellcheck source=scripts/lib/with-timeout.sh
+  source "$lib" 2>/dev/null || return 1
+  with_timeout 5 fno config get config.agents.confirm
 }
 
 DEGRADED=0
@@ -95,7 +97,7 @@ case "$raw" in
       posture="$raw"
     else
       # A non-zero rc with a valid-looking value (e.g. a timeout that still
-      # echoed a default) is a failed read. spawn is a FREE lane (ab-994222ee):
+      # echoed a default) is a failed read. spawn is a FREE lane:
       # there is nothing billed or destructive to gate, so degrade toward the
       # no-confirm default (auto), NOT toward a confirm - the whole point of the
       # free lane is that a phone "do it" is never re-asked. Surface the warn.
@@ -110,8 +112,9 @@ WARN=""
 
 # ---- compute caveat (exec-stall / yolo / merge grant) ------------------------
 # Exec-stall: a codex/gemini exec build has nobody to answer a clarifying
-# question (codex auto-rejects and continues; gemini aborts the run). Caveats
-# always confirm under `auto`, even with an explicit provider (Locked Decision 3).
+# question (codex auto-rejects and continues; gemini aborts the run). Under the
+# free-lane posture caveats do NOT force a confirm - they surface
+# as a `warn` alongside the genuine receipt (see the decide block below).
 CAVEAT=0
 CAVEAT_TEXT=""
 add_caveat() {
@@ -130,12 +133,12 @@ if [[ "$PAYLOAD_MODE" == "build" && "$MODE" == "exec" ]]; then
 fi
 [[ "$YOLO" -eq 1 ]] && add_caveat "running with --yolo (sandbox/approval bypass)"
 # bypassPermissions is the same gate-bypass risk class as yolo, and for claude it
-# IS the yolo mapping (normalize clears YOLO after mapping, x-d235). Caveat on the
+# IS the yolo mapping (normalize clears YOLO after mapping). Caveat on the
 # effective mode so a bypass launch always surfaces the warning - whether it came
 # from --yolo on claude or an explicit --permission-mode bypassPermissions.
 [[ "$PERMISSION_MODE" == "bypassPermissions" ]] && add_caveat "running with --permission-mode bypassPermissions (permission-gate bypass)"
 
-# ---- decide (free-lane posture, ab-994222ee) ---------------------------------
+# ---- decide (free-lane posture) ---------------------------------
 # spawn is a FREE, reversible lane: an autonomous worker lands a PR for REVIEW
 # (no auto-merge), so nothing is billed or destructive to gate. It therefore
 # does NOT confirm by default. The ONLY thing that re-introduces a confirm is the

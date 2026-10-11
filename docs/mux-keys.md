@@ -4,9 +4,14 @@ The three sideline-adjacent actions sit on three different keys, and their names
 
 | Key | Action id | Event | What opens |
 |---|---|---|---|
-| `prefix+f` | `find` | OpenNav | The navigator: a global goto picker over every squad, tab, pane, agent and work-queue card. Text-filter by label, pane id, node id, title-slug or workspace. |
+| `prefix+f` | `find` | OpenNav | The navigator: a global goto picker over every workspace, tab, pane, agent and work-queue card. Text-filter by label, pane id, node id, title-slug or workspace. |
 | `prefix+w` | `selector` | OpenSelector | The sideline row selector: cursor over the sideline's own rows. |
 | `prefix+b` | `toggle-sideline` | TogglePanel | Sideline panel visibility. |
+| `prefix+q` | `notifications-bell` | ToggleBell | Questions and fleet announcements in the notifications panel. |
+
+## Inside the notifications panel
+
+The panel opens from the bell at the far right of the sideline's top row or with `prefix+q`. While open, bare `j`/`k` move, `Enter` opens a question or clears settled questions, `c` clears settled questions, and `q`/`Esc` closes it.
 
 ## The global chord: Ctrl+Opt+Left
 
@@ -39,4 +44,6 @@ The overlay owns every keystroke, so bare arrows are free there.
 selector = ";"
 ```
 
-The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `Ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
+The action id is `selector`, not `toggle-sideline`. `;` is a free single-byte chord, right pinky against the default left-hand `ctrl-b` prefix. A collision or unknown action id is refused and reported, never silently ignored.
+
+You can also rebind from the mux. The menu's `keybindings` row and `settings > keybindings` open the SAME table: the prefix line on top, every chord grouped under its section, and an `[ edit keys in <editor> ]` button on the tail. Enter on a chord row runs it. To rebind, take the button: it opens the key config in your `$EDITOR` (vi when none is set). After the editor exits, the mux reloads the keys, and a rejected entry is reported with the resolver's sentence.

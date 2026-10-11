@@ -14,7 +14,8 @@ executor-routing.yml
 guards.yml
 install-script-portability.yml
 internal-refs.yml
-nightly-release-tag.yml
+main-binaries.yml
+release.yml
 pitfalls.yml
 pr-node-closure.yml
 provider-smoke.yml
@@ -24,3 +25,4 @@ review-coverage-gate.yml
 skill-limitations.yml
 rust-ci.yml
 stacked-base-guard.yml
+install-channels.yml

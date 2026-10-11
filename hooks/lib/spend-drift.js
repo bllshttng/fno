@@ -6,9 +6,12 @@
 
 // Two model ids "match" when one is a prefix of the other after stripping any
 // [window] suffix. claude-opus-4-8 ~ claude-opus-4-8[1m]; glm-4.6 !~ claude-*.
-// Missing data -> match (fail open: never warn on absent inputs).
+// Missing data -> match (fail open: never warn on absent inputs). '<synthetic>'
+// is the id Claude Code stamps on the error turns it generates itself (API 500/
+// 529); it is not a routing answer, so treat it as absent too.
 function modelsMatch(a, b) {
-  const norm = (m) => String(m || '').toLowerCase().replace(/\[.*?\]/g, '').trim()
+  const norm = (m) =>
+    String(m || '').toLowerCase().replace(/<synthetic>/g, '').replace(/\[.*?\]/g, '').trim()
   const na = norm(a)
   const nb = norm(b)
   if (!na || !nb) return true
@@ -37,7 +40,7 @@ function decideSpendDrift({ capUsd, cost, intendedModel, actualModel, state }) {
       message:
         `MODEL DRIFT: attested '${intendedModel}' but this session is running ` +
         `'${actualModel}'. A routing failure slipped past the SessionStart env ` +
-        `check (x-db50 class). Verify your provider routing before trusting this run.`,
+        `check (class). Verify your provider routing before trusting this run.`,
       state: s,
     }
   }

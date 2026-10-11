@@ -126,12 +126,9 @@ have scripts/install/fno.sh 'refusing to install over a foreign fno' "stable-str
 lacks scripts/install/fno.sh 'refusing to install over it' "over-broad adopt refusal"
 have scripts/install/fno.sh '(version unreadable)' "receipt never prints a blank version"
 
-have cli/src/fno/update.py '"$__vn" -gt 15 ] && return 1; sleep 0.2' "15-retry ceiling and 0.2s poll"
-have cli/src/fno/update.py 'if __fno_verify_within; then break' "waited install verify"
-have cli/src/fno/update.py '_fno_n -lt 15' "15-retry ceiling in _await_binary"
-# Anchored to _await_binary's own increment: a bare `sleep 0.2` here would be
-# satisfied by whichever of the two polls did NOT drift, so neither would be pinned.
-have cli/src/fno/update.py '_fno_n=$((_fno_n+1)); sleep 0.2' "0.2s poll in _await_binary"
+have crates/fno/src/doctor_update.rs 'for _ in 0..15' "15-retry ceiling (install verify and fno-py await)"
+have crates/fno/src/doctor_update.rs 'Duration::from_millis(200)' "0.2s poll"
+have crates/fno/src/doctor_update.rs 'if verify_uv_install()' "waited install verify"
 
 have crates/fno/src/bootstrap.rs 'VERIFY_ATTEMPTS: u32 = 15' "15-retry ceiling"
 have crates/fno/src/bootstrap.rs 'VERIFY_POLL: Duration = Duration::from_millis(200)' "0.2s poll"
@@ -145,7 +142,7 @@ have crates/fno/src/bootstrap.rs 'install_verified_within(uv, VERIFY_ATTEMPTS, V
 # reads the shared constant's definition - one literal, no sibling can shadow
 # it - and both call sites are counted so a bare timeout= literal cannot
 # quietly return.
-have hooks/git-protection.py '_VETO_PROBE_TIMEOUT = 25' "shared veto timeout definition"
+have hooks/git-protection.py '_VETO_PROBE_TIMEOUT = 24' "shared veto timeout definition"
 _v=$(grep -c 'timeout=_VETO_PROBE_TIMEOUT' "$REPO/hooks/git-protection.py")
 [ "$_v" -eq 2 ] || fail "expected both veto call sites on _VETO_PROBE_TIMEOUT, found $_v"
 _hook_veto=$(grep -oE '_VETO_PROBE_TIMEOUT = [0-9]+' "$REPO/hooks/git-protection.py" | head -n 1)

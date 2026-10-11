@@ -17,6 +17,12 @@
 #   --yes         Skip the process-kill confirmation prompt.
 #   --delete-branch  After removing the worktree, delete its branch with
 #                    `git branch -D` (force). Default: keep branch.
+#   --merge-triggered  Require HEAD to be reachable from refreshed origin/main.
+#   --done-node   The merged sweep's arm: only a fresh gate receipt of
+#                 `reason=done-node` passes the strict check. Untracked files
+#                 are salvaged first, a detached HEAD is pinned to a salvage
+#                 branch first, and the unpushed refusal is skipped (the branch
+#                 survives removal, so no commit is lost).
 #
 # Exit codes:
 #   0  worktree removed
@@ -32,6 +38,8 @@ set -euo pipefail
 FORCE=0
 ASSUME_YES=0
 DELETE_BRANCH=0
+MERGE_TRIGGERED=0
+DONE_NODE=0
 TARGET_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -39,6 +47,8 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --delete-branch) DELETE_BRANCH=1; shift ;;
+    --merge-triggered) MERGE_TRIGGERED=1; shift ;;
+    --done-node) DONE_NODE=1; shift ;;
     -h|--help)
       sed -n '2,/^set -euo/p' "$0" | sed 's/^# //; s/^#//'
       exit 0
@@ -48,6 +58,16 @@ while [[ $# -gt 0 ]]; do
     *) TARGET_ARG="$1"; shift ;;
   esac
 done
+
+# The done-node arm speaks through the same gate flag the sweep set when it
+# decided to call us; every wt_reapable call below re-reads with it on.
+if [[ "$DONE_NODE" -eq 1 ]]; then
+  export WT_REAPABLE_DONE_NODE=1
+fi
+# Set by the done-node path; receipt lines name them when set.
+DONE_NODE_SALVAGE_DIR=""
+DONE_NODE_SALVAGE_REF=""
+DONE_NODE_PINNED_BRANCH=""
 
 # Resolve target worktree path. Three input shapes:
 #   1. absolute path                 -> use as-is
@@ -148,9 +168,30 @@ if [[ "$BRANCH" == "HEAD" ]]; then
   BRANCH="(detached)"
 fi
 
+if [[ "$MERGE_TRIGGERED" -eq 1 ]]; then
+  _MERGE_REACHABILITY_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-unpushed.sh"
+  if [[ -f "$_MERGE_REACHABILITY_LIB" ]]; then
+    # shellcheck source=/dev/null
+    source "$_MERGE_REACHABILITY_LIB"
+  fi
+  if ! git -C "$CANONICAL" fetch origin main >/dev/null 2>&1; then
+    echo "archive-worktree: merge-triggered origin/main refresh failed; keeping $TARGET" >&2
+    exit 2
+  fi
+  if ! wt_head_reachable_from_origin_main "$TARGET"; then
+    echo "archive-worktree: merge-triggered HEAD is not reachable from origin/main; keeping $TARGET" >&2
+    exit 2
+  fi
+fi
+
 echo "=== Archiving worktree ===" >&2
 echo "    Path:   $TARGET" >&2
 echo "    Branch: $BRANCH" >&2
+
+WORKTREE_BYTES=0
+if WORKTREE_BYTES_KIB="$(du -sk "$TARGET" 2>/dev/null | awk 'NR==1 {print $1}')" && [[ "$WORKTREE_BYTES_KIB" =~ ^[0-9]+$ ]]; then
+  WORKTREE_BYTES=$((WORKTREE_BYTES_KIB * 1024))
+fi
 
 # ---- Strict pre-removal checks and force disclosure -----------------------
 # Measure every strict condition in both modes. --force may override positive
@@ -168,6 +209,31 @@ _REMOVAL_EVENT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && 
 if [[ -f "$_REMOVAL_EVENT_LIB" ]]; then
   # shellcheck source=/dev/null
   source "$_REMOVAL_EVENT_LIB"
+fi
+
+# The occupancy classifier bridge. A partial deploy that dropped it
+# reads every pid as holds, which keeps today's confirm-or-decline path.
+_OCCUPANCY_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/worktree-occupancy.sh"
+if [[ -f "$_OCCUPANCY_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_OCCUPANCY_LIB"
+else
+  wt_classify_pids() {
+    local pid
+    while IFS= read -r pid; do
+      [[ -z "$pid" ]] && continue
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" holds keep - "classifier unavailable" -
+    done <<< "$2"
+  }
+fi
+
+# The build hash dir outlives git's removal; reclaim it while the manifest
+# can still answer. A partial deploy without the lib leaves the dir to the
+# sweep.
+_CARGO_BUILD_DIR_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" 2>/dev/null && pwd)/cargo-build-dir.sh"
+if [[ -f "$_CARGO_BUILD_DIR_LIB" ]]; then
+  # shellcheck source=/dev/null
+  source "$_CARGO_BUILD_DIR_LIB"
 fi
 
 measure_strict_state() {
@@ -363,6 +429,12 @@ if [[ "$FORCE" -eq 0 ]]; then
     exit 2
   fi
   _REAPABLE_LIB="$_CHECK_REAPABLE_LIB"
+  # A tree a human NAMED is the orphan-recovery path target init advertises
+  # when a worktree outlives its session; the setup-window refusal exists for
+  # automatic reapers, so a manual archive may proceed on an unborn tree.
+  # Content checks are unchanged. An automatic leg (FNO_WT_REMOVE_CALLER
+  # names its sweep or ritual) keeps the refusal.
+  [[ -z "${FNO_WT_REMOVE_CALLER:-}" ]] && WT_REAPABLE_ALLOW_UNBORN=1
   if [[ -f "$_REAPABLE_LIB" ]]; then
     if ! wt_reapable "$TARGET"; then
       echo "archive-worktree: $WT_REAPABLE_LINE at $TARGET" >&2
@@ -370,13 +442,32 @@ if [[ "$FORCE" -eq 0 ]]; then
       echo "    --force to override, or commit/stash first." >&2
       exit 2
     fi
-    # Cleared, but git will still object to the missing tracked files. Record
-    # that so the removal can tell git we already checked (see REMOVE_FLAGS).
+    # --done-node is not a blanket pass: the gate must have said yes BECAUSE
+    # the node reads done (or the branch is merged). Any other yes is a
+    # caller bug, and the tree stays.
+    if [[ "$DONE_NODE" -eq 1 && "$WT_REAPABLE_LINE" != *reason=done-node* ]]; then
+      echo "archive-worktree: --done-node needs a done-node receipt, got: $WT_REAPABLE_LINE" >&2
+      exit 2
+    fi
+    # Cleared, but git will still object. It objects to TWO classes we cleared
+    # on their own terms: tracked files missing from disk, and the untracked
+    # symlinks setup-worktree.sh wrote (`discounted=`). Record either so the
+    # removal can tell git we already checked (see REMOVE_FLAGS). Missing the
+    # second class is not a no-op: the tree passes wt_reapable, this script
+    # spends its salvage push and its process sweep, and then git refuses.
+    _WT_CLEARED_DIRT=0
     case "$WT_REAPABLE_LINE" in
       *recoverable_deletions=0*) : ;;
-      *recoverable_deletions=*) _WT_RECOVERABLE_ONLY=1
-        echo "archive-worktree: $WT_REAPABLE_LINE" >&2 ;;
+      *recoverable_deletions=*) _WT_CLEARED_DIRT=1 ;;
     esac
+    case "$WT_REAPABLE_LINE" in
+      *discounted=0*) : ;;
+      *discounted=*) _WT_CLEARED_DIRT=1 ;;
+    esac
+    if [[ "$_WT_CLEARED_DIRT" -eq 1 ]]; then
+      _WT_RECOVERABLE_ONLY=1
+      echo "archive-worktree: $WT_REAPABLE_LINE" >&2
+    fi
   elif [[ -n "$FORCE_DIRTY_STATUS" ]]; then
     echo "archive-worktree: dirty working tree at $TARGET" >&2
     printf '%s\n' "$FORCE_DIRTY_STATUS" >&2
@@ -384,7 +475,11 @@ if [[ "$FORCE" -eq 0 ]]; then
     exit 2
   fi
 
-  if [[ "$FORCE_UNPUSHED_COUNT" -gt 0 ]]; then
+  if [[ "$DONE_NODE" -eq 1 ]]; then
+    # The branch survives removal, so an unpushed commit is not lost - that
+    # is the done-node arm's contract. The unpushed refusal does not apply.
+    :
+  elif [[ "$FORCE_UNPUSHED_COUNT" -gt 0 ]]; then
     if [[ "$BRANCH" == "(detached)" ]]; then
       echo "archive-worktree: $FORCE_UNPUSHED_COUNT commit(s) on detached HEAD not on any remote at $TARGET" >&2
     elif [[ -n "$FORCE_UPSTREAM" ]]; then
@@ -398,7 +493,7 @@ if [[ "$FORCE" -eq 0 ]]; then
   fi
   if [[ -n "$FORCE_LIVE_EVIDENCE" ]]; then
     echo "archive-worktree: live target session ($FORCE_LIVE_EVIDENCE)" >&2
-    echo "    Cancel it first (touch $TARGET/.fno/.target-cancelled) or use --force." >&2
+    echo "    Cancel it first (printf 'author: you\nreason: why\n' > $TARGET/.fno/.target-cancelled) or use --force." >&2
     exit 2
   fi
 fi
@@ -471,19 +566,37 @@ if [[ "$CWD_SNAPSHOT_OK" -ne 1 ]]; then
   exit 2
 fi
 
+# Removal-time classification. The sweep's step-4 read is a moment
+# old; this re-enumeration is authoritative. All-inert rows release the tree:
+# only terminate rows are signalled here, retire rows are the sweep's claude
+# rm business. Any holds row - including a classifier that cannot answer,
+# which reads all holds - keeps today's confirm-or-decline path. --yes keeps
+# its meaning: signal every pid.
+OCC_ROWS=""
+N_HELD=0
+if [[ -n "$ALL_PIDS" ]]; then
+  OCC_ROWS="$(wt_classify_pids "$TARGET" "$ALL_PIDS")"
+  N_HELD="$(printf '%s\n' "$OCC_ROWS" | awk -F '\t' '$2 == "holds" { c++ } END { print c + 0 }')"
+fi
+
 if [[ -n "$ALL_PIDS" ]]; then
   echo "    Processes rooted in $TARGET:" >&2
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
+    ROW_INFO="$(printf '%s\n' "$OCC_ROWS" | awk -F '\t' -v p="$pid" '$1 == p { print $2 " " $5; exit }')"
     CMD="$(ps -p "$pid" -o command= 2>/dev/null || echo '(gone)')"
-    echo "      $pid  $CMD" >&2
+    echo "      $pid  ${ROW_INFO:-unclassified}  $CMD" >&2
   done <<< "$ALL_PIDS"
 
-  if [[ "$ASSUME_YES" -ne 1 ]]; then
+  KILL_ALL=0
+  if [[ "$ASSUME_YES" -eq 1 ]]; then
+    KILL_ALL=1
+  elif [[ "$N_HELD" -gt 0 ]]; then
     # No controlling tty (a non-interactive sweep): decline cleanly with one
     # line instead of letting `read </dev/tty` spew "/dev/tty: Device not
-    # configured" and decline anyway. Same rc=3; SIGTERMing live processes
-    # stays opt-in via --yes / --kill-orphans, never a headless default.
+    # configured" and decline anyway. Same rc=3; signalling unclassified live
+    # processes stays opt-in via --yes or an interactive confirmation, never
+    # a headless default. Inert rows released the tree above this prompt.
     # `-r /dev/tty` only tests the perm bits, so actually open it - on macOS a
     # session with no controlling terminal fails the open, not the test.
     # Probe the open in a SUBSHELL first: `exec` is a POSIX special built-in and
@@ -501,9 +614,15 @@ if [[ -n "$ALL_PIDS" ]]; then
     read -r REPLY <&3 || REPLY="n"
     exec 3<&-
     case "$REPLY" in
-      y|Y|yes|YES) ;;
+      y|Y|yes|YES) KILL_ALL=1 ;;
       *) echo "archive-worktree: declined; not archiving." >&2; exit 3 ;;
     esac
+  fi
+
+  if [[ "$KILL_ALL" -eq 1 ]]; then
+    TERM_PIDS="$ALL_PIDS"
+  else
+    TERM_PIDS="$(printf '%s\n' "$OCC_ROWS" | awk -F '\t' '$3 == "terminate" { print $1 }')"
   fi
 
   # SIGTERM first, then SIGKILL on holdouts after 5 seconds. SIGTERM gives
@@ -512,7 +631,7 @@ if [[ -n "$ALL_PIDS" ]]; then
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
     kill -TERM "$pid" 2>/dev/null || true
-  done <<< "$ALL_PIDS"
+  done <<< "$TERM_PIDS"
   sleep 5
   HOLDOUTS=""
   while IFS= read -r pid; do
@@ -520,7 +639,7 @@ if [[ -n "$ALL_PIDS" ]]; then
     if kill -0 "$pid" 2>/dev/null; then
       HOLDOUTS+="$pid"$'\n'
     fi
-  done <<< "$ALL_PIDS"
+  done <<< "$TERM_PIDS"
   if [[ -n "$HOLDOUTS" ]]; then
     echo "    SIGKILL holdouts: $(echo "$HOLDOUTS" | tr '\n' ' ')" >&2
     while IFS= read -r pid; do
@@ -597,6 +716,113 @@ salvage_fno() {
   return 0
 }
 
+# ---- done-node arm: salvage untracked content, pin a detached HEAD ---------
+# The arm's whole deal: removal loses the untracked files git does not carry
+# and any commit no branch names. Both are rescued BEFORE the strict removal,
+# into the same canonical salvage tree salvage_fno uses. A failure keeps the
+# worktree (exit 5) - losing work to save disk is never the trade.
+salvage_untracked() {
+  local node date dest rel base parent
+  node="$(_salvage_node)"
+  date="$(date +%Y%m%d)"
+  dest="$CANONICAL/.fno/salvage/${date}-${node}/untracked"
+  local status line
+  status="$(git -C "$TARGET" status --porcelain --untracked-files=all 2>/dev/null)" || return 0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    [[ "${line:0:2}" == "??" ]] || continue
+    rel="${line:3}"
+    base="$(basename "$rel")"
+    parent="$(dirname "$rel")"
+    # The gate discounts setup-worktree.sh's links; copying one would copy a
+    # slice of the canonical checkout through the link. Skip the same shape.
+    if [[ -L "$TARGET/$rel" ]]; then
+      case "$base" in
+        internal|.agents|.codex|.codex-plugin|.gemini) continue ;;
+      esac
+      if [[ "$parent" == ".claude" || "$parent" == *"/.claude" ]]; then
+        continue
+      fi
+    fi
+    [[ -e "$TARGET/$rel" ]] || continue
+    if ! mkdir -p "$dest/$(dirname "$rel")" 2>/dev/null; then
+      echo "archive-worktree: salvage failed: cannot create $dest" >&2
+      return 5
+    fi
+    if ! cp -R "$TARGET/$rel" "$dest/$rel" 2>/dev/null; then
+      echo "archive-worktree: salvage failed: $rel -> $dest/$rel" >&2
+      return 5
+    fi
+  done <<< "$status"
+  return 0
+}
+
+# Under worktree.prune_done=aggressive the arm's receipt covers modified
+# tracked content too, so the diff is rescued before removal the same way the
+# detached HEAD is: a ref names it, the tree may go. `git stash create`
+# writes a commit holding every tracked change (staged and unstaged) without
+# touching the working tree, HEAD, or the shared stash stack; the ref points
+# at it and survives the removal. An existing ref at a DIFFERENT sha gets the
+# short sha appended instead of being clobbered. Empty output = a clean tree,
+# nothing to salvage. A failure keeps the worktree (exit 5).
+salvage_tracked_ref() {
+  local node ref sha
+  node="$(_salvage_node)"
+  ref="refs/fno/salvage/$node"
+  sha="$(git -C "$TARGET" stash create 2>/dev/null)" || return 5
+  [[ -z "$sha" ]] && return 0
+  if git -C "$TARGET" show-ref --verify --quiet "$ref"; then
+    if [[ "$(git -C "$TARGET" rev-parse --verify "$ref")" == "$sha" ]]; then
+      DONE_NODE_SALVAGE_REF="$ref"
+      return 0
+    fi
+    ref="$ref-$(git -C "$TARGET" rev-parse --short "$sha")"
+  fi
+  if ! git -C "$TARGET" update-ref "$ref" "$sha"; then
+    echo "archive-worktree: salvage failed: tracked diff -> $ref" >&2
+    return 5
+  fi
+  DONE_NODE_SALVAGE_REF="$ref"
+  echo "archive-worktree: salvaged tracked diff to $ref" >&2
+  return 0
+}
+
+if [[ "$DONE_NODE" -eq 1 ]]; then
+  # A detached HEAD pins first: its commit belongs to no branch, so removal
+  # would leave it unreachable. An existing salvage branch at a DIFFERENT sha
+  # gets the short sha appended instead of being clobbered.
+  if [[ "$BRANCH" == "(detached)" ]]; then
+    _dn_head="$(git -C "$TARGET" rev-parse HEAD)"
+    _dn_short="$(git -C "$TARGET" rev-parse --short HEAD)"
+    _dn_name="salvage/$(basename "$TARGET")"
+    if git show-ref --verify --quiet "refs/heads/$_dn_name"; then
+      if [[ "$(git rev-parse "refs/heads/$_dn_name")" != "$_dn_head" ]]; then
+        _dn_name="$_dn_name-$_dn_short"
+      fi
+    fi
+    if ! git -C "$TARGET" branch "$_dn_name" "$_dn_head"; then
+      echo "archive-worktree: keeping worktree $TARGET (could not pin detached HEAD)" >&2
+      exit 5
+    fi
+    DONE_NODE_PINNED_BRANCH="$_dn_name"
+    echo "archive-worktree: pinned detached HEAD to branch $_dn_name" >&2
+  fi
+  if ! salvage_untracked; then
+    echo "archive-worktree: keeping worktree $TARGET (untracked salvage failed, nothing removed)" >&2
+    exit 5
+  fi
+  # Only an aggressive receipt puts a tracked diff in scope: under balanced
+  # the gate keeps such a tree before salvage is ever reached, so the marker
+  # is the contract, not a second config read.
+  if [[ "$WT_REAPABLE_LINE" == *prune_done=aggressive* ]]; then
+    if ! salvage_tracked_ref; then
+      echo "archive-worktree: keeping worktree $TARGET (tracked-diff salvage failed, nothing removed)" >&2
+      exit 5
+    fi
+  fi
+  DONE_NODE_SALVAGE_DIR="$CANONICAL/.fno/salvage/$(date +%Y%m%d)-$(_salvage_node)/untracked"
+fi
+
 if ! salvage_fno; then
   echo "archive-worktree: keeping worktree $TARGET (salvage failed, nothing removed)" >&2
   exit 5
@@ -609,16 +835,28 @@ REMOVE_FLAGS=""
 # check alone was not enough. Our `--force` overrides disclosed positive checks
 # (dirty, unpushed, live session). `git worktree remove --force` skips GIT's own check, which
 # counts a tracked file missing from disk as "modified" and refuses with exit
-# 4. So a worktree we affirmatively cleared as recoverable-only still failed to
-# remove, and the whole predicate change was inert on exactly the 17 worktrees
-# it targets. Pass git's force only after OUR check said yes on its own terms:
+# 4. It refuses on untracked content the same way, which is the second class:
+# setup's own symlinks. So a worktree we affirmatively cleared still failed to
+# remove, and the whole predicate change was inert on exactly the worktrees it
+# targets. Pass git's force only after OUR check said yes on its own terms:
 # the unpushed-commit and live-session guards above have already run.
 # RE-READ AT REMOVAL TIME. The verdict above was taken before the process sweep
 # SIGTERM/SIGKILLed anything rooted here and before salvage ran; an editor or
 # agent killed mid-write can leave a modified tracked file behind. Git's refusal
 # is the last line of defence, so only wave it aside on a verdict that is still
 # true right now (the same rule the liveness re-check follows).
-if [[ "${_WT_RECOVERABLE_ONLY:-0}" -eq 1 ]]; then
+if [[ "$DONE_NODE" -eq 1 ]]; then
+  # RE-READ AT REMOVAL TIME on the arm's terms too: only a FRESH done-node
+  # verdict waves git's refusal aside (the salvage pass just moved untracked
+  # files; an editor can still have written). A tree that no longer reads
+  # done-node stays.
+  if wt_reapable "$TARGET" && [[ "$WT_REAPABLE_LINE" == *reason=done-node* ]]; then
+    REMOVE_FLAGS="--force"
+  else
+    echo "archive-worktree: $WT_REAPABLE_LINE at removal time; keeping $TARGET" >&2
+    exit 2
+  fi
+elif [[ "${_WT_RECOVERABLE_ONLY:-0}" -eq 1 ]]; then
   if wt_reapable "$TARGET"; then
     REMOVE_FLAGS="--force"
   else
@@ -626,6 +864,9 @@ if [[ "${_WT_RECOVERABLE_ONLY:-0}" -eq 1 ]]; then
     exit 2
   fi
 fi
+# Reclaim the build hash dir while the manifest can still answer;
+# the sweep reaps what an unreadable resolution leaves behind.
+declare -F cargo_build_dir_remove_for_wt >/dev/null 2>&1 && cargo_build_dir_remove_for_wt "$TARGET" || true
 if ! git worktree remove $REMOVE_FLAGS "$TARGET"; then
   echo "archive-worktree: git worktree remove failed" >&2
   exit 4
@@ -638,6 +879,9 @@ git worktree prune
 if declare -F _wt_emit_removal_event >/dev/null 2>&1; then
   _WT_EVENT_CLAIM="no-live-claim"
   _WT_EVENT_REASON="strict checks passed (reapable, pushed, no live session)"
+  if [[ "$DONE_NODE" -eq 1 ]]; then
+    _WT_EVENT_REASON="done-node; tree removed, branch kept"
+  fi
   if [[ "$FORCE" -eq 1 ]]; then
     _WT_EVENT_CLAIM="overridden-by-force: ${INITIAL_LIVE_EVIDENCE:-none}"
     _WT_EVENT_REASON="--force override of disclosed checks"
@@ -646,7 +890,7 @@ if declare -F _wt_emit_removal_event >/dev/null 2>&1; then
   [[ "$FORCE" -eq 1 ]] && _WT_EVENT_FORCED=true
   _wt_emit_removal_event "$CANONICAL" "$TARGET" \
     "${FNO_WT_REMOVE_CALLER:-manual archive}" \
-    "$_WT_EVENT_CLAIM" "$_WT_EVENT_REASON" "$BRANCH" "$_WT_EVENT_FORCED"
+    "$_WT_EVENT_CLAIM" "$_WT_EVENT_REASON" "$BRANCH" "$_WT_EVENT_FORCED" "$WORKTREE_BYTES"
 fi
 
 # ---- Branch handling -----------------------------------------------------
@@ -682,5 +926,14 @@ else
   else
     echo "archive-worktree: archived $TARGET (worktree directory discarded; detached branch data has no named branch)" >&2
   fi
+fi
+
+# The done-node receipt: where the untracked content went, and what holds the
+# detached commit now. Both lines are best-effort narration AFTER a successful
+# removal; neither can fail the run.
+if [[ "$DONE_NODE" -eq 1 ]]; then
+  [[ -n "$DONE_NODE_SALVAGE_DIR" ]] && echo "archive-worktree: untracked content salvaged to $DONE_NODE_SALVAGE_DIR" >&2
+  [[ -n "$DONE_NODE_SALVAGE_REF" ]] && echo "archive-worktree: tracked diff salvaged to $DONE_NODE_SALVAGE_REF" >&2
+  [[ -n "$DONE_NODE_PINNED_BRANCH" ]] && echo "archive-worktree: detached HEAD pinned to $DONE_NODE_PINNED_BRANCH" >&2
 fi
 exit "$BRANCH_DELETE_RC"

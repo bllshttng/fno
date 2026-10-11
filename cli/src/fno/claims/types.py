@@ -9,6 +9,7 @@ ClaimState is the four-way classification used by status/list verbs.
 """
 from __future__ import annotations
 
+import time
 from enum import Enum
 from typing import Any, Optional
 
@@ -33,6 +34,11 @@ MIN_TTL_MS = 60_000        # 1 minute
 MAX_TTL_MS = 86_400_000    # 24 hours
 
 
+def now_ms() -> int:
+    """Return current UTC time as epoch milliseconds."""
+    return int(time.time() * 1000)
+
+
 class ClaimState(str, Enum):
     """Classification of a key's current state.
 
@@ -41,7 +47,7 @@ class ClaimState(str, Enum):
     - suspect: TTL unexpired but holder not provably alive (dead/replaced pid).
       The respawned-worker case: TTL still protects the slot, so acquire/
       dispatch treat it like `live` (never steal); only TTL expiry (-> stale)
-      frees it. (x-ba4b)
+      frees it.
     - stale: claim exists but holder is dead or expired (recoverable)
     - corrupted: claim file present but cannot be parsed
     """
@@ -76,18 +82,23 @@ class Claim(BaseModel):
         machine_id: stable machine identity (``hostid.machine_id``). Additive:
             absent on pre-change records (reads as None, never a parse error),
             which fall back to the host compare. Cross-machine claims are
-            intentionally treated as opaque (see staleness.is_live).
+            intentionally treated as opaque by the native claim verdict.
         reason: optional human-readable context string.
         pid_provenance: how ``pid`` was resolved at write time. "session-prover"
             = the process-tree prover resolved it from the acquiring session's
-            own anchor; "ambient" = everything else (caller-supplied, resolved
+            own anchor; "holder-process" = written by the native flight gate,
+            the pid is the process that holds the lease for the whole hold;
+            "ambient" = everything else (caller-supplied, resolved
             through an ambient harness marker, or the default transient
-            subprocess pid). The expired-TTL hybrid arm in staleness.classify
+            subprocess pid). The expired-TTL hybrid arm in the native classifier
             reads it: a live pid keeps an expired claim LIVE only when it was
             proven to be the holder session's own process, so a long-lived
             foreign process can never make a lease permanent. Additive: absent
             on pre-change records (reads as None), which classify treats as
             ambient - a legacy claim cannot prove its pid, and the TTL wins.
+        session_id: harness session id of the acquiring process, resolved by
+            the same identity walk as ``harness``. Additive: absent on
+            pre-change records (reads as None). The liveness witness key.
         metadata: optional dict; treated opaquely.
 
     Bool-vs-string traps are not in play here because no field is a Literal.
@@ -109,6 +120,7 @@ class Claim(BaseModel):
     machine_id: Optional[str] = None
     reason: Optional[str] = None
     harness: Optional[str] = None
+    session_id: Optional[str] = None
     pid_provenance: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -185,6 +197,8 @@ class Claim(BaseModel):
             out["reason"] = self.reason
         if self.harness is not None:
             out["harness"] = self.harness
+        if self.session_id is not None:
+            out["session_id"] = self.session_id
         if self.pid_provenance is not None:
             out["pid_provenance"] = self.pid_provenance
         if self.metadata:

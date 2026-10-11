@@ -4,9 +4,9 @@ A stacked PR names another feature branch as its base. When that base lands on
 main and nobody retargets the stacked PR, GitHub still merges it - into the dead
 base - and reports MERGED while the code reaches nobody.
 
-Specimen: PR #800 merged into ``feature/bg-crown`` at 2026-08-10T19:42:32Z, an
+Specimen: PR #800 merged into ``feature/bg-role`` at 2026-08-10T19:42:32Z, an
 hour after PR #789 had landed that same branch on main at 18:05:58Z. Its merge
-commit ``9b665db4`` is the tip of ``origin/feature/bg-crown`` and is not an
+commit ``9b665db4`` is the tip of ``origin/feature/bg-role`` and is not an
 ancestor of ``origin/main``; its three commits are still not on main. GitHub
 reports the PR MERGED.
 
@@ -126,6 +126,7 @@ def _default_branch(slug: str, cwd: str) -> Optional[str]:
 
 
 def _base_ref(pr_number, slug: str, cwd: str) -> Optional[str]:
+    """The base ref from one PR read; ``None`` on a miss."""
     selector = str(pr_number).rstrip("/").rsplit("/", 1)[-1]
     if selector.isdigit():
         endpoint = f"repos/{slug}/pulls/{selector}"
@@ -140,11 +141,11 @@ def _base_ref(pr_number, slug: str, cwd: str) -> Optional[str]:
         payload = json.loads(res.stdout)
         if isinstance(payload, list):
             payload = payload[0] if payload else None
-        base = payload.get("base") if isinstance(payload, dict) else None
-        value = base.get("ref") if isinstance(base, dict) else None
+        base_row: Optional[dict] = payload.get("base") if isinstance(payload, dict) else None
+        ref: Optional[str] = base_row.get("ref") if isinstance(base_row, dict) else None
     except (json.JSONDecodeError, AttributeError):
         return None
-    return value if isinstance(value, str) and value else None
+    return ref if isinstance(ref, str) and ref else None
 
 
 def _merged_pr_for_head(base: str, slug: str, cwd: str) -> tuple:
@@ -196,9 +197,15 @@ def _merged_pr_for_head(base: str, slug: str, cwd: str) -> tuple:
 def _fetch_ref(ref: str, cwd: str) -> bool:
     """Fetch one branch with an explicit refspec. Reading a remote-tracking ref
     without fetching answers from whatever the last fetch left behind, and a
-    stale ref is exactly how a base that has since landed still looks alive."""
+    stale ref is exactly how a base that has since landed still looks alive.
+    --no-write-fetch-head: this probe reads remote-tracking refs, never
+    FETCH_HEAD, and a for-merge entry left behind is what a racing `git pull`
+    merged into canonical main."""
     fetch = _probe(
-        ["git", "fetch", "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}"],
+        [
+            "git", "fetch", "--no-write-fetch-head",
+            "origin", f"+refs/heads/{ref}:refs/remotes/origin/{ref}",
+        ],
         cwd,
     )
     return fetch is not None and fetch.ok
@@ -298,7 +305,11 @@ def lineage_verdict(pr_number, cwd: str) -> Tuple[str, str]:
         return ("unknown", f"could not read the base ref of PR #{pr_number} (REST read failed)")
 
     if base == default:
-        return ("ok", f"base is the default branch ({default})")
+        # A head that lacks the default tip is not a lineage fault. GitHub
+        # already refuses a conflicting merge, and demanding the tip makes a
+        # slow PR chase a busy default branch forever, cancelling its CI on
+        # every catch-up push.
+        return ("ok", f"base is the default branch '{default}'")
 
     merged, merged_head = _merged_pr_for_head(base, slug, cwd)
     fetched, base_current, base_gone = _fetch_refs(base, default, cwd)
@@ -312,7 +323,7 @@ def lineage_verdict(pr_number, cwd: str) -> Tuple[str, str]:
     # about the branch as it stands now: delete `feature/x` after merging it,
     # recreate it later for new work, and the old PR still answers this query
     # forever. Comparing to the live tip keeps the specimen caught (#789 merged
-    # head 85b90e485, which was still feature/bg-crown's tip when #800 merged)
+    # head 85b90e485, which was still feature/bg-role's tip when #800 merged)
     # while a recreated or continued branch reads as alive - the false refusal
     # that would otherwise get this guard switched off.
     if merged > 0 and merged_head and base_tip and merged_head == base_tip:

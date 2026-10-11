@@ -1,6 +1,6 @@
 """fno self-introspection commands: the ``whoami`` group.
 
-``whoami`` is a group (unit 6 of the x-9d6c reorg) whose bare invocation is
+``whoami`` is a group (unit 6 of the reorg) whose bare invocation is
 still the one-line operating-stack summary, byte-identical to the former
 single command. The session-read leaves folded under it: ``status`` (the
 former top-level status root, one session read under two names),
@@ -79,7 +79,7 @@ def _foreign_identity_line() -> Optional[str]:
     the ambiguity refusal read, so the remedy cannot drift from what is actually
     consulted. Returns None when the env is clean, which is the normal case.
     """
-    from fno.claims.self_identity import resolve_self_identity
+    from fno.agents.self_stamp import resolve_self_identity
     from fno.harness_identity import (
         AMBIENT_IDENTITY_FAMILY,
         ambient_identity_strip_flags,
@@ -178,7 +178,7 @@ def _derive_status_from_events(project_root: Path, session_id: Optional[str]) ->
     """Derive session status from the latest termination event in events.jsonl.
 
     Returns a human-readable string. Called when target-state.md has no status
-    field (immutable manifest after control-plane collapse, ab-d0337fbc).
+    field (immutable manifest after control-plane collapse).
     Minimal read: scan the tail of events.jsonl for a termination event matching
     the session_id. Falls back to 'active' if no termination found.
     """
@@ -294,7 +294,7 @@ whoami_app = typer.Typer(
 def _route_provider_line() -> Optional[str]:
     """The model provider this session was routed to, when it was routed at all.
 
-    Env-gated on the stamp a bound route writes (x-c703), so a hand-started
+    Env-gated on the stamp a bound route writes, so a hand-started
     session on the operator's own account prints nothing here and its output is
     byte-for-byte what it was. A stamped worker gets the one fact it could not
     previously learn about itself: whose quota it is spending, and whether that
@@ -361,6 +361,41 @@ def whoami_command(
         print(f"error: {exc}", file=sys.stderr)
         raise typer.Exit(code=4) from exc
     agent_self = (os.environ.get("FNO_AGENT_SELF") or "").strip()
+    # FNO_AGENT_SELF only reaches a process the spawn path started
+    # with it set. A worker that joined via /fno-me, an adopted session, or a
+    # restored pane has no such env, though its registry row already answers
+    # the same question. Tier 2 of resolve_self (whoami.py) is exactly that
+    # fallback; called with no live_status_fn it costs one registry read and
+    # spawns no `claude` subprocess (AC4-FR), so it is safe on this hot
+    # SessionStart path. Silent on every failure (AC3-HP): a human session or
+    # a broken registry must render byte-for-byte as before.
+    #
+    # Only the non-JSON render below reads this: the JSON payload has no
+    # `agent:` line to fill, so a `--json` call must not pay for a lookup
+    # whose result it would discard (review finding).
+    agent_registry_name: Optional[str] = None
+    if not agent_self and not opts.json_output:
+        try:
+            from fno.agents import whoami as whoami_mod
+            from fno.agents.registry import RegistryVersionError, load_registry
+            from fno.agents.self_stamp import resolve_self_identity
+
+            _ident = resolve_self_identity(os.environ)
+            if _ident.session_id and _ident.harness:
+                try:
+                    _registry = load_registry()
+                except RegistryVersionError:
+                    _registry = []
+                _result = whoami_mod.resolve_self(
+                    env=os.environ,
+                    registry=_registry,
+                    session_uuid=_ident.session_id,
+                    harness=_ident.harness,
+                )
+                if _result.registered and _result.name:
+                    agent_registry_name = _result.name
+        except Exception:  # noqa: BLE001 - this pointer never gains a failure mode
+            agent_registry_name = None
     mail_unread = _mail_unread_count(mail, agent_self, harness_sid, state.project_root)
     # Context pressure from the same transcript the model line resolves. Probed
     # once here and reused in both render branches so the file is not tailed
@@ -369,17 +404,17 @@ def whoami_command(
     # must never gain a failure mode, and a fresh SessionStart stays byte-for-byte
     # unchanged (the inject block carries a real number exactly on a post-compaction
     # resume, where re-orientation matters).
-    from fno.agents.crown import current_crown
+    from fno.agents.role import current_role
     from fno.context_probe import probe_context
 
     context_reading = probe_context()
     # Registry-derived identity, like `mail` and `agent_self` above: resolved
-    # once and rendered by both branches. `current_crown` never raises, so an
+    # once and rendered by both branches. `current_role` never raises, so an
     # attended human shell (no agent identity, no registry row) answers None
     # and both branches below omit the line/key entirely - byte-for-byte
-    # unchanged from before this session gained a crown to report.
-    crown = current_crown()
-    # Resolved once and rendered by both branches, like mail and crown above.
+    # unchanged from before this session gained a role to report.
+    role = current_role()
+    # Resolved once and rendered by both branches, like mail and role above.
     foreign_identity = _foreign_identity_line()
     if opts.json_output:
         payload = _ctx_to_jsonable(state)
@@ -412,8 +447,8 @@ def whoami_command(
             from fno.config import provider_subagent_budget
 
             payload["subagent_budget"] = provider_subagent_budget(provider)
-        if crown is not None:
-            payload["crown"] = crown["text"]
+        if role is not None:
+            payload["role"] = role["text"]
         if context_reading is not None:
             payload["context_used_pct"] = context_reading.used_pct
             payload["context_used_tokens"] = context_reading.used_tokens
@@ -474,7 +509,7 @@ def whoami_command(
             f"({context_reading.used_tokens:,} of "
             f"{context_reading.window_tokens:,} tokens)"
         )
-    # x-301a: opportunistic mesh-name pointer. `fno whoami` reports operating
+    # opportunistic mesh-name pointer. `fno whoami` reports operating
     # CONTEXT and does not otherwise surface the registered mesh name; when this
     # process IS a mesh worker (the spawn path injected FNO_AGENT_SELF), echo it
     # as one extra line so a worker that ran the reflexive `fno whoami` sees its
@@ -482,8 +517,10 @@ def whoami_command(
     # unchanged. The focused, complete answer remains `fno agents whoami`.
     if agent_self:
         typer.echo(f"agent:    {agent_self} (mesh)")
-    if crown is not None:
-        typer.echo(f"crown:    {crown['text']}")
+    elif agent_registry_name:
+        typer.echo(f"agent:    {agent_registry_name} (registry)")
+    if role is not None:
+        typer.echo(f"role:    {role['text']}")
     _emit_warnings(state)
 
 
@@ -530,11 +567,11 @@ def _detect_inconsistencies(raw: Dict[str, Any]) -> List[str]:
     ext = raw.get("external_review_passed")
     if pr_number not in (None, "null") and ext is False:
         findings.append(
-            f"pr_number={pr_number} but external_review_passed: false -> /pr check probably owed"
+            f"pr_number={pr_number} but external_review_passed: false -> /fno:ship pr check probably owed"
         )
     if raw.get("artifact_shipped") is True and raw.get("pr_number") in (None, "null"):
         findings.append(
-            "artifact_shipped: true but pr_number is null -> /pr create likely incomplete"
+            "artifact_shipped: true but pr_number is null -> /fno:ship pr create likely incomplete"
         )
     return findings
 
@@ -640,15 +677,11 @@ def status_command(
 whoami_app.command("status")(status_command)
 
 from fno.context_probe import context_command  # noqa: E402
-from fno.ledger_show import ledger_show_command  # noqa: E402
+from fno.agents.history import history_command  # noqa: E402
 from fno.scoreboard.cli import scoreboard_command  # noqa: E402
 
 whoami_app.command("context", hidden=True)(context_command)
-# Hidden alias (x-6db9): the advertised primary is `fno agents history`, which
-# reads this ledger BESIDE the live registry and reap receipts. Kept working
-# so in-flight callers and muscle memory keep resolving; the store keeps its
-# name, the verb names the question.
-whoami_app.command("ledger", hidden=True)(ledger_show_command)
+whoami_app.command("ledger", hidden=True)(history_command)
 whoami_app.command("scoreboard", hidden=True)(scoreboard_command)
 
 
@@ -657,7 +690,7 @@ def cost_command(
 ) -> None:
     """Forward all args to the in-package cost CLI (``fno.cost._session_cost``).
 
-    Moved under whoami from an eager root command (unit 6, x-9d6c). The heavy
+    Moved under whoami from an eager root command (unit 6). The heavy
     ``_session_cost`` import stays deferred to call time, so loading the
     whoami group never pays for it. argparse owns the flag parsing; we bridge
     via ``sys.argv`` and translate its ``SystemExit`` into a ``typer.Exit`` so

@@ -20,14 +20,14 @@ def _commands(app) -> set[str]:
     return set(command.list_commands(click.Context(command)))
 
 
-def test_agents_registers_the_nine_folded_roots() -> None:
+def test_agents_registers_the_eight_folded_roots() -> None:
+    # x-3873 removed `dispatch`: one launch verb, and it is spawn (d-496680aa).
     from fno.agents.cli import agents_app
 
     assert {
         "autonomy",
         "claim",
-        "dispatch",
-        "king",
+        "lead",
         "mail",
         "mcp",
         "restart",
@@ -36,11 +36,11 @@ def test_agents_registers_the_nine_folded_roots() -> None:
     } <= _commands(agents_app)
 
 
-def test_agents_king_excludes_board_while_inbox_keeps_it() -> None:
+def test_agents_lead_excludes_board_while_inbox_keeps_it() -> None:
     from fno.inbox.cli import inbox_app
-    from fno.king.cli import agents_king_app
+    from fno.lead.cli import agents_lead_app
 
-    assert "board" not in _commands(agents_king_app)
+    assert "board" not in _commands(agents_lead_app)
     assert "board" in _commands(inbox_app)
 
 
@@ -50,16 +50,20 @@ def test_old_agents_fold_spellings_forward_and_teach() -> None:
     for old, destination in (
         ("autonomy", "agents autonomy"),
         ("claim", "agents claim"),
-        ("dispatch", "agents dispatch"),
-        ("king", "agents king"),
+        ("lead", "agents lead"),
         ("mcp", "agents mcp"),
-        ("restart", "agents restart"),
         ("roles", "agents roles"),
         ("worker", "agents worker"),
     ):
         result = runner.invoke(app, [old, "--help"])
         assert result.exit_code == 0, (old, result.output)
         assert f"fno {old} is now fno {destination}" in (result.stderr or "")
+
+    # restart left the teach loop: a permanent alias now (2026-09-30
+    # operator ruling), it forwards and never teaches.
+    aliased = runner.invoke(app, ["restart", "--help"])
+    assert aliased.exit_code == 0, aliased.output
+    assert "is now" not in (aliased.stderr or "")
 
 
 def test_restored_mail_stays_folded_at_agents_as_a_silent_alias() -> None:
@@ -73,22 +77,24 @@ def test_restored_mail_stays_folded_at_agents_as_a_silent_alias() -> None:
     assert "is now" not in (result.stderr or "")
 
 
-def test_old_king_board_forwards_to_inbox_not_agents() -> None:
+def test_old_lead_board_forwards_to_inbox_not_agents() -> None:
     from fno.cli import app
 
-    result = runner.invoke(app, ["king", "board", "--help"])
+    result = runner.invoke(app, ["lead", "board", "--help"])
     assert result.exit_code == 0, result.output
-    assert "fno king board is now fno inbox board" in (result.stderr or "")
+    assert "fno lead board is now fno inbox board" in (result.stderr or "")
 
 
 def test_rust_shellouts_use_the_folded_mcp_and_board_paths() -> None:
     daemon = (REPO_ROOT / "crates/fno-agents/src/daemon.rs").read_text()
-    loopcheck = (REPO_ROOT / "crates/fno-agents/src/loopcheck.rs").read_text()
+    termination = (REPO_ROOT / "crates/fno-agents/src/lead_termination.rs").read_text()
 
     assert '.args(["agents", "mcp", "send", "--session-id", channel_id])' in daemon
-    # The king's board read moved behind bounded_read; the pinned invariant is
-    # the folded `inbox board` spelling, not the Command::args call shape.
-    assert '&["inbox", "board", "--json", "--state"' in loopcheck
+    # The lead's board read is IN PROCESS since x-25b8: the stop gate calls the
+    # collector as a library. The pinned invariant is the library call with the
+    # stop-gate budget handed in, never a subprocess spelling.
+    assert "crate::org_board::read_board(&opts)" in termination
+    assert "budget_ms: crate::loopcheck::stopgate_read_timeout()" in termination
 
 
 def test_growth_launch_uses_the_folded_roles_path() -> None:
@@ -102,7 +108,7 @@ def test_folded_groups_do_not_consume_agents_leaf_cap() -> None:
     from fno.cli import COLLAPSE_KEEP
 
     assert COLLAPSE_KEEP["agents"].isdisjoint(
-        {"autonomy", "claim", "dispatch", "king", "mail", "mcp", "roles", "worker"}
+        {"autonomy", "claim", "dispatch", "lead", "mail", "mcp", "roles", "worker"}
     )
 
 
@@ -111,7 +117,7 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
         "fno.autonomy_cli",
         "fno.claims.cli",
         "fno.dispatch",
-        "fno.king.cli",
+        "fno.lead.cli",
         "fno.mail.cli",
         "fno.mcp.cli",
         "fno.restart",
@@ -136,9 +142,9 @@ def test_importing_agents_cli_does_not_import_folded_subgroups() -> None:
 
 
 def test_internal_variable_and_rust_callers_use_folded_paths() -> None:
-    king_loop = (REPO_ROOT / "crates/fno-agents/src/loop_king.rs").read_text()
+    lead_loop = (REPO_ROOT / "crates/fno-agents/src/loop_lead.rs").read_text()
     eval_sweep = (REPO_ROOT / "scripts/lib/eval-sweep-throttle.sh").read_text()
 
-    assert '"agents",\n            "king",\n            "escalate"' in king_loop
+    assert '"agents",\n                "org",\n                "escalate"' in lead_loop
     assert '"$fno_cmd" agents claim acquire' in eval_sweep
     assert '"$fno_cmd" agents claim release' in eval_sweep

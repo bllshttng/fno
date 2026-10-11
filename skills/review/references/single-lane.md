@@ -27,10 +27,12 @@ Work every angle in this same context, in one pass - do not skip angles for lack
 | level | angles | cap | bias |
 |-------|--------|-----|------|
 | low | one careful pass (below) | 4 | precision |
-| medium | A B C Reuse Simplification Efficiency Altitude Conventions | 8 | precision |
-| high | the 8-angle set | 10 | recall |
-| xhigh | the 10-angle set, adds D and E | 15 | recall |
-| max | the 10-angle set, adds D and E | 15 | recall |
+| medium | A B C Reuse Simplification Efficiency Altitude Conventions Test value | 9 | precision |
+| high | the 9-angle set | 10 | recall |
+| xhigh | the 11-angle set, adds D and E | 15 | recall |
+| max | the 11-angle set, adds D and E | 15 | recall |
+
+Angle F (sibling answerer) runs at every level, low through max, on top of the sets above: it reads the plan's `surface:` block rather than more hunks, so it costs one grep, not a wider pass.
 
 ### The low pass
 
@@ -55,6 +57,14 @@ Scan for the classic pitfalls of the diff's language/framework - for example: JS
 ### Angle E - wrapper/proxy correctness
 
 When the PR adds or modifies a type that wraps another (cache, proxy, decorator, adapter): check that every method routes to the wrapped instance and not back through a registry/session/global - e.g. a caching provider holding a `delegate` field that resolves IDs via `session.get(...)` instead of `delegate.get(...)` will re-enter the cache or recurse. Also check that the wrapper forwards all the methods the callers actually use.
+
+### Angle F - sibling answerer
+
+For the one question this diff answers (take it from the plan's `surface:` block when the PR has one; phrase it yourself when it does not), find one answerer the diff did not touch: another read or write of the same field, a second timeout on the same read, a second id format for the same thing, a second constant for the same limit. Grep the symbol, not the word. Grep it in every language tree, not only the diff's own. If you find one the block does not list, that is a candidate: the plan undercounted, and the next PR on this feature is already visible. If the block lists it as `out-of-scope`, check that the reason still holds against the diff.
+
+### Test value
+
+When the diff adds or changes a test, apply the authoring gate and junk-pattern list from `skills/test-audit/SKILL.md`. When authoring answers are incomplete or a junk-pattern match lacks a verified retention-bar contract, raise a BLOCKING finding. Do not label it advisory or cleanup. If its independent retention-bar contract is named and verified, retain the matching test. Check assertion-free probes, exact source greps, self-comparisons, duplicate owner-boundary proofs, and fixtures supplying the asserted receipt. This angle costs nothing on a diff that touches no test.
 
 ### Reuse
 
@@ -100,10 +110,33 @@ For every kept finding, open the cited `file:line` and check the finding's verba
 
 ### Carry-forward (prior rounds)
 
-An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head through the existing accessor and verify it before trusting it:
+An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
+
+Write the helper below to a file in a gitignored state directory (`.fno/tmp/` is fine) and run it as a plain argv call: `python3 <file> <events-path> <branch> <head-sha>`. A worktree session's Bash isolation refuses shell expansion and command substitution (docs/architecture/worktree-mechanics.md), so the helper is never inlined into a shell command. `<events-path>` is the events journal (`.fno/events.jsonl`, linked to canonical from every worktree; `printenv FNO_EVENTS_PATH` when the environment names one). Empty output means no prior round.
+
+```python
+import json, sys
+path, branch, head = sys.argv[1], sys.argv[2], sys.argv[3]
+best = ""
+for line in open(path, encoding="utf-8"):
+    if "review_attestation" not in line:
+        continue
+    try:
+        row = json.loads(line)
+    except ValueError:
+        continue
+    data = row.get("data") or {}
+    if data.get("verdict") != "pass" or data.get("branch") != branch:
+        continue
+    sha = data.get("head_sha") or ""
+    if sha and sha != head:
+        best = sha
+print(best)
+```
+
+With `PRIOR_HEAD` resolved, read it into the scope decision with the same file-based shape (write any multi-step decision as a script, run it plainly):
 
 ```bash
-PRIOR_HEAD=$(fno do review --sigma-last-head --sigma-node "$NODE_ID" --sigma-pr "$PR_NUMBER" 2>/dev/null || true)
 SCOPE="first-round"
 if [ -n "$PRIOR_HEAD" ] && git merge-base --is-ancestor "$PRIOR_HEAD" HEAD 2>/dev/null; then
   if git diff --name-only "$PRIOR_HEAD..HEAD" | grep -qE '(^|/)(CLAUDE\.md|AGENTS\.md)$|^\.claude/rules/'; then
@@ -116,19 +149,9 @@ fi
 
 A prior head that is not an ancestor of HEAD (rebase, squash, force-push) reads as `first-round`: full scope. An empty increment resets to full scope the same way, so a zero-file round can never pass vacuously. The single changed-files producer is this block; no other diff read in the pass names its own base.
 
-On an incremental round, read the prior round's report through the existing inspect surface and keep its exit status:
+On an incremental round, read the prior round's findings from the SAME journal row. The bounded `findings` primitives it carries (category, verdict, finding_key, summary, autofix_class) are the prior report body. A prior row without findings primitives is unreadable evidence, not an empty prior report. Re-run this round at full scope before any verdict, and emit no attestation from the incomplete round. A live blocking finding can sit in an unread prior round.
 
-```bash
-if PRIOR_REPORT=$(fno do review --inspect-sigma --sigma-node "$NODE_ID" --sigma-pr "$PR_NUMBER" --sigma-head "$PRIOR_HEAD" --json 2>/dev/null); then
-  INSPECT=ok
-else
-  INSPECT=failed
-fi
-```
-
-With `INSPECT=ok` and no critical or high findings in the prior body, there is nothing to carry. With `INSPECT=failed`, the prior report was not readable and the narrowed scope is unproven: re-run this round at full scope before any verdict, and emit no attestation from the incomplete round. Never read a failed inspection as an empty prior report - a live blocking finding can sit in the unread report.
-
-For each critical or high finding in a readable prior body, re-validate its cited quote at the CURRENT head, the same cite-or-drop check as above:
+For each critical or high finding in a readable prior round, re-validate its cited quote at the CURRENT head, the same cite-or-drop check as above:
 
 - quote still matches at the cited `file:line` -> the finding is unresolved. Carry it verbatim into this round's report tagged `carried from round <id>`. It counts as a blocking finding of THIS round.
 - quote is gone or no longer supports the claim -> it lands in the 0-25 abstain band, drops below the 80 threshold, and is named `dropped-unverifiable`.
@@ -143,7 +166,7 @@ Surface up to 8 additional candidates, each naming a defect not already on the l
 
 ## Report and emit
 
-The report opens with one scope line and ends with one verdict line. The scope line is `Scope: first-round` on a full review, `Scope: incremental` on a narrowed round, or `Scope: full-scope (prior report unreadable; inspect failed)` after a failed inspection forced the wider scope. The verdict line is `Verdict: pass` or `Verdict: fail`, and it mirrors the classifier: pass only when the blocking count is zero and no carried finding is unresolved.
+The report opens with one scope line and ends with one verdict line. The scope line is `Scope: first-round` on a full review, `Scope: incremental` on a narrowed round, or `Scope: full-scope (prior round unreadable)` after an unreadable prior round forced the wider scope. The verdict line is `Verdict: pass` or `Verdict: fail`, and it mirrors the classifier: pass only when the blocking count is zero and no carried finding is unresolved.
 
 The resolved route line comes from the one seam: `fno do review resolve-level <level>` prints the full record (level, level_source, band, effort, model, provider, degraded_max). Its `model`/`effort`/`provider` name the POLICY pick for this level - never what ran, because this lane never dispatches. Since the lane always executes inline in the invoking session (Phase 0 above), report the resolved route's `model`/`effort`/`provider` as a `resolved (not dispatched):` line, and separately state `executed inline as: <this session's own harness and model>` so a reader never mistakes the policy target for an attribution of the finished work. A session unable to name its own model states so rather than guessing.
 
@@ -166,27 +189,27 @@ The findings payload is a fenced JSON array, at most the level's cap, ranked mos
     "short_summary": "the claim alone at 60 characters or less",
     "failure_scenario": "concrete inputs/state -> wrong output/crash",
     "category": "correctness",
-    "verdict": "CONFIRMED"
+    "verdict": "CONFIRMED",
+    "autofix_class": "gated_auto",
+    "owner": "author"
   }
 ]
 ```
 
 `short_summary` is the claim alone, no rationale or consequence clause. `category` is a short kebab-case slug for the angle that produced it (`correctness`, `simplification`, `efficiency`, `reuse`, `altitude`, `conventions`, or a more specific slug like `test-coverage`). `verdict` is CONFIRMED or PLAUSIBLE; a REFUTED candidate never enters the array. A carried finding enters the array with the verdict its re-validation produced.
 
-Write the array to a temp file, classify it, and emit through the shared producer surface. The lane never counts its own findings for the emit decision - the classifier's blocking count decides:
+`autofix_class` is `gated_auto`, `manual`, or `advisory`. `gated_auto` names a fix a machine can apply: mechanical, scoped to the reviewed diff, provable by a test. `manual` names a fix the author applies. `advisory` records judgment with no fix intended. When two candidates dedup to one, the survivor carries the more conservative class (advisory over manual over gated_auto). A disagreement about fixability resolves against the machine. An absent class reads as absent: nothing is auto-applied on a guess. `owner` names who acts (`author` or `reviewer`), and `--fix` prints it. The class rides the attestation ledger beside the finding, so the next round reads what can be applied without re-deriving it.
+
+Write the array to a temp file, classify it, and attest in the same command. The verb writes the `review_attestation` row with the verdict it measured from the classified findings (pass only on zero blocking), so the lane never counts its own findings and no separate pass step exists:
 
 ```bash
-CLASSIFIED=$(fno do review classify --findings-file "$FINDINGS" --emit-record)
-BLOCKING=$(jq -r '.findings_blocking' <<<"$CLASSIFIED")
-if [ "$BLOCKING" = "0" ]; then
-  bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass --findings-file "$FINDINGS"
-else
-  bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review fail --findings-file "$FINDINGS"
-fi
+fno do review classify --findings-file "$FINDINGS" --emit-record --attest code-review
 ```
+
+When earlier rounds on this branch raised blocking findings, the payload carries them and their dispositions: `{"findings": [...], "dispositions": [{"finding_key", "disposition", "reason"}]}`. Dispose each blocking finding as `fixed`, or as `declined` with a cited reason. A declined reason quotes the proving line at the current head as a double-quoted span, which the emit gate enforces. It also names the failure scenario that does not hold. The row records it as disposed-by-decline, and it counts against the round cap the same as a fix. A pass that leaves one out is refused at emit. Never drop a finding from the array to reach a pass. A round that declines its own finding stays a fail, and under the two-round law a fail row counts once the cap is reached. `nonblocking` never clears a finding the gate reads as blocking.
 
 ## Flags
 
-`--comment`: when the target is a GitHub PR, post each finding as an inline PR comment (`gh api repos/{owner}/{repo}/pulls/<n>/comments`, one call per finding, a suggestion block only when it fully fixes the issue). When the target is not a PR, print the findings and note the flag was ignored.
+`--comment`: on a GitHub PR target, post each finding as an inline PR comment, one call per finding (`gh api repos/{owner}/{repo}/pulls/<n>/comments`). Add a suggestion block only for a fix that resolves the finding whole. On any other target the findings are HELD, not dropped. The `review_attestation` row the attest step writes already carries the branch and HEAD. When the branch's PR opens, the create flow's `fno do pr publish-review` step posts the held findings as one PR comment. The post is idempotent by marker. A reviewed head behind the PR head posts with both shas named. Print `held for PR: branch <b> head <sha>, N findings`. If HEAD later moves, review the new head as owed.
 
-`--fix`: apply the findings to the working tree after the report: fix each one directly - correctness bugs and reuse/simplification/efficiency cleanups alike. Skip any finding whose fix would change intended behavior, require changes well outside the reviewed diff, or that you judge to be a false positive - note the skip rather than arguing with it. Then emit on the NEW head after the fix commit: a pass on a superseded commit is discarded, so the attestation must name the head the fixes landed on. Verify the fix delta first.
+`--fix`: apply the findings to the working tree after the report, gated by class. Apply `gated_auto` findings only. The lane is one context, so the finder and the verifier are a single witness. A single-witness blocking finding is auto-applied only with class `gated_auto` and a passing test. Print every `manual` and `advisory` finding as a row with its `owner` and a one-line reason it was not applied, for the author to decide. A skip you judge a false positive is noted the same way, never argued with. Then emit on the NEW head after the fix commit. A pass on a superseded commit is discarded, so the attestation must name the head the fixes landed on. Verify the fix delta first.

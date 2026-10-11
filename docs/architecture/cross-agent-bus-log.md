@@ -16,7 +16,7 @@ One global append-only log is the system of record. The per-recipient markdown t
 | :--- | :--- | :--- |
 | Registry (exists) | `~/.fno/agents/registry.json` | WHO: name, provider, session id, cwd, status. Sole addressing authority. |
 | Bus log (this work) | `<bus_dir>/messages.jsonl` (+ rotated `.N`) | WHAT WAS SAID: canonical, append-only, provider-neutral transcript. |
-| Pair budget ledger | `<bus_dir>/word-budget/<pair-digest>.json` | WHAT MAY BE SENT NOW: lock-protected reservations for one canonical sender-recipient pair, pruned after 10 minutes or reset by an inbound authored message. |
+| Control ledger | `<bus_dir>/word-budget/<pair-digest>.json` | WHAT MAY BE SENT NOW on the control lane: lock-protected reservations for one canonical sender-recipient pair's `control:` traffic, capped at 60 words, pruned after 10 minutes or reset by an inbound authored message. |
 | Cursors (this work) | `<bus_dir>/cursors/<name>.json` | Per-consumer read position, keyed by last-seen message-id. |
 | Markdown render (demoted) | `<recipient>/inbox/*.md` | Obsidian-visible render of the log; no authority. |
 
@@ -27,10 +27,10 @@ One global append-only log is the system of record. The per-recipient markdown t
 One JSON object per line (`fno.bus.log.Envelope`):
 
 ```json
-{"v":1,"id":"msg-3f8f96","ts":"2026-06-07T19:51:32Z","thread":"msg-3f8f96","from":"alice","to":"bob","kind":"send","provider_from":"claude","provider_to":"codex","in_reply_to":"...","delivery":"hosted","word_count":17,"meta":{...},"body":"..."}
+{"v":1,"id":"msg-3f8f96","ts":"2026-06-07T19:51:32Z","thread":"msg-3f8f96","from":"alice","to":"bob","kind":"send","from_harness":"claude","to_harness":"codex","in_reply_to":"...","delivery":"hosted","word_count":17,"meta":{...},"body":"..."}
 ```
 
-`from` and `to` are canonical registry names, session handles, or project names. `provider_from` and `provider_to` are audit tags, never addresses. Reply correlation uses `request_id` and `in_reply_to` independently of provider tags.
+`from` and `to` are canonical registry names, session handles, or project names. `from_harness` and `to_harness` are audit tags, never addresses (renamed from `provider_from`/`provider_to`, and the reader still accepts the old keys on stored rows). Reply correlation uses `request_id` and `in_reply_to` independently of harness tags.
 
 `word_count` stores the authored body's send-time count under the pure Rule 7 masking rules. It is never recomputed from a stored `<fno_mail>` wrapper.
 
@@ -38,15 +38,17 @@ One JSON object per line (`fno.bus.log.Envelope`):
 
 A root message threads under its own id. A reply sets `in_reply_to`.
 
-### Rolling sender-recipient word budget
+From the Messages tab, the user types a reply into the chosen pane. After focus and input succeed, the client records one `delivery: "typed"` bus row. The row sets `from` to `user` and `in_reply_to` to the tapped message id, then enters the paired chat projection. Typed rows are audit records, so the drain does not deliver them again. If the selected session has no pane, the client writes no reply.
 
-Before any outward send effect, `fno.mail.budget.reserve` charges the authored word count to one canonical sender-recipient pair. The fixed policy is 80 masked words over a rolling 10-minute window.
+### Control lane word ledger
+
+Before any outward control send, `fno.mail.budget.reserve_control` charges the authored word count to one canonical sender-recipient pair. The fixed policy is 60 masked words over a rolling 10-minute window. An ordinary send writes no ledger row: rule 7 is its only word gate.
 
 An authored inbound `send`, `heads-up`, `question`, or `fyi` resets earlier reservations. Self-sends, migrations, withdrawals, and other non-authored rows do not reset them.
 
 A refused or proven failed send releases its reservation. An unconfirmed or post-delivery audit failure stays charged until reset or expiry.
 
-Pair files use a digest of the canonical addresses instead of an address-derived path. A sidecar lock serializes same-pair reservations. A temporary file and atomic replace persist the ledger before transport begins.
+Control files use a digest of the canonical addresses instead of an address-derived path. A sidecar lock serializes same-pair reservations. A temporary file and atomic replace persist the ledger before transport begins.
 
 Different pairs do not share a lock. A malformed or unreadable active ledger fails closed instead of resetting the count.
 
@@ -84,6 +86,60 @@ Project/cwd is demoted from address to resolver. `fno agents send --to-project X
 
 `ProjectResolution` enforces exactly-one-outcome at construction. `ask` is synchronous, so `ask --to-project` requires exactly one live peer (none/ambiguous is an error; use `send` for the durable path).
 
+## Role-destination addressing (anycast over the role)
+
+`fno agents mail send --to-lead <scope> <msg>` addresses the ROLE, not the session. The holder is resolved from the registry at SEND time. The resolver is `resolve_to_lead` in `cli/src/fno/agents/role.py`. It uses `role_scope_matches`, the same territory rule the row-keyed lead readers use.
+
+Succession moves the role row. It does not move the mail handle a peer learned while that handle was titled. So a handle send after an departure reaches the wrong session. Both failures are silent: the message was delivered, a session woke, and it answered.
+
+The rule:
+
+- exactly one live titled row over that scope: deliver live to it.
+- none: refuse, exit 16, queue nothing. A project queue has a future drain that reads it as that project. A vacant role has no such reader. Queueing strands the message at the address.
+- more than one: refuse, naming both holders. That is the split role `fno agents org` already reports. It is not a multiplicity to pick between, so there is no `--any` tie-break here.
+
+`resolve_to_lead` returns the holder names as a plain list. A list has no illegal state to guard, so unlike `ProjectResolution` there is no construction-time check. The one caller reads the three outcomes off the length.
+
+`--to-lead` is exclusive with every other addressing mode: `--to-project`, `--to-self`, `--kind`, `--raw`, `--force`, `--any`, and a second positional. A second address decides where the message lands. The role deciding that is the point.
+
+A forwarding pointer written at departure is the cheaper-looking fix, and it is refused on purpose. The pointer is itself a recorded identity. A second succession leaves it naming a session that is no longer titled either.
+
+## Role attributes
+
+Every envelope carries the live roles of its sender and its reader as header attributes, read at render time from the same registry:
+
+```
+from_rank="L1 fno"
+to_rank="L1 fno"     (or to_rank="none")
+```
+
+`from_rank` is the sender's verified role. The Rust injection door refuses a payload whose `from_rank` does not match the live registry read for its sender. `to_rank` names the RECIPIENT's own role. `from_rank` and `to_rank` name verified standing, never authority: they are a display of who holds what, not a grant.
+
+Two gates, in order, for `to_rank`. With no resolved recipient session id, the attribute is omitted. `none` is a positive claim about the reader's authority, and an unresolved address is an absence rather than a reading. A unassigned fleet (`fleet_has_role()` false) omits it too, so those envelopes stay byte-unchanged. An unreadable registry omits it as well. `fleet_has_role()` fails open while the role read fails closed. The two alone once told a live lead it had been deposed, so an unreadable registry claims nothing.
+
+## Job-address lane
+
+`fno agents mail send node:<id> <msg>` (or `pr:<n>`, normalized to `node:<id>` by the graph lookup) addresses the WORK, not the process. The lane lives in `cli/src/fno/mail/job_lane.py`.
+
+A job address outlives its holder. That is the structural fix for the dead-handle strand. A session handle expired faster than the message. Mail to it then piled up on a queue the dead session never drained.
+
+Two outcomes, matching the name lane's one-line stdout contract. There is no second delivery-verification receipt, because a receipt claiming delivery happened after the fact is the shape that has lied four times.
+
+- A holder exists (claim live or suspect): live-inject to the holder's session. A confirmed inject IS delivery and writes no durable copy, the same as a hosted name-lane send. A live miss floors to a durable envelope addressed to `node:<id>`, so a successor drains it. The owner is `wake-daemon`. The holder exists and the inject missed, so the message waits for a drain rather than a turn boundary. A `node:<id>` thread surfaces at a holder's SessionStart scan, because the turn-boundary scan reads only the session's own handle. The receipt must not promise turn-boundary visibility.
+- No holder (free, stale, corrupted, or no node): REFUSE, exit 16, queue nothing. Queueing strands the message at the job address, which is the defect again, one address over.
+
+The inject targets the session id. Both `control.sock` and the codex daemon are keyed by it and cwd-independent, so a holder in another worktree is reachable from the sender's cwd. A bus-only holder is refused inside the injector, so the receipt names the policy rather than a miss.
+
+## Name-lane address resolution
+
+`_name_lane_send` in `cli/src/fno/mail/cli.py` is the one choke point every delivery rung lives in. Two rules there are easy to break by moving a line.
+
+The durable copy must be addressed to the RESOLVED session's canonical handle. Deriving it from the raw token misaddresses every alias. A full session id is the collision escape hatch. It is written verbatim, never canonicalized. Two same-window codex sessions share their first eight characters, so canonicalizing a full id collapses both onto one durable key. `drain-self` reads the full id.
+
+A non-id token, such as a spawn `--name` like `blueprint-auth-glm`, is not a mail address. The drain is handle-keyed, so a name never matches a session's handle and a durable write under it strands. `--force` is the exception, and for that same reason: it writes no durable row. It types at a pane the registry names, and the registry is what resolves a friendly name to the session behind it.
+
+The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that returns on its own. An address rule that covers only the lanes reached last is not an address rule. A dropped transport flag is worse than a refused one, because the receipt still reads like a success. Neither guard applies where the address was never typed as a bare positional. `--to-project` holds the BODY in the positional, so an eight-hex there is content nobody is addressing. `--to-lead` and `--to-self` DERIVE the handle they hand the name lane. A derived handle names exactly one live row, so the ambiguity the head-8 rule guards cannot arise. A titled row's own `--name` can legitimately be a codex head-8, and the guard there refuses a send the role resolved correctly.
+
 ## `fno inbox` alias + legacy migration
 
 `fno agents send` (with `fno agents send --to-project <project>` for project-destination anycast) routes through `write_new_thread`, which mirrors a canonical envelope into the bus on every write: one log line per send, the md render and the envelope agree (no md-store divergence), and the existing triage drain finds it. The mirror is best-effort (the md render is the durable copy); a mirror failure warns loudly on stderr because a bus reader would otherwise diverge from the md drain until backfill.
@@ -104,11 +160,34 @@ Same-project by-name delivery was the unfinished half of the bus: `fno agents se
 
 - `from_session` - the sender's session id, the audit/robustness key for sender-exclusion on a broadcast.
 - `from_model` - the sender's model, reserved for the render. No truthful source exists in `AgentEntry` today, so no producer sets it yet; the field is forward-compat room, not fabricated.
-- `to_kind` - the addressing discriminator: `name | session | project`. `fno agents send <name>` sets `name`; the `--to-project` durable path sets `project`.
+- `to_kind` - the addressing discriminator: `name | session | project | fleet`. `fno agents send <name>` sets `name`. The `--to-project` durable path sets `project`. A fleet announcement sets `fleet`.
 
-**Sender-exclusion.** `scan_unread(name, *, exclude_from=...)` drops messages whose `from`/`from_session` is in `exclude_from`. By-name reads pass nothing (a direct address is never a self-echo); the project-broadcast read excludes the worker itself so it never drains its own broadcast back. The load-bearing exclusion key is the sender name (always present); `from_session` is secondary.
+**Sender-exclusion.** `scan_unread(name, *, exclude_from=...)` drops messages whose `from`/`from_session` is in `exclude_from`. By-name reads pass nothing (a direct address is never a self-echo). The load-bearing exclusion key is the sender name (always present). `from_session` is secondary. The project-broadcast read that used this exclusion is gone. No writer ever produced a `to_kind: project` row (measured 2026-09-13: 0 of 4609 bus lines). Fleet announcements (below) are addressed to `fleet:<scope>`, which no session handle equals, so `scan_unread` cannot return one by construction.
 
-**Loop-boundary drain.** `peek_nudge` now drains the union of (a) by-name mail to this worker and (b) project broadcasts not sent by it, restoring global oldest-first order across the two cursor-bounded scans. The worker's own registry name is resolved best-effort from its unique live cwd (`_resolve_self_name`); zero-or-many live entries at one cwd degrade to project-only delivery rather than guess. The Rust `nudge.rs` is unchanged: it already shells out to the Python `fno agents nudge-peek`, so the fix lands entirely in the Python it calls.
+**Loop-boundary drain.** `peek_nudge` drains by-name mail to this worker, oldest first, through its own cursor-bounded scan. The worker's own registry name is resolved best-effort from its unique live cwd (`_resolve_self_name`). No resolvable name means nothing drains rather than a guessed recipient. Fleet announcements take the SAME boundary natively: `nudge.rs::append_inbox_nudge` calls `crate::announce::read_render` before the addressed-mail shell-out, so one block message carries both.
+
+## Fleet announcements (one bus line)
+
+One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agents/src/announce.rs`, reached as `fno agents mail team` or the binary-direct `fno-agents announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
+
+**Envelope.** Key order matches `to_json_line`. `to: "fleet:<scope>"` and `to_kind: "fleet"` mean no Python address can ever equal it, so `scan_unread` and every addressed-mail reader cannot deliver it. `meta` carries `scope`, `audience` (the snapshot), `subject`, `expires_at`, `urgent`, `supersedes`.
+
+**Audience snapshot.** At send time the writer records each matching row's identity-normalized full `harness_session_id`. It never records the Claude transport `short_id`. It leaves the sender's own row out. The row filters: non-terminal status, a session id, `role_level` set for `leads`. A role scope answers to territory equality, alias-normalized. `project:<p>` adds a cwd path match. That list is the receipt denominator.
+
+**Late arrivals.** A session outside the snapshot that matches the scope at read time still sees a standing announcement. Receipts count it as `late`, never in the audience N.
+
+**Per-session cursor.** `<state_dir>/announce-cursors/<session>.json` holds one seen-id set per session. The shape follows nudge-cursors, but it is a separate file on purpose. `peek_nudge` prunes its cursor to its own unread set. A shared file can drop announcement ids and re-surface them forever. The announce reader prunes to ids still on retained bus segments.
+
+**Render.** `<fno_mail id="..." kind="announce" from="..." subject="..." expires="...">body</fno_mail>`. The id inside the open tag is what a transcript scan proves landing with. No new marker exists.
+
+**Receipts.** `announce status <id>` is the sender view: `audience N, landed L, pending P, woken W, unverified U, late K`. When a `kind: "landed"` control row exists for the (announcement, session) pair, the session is `landed`. Otherwise the status run scans that session's transcript for the id: claude `<projects>/*/<id>.jsonl`, codex a rollout scan. A session with no resolvable store is `unverified`, never `pending`. On transcript proof the run appends the landed control row, so the next run re-reads nothing. `mail team --json` prints the send receipt only. Status is a separate read.
+
+**Expiry and supersession.** `--expires` defaults to 24h and caps at 7d. Readers skip expired rows. A newer announcement with the same `subject` and scope lists the older standing one in `meta.supersedes`. Readers skip superseded rows, so a woken session only ever sees current news.
+
+**Authority and rate limit.** The Python shim keeps the three body guards: forged envelope, byte cap, and style lint (the single style implementation stays there). The shim also resolves the sender: a session whose harness identity the process can prove it owns stamps `agent`. Everything else stamps `operator`. Rust accepts an operator, or an `agent` whose live registry row holds a role. Anything else refuses with exit 2. Six announcements per sender per rolling hour, counted from the bus itself.
+
+**Boundaries.** Claude: `inject-announce.sh` on SessionStart and UserPromptSubmit, with a SessionStart source of `compact` mapped to the compact boundary. Codex: UserPromptSubmit, PostCompact, and section 6a of `session-start.sh`. The target loop reads natively in `nudge.rs` at its block paths. opencode reads in `experimental.chat.system.transform`. pi reads in `before_agent_start`, the pre-turn event whose returned message is injected into the session. A plain Stop is not a delivery boundary (the turn is over). Urgent wake for idle sessions is wave 4 and waits on the wake-lane fix it depends on.
+
 
 **Projection.** `fno inbox view [--from P] [--all] [--json] [-n N]` renders the bus log (the source of record) read-only, surfacing the enriched fields when present and ignoring unknown fields (forward-compatible). It is project-scoped by default (traffic to/from the project or an agent in it) so a cross-project body is not leaked; `--all` is the explicit operator view. The bus log file is created `0o600` (it holds message bodies; create-only, so pre-existing logs keep their prior mode).
 

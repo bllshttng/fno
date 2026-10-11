@@ -38,13 +38,32 @@ CWD = Path("/tmp")
         (
             "codex",
             "workspace-write:on-request",
-            ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"],
+            [
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+                "-c",
+                "sandbox_workspace_write.network_access=true",
+            ],
+        ),
+        (
+            "codex",
+            "workspace-write:never",
+            [
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "never",
+                "-c",
+                "sandbox_workspace_write.network_access=true",
+            ],
         ),
         ("opencode", "auto", ["--auto"]),
-        ("agy", "skip", []),  # argv already carries --dangerously-skip-permissions
+        ("agy", "skip", ["--dangerously-skip-permissions"]),
     ],
 )
-def test_mapping_accepts_provider_native_values(provider, mode, expected):
+def test_mapping_accepts_provider_native_values(rust_door, provider, mode, expected):
     assert permission_pane_tokens(provider, mode) == expected
 
 
@@ -52,16 +71,87 @@ def test_mapping_accepts_provider_native_values(provider, mode, expected):
     "provider,mode",
     [
         ("opencode", "acceptEdits"),  # AC3-ERR: only 'auto' maps
-        ("agy", "plan"),  # only 'skip' maps
+        ("agy", "yolo-please"),  # not in agy's own vocabulary
         ("codex", "bogus"),  # not a shortcut or colon form
         ("codex", "workspace-write"),  # colon form needs both axes
         ("claude", ""),  # empty value required
     ],
 )
-def test_mapping_fail_closed_on_unmappable(provider, mode):
+def test_mapping_fail_closed_on_unmappable(rust_door, provider, mode):
     with pytest.raises(DispatchAskError) as exc:
         permission_pane_tokens(provider, mode)
     assert exc.value.exit_code == 2
+
+
+@pytest.mark.dev_build
+def test_codex_refusal_names_the_overlay_key(rust_door):
+    """fno's own builtin carries as codex's bypass flag; a genuinely foreign
+    word still refuses and names the config key that fixes it (AC5-HP)."""
+    assert permission_pane_tokens("codex", "bypassPermissions") == [
+        "--dangerously-bypass-approvals-and-sandbox"
+    ]
+    with pytest.raises(DispatchAskError) as exc:
+        permission_pane_tokens("codex", "acceptEdits")
+    assert "agents.*.harness.codex.permission_mode" in str(exc.value)
+
+
+@pytest.mark.dev_build
+def test_codex_pane_bounded_default_rides_the_rust_owner(rust_door, monkeypatch, tmp_path):
+    """AC3-HP: with no mode and no yolo, the pane's bounded default IS the
+    thread lane's workspace-write:never pair, tokens straight from
+    permission_pane_tokens - pane and thread start from one posture, and the
+    network override rides with it."""
+    monkeypatch.setattr("fno.agents.mux_spawn.worker_writable_dirs", lambda *a, **k: [])
+    argv = build_pane_argv("codex", "hi", tmp_path, False, None, None)
+    assert argv[:5] == ["codex", "--remote", "unix://", "-C", str(tmp_path)]
+    i = argv.index("--sandbox")
+    assert argv[i : i + 6] == [
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        "-c",
+        "sandbox_workspace_write.network_access=true",
+    ]
+
+
+# --- agy pane posture: default bypass, explicit mode replaces it -------------
+
+
+@pytest.fixture
+def rust_door(monkeypatch):
+    """Pin the posture door to THIS checkout's fno-agents build; skip where
+    the checkout has none (the same contract conftest.native_backlog_door
+    implements). A stale installed binary must not answer for this tree."""
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+
+
+@pytest.mark.dev_build
+def test_agy_pane_default_keeps_bypass(rust_door, capsys):
+    argv = build_pane_argv("agy", "hi", CWD, False, "uuid", None, None)
+    assert "--dangerously-skip-permissions" in argv
+    # The launch names the posture it ran with, once, on stderr.
+    captured = capsys.readouterr().err
+    assert "agy posture: bypass (lane-default)" in captured
+
+
+@pytest.mark.dev_build
+def test_agy_pane_mode_replaces_bypass(rust_door):
+    argv = build_pane_argv("agy", "hi", CWD, False, "uuid", None, "plan")
+    assert "--mode" in argv and "plan" in argv
+    assert "--dangerously-skip-permissions" not in argv
+
+
+@pytest.mark.dev_build
+def test_agy_pane_yolo_plus_mode_refuses(rust_door):
+    # AC13-ERR flavor: one knob at a time, before any spawn.
+    with pytest.raises(DispatchAskError):
+        build_pane_argv("agy", "hi", CWD, True, "uuid", None, "plan")
 
 
 # --- build_pane_argv integration -------------------------------------------
@@ -88,8 +178,10 @@ def test_codex_pane_colon_two_axis_form():
     argv = build_pane_argv(
         "codex", "hi", CWD, False, None, None, "workspace-write:on-request"
     )
-    assert argv[:6] == [
+    assert argv[:8] == [
         "codex",
+        "--remote",
+        "unix://",
         "-C",
         str(CWD),
         "--sandbox",
@@ -143,7 +235,9 @@ def _stub_pane_path(monkeypatch) -> dict:
 
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
     monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: None)
-    monkeypatch.setattr(mux_spawn, "dispatch_spawn_pane", fake_dispatch_spawn_pane)
+    monkeypatch.setattr(
+        mux_spawn, "dispatch_spawn_bounded_pane", fake_dispatch_spawn_pane
+    )
     return received
 
 
@@ -173,7 +267,7 @@ def test_permission_mode_reaches_pane_dispatch(runner, monkeypatch):
     result = runner.invoke(
         agents_app,
         ["spawn", "--name", "w1", "hi", "--harness", "claude",
-         "--permission-mode", "acceptEdits"],
+         "--substrate", "pane", "--permission-mode", "acceptEdits"],
     )
     assert result.exit_code == 0, result.output
     assert received["permission_mode"] == "acceptEdits"
@@ -188,16 +282,16 @@ def test_permission_mode_reaches_pane_dispatch(runner, monkeypatch):
 @pytest.mark.parametrize(
     "extra_args",
     [
-        # explicit non-bg substrate: a bare --resume now IMPLIES bg (x-f76e),
-        # so the guard is exercised by pinning a non-bg lane explicitly.
+        # explicit non-thread substrate: a bare --resume now IMPLIES thread,
+        # so the guard is exercised by pinning a non-thread lane explicitly.
         ["--substrate", "pane"],
-        ["--substrate", "bg", "--harness", "codex"],  # bg but non-claude
+        ["--substrate", "thread", "--harness", "codex"],  # thread but non-claude
     ],
 )
 def test_resume_requires_claude_bg(runner, monkeypatch, extra_args):
-    """US4: --resume continues a claude --bg transcript, so it is rejected on any
-    non-(claude, bg) lane with exit 2 before dispatch. The resume value must be a
-    real session uuid: the x-f76e front-door normalizer validates the shape first."""
+    """US4: --resume continues a claude thread transcript, so it is rejected on any
+    non-(claude, thread) lane with exit 2 before dispatch. The resume value must be a
+    real session uuid: the front-door normalizer validates the shape first."""
     _stub_pane_path(monkeypatch)
     from fno.agents.cli import agents_app
 
@@ -207,14 +301,20 @@ def test_resume_requires_claude_bg(runner, monkeypatch, extra_args):
          "6501096a-1111-2222-3333-444455556666", *extra_args],
     )
     assert result.exit_code == 2
-    assert "--resume requires --substrate bg" in result.output
+    assert "--resume requires --substrate thread" in result.output
 
 
 def test_bg_permission_mode_non_claude_fails_closed(runner, monkeypatch):
     """codex bg/headless via the Python fallback refuses --permission-mode
     (its one-shot lane hardcodes its bypass); mirrors the Rust guard."""
     _stub_pane_path(monkeypatch)
+    from fno import rust_binary
     from fno.agents.cli import agents_app
+
+    # Force the Python fallback: a smoke run may leave a real fno-agents
+    # reachable for the claim door, which would route this to the Rust guard.
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
 
     result = runner.invoke(
         agents_app,
@@ -222,14 +322,21 @@ def test_bg_permission_mode_non_claude_fails_closed(runner, monkeypatch):
          "--permission-mode", "acceptEdits"],
     )
     assert result.exit_code == 2
-    assert "not supported" in result.output and "pane" in result.output
+    assert "not supported" in result.output and "-Y" in result.output
+    assert "use --substrate pane" not in result.output
 
 
 def test_bg_permission_mode_claude_honored_via_python(runner, monkeypatch):
     """claude bg via the Python fallback HONORS --permission-mode (it threads to
     _claude_create_path -> bg_create), never a hard-fail. Regression guard for
     the availability bug where a config default hard-failed autonomous dispatch."""
+    from fno import rust_binary
     from fno.agents import dispatch, spawn_gate
+
+    # Force the Python fallback: a smoke run may leave a real fno-agents
+    # reachable for the claim door, which would route this to the Rust runtime.
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
 
     captured: dict = {}
 
@@ -249,7 +356,7 @@ def test_bg_permission_mode_claude_honored_via_python(runner, monkeypatch):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
          "--permission-mode", "acceptEdits"],
     )
     assert result.exit_code == 0, result.output
@@ -264,7 +371,13 @@ def test_bg_permission_mode_claude_honored_via_python(runner, monkeypatch):
 def test_bg_yolo_receipt_names_bypass_via_python(runner, monkeypatch):
     """--yolo on the Python claude bg fallback names bypassPermissions in the
     receipt (audit parity with the Rust bg receipt)."""
+    from fno import rust_binary
     from fno.agents import dispatch, spawn_gate
+
+    # Force the Python fallback: a smoke run may leave a real fno-agents
+    # reachable for the claim door, which would route this to the Rust runtime.
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
 
     class _Gate:
         def release(self) -> None:
@@ -281,11 +394,56 @@ def test_bg_yolo_receipt_names_bypass_via_python(runner, monkeypatch):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg", "--yolo"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread", "--yolo"],
     )
     assert result.exit_code == 0, result.output
     receipt = json.loads(result.output.splitlines()[0])
     assert receipt["permission_mode_requested"] == "bypassPermissions"
+    assert "permission_mode" not in receipt
+
+
+def test_codex_yolo_receipt_names_yolo_via_python(runner, monkeypatch):
+    """--yolo on a codex spawn names yolo (codex's own spelling) in the
+    receipt, never claude's bypassPermissions (x-6c8a)."""
+    from fno import rust_binary
+    from fno.agents import dispatch, spawn_gate
+
+    # Force the Python fallback so the receipt under test is this module's.
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+
+    class _Gate:
+        def release(self) -> None:
+            pass
+
+    monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
+    monkeypatch.setattr(
+        "fno.agents.dispatch.dispatch_spawn",
+        lambda **kw: dispatch.SpawnResult(
+            kind="created", name=kw["name"], provider="codex", short_id="abcd1234"
+        ),
+    )
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--substrate", "thread", "--yolo"],
+    )
+    assert result.exit_code == 0, result.output
+    receipt = json.loads(result.output.splitlines()[0])
+    assert receipt["permission_mode_requested"] == "yolo"
+    assert "permission_mode" not in receipt
+
+    # The env-resolved harness counts too: no --harness, the invoking-harness
+    # marker names codex, and the receipt still reads yolo.
+    monkeypatch.setenv("CODEX_THREAD_ID", "t-env-codex")
+    result = runner.invoke(
+        agents_app,
+        ["spawn", "--name", "w2", "hi", "--substrate", "thread", "--yolo"],
+    )
+    assert result.exit_code == 0, result.output
+    receipt = json.loads(result.output.splitlines()[0])
+    assert receipt["permission_mode_requested"] == "yolo"
     assert "permission_mode" not in receipt
 
 
@@ -304,14 +462,24 @@ def test_claude_python_build_argv_threads_permission_mode():
 
 
 def _fake_settings(mode: str):
-    return SimpleNamespace(agents=SimpleNamespace(spawn_permission_mode=mode))
+    return SimpleNamespace(
+        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode=mode))
+    )
 
 
 def _capture_spawn(monkeypatch, module):
     """Mock the spawn subprocess at ``module.subprocess.run``; return the cmd."""
     captured: dict = {}
+    real_run = module.subprocess.run
 
     def fake_run(cmd, **kwargs):
+        # The mint is a real pre-spawn subprocess (x-84b2): serve it with the
+        # real binary and keep it out of the capture, which pins the SPAWN argv.
+        if {"name-mint", "name-codes", "name-parse"} & {str(p) for p in cmd}:
+            return real_run(cmd, **kwargs)
+        # Native event commits are infrastructure: ride the real binary too.
+        if {"doctor", "event"} <= {str(p) for p in cmd}:
+            return real_run(cmd, **kwargs)
         captured["cmd"] = cmd
         return SimpleNamespace(
             returncode=0, stdout='{"name":"w","short_id":"abcd1234"}', stderr=""
@@ -329,7 +497,7 @@ def test_advance_worker_reads_config_default(monkeypatch):
     monkeypatch.setattr(
         "fno.config.load_settings", lambda: _fake_settings("acceptEdits")
     )
-    advance._spawn_worker("x-test", None, "slug")
+    advance._spawn_worker("x-test", None, "slug", node=_node_row("x-test"))
     assert "--permission-mode" in captured["cmd"]
     i = captured["cmd"].index("--permission-mode")
     assert captured["cmd"][i + 1] == "acceptEdits"
@@ -340,18 +508,22 @@ def test_advance_worker_explicit_flag_wins_over_config(monkeypatch):
 
     captured = _capture_spawn(monkeypatch, advance)
     monkeypatch.setattr("fno.config.load_settings", lambda: _fake_settings("plan"))
-    advance._spawn_worker("x-test", None, "slug", permission_mode="acceptEdits")
+    advance._spawn_worker("x-test", None, "slug", permission_mode="acceptEdits", node=_node_row("x-test"))
     i = captured["cmd"].index("--permission-mode")
     assert captured["cmd"][i + 1] == "acceptEdits"
 
 
-def test_advance_worker_unset_config_is_unchanged(monkeypatch):
+def test_advance_worker_unset_config_falls_to_builtin(monkeypatch):
+    """AC3-HP (x-7198): no config at all still resolves the built-in answer,
+    byte-identical to the old spawn_permission_mode default."""
     from fno.backlog import advance
+    from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
 
     captured = _capture_spawn(monkeypatch, advance)
     monkeypatch.setattr("fno.config.load_settings", lambda: _fake_settings(""))
-    advance._spawn_worker("x-test", None, "slug")
-    assert "--permission-mode" not in captured["cmd"]
+    advance._spawn_worker("x-test", None, "slug", node=_node_row("x-test"))
+    i = captured["cmd"].index("--permission-mode")
+    assert captured["cmd"][i + 1] == SPAWN_PERMISSION_BUILTIN
 
 
 def test_think_worker_reads_config_default(monkeypatch):
@@ -372,7 +544,7 @@ def test_think_worker_codex_uses_shared_dispatch_default(monkeypatch):
 
     captured = _capture_spawn(monkeypatch, spawn_think)
     settings = SimpleNamespace(
-        agents=SimpleNamespace(spawn_permission_mode=""),
+        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="")),
         dispatch=SimpleNamespace(
             harness="",
             substrate="",
@@ -402,7 +574,7 @@ def test_think_worker_scopes_tier_to_resolved_dispatch_harness(monkeypatch):
 
     captured = _capture_spawn(monkeypatch, spawn_think)
     settings = SimpleNamespace(
-        agents=SimpleNamespace(spawn_permission_mode=""),
+        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="")),
         dispatch=SimpleNamespace(
             harness="codex",
             substrate="",
@@ -438,7 +610,7 @@ def test_think_worker_explicit_pane_uses_shared_capability_gate(monkeypatch):
 
     captured = _capture_spawn(monkeypatch, spawn_think)
     settings = SimpleNamespace(
-        agents=SimpleNamespace(spawn_permission_mode="plan"),
+        agents=SimpleNamespace(defaults=SimpleNamespace(permission_mode="plan")),
         dispatch=SimpleNamespace(
             harness="",
             substrate="pane",
@@ -469,6 +641,28 @@ def test_think_worker_explicit_pane_uses_shared_capability_gate(monkeypatch):
 import shutil  # noqa: E402
 import stat  # noqa: E402
 import subprocess as _sp  # noqa: E402
+
+
+def _node_row(
+    node_id: str,
+    difficulty: str | None = "low",
+    verb: str | None = None,
+    model: str | None = "glm-5.3-flash[1m]",
+) -> dict:
+    """The minimal node dict tests pass to the dispatcher.
+
+    Key presence is what the projection check reads; difficulty low derives
+    /target, matching what the builtin path asserted before the None branch
+    was deleted. An out-of-family ``verb`` rides the row so the lifecycle
+    table abstains and the explicit verb wins, as the deleted None path did.
+    The default model pin clears the seam gate (x-8fb2): CI runs with no
+    routing config, so the grid declines and an unpinned spawn would refuse."""
+    return {
+        "id": node_id,
+        "dispatch_verb": verb or "",
+        "difficulty": difficulty,
+        "model": model,
+    }
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="spawn.sh needs jq")
@@ -508,3 +702,51 @@ def test_spawn_sh_forwards_permission_mode(tmp_path):
     assert "--permission-mode" in forwarded
     i = forwarded.index("--permission-mode")
     assert forwarded[i + 1] == "acceptEdits"
+
+
+# --- x-6863: one vocabulary, in Rust; the Python holds no second table ------
+
+
+def _rust_answer(provider: str, mode: str, substrate: str | None) -> dict:
+    from fno.rust_binary import verb_call
+
+    payload = {"provider": provider, "mode": mode}
+    if substrate:
+        payload["substrate"] = substrate
+    return verb_call("permission-tokens", payload, Exception)
+
+
+
+@pytest.mark.parametrize(
+    "provider,mode",
+    [
+        ("claude", "bypassPermissions"),
+        ("codex", "full-auto"),
+        ("codex", "workspace-write:on-request"),
+        ("gemini", "yolo"),
+        ("opencode", "auto"),
+        ("agy", "skip"),
+        ("cursor-agent", "force"),
+        ("grok", "dontAsk"),
+    ],
+)
+def test_python_bridge_matches_the_rust_vocabulary(provider, mode):
+    """AC4-EDGE: the bridge and the owner answer identically, so the tree
+    holds ONE table. The refusal messages compare byte-for-byte too."""
+    from fno.rust_binary import VerbUnavailable, verb_call
+
+    py_refusal = None
+    py_tokens = None
+    try:
+        py_tokens = permission_pane_tokens(provider, mode)
+    except DispatchAskError as exc:
+        py_refusal = str(exc)
+    rust = _rust_answer(provider, mode, None)
+    if rust.get("refusal"):
+        assert py_refusal is not None, f"python accepted what rust refused: {rust}"
+        assert py_refusal == rust["refusal"]
+        with pytest.raises(DispatchAskError):
+            permission_pane_tokens(provider, mode)
+    else:
+        assert py_refusal is None
+        assert py_tokens == [str(t) for t in rust["tokens"]]

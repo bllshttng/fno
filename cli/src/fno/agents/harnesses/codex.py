@@ -34,10 +34,11 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 
 from fno.agents.harnesses.base import ReachabilityProbeError
 
+BOUNDED_NETWORK_OVERRIDE = "sandbox_workspace_write.network_access=true"  # codex_posture twin
 
 # Pinned from a real codex 0.130.0 capture (scripts/smoke/capture-codex-jsonl.sh).
 # DO NOT reference these literal string values outside this constants block;
@@ -71,12 +72,17 @@ class CodexResult:
         last_msg: last assistant text seen on the stream; "" if no
             ``agent_message`` event fired.
         duration_ms: wall-clock elapsed since Popen returned.
+        provider: the routing provider the launch used ("" when unrouted);
+            the identity a registry row records for a relaunch to re-resolve.
+        model: the routed model id ("" when unrouted).
     """
 
     exit_code: int
     session_id: Optional[str]
     last_msg: str
     duration_ms: int
+    provider: str = ""
+    model: str = ""
 
 
 class CodexInvocationError(RuntimeError):
@@ -134,7 +140,7 @@ def sandbox_flag(yolo: bool) -> list[str]:
     before ``exec`` - see :func:`approval_flag`.
 
     - bounded (``yolo=False``, default): ``--sandbox workspace-write`` -
-      workspace sandbox.
+      workspace sandbox with network on, so ``gh`` and the keeper socket work.
     - full yolo (``yolo=True``, explicit opt-in):
       ``--dangerously-bypass-approvals-and-sandbox`` - unsandboxed bypass. The
       two are mutually exclusive; never combine the workspace sandbox with the
@@ -142,7 +148,7 @@ def sandbox_flag(yolo: bool) -> list[str]:
     """
     if yolo:
         return ["--dangerously-bypass-approvals-and-sandbox"]
-    return ["--sandbox", "workspace-write"]
+    return ["--sandbox", "workspace-write", "-c", BOUNDED_NETWORK_OVERRIDE]
 
 
 def approval_flag(yolo: bool) -> list[str]:
@@ -307,7 +313,7 @@ def plan_writable_args(cwd: Path) -> list[str]:
 
 
 def _effective_yolo(yolo: bool, headless_yolo: Optional[bool] = None) -> bool:
-    """Resolve the effective sandbox-bypass for the autonomous exec lane (ab-994222ee).
+    """Resolve the effective sandbox-bypass for the autonomous exec lane.
 
     The create/resume path is the headless (MODE==exec) lane: a worker no
     operator is watching. Returns whether this launch is FULL yolo (unsandboxed
@@ -569,7 +575,7 @@ def _run_codex(
         spawn_env["FNO_AGENT_SELF"] = agent_self
         spawn_env["FNO_AGENT_HARNESS"] = "codex"
     if route_env:
-        # Codex-lane routing (x-db50 Item 4): the api key named by the
+        # Codex-lane routing (Item 4): the api key named by the
         # model_provider's env_key. The base_url/model ride the -c config.
         spawn_env.update(route_env)
 
@@ -753,6 +759,7 @@ def create(
     role: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
     add_dir: Optional[str] = None,
+    passthrough: Optional[Sequence[str]] = None,
 ) -> CodexResult:
     """Spawn ``codex exec --json --cd <cwd> --skip-git-repo-check ...``.
 
@@ -770,12 +777,13 @@ def create(
     """
     full_prompt = inject_from_name(prompt, from_name)
     eff_yolo = _effective_yolo(yolo, headless_yolo)
-    # Role-based routing (x-db50 Item 4). An openai-protocol provider routes the
+    # Role-based routing (Item 4). An openai-protocol provider routes the
     # codex lane via inline `-c` config (codex ignores OPENAI_BASE_URL); the api
     # key rides the spawn env. None (no role / non-openai provider / missing key)
     # changes nothing (fail-safe). `-c` flags are GLOBAL, so they precede `exec`.
     config_args: list[str] = []
     route_env: dict[str, str] = {}
+    codex_route = None
     if role:
         from fno.agents.model_routing import resolve_codex_route
 
@@ -787,7 +795,7 @@ def create(
         config_args += ["-c", f"model_reasoning_effort={reasoning_effort}"]
     # Approval is a GLOBAL flag and must precede `exec`; sandbox is an `exec`
     # flag and follows it. See `approval_flag` / `sandbox_flag`.
-    # x-b6e2: a user --add-dir grants extra write access on `codex exec`
+    # a user --add-dir grants extra write access on `codex exec`
     # (additive; codex's own cwd rides -C). Empty/None = unchanged argv.
     # The computed set rides the same cell through the shared decision, so the
     # headless lane grants the state root exactly as the pane lane does. It is
@@ -813,6 +821,7 @@ def create(
     from fno.agents.harness_map import render_session_argv
 
     identity = render_session_argv("codex", "headless_create")
+    from fno.agents.mux_spawn import codex_hook_trust_args
     argv = [
         identity[0],
         *config_args,
@@ -824,12 +833,19 @@ def create(
         *git_args,
         *plan_args,
         *sandbox_flag(eff_yolo),
+        *codex_hook_trust_args(),
+    ]
+    if passthrough:
+        from fno.agents.mux_spawn import pane_passthrough_tokens
+
+        argv = [*argv, *pane_passthrough_tokens(passthrough, emitted=argv)]
+    argv += [
         # Behind `--` (codex's own clap tip): a leading-flag seed must be the
         # prompt positional, not a codex flag.
         "--",
         full_prompt,
     ]
-    return _run_codex(
+    result = _run_codex(
         argv=argv,
         output_path=output_path,
         timeout=timeout,
@@ -838,74 +854,22 @@ def create(
         agent_self=agent_self,
         route_env=route_env or None,
     )
+    # carry the resolved route identity on the result so the minted
+    # registry row records it (never an endpoint or a key - the relaunch
+    # re-resolves the route from today's config). CodexResult is frozen, so
+    # the identity rides a copy, not a mutation.
+    if codex_route is not None:
+        import dataclasses
 
+        result = dataclasses.replace(
+            result, provider=codex_route.provider, model=codex_route.model
+        )
+    # The spawn is fully real by here, so a slow or refusing assignment can
+    # never delay or fail it (fire-and-forget; see codex_project).
+    from fno.agents.codex_project import assign_project_detached
 
-def resume(
-    *,
-    session_id: str,
-    cwd: Path,
-    prompt: str,
-    from_name: str,
-    yolo: bool,
-    output_path: Path,
-    timeout: Optional[float] = None,
-    headless_yolo: Optional[bool] = None,
-    reasoning_effort: Optional[str] = None,
-    agent_self: Optional[str] = None,
-) -> CodexResult:
-    """Spawn ``codex exec resume <session_id> --json ...`` from ``cwd``.
-
-    codex's ``exec resume`` does NOT accept ``--cd`` (verified against
-    0.130.0). cwd-pinning is enforced by setting the subprocess's
-    working directory via ``Popen(cwd=...)``; codex's session lookup
-    filters by the current cwd by default.
-
-    Args:
-        session_id: UUID from the registry's ``codex_session_id`` field.
-        cwd: registry-recorded cwd for the agent; the call-time cwd is
-            ignored (parent design domain pitfall: cwd-pinned sessions).
-        yolo: sandbox bypass; default False.
-        reasoning_effort: create-time effort restored from the registry.
-
-    Raises:
-        :class:`CodexInvocationError`: codex exits non-zero (e.g. session
-            not found, model error). The exit code is propagated; stderr
-            went into the tee (output.jsonl) via Locked Decision 12.
-        :class:`CodexTimeoutError`: wall-clock exceeded ``timeout``.
-    """
-    full_prompt = inject_from_name(prompt, from_name)
-    # `codex exec resume` accepts neither `--sandbox` nor `--add-dir`, and it
-    # re-resolves the posture from config rather than inheriting the
-    # create-time one, so the bounded case re-pins both through `-c`.
-    eff_yolo = _effective_yolo(yolo, headless_yolo)
-    from fno.agents.harness_map import render_session_argv
-
-    identity = render_session_argv("codex", "headless_resume", session_id)
-    effort_args = (
-        ["-c", f"model_reasoning_effort={reasoning_effort}"]
-        if reasoning_effort
-        else []
-    )
-    argv = [
-        identity[0],
-        *effort_args,
-        *identity[1:],
-        "--json",
-        "--skip-git-repo-check",
-        *sandbox_flag_resume(eff_yolo),
-        *([] if eff_yolo else sandbox_config_args_resume(cwd)),
-        "--",
-        full_prompt,
-    ]
-    return _run_codex(
-        argv=argv,
-        output_path=output_path,
-        timeout=timeout,
-        expect_session=False,
-        popen_cwd=cwd,
-        agent_self=agent_self,
-        bound_session_id=session_id,
-    )
+    assign_project_detached(cwd, result.session_id)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +894,6 @@ def default_session_index_path() -> Path:
 
 # Backwards-compatible alias for callers that imported the underscore-prefixed
 # name before the public-API rename. New code should use the public name.
-_default_session_index_path = default_session_index_path
 
 
 def load_known_session_ids(
@@ -992,71 +955,3 @@ def session_index_exists(*, session_index_path: Optional[Path] = None) -> bool:
     """
     path = session_index_path or default_session_index_path()
     return path.exists()
-
-
-def remove_session_index_entry(
-    session_id: str, *, session_index_path: Optional[Path] = None
-) -> bool:
-    """Drop ``session_id``'s line(s) from codex's session index.
-
-    Record-only teardown: the rollout/transcript files under
-    ``~/.codex/sessions/`` are never touched. Returns True if the index
-    changed, False if the id was already absent (idempotent success --
-    a manually-cleaned index must not fail ``fno agents rm``).
-
-    Matching is on the parsed ``id`` FIELD, not substring containment.
-    The index also carries a free-text ``thread_name``, so a substring
-    match would delete an unrelated session whose name merely quotes
-    this uuid. :func:`load_known_session_ids` can afford its schema-
-    agnostic regex because a false positive there only over-reports
-    liveness; here it would destroy the wrong record.
-
-    A line that does not parse, or that carries no matching ``id``, is
-    always kept: this never removes what it does not understand.
-
-    The rewrite is atomic (temp file in the same directory + ``os.replace``,
-    preserving the original mode), so a concurrent codex append can never
-    observe a half-written index. It is NOT locked: an append landing
-    between the read and the rename is lost, which would leave that
-    session unknown to reconcile until codex rewrites the index. The
-    window is milliseconds on a manual admin command, so the ceiling is
-    accepted rather than paid for with a lock.
-
-    Raises:
-        ValueError: id is not UUID-shaped.
-        OSError: index present but unreadable/unwritable (caller surfaces).
-    """
-    if not isinstance(session_id, str) or not _SESSION_ID_RE.fullmatch(session_id):
-        raise ValueError(
-            f"refusing to rewrite codex session index: {session_id!r} is not "
-            "a UUID-shaped session id"
-        )
-    path = session_index_path or default_session_index_path()
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    except FileNotFoundError:
-        # Fresh codex install / index never written: nothing to tear down.
-        return False
-
-    def _is_target(line: str) -> bool:
-        try:
-            row = json.loads(line)
-        except (ValueError, TypeError):
-            return False
-        return isinstance(row, dict) and row.get("id") == session_id
-
-    kept = [ln for ln in lines if not _is_target(ln)]
-    if len(kept) == len(lines):
-        return False
-    tmp = path.with_name(f"{path.name}.fno-rm.{os.getpid()}.tmp")
-    try:
-        tmp.write_text("".join(kept), encoding="utf-8")
-        os.chmod(tmp, path.stat().st_mode & 0o7777)
-        os.replace(tmp, path)
-    except BaseException:
-        # BaseException, not OSError: a KeyboardInterrupt landing between the
-        # write and the rename would otherwise strand the temp file next to
-        # the index, and nothing sweeps it.
-        tmp.unlink(missing_ok=True)
-        raise
-    return True

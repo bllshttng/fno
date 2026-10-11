@@ -100,14 +100,11 @@ plan ages:
 
 | Relationship | Action |
 |--------------|--------|
-| candidate is a strict subset of other | `absorb` (existing plan covers everything) |
-| other is a strict subset of candidate | `supersede` (new plan covers more) |
-| shared >= 50% of both sides AND other is older | `absorb` |
-| shared >= 50% of both sides AND ages tied | `coordinate` |
+| shared < 50% of the wider surface | `coordinate` |
+| shared >= 50% of the wider surface AND candidate is a strict subset of other | `absorb` (existing plan covers everything) |
+| shared >= 50% of the wider surface AND other is a strict subset of candidate | `supersede` (new plan covers more) |
+| shared >= 50% of the wider surface AND other is older | `absorb` |
 | anything else | `coordinate` |
-
-Severity-low cases get a `coordinate` action with a "split into a shared
-dependency" rationale appended to the message.
 
 ## Dispatch-time gate
 
@@ -230,8 +227,7 @@ stderr warning so a misconfigured environment is visible.
   candidate against the existing plan) - opt-in via a future flag.
 - **Cross-project collisions** - today's primitive is project-scoped
   because the graph is project-scoped.
-- **Kanban edge rendering** - showing "these two cards have a connecting
-  edge" in `~/.fno/graph.md` requires extending the renderer.
+- **Kanban edge rendering** - showing "these two cards have a connecting edge" in `~/.fno/pages/graph.md` requires extending the renderer.
 - **Time-bounded collision tolerance** - "plans more than 60 days old
   don't count" risks papering over real conflicts; skipped.
 

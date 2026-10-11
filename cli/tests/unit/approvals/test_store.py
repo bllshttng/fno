@@ -19,12 +19,17 @@ from fno.approvals import (
     RefusedError,
     ReconciliationRead,
     action_digest,
-    classify_effect,
     effect_ref_projection,
     evidence_projection,
 )
-from fno.approvals.models import EffectDisposition
 from fno.company.contracts import EvidenceResult, EvidenceSubjectKind
+
+# The store routes writes and classification through the Rust effect gate
+# (`authorized-merge` op effect-*), so every test here needs this checkout's
+# fno-agents dev build; the smoke pytest legs delete it on purpose and skip
+# via the dev_build marker (tests/test-dev-build-suites.sh runs them with
+# the build present).
+pytestmark = pytest.mark.dev_build
 
 FOUNDER = "principal:founder"
 INTERN = "principal:intern"
@@ -97,10 +102,9 @@ def store(tmp_path: Path, clock: list[_dt.datetime]) -> EffectStore:
 
 
 def _events(tmp_path: Path) -> list[dict]:
-    path = tmp_path / "events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    from tests._event_rows import event_rows
+
+    return event_rows(tmp_path / "events.jsonl")
 
 
 def _approve(store: EffectStore, request: ApprovalRequest) -> str:
@@ -871,28 +875,6 @@ def test_ac7_rec_repair_after_reopening_the_store(
 
 
 # ── AC-A8-INV: effect policy is function-agnostic ───────────────────────────
-
-
-@pytest.mark.parametrize(
-    "effect_class,expected",
-    [
-        ("communication.external", EffectDisposition.REQUIRE_APPROVAL),
-        ("publication.public", EffectDisposition.REQUIRE_APPROVAL),
-        ("system_of_record.mutation", EffectDisposition.REQUIRE_APPROVAL),
-        ("something.brand.new", EffectDisposition.REQUIRE_APPROVAL),
-        ("internal.draft", EffectDisposition.ALLOW),
-        ("internal.research", EffectDisposition.ALLOW),
-        ("financial.payment", EffectDisposition.DENY),
-        ("financial.commitment", EffectDisposition.DENY),
-        ("signature.contract", EffectDisposition.DENY),
-        ("employment.action", EffectDisposition.DENY),
-        ("infrastructure.destructive", EffectDisposition.DENY),
-    ],
-)
-def test_ac8_inv_classification_reads_only_the_effect_class(
-    effect_class: str, expected: EffectDisposition
-) -> None:
-    assert classify_effect(effect_class) is expected
 
 
 @pytest.mark.parametrize("function", ["marketing", "support", "sales", "operations", "design"])

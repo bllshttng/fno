@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import subprocess
@@ -22,15 +23,20 @@ def _result(argv: list[str], cwd: Path | None = None, timeout: int = 10):
     raise AssertionError(f"unexpected argv: {argv}")
 
 
-def test_receipt_collects_grounding_without_writes(tmp_path: Path) -> None:
+def test_receipt_collects_grounding_without_writes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fno.paths import worktree_space_dir
     from fno.think_inspect import build_receipt
 
+    monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "prisma").mkdir()
     (repo / "prisma" / "schema.prisma").write_text("model User {}\n")
-    (repo / ".fno").mkdir()
-    (repo / ".fno" / "codemap.md").write_text("# Map\n\n## Database Schema\n\n### public.users\n")
+    artifact = worktree_space_dir(repo) / "codemap.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("# Map\n\n## Database Schema\n\n### public.users\n")
     (repo / "AGENTS.md").write_text(
         "# Agents\n\n## Pitfalls corpus (capped)\n\n"
         "### Guards can lie\n\nTrap.\n\n- graduates-to: lint\n- added: 2026-07-25\n\n"
@@ -42,7 +48,8 @@ def test_receipt_collects_grounding_without_writes(tmp_path: Path) -> None:
     retro.write_text("# Retro\n")
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
-    (home / ".fno" / "lesson-candidates.jsonl").write_text("{}\n{}\n")
+    (home / ".fno" / "history").mkdir(parents=True, exist_ok=True)
+    (home / ".fno" / "history" / "lesson-candidates.jsonl").write_text("{}\n{}\n")
     graph = [
         {
             "id": "x-4007",
@@ -97,13 +104,16 @@ def test_receipt_collects_grounding_without_writes(tmp_path: Path) -> None:
     assert receipt["database"] == {
         "detected": True,
         "signals": ["prisma/schema.prisma"],
-        "schema_artifact": ".fno/codemap.md",
+        "schema_artifact": "codemap.md",
         "schema_status": "grounded",
     }
     assert receipt["pitfalls"]["entries"] == ["Guards can lie"]
     assert receipt["pitfalls"]["retro_syntheses"] == [str(retro)]
     assert receipt["pitfalls"]["lesson_candidates"] == 2
-    assert receipt["complete"] is True
+    # The injected pool has no graph file behind it, so the fts lane of the
+    # duplicate recall did not run and the receipt refuses to read complete.
+    assert receipt["complete"] is False
+    assert any("without the fts lane" in w for w in receipt["warnings"])
 
 
 def test_receipt_exposes_unavailable_evidence(tmp_path: Path) -> None:
@@ -137,18 +147,21 @@ def test_receipt_exposes_unavailable_evidence(tmp_path: Path) -> None:
 
 
 def test_decisions_consumer_requests_live_rows(monkeypatch) -> None:
-    from fno import decide
     from fno.think_inspect import _decisions_section
 
     seen: dict[str, object] = {}
 
-    def fake_list_decisions(subject, limit=None, lane=None, state=None):
-        seen["state"] = state
-        return subject, [
-            {"decision_id": "d-live", "decision": "keep", "lifecycle": "live"},
-        ], 0
+    def fake_door(payload):
+        argv = payload["argv"]
+        seen["state"] = argv[argv.index("--state") + 1]
+        return {
+            "decisions": [
+                {"decision_id": "d-live", "decision": "keep", "lifecycle": "live"},
+            ],
+            "damaged": 0,
+        }
 
-    monkeypatch.setattr(decide, "list_decisions", fake_list_decisions)
+    monkeypatch.setattr("fno.rust_binary.call_front_json", fake_door)
     section = _decisions_section("x-4007")
 
     assert seen["state"] == "live"
@@ -164,7 +177,9 @@ def test_corrupt_graph_is_not_recast_as_empty(tmp_path: Path) -> None:
     entries, error = _load_graph(graph)
 
     assert entries is None
-    assert error and "not valid JSON" in error
+    # The store import refuses an unreadable seed; the wording names the store,
+    # not the old JSON parse.
+    assert error and ("could not be read" in error or "not valid JSON" in error)
 
 
 def test_receipt_resolves_paths_from_requested_repository(monkeypatch, tmp_path: Path) -> None:
@@ -174,13 +189,11 @@ def test_receipt_resolves_paths_from_requested_repository(monkeypatch, tmp_path:
     (repo / ".fno").mkdir(parents=True)
     (repo / ".fno" / "config.toml").write_text(
         'plans_dir = "target-plans"\n'
-        '[paths]\n'
-        'graph_json = "target-state/graph.json"\n'
+        'state_dir = "target-state"\n'
     )
     graph_path = repo / "target-state" / "graph.json"
     graph_path.parent.mkdir()
-    graph_path.write_text(
-        json.dumps(
+    seed_graph(graph_path, json.dumps(
             {
                 "entries": [
                     {
@@ -191,8 +204,7 @@ def test_receipt_resolves_paths_from_requested_repository(monkeypatch, tmp_path:
                     }
                 ]
             }
-        )
-    )
+        ))
     plans = repo / "target-plans"
     plans.mkdir()
     retro = plans / "20260725-retro-synthesis-x-target.md"
@@ -210,13 +222,17 @@ def test_receipt_resolves_paths_from_requested_repository(monkeypatch, tmp_path:
     assert receipt["pitfalls"]["retro_syntheses"] == [str(retro)]
 
 
-def test_schema_artifact_older_than_schema_source_is_stale(tmp_path: Path) -> None:
+def test_schema_artifact_older_than_schema_source_is_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from fno.paths import worktree_space_dir
     from fno.think_inspect import build_receipt
 
+    monkeypatch.setenv("FNO_SPACES_DIR", str(tmp_path / "spaces"))
     repo = tmp_path / "repo"
     (repo / "prisma").mkdir(parents=True)
-    (repo / ".fno").mkdir()
-    artifact = repo / ".fno" / "codemap.md"
+    artifact = worktree_space_dir(repo) / "codemap.md"
+    artifact.parent.mkdir(parents=True)
     artifact.write_text("## Database Schema\n")
     schema = repo / "prisma" / "schema.prisma"
     schema.write_text("model User {}\n")
@@ -277,6 +293,289 @@ def test_exact_archived_node_is_labeled_and_keeps_pr_link(tmp_path: Path) -> Non
     assert receipt["graph"]["resolved"]["pr_number"] == 321
 
 
+def test_closure_carries_the_retraction_stamp(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    retracted = {
+        "id": "x-false",
+        "slug": "false-premise-row",
+        "title": "Row filed on a false premise",
+        "status": "deferred",
+        "deferred_kind": "retracted",
+        "deferred_reason": "the premise was measured false",
+    }
+
+    receipt = build_receipt(
+        "x-false",
+        repo=repo,
+        graph_entries=[retracted],
+        archive_entries=[],
+        plans_path=tmp_path / "plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+
+    closure = receipt["graph"]["closure"]
+    assert closure["status"] == "deferred"
+    assert closure["deferred_kind"] == "retracted"
+    # the summary rows (duplicates fold targets, parent, resolved) carry the
+    # kind too, so the gate can settle a SIBLING's liveness, not just the
+    # resolved node's
+    assert receipt["graph"]["resolved"]["deferred_kind"] == "retracted"
+
+
+# --- AC3-HP / AC4-EDGE / AC5-EDGE: seed lane recall and its honesty marker ---
+
+
+def test_seed_lane_matches_node_lane_candidate_set(tmp_path: Path) -> None:
+    from fno.graph.relatedness import _DOMAIN_BONUS, _MIN_SCORE
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # x-seed-src stands in for the not-yet-filed idea: present when resolved
+    # by id (the id lane's positive control), absent from the seed-lane graph
+    # (a design-doc seed never matches a node that does not exist yet).
+    node_a = {
+        "id": "x-seed-src",
+        "slug": "seed-src",
+        "title": "alpha bravo charlie delta echo",
+        "details": "foxtrot golf hotel",
+        "status": "ready",
+        "domain": "code",
+    }
+    node_b = {
+        "id": "bbb",
+        "slug": "bbb",
+        "title": "alpha bravo charlie india juliet",
+        "details": "",
+        "status": "ready",
+        "domain": "code",
+    }
+    node_c = {
+        "id": "ccc",
+        "slug": "ccc",
+        "title": "alpha bravo kilo lima mike",
+        "details": "",
+        "status": "ready",
+        "domain": "code",
+    }
+
+    node_receipt = build_receipt(
+        "x-seed-src",
+        repo=repo,
+        graph_entries=[node_a, node_b, node_c],
+        archive_entries=[],
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+    assert node_receipt["graph"]["recall"] == {
+        "lane": "node",
+        "seed_tokens": node_receipt["graph"]["recall"]["seed_tokens"],
+        "floor": _MIN_SCORE,
+        "fts": "degraded",
+        "fts_warning": node_receipt["graph"]["recall"]["fts_warning"],
+    }
+    node_ids = sorted(row["id"] for row in node_receipt["graph"]["duplicates"])
+    assert node_ids == ["bbb", "ccc"]
+
+    seed_text = "alpha bravo charlie delta echo foxtrot golf hotel"
+    seed_receipt = build_receipt(
+        seed_text,
+        repo=repo,
+        graph_entries=[node_b, node_c],
+        archive_entries=[],
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+    assert seed_receipt["graph"]["recall"]["lane"] == "seed"
+    assert seed_receipt["graph"]["recall"]["floor"] == _MIN_SCORE - _DOMAIN_BONUS
+    seed_ids = sorted(row["id"] for row in seed_receipt["graph"]["duplicates"])
+    assert seed_ids == node_ids == ["bbb", "ccc"]
+
+
+def test_seed_lane_widens_k_so_low_score_family_is_not_evicted_by_noise(tmp_path: Path) -> None:
+    # A wider floor also widens how many candidates clear it. If the seed lane
+    # kept the node lane's k=5 cap, five higher-scoring but unrelated
+    # candidates could fill every slot and evict the one low-score candidate
+    # the floor widening exists to recover.
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    seed_words = [
+        "zeta", "eta", "theta", "iota", "kappa", "lambda", "omicron", "rho",
+        "sigma", "tau", "upsilon", "phi", "chi", "psi", "omega", "beta",
+    ]
+    seed_text = " ".join(seed_words)
+
+    # Shares one seed word only: raw jac = 1/16 = 0.0625. Clears the seed
+    # floor (0.05) but would lose every one of 5 slots to the noise below.
+    true_family = {
+        "id": "true1", "title": "zeta", "details": "", "status": "ready", "domain": "code",
+    }
+    # Each shares two seed words plus one unique word: raw jac = 2/17 = 0.1176,
+    # ranking above true_family despite matching nothing true_family doesn't.
+    noise_pairs = [
+        ("eta", "theta"), ("iota", "kappa"), ("lambda", "omicron"),
+        ("rho", "sigma"), ("tau", "upsilon"),
+    ]
+    noise_nodes = [
+        {
+            "id": f"noise{i}",
+            "title": f"{a} {b} noiseword{i}",
+            "details": "",
+            "status": "ready",
+            "domain": "code",
+        }
+        for i, (a, b) in enumerate(noise_pairs, start=1)
+    ]
+
+    receipt = build_receipt(
+        seed_text,
+        repo=repo,
+        graph_entries=[true_family, *noise_nodes],
+        archive_entries=[],
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+
+    ids = [row["id"] for row in receipt["graph"]["duplicates"]]
+    assert "true1" in ids, f"low-score true family evicted by higher-scoring noise: {ids}"
+    assert len(ids) == 6
+
+
+def test_seed_lane_empty_marks_incomplete_and_names_backlog_find(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    receipt = build_receipt(
+        "zzqx nonexistent vocabulary token",
+        repo=repo,
+        graph_entries=[],
+        archive_entries=[],
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+
+    assert receipt["graph"]["recall"]["lane"] == "seed"
+    assert receipt["graph"]["duplicates"] == []
+    assert receipt["complete"] is False
+    assert any("fno backlog find" in w for w in receipt["warnings"])
+
+
+def _seeded_graph_repo(tmp_path: Path, entries: list[dict]) -> tuple[Path, Path]:
+    """A repo whose config points graph_json at a tmp graph file.
+
+    build_receipt derives the graph path from settings; pointing the repo's
+    own config at the tmp file is the supported override, and it keeps the
+    fts lane live against bytes this test wrote instead of the real graph.
+    """
+    repo = tmp_path / "repo"
+    (repo / ".fno").mkdir(parents=True)
+    graph = tmp_path / "graph.json"
+    seed_graph(graph, json.dumps({"entries": entries}) + "\n")
+    (repo / ".fno" / "config.toml").write_text(
+        f'state_dir = "{graph.parent}"\n', encoding="utf-8"
+    )
+    return repo, graph
+
+
+def _wombat_corpus() -> tuple[str, list[dict]]:
+    """Seed + graph where only the fts lane can see the true family.
+
+    fts.search is an implicit AND over every query token, so `fam` contains
+    all eight seed words plus 160 fillers: raw Jaccard 8/168 = 0.048, below
+    the 0.05 seed floor, so the relatedness lane drops it. Five noise nodes
+    each share five seed words (5/9 = 0.556) and outrank fam on Jaccard
+    alone. Without the fts lane fam is invisible; with it, the gate sees
+    what the fold offer sees.
+    """
+    animals = ["wombat", "burrow", "falcon", "heron", "ibex", "jaguar", "kraken", "lynx"]
+    seed = " ".join(animals)
+    fam = {
+        "id": "fam",
+        "slug": "fam",
+        "title": seed + " " + " ".join(f"filler{i:03d}" for i in range(1, 161)),
+        "status": "ready",
+        "domain": "code",
+    }
+    groups = [(0, 5), (1, 6), (2, 7), (3, 8), (0, 5)]
+    noise = [
+        {
+            "id": f"noise{n}",
+            "slug": f"noise{n}",
+            "title": " ".join(animals[lo:hi]) + f" noiseword{n}",
+            "status": "ready",
+            "domain": "code",
+        }
+        for n, (lo, hi) in enumerate(groups, start=1)
+    ]
+    return seed, [fam, *noise]
+
+
+def test_seed_lane_duplicates_carry_the_fts_lane(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    seed, entries = _wombat_corpus()
+    repo, _graph = _seeded_graph_repo(tmp_path, entries)
+
+    receipt = build_receipt(
+        seed,
+        repo=repo,
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+
+    rows = {row["id"]: row for row in receipt["graph"]["duplicates"]}
+    assert "fam" in rows, f"fts-only family missing from duplicates: {sorted(rows)}"
+    assert "fts" in rows["fam"]["lanes"]
+    assert receipt["graph"]["recall"]["fts"] == "ok"
+
+
+
+
+
+def test_injected_entries_name_the_degraded_fts_lane(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    node_b = {
+        "id": "bbb",
+        "slug": "bbb",
+        "title": "alpha bravo charlie india juliet",
+        "status": "ready",
+        "domain": "code",
+    }
+
+    receipt = build_receipt(
+        "alpha bravo charlie delta echo",
+        repo=repo,
+        graph_entries=[node_b],
+        archive_entries=[],
+        plans_path=tmp_path / "missing-plans",
+        home=tmp_path,
+        run=_result_without_title_assertion,
+    )
+
+    recall = receipt["graph"]["recall"]
+    assert recall["fts"] == "degraded"
+    assert recall["fts_warning"]
+    assert [row["id"] for row in receipt["graph"]["duplicates"]] == ["bbb"]
+
+
 def test_cli_emits_machine_readable_receipt(monkeypatch, tmp_path: Path) -> None:
     from fno.provenance.cli import think_app
 
@@ -300,3 +599,106 @@ def test_cli_rejects_missing_repository(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 2
     assert "repository directory not found" in result.output
+
+
+# -- plan rulings on the receipt (x-6f98) --
+
+
+def _rulings_run(argv: list[str], cwd: Path | None = None, timeout: int = 10):
+    if argv[:2] == ["git", "rev-parse"]:
+        value = "feature/x-4007\n" if "--abbrev-ref" in argv else "abc123def456\n"
+        return subprocess.CompletedProcess(argv, 0, value, "")
+    if argv[:2] == ["git", "status"]:
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    if argv[:2] == ["git", "log"]:
+        return subprocess.CompletedProcess(argv, 0, "abc123\tprior\n", "")
+    if argv[:3] == ["gh", "pr", "list"]:
+        return subprocess.CompletedProcess(argv, 0, "[]", "")
+    raise AssertionError(f"unexpected argv: {argv}")
+
+
+def _ruled_out_graph() -> list[dict]:
+    return [
+        {
+            "id": "x-bbbb",
+            "slug": "ruled-out",
+            "title": "Ruled out node",
+            "details": "the node a sibling plan rejected",
+            "status": "ready",
+            "domain": "code",
+        },
+    ]
+
+
+def _rejecting_plan_text() -> str:
+    return (
+        "---\nclaims: x-aaaa\ntitle: T\n"
+        "consolidation:\n"
+        "  outcome: proceed_alone\n"
+        "  rejected:\n"
+        "    - id: x-bbbb\n"
+        "      reason: R\n"
+        "---\n\n# T\n"
+    )
+
+
+def test_receipt_carries_a_sibling_plan_rejection(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    plan = plans / "plan-x-aaaa.md"
+    plan.write_text(_rejecting_plan_text(), encoding="utf-8")
+
+    receipt = build_receipt(
+        "x-bbbb",
+        repo=repo,
+        graph_entries=_ruled_out_graph(),
+        archive_entries=[],
+        plans_path=plans,
+        home=tmp_path / "home",
+        run=_rulings_run,
+    )
+
+    graph = receipt["graph"]
+    assert graph["plan_rulings_status"] == "ok"
+    assert len(graph["plan_rulings"]) == 1
+    row = graph["plan_rulings"][0]
+    assert row["by"] == ["x-aaaa"]
+    assert row["plan_path"] == str(plan)
+    assert row["reason"] == "R"
+
+
+def test_receipt_reports_an_unreadable_plans_dir_as_error(tmp_path: Path) -> None:
+    from fno.think_inspect import build_receipt
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    missing = tmp_path / "no" / "such"
+
+    receipt = build_receipt(
+        "x-bbbb",
+        repo=repo,
+        graph_entries=_ruled_out_graph(),
+        archive_entries=[],
+        plans_path=missing,
+        home=tmp_path / "home",
+        run=_rulings_run,
+    )
+
+    graph = receipt["graph"]
+    assert graph["plan_rulings"] == []
+    assert graph["plan_rulings_status"] == "error"
+    assert str(missing) in graph["plan_rulings_detail"]
+
+
+def test_plan_rulings_section_ok_empty_for_an_unresolved_seed() -> None:
+    from fno.think_inspect import _plan_rulings_section
+
+    assert _plan_rulings_section(None, Path("/nope")) == {
+        "plan_rulings": [],
+        "plan_rulings_status": "ok",
+        "plan_rulings_detail": None,
+    }

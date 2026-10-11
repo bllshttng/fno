@@ -74,7 +74,7 @@ def _resolve_pr_session_ids(
 ) -> list[str]:
     """Session id(s) whose ledger entry owns this PR, scoped to ``repo_slug``.
 
-    Mirrors the post-merge Step 4b ledger scan (skills/pr/references/merged.md). Because
+    Mirrors the post-merge Step 4b ledger scan (skills/ship/references/merged.md). Because
     ``ledger.json`` is GLOBAL and GitHub PR numbers collide across repos, a known
     ``repo_slug`` is REQUIRED to attribute any entry: an entry matches when its
     ``pr_url`` ends in ``/<slug>/pull/<pr>``. A url-less entry names no repo, so
@@ -86,7 +86,7 @@ def _resolve_pr_session_ids(
 
     Returns ``[]`` on any failure (missing/unreadable/malformed ledger, no repo
     scope, no match), so the caller treats "no owning session" as the read-only
-    case (x-90b8) rather than crashing the harvest. The join itself lives in
+    case rather than crashing the harvest. The join itself lives in
     :mod:`fno.ledger_join` (shared with ``fno backlog carveout list --pr-number``); this
     wrapper keeps retro's flatten-to-empty contract.
     """
@@ -232,7 +232,7 @@ def _process_payload(
     # The node's durable home (cwd) + project attribution must root at CANONICAL,
     # not the worktree: filed nodes outlive the worktree they were captured in
     # (archive-worktree.sh tears it down), and detect_project_from_settings only
-    # matches canonical roots, never worktree paths (ab-b4da4664). repo_root stays
+    # matches canonical roots, never worktree paths. repo_root stays
     # the worktree for finding worktree-local artifacts (COMPLETION.md above, the
     # .triage-pending fast-path in run()). Defaults to repo_root for direct
     # callers/tests passing a single root, exactly like carveout_root.
@@ -248,21 +248,21 @@ def _process_payload(
     elif payload.get("session_id"):
         session_ids = [str(payload["session_id"])]
 
-    # x-90b8: run()'s synthetic --pr-number path sets this when it could resolve
+    # run()'s synthetic --pr-number path sets this when it could resolve
     # NO owning session for the PR (a manual / hotfix merge with no session<->PR
     # ledger link). Carve-outs are session-scoped, so an unscoped harvest under
     # an arbitrary PR mis-attributes another session's deferred work; triage_pr
     # then surfaces them read-only instead of filing/consuming them.
     carveouts_readonly = bool(payload.get("carveouts_readonly"))
 
-    # x-23c0: a reconcile-dropped sentinel (fno backlog reconcile, for PRs merged
+    # a reconcile-dropped sentinel (fno backlog reconcile, for PRs merged
     # outside the ship gate) often carries NO session scoping, unlike the
     # .triage-pending fast-path / --session. Without resolving the PR's owning
     # session(s) here, harvest_carveouts runs with session_ids=None and DRAINS the
     # whole shared ledger, stamping another in-flight session's carve-outs onto
     # this PR (cv-5e4b9f4d, recorded in #123's session, harvested by #121). Resolve
     # the owning session(s) from the GLOBAL ledger, repo-scoped, exactly like
-    # run()'s synthetic --pr-number path; no owner resolves -> read-only (x-90b8).
+    # run()'s synthetic --pr-number path; no owner resolves -> read-only.
     # Plural by design (list return): a batch PR owns MULTIPLE member sessions and
     # must harvest all of them. The synthetic path pre-sets one of these fields in
     # the payload, so this fallback never re-runs for it.
@@ -289,7 +289,7 @@ def _process_payload(
 
     # Derive resolved/skipped finding sets from REAL PR data before harvesting
     # reviewer comments. Without this every comment becomes a candidate, so an
-    # already-implemented finding gets re-filed (ab-bb7fa74f). Only runs on the
+    # already-implemented finding gets re-filed. Only runs on the
     # live path (comments is None); tests inject `comments` (and optionally
     # resolved_ids/skipped_ids) and skip derivation for determinism.
     derive_warnings: list[str] = []
@@ -317,7 +317,7 @@ def _process_payload(
                 # Suppress findings the LATEST PR state shows as addressed:
                 # resolved OR outdated threads. Outdated catches fixes pushed
                 # without a manual "Resolve" click, the gap that re-queued 7
-                # implemented findings (ab-158ab951).
+                # implemented findings.
                 resolved_ids = _harvest.addressed_ids_from_threads(threads)
             if skipped_ids is None:
                 # The Skipped-table cross-check is cosmetic (powers only the
@@ -349,7 +349,7 @@ def _process_payload(
 
     # Attribute filed nodes to the harvested PR's repo. retro's create path does
     # NOT auto-derive project the way `fno backlog idea` does, so without this
-    # every queued node lands with project=None (ab-158ab951). The retro-pending
+    # every queued node lands with project=None. The retro-pending
     # dir is GLOBAL, so a plain run can process sentinels from OTHER repos; only
     # attribute via the cwd-derived project when the sentinel actually belongs to
     # this repo (its pr_url repo matches current_repo_slug, or it carries no repo
@@ -405,7 +405,7 @@ def _process_payload(
     if clean and report.harvested_carveout_ids:
         # Consume the carve-outs this clean run processed so they are never
         # re-harvested / re-filed under a later PR (bounds the ledger too).
-        # ab-d4e8f852: the consume is best-effort - it must never block trigger
+        # the consume is best-effort - it must never block trigger
         # removal - but it must NOT be silent. A swallowed failure (a returned
         # 0, a lock timeout, an OSError) leaves the ids in the ledger and they
         # churn back in on the next run undetected, which is exactly what the
@@ -434,41 +434,17 @@ def _process_payload(
 
 def process_sentinel_file(
     sentinel_path: Path,
-    *,
-    repo_root: Path,
-    existing_nodes: list[dict],
-    comments: Optional[list[dict]] = None,
-    resolved_ids: Optional[set[str]] = None,
-    skipped_ids: Optional[set[str]] = None,
-    gh_runner: Optional[Callable] = None,
-    create_fn=None,
-    inbox_fn=None,
-    carveout_root: Optional[Path] = None,
-    current_repo_slug: Optional[str] = None,
-    node_root: Optional[Path] = None,
-    ledger_path: Optional[Path] = None,
+    **kwargs,
 ) -> "tuple[TriageReport, bool]":
     """Triage one sentinel file. Returns (report, removed).
 
-    The sentinel is removed ONLY when the land fully succeeded and the harvest
-    was not partial; otherwise it is retained for retry (AC4-ERR/AC6 idempotency).
+    Keyword passthrough to :func:`_process_payload`, whose signature is the
+    real one. The sentinel is removed ONLY when the land fully succeeded and
+    the harvest was not partial; otherwise it is retained for retry
+    (AC4-ERR/AC6 idempotency).
     """
     payload = json.loads(sentinel_path.read_text(encoding="utf-8"))
-    report, clean = _process_payload(
-        payload,
-        repo_root=repo_root,
-        existing_nodes=existing_nodes,
-        comments=comments,
-        resolved_ids=resolved_ids,
-        skipped_ids=skipped_ids,
-        gh_runner=gh_runner,
-        create_fn=create_fn,
-        inbox_fn=inbox_fn,
-        carveout_root=carveout_root,
-        current_repo_slug=current_repo_slug,
-        node_root=node_root,
-        ledger_path=ledger_path,
-    )
+    report, clean = _process_payload(payload, **kwargs)
     removed = False
     if clean:
         try:
@@ -529,7 +505,7 @@ def _run_postmortem_pass(repo_root: Path, node_root: Path) -> tuple[bool, int]:
 @retro_app.command("drain-postmortems")
 def drain_postmortems() -> None:
     """Drain unconsumed postmortems ONLY - no sentinel triage, no carve-out
-    harvest. The narrow verb (x-42f6 US3) co-fired in the SessionStart reconcile
+    harvest. The narrow verb (US3) co-fired in the SessionStart reconcile
     throttle so a stuck session's postmortem is harvested within one throttle
     window, not "whenever some other PR happens to merge." Idempotent: date+
     session-keyed filenames and consumed_at stamps mean a re-drain is a no-op."""
@@ -578,7 +554,7 @@ def sweep_carveouts_cmd(
         "--kind",
         "-k",
         help="Narrow to one carve-out kind (deferred | oos-bug). Dispositions "
-        "are unchanged; `backfill` is never swept (it belongs to /fno:pr merged).",
+        "are unchanged; `backfill` is never swept (it belongs to /fno:ship pr merged).",
     ),
     autonomous: bool = typer.Option(
         False,
@@ -611,7 +587,7 @@ def sweep_carveouts_cmd(
         # it through validation reported "0 unharvested" for rows that exist and
         # are simply owned by another verb, which reads as "nothing to do".
         detail = (
-            " (backfill belongs to /fno:pr merged's backfill slot and is never swept)"
+            " (backfill belongs to /fno:ship pr merged's backfill slot and is never swept)"
             if kind == BACKFILL_KIND
             else ""
         )
@@ -699,11 +675,11 @@ def run(
         False,
         "--keep-going",
         help=(
-            "Autonomous keep-going (x-3360): treat this harvest as a no-human "
+            "Autonomous keep-going : treat this harvest as a no-human "
             "run so the engine classifies surviving carve-outs and dispatches "
             "follow-up /think or /target work under the firehose ceiling. A no-op "
             "unless config.keep_going.enabled is set. Passed by the autonomous "
-            "/fno:pr merged ritual; a real autonomous-mode sentinel triggers the "
+            "/fno:ship pr merged ritual; a real autonomous-mode sentinel triggers the "
             "engine without it."
         ),
     ),
@@ -747,7 +723,7 @@ def run(
     repo_root = resolve_repo_root()
     # Filed nodes are scoped to the CANONICAL root, never the worktree: a node
     # outlives the worktree it was captured in, and only canonical roots match
-    # settings.yaml for project attribution (ab-b4da4664). repo_root stays the
+    # settings.yaml for project attribution. repo_root stays the
     # worktree below for the .triage-pending fast-path + COMPLETION.md lookups,
     # which are written by the in-worktree session.
     node_root = resolve_canonical_repo_root()
@@ -782,7 +758,7 @@ def run(
 
     # `--pr` is strictly scoped: harvest ONLY this PR. Without this, passing --pr
     # ALSO drains every unrelated retro-pending sentinel in the same run, pulling
-    # another repo's carve-outs into this PR's triage (ab-158ab951). PR numbers
+    # another repo's carve-outs into this PR's triage. PR numbers
     # are unique only within a repo, so match BOTH the number AND (when the repo
     # is known) the sentinel's repo, or a same-numbered sentinel from another
     # repo would still be drained (codex P2). The synthetic --pr harvest below
@@ -793,7 +769,7 @@ def run(
             if _sentinel_pr_number(p) == pr and _sentinel_repo_matches(p, current_slug)
         ]
 
-    # W6 6.2 (x-f063): the postmortem source rides the PLAIN retro run - no
+    # W6 6.2: the postmortem source rides the PLAIN retro run - no
     # new trigger (the post-merge ritual and on-demand `fno backlog retro run` both
     # land here). A --node/--pr-number run is a targeted harvest and skips it.
     # Same independence contract as the PR-scoped sources: its failure never
@@ -801,7 +777,7 @@ def run(
     pm_failed = False
     if node is None and pr is None:
         pm_failed, _ = _run_postmortem_pass(repo_root, node_root)
-        # Autonomy-debt summary (x-f894): rank gate_escape events by reason so
+        # Autonomy-debt summary: rank gate_escape events by reason so
         # the roadmap sees which reliability fix pays first. Rides the plain run
         # (like the postmortem pass); prints even with no sentinels, before the
         # early exit, so a clean repo still reports "0 by reason". Best-effort:
@@ -827,7 +803,7 @@ def run(
         ledger filled up, and the close gate then refused every node with no
         verb that could clear it.
 
-        Counted at the END, on every run including --pr-number (how /fno:pr
+        Counted at the END, on every run including --pr-number (how /fno:ship pr
         merged calls this). Counting up front announced the rows this very run
         was about to harvest as "no trigger covers them", which is false while
         it is being printed and stale by the time the run finishes. Reporting
@@ -884,7 +860,7 @@ def run(
         # --session-id wins; otherwise resolve from the ledger by PR number/url.
         # If NEITHER yields a session, the carve-out source is read-only: an
         # unscoped carve-out (another session's deferred work) must never be
-        # stamped onto / consumed under an arbitrary --pr-number (x-90b8). The
+        # stamped onto / consumed under an arbitrary --pr-number. The
         # post-merge Step 4b backfill slot uses the same guard.
         if session:
             payload["session_ids"] = list(session)
@@ -896,7 +872,7 @@ def run(
                 payload["carveouts_readonly"] = True
         if slug:
             payload["pr_url"] = f"https://github.com/{slug}/pull/{pr}"
-        # x-3360: an autonomous keep-going harvest (the /fno:pr merged ritual
+        # an autonomous keep-going harvest (the /fno:ship pr merged ritual
         # passes --keep-going) has no sentinel, so mark the synthetic payload
         # autonomous so nodes land active AND the keep-going engine fires. Gated
         # by config so a stray flag on a keep_going-off install stays a plain run.

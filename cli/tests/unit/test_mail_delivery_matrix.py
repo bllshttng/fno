@@ -60,6 +60,9 @@ def mailbox(tmp_path, monkeypatch):
     """Co-isolate the md render, the bus log, and every discovery source."""
     monkeypatch.delenv("FNO_BUS_DIR", raising=False)
     monkeypatch.setenv("FNO_INBOX_ROOT", str(tmp_path))
+    # the post-send landed verify reads immediately; these tests pin
+    # receipt wording, not the settle window.
+    monkeypatch.setenv("FNO_MAIL_LANDED_SETTLE_S", "0")
     use_tmpdir(monkeypatch, tmp_path)
     _blank_discovery(monkeypatch, tmp_path)
     return tmp_path
@@ -91,7 +94,9 @@ def _seed_asleep_transcript(monkeypatch, tmp_path, *, session_id=ASLEEP_SID, age
     That combination -- the transcript exists on disk, but the session is not
     live -- IS the asleep state. Discovery correctly refuses to list it (it is a
     liveness-gated LISTING); the ladder must still reach it, because asleep is a
-    resumable state rather than voicemail.
+    resumable state rather than voicemail. The seeded row carries content: the
+    transcript reader drops a contentless row, and a stalled verdict needs a
+    record to read.
     """
     from fno.agents import discover
 
@@ -101,7 +106,7 @@ def _seed_asleep_transcript(monkeypatch, tmp_path, *, session_id=ASLEEP_SID, age
     transcript = proj / f"{session_id}.jsonl"
     transcript.write_text(
         json.dumps({"type": "assistant", "isSidechain": False,
-                    "message": {"model": "claude-opus-4-8"}}) + "\n",
+                    "message": {"model": "claude-opus-4-8", "content": "waiting on the operator."}}) + "\n",
         encoding="utf-8",
     )
     old = time.time() - age_s
@@ -170,7 +175,7 @@ def test_cell1_inject_body_is_envelope_wrapped(runner, mailbox, monkeypatch, tmp
     runner.invoke(app, ["agents", "mail", "send", LIVE_HANDLE, "hi", "--from-name", "web"])
 
     assert bodies, "nothing was injected"
-    assert "<fno_mail" in bodies[0]
+    assert bodies[0].splitlines()[0].startswith("`@web · fmail-"), bodies[0][:80]
 
 
 def test_cell1_inject_is_attempted_before_any_durable_write(
@@ -263,7 +268,7 @@ def test_cell2_wake_prompt_is_envelope_wrapped(runner, mailbox, monkeypatch, tmp
     runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "wake up", "--from-name", "web"])
 
     assert seeds, "nothing was sent as a wake prompt"
-    assert "<fno_mail" in seeds[0]
+    assert seeds[0].splitlines()[0].startswith("`@web · fmail-"), seeds[0][:80]
 
 
 def test_cell2_receipt_names_the_revived_thread(runner, mailbox, monkeypatch, tmp_path):
@@ -296,9 +301,12 @@ def test_cell4_failed_wake_demotes_durably_with_lane_receipt(
 
     res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
 
-    # Exit 0: the envelope is safe even though every live lane missed.
-    assert res.exit_code == 0, res.output
+    # the envelope is safe but nothing proves it landed, so the
+    # receipt says NOT LANDED and the exit says so too (14).
+    assert res.exit_code == 14, res.output
     assert "queued (durable)" in res.output
+    assert "NOT LANDED" in res.output
+    assert "fno agents peek" in res.output, res.output
     combined = res.output + (res.stderr or "")
     assert "spawn-exit-1" in combined, "the receipt does not name why the wake failed"
     # Addressed to the canonical handle the recipient's own drain reads.
@@ -409,7 +417,7 @@ def test_cell4_inject_boundary_parses_the_reason_side_channel(monkeypatch):
         dispatch_mod.subprocess, "run", _verb('{"delivered": false, "reason": "attach-failed"}')
     )
     assert dispatch_mod._mail_inject_claude("ses-1", "hi", reason_out=reason) is False
-    assert reason == ["attach-failed"]
+    assert reason == ["attach-failed", "waited-0s"]
 
     reason.clear()
     monkeypatch.setattr(
@@ -432,15 +440,16 @@ def test_cell4_inject_boundary_parses_the_reason_side_channel(monkeypatch):
 
 
 def test_cell4_receipt_carries_the_inject_reason_token(runner, mailbox, monkeypatch, tmp_path):
-    """x-1904 change 4: a durable demotion names the live lane's own cause.
+    """x-1904 change 4, as refined by x-1602: the cause survives, split by channel.
 
-    The inject boundary already emits a precise reason vocabulary
-    (not-confirmed / attach-failed / io-error / ...); Python used to discard
-    it, so a miss to a LIVE recipient read as a bare live-miss -- and the
-    _warn_deferred boilerplate called the recipient "not live", a receipt
-    naming the wrong cause (it cost a wrong liveness hypothesis on measured
-    evidence). The receipt must carry the token, and the preamble must not
-    claim not-live when the lane itself says it missed a live recipient.
+    The inject boundary emits a precise reason vocabulary (not-confirmed /
+    attach-failed / io-error / ...); Python used to discard it, so a miss to a
+    LIVE recipient read as a bare live-miss. x-1904 put the raw token on the
+    stdout receipt; x-1602 moved it to the diagnostic channel, because an
+    error string inside a SUCCESS receipt is what read as a broken lane and
+    held a fleet order an extra cycle. The stdout receipt now names the legs;
+    the stderr advisory keeps both the token and the liveness truth (the
+    recipient was live and reachable, so "is not live" stays a lie).
     """
 
     def _miss(recipient, text, *, sender=None, reason_out=None):
@@ -457,16 +466,228 @@ def test_cell4_receipt_carries_the_inject_reason_token(runner, mailbox, monkeypa
 
     res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
     combined = res.output + (res.stderr or "")
+    receipt = next(ln for ln in res.stdout.splitlines() if "queued (durable)" in ln)
 
-    assert res.exit_code == 0, combined
-    assert "queued (durable)" in combined
-    assert "[attach-failed]" in combined, (
-        f"the receipt must name the inject's own reason, not a generic live-miss: {combined}"
+    assert res.exit_code == 14, combined
+    assert "durable leg holds" in receipt, (
+        f"the success receipt must carry the positive leg story: {receipt}"
+    )
+    assert "attach-failed" in (res.stderr or ""), (
+        f"the stderr advisory must keep the inject's own cause: {combined}"
+    )
+    assert "was live and reachable" in combined, (
+        "the live-lane arm must credit the transcript verdict the lane "
+        f"contradicted, not just name the miss: {combined}"
     )
     assert "is not live" not in combined, (
         "the durable preamble must not claim not-live for a lane failure the "
         f"reason token names: {combined}"
     )
+
+
+def test_stalled_head_reads_the_transcript_not_the_lane(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """A head past the stall threshold warns from the transcript verdict.
+
+    Plain-False inject carries no reason token, so live_reason stays None and
+    _warn_deferred consults resolve_session_truth; the seeded transcript's
+    age decides the arm. The receipt token is then the generic live-miss --
+    the prose is what must name the stall.
+    """
+
+    _seed_asleep_transcript(monkeypatch, tmp_path, age_s=9000)
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(
+        "fno.agents.dispatch.wake_and_deliver",
+        lambda *_a, **_k: (False, "spawn-exit-1"),
+    )
+
+    res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
+    combined = res.output + (res.stderr or "")
+
+    assert res.exit_code == 14, combined
+    assert "queued (durable)" in combined
+    assert "reads stalled on its transcript" in combined, (
+        f"the warning must come from the transcript verdict, not the lane: {combined}"
+    )
+    assert "silent" in combined, combined
+    assert "may never" in combined, combined
+    assert "is not live" not in combined, combined
+
+
+def test_live_miss_receipt_names_the_transcript_age(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """x-6d89 AC8: a [live-miss] receipt names the recipient's transcript age.
+
+    A bare live-miss reads identically for a transient miss to a genuinely
+    live peer (x-b610: re-send works) and for a session that stood down two
+    hours ago (nothing will drain it). The age is the discriminator, and an
+    unreadable transcript must print unknown, never 0s.
+    """
+
+    _seed_asleep_transcript(monkeypatch, tmp_path, age_s=9000)
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False
+    )
+    monkeypatch.setattr(
+        "fno.agents.dispatch.wake_and_deliver",
+        lambda *_a, **_k: (False, "spawn-exit-1"),
+    )
+
+    res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
+    combined = res.output + (res.stderr or "")
+
+    assert res.exit_code == 14, combined
+    assert "[live-miss, transcript quiet 2h]" in combined, (
+        f"the live-miss receipt must name the transcript age the sender needs "
+        f"to tell transient from stood-down: {combined}"
+    )
+
+
+def test_live_miss_age_suffix_names_unknown_when_no_transcript(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """The suffix's unknown branch: an unreadable transcript never reads 0s."""
+    from fno.mail.receipts import _live_miss_age_suffix
+
+    assert _live_miss_age_suffix("nobody-here") == ", transcript age unknown"
+
+
+# ---------------------------------------------------------------------------
+# x-1602: the durable receipt carries its drain window, and a live-lane
+# failure renders as legs, never as an error token. A lead once read an
+# absence inside the drain window, called a working lane broken, and held a
+# fleet-wide standing order an extra cycle; `queued (durable) [io-error]` is
+# the receipt that did it -- no clock, and an error string in a success.
+# ---------------------------------------------------------------------------
+
+
+def test_durable_receipt_names_the_drain_window(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """AC1 (x-1602): a normal `queued (durable)` receipt names its drain window.
+
+    `queued (durable)` states a queue state and nothing about time, so a reader
+    who checks early cannot tell "not yet" from "never". The clause quotes the
+    owner-class horizon the stranded sweep already enforces -- the one bound
+    the machine commits to -- so it must appear on an ORDINARY durable receipt,
+    not only on a failure-shaped one.
+    """
+    _seed_asleep_transcript(monkeypatch, tmp_path)
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        "fno.agents.dispatch.wake_and_deliver",
+        lambda *_a, **_k: (False, "spawn-exit-1"),
+    )
+
+    res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
+
+    assert res.exit_code == 14, res.output
+    receipt = next(ln for ln in res.stdout.splitlines() if "queued (durable)" in ln)
+    assert "typically drains within" in receipt, receipt
+    assert "an empty unread before then is not a failure" in receipt, receipt
+
+
+def test_window_clause_maps_owner_to_the_sweep_horizon():
+    """The window is the sweep's own horizon per owner class, never a constant.
+
+    An unknown class prints no window: a guessed bound is this node's own
+    defect wearing a friendlier sentence.
+    """
+    from fno.mail.receipts import durable_window_clause
+
+    assert "~1h" in durable_window_clause("live-drain")
+    assert "~6h" in durable_window_clause("wake-daemon")
+    assert "~24h" in durable_window_clause("inbox-drain")
+    for absent in (None, "", "dead-letter", "some-future-owner"):
+        assert durable_window_clause(absent) == "", absent
+
+
+def test_live_failure_receipt_positives_the_durable_leg_and_hides_the_token(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """AC2 (x-1602): a live-inject miss + durable success is a NORMAL outcome.
+
+    The stdout receipt says which leg missed and that the durable leg holds,
+    asserted as a positive marker (never as the absence of a word). The raw
+    token is diagnostic vocabulary: it must survive on stderr where the
+    recovery ladder reads it, but a success receipt must not wear it.
+    """
+
+    def _miss(recipient, text, *, sender=None, reason_out=None):
+        if reason_out is not None:
+            reason_out.append("io-error")
+        return False
+
+    _seed_asleep_transcript(monkeypatch, tmp_path)
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _miss)
+    monkeypatch.setattr(
+        "fno.agents.dispatch.wake_and_deliver",
+        lambda *_a, **_k: (False, "spawn-exit-1"),
+    )
+
+    res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
+
+    assert res.exit_code == 14, res.output
+    receipt = next(ln for ln in res.stdout.splitlines() if "queued (durable)" in ln)
+    assert "durable leg holds" in receipt, receipt
+    assert "io-error" not in receipt, receipt
+    combined = res.output + (res.stderr or "")
+    assert "io-error" in combined, (
+        f"the diagnostic token must survive off the receipt line: {combined}"
+    )
+
+
+def test_live_miss_receipt_names_wait_and_transcript_age(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    """AC3 (x-7345): the receipt says how long the live leg waited and how
+    long the recipient has been quiet. Words only: the raw tokens stay on
+    stderr (x-1602's pin still binds)."""
+
+    def _miss(recipient, text, *, sender=None, reason_out=None):
+        if reason_out is not None:
+            reason_out.extend(["not-confirmed", "waited-32s"])
+        return False
+
+    _seed_asleep_transcript(monkeypatch, tmp_path)
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _miss)
+    monkeypatch.setattr(
+        "fno.agents.dispatch.wake_and_deliver",
+        lambda *_a, **_k: (False, "spawn-exit-1"),
+    )
+
+    res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
+
+    assert res.exit_code == 14, res.output
+    receipt = next(ln for ln in res.stdout.splitlines() if "queued (durable)" in ln)
+    assert "live leg unconfirmed after 32s" in receipt, receipt
+    assert "transcript quiet" in receipt, receipt
+    assert "durable leg holds" in receipt, receipt
+    assert "not-confirmed" not in receipt, receipt
+    assert "waited-" not in receipt, receipt
+
+
+def test_durable_leg_story_says_transcript_age_unknown(monkeypatch):
+    """AC5 (x-7345): an unreadable transcript prints unknown, never 0s."""
+    import fno.agents.session_truth as session_truth
+    from fno.mail.receipts import durable_leg_story
+
+    monkeypatch.setattr(
+        session_truth, "resolve_session_truth", lambda _r: {"last_activity_age_s": None}
+    )
+    story = durable_leg_story("io-error", "some-target")
+    assert story is not None
+    assert "transcript age unknown" in story, story
+    assert "0s" not in story, story
+    assert "io-error" not in story, story
+    # no waited token -> no "after" clause; no recipient -> no age clause
+    assert " after " not in durable_leg_story("io-error", "some-target")
+    assert durable_leg_story("io-error") == "live leg unconfirmed; durable leg holds"
 
 
 # ---------------------------------------------------------------------------
@@ -605,10 +826,10 @@ def test_cell6b_retired_form_read_off_a_stored_record_is_migrated(
 
     result = runner.invoke(
         app,
-        ["mail", "reply", "--to", inbound.thread_id, "--body", "ack"],
+        ["mail", "reply", "--to", inbound.thread_id, "--body", "ack", "--from", "lead"],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 14, result.output
     replies = [m for m in iter_messages() if m.in_reply_to == inbound.thread_id]
     assert len(replies) == 1
     assert replies[0].to == LIVE_HANDLE
@@ -883,10 +1104,19 @@ def test_unreadable_store_full_id_live_miss_queues_to_drainable_full_id(
         ["mail", "send", send_id, "hi", "--from-name", "web"],
     )
 
-    assert res.exit_code == 0, res.output
+    assert res.exit_code == 14, res.output
     assert attempted == [("claude", send_id), ("codex", send_id)]
     expected_handle = session_identity_key(drain_id)
-    assert f"queued (durable) for {expected_handle}" in res.output
+    import json as _json
+
+    receipt = _json.loads(
+        next(
+            ln
+            for ln in res.output.splitlines()
+            if ln.startswith("{") and "queued (durable)" in ln
+        )
+    )
+    assert receipt["to"] == expected_handle
     drained = _drain_as(runner, monkeypatch, drain_id)
     assert len(drained) == 1
     assert drained[0]["to"] == expected_handle
@@ -922,7 +1152,7 @@ def test_a_non_claude_session_is_not_woken_as_claude(
 
     res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
 
-    assert res.exit_code == 0, res.output
+    assert res.exit_code == 14, res.output
     assert not woke, "a codex session was handed to a claude resume"
     assert "unsupported-harness" in (res.output + (res.stderr or ""))
     assert "queued (durable)" in res.output
@@ -1004,7 +1234,7 @@ def test_exactly_one_receipt_line_per_send(
 
     res = runner.invoke(app, ["agents", "mail", "send", ASLEEP_HANDLE, "hi", "--from-name", "web"])
 
-    assert res.exit_code == 0, res.output
+    assert res.exit_code == (14 if expected == "queued (durable)" else 0), res.output
     receipts = [
         ln for ln in res.stdout.splitlines()
         if any(m in ln for m in ("delivered (hosted)", "delivered (woken)", "queued (durable)"))
@@ -1023,3 +1253,26 @@ def test_exactly_one_receipt_line_per_send(
     else:
         assert rows[0].delivery == "hosted"
         assert scan_unread(rows[0].to) == []
+
+
+def test_deferred_head_reads_the_oracle_at_call_time(monkeypatch):
+    """The receipt sentence must honor a resolver replaced after import.
+
+    Importing the module first is the point: a name bound at import time
+    keeps the resolver this module happened to import, so the seeded
+    verdict below is ignored and the receipt reports a real session. That
+    failure depends on import order, so it hides until some other test
+    imports the module first.
+    """
+    import fno.mail.deferred_liveness as deferred_liveness
+    from fno.agents import session_truth
+
+    monkeypatch.setattr(
+        session_truth,
+        "resolve_session_truth",
+        lambda *_a, **_k: {"state": "unknown", "last_activity_age_s": None},
+    )
+
+    head = deferred_liveness.deferred_liveness_head("9a063cd3")
+    assert "could not be established" in head, head
+    assert "is not live" not in head, head

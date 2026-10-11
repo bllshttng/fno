@@ -5,6 +5,7 @@ The resolver's projects_root is injected via monkeypatch so no real
 ~/.claude is touched.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -25,7 +26,7 @@ runner = CliRunner()
 def tmp_graph(tmp_path, monkeypatch) -> Path:
     """A fresh empty graph.json; monkeypatches fno.graph constants to use it."""
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     import fno.graph._constants as gc
     import fno.graph.store as gs
     monkeypatch.setattr(gc, "GRAPH_JSON", g)
@@ -44,9 +45,15 @@ def _invoke(*args, input=None):
 
 
 def _write_node(g: Path, node: dict) -> None:
-    data = json.loads(g.read_text())
-    data["entries"].append(node)
-    g.write_text(json.dumps(data, indent=2) + "\n")
+    from fno.graph.store import read_graph_strict
+
+    seed_graph(g, [*read_graph_strict(g), node])
+
+
+def _store_state(g: Path):
+    from fno.graph.store import read_graph_strict, store_export_status
+
+    return read_graph_strict(g), store_export_status(g)
 
 
 def _base_node(node_id: str, **overrides) -> dict:
@@ -243,20 +250,20 @@ def test_ac_edge_foreign_harness_spawn(tmp_graph, tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Read-only: no mutation to graph.json
+# Read-only: no mutation to the graph store
 # ---------------------------------------------------------------------------
 
 def test_ac_verify_read_only(tmp_graph, tmp_path, monkeypatch):
-    """AC-VERIFY: provenance command never mutates graph.json."""
+    """AC-VERIFY: provenance command never mutates the graph store."""
     import fno.provenance.resolver as resolver_mod
     monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
 
     node = _base_node("ab-prov0006", source_session_id="sid-xyz", source_harness="claude")
     _write_node(tmp_graph, node)
 
-    before = tmp_graph.read_text()
+    before = _store_state(tmp_graph)
     _invoke("backlog", "provenance", "ab-prov0006")
-    after = tmp_graph.read_text()
+    after = _store_state(tmp_graph)
 
     assert before == after
 
@@ -303,7 +310,12 @@ def test_ac3_ui_lifecycle_rows_json(tmp_graph, tmp_path, monkeypatch):
     r = _invoke("backlog", "provenance", "ab-life0002", "--json")
     assert r.exit_code == 0, r.output
     data = json.loads(r.output)
-    assert data["sessions"] == _SESSIONS
+    # Store rows normalize sessions to the typed shape (started_at/ended_at
+    # fields, nulls materialized), so compare the lifecycle identity, not
+    # the raw seeded dicts.
+    assert [
+        (s["phase"], s["harness"], s["session_id"]) for s in data["sessions"]
+    ] == [(s["phase"], s["harness"], s["session_id"]) for s in _SESSIONS]
     assert "edges" in data  # existing edges preserved
 
 
@@ -317,3 +329,182 @@ def test_lifecycle_empty_sessions_no_crash(tmp_graph, tmp_path, monkeypatch):
     r = _invoke("backlog", "provenance", "ab-life0003", "--json")
     assert r.exit_code == 0, r.output
     assert json.loads(r.output)["sessions"] == []
+
+
+# ---------------------------------------------------------------------------
+# One-call answer: the PR block + per-session registry liveness
+# ---------------------------------------------------------------------------
+
+
+def test_pr_line_number_without_url_renders_the_number(tmp_graph, tmp_path, monkeypatch):
+    """A legacy node with pr_number but no pr_url renders the number, never the
+    string None (such nodes exist: repo-scoped stamping refuses urlless nodes)."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _write_node(tmp_graph, _base_node("ab-prv00003", pr_number=777, pr_url=None))
+
+    r = _invoke("backlog", "provenance", "ab-prv00003")
+    assert r.exit_code == 0, r.output
+    assert "pr: #777" in r.output
+    assert "None" not in r.output
+
+
+def _pin_registry(monkeypatch, tmp_path, agents):
+    """Point the registry reader at a hermetic file with the given agent rows.
+
+    Every row gains the required-but-irrelevant cwd/log_path fields so the
+    strict AgentEntry parse accepts the fixture."""
+    filled = [
+        {"cwd": "/tmp/wt", "log_path": "/tmp/wt/log", **a}
+        for a in agents
+    ]
+    p = tmp_path / "registry.json"
+    p.write_text(
+        json.dumps({"schema_version": 19, "agents": filled}), encoding="utf-8"
+    )
+    monkeypatch.setattr("fno.paths.agents_registry_path", lambda: p)
+
+
+def test_ac1_hp_pr_renders_human_and_json(tmp_graph, tmp_path, monkeypatch):
+    """AC1-HP: an entry with pr_number/pr_url renders a pr: line and JSON keys."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _write_node(tmp_graph, _base_node(
+        "ab-prv00001",
+        pr_number=1234,
+        pr_url="https://github.com/bllshttng/footnote/pull/1234",
+    ))
+
+    r = _invoke("backlog", "provenance", "ab-prv00001")
+    assert r.exit_code == 0, r.output
+    assert "pr: #1234" in r.output
+    assert "https://github.com/bllshttng/footnote/pull/1234" in r.output
+
+    rj = _invoke("backlog", "provenance", "ab-prv00001", "--json")
+    data = json.loads(rj.output)
+    assert data["pr"]["number"] == 1234
+    assert data["pr"]["url"] == "https://github.com/bllshttng/footnote/pull/1234"
+
+
+def test_ac1_edge_no_pr_renders_none_with_keys_present(tmp_graph, tmp_path, monkeypatch):
+    """AC1-EDGE: no PR -> pr renders (none); JSON carries nulls, keys present."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _write_node(tmp_graph, _base_node("ab-prv00002"))
+
+    r = _invoke("backlog", "provenance", "ab-prv00002")
+    assert r.exit_code == 0, r.output
+    assert "pr: (none)" in r.output
+
+    data = json.loads(_invoke("backlog", "provenance", "ab-prv00002", "--json").output)
+    assert data["pr"]["number"] is None
+    assert data["pr"]["url"] is None
+
+
+def test_ac3_hp_registry_status_live_and_reaped(tmp_graph, tmp_path, monkeypatch):
+    """AC3-HP: a row whose session id has a registry entry renders that status;
+    a row with no entry renders reaped."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _pin_registry(monkeypatch, tmp_path, [
+        {"name": "worker-live", "harness": "claude",
+         "harness_session_id": "sess-live-0001", "status": "live"},
+        {"name": "worker-done", "harness": "claude",
+         "harness_session_id": "sess-exited-01", "status": "exited"},
+    ])
+    _write_node(tmp_graph, _base_node("ab-liv00001", sessions=[
+        {"phase": "do", "harness": "claude", "session_id": "sess-live-0001",
+         "started_at": "2026-09-14T01:00:00Z"},
+        {"phase": "do", "harness": "claude", "session_id": "sess-exited-01",
+         "started_at": "2026-09-14T02:00:00Z"},
+        {"phase": "ship", "harness": "claude", "session_id": "sess-gone-0001",
+         "started_at": "2026-09-14T03:00:00Z"},
+    ]))
+
+    r = _invoke("backlog", "provenance", "ab-liv00001")
+    assert r.exit_code == 0, r.output
+    assert "sess-live-0001" in r.output and "[live]" in r.output
+    assert "sess-exited-01" in r.output and "[exited]" in r.output
+    assert "sess-gone-0001" in r.output and "[reaped]" in r.output
+
+    data = json.loads(_invoke("backlog", "provenance", "ab-liv00001", "--json").output)
+    by_sid = {row["session_id"]: row.get("registry_status")
+              for row in data["lifecycle"]["phases"] if row.get("recorded")}
+    assert by_sid["sess-live-0001"] == "live"
+    assert by_sid["sess-exited-01"] == "exited"
+    assert by_sid["sess-gone-0001"] == "reaped"
+
+
+def test_ac3_hp_observed_model_renders_when_observed(tmp_graph, tmp_path, monkeypatch):
+    """AC3-HP: a row carrying an observed model renders it; a row without does not."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _pin_registry(monkeypatch, tmp_path, [])
+    _write_node(tmp_graph, _base_node("ab-obs00001", sessions=[
+        {"phase": "do", "harness": "claude", "session_id": "sess-obs-0001",
+         "started_at": "2026-09-14T01:00:00Z",
+         "observed_model": {"kind": "observed", "model": "glm-5.3-flash", "samples": 9}},
+        {"phase": "do", "harness": "claude", "session_id": "sess-nomod-001",
+         "started_at": "2026-09-14T02:00:00Z",
+         "observed_model": {"kind": "no-model-yet"}},
+    ]))
+
+    r = _invoke("backlog", "provenance", "ab-obs00001")
+    assert r.exit_code == 0, r.output
+    assert "glm-5.3-flash" in r.output
+
+    data = json.loads(_invoke("backlog", "provenance", "ab-obs00001", "--json").output)
+    by_sid = {row["session_id"]: row.get("observed_model")
+              for row in data["lifecycle"]["phases"] if row.get("recorded")}
+    assert by_sid["sess-obs-0001"] == "glm-5.3-flash"
+    assert by_sid["sess-nomod-001"] is None
+
+
+def test_ac4_edge_registry_read_failure_omits_annotations(tmp_graph, tmp_path, monkeypatch):
+    """AC4-EDGE: an unreadable registry omits liveness annotations, never fails."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    import fno.agents.registry as registry_mod
+    def _boom():
+        raise RuntimeError("registry wedged")
+    monkeypatch.setattr(registry_mod, "load_registry", _boom)
+    _write_node(tmp_graph, _base_node("ab-fail0001", sessions=[
+        {"phase": "do", "harness": "claude", "session_id": "sess-fail-0001",
+         "started_at": "2026-09-14T01:00:00Z"},
+    ]))
+
+    r = _invoke("backlog", "provenance", "ab-fail0001")
+    assert r.exit_code == 0, r.output
+    assert "sess-fail-0001" in r.output
+    assert "[reaped]" not in r.output
+    assert "[live]" not in r.output
+
+
+def test_d72f_dispatcher_survives_reap(tmp_graph, tmp_path, monkeypatch):
+    """The node's verify contract: with an empty registry (worker reaped), the
+    spawn edge still names the dispatcher and the worker's row reads reaped."""
+    import fno.provenance.resolver as resolver_mod
+    monkeypatch.setattr(resolver_mod, "_DEFAULT_PROJECTS_ROOT", tmp_path / "empty")
+
+    _pin_registry(monkeypatch, tmp_path, [])
+    _write_node(tmp_graph, _base_node(
+        "ab-reap0001",
+        spawned_by_session="disp-aaaa-0000-0000-000000000001",
+        spawned_by_harness="claude",
+        sessions=[
+            {"phase": "do", "harness": "claude", "session_id": "worker-aaaa-0000-0000-000000000001",
+             "started_at": "2026-09-14T01:00:00Z"},
+        ],
+    ))
+
+    r = _invoke("backlog", "provenance", "ab-reap0001")
+    assert r.exit_code == 0, r.output
+    assert "disp-aaaa-0000-0000-000000000001" in r.output  # dispatcher survives
+    assert "worker-aaaa-0000-0000-000000000001" in r.output
+    assert "[reaped]" in r.output  # and the reaped row says so

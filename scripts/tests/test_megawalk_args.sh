@@ -17,13 +17,22 @@ trap 'rm -rf "$TMP"' EXIT
 export HOME="$TMP"
 mkdir -p "$HOME/.fno"
 
+# The shim forwards through the `fno` front door; stage a stub `fno` on PATH
+# that delegates to the in-tree CLI so the harness is hermetic against the
+# machine's installed binary.
+mkdir -p "$TMP/bin"
+printf '#!/usr/bin/env bash\nexec uv run --project "%s/cli" python -m fno.cli "$@"\n' \
+  "$REPO_ROOT" > "$TMP/bin/fno"
+chmod +x "$TMP/bin/fno"
+export PATH="$TMP/bin:$PATH"
+
 PASS=0
 FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1 :: $2"; FAIL=$((FAIL + 1)); }
 
-# Seed a tiny sandbox graph.json that maps ab-12345678 -> plans/test.md.
-cat > "$HOME/.fno/graph.json" <<'JSON'
+# Seed graph.db through the anchor that the resolver passes to the keeper.
+cat <<'JSON' | uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$HOME/.fno/graph.json"
 {"entries": [
   {"id": "ab-12345678", "title": "Test", "plan_path": "plans/test.md", "status": "ready"}
 ]}

@@ -50,7 +50,7 @@ VALID_PRIORITIES = {"p0", "p1", "p2", "p3"}
 # MINTED fu-id grammar: 6 lowercase hex (mint_fu_id). Used for collision
 # avoidance (_existing_ids) and the bare-token unparseable-line warning. The
 # RECOGNITION grammar (_FU_TOKEN) is broader: it also matches hand-authored slug
-# ids like fu-cwd339 / fu-codex-errpaths that live inboxes carry (ab-932f5a92),
+# ids like fu-cwd339 / fu-codex-errpaths that live inboxes carry,
 # so the checkbox-line item parsers see them while minting stays strictly 6-hex.
 FU_RE = re.compile(r"fu-[0-9a-f]{6}")
 _FU_TOKEN = r"fu-[a-z0-9][a-z0-9-]*"
@@ -60,7 +60,7 @@ _MEMORY_SLUG_RE = re.compile(r"^\s*\[\[.*\]\]\s*$")
 # read/write paths (parse_items/list, promote, dismiss, archive_struck, triage)
 # keep working after `tidy` normalizes separators to hyphen. add/promote/dismiss
 # now WRITE the hyphen (Phase 2 separator migration). The fu-token is _FU_TOKEN
-# (minted 6-hex OR a hand-authored slug, ab-932f5a92); minting stays 6-hex.
+# (minted 6-hex OR a hand-authored slug); minting stays 6-hex.
 _ITEM_RE = re.compile(r"^- \[([ x\-])\]\s+(" + _FU_TOKEN + r")\s+(?:—|-)\s+(.*?)\s*$")
 _PRIORITY_SUFFIX_RE = re.compile(r"\s*\((p[0-3])\)\s*$")
 
@@ -171,7 +171,7 @@ def find_unparseable_fu_lines(text: str) -> list[tuple[int, str]]:
 #
 # A *managed item* is a checkbox line that carries a type token. Four types:
 #   followup  fu-XXXXXX    (minted 6-hex OR a hand-authored slug like fu-cwd339,
-#                           ab-932f5a92; only 6-hex is MINTED, see mint_fu_id)
+#             ; only 6-hex is MINTED, see mint_fu_id)
 #   carveout  cv-XXXXXXXX  (8 hex; lifecycle owned by carveouts.jsonl + retro)
 #   node      ab-XXXXXXXX  (8 hex; transient - Phase 2 `tidy` ejects filed nodes)
 #   human     a maintainer-marker tag (config-driven via post_merge.maintainer_marker;
@@ -636,20 +636,56 @@ def _replace_item_line(text: str, fu_id: str, new_line: str) -> str:
     return new_text
 
 
-def _create_graph_node(*, title: str, priority: str, domain: str = "code", graph_path: Optional[Path] = None, blocks_everything: bool = False) -> str:
+def _item_source_ref(text: str, fu_id: str) -> Optional[str]:
+    """The item's ``source:`` sub-line value as birth evidence; None if absent."""
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        m = _ITEM_RE.match(line)
+        if m is None or m.group(2) != fu_id:
+            continue
+        for sub in lines[idx + 1 :]:
+            if _ITEM_RE.match(sub) or (sub and not sub[0].isspace()):
+                return None
+            if sub.strip().startswith("source:"):
+                return sub.strip()[len("source:") :].strip() or None
+        return None
+    return None
+
+
+
+
+def _create_graph_node(
+    *,
+    title: str,
+    priority: str,
+    difficulty: Optional[str],
+    domain: str = "code",
+    graph_path: Optional[Path] = None,
+    blocks_everything: bool = False,
+    source_kind: str = "organic",
+    origin_evidence: Optional[str] = None,
+) -> str:
     """Create a plan-less idea node on the graph; return its ab-id.
 
     Reuses the canonical node-build path so a schema addition shows up here
     too. Imported lazily to avoid the import cycle (graph.cli imports this
     module at load to register the subapp)."""
-    from fno.graph._constants import mint_node_id, validate_priority_write
+    from fno.graph._constants import (
+        mint_node_id,
+        validate_priority_write,
+        validate_source_kind,
+    )
     from fno.graph._intake import detect_project_from_settings
     from fno.graph.cli import _build_backlog_node, _graph_path
-    from fno.graph.store import locked_mutate_graph
+    from fno.graph.store import commit_rows_via_store
 
     gpath = graph_path or _graph_path()
     try:
         validate_priority_write(priority, blocks_everything=blocks_everything)
+    except ValueError as exc:
+        raise InboxValidationError(str(exc)) from exc
+    try:
+        validate_source_kind(source_kind)
     except ValueError as exc:
         raise InboxValidationError(str(exc)) from exc
     resolved_cwd = os.getcwd()
@@ -663,17 +699,21 @@ def _create_graph_node(*, title: str, priority: str, domain: str = "code", graph
         node = _build_backlog_node(
             title=title,
             priority=priority,
+            difficulty=difficulty,
             blocks_everything=blocks_everything,
             domain=domain,
             project=project,
             cwd=resolved_cwd,
+            source_kind=source_kind,
+            origin_channel="capture_promote",
+            origin_evidence=origin_evidence,
             known_ids={e.get("id") for e in entries},
         )
         node["id"] = new_id
         entries.append(node)
         return entries
 
-    locked_mutate_graph(gpath, mutator)
+    commit_rows_via_store(gpath, mutator)
     return holder[0]
 
 
@@ -682,8 +722,10 @@ def promote_item(
     fu_id: str,
     *,
     priority: Optional[str] = None,
+    difficulty: Optional[str],
     blocks_everything: bool = False,
     graph_path: Optional[Path] = None,
+    source_kind: str = "organic",
 ) -> dict:
     """Promote an inbox item to a graph node and strike its checkbox.
 
@@ -700,6 +742,20 @@ def promote_item(
         raise InboxValidationError(
             f"--priority must be one of {sorted(VALID_PRIORITIES)}, got {priority!r}"
         )
+    from fno.graph._constants import DIFFICULTY_HELP, normalize_difficulty
+
+    if difficulty is None:
+        raise InboxValidationError(
+            "non-interactive filing requires --difficulty "
+            f"(low, medium, high). {DIFFICULTY_HELP}"
+        )
+    try:
+        normalized_difficulty = normalize_difficulty(difficulty)
+        if normalized_difficulty is None:
+            raise ValueError("difficulty must not be empty")
+        difficulty = normalized_difficulty
+    except ValueError as exc:
+        raise InboxValidationError(f"{exc}. {DIFFICULTY_HELP}") from exc
     path = Path(path)
     lock_path = path.with_name(path.name + ".lock")
     fd = _acquire_lock(lock_path, 50)
@@ -722,14 +778,19 @@ def promote_item(
 
         title, parsed_priority = _split_priority(m.group(3))
         node_priority = priority or parsed_priority or "p2"
+        source_ref = _item_source_ref(text, fu_id)
+        origin_ref = f"{fu_id} source: {source_ref}" if source_ref else fu_id
         # Node creation acquires the graph lock; we hold the inbox lock. The
         # ordering is always inbox -> graph (add/promote/dismiss never take the
         # graph lock first), so there is no deadlock.
         node_id = _create_graph_node(
             title=title,
             priority=node_priority,
+            difficulty=difficulty,
             graph_path=graph_path,
             blocks_everything=blocks_everything,
+            source_kind=source_kind,
+            origin_evidence=origin_ref,
         )
 
         new_line = f"- [x] {fu_id} - {m.group(3)} -> {node_id}"
@@ -870,19 +931,9 @@ def _norm(s: str) -> str:
 def _completed_node_ids(
     graph_path: Optional[Path], *, include_deferred: bool = False
 ) -> tuple[set[str], Optional[str]]:
-    """Return ``(complete_ids, warning)`` from graph.json.
-
-    A node is 'complete' when ``completed_at`` OR ``superseded_by`` is set
-    (read directly, since ``read_graph`` does not recompute ``status``).
-    ``deferred_at`` counts only with ``include_deferred``. Fail-safe: a missing
-    or unreadable graph returns an EMPTY id set plus a warning, so ``tidy``
-    ejects nothing rather than archiving a live item on a read miss.
-    """
     if graph_path is None:
         return set(), None
     graph_path = Path(graph_path)
-    if not graph_path.exists():
-        return set(), f"graph.json not found at {graph_path}; skipping eject"
     try:
         from fno.graph.store import _apply_graph_defaults, _read_json
 
@@ -1257,27 +1308,20 @@ def _count_session_events(
     """Count events whose type is in ``event_types`` for ``session_id``.
 
     Takes a tuple so readers can dual-accept the ``capture_*`` vocabulary and
-    the legacy ``inbox_*`` one (events.jsonl is append-only history; rows
+    the legacy ``inbox_*`` one (the store is append-only history; rows
     written by a pre-rename binary keep their old type forever).
     """
-    events_path = Path(events_path)
-    if not events_path.exists():
+    from fno.events.store_client import query_rows
+
+    try:
+        rows = query_rows(Path(events_path), types=list(event_types))
+    except Exception:
         return 0
-    n = 0
-    # Iterate line-by-line rather than read_text().splitlines() so the whole
-    # events log is never held in memory (it grows unbounded over a project's life).
-    with events_path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                evt = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if evt.get("type") in event_types and (evt.get("data") or {}).get("session_id") == session_id:
-                n += 1
-    return n
+    return sum(
+        1
+        for row in rows
+        if (row.get("data") or {}).get("session_id") == session_id
+    )
 
 
 def count_capture_adds(session_id: str, events_path: Path) -> int:
@@ -1481,7 +1525,7 @@ def cmd_list(
         text = path.read_text(encoding="utf-8") if path.exists() else ""
     except (OSError, UnicodeDecodeError) as exc:
         # A present-but-unreadable inbox (permission denied / non-UTF-8) must exit
-        # cleanly, not dump a raw traceback (ab-0625107e).
+        # cleanly, not dump a raw traceback.
         typer.echo(f"error: cannot read inbox {path}: {exc}", err=True)
         raise typer.Exit(code=1)
     if by_type:
@@ -1604,13 +1648,46 @@ def cmd_capture_pass(
 def cmd_promote(
     fu_id: str = typer.Argument(..., help="The fu-XXXXXX id to promote."),
     priority: Optional[str] = typer.Option(None, "--priority", help="Override node priority (else inherits the item's)."),
+    difficulty: Optional[str] = typer.Option(None, "--difficulty", help="Intrinsic work difficulty: low|medium|high."),
     blocks_everything: bool = typer.Option(False, "--blocks-everything", help="Acknowledge that p0 blocks all downstream work."),
+    source_kind: str = typer.Option(
+        "organic",
+        "--source-kind",
+        help=(
+            "organic|from_inbox|from_observation|from_supervisor|operator_request. "
+            "Keeps the item's origin when it becomes a node."
+        ),
+    ),
 ) -> None:
     """Promote an inbox item to a graph node (idempotent)."""
     try:
+        from fno.graph._constants import validate_source_kind
+
+        validate_source_kind(source_kind)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1)
+    if difficulty is None:
+        if not sys.stdin.isatty():
+            from fno.graph._constants import DIFFICULTY_HELP
+
+            typer.echo(
+                "Error: non-interactive filing requires --difficulty "
+                f"(low, medium, high). {DIFFICULTY_HELP}",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        from fno.graph.cli import _prompt_difficulty_value
+
+        difficulty = typer.prompt(
+            "Difficulty (low|medium|high)", value_proc=_prompt_difficulty_value
+        )
+    try:
         result = promote_item(
             _inbox_path(), fu_id, priority=priority,
+            difficulty=difficulty,
             blocks_everything=blocks_everything,
+            source_kind=source_kind,
         )
     except InboxValidationError as exc:
         typer.echo(f"error: {exc}", err=True)

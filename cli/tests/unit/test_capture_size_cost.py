@@ -7,6 +7,8 @@
   blocks the close.
 """
 from __future__ import annotations
+from tests.conftest import run_native_create
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -16,6 +18,8 @@ from typer.testing import CliRunner
 
 from fno.cli import app
 from fno.graph._intake import VALID_NODE_TYPES, normalize_size, normalize_type
+from fno.graph.store import read_graph_strict
+from tests.conftest import run_native_create
 
 runner = CliRunner()
 
@@ -25,7 +29,7 @@ def _route_graph(tmp_path, monkeypatch) -> tuple[Path, Path]:
     import fno.graph.store as gs
 
     g = tmp_path / "graph.json"
-    g.write_text('{"entries": []}\n')
+    seed_graph(g, '{"entries": []}\n')
     ledger = tmp_path / "ledger.json"
     ledger.write_text('{"entries": []}\n')
     monkeypatch.setattr(gc, "GRAPH_JSON", g)
@@ -37,7 +41,19 @@ def _route_graph(tmp_path, monkeypatch) -> tuple[Path, Path]:
 
 
 def _entries(g: Path) -> list[dict]:
-    return json.loads(g.read_text())["entries"]
+    return read_graph_strict(g)
+
+
+def _door_state(tmp_path) -> tuple[Path, Path]:
+    """A door-test state root: seeded empty graph + the ledger file the native
+    rollup reads (state_dir/ledger.json)."""
+    root = tmp_path / "state"
+    root.mkdir()
+    g = root / "graph.json"
+    seed_graph(g, '{"entries": []}\n')
+    ledger = root / "ledger.json"
+    ledger.write_text('{"entries": []}\n')
+    return g, ledger
 
 
 # -- normalize_size --------------------------------------------------------
@@ -104,9 +120,27 @@ def test_normalize_type(value, expected):
 def test_valid_node_types_is_the_one_vocabulary():
     """`backlog update --type` validates against this same set, not a copy."""
     assert VALID_NODE_TYPES == frozenset({"feature", "epic", "bug", "roadmap"})
-    result = runner.invoke(app, ["backlog", "update", "ab-nope0001", "--type", "banana"])
-    assert result.exit_code == 1
-    assert "invalid type 'banana'" in result.output
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    proc = _sp.run(
+        [str(binary), "backlog", "update", "ab-nope0001", "--type", "banana"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={
+            "PATH": _os.environ["PATH"],
+            "FNO_TRACKER_BACKEND": "graph",
+        },
+    )
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 1
+    assert "invalid type 'banana'" in out
 
 
 def test_intake_copies_type_from_frontmatter(tmp_path, monkeypatch):
@@ -151,28 +185,35 @@ def test_intake_non_node_type_falls_back_silently(tmp_path, monkeypatch, declare
 
 
 def test_create_paths_reject_an_invalid_type(tmp_path, monkeypatch):
-    """`add`/`idea` validate --type against the same set `update` does."""
-    _route_graph(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["backlog", "add", "T", "--type", "task"])
+    """`add` validates --type against the set `update` validates."""
+    g, _ = _route_graph(tmp_path, monkeypatch)
+    result = run_native_create(g, "add", "T", "--type", "task", "--difficulty", "medium")
     assert result.exit_code == 1
-    assert "invalid type 'task'" in result.output
+    assert "invalid type 'task'" in (result.output + result.stderr)
 
 
 # -- backlog done stamps cost ledger->node ---------------------------------
 
 
 def _seed_node(g: Path, plan_path: str) -> None:
-    g.write_text(json.dumps({"entries": [{
+    seed_graph(g, json.dumps({"entries": [{
         "id": "ab-cost0001",
         "title": "Costed node",
+        "slug": "ab-cost0001",
+        "type": "feature",
+        "priority": "p2",
+        "status": "ready",
         "plan_path": plan_path,
         "cost_usd": None,
         "cost_sessions": [],
+        "artifact_url": "https://example.test/artifact",
     }]}) + "\n")
 
 
-def test_backlog_done_stamps_cost_from_ledger(tmp_path, monkeypatch):
-    g, ledger = _route_graph(tmp_path, monkeypatch)
+def test_backlog_done_stamps_cost_from_ledger(tmp_path):
+    # The close is native, so the rollup reads the sandbox's own ledger.json;
+    # a real file replaces the old monkeypatched LEDGER_JSON route.
+    g, ledger = _door_state(tmp_path)
     _seed_node(g, "internal/plans/costed.md")
     ledger.write_text(json.dumps({"entries": [{
         "plan_path": "internal/plans/costed.md",
@@ -183,10 +224,10 @@ def test_backlog_done_stamps_cost_from_ledger(tmp_path, monkeypatch):
 
     # --force --skip-stamp bypasses the gh cross-check and plan stamp; the node
     # has no PR refs so no gh call is made.
-    result = runner.invoke(
-        app, ["backlog", "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"]
+    result = run_native_create(
+        g, "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.output + result.stderr
 
     node = _entries(g)[0]
     assert node["completed_at"]
@@ -198,39 +239,44 @@ def test_backlog_done_stamps_cost_from_ledger(tmp_path, monkeypatch):
     assert node["cost_sessions"][0]["cost_usd"] == pytest.approx(1.20)
 
 
-def test_backlog_done_does_not_overwrite_existing_cost(tmp_path, monkeypatch):
+def test_backlog_done_does_not_overwrite_existing_cost(tmp_path):
     """Fill-only: a node that already carries cost (e.g. from `fno done`) keeps
     it; backlog done never clobbers a richer prior stamp (codex P2)."""
-    g, ledger = _route_graph(tmp_path, monkeypatch)
-    g.write_text(json.dumps({"entries": [{
+    g, ledger = _door_state(tmp_path)
+    seed_graph(g, json.dumps({"entries": [{
         "id": "ab-cost0001",
         "title": "Pre-costed",
+        "slug": "ab-cost0001",
+        "type": "feature",
+        "priority": "p2",
+        "status": "ready",
         "plan_path": "internal/plans/costed.md",
         "cost_usd": 9.99,
         "cost_sessions": [{"session_id": "pre", "cost_usd": 9.99}],
+        "artifact_url": "https://example.test/artifact",
     }]}) + "\n")
     ledger.write_text(json.dumps({"entries": [{
         "plan_path": "internal/plans/costed.md", "cost_usd": 1.20,
         "sessions": ["sess-a"], "completed": "2026-07-08T10:00:00Z",
     }]}) + "\n")
 
-    result = runner.invoke(
-        app, ["backlog", "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"]
+    result = run_native_create(
+        g, "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.output + result.stderr
     node = _entries(g)[0]
     assert node["cost_usd"] == pytest.approx(9.99)  # prior stamp preserved
     assert node["cost_sessions"] == [{"session_id": "pre", "cost_usd": 9.99}]
 
 
-def test_backlog_done_no_ledger_row_leaves_cost_null(tmp_path, monkeypatch):
-    g, _ = _route_graph(tmp_path, monkeypatch)
+def test_backlog_done_no_ledger_row_leaves_cost_null(tmp_path):
+    g, _ = _door_state(tmp_path)
     _seed_node(g, "internal/plans/uncosted.md")  # ledger stays empty
 
-    result = runner.invoke(
-        app, ["backlog", "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"]
+    result = run_native_create(
+        g, "done", "ab-cost0001", "--force", "--reason", "test", "--skip-stamp"
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 0, result.output + result.stderr
 
     node = _entries(g)[0]
     assert node["completed_at"]  # close still succeeds

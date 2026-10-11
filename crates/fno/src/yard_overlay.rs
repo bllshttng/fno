@@ -1,11 +1,11 @@
-//! The yard identity fold's shell-out leg (x-b2bf): a bounded, fail-open
+//! The yard identity fold's shell-out leg : a bounded, fail-open
 //! call to `fno agents yard --json`, mirroring [`crate::needs_overlay`]'s idiom.
 //!
 //! The client owns the status leg (badge / need / PR readings from the
 //! layout it already holds) and derives the eye from those values at render
 //! time - one status value feeds both the row and the sprite. This module
 //! supplies the identity leg the layout cannot see (species, rarity tier,
-//! crown, first-sighting), which the Python fold computes over the registry
+//! team, first-sighting), which the Python fold computes over the registry
 //! and the graph archive. The call runs off the UI loop on a spawned task
 //! and reports back over a channel, so a slow `fno` never blocks the
 //! overlay from opening.
@@ -35,7 +35,7 @@ pub struct YardItem {
     #[serde(default)]
     pub rarity: String,
     #[serde(default)]
-    pub crown_level: u32,
+    pub role_level: u32,
     #[serde(default)]
     pub first_sighting: bool,
 }
@@ -56,7 +56,7 @@ fn fno_bin() -> PathBuf {
 pub async fn fold_now() -> Option<Vec<YardItem>> {
     let mut command = crate::process_admission::tokio_command(fno_bin());
     command
-        // x-6233: the yard verb lives under `agents` now; the bare root
+        // the yard verb lives under `agents` now; the bare root
         // spelling is a one-release shim whose stderr move-line this call
         // would otherwise pay on every overlay open.
         .args(["agents", "yard", "--json"])
@@ -100,13 +100,103 @@ struct Payload {
     citizens: Vec<YardItem>,
 }
 
+use crate::client::{pad_to, NeedsFooter, YARD_OVERLAY_W};
+
+/// Build the yard overlay lines: the CROWD as one glyph per citizen
+/// (the cheap layer - many cats, one cell each, the only multi-citizen
+/// render) and the SPOTLIGHT as exactly one 12-column sprite for the
+/// selected citizen. One sprite at a time is the capacity ruling: a
+/// simultaneous field of full sprites fits no panel width the sideline
+/// publishes (`PANEL_W` 28 fits one sprite plus a label, two plus nothing).
+/// Without an identity payload the spotlight shows its pending notice and
+/// NO sprite - a species with no reading is a guessed cat, and the yard does
+/// not guess. The hat reads the ROW's `role_level` (the same wire value the
+/// sideline orders by), never a payload copy.
+pub(crate) fn overlay_lines(
+    crowd: &[(&str, crate::sprites::Eye, u32)],
+    sel: usize,
+    identity: Option<&crate::yard_overlay::YardItem>,
+    frame: usize,
+    footer: NeedsFooter,
+) -> Vec<String> {
+    let mut lines = vec![pad_to(" the yard · n/N pick · q close", YARD_OVERLAY_W)];
+    if crowd.is_empty() {
+        // The true failure state of a dispatch system: nothing was sent out.
+        lines.push(pad_to(
+            "   the yard is empty - nothing was dispatched",
+            YARD_OVERLAY_W,
+        ));
+    } else {
+        // Crowd row: one eye glyph per citizen, wrapped to the body width.
+        let glyphs: String = crowd.iter().map(|(_, e, _)| e.glyph()).collect();
+        for chunk in glyphs
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(YARD_OVERLAY_W - 3)
+        {
+            lines.push(pad_to(
+                &format!("   {}", chunk.iter().collect::<String>()),
+                YARD_OVERLAY_W,
+            ));
+        }
+        lines.push(pad_to("", YARD_OVERLAY_W));
+        let sel = sel.min(crowd.len() - 1);
+        let (name, eye, team) = crowd[sel];
+        match identity {
+            Some(id) => {
+                let mut caption =
+                    format!(" ▸ {name} · {}", crate::sprites::species_name(id.species));
+                if !id.rarity.is_empty() {
+                    caption.push_str(&format!(" · {}", id.rarity));
+                }
+                if team >= 1 {
+                    caption.push_str(&format!(" · team {team}"));
+                }
+                if id.first_sighting {
+                    caption.push_str(" · NEW");
+                }
+                lines.push(pad_to(&caption, YARD_OVERLAY_W));
+                if team >= 1 {
+                    lines.push(pad_to(
+                        &format!("  {}", crate::sprites::HAT_TEAM),
+                        YARD_OVERLAY_W,
+                    ));
+                }
+                for row in crate::sprites::render_frame(id.species, frame, eye) {
+                    lines.push(pad_to(&format!("  {row}"), YARD_OVERLAY_W));
+                }
+            }
+            None => {
+                // No identity for this row. What that MEANS depends on the
+                // fold: still folding says pending; landed says the row has
+                // no registry citizen behind it (a bare shell, a tombstone,
+                // an external roster row) - never "pending" forever, and
+                // never a guessed species either way.
+                let why = match footer {
+                    NeedsFooter::Folding => "identity fold pending".to_string(),
+                    NeedsFooter::Degraded => "identity fold unavailable".to_string(),
+                    NeedsFooter::AsOf => "no yard identity (not a registry citizen)".to_string(),
+                };
+                lines.push(pad_to(&format!(" ▸ {name} · {why}"), YARD_OVERLAY_W));
+            }
+        }
+    }
+    let footer_line = match footer {
+        NeedsFooter::Folding => "   folding identities...".to_string(),
+        NeedsFooter::Degraded => "   identity fold unavailable - readings only".to_string(),
+        NeedsFooter::AsOf => format!("   {} citizens", crowd.len()),
+    };
+    lines.push(pad_to(&footer_line, YARD_OVERLAY_W));
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_a_citizen_array() {
-        let json = br#"{"citizens":[{"id":"1111-aaaa","name":"worker","harness":"claude","species":4,"rarity":"common","crown_level":0,"first_sighting":false}]}"#;
+        let json = br#"{"citizens":[{"id":"1111-aaaa","name":"worker","harness":"claude","species":4,"rarity":"common","role_level":0,"first_sighting":false}]}"#;
         let items = parse(json).expect("valid payload parses");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "worker");
@@ -117,11 +207,11 @@ mod tests {
 
     #[test]
     fn missing_optional_fields_default() {
-        // crown_level / first_sighting / rarity absent -> defaults, not a
+        // role_level / first_sighting / rarity absent -> defaults, not a
         // parse failure (the fold may predate a field).
         let json = br#"{"citizens":[{"id":"i","name":"n"}]}"#;
         let items = parse(json).expect("parses with defaults");
-        assert_eq!(items[0].crown_level, 0);
+        assert_eq!(items[0].role_level, 0);
         assert!(!items[0].first_sighting);
         assert_eq!(items[0].rarity, "");
     }

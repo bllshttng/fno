@@ -4,8 +4,8 @@
 #
 # After Phase 03 of the path-config migration (plan 2026-05-14-path-config-impl),
 # all path resolution must go through:
-#   Python : from fno import paths  (paths.state_dir(), paths.graph_json(), ...)
-#   Bash   : source "$(fno config paths shell-stub)"  then use $STATE_DIR, $GRAPH_JSON_PATH, etc.
+#   Python: from fno import paths  (paths.state_dir(), paths.graph_json(), ...)
+#   Bash: source "$(fno config paths shell-stub)"  then use $STATE_DIR and its emitted paths.
 #
 # Run: bash scripts/ci/check-no-hardcoded-paths.sh
 # Exits 0 when no violations found; exits 1 with a report when violations detected.
@@ -13,16 +13,15 @@
 # Allowlist rationale
 # -------------------
 # Python (entire-file exclusions):
-#   - fno/paths.py, paths_cli.py, paths_verify.py - canonical accessor defs
+#   - fno/paths.py, paths_cli.py - canonical accessor defs
 #   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
-#   - fno/setup/emit_shell.py   - generates paths.sh from schema
 #   - fno/setup/migrate_paths.py - migration command
 #   - fno/update.py             - has try/except fallback for source-path cache
 #   - fno/adapters/providers/dispatch.py - has try/except fallback for providers
 #   - fno/adapters/providers/staging.py  - has try/except fallback for providers
 #   - graph/_constants.py             - uses _state_dir() helper with try/except
 #   - cost/_register.py, cost/_session_cost.py - the moved standalone metric
-#       scripts (ab-58645f63: former scripts/metrics/register-task.py +
+#       scripts (: former scripts/metrics/register-task.py +
 #       session-cost.py). They keep their home-anchored ledger literal
 #       (~/.fno/ledger.json), which is exactly what paths.ledger_json() defaults
 #       to; the move-not-rewrite preserved them verbatim (no logic change).
@@ -83,14 +82,15 @@ add_violation() {
 # Python: Path.home() / ".fno" in CLI source files
 #
 # Files excluded (known legitimate fallbacks or bootstrap paths):
-#   paths.py, paths_cli.py, paths_verify.py, config/__init__.py,
+#   paths.py, paths_cli.py, config/__init__.py,
 #   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
 #     so it predates and cannot route through fno.paths),
-#   setup/emit_shell.py, setup/migrate_paths.py,
+#   setup/migrate_paths.py,
 #   update.py (try/except),
 #   adapters/providers/dispatch.py (try/except), adapters/providers/staging.py (try/except),
 #   adapters/providers/loader.py (bootstrap: settings loader self-reference)
 #   agents/dispatch_target.py (bootstrap: settings loader self-reference)
+#   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
 #   cost/_register.py, cost/_session_cost.py (moved standalone metric scripts)
 #   graph/_constants.py (uses _state_dir() helper), test_*.py
 # ---------------------------------------------------------------------------
@@ -101,10 +101,8 @@ PY_HITS=$(
         --include='*.py' \
         --exclude='paths.py' \
         --exclude='paths_cli.py' \
-        --exclude='paths_verify.py' \
         --exclude='test_*.py' \
         2>/dev/null \
-    | grep -v 'setup/emit_shell\.py' \
     | grep -v 'setup/migrate_paths\.py' \
     | grep -v 'config/__init__\.py' \
     | grep -v 'config_io\.py' \
@@ -114,6 +112,7 @@ PY_HITS=$(
     | grep -v 'adapters/providers/staging\.py' \
     | grep -v 'adapters/providers/loader\.py' \
     | grep -v 'agents/dispatch_target\.py' \
+    | grep -v 'agents/registry\.py' \
     | grep -v 'cost/_register\.py' \
     | grep -v 'cost/_session_cost\.py' \
     | grep -v 'doctor\.py' \

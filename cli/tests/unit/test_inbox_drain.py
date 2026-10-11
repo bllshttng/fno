@@ -40,8 +40,9 @@ def test_question_drops_wake_signal_leaves_unread(inbox_root, repo_root):
     assert results[0].action == "wake_signal_dropped"
     assert results[0].kind == "question"
 
-    # Wake signal landed under .fno/wake-signals
-    sigs = list((repo_root / ".fno" / "wake-signals").glob("wake-*.json"))
+    # Wake signal landed in the repo's space wake-signals dir
+    from fno.wake.signal import signals_dir
+    sigs = list(signals_dir(repo_root).glob("wake-*.json"))
     assert len(sigs) == 1
 
     # Thread stays unread
@@ -148,7 +149,11 @@ def test_heads_up_create_node_marks_read(inbox_root, repo_root, monkeypatch):
             self.stdout = stdout
             self.stderr = stderr
 
+    real_run = _subprocess.run  # the stub patches the shared module attr
+
     def fake_run(cmd, *args, **kwargs):
+        if len(cmd) >= 2 and cmd[1] == "mail-envelope":
+            return real_run(cmd, *args, **kwargs)
         if cmd[:4] == ["fno-py", "backlog", "new", "--help"]:
             return _FakeRun(stdout="--source-inbox-thread\n")
         if cmd[:3] == ["fno-py", "backlog", "new"]:

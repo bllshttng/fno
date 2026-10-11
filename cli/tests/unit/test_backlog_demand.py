@@ -13,9 +13,10 @@ subprocess per row would be measuring the wrong thing slowly.
 Two properties carry the ordering contract. Distinct SESSIONS are the numerator,
 so a node that somehow accumulated two rows from one session still counts once.
 And the read touches nothing: `demand` never writes rank, never consults a
-kanban column, and leaves graph.json byte for byte as it found it.
+kanban column, and leaves the graph store rows unchanged.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -24,6 +25,7 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
+from fno.graph.store import read_graph_strict
 
 runner = CliRunner()
 
@@ -42,7 +44,8 @@ def _node(node_id: str, priority: str = "p2", **over) -> dict:
     entry = {
         "id": node_id,
         "slug": f"slug-{node_id}",
-        "title": f"node {node_id}",
+        "title": "seed node",
+        "type": "feature",
         "status": "ready",
         "priority": priority,
         "_kanban_column": "Next",
@@ -54,7 +57,7 @@ def _node(node_id: str, priority: str = "p2", **over) -> dict:
 @pytest.fixture
 def tmp_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     graph = tmp_path / "graph.json"
-    graph.write_text('{"entries": []}\n', encoding="utf-8")
+    seed_graph(graph, '{"entries": []}\n')
     import fno.graph._constants as gc
     import fno.graph.store as gs
 
@@ -66,7 +69,7 @@ def tmp_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _write(graph: Path, *entries: dict) -> None:
-    graph.write_text(json.dumps({"entries": list(entries)}, indent=2) + "\n", encoding="utf-8")
+    seed_graph(graph, json.dumps({"entries": list(entries)}, indent=2) + "\n")
 
 
 # --- the score ---------------------------------------------------------------
@@ -143,7 +146,7 @@ def test_an_unknown_priority_weighs_as_p2(tmp_graph):
 def test_dispatch_context_renders_beside_the_number(tmp_graph):
     """AC9. Sybil-by-dispatch is shown, never corrected out of the count.
 
-    A row reading `enc 2, dispatched 2` is a king that fanned out. A row
+    A row reading `enc 2, dispatched 2` is a lead that fanned out. A row
     reading `enc 3, dispatched 0` is three sessions that hit the node while
     doing something else. Withholding the number would withhold the signal.
     """
@@ -188,10 +191,10 @@ def test_the_read_leaves_the_graph_untouched(tmp_graph):
         _node("zz-0001", "p3", encounters=[_enc("s1"), _enc("s2")]),
         _node("zz-0002", "p0", encounters=[_enc("s3")]),
     )
-    before = tmp_graph.read_bytes()
+    before = read_graph_strict(tmp_graph)
     result = runner.invoke(app, ["backlog", "demand"])
     assert result.exit_code == 0, result.output
-    assert tmp_graph.read_bytes() == before
+    assert read_graph_strict(tmp_graph) == before
 
 
 def test_the_table_names_the_node_and_its_counts(tmp_graph):
@@ -216,7 +219,10 @@ def test_json_output_carries_the_same_rows(tmp_graph):
     _write(
         tmp_graph,
         _node("zz-0001", "p3", encounters=[_enc("s1"), _enc("s2"), _enc("s3")]),
-        _node("zz-0002", "p0", encounters=[_enc("s4")], sessions=[{"session_id": "s4"}]),
+        _node("zz-0002", "p0", encounters=[_enc("s4")], sessions=[{
+            "phase": "do", "harness": "claude", "session_id": "s4",
+            "started_at": "2026-09-01T00:00:00Z",
+        }]),
     )
     result = runner.invoke(app, ["backlog", "demand", "--json"])
     assert result.exit_code == 0, result.output

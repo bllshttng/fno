@@ -1,6 +1,6 @@
 # fno-agents
 
-Rust PTY supervisor substrate for footnote multi-CLI agents (Phase 6, backlog `ab-a09e1eaf`).
+Rust PTY supervisor substrate for footnote multi-CLI agents (Phase 6, backlog ``).
 
 This crate is the substrate half of the Phase 6 design (`~/your-vault/internal/fno/design/2026-05-22-fno-pty-supervisor-and-drive.md`). It gives codex / gemini (and future OpenCode) agents the persistent-session, attach/detach, drive UX that Claude has. Python `fno agents <verb>` shells into the daemon/client binary; the daemon talks to per-agent workers over Unix sockets.
 
@@ -25,7 +25,7 @@ Accordingly, the substrate here is written **worker-side**: `PtySession` is what
 ### Provider layer (added on top of the substrate)
 
 - `provider.rs` — `Provider` + `ProviderWithPty` traits. `as_pty()` returns `Option`, so `ClaudeProvider` (shellout to `claude --bg`, not PTY-managed) is distinguished from `CodexProvider` (JSONL stream) / `GeminiProvider` (single JSON blob) in the type system. `create_argv` / `resume_argv` mirror the validated Python adapters; `reachability` is tri-state and authoritative (codex session-index membership; gemini cwd-pinned short-prefix + full-UUID content check), never reporting a dead session live.
-- `claude_ask.rs` — client-side `claude --bg` ask path (ab-cc926b4e). Because `ClaudeProvider::as_pty()` is `None`, the daemon cannot manage claude; the **client** replicates Python's `harnesses/claude.py` ask path directly (create + socket follow-up + reply extraction) with byte-parity. Wired via `bin/client.rs::maybe_run_claude_ask`. See `docs/architecture/fno-agents-claude-ask-rust.md`.
+- `claude_ask.rs` — client-side `claude --bg` ask path. Because `ClaudeProvider::as_pty()` is `None`, the daemon cannot manage claude; the **client** replicates Python's `harnesses/claude.py` ask path directly (create + socket follow-up + reply extraction) with byte-parity. Wired via `bin/client.rs::maybe_run_claude_ask`. See `docs/architecture/fno-agents-claude-ask-rust.md`.
 - `envelope.rs` — structural anti-injection `Envelope`. The user message is JSON-escaped, so the framing cannot be forged by message content (a hostile payload stays inside the `msg` field).
 - `readiness.rs` — per-CLI `CodexReadinessDetector` / `GeminiReadinessDetector` over the `ScreenView` seam. Conservative: ready only on a positive prompt-glyph signal in the bottom status region, never a byte-count guess; rejects the gemini "Waiting for auth" false-ready.
 - `screen.rs` — terminal-grid construction behind the `ScreenView` seam.
@@ -41,7 +41,8 @@ The supervisor layer on top of the substrate. Three binaries compile from this c
 | Module | Contents |
 |---|---|
 | `protocol.rs` | Length-prefixed (4-byte LE `u32`) JSON-RPC over the Unix socket; `agent.*` / `channel.*` namespace dispatch; `MAX_FRAME_BYTES` guard (malformed frame -> structured error, never a daemon crash). The drive WebSocket upgrade is a documented Wave 4 seam. |
-| `events.rs` | Operator-facing `events.jsonl` emitter; `O_APPEND` open-write-close (atomic per sub-`PIPE_BUF` line); 500B payload cap -> `event_payload_too_large` meta-event (never silent); size rotation. |
+| `events.rs` | Operator-facing `events.jsonl` emitter; `O_APPEND` open-write-close; schema cap (`limits.max_data_bytes`, 65536) -> `event_payload_too_large` meta-event (never silent); rotation ingests the store first. |
+| `event_store.rs` | One SQLite store (`events.db`) beside each durable journal; ingests the rotated generation and then the live file (inode cursor + line-hash dedupe), WAL + busy-timeout, 30-day horizon, `(scope, type, ts_ms)` index for history reads. |
 | `state.rs` | `registry.json` (v3) + per-agent `state.json` (v1); flock-protected (`fs2`, `flock(2)`) atomic read/modify/write via a `.lock` sidecar that is the canonical cross-language lock target; `PtyState::take_active_drive` co-locates the recovery read-before-clear ordering invariant. |
 | `paths.rs` | `~/.fno/agents/` layout + 0700/0600 perm helpers + worker-socket discovery scan. |
 | `daemon.rs` | Six-state lifecycle (event on entry); socket bind with 0700/0600 fstat-verify + lazy-start race resolution + flock self-test; 7-step startup recovery (`drive_crashed` before clear, orphan-dir archive, dead-PID reap); `agent.spawn/ask/list/status/stop/rm/reconcile` + `channel.register/unregister/push`; idle lazy-exit; zombie reaping; UUIDv4 from urandom. |

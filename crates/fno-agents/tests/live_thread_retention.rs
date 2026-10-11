@@ -1,8 +1,7 @@
-use fno::agents_view::{Liveness, RegistryAgent};
+use fno::agents_view::RegistryAgent;
 use fno::proto::AgentRow;
 use fno::squad_store::{MemberEvidence, MemberLiveness, StoredMember};
-use fno_agents::gc::{gc_action, GcAction, GcRow, KeepReason};
-use fno_agents::AgentStatus;
+use fno_agents::gc::{gc_decide, GcAction, GcRow, KeepReason};
 
 #[test]
 fn live_thread_identity_survives_store_gc_and_sideline_facts() {
@@ -12,36 +11,21 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
     let member = StoredMember {
         attach_id: String::new(),
         tombstone: false,
+        tombstone_reason: None,
         detached: false,
         tab_name: Some("worker-tab".into()),
         cwd: Some("/repo/worktree".into()),
         worker: Some(worker.into()),
         harness: Some(harness.into()),
         harness_session_id: Some(session_id.into()),
+        pane_id: None,
     };
     let registry = RegistryAgent {
-        spawned_by_session: None,
-        session_id: None,
-        harness_session_id: Some(session_id.into()),
-        predecessor_session_ids: Vec::new(),
-        forked_from_session_id: None,
         name: worker.into(),
         cwd: "/repo/worktree".into(),
         harness: Some(harness.into()),
-        exited: false,
-        badge: None,
-        reason: None,
-        mux: None,
-        answerable: None,
-        attach_id: None,
-        external: false,
-        account: None,
-        claude_session_uuid: None,
-        updated_at: None,
-        crown_level: None,
-        crown_scope: None,
-        liveness: Liveness::Alive,
-        dnd: false,
+        harness_session_id: Some(session_id.into()),
+        ..Default::default()
     };
     let mut evidence = MemberEvidence::from_sets(
         [worker.to_string(), session_id.to_string()]
@@ -52,6 +36,12 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
     evidence.add_live_pair(harness, session_id);
     assert_eq!(evidence.verdict(&member), MemberLiveness::Live);
     let sideline = AgentRow {
+        portal: None,
+        harness: None,
+        model: None,
+        route: None,
+        spawned_by_name: None,
+        lineage_reason: None,
         squad: Some(7),
         name: registry.name.clone(),
         pane_id: None,
@@ -59,6 +49,8 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         reason: None,
         exited: registry.exited,
         unmeasured: false,
+        liveness_measured_at: None,
+        harness_title: None,
         answerable: None,
         attach_id: None,
         external: false,
@@ -70,10 +62,13 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         account: None,
         updated_at: None,
         pr: None,
+        pr_session_short: None,
         tail: None,
-        crown_level: None,
-        crown_scope: None,
+        role_level: None,
+        role_scope: None,
+        role_title: None,
         spawned_by_session: None,
+        lineage_kind: None,
         harness_session_id: registry.harness_session_id.clone(),
         basis: None,
         last_activity_age_s: None,
@@ -82,26 +77,48 @@ fn live_thread_identity_survives_store_gc_and_sideline_facts() {
         pane_activity: None,
         reach: Default::default(),
         dnd: false,
+        ..Default::default()
     };
     assert_eq!(sideline.harness_session_id.as_deref(), Some(session_id));
 
+    // A thread whose transcript was just written is WRITING now, whatever a
+    // stored status says: retirement keys on the served activity and the
+    // graph, and both hold it.
     let live = GcRow {
-        status: AgentStatus::Exited,
-        is_live: true,
-        pid_confirmed_dead: true,
+        origin: Some("spawn".into()),
+        teamed: false,
+        work: fno_agents::graph_store::WorkState::AllDone {
+            nodes: vec!["N1".into()],
+        },
+        transcript_age_s: Some(4),
         owns_worktree: false,
-        exited_at: Some(9),
-        liveness_surface: true,
-        transcript_fresh: Some(false),
-        harness_session_gone: Some(true),
-        dormant_done: false,
-        worktree_clean: Some(true),
-        probe: fno_agents::client_verbs::RowLiveness::Alive,
+        worktree_clean: None,
+        branch_merged: None,
+        planning: None,
+        planning_closed: Vec::new(),
+        planning_plan_written: Vec::new(),
+        planning_released: false,
+        turn_ended: false,
+        confirm_hold: None,
+        session_terminal: None,
+        superseded_by_live_peer: None,
+        node_merged: false,
+        process_gone: false,
+        release_quiet: false,
+        open_pr: None,
+        peer_drives_pr: false,
+        pr_settled: false,
+        origin_corpse: false,
+        registry_terminal: false,
+        open_work_retire_s: fno_agents::agents_config::DEFAULT_OPEN_WORK_RETIRE_SECS as i64,
+        live_claim: None,
+        worked_node: true,
+        node_held_elsewhere: None,
     };
-    assert_eq!(gc_action(&live, 10_000, 1), GcAction::Keep);
+    assert_eq!(gc_decide(&live, 900).0, GcAction::Keep);
     assert_eq!(
-        fno_agents::gc::keep_reason(&live, 10_000, 1),
-        Some(KeepReason::Live)
+        gc_decide(&live, 900).1,
+        Some(KeepReason::Active { age_s: 4 })
     );
     assert_eq!(member.harness.as_deref(), Some(harness));
     assert_eq!(member.harness_session_id.as_deref(), Some(session_id));

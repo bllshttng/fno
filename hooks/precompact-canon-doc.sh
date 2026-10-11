@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: PreCompact - precompact canon doc
 # precompact-canon-doc.sh - PreCompact mechanical backstop.
 #
 # Writes and refreshes the MECHANICAL sections of this session's canon handoff
@@ -10,7 +11,7 @@
 # command/http/mcp_tool, not prompt/agent), so the two judgment sections -
 # merge order, open decisions - are left as empty headings filled by the
 # session at full context (the context-nudge asks for that). This is a
-# backstop that reaches every compacting session, including the king passes and
+# backstop that reaches every compacting session, including the lead passes and
 # non-target sessions that the manifest-gated arm-handoff hook never reaches.
 #
 # NEVER blocks. Compaction triggered to recover from a context-limit error must
@@ -18,6 +19,10 @@
 # never emits decision: block, and degrades to an omitted section (never a
 # failure) when fno / gh / the registry is unreadable or absent.
 set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ "${FNO_PLATFORM:-}" == "codex" ]]; then
@@ -29,6 +34,8 @@ FNO_DIR=".fno"
 # The session-id fallback chain lives in the shared postcompact lib so a marker
 # change lands once. Unreadable lib: keep the local chain quiet, never fail.
 CARRIER_LIB="$PLUGIN_ROOT/scripts/lib/postcompact-carrier.sh"
+MARKER_LIB="$PLUGIN_ROOT/scripts/lib/canon-doc-marker.sh"
+[[ -r "$MARKER_LIB" ]] && source "$MARKER_LIB"
 
 # ---------------------------------------------------------------------------
 # Read the hook event from stdin (non-fatal if absent).
@@ -72,15 +79,74 @@ fi
 # No session id -> nothing useful to point at. Emit nothing, exit clean.
 [[ -n "$SID" ]] || exit 0
 
+# ---------------------------------------------------------------------------
+# Compaction marker (wave 1): stamp "this session is compacting" so the
+# cap actor and every idle reader can tell a compacting session from an idle
+# one. Best-effort: a failed mark must not fail the hook, so every failure
+# degrades to no marker (the reader reports Unknown, never a false all-clear).
+# ---------------------------------------------------------------------------
+if command -v fno-agents >/dev/null 2>&1; then
+  fno-agents compaction mark --session "$SID" >/dev/null 2>&1 || true
+fi
+
 # Short id for display. Labeled tail-8 because that is the mail handle today;
 # the full SID above is the authoritative identity key regardless.
 SHORT="${SID: -8}"
 
 # ---------------------------------------------------------------------------
+# Teamed-ness + team scope, read before the doc-path resolution because a
+# teamed session keys its doc on the SCOPE (a team outlives its sessions; a
+# successor resolves the same rolling doc). Computed once from the registry
+# read and handed into the heredoc below via env: the heredoc's stdout carries
+# ONLY the auto block text, matching every other fact in this script. An
+# earlier version smuggled this boolean out as a synthetic first stdout line
+# for bash to split off by position - fragile, since any reordering of the
+# heredoc's own output silently corrupts the auto block with no error (the
+# whole heredoc is wrapped in `|| true`).
+# ---------------------------------------------------------------------------
+REG_ROWS=""
+REG_RC=0
+if command -v fno >/dev/null 2>&1; then
+  # A hook is never a delegated one-verb child, so a FNO_AGENTS_RUNTIME pin
+  # here has leaked off a spawned worker: strip it for this read, keep the
+  # exit code, and let a failed read read as `unknown`, never as unpromoted
+  # (under the pin the silent `|| true` took the failure for "no
+  # registry row" and a teamed lead got a plain session doc).
+  REG_ROWS="$(env -u FNO_AGENTS_RUNTIME fno agents registry-json 2>/dev/null)"
+  REG_RC=$?
+  if [[ "$REG_RC" -ne 0 ]]; then
+    echo "precompact-canon-doc.sh: fno agents registry-json exited $REG_RC; the doc's team line reads unknown (the FNO_AGENTS_RUNTIME pin was stripped before the read)" >&2
+  fi
+fi
+
+TEAM_INFO="$(SID="$SID" REG_ROWS="$REG_ROWS" python3 -c '
+import json, os
+sid = os.environ.get("SID", "")
+try:
+    data = json.loads(os.environ.get("REG_ROWS") or "[]")
+except Exception:
+    data = []
+if isinstance(data, dict):
+    data = data.get("agents") or data.get("rows") or []
+rows = data if isinstance(data, list) else []
+mine = [r for r in rows if r.get("session_id") == sid or r.get("harness_session_id") == sid]
+r = mine[0] if mine else {}
+lvl = r.get("role_level")
+scp = r.get("role_scope")
+print("1" if (mine and (lvl is not None or scp is not None)) else "0")
+print(scp if isinstance(scp, str) else "")
+' 2>/dev/null || true)"
+IS_TEAMED="$(printf '%s' "$TEAM_INFO" | sed -n 1p)"
+TEAM_SCOPE="$(printf '%s' "$TEAM_INFO" | sed -n 2p)"
+[[ "$IS_TEAMED" == "1" ]] || IS_TEAMED=0
+
+# ---------------------------------------------------------------------------
 # Resolve the canon doc path. A manual /compact <path> carries a path the
 # session deliberately chose - enrich THAT file rather than minting a sibling.
-# Otherwise fall back to fno config paths handoff. Only treat custom_instructions as a
-# path when it plainly is one (ends in .md); prose instructions fall through.
+# Otherwise fall back to fno config paths handoff: --scope for a teamed
+# session (the newest doc for that team, else today's scope-keyed name), the
+# session-keyed form otherwise. Only treat custom_instructions as a path when
+# it plainly is one (ends in .md); prose instructions fall through.
 # ---------------------------------------------------------------------------
 DOC_PATH=""
 _ci="$(_json_field custom_instructions)"
@@ -94,11 +160,30 @@ case "$_ci" in
   /*.md|./*.md|../*.md) DOC_PATH="$_ci" ;;
   *.md) [[ -f "$_ci" ]] && DOC_PATH="$_ci" ;;
 esac
+if [[ -z "$DOC_PATH" && -n "$TEAM_SCOPE" ]]; then
+  DOC_PATH="$(fno config paths handoff --scope "$TEAM_SCOPE" 2>/dev/null || true)"
+fi
 if [[ -z "$DOC_PATH" ]]; then
   DOC_PATH="$(fno config paths handoff --session-id "$SID" 2>/dev/null || true)"
 fi
 # No resolvable doc path -> a bare discard list with no pointer is worth little.
 [[ -n "$DOC_PATH" ]] || exit 0
+
+# A doc path that is itself a symlink: resolve it, so the atomic rename below
+# replaces the real file and the link keeps pointing at the fresh content.
+# Renaming over the link would silently replace the link with a regular file.
+# Plain readlink resolves one hop per call, which stays portable to hosts
+# whose readlink has no -f.
+for _hop in 1 2 3 4 5; do
+  [[ -L "$DOC_PATH" ]] || break
+  _link="$(readlink "$DOC_PATH" 2>/dev/null)" || break
+  [[ -n "$_link" ]] || break
+  case "$_link" in
+    /*) DOC_PATH="$_link" ;;
+    *) DOC_PATH="$(dirname "$DOC_PATH")/$_link" ;;
+  esac
+done
+unset _hop _link
 
 # ---------------------------------------------------------------------------
 # Gather mechanical facts. Each degrades to an empty/omitted value, never an
@@ -114,11 +199,6 @@ if [[ -f "$FNO_DIR/target-state.md" ]]; then
   PLAN="$(grep -m1 -E "^plan_path:" "$FNO_DIR/target-state.md" 2>/dev/null | sed -E 's/^plan_path:[[:space:]]*//; s/^"(.*)"$/\1/' || true)"
 fi
 
-REG_ROWS=""
-if command -v fno >/dev/null 2>&1; then
-  REG_ROWS="$(fno agents registry-json 2>/dev/null || true)"
-fi
-
 PR_RAW=""
 if command -v fno >/dev/null 2>&1; then
   # Omit the section entirely if fno is missing, there is no remote, or REST fails
@@ -130,10 +210,16 @@ fi
 # Build the auto block. One python heredoc (quoted delimiter => no shell
 # escaping) reads the facts from env and emits the mechanical sections. JSON
 # parsing stays in python; bash never touches it.
+# No apostrophes anywhere in this heredoc body: bash's paren-matching for the
+# enclosing $(...) misreads an apostrophe followed later by a parenthesized
+# comment/string as an unterminated quote, and the script fails `bash -n`
+# with an EOF error that names an unrelated later line.
 # ---------------------------------------------------------------------------
 AUTO_BLOCK="$(SID="$SID" SHORT="$SHORT" NODE="$NODE" PLAN="$PLAN" \
-             REG_ROWS="$REG_ROWS" PR_RAW="$PR_RAW" python3 <<'PY' 2>/dev/null || true
-import os, json
+             REG_ROWS="$REG_ROWS" REG_RC="$REG_RC" PR_RAW="$PR_RAW" IS_TEAMED="$IS_TEAMED" python3 <<'PY' 2>/dev/null || true
+import json
+import os
+import subprocess
 
 
 def rows_from(raw):
@@ -154,25 +240,46 @@ rows = rows_from(os.environ.get("REG_ROWS", ""))
 mine = [r for r in rows if r.get("session_id") == sid or r.get("harness_session_id") == sid]
 r = mine[0] if mine else {}
 
-lvl = r.get("crown_level")
-scp = r.get("crown_scope")
-if not mine:
-    crown = "none (no registry row for this session)"
-elif lvl is None and scp is None:
-    crown = "none (uncrowned)"
+lvl = r.get("role_level")
+scp = r.get("role_scope")
+teamed = os.environ.get("IS_TEAMED") == "1"
+reg_rc = os.environ.get("REG_RC", "")
+if reg_rc not in ("", "0"):
+    team = "unknown (registry-json exit %s)" % reg_rc
+elif not mine:
+    team = "none (no registry row for this session)"
+elif not teamed:
+    team = "none (unpromoted)"
 else:
-    crown = "level %s | scope %s" % (lvl if lvl is not None else "-", scp if scp is not None else "-")
+    team = "level %s | scope %s" % (lvl if lvl is not None else "-", scp if scp is not None else "-")
 
-live = [x for x in rows
-        if x.get("spawned_by_session") == sid
-        and str(x.get("status", "")).lower() not in ("exited", "dead")]
-if not live:
+# The stored `status` word lies (a dead row can read `live`
+# indefinitely), so this reads the SERVED `liveness` field instead - `fno
+# agents registry-json` derives it from the freshness rule and withholds a
+# stale word as null. A row whose liveness is null (never measured, or stale
+# past the window) is unresolved, not alive: listed under its own label
+# rather than silently among the live, so a broken reader never reads as an
+# all-clear.
+alive = [x for x in rows
+         if x.get("spawned_by_session") == sid
+         and x.get("liveness") == "alive"]
+unresolved = [x for x in rows
+              if x.get("spawned_by_session") == sid
+              and x.get("liveness") not in ("alive", "dead")]
+if not alive and not unresolved:
     workers = "none"
 else:
-    workers = "\n".join(
+    lines = [
         "- %s | %s | %s" % ((x.get("session_id") or "")[-8:], x.get("name", "-"), x.get("status", "-"))
-        for x in live
-    )
+        for x in alive
+    ]
+    if unresolved:
+        lines.append("- unresolved liveness:")
+        lines.extend(
+            "  - %s | %s | %s" % ((x.get("session_id") or "")[-8:], x.get("name", "-"), x.get("status", "-"))
+            for x in unresolved
+        )
+    workers = "\n".join(lines)
 
 if node or plan:
     pointers = []
@@ -186,7 +293,7 @@ else:
 
 out = ["## Identity (auto)",
        "- mail handle (tail-8): `%s`" % short,
-       "- crown: %s" % crown,
+       "- team: %s" % team,
        "",
        "## Live workers (auto)",
        workers,
@@ -201,6 +308,70 @@ if pr_rows:
                                     x.get("title", "-"), x.get("headRefName", "-"))
             for x in pr_rows]
 
+
+def _epic_children(epic_id):
+    """One epic's children via `epic status`, or None on any failure."""
+    try:
+        proc = subprocess.run(
+            ["fno", "backlog", "epic", "status", epic_id, "--json"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        data = json.loads(proc.stdout or "")
+    except Exception:
+        return None
+    children = data.get("children")
+    return children if isinstance(children, list) else None
+
+
+def nodes_under_purview(scope):
+    """The team scope's children, id plus status, via the existing epic
+    status read. A portfolio team stores its scope as a comma-joined set of
+    epics (fno.agents.team.canonical_scope) - query each member and merge,
+    so a level-2 lead over more than one epic sees every member's children,
+    not just the first. Bounded (5s per member) and degrade-only: a member
+    that is not a queryable epic (a level-1 whole-project team, an
+    unreadable graph) contributes nothing rather than failing the whole
+    read; this whole block is skipped only when EVERY member yields nothing."""
+    if not scope:
+        return None
+    rows = []
+    seen_ids = set()
+    for member in (part.strip() for part in scope.split(",")):
+        if not member:
+            continue
+        for c in _epic_children(member) or []:
+            node_id = c.get("id")
+            if node_id in seen_ids:
+                continue
+            seen_ids.add(node_id)
+            rows.append(c)
+    if not rows:
+        return None
+    return "\n".join(
+        "- %s [%s] %s" % (c.get("id", "-"), c.get("status", "-"), c.get("slug", ""))
+        for c in rows
+    )
+
+
+# A lead additionally holds its nodes under purview and its own live workers -
+# facts no other session has. Skipped whole when unpromoted so a non-lead canon
+# doc stays byte-identical to the prior output (AC2-EDGE).
+if teamed:
+    nodes = nodes_under_purview(scp) or "_(nodes under purview: unavailable)_"
+    out += [
+        "",
+        "## Lead: nodes under purview (auto)",
+        "level %s over %s" % (lvl if lvl is not None else "-", scp if scp is not None else "-"),
+        "",
+        nodes,
+        "",
+        # `workers` is spawned_by_session, not team-scope-filtered: a
+        # successor omits a predecessor workers list, and unrelated-territory
+        # workers of this session leak in. Follow-up under.
+        "## Lead: live workers in scope (auto)",
+        workers,
+    ]
+
 print("\n".join(out))
 PY
 )"
@@ -211,16 +382,27 @@ PY
 # the session filled at full context (the compact that triggers this hook would
 # otherwise erase the judgment right when post-compact context needs it).
 # ---------------------------------------------------------------------------
+_session_block_raw() {
+  # $1 = heading label substring. The verbatim body between the markers under
+  # the matching "## <label>" heading, or "" when the doc is absent or the
+  # label has no block.
+  awk -v label="$1" '
+    /^## / { heading = $0; next }
+    /<!-- fno:session -->/ { grab = (index(heading, label) > 0); next }
+    grab && /<!-- \/fno:session -->/ { grab=0; next }
+    grab { print }
+  ' "$DOC_PATH" 2>/dev/null
+}
+
 _session_block() {
-  # $1 = ordinal (1 or 2), $2 = default instruction text.
-  local ord="$1" default="$2" preserved=""
+  # $1 = heading label substring, $2 = default instruction text. Matched by
+  # the "## <label>" heading immediately above each marker, not by ordinal
+  # position: a lead who hand-writes only the two team headings on a first
+  # compaction (the doc did not exist yet to hold headings 1/2) still binds
+  # correctly, instead of silently landing in the wrong slot.
+  local label="$1" default="$2" preserved=""
   if [[ -f "$DOC_PATH" ]]; then
-    preserved="$(awk -v n="$ord" '
-      BEGIN { c=0 }
-      /<!-- fno:session -->/ { c++; if (c==n) { grab=1; next } }
-      grab && /<!-- \/fno:session -->/ { grab=0 }
-      grab { print }
-    ' "$DOC_PATH" 2>/dev/null)"
+    preserved="$(_session_block_raw "$label")"
   fi
   if [[ -n "$(printf '%s' "$preserved" | tr -d '[:space:]')" ]]; then
     printf '%s\n' "$preserved"
@@ -229,14 +411,60 @@ _session_block() {
   fi
 }
 
-DEFAULT_MERGE="_Merge order and the reason for it. Nothing external knows this; the session fills it at full context._"
-DEFAULT_DECISIONS="_Open decisions awaiting the operator. Nothing external knows this; the session fills it at full context._"
+_unowned_session_blocks() {
+  # Every fno:session-marked section whose heading is NOT one of the four the
+  # writer regenerates below, captured verbatim (heading + markers + body).
+  # The assembly re-emits only the four known sections, so without this pass a
+  # refresh deletes a lead's hand-written "## HANDOFF (session)" whole. Only
+  # content below the hook's own title line is ours to keep: above it, PRIOR
+  # already preserves the body verbatim, and both passes would duplicate it.
+  awk -v k1="Merge order and why" -v k2="Open decisions awaiting the operator" \
+      -v k3="Gaps and open thinking" -v k4="Workarounds in force" '
+    /^# Canon doc: / { started = 1; heading = ""; next }
+    !started { next }
+    /^## / { heading = $0; next }
+    {
+      if (index($0, "<!-- fno:session -->") > 0) {
+        known = index(heading, k1) > 0 || index(heading, k2) > 0 \
+             || index(heading, k3) > 0 || index(heading, k4) > 0
+        keep = !known
+        bhead = heading
+        if (keep && heading != "") buf = buf heading "\n"
+        heading = ""
+      }
+      if (keep) {
+        buf = buf $0 "\n"
+        if (index($0, "<!-- /fno:session -->") > 0) {
+          # One copy per heading, ever: if the writer ever regenerates a
+          # section this pass also captures (a label list drift), the copy
+          # already on disk must not compound into a second one per fire.
+          if (bhead == "" || !(bhead in seen)) {
+            if (bhead != "") seen[bhead] = 1
+            printf "%s", buf
+          }
+          buf = ""; keep = 0
+        }
+      }
+    }
+    END { printf "%s", buf }
+  ' "$DOC_PATH" 2>/dev/null
+}
+
+DEFAULT_MERGE="_Merge order and the reason for it. Nothing external knows this. The session fills it at full context._"
+DEFAULT_DECISIONS="_Open decisions awaiting the operator. Nothing external knows this. The session fills it at full context._"
+DEFAULT_GAPS="_Gaps and open thinking only this team holds. Nothing external knows this. The session fills it at full context._"
+DEFAULT_WORKAROUNDS="_Workarounds in force only this team is running. Nothing external knows this. The session fills it at full context._"
 
 # Capture the preserved-or-defaulted session blocks BEFORE opening the doc for
 # write. The assembly below redirects to $DOC_PATH, which truncates it on open;
 # reading inside that block would see an empty file and always default.
-SB1="$(_session_block 1 "$DEFAULT_MERGE")"
-SB2="$(_session_block 2 "$DEFAULT_DECISIONS")"
+SB1="$(_session_block "Merge order and why" "$DEFAULT_MERGE")"
+SB2="$(_session_block "Open decisions awaiting the operator" "$DEFAULT_DECISIONS")"
+SB3="" SB4=""
+if [[ "$IS_TEAMED" == "1" ]]; then
+  SB3="$(_session_block "Gaps and open thinking" "$DEFAULT_GAPS")"
+  SB4="$(_session_block "Workarounds in force" "$DEFAULT_WORKAROUNDS")"
+fi
 
 # A doc the session wrote by hand carries none of the markers above, so the
 # preserve helper reads nothing from it and the write below would truncate it
@@ -245,24 +473,116 @@ SB2="$(_session_block 2 "$DEFAULT_DECISIONS")"
 # is preserved once, not appended again.
 PRIOR=""
 if [[ -f "$DOC_PATH" ]]; then
-  PRIOR="$(awk '/^# Canon doc: session /{exit} {print}' "$DOC_PATH" 2>/dev/null)"
+  PRIOR="$(awk '/^# Canon doc: /{exit} {print}' "$DOC_PATH" 2>/dev/null)"
+fi
+
+# Unowned session sections (any marked "## X (session)" heading beyond the
+# four regenerated above, e.g. a lead's "## HANDOFF (session)") captured
+# before the truncate like the blocks above and re-emitted verbatim, so a
+# refresh keeps session-owned content instead of deleting it silently.
+EXTRA_SESSIONS=""
+if [[ -f "$DOC_PATH" ]]; then
+  EXTRA_SESSIONS="$(_unowned_session_blocks)"
+fi
+
+# The fno:user block is the one section the machine NEVER writes and ALWAYS
+# reads: whatever the user typed between its markers round-trips byte-for-byte,
+# and the closing marker is re-added below when a partial edit dropped it
+# (capture runs to the next heading or EOF, so nothing is lost either way).
+# Captured before the truncate like the session blocks. Seeded only when no
+# open marker exists yet; from then on the placeholder is ordinary content.
+USER_BLOCK=""
+USER_SEED=1
+if [[ -f "$DOC_PATH" ]] && command -v canon_doc_extract_marker >/dev/null 2>&1; then
+  USER_BLOCK="$(canon_doc_extract_marker "$DOC_PATH" user)" && USER_SEED=0
+fi
+if [[ "$USER_SEED" == "1" ]]; then
+  USER_BLOCK="$(canon_doc_user_placeholder)"
 fi
 
 # ---------------------------------------------------------------------------
-# Assemble the doc. Auto block fully regenerated; the two session blocks are
-# preserved-or-defaulted. Ensure the parent dir exists (handoffs_dir may resolve
-# to a path that does not yet exist, e.g. the state-dir fallback on a fresh
-# setup); without this the write fails silently and the pointer below would lie.
+# Content gate: refuse the whole write when a block the doc still holds as
+# real judgment captured back as its default placeholder. That combination
+# only happens when the capture misread - a read racing another refresh, a
+# doc briefly vanishing - and writing would stamp placeholders over judgment
+# (the 2026-09-13 team-doc loss). Leaving the doc untouched is always safe:
+# the next fire reads again. Never blocks: the pointer below still prints.
+# ---------------------------------------------------------------------------
+WRITE_REFUSED=0
+_gate_block() { # $1 label, $2 captured value, $3 default text
+  [[ "$WRITE_REFUSED" == "1" ]] && return 0
+  local raw=""
+  [[ -f "$DOC_PATH" ]] && raw="$(_session_block_raw "$1")"
+  if [[ -n "$(printf '%s' "$raw" | tr -d '[:space:]')" && "$raw" != "$3" && "$2" == "$3" ]]; then
+    WRITE_REFUSED=1
+    echo "canon doc: captured '$1' reads empty while the doc holds it; refusing to overwrite $DOC_PATH" >&2
+  fi
+  return 0
+}
+_gate_block "Merge order and why" "$SB1" "$DEFAULT_MERGE"
+_gate_block "Open decisions awaiting the operator" "$SB2" "$DEFAULT_DECISIONS"
+if [[ "$IS_TEAMED" == "1" ]]; then
+  _gate_block "Gaps and open thinking" "$SB3" "$DEFAULT_GAPS"
+  _gate_block "Workarounds in force" "$SB4" "$DEFAULT_WORKAROUNDS"
+fi
+# The user block gets the same guard: it is the one section the machine never
+# writes, so re-seeding its placeholder over real notes is the same loss.
+if [[ "$WRITE_REFUSED" == "0" && -f "$DOC_PATH" ]] \
+  && command -v canon_doc_is_placeholder >/dev/null 2>&1 \
+  && command -v canon_doc_extract_marker >/dev/null 2>&1; then
+  _uprior="$(canon_doc_extract_marker "$DOC_PATH" user 2>/dev/null || true)"
+  if [[ -n "$(printf '%s' "$_uprior" | tr -d '[:space:]')" ]] \
+    && ! canon_doc_is_placeholder "$_uprior" \
+    && canon_doc_is_placeholder "$USER_BLOCK"; then
+    WRITE_REFUSED=1
+    echo "canon doc: captured user block reads empty while the doc holds notes; refusing to overwrite $DOC_PATH" >&2
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Assemble the doc into a fresh temp file in the doc's own directory, then
+# rename it over the doc. Auto block fully regenerated; the session blocks are
+# preserved-or-defaulted. The old `> "$DOC_PATH"` truncated the doc on open,
+# so a hook killed mid-assembly left a partial doc and a refresh overlapping
+# another one captured that partial and stamped placeholders over judgment.
+# rename(2) within one directory is atomic, so a reader or a killed writer
+# never sees a partial file. Ensure the parent dir exists (handoffs_dir may
+# resolve to a path that does not yet exist, e.g. the state-dir fallback on a
+# fresh setup); without this the write fails silently and the pointer below
+# would lie.
 # ---------------------------------------------------------------------------
 mkdir -p "$(dirname "$DOC_PATH")" 2>/dev/null || true
-{
+_TMP_OUT=""
+_doc_tmp_cleanup() { [[ -n "$_TMP_OUT" ]] && rm -f "$_TMP_OUT" 2>/dev/null; return 0; }
+trap _doc_tmp_cleanup EXIT
+if [[ "$WRITE_REFUSED" != "1" ]]; then
+  _TMP_OUT="$(mktemp "$(dirname "$DOC_PATH")/.canon-doc.tmp.XXXXXX" 2>/dev/null)" || _TMP_OUT=""
+fi
+if [[ -n "$_TMP_OUT" ]]; then
+  # Keep the mode the doc already had: mktemp is 0600 and a shared-vault
+  # reader must not lose access because the hook refreshed the doc.
+  if [[ -f "$DOC_PATH" ]]; then
+    _mode="$(stat -f '%Lp' "$DOC_PATH" 2>/dev/null || stat -c '%a' "$DOC_PATH" 2>/dev/null || echo 644)"
+    chmod "$_mode" "$_TMP_OUT" 2>/dev/null || true
+  fi
+  {
   if [[ -n "$(printf '%s' "$PRIOR" | tr -d '[:space:]')" ]]; then
     printf '%s\n\n' "$PRIOR"
   fi
-  echo "# Canon doc: session ${SHORT}"
+  # A teamed session's doc is the team's rolling doc (scope-keyed name), so
+  # the title names the team; a successor reading it is not session ${SHORT}.
+  if [[ "$IS_TEAMED" == "1" && -n "$TEAM_SCOPE" ]]; then
+    echo "# Canon doc: team ${TEAM_SCOPE}"
+  else
+    echo "# Canon doc: session ${SHORT}"
+  fi
   echo ""
   echo "Session id (authoritative): \`${SID}\`  |  refreshed ${ISO} by precompact-canon-doc.sh."
-  echo "Mechanical sections below are auto-generated; the two judgment sections are filled by the session."
+  # Blank line, deliberately: a paragraph is one physical line, so two echoes
+  # in a row read as a wrapped paragraph and `fno doctor lint style` refuses
+  # the doc this hook just wrote.
+  echo ""
+  echo "Mechanical sections below are auto-generated. The two judgment sections are filled by the session."
   echo ""
   echo "<!-- fno:auto -->"
   printf '%s\n' "$AUTO_BLOCK"
@@ -278,7 +598,32 @@ mkdir -p "$(dirname "$DOC_PATH")" 2>/dev/null || true
   printf '%s\n' "$SB2"
   echo "<!-- /fno:session -->"
   echo ""
-} > "$DOC_PATH" 2>/dev/null || true
+  if [[ "$IS_TEAMED" == "1" ]]; then
+    echo "## Gaps and open thinking (session)"
+    echo "<!-- fno:session -->"
+    printf '%s\n' "$SB3"
+    echo "<!-- /fno:session -->"
+    echo ""
+    echo "## Workarounds in force (session)"
+    echo "<!-- fno:session -->"
+    printf '%s\n' "$SB4"
+    echo "<!-- /fno:session -->"
+    echo ""
+  fi
+  if [[ -n "$(printf '%s' "$EXTRA_SESSIONS" | tr -d '[:space:]')" ]]; then
+    printf '%s\n' "$EXTRA_SESSIONS"
+    echo ""
+  fi
+  echo "## User notes (you write here; the machine only ever reads this)"
+  echo "<!-- fno:user -->"
+  printf '%s\n' "$USER_BLOCK"
+  echo "<!-- /fno:user -->"
+  } > "$_TMP_OUT" 2>/dev/null || true
+  mv -f "$_TMP_OUT" "$DOC_PATH" 2>/dev/null || true
+  _TMP_OUT=""
+else
+  echo "canon doc: could not create a temp file beside $DOC_PATH; leaving the doc untouched" >&2
+fi
 
 # ---------------------------------------------------------------------------
 # Stdout: spend the budget on DISCARD, not preserve. The base compaction prompt

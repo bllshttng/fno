@@ -10,8 +10,12 @@ corrupt-line tolerance, and the isolation-violation detective scan.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+
+import pytest
 
 from fno.observer import fold, isolation
+from tests.fixtures.graph_seed import seed_graph
 
 NOW = datetime(2026, 7, 4, 12, 0, 0)
 
@@ -32,7 +36,10 @@ def test_build_corpus_attribution_and_outcome_join():
         {**_blueprint_row("x-2", "s2"), "phases_completed": ["do"]},  # not blueprint
     ]
     nodes = [{"id": "x-1", "reverted": False}, {"id": "x-2", "reverted": False}]
-    corpus = fold.build_corpus(rows, nodes, [], skill="blueprint", since_days=28, now=NOW)
+    corpus = fold.build_corpus(
+        rows, nodes, [], skill="blueprint", since_days=28, now=NOW,
+        deliveries={"x-1": {"delivered": True}, "x-2": {"delivered": False}},
+    )
     assert corpus["total_rows"] == 2
     assert corpus["attributed"] == 1
     assert corpus["items"][0]["outcome"] == "merged_clean"
@@ -42,7 +49,7 @@ def test_build_corpus_attribution_and_outcome_join():
 def test_insufficient_guard_below_ten():
     summary = fold.build_run_summary(
         run_id="obs-x", skill_id="fno:blueprint", skill_version="unknown",
-        findings=[("structural_validity", "pass")], corpus_size=3, scored_count=3,
+        findings=[("surface_fit", "pass")], corpus_size=3, scored_count=3,
     )
     assert summary == {"state": "insufficient", "need": 10, "n": 3}
 
@@ -52,7 +59,7 @@ def test_replay_batch_skips_min_gate_and_reports_true_size():
     # a single-item batch reports corpus_size=1, never a padded 10.
     summary = fold.build_run_summary(
         run_id="obs-x", skill_id="fno:blueprint", skill_version="unknown",
-        findings=[("structural_validity", "pass")], corpus_size=1, scored_count=1,
+        findings=[("surface_fit", "pass")], corpus_size=1, scored_count=1,
         skill_ref=None, require_min=False,
     )
     assert summary["state"] == "ok"
@@ -61,7 +68,7 @@ def test_replay_batch_skips_min_gate_and_reports_true_size():
     # the default (sweep) still gates
     gated = fold.build_run_summary(
         run_id="obs-x", skill_id="fno:blueprint", skill_version="unknown",
-        findings=[("structural_validity", "pass")], corpus_size=1, scored_count=1,
+        findings=[("surface_fit", "pass")], corpus_size=1, scored_count=1,
     )
     assert gated["state"] == "insufficient"
 
@@ -69,40 +76,70 @@ def test_replay_batch_skips_min_gate_and_reports_true_size():
 def test_coverage_pct_rounds_scored_over_corpus():
     summary = fold.build_run_summary(
         run_id="obs-x", skill_id="fno:blueprint", skill_version="abc1234",
-        findings=[("structural_validity", "pass")], corpus_size=12, scored_count=10,
+        findings=[("surface_fit", "pass")], corpus_size=12, scored_count=10,
     )
     assert summary["state"] == "ok"
     assert summary["coverage_pct"] == 83  # round(100*10/12)
 
 
-def test_structural_checks():
-    assert fold.has_failure_modes_heading("# P\n\n## Failure Modes\n\nx\n") is True
-    assert fold.has_failure_modes_heading("# P\n\n## Overview\nx\n") is False
-    strat = (
-        "## Execution Strategy\n\n```yaml\n"
-        "tasks:\n- id: '1'\n  surface: ['a.py','b.py']\n"
-        "- id: '2'\n  surface: ['b.py','c.py']\n```\n"
+def _strategy_plan(wave_mode: str, shared: bool) -> str:
+    second_surface = "['b.py', 'c.py']" if shared else "['c.py']"
+    return (
+        "---\ntitle: t\n---\n\n## Execution Strategy\n\n```yaml\n"
+        "execution_mode: parallel\n"
+        f"waves:\n- wave: 1\n  mode: {wave_mode}\n  tasks: ['1', '2']\n"
+        "tasks:\n- id: '1'\n  title: t\n  surface: ['a.py', 'b.py']\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
+        f"- id: '2'\n  title: t\n  surface: {second_surface}\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
+        "```\n"
     )
-    assert fold.find_file_ownership_collisions(strat) == ["b.py"]
 
 
-def test_review_precision_pass_degraded_fail():
-    assert fold.score_review_item(addressed_ids={"c1"}, skipped_ids={"c2"}, all_finding_ids={"c1", "c2"}) == {"finding_precision": "pass"}
-    assert fold.score_review_item(addressed_ids={"c1"}, skipped_ids=set(), all_finding_ids={"c1", "c2"}) == {"finding_precision": "degraded"}
-    assert fold.score_review_item(addressed_ids=set(), skipped_ids=set(), all_finding_ids={"c1", "c2"}) == {"finding_precision": "fail"}
-    # no findings at all -> not scorable, a coverage gap
-    assert fold.score_review_item(addressed_ids=set(), skipped_ids=set(), all_finding_ids=set()) == {"finding_precision": None}
+@pytest.mark.dev_build
+def test_collision_free_rides_the_validator():
+    # AC2-HP: shared surface inside one parallel wave fails; the same pair
+    # split across sequential waves passes, matching validate_execution.
+    assert fold.score_blueprint_item({}, plan_text=_strategy_plan("parallel", shared=True))["collision_free"] == "fail"
+    assert fold.score_blueprint_item({}, plan_text=_strategy_plan("sequential", shared=True))["collision_free"] == "pass"
+    # AC1-HP: a plan without the (retired) Failure Modes heading scores clean
+    # on every structural dimension that still exists.
+    scored = fold.score_blueprint_item({}, plan_text=_strategy_plan("sequential", shared=False))
+    assert scored["collision_free"] == "pass"
+    assert "structural_validity" not in scored
+    # AC1-ERR: text that is not a plan (no frontmatter, like a PR diff) is a
+    # coverage gap, never a fail.
+    assert fold.score_blueprint_item({}, plan_text="# diff\nplain text\n")["collision_free"] is None
 
 
+def test_collision_free_is_a_gap_not_a_fabricated_pass_without_waves():
+    # AC1-ERR (regression): a plan whose Execution Strategy declares no
+    # `waves:` block never reaches the validator's wave-scoped surface check,
+    # even when two tasks claim the same file - the old flat-task scan this
+    # replaced would have failed it, so reporting "pass" here would be a
+    # fabricated verdict, not a measured one.
+    plan_text = (
+        "---\ntitle: t\n---\n\n## Execution Strategy\n\n```yaml\n"
+        "execution_mode: parallel\n"
+        "tasks:\n- id: '1'\n  title: t\n  surface: ['a.py', 'b.py']\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
+        "- id: '2'\n  title: t\n  surface: ['b.py', 'c.py']\n"
+        "  verify: uv run pytest -q\n  acceptance: ['AC1']\n"
+        "```\n"
+    )
+    assert fold.score_blueprint_item({}, plan_text=plan_text)["collision_free"] is None
+
+
+@pytest.mark.dev_build
 def test_replay_path_scores_structural_only_and_none_without_plan():
-    # A1: replay item omits shipped_outcome; plan_text=None -> structural None.
+    # A1: replay item omits shipped_outcome; plan_text=None -> gap.
     item = {"include_shipped_outcome": False}
     scored = fold.score_blueprint_item(item, plan_text=None)
-    assert scored == {"structural_validity": None, "collision_free": None}
+    assert scored == {"collision_free": None}
     assert "shipped_outcome" not in scored
     # with fresh output, structural dims resolve (no shipped_outcome ever)
-    scored2 = fold.score_blueprint_item(item, plan_text="## Failure Modes\nx\n")
-    assert scored2["structural_validity"] == "pass"
+    scored2 = fold.score_blueprint_item(item, plan_text=_strategy_plan("sequential", shared=False))
+    assert scored2["collision_free"] == "pass"
     assert "shipped_outcome" not in scored2
 
 
@@ -304,3 +341,35 @@ def test_isolation_violation_detected(tmp_path):
     assert result.violations[0].session_id == leaked
     # a clean scan (id absent) -> clean
     assert isolation.check_isolation({"not-present"}, {"ledger_json": real_ledger}).verdict == "clean"
+
+
+def test_default_real_state_paths_tracks_sqlite_graph_store(tmp_path):
+    paths = isolation.default_real_state_paths(Path("/repo"))
+    assert paths["graph_json"] == Path.home() / ".fno" / "graph.json"
+    db = tmp_path / "graph.json"
+    # A finished row keeps its session: the projection voids an open row's
+    # session mirror (the claim store owns holders), so the leak the scanner
+    # can really see is the finisher session on a completed row.
+    seed_graph(db, [{
+        "id": "x-isolate1", "title": "sandbox", "session_id": "eval-leak",
+        "completed_at": "2026-01-01T00:00:00+00:00",
+    }])
+    result = isolation.check_isolation({"eval-leak"}, {"graph_json": db})
+    assert result.verdict == "violated"
+
+
+def test_unreadable_graph_store_fails_isolation_closed(monkeypatch, tmp_path):
+    from fno.graph import store
+    monkeypatch.setattr(store, "read_graph_strict", lambda _path: (_ for _ in ()).throw(RuntimeError()))
+    result = isolation.check_isolation({"eval-leak"}, {"graph_json": tmp_path / "graph.json"})
+    assert result.verdict == "violated"
+
+
+@pytest.fixture(autouse=True)
+def hermetic_vocabulary(monkeypatch):
+    """The fold's shipped-reason check reads the delivered vocabulary through
+    a fail-closed binary door; the smoke shard deletes the binary, so the
+    seam pins to the stub (the true set) like the scoreboard fixtures do."""
+    from tests._delivery_reference import delivered_stub
+
+    monkeypatch.setattr("fno.rust_binary.delivered_terminals", delivered_stub)

@@ -13,7 +13,14 @@ from pathlib import Path
 
 import typer
 
+from fno.carveout.core import CARVEOUTS_NAME as _CARVEOUTS_NAME
+from fno.paths import project_log as _project_log
 from fno.retro.cli import _sentinel_pr_number, process_sentinel_file
+
+
+def _ledger(root: Path) -> Path:
+    """The carve-out ledger where every product accessor resolves it."""
+    return _project_log(_CARVEOUTS_NAME, project_root=root)
 
 
 class _Rec:
@@ -132,7 +139,7 @@ def test_pr_flag_skips_unrelated_sentinels(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph", lambda p: [])
+    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
 
     processed: list = []
     synth: list = []
@@ -181,7 +188,7 @@ def test_pr_flag_scopes_by_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph", lambda p: [])
+    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
 
     processed: list = []
 
@@ -264,7 +271,7 @@ def test_run_threads_canonical_node_root(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: canonical)
-    monkeypatch.setattr(store, "read_graph", lambda p: [])
+    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
 
     captured: dict = {}
 
@@ -302,7 +309,7 @@ def test_explicit_foreign_repo_not_attributed_to_local(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "retro_pending_dir", lambda: sd)
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph", lambda p: [])
+    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
     # The ACTUAL local repo, independent of the --repo override.
     monkeypatch.setattr(rcli, "_current_repo_slug", lambda *a, **k: "acme/local")
 
@@ -341,8 +348,8 @@ from fno.retro.routine import triage_pr
 
 
 def _write_carveout(root: Path, **rec) -> None:
-    d = root / ".fno"
-    d.mkdir(parents=True, exist_ok=True)
+    led = _ledger(root)
+    led.parent.mkdir(parents=True, exist_ok=True)
     base = {
         "id": "cv-stray",
         "description": "stray deferred work from another session",
@@ -350,7 +357,7 @@ def _write_carveout(root: Path, **rec) -> None:
         "kind": "deferred",
     }
     base.update(rec)
-    (d / "carveouts.jsonl").write_text(json.dumps(base) + "\n", encoding="utf-8")
+    led.write_text(json.dumps(base) + "\n", encoding="utf-8")
 
 
 def test_resolve_pr_session_ids_matches_and_misses(tmp_path):
@@ -545,7 +552,7 @@ def _run_synthetic_pr(tmp_path, monkeypatch, *, ledger_entries, local_slug="o/r"
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr(paths, "ledger_json", lambda: tmp_path / "ledger.json")
     monkeypatch.setattr(cocore, "resolve_carveout_root", lambda: tmp_path)
-    monkeypatch.setattr(store, "read_graph", lambda p: [])
+    monkeypatch.setattr(store, "read_graph_strict", lambda p: [])
     monkeypatch.setattr(rcli, "_current_repo_slug", lambda *a, **k: local_slug)
 
     captured: dict = {}
@@ -607,13 +614,13 @@ def test_run_pr_unresolvable_repo_is_readonly(tmp_path, monkeypatch):
 
 def _seed_two_session_carveouts(root: Path) -> None:
     """Two sessions drop deferred carve-outs into ONE shared ledger."""
-    d = root / ".fno"
-    d.mkdir(parents=True, exist_ok=True)
     lines = [
         {"id": "cv-A", "description": "A deferred work", "session_id": "sess-A", "kind": "deferred"},
         {"id": "cv-B", "description": "B deferred work", "session_id": "sess-B", "kind": "deferred"},
     ]
-    (d / "carveouts.jsonl").write_text(
+    led = _ledger(root)
+    led.parent.mkdir(parents=True, exist_ok=True)
+    led.write_text(
         "".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8"
     )
 
@@ -637,7 +644,7 @@ def test_sentinel_harvest_scopes_to_owning_session(tmp_path):
     assert report.harvested_carveout_ids == ["cv-A"], report.harvested_carveout_ids
     assert report.readonly_carveout_count == 0
     # B's carve-out survives untouched in the ledger; A's was consumed.
-    remaining = (tmp_path / ".fno" / "carveouts.jsonl").read_text(encoding="utf-8")
+    remaining = _ledger(tmp_path).read_text(encoding="utf-8")
     assert "cv-B" in remaining and "cv-A" not in remaining, remaining
 
 
@@ -657,7 +664,7 @@ def test_sentinel_harvest_no_owner_is_readonly(tmp_path):
     assert report.harvested_carveout_ids == [], report.harvested_carveout_ids
     assert report.readonly_carveout_count == 2, report.readonly_carveout_count
     # Nothing consumed: both carve-outs remain for their own PRs.
-    remaining = (tmp_path / ".fno" / "carveouts.jsonl").read_text(encoding="utf-8")
+    remaining = _ledger(tmp_path).read_text(encoding="utf-8")
     assert "cv-A" in remaining and "cv-B" in remaining, remaining
 
 
@@ -697,7 +704,7 @@ def test_sentinel_harvest_no_ledger_is_readonly_not_drain(tmp_path):
     )
     assert report.harvested_carveout_ids == [], report.harvested_carveout_ids
     assert report.readonly_carveout_count == 2, report.readonly_carveout_count
-    remaining = (tmp_path / ".fno" / "carveouts.jsonl").read_text(encoding="utf-8")
+    remaining = _ledger(tmp_path).read_text(encoding="utf-8")
     assert "cv-A" in remaining and "cv-B" in remaining, remaining
 
 

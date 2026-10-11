@@ -1,4 +1,4 @@
-"""Drive-authority detection (Phase 6 Wave 4, ab-8d258ddb).
+"""Drive-authority detection (Phase 6 Wave 4).
 
 ``is_drive_authority_active()`` is the primitive every gate-hardening consumer
 reads. While an operator holds an interactive / step / paranoid drive window on
@@ -16,7 +16,7 @@ is an authoritative "an operator is driving now" signal.
 
 Stop-hook / PreToolUse consumption seam: call ``fno agents drive-authority``
 (exit 0 when active) or import ``is_drive_authority_active``. The full
-operator-authority matrix enforcement + its integration test land in Wave 8
+superuser-authority matrix enforcement + its integration test land in Wave 8
 (design Open Question #10); this module is the shared detection foundation.
 
 Lives at the platform layer rather than under ``fno.agents``: it is a read-only
@@ -85,11 +85,11 @@ def is_drive_authority_active(agents_dir: Optional[Path] = None) -> bool:
 
 
 def _project_events_path() -> Path:
-    """Resolve the project events.jsonl (best-effort, cwd fallback)."""
+    """Resolve the project event journal (best-effort, relative fallback)."""
     try:
-        from fno.paths import resolve_repo_root
+        from fno.paths import project_log
 
-        return resolve_repo_root() / ".fno" / "events.jsonl"
+        return project_log("events.jsonl")
     except Exception:
         return Path(".fno") / "events.jsonl"
 
@@ -103,7 +103,7 @@ def emit_operator_initiated(
 ) -> None:
     """Audit-tag an operator-initiated action taken during a drive window.
 
-    The operator-authority matrix (design LD3/LD29) *allows* informational
+    The superuser-authority matrix (design LD3/LD29) *allows* informational
     actions -- ``fno backlog done``, ``fno gate set``, artifact edits -- while
     an operator holds a drive window, but tags them so the audit trail
     attributes the action to the operator rather than the LLM. The generic

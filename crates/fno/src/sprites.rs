@@ -1,4 +1,4 @@
-//! The yard's sprite table (x-b2bf): the f[no]nimals. 18 species x 3 frames
+//! The yard's sprite table : the f[no]nimals. 18 species x 3 frames
 //! x 5 rows x 12 columns of plain monospace text - the same cell grid the
 //! mux already renders, which is why there is no image pipeline to build.
 //! The art here is ORIGINAL to this repo (the 3x5x12 cell-grid format and
@@ -501,12 +501,12 @@ impl Eye {
     }
 }
 
-/// The only grounded hat: `crown_level >= 1` wears it (registry crown fields,
+/// The only grounded hat: `role_level >= 1` wears it (registry team fields,
 /// stamped by the spawn path - never self-declared). The reference's other
 /// six hats key to an executor mapping not yet verified stable and stay
 /// unrendered; a hat with no reading is the decorative-guard failure the
 /// yard exists to refuse.
-pub const HAT_CROWN: &str = "   \\^^^/    ";
+pub const HAT_TEAM: &str = "   \\^^^/    ";
 
 // No rarity table here: the tier names ride the `fno agents yard --json` payload as
 // strings, so Python's `fno.yard.RARITY_TIERS` is the one live copy. A Rust

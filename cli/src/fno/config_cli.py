@@ -6,6 +6,7 @@ lives in setup/doctor.py.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 import os
 from pathlib import Path
 from importlib import import_module
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 # mounting it eagerly here would have moved that cost onto every `fno config`.
 _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] = {
     "accounts": ("fno.adapters.providers.cli:cli", "Manage account records."),
-    # Folded under config (unit 6, x-9d6c). The old top-level spellings stay
+    # Folded under config (unit 6). The old top-level spellings stay
     # one-release shims (fno.verb_moves); these mounts are the canonical
     # homes. Lazy for the same reason `accounts` is: `fno config get` runs
     # from shell dozens of times per phase and must not pay for their imports.
@@ -55,7 +56,7 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
         "Declared model-routing inventory: init (sample) / inventory (reach).",
         {"hidden": True},
     ),
-    # x-6233 (d-344fe242): `project init` gives a checkout its own fno state
+    # (d-344fe242): `project init` gives a checkout its own fno state
     # root, which is state-root configuration - config's territory. Same
     # lazy+hidden treatment as its siblings above.
     "project": (
@@ -64,6 +65,14 @@ _LAZY_SUBCOMMANDS: dict[str, tuple[str, str] | tuple[str, str, dict[str, Any]]] 
         {"hidden": True},
     ),
     "setup": ("fno.setup_cli:app", "Interactive settings.yaml wizard", {"hidden": True}),
+    # One local-dev install door for every plugin harness. VISIBLE on
+    # purpose and distinct from the hidden `plugins` function-pack group: this
+    # installs the footnote plugin itself, from the filtered stage, in one
+    # action per harness (claude|codex|opencode|agy).
+    "plugin": (
+        "fno.plugin_install_cli:plugin_app",
+        "Install the footnote plugin into a harness from the filtered stage.",
+    ),
 }
 
 app = typer.Typer(
@@ -73,7 +82,7 @@ app = typer.Typer(
 
 
 # ---------------------------------------------------------------------------
-# Post-merge config readiness oracle (ab-dba85fcc)
+# Post-merge config readiness oracle
 #
 # One pure, read-only verdict consumed by three callers: `fno config doctor
 # --post-merge` (this surface), the /target preflight check, and the deferred
@@ -85,7 +94,7 @@ PostMergeStatus = Literal["ready", "unconfigured", "opted_out", "dormant", "erro
 
 @dataclass(frozen=True)
 class PostMergeVerdict:
-    """Whether the /fno:pr merged ritual can run for a repo, and why."""
+    """Whether the /fno:ship pr merged ritual can run for a repo, and why."""
 
     status: PostMergeStatus
     enabled: bool
@@ -115,7 +124,7 @@ class PostMergeVerdict:
         if self.status == "unconfigured":
             return (
                 "[doctor] post-merge: unconfigured - "
-                "config.post_merge.parking_lot_path is unset; the /fno:pr merged "
+                "config.post_merge.parking_lot_path is unset; the /fno:ship pr merged "
                 "prose+triage will be skipped. Set it with: fno config setup post-merge"
             )
         if self.status == "opted_out":
@@ -178,8 +187,8 @@ def _load_repo_post_merge(repo_root: Path):
 
     raw: dict = _read_flat(fno_dir / "config.toml", fno_dir / "settings.yaml")
 
-    # Per-worktree local override (x-cbce): layer the allowlisted key (project.id
-    # since x-071c narrowed the allowlist) so this oracle agrees with
+    # Per-worktree local override: layer the allowlisted key (project.id
+    # since narrowed the allowlist) so this oracle agrees with
     # load_settings() and `fno config get`. Repo-local only (the local file is
     # never symlinked to canonical), which preserves the "a global
     # parking_lot_path must not make every repo look ready" guard above.
@@ -233,7 +242,6 @@ def _repo_has_fno_activity(repo_root: Path, project_id: Optional[str]) -> bool:
     False (dormant) on any unreadable state - a false negative degrades to
     today's silent behavior; a false positive is the nag we are removing.
     """
-    import json
 
     # 1. In-flight target session (cheapest: a stat). An imminent merge counts.
     try:
@@ -259,26 +267,31 @@ def _repo_has_fno_activity(repo_root: Path, project_id: Optional[str]) -> bool:
 
     # 3. Global graph holds a node mapping this repo (by project.id or cwd).
     try:
-        import fno.paths as paths
+        from fno.graph.store import (
+            GraphCorruptError,
+            GraphUnreadableError,
+            StoreUnavailable,
+            read_graph_strict,
+        )
+        from fno.tracker import active_backend_name
 
-        graph = paths.graph_json()
-        if graph.is_file():
-            data = json.loads(graph.read_text(encoding="utf-8"))
-            entries = data.get("entries") if isinstance(data, dict) else data
-            if isinstance(entries, list):
-                root_str = str(repo_root.resolve())
-                for node in entries:
-                    if not isinstance(node, dict):
-                        continue
-                    if project_id and node.get("project") == project_id:
-                        return True
-                    for key in ("_resolved_cwd", "cwd"):
-                        cwd = node.get(key)
-                        if isinstance(cwd, str) and cwd and (
-                            cwd == root_str or cwd.startswith(root_str + "/")
-                        ):
-                            return True
-    except (OSError, ValueError):
+        if active_backend_name() != "graph":
+            return False  # an external backend has no local graph: dormant
+
+        entries = read_graph_strict()
+        root_str = str(repo_root.resolve())
+        for node in entries:
+            if not isinstance(node, dict):
+                continue
+            if project_id and node.get("project") == project_id:
+                return True
+            for key in ("_resolved_cwd", "cwd"):
+                cwd = node.get(key)
+                if isinstance(cwd, str) and cwd and (
+                    cwd == root_str or cwd.startswith(root_str + "/")
+                ):
+                    return True
+    except (OSError, ValueError, StoreUnavailable, GraphUnreadableError, GraphCorruptError):
         pass  # bias dormant
 
     return False
@@ -563,7 +576,7 @@ def doctor_cmd(
 
     With ``--post-merge`` (or ``--json``), instead report whether
     ``config.post_merge.parking_lot_path`` is set for this repo - the gate the
-    /fno:pr merged ritual needs. With ``--review``, report whether every
+    /fno:ship pr merged ritual needs. With ``--review``, report whether every
     configured local reviewer can run in this session. Bare ``fno config
     doctor`` runs the path diagnostic and appends a one-line post-merge
     readiness summary plus the resolved ship gates (each probe with its source,
@@ -585,29 +598,23 @@ def doctor_cmd(
     from fno.setup.doctor import run_doctor
 
     rc = run_doctor()
-    # Open Question 1: bare doctor carries a one-line post-merge summary so the
-    # gap is visible without remembering the flag. Best-effort; never crashes
-    # the diagnostic.
-    try:
-        typer.echo(post_merge_readiness(_repo_root()).summary_line())
-    except Exception:  # noqa: BLE001 - the summary is advisory, not the command
-        pass
-    try:
-        _report_gates()
-    except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
-        pass
-    try:
-        _report_state_roots()
-    except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
-        pass
-    try:
-        _report_deprecated_auto_merge()
-    except Exception:  # noqa: BLE001 - advisory, same wrap as the three above
-        pass
-    try:
-        _report_deprecated_dispatch_harness()
-    except Exception:  # noqa: BLE001 - advisory, same wrap as the three above
-        pass
+    # Every report is advisory: one that fails never crashes the diagnostic.
+    # The post-merge line runs first so bare doctor shows the gap without the
+    # flag (Open Question 1). One wrapper, so the next report is a name here.
+    for report in (
+        lambda: typer.echo(post_merge_readiness(_repo_root()).summary_line()),
+        _report_gates,
+        _report_state_roots,
+        _report_deprecated_auto_merge,
+        _report_deprecated_dispatch_harness,
+        _report_deprecated_active_backlog_mission,
+        _report_band_routing,
+        _report_harness_overlays,
+    ):
+        try:
+            report()
+        except Exception:  # noqa: BLE001 - a report, not the diagnostic itself
+            pass
     raise typer.Exit(rc)
 
 
@@ -620,7 +627,7 @@ def _state_root_selector(row: "StateFile") -> str:
     WHICH file set it, so the receipt cannot drift from the loader's own merge
     semantics - it is reading the loader's answer rather than re-deriving one.
     """
-    from fno.config import resolve_source
+    from fno.config_readback import source_note
 
     for token in row.selector.split(","):
         key = token.strip().removeprefix("else ").strip()
@@ -632,12 +639,9 @@ def _state_root_selector(row: "StateFile") -> str:
         key = key.split("(", 1)[0].strip()
         if not key.startswith("config."):
             continue
-        try:
-            decided = resolve_source(key.removeprefix("config."))
-        except Exception:  # noqa: BLE001 - a receipt, not the loader
-            decided = None
-        if decided is not None:
-            return f"{key} (set in {decided[0]})"
+        note = source_note(key.removeprefix("config."))
+        if note is not None:
+            return f"{key} ({note})"
     return row.selector
 
 
@@ -727,7 +731,7 @@ def _deprecated_dispatch_file_rows():
 def _report_deprecated_auto_merge() -> None:
     """Name every config file still setting the deprecated ``dispatch.auto_merge``.
 
-    The migration arm of x-4be1: the alias keeps old files working for one
+    The migration arm of : the alias keeps old files working for one
     release, and this line tells the operator WHICH file to move.
     """
     for candidate, scope_flag, scope, legacy in _deprecated_dispatch_file_rows():
@@ -753,6 +757,42 @@ def _report_deprecated_auto_merge() -> None:
             f"      It reads as `auto_merge.grant = \"{reads_as}\"` for one release.\n"
             f"      Migrate: fno config set auto_merge.grant {reads_as}{scope_flag} && "
             f"fno config unset dispatch.auto_merge{scope_flag}"
+        )
+
+
+def _report_deprecated_active_backlog_mission() -> None:
+    """Name every config file still setting the ignored ``active_backlog.mission``.
+
+ retirement: the mission-scoped drain resolves one target per ACTIVE
+    mission (an epic with ``mission_active=true`` in the graph), so this key
+    selects nothing. Parseable for one release; this line names the live axis.
+    """
+    from fno.config import _candidate_paths, _global_settings_path, _load_raw
+
+    global_dir = _global_settings_path().parent
+    for candidate in _candidate_paths():
+        if not candidate.is_file():
+            continue
+        parsed, ok = _load_raw(candidate)
+        if not ok:
+            continue
+        block = parsed.get("active_backlog")
+        if not isinstance(block, dict):
+            wrapped = parsed.get("config")
+            block = wrapped.get("active_backlog") if isinstance(wrapped, dict) else None
+        if not isinstance(block, dict):
+            continue
+        mission = block.get("mission")
+        if not isinstance(mission, str) or not mission.strip():
+            continue
+        scope_flag = "" if candidate.parent == global_dir else " --local"
+        typer.echo(
+            f"warn: {candidate} sets `active_backlog.mission`, which the "
+            "mission-scoped drain IGNORES (missions are per-epic graph state, "
+            "not config).\n"
+            "      Live axis: `fno backlog advance --epic <id>` activates a "
+            "mission; `--stop` retires it.\n"
+            f"      Remove the ignored key: fno config unset active_backlog.mission{scope_flag}"
         )
 
 
@@ -794,35 +834,178 @@ def _report_deprecated_dispatch_harness() -> None:
         )
 
 
-@app.command("active-backlog")
-def active_backlog_cmd(
-    json_out: bool = typer.Option(
-        False, "--json", "-J", help="Emit a JSON list of drain targets for the daemon."
-    ),
-) -> None:
-    """Resolve which projects the active-backlog daemon should drain.
+def _report_band_routing() -> None:
+    """Say when band routing is routing nothing, and why. Silent once any
+    verb's slot would take a lane; ``model_routing.roles`` is a DIFFERENT
+    axis and reads as already on."""
+    from fno import route_resolve
 
-    Reads config.active_backlog + the workspace project->path map and prints the
-    enabled drain targets (project, cwd, interval, failure_limit, mission). The
-    daemon shells this on entering Serving to discover its targets. Read-only and
-    best-effort: a malformed config yields an empty list, never an error.
+    inventory = route_resolve.resolve_inventory()
+    read_verbs = route_resolve.slot_verbs()
+    # Silent once any verb's slot would take a lane: routing is armed, and
+    # the unconfigured verbs are a per-verb choice, not a dead router.
+    empty_verbs = [
+        verb for verb in read_verbs
+        if not str(route_resolve.slot_states(
+            verb
+        ).get("would_take", "")).startswith(f"agents.profiles.{verb}.lanes")
+    ]
+    if len(empty_verbs) < len(read_verbs):
+        return
+    settings = None
+    try:
+        from fno.config import load_settings
+
+        settings = load_settings()
+        roles = getattr(getattr(settings, "model_routing", None), "roles", None)
+    except Exception:  # noqa: BLE001 - the note is a hint on top of the line
+        roles = None
+    routing = getattr(settings, "routing", None)
+    declared_count = len(getattr(routing, "models", None) or [])
+    typer.echo(
+        f"band routing inactive: config.routing.models declares {declared_count} "
+        "row(s), and no verb slot has a lane that resolves: "
+        f"{', '.join(empty_verbs)}\n"
+        f"      The built-in rows keep a tier request answerable: "
+        f"{', '.join(sorted(inventory.rows)) or 'none'}\n"
+        "      Declare [[routing.models]] rows plus [agents.profiles.<verb>] "
+        "lanes to activate "
+        "(docs/architecture/role-based-model-routing.md)"
+        + (
+            "\n      Note: model_routing.roles is set, but it routes by ROLE, "
+            "not by band."
+            if roles
+            else ""
+        )
+    )
+
+
+def _report_harness_overlays() -> None:
+    """Name the (config rung, harness) pairs a scalar cannot serve.
+
+    The spawn seam degrades open on config values by design, so this readout
+    is where an operator hears a value will be skipped on some harness.
+    Resolution rides the spawn-overlay verb (the spawn seam's own rungs);
+    silent when every pair maps.
     """
-    import json as _json
+    from fno.agents.harnesses import READABLE_PROVIDERS
+    from fno.agents.mux_spawn import effort_tokens, permission_pane_tokens
+    from fno.agents.spawn_defaults import _overlay_payload
+    from fno.agents.spawn_overlay_client import (
+        SpawnOverlayUnavailable,
+        spawn_overlay_call,
+    )
+    from fno.agents.harness_map import CLAUDE_PERMISSION_MODES
+    from fno.config import load_settings
 
-    from fno.active_backlog import drain_targets_as_dicts
-
-    targets = drain_targets_as_dicts()
-    if json_out:
-        typer.echo(_json.dumps(targets))
+    try:
+        agents = load_settings().agents
+    except Exception:  # noqa: BLE001 - an unreadable config reads as absent
         return
+    defaults = agents.defaults
+    rows: list = [(v, p) for v, p in (getattr(agents, "profiles", None) or {}).items()]
+    rows.append(("", None))
+    seen: set = set()
+    for verb, prof in rows:
+        try:
+            answer = spawn_overlay_call(
+                {
+                    "kind": "overlay",
+                    "verb": verb,
+                    "defaults": _overlay_payload(defaults),
+                    "profile": _overlay_payload(prof) if prof is not None else None,
+                    "harnesses": list(READABLE_PROVIDERS),
+                }
+            )
+        except SpawnOverlayUnavailable as exc:
+            typer.echo(f"config doctor: harness-overlay readout unavailable: {exc}")
+            return
+        if answer.get("refusal"):
+            # The verb's own guards refused the config (unknown harness
+            # key, a ranking field in an overlay); that IS the finding.
+            typer.echo(answer["refusal"])
+            return
+        for harness, effective in (answer.get("effective_by_harness") or {}).items():
+            for name, mapper in (
+                ("permission_mode", permission_pane_tokens),
+                ("effort", effort_tokens),
+            ):
+                entry = effective.get(name)
+                if not entry:
+                    continue
+                value, rung = entry["value"], entry["rung"]
+                # One line per unique (rung, field, harness, value): every
+                # verb resolves the same defaults scalar beneath it, and the
+                # defect is one, not four.
+                key = (rung, name, harness, value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                if harness == "claude" and name == "permission_mode":
+                    # Exact passthrough: the mapper cannot catch another
+                    # harness's spelling, so check claude's own vocabulary.
+                    if value in CLAUDE_PERMISSION_MODES:
+                        continue
+                    typer.echo(
+                        f"config.{rung}.permission_mode = {value!r} is not a "
+                        "claude permission mode; set claude's answer under "
+                        f"[{rung}.harness.claude]"
+                    )
+                    continue
+                try:
+                    mapper(harness, value)
+                except Exception as exc:
+                    typer.echo(
+                        f"config.{rung}.{name} = {value!r} cannot map on "
+                        f"{harness}: {exc}; set {harness}'s answer under "
+                        f"[{rung}.harness.{harness}]"
+                    )
+
+
+@app.command("active-backlog")
+def active_backlog_cmd() -> None:
+    """Print the active-backlog drain reading. Full contract:
+    docs/architecture/coordination.md#per-territory-team-cap
+
+    JSON readers call the binary door directly:
+    fno-agents active-backlog-receipt
+    """
+    from fno.rust_binary import call_binary_json
+
+    error, reading = call_binary_json("active-backlog-receipt")
+    if error is not None:
+        typer.echo(f"active-backlog: {error}", err=True)
+        raise typer.Exit(code=1)
+    if isinstance(reading, list):
+        # A pre-338c binary prints a bare target list.
+        reading = {"targets": reading, "missions": len(reading), "skip_reason": None}
+    targets = reading["targets"]
     if not targets:
-        typer.echo("active-backlog: no active missions to drain")
-        return
-    for t in targets:
-        mission = f" mission={t['mission']}" if t["mission"] else ""
+        reason = reading["skip_reason"] or "no_missions"
+        if reason == "no_missions":
+            typer.echo("active-backlog: no territories to drain")
+            return
+        causes = {
+            "drain_disabled": "the drain is disabled: config.active_backlog.enabled",
+            "bad_interval": "invalid interval: config.active_backlog.interval",
+            "project_disabled": (
+                "the most common drop is a disabled project: "
+                "config.active_backlog.enabled"
+            ),
+            "no_workspace_path": (
+                "the most common drop is a missing workspace path"
+            ),
+        }
         typer.echo(
-            f"{t['project']}\t{t['cwd']}\tinterval={t['interval_seconds']}s\t"
-            f"failure_limit={t['failure_limit']}{mission}"
+            f"active-backlog: {reading['missions']} drainable territories, 0 targets "
+            f"({causes.get(reason, reason)})"
+        )
+        return
+    for tg in targets:
+        mission = f" mission={tg['mission']}" if tg.get("mission") else ""
+        typer.echo(
+            f"{tg['scope']}\t{tg['cwd']}\tinterval={tg['interval_seconds']}s\t"
+            f"failure_limit={tg['failure_limit']}{mission}"
         )
 
 
@@ -832,7 +1015,7 @@ def status_sinks_cmd(
         False, "--json", "-J", help="Emit a JSON list of fanout targets for the daemon."
     ),
 ) -> None:
-    """Resolve which projects the status-fanout supervisor should tick (x-2057).
+    """Resolve which projects the status-fanout supervisor should tick.
 
     A project is a target when it has >=1 enabled ``status_sinks`` entry -
     INDEPENDENT of ``config.active_backlog``. The daemon shells this to discover
@@ -869,7 +1052,7 @@ def assert_subagent_budget_cmd(
     Prints the verdict's reason and exits 0 on a permit, 1 on a refusal.
     Fails open: no stamp, no budget entry or an unreadable config permits,
     with the reason saying so. This is the seam skill text calls before
-    declaring a panel width (x-25a7 Locked Decision 7).
+    declaring a panel width (Locked Decision 7).
     """
     from fno.config import assert_subagent_budget
 
@@ -877,6 +1060,19 @@ def assert_subagent_budget_cmd(
     prefix = "permit" if check.permitted else "refused"
     typer.echo(f"{prefix}: {check.reason}")
     raise typer.Exit(0 if check.permitted else 1)
+
+
+@app.command("build-dir", hidden=True)
+def build_dir_cmd() -> None:
+    """Print the CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
+
+    The shell surface over fno.paths.cargo_build_dir_value(); the target stop
+    hook exports it for done_probes that run cargo. Hidden: consumed
+    by the hook, not by operators.
+    """
+    from fno.paths import cargo_build_dir_value
+
+    typer.echo(cargo_build_dir_value())
 
 
 @app.command("get")
@@ -901,18 +1097,17 @@ def get_cmd(
 
     The leading ``config.`` is optional: a bare ``review.required_bots`` is
     retried as ``config.review.required_bots`` so a caller need not remember
-    the redundant prefix (x-8b64 E: the review gate defaults to
+    the redundant prefix (E: the review gate defaults to
     ``config.review.required_bots`` but the shorthand used to error).
 
-    Which FILE decided the value prints on STDERR (x-4be1): the silent
+    Which FILE decided the value prints on STDERR : the silent
     home-vs-project override is the defect this fixes, so the resolved value
     alone on stdout would keep the confusion. stdout stays value-only because
     callers pipe it (normalize.sh compares the whole stream); the source line,
-    including an ``overrides`` clause exactly when a lower-precedence file
-    also sets the key, is stderr-only. ``--json`` carries both streams' facts
-    as one object.
+    including an ``overrides`` clause exactly when a lower-precedence file set
+    a value the merge discarded, is stderr-only. ``--json`` carries both
+    streams' facts as one object.
     """
-    import json
     import os
     import sys
 
@@ -934,36 +1129,12 @@ def get_cmd(
     provenance_root: Optional[Path] = None if pinned_config else settings_root
     searched_candidates = describe_settings_for_repo(provenance_root)
 
-    def _traverse(dotted: str) -> tuple[bool, object]:
-        node: object = root
-        for part in dotted.split("."):
-            if isinstance(node, BaseModel) and part in type(node).model_fields:
-                node = getattr(node, part)
-            elif isinstance(node, dict) and part in node:
-                node = node[part]
-            else:
-                return (False, None)
-        return (True, node)
+    from fno.config.writer import resolve_dotted
 
-    ok, node = _traverse(key)
-    if not ok and key.startswith("config."):
-        # The model is flat now (config fields at the top level); a legacy
-        # `config.`-prefixed key resolves once the prefix is dropped.
-        ok, node = _traverse(key[len("config.") :])
-    if not ok and not key.startswith("config."):
-        ok, node = _traverse(f"config.{key}")
-    if not ok and (
-        key.startswith("providers.")
-        or key.startswith("config.providers.")
-        or key == "providers"
-        or key == "config.providers"
-    ):
-        aliased = key.replace("providers", "accounts", 1)
-        ok, node = _traverse(aliased)
-        if not ok and aliased.startswith("config."):
-            ok, node = _traverse(aliased[len("config.") :])
-        if not ok and not aliased.startswith("config."):
-            ok, node = _traverse(f"config.{aliased}")
+    # One call resolves every spelling: the resolver itself drops a legacy
+    # `config.` prefix and aliases `providers` to `accounts`.
+    descended_default = [False]
+    ok, node = resolve_dotted(root, key.split("."), descended_default)
     if not ok:
         typer.echo(f"error: unknown config key '{key}'", file=sys.stderr)
         raise typer.Exit(code=1)
@@ -1019,6 +1190,13 @@ def get_cmd(
 
     if is_leaf:
         source_line = f"source: {decider}" if decider else "source: default (no config file sets this key)"
+        if descended_default[0]:
+            # An absent dict[str, Model] key read as the model default. A
+            # typo'd name and an unset name land here alike; say so.
+            typer.echo(
+                f"note: no config file sets '{key}'; showing the schema default",
+                file=sys.stderr,
+            )
         if overridden:
             source_line += " (overrides " + ", ".join(str(p) for p in overridden) + ")"
     else:
@@ -1064,13 +1242,13 @@ def set_cmd(
 
       fno config set <key> <value>        # single key (value may contain '=')
       fno config set a.b=1 c.d=2 ...       # atomic multi-key set
+      fno config set agents.profiles.target.lanes '["codex-luna","zai"]'
 
-    Each value is coerced to the field's type and validated against the schema
-    (e.g. ``config.agents.a2a.turn_ceiling`` must be >= 1), then written
-    atomically under a single file lock. In the multi-key form the batch is
-    all-or-nothing: if ANY value is invalid the file is left unchanged and the
-    command exits non-zero (AC2-ERR / AC2-FR). A key repeated in one call uses
-    the last value (AC2-EDGE).
+    A list takes a JSON array or `a,b`. Each value is coerced to the field's
+    type and schema-validated (``config.agents.a2a.turn_ceiling`` must be >= 1),
+    then written atomically under one file lock. The multi-key batch is
+    all-or-nothing: any invalid value leaves the file unchanged and exits
+    non-zero. A key repeated in one call uses the last value.
     """
     import sys
 
@@ -1151,17 +1329,30 @@ def set_cmd(
 
     _check_overridden_writes(results)
 
-    # x-e106: setting pr_watch.enabled couples to the launchd agent so enabled
+    # setting pr_watch.enabled couples to the launchd agent so enabled
     # means running. Loud on failure, never reverts config (doctor is the guard).
     for r in results:
         if r.key.endswith("pr_watch.enabled"):
             _couple_pr_watch(bool(r.value))
             break
 
+    # The durable-grant coupling: a write leaving the standing dispatch grant
+    # armed implies a live watcher, because recorded receipts are only
+    # executable while something ticks. ONE-WAY on purpose: arming the grant
+    # activates the agent, but revoking it never unloads - pr_watch.enabled
+    # owns that switch and the watcher serves review dispatch beyond grants.
+    # Subordinate to autonomy.enabled: the panic switch outranks every
+    # spawner, and an autonomous merger must never be brought to life behind
+    # its back. Failure is loud and never reverts the config (doctor guards).
+    for r in results:
+        if r.key.endswith("auto_merge.enabled") or r.key.endswith("auto_merge.grant"):
+            _couple_grant_observer()
+            break
+
 
 def _check_overridden_writes(results: list) -> None:
     """Warn on stderr when a write succeeded on disk but a higher-precedence
-    configuration layer overrides it (x-389d).
+    configuration layer overrides it.
 
     Receipt defect fix: local-over-global precedence is correct and stays, but
     `fno config set` must not silently report success on a write that is inert in
@@ -1170,23 +1361,14 @@ def _check_overridden_writes(results: list) -> None:
     """
     import sys
 
-    from pydantic import BaseModel
+    from fno.config import _load_settings_at, load_settings, resolve_source
 
-    from fno.config import load_settings, resolve_source
-
-    load_settings.cache_clear()
+    # The verb just rewrote a config file at the SAME declaration key; the
+    # keyed cache would serve the pre-write entry without this clear.
+    _load_settings_at.cache_clear()
     root = load_settings()
 
-    def _traverse(dotted: str) -> tuple[bool, object]:
-        node: object = root
-        for part in dotted.split("."):
-            if isinstance(node, BaseModel) and part in type(node).model_fields:
-                node = getattr(node, part)
-            elif isinstance(node, dict) and part in node:
-                node = node[part]
-            else:
-                return (False, None)
-        return (True, node)
+    from fno.config.writer import resolve_dotted
 
     for r in results:
         source = resolve_source(r.key)
@@ -1198,11 +1380,7 @@ def _check_overridden_writes(results: list) -> None:
         except OSError:
             is_same_file = decider == r.path
         if not is_same_file:
-            ok, node = _traverse(r.key)
-            if not ok and r.key.startswith("config."):
-                ok, node = _traverse(r.key[len("config.") :])
-            if not ok and not r.key.startswith("config."):
-                ok, node = _traverse(f"config.{r.key}")
+            ok, node = resolve_dotted(root, r.key.split("."))
             effective_value = node if ok else None
             if effective_value != r.value:
                 target_flag = "--local" if r.scope == "global" else "--global"
@@ -1258,6 +1436,45 @@ def _couple_pr_watch(enabled: bool) -> None:
             )
         else:
             typer.echo(f"pr-watch: agent {outcome} (disabled).")
+
+
+def _couple_grant_observer() -> None:
+    """Activate the watcher when a config write leaves the dispatch grant armed.
+
+    The activation half of the grant-implies-observer coupling; revocation is
+    deliberately NOT coupled (see the call site). Best-effort and loud: an
+    activation failure never reverts the write, it just says so.
+    """
+    import sys
+
+    try:
+        from fno.config import _load_settings_at, load_settings
+
+        # Same declaration key as the write above; clear the keyed entry.
+        _load_settings_at.cache_clear()
+        settings = load_settings()
+        am = settings.auto_merge
+        armed = bool(am.enabled) and str(am.grant or "none") == "dispatch"
+        if not armed or not settings.autonomy.enabled:
+            return
+        from fno.pr_watch.cli import ensure_watcher_activated
+
+        outcome = ensure_watcher_activated()
+        if outcome == "activated":
+            typer.echo(
+                "pr-watch: activated to serve the standing dispatch grant."
+            )
+        elif outcome == "already-running":
+            pass
+        else:
+            typer.echo(
+                f"pr-watch: WARNING dispatch grant armed but activation failed "
+                f"({outcome}); config stays. Run `fno do pr watch install` or "
+                "check `fno doctor`.",
+                file=sys.stderr,
+            )
+    except Exception as exc:  # noqa: BLE001 - coupling is best-effort
+        typer.echo(f"pr-watch grant coupling unavailable: {exc}", file=sys.stderr)
 
 
 @app.command("unset")
@@ -1341,11 +1558,10 @@ def history(
     ),
 ) -> None:
     """Read config-write receipts from the global and project journals."""
-    import json
 
-    from fno.paths import global_events_json, project_events_json
+    from fno.paths import event_journals
 
-    journal_paths = [global_events_json(), project_events_json()]
+    journal_paths = event_journals()
     rows: list[dict[str, Any]] = []
     for journal_path in journal_paths:
         # Bounded per file: the newest `limit` matching rows of one journal
@@ -1463,44 +1679,56 @@ def schema(
     if toml:
         rendered = schema_gen.render_example_toml()
         target = _repo_root() / "docs" / "config.example.toml"
+        # The Rust defaults inventory embeds its own copy of the same render:
+        # cargo publish packs only the crate, so an include_str! escape into
+        # docs/ fails the tarball compile. One renderer, two committed
+        # copies, both checked.
+        extra_target = _repo_root() / "crates" / "fno" / "config.example.toml"
         regen = "fno config schema --toml --write"
     else:
         rendered = schema_gen.render_markdown()
         target = _repo_root() / "docs" / "configuration-guide.md"
+        extra_target = None
         regen = "fno config schema --markdown --write"
 
     if check:
-        try:
-            current = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            # Unreadable or non-UTF-8 committed file -> treat as stale (differs
-            # from the freshly rendered text), prompting a regenerate.
-            current = None
-        if current != rendered:
-            typer.echo(
-                f"error: {target} is stale; run `{regen}`",
-                file=sys.stderr,
-            )
-            raise typer.Exit(code=2)
+        targets = [target] + ([extra_target] if extra_target else [])
+        for t in targets:
+            try:
+                current = t.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                # Unreadable or non-UTF-8 committed file -> treat as stale
+                # (differs from the freshly rendered text), prompting a
+                # regenerate.
+                current = None
+            if current != rendered:
+                typer.echo(
+                    f"error: {t} is stale; run `{regen}`",
+                    file=sys.stderr,
+                )
+                raise typer.Exit(code=2)
         typer.echo(f"{target} is up to date")
         return
 
     if write:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic temp + replace so a write error never truncates the committed
-        # file (AC5-FR). Write to a temp in the same dir, then os.replace.
-        fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(rendered)
-            os.replace(tmp, target)
-        except Exception:
+        targets = [target] + ([extra_target] if extra_target else [])
+        for t in targets:
+            t.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic temp + replace so a write error never truncates the
+            # committed file (AC5-FR). Write to a temp in the same dir, then
+            # os.replace.
+            fd, tmp = tempfile.mkstemp(dir=str(t.parent), suffix=".tmp")
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-        typer.echo(f"wrote {target}")
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(rendered)
+                os.replace(tmp, t)
+            except Exception:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
+            typer.echo(f"wrote {t}")
         return
 
     typer.echo(rendered)

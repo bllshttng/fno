@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -27,9 +30,9 @@ if TYPE_CHECKING:
     from fno.config import SettingsModel
 
 
-def _warn_if_foreign_fno_repo_root(resolved: Path) -> None:
+def _warn_if_foreign_fno_repo_root(resolved: Path, cwd: Path) -> None:
     """One-line heads-up when ``FNO_REPO_ROOT`` pins the fno plugin root
-    while the cwd is a *different* git repo.
+    while *cwd* is a *different* git repo.
 
     ``FNO_REPO_ROOT`` is overloaded historically: operators reached for it to
     fix an events-schema-resolution miss, but it ALSO repoints ``fno config
@@ -40,10 +43,11 @@ def _warn_if_foreign_fno_repo_root(resolved: Path) -> None:
     ``FNO_REPO_ROOT`` that way; this warning catches the lingering footgun.
 
     Best-effort and non-fatal: any failure is swallowed so path resolution
-    never breaks. Fires at most once per process (``resolve_repo_root`` is
-    cached), and only when the pinned root is the fno PLUGIN root (by its
+    never breaks. Fires at most once per ``(cwd, pin)`` key
+    (``resolve_repo_root_at`` is cached), and only when the pinned root is
+    the fno PLUGIN root (by its
     marker file, not its directory basename - a clone/worktree can be named
-    anything) AND the cwd resolves to a different git repo. (ab-fe825805 change 4)
+    anything) AND the cwd resolves to a different git repo. (change 4)
     """
     try:
         if not _is_plugin_root(resolved):
@@ -54,7 +58,7 @@ def _warn_if_foreign_fno_repo_root(resolved: Path) -> None:
         # out of unit tests that globally stub subprocess.run while resolving
         # paths (resolve_repo_root is on the CLI-wrapper hot path).
         try:
-            Path.cwd().resolve().relative_to(resolved)
+            cwd.resolve().relative_to(resolved)
             return  # cwd within resolved -> same repo
         except (ValueError, OSError):
             pass
@@ -63,6 +67,7 @@ def _warn_if_foreign_fno_repo_root(resolved: Path) -> None:
             capture_output=True,
             text=True,
             check=False,
+            cwd=str(cwd),
             timeout=2,  # diagnostic-only: never block a CLI invocation on a slow FS
         )
         # Defensive reads: in the stubbed-subprocess test contexts above the
@@ -88,21 +93,21 @@ def _warn_if_foreign_fno_repo_root(resolved: Path) -> None:
 
 
 @cache
-def resolve_repo_root() -> Path:
-    """Resolve the repo root for state + artifact path resolution.
+def resolve_repo_root_at(cwd: str, pin: Optional[str]) -> Path:
+    """Resolve the repo root, keyed on its declaration ``(cwd, pin)``.
 
-    Cached once per process. The ``FNO_REPO_ROOT`` env var is read at
-    first call and frozen; changing it mid-process (e.g. in tests) requires
-    ``fno.paths.resolve_repo_root.cache_clear()`` before the next call.
+    The cache keys on the two ambient inputs the resolution reads, so a
+    caller that changes either gets a fresh resolution with no cache_clear:
+    the key IS the declaration.
 
-    Order: ``FNO_REPO_ROOT`` env var, ``git rev-parse --show-toplevel``,
-    then cwd. The env var is the test hook; the git fallback handles
-    users running ``fno`` from a subdirectory; cwd is the last resort.
+    Order: ``pin`` (the ``FNO_REPO_ROOT`` env var, read at call time by the
+    wrapper), ``git rev-parse --show-toplevel``, then cwd. The env var is
+    the test hook; the git fallback handles users running ``fno`` from a
+    subdirectory; cwd is the last resort.
     """
-    env_root = os.environ.get("FNO_REPO_ROOT")
-    if env_root:
-        resolved = Path(env_root).resolve()
-        _warn_if_foreign_fno_repo_root(resolved)
+    if pin:
+        resolved = Path(pin).resolve()
+        _warn_if_foreign_fno_repo_root(resolved, Path(cwd))
         return resolved
     try:
         result = subprocess.run(
@@ -110,12 +115,23 @@ def resolve_repo_root() -> Path:
             capture_output=True,
             text=True,
             check=False,
+            cwd=cwd,
         )
         if result.returncode == 0 and result.stdout.strip():
             return Path(result.stdout.strip()).resolve()
     except (FileNotFoundError, OSError):
         pass
-    return Path.cwd()
+    return Path(cwd)
+
+
+def resolve_repo_root() -> Path:
+    """Resolve the repo root for state + artifact path resolution.
+
+    Uncached wrapper: reads the process declaration (``os.getcwd()`` and
+    ``FNO_REPO_ROOT``) at call time and delegates to the keyed
+    :func:`resolve_repo_root_at`.
+    """
+    return resolve_repo_root_at(os.getcwd(), os.environ.get("FNO_REPO_ROOT"))
 
 
 def resolve_canonical_worktree(
@@ -143,7 +159,36 @@ def resolve_canonical_worktree(
       never returned. ``core.worktree`` recovery was rejected (empirically empty
       for ``--separate-git-dir``). git's porcelain paths are already
       symlink-resolved, so the ``.git`` probe is reliable.
+
+    Subprocess-free short-circuit: a ``.git`` DIRECTORY above cwd marks a main
+    working tree - the first record ``git worktree list`` emits - so the
+    filesystem answers exactly. A ``.git`` FILE marks a linked worktree whose
+    pointer names the main tree's git dir (``<main>/.git/worktrees/<name>``),
+    which parses without a subprocess; a submodule worktree's pointer
+    (``.../.git/modules/<mod>/.git/worktrees/<name>``) fails the
+    ``<prefix>/.git``-is-a-dir guard and falls through to the subprocess. The
+    settings load sits on the hot lane: one ``doctor footprint`` run must
+    shell exactly one subprocess (``ps``), so a cold config read may not pay
+    for a ``worktree list``.
     """
+    anchor = Path(cwd) if cwd is not None else Path.cwd()
+    for ancestor in [anchor, *anchor.parents]:
+        dot_git = ancestor / ".git"
+        if dot_git.is_dir():
+            return ancestor.resolve()
+        if dot_git.is_file():
+            text = dot_git.read_text(encoding="utf-8", errors="replace")
+            for line in text.splitlines():
+                if not line.startswith("gitdir:"):
+                    continue
+                gitdir = Path(line[len("gitdir:") :].strip())
+                if not gitdir.is_absolute():
+                    gitdir = (ancestor / gitdir).resolve()
+                marker = "/.git/worktrees/"
+                parts = str(gitdir).split(marker)
+                if len(parts) == 2 and (Path(parts[0]) / ".git").is_dir():
+                    return Path(parts[0]).resolve()
+            break
     try:
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
@@ -206,10 +251,10 @@ def resolve_canonical_repo_root() -> Path:
     fallback (also covers bare / separate-git-dir layouts the helper returns
     ``None`` for).
 
-    Uncached on purpose: it is called once per process from inside the
-    ``lru_cache``-d :func:`fno.config.load_settings`, so caching buys
-    nothing, and staying uncached keeps test isolation simple (no extra
-    ``cache_clear`` plumbing) and honors mid-process ``FNO_REPO_ROOT`` changes.
+    Uncached on purpose: :func:`fno.config.load_settings` is an uncached
+    wrapper over a declaration-keyed cache, so caching here buys nothing,
+    and staying uncached keeps test isolation simple and honors
+    mid-process ``FNO_REPO_ROOT`` changes.
     """
     env_root = os.environ.get("FNO_REPO_ROOT")
     if env_root:
@@ -220,14 +265,145 @@ def resolve_canonical_repo_root() -> Path:
     return resolve_repo_root()
 
 
+# Project spaces: state OUTSIDE any checkout. Cross-worktree state at the
+# space root, session-keyed state under ``worktrees/<name>/``.
+
+
+def space_slug(canonical_root: Path) -> str:
+    """The full canonical path with ``/`` swapped for ``-`` (Claude's project-dir
+    shape: read the dir, see the path). Mirrored byte for byte in ``fno-agents::paths``."""
+    return str(canonical_root).replace("/", "-")
+
+
+def _canonical_for(root: Path) -> Path:
+    root = root.resolve()
+    gitdir = root / ".git"
+    # A `.git` dir is a main checkout; an absent one is no repo. Only the
+    # linked-worktree gitfile needs the probe.
+    if not gitdir.exists() or gitdir.is_dir():
+        return root
+    canonical = resolve_canonical_worktree(root)
+    if canonical is not None:
+        return canonical.resolve()
+    return root
+
+
+def spaces_root(*, durable: bool = False) -> Path:
+    """``FNO_SPACES_DIR`` > ``config.paths.spaces_dir`` > ``<state_dir>/spaces``.
+
+    ``durable=True`` skips the env pin: the env var rides one process (a test
+    sandbox, an isolation run), while the config override and the default
+    state root outlive it. A one-time migration moves the ONLY copy, so its
+    destination must be a root the repo's own processes still resolve.
+    """
+    if not durable:
+        explicit = os.environ.get("FNO_SPACES_DIR")
+        if explicit:
+            return _guard_state_path(Path(os.path.expanduser(explicit)).resolve())
+    settings = _settings()
+    override = settings.paths.spaces_dir
+    if override is not None:
+        return _guard_state_path(_resolve(override))
+    return _guard_state_path(state_dir() / "spaces")
+
+
+def space_dir(project_root: Optional[Path] = None) -> Path:
+    """The space for ``project_root``'s repo (default: cwd's), keyed on its
+    CANONICAL root so every worktree answers the same path."""
+    root = resolve_canonical_repo_root() if project_root is None else _canonical_for(project_root)
+    return _guard_state_path(spaces_root() / space_slug(root))
+
+
+def worktree_space_dir(project_root: Optional[Path] = None) -> Path:
+    """The session-keyed slice: ``<space>/worktrees/<name>/``, or the space root from canonical."""
+    root = project_root or resolve_repo_root()
+    if root.resolve() != _canonical_for(root):
+        return _guard_state_path(space_dir(root) / "worktrees" / root.name)
+    return space_dir(root)
+
+
+def target_state_path(project_root: Optional[Path] = None) -> Path:
+    """The write-once session manifest, per worktree slice of the space."""
+    return _guard_state_path(worktree_space_dir(project_root) / "target-state.md")
+
+
+def target_state_path_or_legacy(project_root: Optional[Path] = None) -> Path:
+    """``target_state_path``, falling back to the pre-space checkout manifest."""
+    try:
+        space = target_state_path(project_root)
+        if space.exists():
+            return space
+    except Exception:  # noqa: BLE001 - a read degrades, never refuses
+        pass
+    root = project_root or resolve_repo_root()
+    return root / ".fno" / "target-state.md"
+
+
+def _repo_root_of(path: Path) -> Optional[Path]:
+    """The nearest ancestor of ``path`` that is a checkout root, or None.
+
+    A pure filesystem walk: no env, no cwd, no subprocess, so the answer
+    about ``old`` cannot be bent by whoever is resolving state in this call.
+    """
+    probe = path.parent.resolve()
+    for candidate in (probe, *probe.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def migrate_from_checkout(old: Path, new: Path) -> bool:
+    """One-shot lazy migration onto the space: move a legacy checkout file to
+    ``new`` unless either exists or old is a symlink, then leave a MOVED-TO
+    pointer. Best effort: any failure leaves ``old`` in place and returns
+    False, degrading to the legacy path.
+
+    The destination must be the source repository's own DURABLE space
+    (``config.paths.spaces_dir`` or the default state root - never a
+    per-process ``FNO_SPACES_DIR`` pin): a move into a sandbox root strands
+    the only copy where the repo's own readers never look again, behind a
+    MOVED-TO pointer they do not follow. A source outside any
+    checkout has no durable space to check against and keeps the old
+    behavior.
+    """
+    if old == new or new.exists() or not old.exists() or old.is_symlink():
+        return False
+    # The state root is not a checkout journal.
+    if old.parent.resolve() == state_dir().resolve():
+        return False
+    try:
+        repo = _repo_root_of(old)
+        if repo is not None:
+            durable_space = spaces_root(durable=True) / space_slug(_canonical_for(repo))
+            if not new.resolve().is_relative_to(durable_space.resolve()):
+                return False
+    except Exception:  # noqa: BLE001 - the documented degrade: a guard that cannot compute refuses
+        return False
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(old, new)
+        except OSError:
+            shutil.move(str(old), str(new))
+        marker = old.parent / "MOVED-TO"
+        if not marker.exists():
+            marker.write_text(f"{new.parent}\n")
+        return True
+    except OSError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Settings cache (lazy import to avoid circular-import hazard at module load)
 # ---------------------------------------------------------------------------
 
 
-@cache
 def _settings() -> "SettingsModel":
-    """Load and cache settings for the lifetime of this process."""
+    """Load the settings for the caller's declared root.
+
+    Uncached: the keyed cache lives on ``fno.config._load_settings_at``;
+    a cache here would be keyed on nothing.
+    """
     from fno.config import load_settings
     return load_settings()
 
@@ -377,7 +553,7 @@ def _resolve(
             # Returning the raw relative value would leave the assembled
             # path relative, anchoring it at project_root/CWD - in a
             # worktree that lands handoffs at a junk worktree-local path
-            # (ab-347f6482).
+            #.
             vroot = vault_root(settings=active_settings)
             if vroot is None:  # unreachable: enabled + vault guarded above
                 raise ValueError(
@@ -423,22 +599,23 @@ def resolve_configured_path(
 
 
 def _guard_state_path(path: Path) -> Path:
-    """Refuse a resolved state path outside the hermetic test sandbox."""
-    if os.environ.get("FNO_TEST_HERMETIC") == "1":
-        # Reuse the events fence and its allowed-root calculation. A hand-built
-        # state path still cannot be reached here; that remaining R4 surface is
-        # guarded by the state-path lint rather than by an accessor.
-        from fno.events import _refuse_hermetic_escape
+    """Judge a resolved state path against the process root declaration.
 
-        _refuse_hermetic_escape(path)
-    return path
+    The rule lives in :func:`fno.hermetic.declared_root` and both fences call
+    it, so they cannot disagree about what an absent declaration means. A
+    hand-built state path still cannot reach here; the state-path lint guards
+    that remaining R4 surface.
+    """
+    from fno.hermetic import declared_root
+
+    return declared_root(path)
 
 
 # ---------------------------------------------------------------------------
 # The state-file table: one resolver per state file
 # ---------------------------------------------------------------------------
 #
-# Epic x-3d21 R4 rules that every fno state access resolves against a DECLARED
+# Epic R4 rules that every fno state access resolves against a DECLARED
 # root, and that ambient position (cwd, `git rev-parse --show-toplevel`, $HOME
 # read at call time, a hand-built `<root>/.fno/<file>`) may never select one.
 # A hand-built path consults nothing, so `FNO_EVENTS_PATH`, a guard, or a
@@ -451,9 +628,9 @@ def _guard_state_path(path: Path) -> Path:
 #   `fno config doctor`            needs `root_class` and `selector`.
 #   `fno.state_fence`              needs `resolver`.
 #
-# It is also the ONE point this node shares with x-6f9f, and the two reasons
-# are different on purpose: x-6f9f wants a single named owner per state file
-# because N implementations of one operation drift, and x-3d21 R4 wants one
+# It is also the ONE point this node shares with, and the two reasons
+# are different on purpose: wants a single named owner per state file
+# because N implementations of one operation drift, and R4 wants one
 # because a resolver is the only thing a root selector can be attached to.
 # One table, both reasons, written once.
 
@@ -485,13 +662,6 @@ class StateFile:
 
 STATE_FILES: tuple[StateFile, ...] = (
     StateFile(
-        filename="graph.json",
-        resolver="fno.paths.graph_json",
-        root_class="OPERATOR",
-        selector="config.paths.graph_json, else config.state_dir",
-        owning_modules=("cli/src/fno/paths.py",),
-    ),
-    StateFile(
         filename="ledger.json",
         resolver="fno.paths.ledger_json",
         root_class="OPERATOR",
@@ -502,8 +672,7 @@ STATE_FILES: tuple[StateFile, ...] = (
         filename="registry.json",
         resolver="fno.paths.agents_registry_path",
         root_class="OPERATOR",
-        selector="config.paths.agents_registry_path, else config.state_dir "
-        "(Rust runtime home: FNO_AGENTS_HOME)",
+        selector="FNO_AGENTS_HOME, else config.state_dir (Rust runtime home)",
         owning_modules=("cli/src/fno/paths.py", "crates/fno-agents/src/paths.rs"),
     ),
     StateFile(
@@ -533,18 +702,15 @@ STATE_FILES: tuple[StateFile, ...] = (
         filename="events.jsonl",
         resolver="fno.paths.project_events_json",
         root_class="PROJECT",
-        selector="FNO_EVENTS_PATH, else git --git-common-dir",
+        selector="FNO_EVENTS_PATH, else config.paths.spaces_dir, else state_dir",
         owning_modules=("cli/src/fno/paths.py", "crates/fno-agents/src/paths.rs"),
     ),
     StateFile(
         filename="target-state.md",
-        # No owner today. `fno.phase.cli`, `fno.update` and `fno.recovery` each
-        # build it, which is why the lint's refusal for this row names the gap
-        # instead of a symbol that does not exist.
-        resolver=None,
+        resolver="fno.paths.target_state_path",
         root_class="PROJECT",
-        selector="git --git-common-dir",
-        owning_modules=(),
+        selector="worktree slice of the space",
+        owning_modules=("cli/src/fno/paths.py", "cli/src/fno/agent/state.py"),
     ),
 )
 
@@ -556,8 +722,30 @@ STATE_FILES: tuple[StateFile, ...] = (
 
 def state_dir() -> Path:
     """Return the state directory (default: ~/.fno/)."""
+    if carrier := os.environ.get("FNO_STATE_DIR"):
+        return _guard_state_path(Path(os.path.expanduser(carrier)).resolve())
     settings = _settings()
     return _guard_state_path(_resolve(settings.state_dir))
+
+
+def cargo_build_dir_value() -> str:
+    """The CARGO_BUILD_BUILD_DIR value: ``<base>/{workspace-path-hash}``.
+
+    cargo expands the template itself and the hash is per workspace root, so
+    parallel checkouts never share the artifact lock and intermediates never
+    land in a checkout. Base: ``config.paths.cargo_targets_base``, else
+    ``<state_dir>/cargo-build``.
+    """
+    try:
+        override = _settings().paths.cargo_targets_base
+        base = (
+            _resolve(os.path.expanduser(override))
+            if override
+            else state_dir() / "cargo-build"
+        )
+    except Exception:  # noqa: BLE001 - broken settings degrade to the default base
+        base = Path(os.path.expanduser("~/.fno/cargo-build"))
+    return f"{base}/{{workspace-path-hash}}"
 
 
 def graphql_quota_lock() -> Path:
@@ -573,41 +761,40 @@ def github_cli_proxy_dir() -> Path:
 def locks_dir() -> Path:
     """Advisory-lock sidecar directory (``~/.fno/locks``).
 
-    Deliberately config-free (``$HOME`` only, no settings load) so
-    ``fno.plan._stamp`` can compute it under the bare python - no tomli_w - that
-    Rust finalize invokes. The plan-doc lock is keyed by the plan's resolved path,
+    Deliberately config-free (``$HOME``/``FNO_STATE_DIR`` only, no settings load). The plan-doc lock is keyed by the plan's resolved path,
     so the two fno writers only need to agree on this directory; a config
     ``state_dir`` override deliberately does NOT move it (moving it would desync
-    the config-loading append side from the config-free stamp side)."""
+    the config-loading append side from the config-free stamp side). The
+    ``FNO_STATE_DIR`` carrier may: it needs no config load, so both writers
+    agree under it, and the seal pins it around a forwarded HOME."""
+    if carrier := os.environ.get("FNO_STATE_DIR"):
+        return Path(os.path.expanduser(carrier)).resolve() / "locks"
     return Path.home() / ".fno" / "locks"
 
 
+def place_anchor(root: Path) -> Path:
+    """Mirror the Rust state_layout::place ladder for a graph anchor: the db
+    twin's presence picks between the db/ spelling and the legacy one, so a
+    root mid-migration and a root already moved both answer the store they
+    actually hold."""
+    if (root / "db" / "graph.db").exists():
+        return root / "db" / "graph.json"
+    if (root / "graph.db").exists():
+        return root / "graph.json"
+    return root / "db" / "graph.json"
+
+
 def graph_json() -> Path:
-    """Return the path to graph.json."""
-    settings = _settings()
-    override = settings.paths.graph_json
-    if override is not None:
-        return _guard_state_path(_resolve(override))
-    return state_dir() / "graph.json"
+    """Return the path to graph.json (the anchor; its store is the db sibling)."""
+    return place_anchor(state_dir())
 
 
 def graph_archive_json() -> Path:
-    """Return the path to graph-archive.json (terminal-node archive sweep).
-
-    A sibling of graph.json so it follows any ``config.paths.graph_json``
-    override automatically - the archive must live next to the graph it drains
-    from. No override of its own (and so no bare ``~/.fno``): it is never
-    meaningful to separate the archive from its working graph.
-    """
     return graph_json().parent / "graph-archive.json"
 
 
 def relatedness_json() -> Path:
     """Return the path to relatedness.json (node-to-node relatedness sidecar).
-
-    A sibling of graph.json (like graph-archive.json) so it follows any
-    ``config.paths.graph_json`` override and is inherently shared across
-    worktrees. Regenerable artifact, never part of graph.json.
     """
     return graph_json().parent / "relatedness.json"
 
@@ -617,13 +804,17 @@ def ledger_json() -> Path:
 
     Pinned global: the ledger is cross-project by definition (one row per
     terminal session across every repo), so it must never fork into a
-    per-repo stray. An absolute ``config.paths.ledger_json`` override wins,
-    while a relative override is anchored under ``~/.fno``. Otherwise it
-    follows ``config.state_dir`` only when that is an absolute anchor - the
-    ``~/.fno`` default and test sandboxes both are; a *relative*
-    (project-/CWD-anchored) ``state_dir`` would land the ledger inside a repo
-    checkout, so it falls back to the user-global ``~/.fno`` instead.
+    per-repo stray. The ``FNO_STATE_DIR`` carrier wins first: the seal pins an
+    absolute root, so a sealed ledger follows ``state_dir()``. An absolute
+    ``config.paths.ledger_json`` override wins, while a relative override is
+    anchored under ``~/.fno``. Otherwise it follows ``config.state_dir`` only
+    when that is an absolute anchor - the ``~/.fno``
+    default and test sandboxes both are; a *relative* (project-/CWD-anchored)
+    ``state_dir`` would land the ledger inside a repo checkout, so it falls
+    back to the user-global ``~/.fno`` instead.
     """
+    if os.environ.get("FNO_STATE_DIR"):
+        return root_state_file("ledger.json")
     settings = _settings()
     override = settings.paths.ledger_json
     if override is not None:
@@ -635,7 +826,7 @@ def ledger_json() -> Path:
         )
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
     if os.path.isabs(raw):
-        return _guard_state_path(state_dir() / "ledger.json")
+        return root_state_file("ledger.json")
     return _guard_state_path(_resolve("~/.fno/") / "ledger.json")
 
 
@@ -658,13 +849,89 @@ def operator_lane() -> Path:
         )
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
     if os.path.isabs(raw):
-        return _guard_state_path(state_dir() / "my-priorities.md")
+        return root_state_file("my-priorities.md")
     return _guard_state_path(_resolve("~/.fno/") / "my-priorities.md")
 
 
 def global_events_json() -> Path:
     """Return the cross-checkout event journal beside the global ledger."""
     return _guard_state_path(ledger_json().parent / "events.jsonl")
+
+
+def _state_subfile_at(root: Path, subfolder: str, name: str, legacy_name: str) -> Path:
+    """The move ladder against an explicit root (so a must-not-raise caller
+    can name ``~/.fno`` without loading settings): answer
+    ``<root>/<subfolder>/<name>``, renaming the legacy root spelling into it
+    on first resolve. The rename never clobbers an existing ``state/`` file
+    (merge-capable readers fold the legacy remainder themselves) and keeps
+    the caller on the legacy path when it cannot land.
+    """
+    new = root / subfolder / name
+    legacy = root / legacy_name
+    if legacy.exists() and not new.exists():
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(new)
+        except OSError:
+            # A racer's winning rename removed legacy; answering legacy would
+            # send the write back to the root, so prefer a new that exists.
+            return _guard_state_path(new if new.exists() else legacy)
+    return _guard_state_path(new)
+
+
+def state_runtime_file(name: str, legacy_name: Optional[str] = None) -> Path:
+    """A rewritten runtime-state file under ``state/``, reading the legacy
+    root spelling while it exists. The one resolver for the pr-watch,
+    fleet-sweep, provider-runtime, failover, health-throttle, recovery-nudge
+    and watchdog-sweep state the tidiness law moved off the root
+    (docs/state-root-inventory.md): the resolver is the mover, so no second
+    mechanism can drift. ``legacy_name`` carries a root file whose spelling
+    the move also changed (the dot-stamps drop their dot).
+    """
+    return _state_subfile_at(state_dir(), "state", name, legacy_name or name)
+
+
+def logs_file(name: str) -> Path:
+    """A log file under ``logs/``: the same ladder as
+    :func:`state_runtime_file` for the root logs the tidiness law moved.
+    """
+    return _state_subfile_at(state_dir(), "logs", name, name)
+
+
+# The inventory doc's remaining root-file rows: the fence a root-level write
+# passes. SHRINK-ONLY like the rows it mirrors - a writer that moves deletes
+# its name here and its doc row in the same PR (the parity test in
+# cli/tests/test_state_root_inventory.py refuses a name no row matches).
+_ROOT_STATE_FILE_ROWS: frozenset[str] = frozenset(
+    {
+        "config.toml", "config.toml.lock", "config.toml.bak",
+        "settings.yaml", "settings.yaml.lock",
+        "ledger.json", "ledger.md",
+        "events.jsonl", "events.jsonl.1", "events.jsonl.ephemeral",
+        "decisions.jsonl", "decisions.jsonl.compact", "decisions.jsonl.corrupt",
+        "questions.jsonl",
+        "my-priorities.md", "my-priorities.md.lock",
+        ".env", ".gitignore", ".path-migration-done",
+    }
+)
+
+
+def root_state_file(name: str) -> Path:
+    """A root-level state file, refusing any leaf the inventory does not row.
+
+    Root rows are shrink-only, so a NEW root-level write has no row and this
+    door refuses it, naming the remedy. The remaining root writers route
+    through here so the day one moves, the row, the fence entry and the
+    accessor leave in one change.
+    """
+    if name not in _ROOT_STATE_FILE_ROWS:
+        raise ValueError(
+            f"'{name}' has no state-root inventory row; the root holds no new "
+            "writers (docs/state-root-inventory.md, 'The rule'). Put the state "
+            "in a named subfolder - state_runtime_file() for rewritten runtime "
+            "state, logs_file() for logs, or an existing folder accessor."
+        )
+    return state_dir() / name
 
 
 def decisions_jsonl() -> Path:
@@ -683,7 +950,7 @@ def questions_jsonl() -> Path:
 
 
 def project_events_json() -> Path:
-    """The per-checkout event journal, or the scratch journal a harness pins.
+    """The per-repository event journal in the space, or the pin a harness sets.
 
     ``FNO_EVENTS_PATH`` exists because repo-root resolution cannot be
     sandboxed. ``fno.hermetic.neutralise`` deliberately leaves ``FNO_REPO_ROOT``
@@ -711,7 +978,96 @@ def project_events_json() -> Path:
     override = os.environ.get("FNO_EVENTS_PATH")
     if override:
         return _guard_state_path(Path(override))
-    return _guard_state_path(resolve_repo_root() / ".fno" / "events.jsonl")
+    space = space_dir() / "events.jsonl"
+    migrate_from_checkout(resolve_repo_root() / ".fno" / "events.jsonl", space)
+    return _guard_state_path(space)
+
+
+# Sibling journal suffix for ephemeral-class rows. Declared here, the
+# dependency-free module, so both `fno.events` (which aliases it as
+# EPHEMERAL_SUFFIX) and `event_journals` share one definition; the Rust
+# EventEmitter states the same string and a parity test holds all of them
+# equal.
+EPHEMERAL_EVENTS_SUFFIX = ".ephemeral"
+
+
+def journal_and_ephemeral_sibling(path: Path) -> list[Path]:
+    """The resolved journal plus its ``.ephemeral`` sibling, oldest first.
+
+    The one derivation for readers that take an explicit journal path: the
+    journal is RESOLVED first because callers pass worktree journals that are
+    symlinks into the repo space, and the sibling lives beside the real file,
+    not beside the link. Readers with a different shape (the scoreboard's
+    static ledger pair, the pane reader's rotation bridge) still derive their
+    own lists but must keep this resolve-first order.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path.absolute()
+    return [
+        resolved,
+        resolved.with_name(resolved.name + EPHEMERAL_EVENTS_SUFFIX),
+    ]
+
+
+def event_journals() -> list[Path]:
+    """Return every event journal and retained rotation, oldest first.
+
+    The three live journals have different owners, but each uses the same
+    ``events.jsonl`` rotation convention. Resolve and de-duplicate after
+    expansion because a worktree journal may be a symlink to the project log.
+    Each resolved journal also contributes its ``.ephemeral`` sibling (retention
+    routing) plus that sibling's own numeric rotations, listed only
+    when they exist - the sibling is derived from the RESOLVED journal so a
+    symlinked worktree journal points at its space's sibling, the same file
+    the writers route to.
+    """
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for live in (
+        global_events_json(),
+        agents_home_dir() / "events.jsonl",
+        project_events_json(),
+    ):
+        try:
+            resolved_live = live.resolve()
+        except OSError:
+            resolved_live = live.absolute()
+        bases = [resolved_live]
+        ephemeral = resolved_live.with_name(resolved_live.name + EPHEMERAL_EVENTS_SUFFIX)
+        if ephemeral.exists():
+            bases.append(ephemeral)
+        for base in bases:
+            parent = base.parent
+            prefix = base.name + "."
+            rotated: list[tuple[int, Path]] = []
+            entries: Iterable[Path]
+            try:
+                # list() forces the lazy iterdir generator INSIDE the try: the
+                # open happens on first next(), so a bare assignment never catches
+                # the missing-parent error this handler exists to absorb.
+                entries = list(parent.iterdir())
+            except OSError:
+                entries = ()
+            for candidate in entries:
+                if not candidate.name.startswith(prefix):
+                    continue
+                suffix = candidate.name[len(prefix) :]
+                if suffix.isdigit() and candidate.exists():
+                    rotated.append((int(suffix), candidate))
+            rotated.sort(key=lambda item: item[0], reverse=True)
+            candidates = [path for _, path in rotated]
+            candidates.append(base)
+            for candidate in candidates:
+                try:
+                    path = candidate.resolve()
+                except OSError:
+                    path = candidate.absolute()
+                if path not in seen:
+                    seen.add(path)
+                    resolved.append(path)
+    return resolved
 
 
 def repo_identity_from_remote_url(url: str) -> Optional[str]:
@@ -805,8 +1161,8 @@ def evals_history() -> Path:
         return _guard_state_path(_resolve(override))
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
     if os.path.isabs(raw):
-        return state_dir() / "evals-history.jsonl"
-    return _guard_state_path(_resolve("~/.fno/") / "evals-history.jsonl")
+        return state_dir() / "history" / "evals-history.jsonl"
+    return _guard_state_path(_resolve("~/.fno/") / "history" / "evals-history.jsonl")
 
 
 def benchmarks_json() -> Path:
@@ -818,12 +1174,16 @@ def benchmarks_json() -> Path:
     ``~/.fno`` rather than forking into a repo checkout. No dedicated
     ``config.paths`` override: callers that need isolation pass an explicit path
     to the benchmarks module (the refresh/show/load functions all accept one).
+
+    Resolves under ``cache/`` per the state-root tidiness law, renaming the
+    legacy root spelling on first resolve (the same move ladder
+    :func:`state_runtime_file` runs).
     """
     settings = _settings()
     raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
     if os.path.isabs(raw):
-        return _guard_state_path(state_dir() / "benchmarks.json")
-    return _guard_state_path(_resolve("~/.fno/") / "benchmarks.json")
+        return _state_subfile_at(state_dir(), "cache", "benchmarks.json", "benchmarks.json")
+    return _state_subfile_at(_resolve("~/.fno/"), "cache", "benchmarks.json", "benchmarks.json")
 
 
 def runtime_state_json() -> Path:
@@ -838,40 +1198,27 @@ def runtime_state_json() -> Path:
     429-lock WRITE path, and a bad config must never turn a rate-limit into a
     crash that loses the lock. Tests pin an explicit file via the
     ``FNO_RUNTIME_STATE_PATH`` env override instead of a config key.
+
+    Resolves under ``state/`` per the state-root tidiness law through
+    :func:`state_runtime_file`; the Rust reader
+    (``fno-agents provider_cap::runtime_state_path``) mirrors the same
+    ladder, so the two languages answer one file.
     """
     try:
         settings = _settings()
         raw = os.path.expanduser(os.path.expandvars(settings.state_dir))
         if os.path.isabs(raw):
-            return _guard_state_path(state_dir() / "provider-runtime-state.json")
+            return state_runtime_file("provider-runtime-state.json")
     except Exception:  # noqa: BLE001 - see docstring: never raise on config
         pass
-    return _guard_state_path(_resolve("~/.fno/") / "provider-runtime-state.json")
-
-
-def loops_paused_json() -> Path:
-    """Return the path to the global loops pause-all sentinel.
-
-    Always ``~/.fno/loops-paused.json`` unless explicitly overridden - unlike
-    :func:`ledger_json`, this does NOT follow a customized absolute
-    ``config.state_dir``: a per-project settings.yaml could set a different
-    absolute ``state_dir`` per repo, which would fork the "one global kill
-    switch" sentinel into multiple files despite each being individually
-    absolute. The sentinel's whole purpose is a single coordination point
-    every loop tick checks, across every repo, so it is pinned unconditionally.
-    """
-    settings = _settings()
-    override = settings.paths.loops_paused_json
-    if override is not None:
-        return _guard_state_path(_resolve(override))
-    return _guard_state_path(_resolve("~/.fno/") / "loops-paused.json")
+    return _state_subfile_at(_resolve("~/.fno/"), "state", "provider-runtime-state.json", "provider-runtime-state.json")
 
 
 def observer_reports_dir(
     project_root: Optional[Path] = None, project_id: Optional[str] = None
 ) -> Path:
     """Return the directory where the observer harness writes its
-    human-readable digests (x-57a5, ``<skill>-<date>.md``).
+    human-readable digests (``<skill>-<date>.md``).
 
     Resolution order mirrors :func:`handoffs_dir`:
       1. ``config.paths.observer_reports_dir`` explicit override.
@@ -935,95 +1282,83 @@ def bus_dir() -> Path:
     return state_dir() / "bus"
 
 
-def plans_dir(project_root: Optional[Path] = None) -> Path:
-    """Return the plans directory.
+def _plan_path_door(args: list[str]) -> str:
+    """One pydoor hop to the Rust plans-chain resolver (``plans_path.rs``).
 
-    Default is project-relative: <project_root>/.fno/plans/.
-    When project_root is None, falls back to resolve_repo_root().
+    argv[0] is the resolved binary path, so the pydoor rule stays satisfied.
+    A missing binary or a failing chain raises; callers surface the error
+    rather than silently resolving a wrong dir.
     """
-    settings = _settings()
-    raw = settings.plans_dir
-    root = project_root or resolve_repo_root()
+    import subprocess
 
-    # Detect whether the raw value is a "plain relative" path:
-    # - does not start with /, ~, $
-    # - does not contain { } template variables (no {vault}, {project}, etc.)
-    # For such paths, bypass _resolve() entirely and anchor directly to root.
-    # _resolve() internally calls Path(...).resolve() which uses CWD, ignoring project_root.
-    leading = raw.lstrip()
-    has_templates = "{" in raw
-    is_plain_relative = leading and not (
-        leading.startswith("/")
-        or leading.startswith("~")
-        or "$" in raw  # env vars anywhere, not just at start
-        or has_templates
-    )
+    from fno.rust_binary import resolve_binary
 
-    if is_plain_relative:
-        return (root / raw).resolve()
-
-    # For template-containing or absolute paths, use _resolve (which handles {vault}, {project})
-    return _resolve(raw, project_root=root)
+    binary = resolve_binary()
+    if binary is None:
+        raise RuntimeError(
+            "the fno-agents binary was not found; reinstall footnote "
+            "or set FNO_AGENTS_BIN"
+        )
+    proc = subprocess.run([str(binary), *args], capture_output=True, text=True)
+    if proc.returncode != 0:
+        detail = (proc.stderr or "plan-path verb failed").strip()
+        raise RuntimeError(detail)
+    return proc.stdout.strip()
 
 
 def plans_content_dir(project_root: Optional[Path] = None) -> Path:
-    """Resolve where plan DOCS actually live (x-ff83).
+    """Resolve where plan DOCS actually live.
 
-    Same lookup ``/blueprint`` and interactive ``/think`` use (mirrors the
-    ``scripts/lib/config.sh`` resolution order):
+    The ``plansDirectory -> config.plans_dir`` chain answers from Rust
+    (``plans_path.rs``, the chain's single owner); this door exists so the
+    Python callers keep their import. Same tiers as ever:
       1. ``.claude/settings.local.json`` -> ``plansDirectory`` (per-machine).
       2. ``.claude/settings.json`` -> ``plansDirectory`` (project-level, committed).
-      3. ``config.plans_dir`` (settings.yaml) via :func:`plans_dir`.
-
-    Distinct from :func:`plans_dir`, which returns only the settings.yaml
-    default and does not read the ``.claude`` override the docs vault uses.
+      3. ``config.plans_dir`` (the ``.fno/plans/`` sentinel -> ``<space>/plans``).
     """
-    import json
-
     root = project_root or resolve_repo_root()
-    for name in ("settings.local.json", "settings.json"):
-        try:
-            data = json.loads((root / ".claude" / name).read_text())
-            raw = data.get("plansDirectory")
-            if raw:
-                p = Path(raw)
-                return p if p.is_absolute() else (root / p).resolve()
-        except (OSError, ValueError):
-            continue  # missing/unreadable -> try the next tier
-    return plans_dir(root)
+    return Path(_plan_path_door(["state", "plan-dir", str(root)]))
 
 
-def plan_doc_filename(slug: str, node: str = "", now: Optional[object] = None) -> str:
-    """Render ``config.plans_filename`` (strftime codes + {slug}/{node}).
+_NODE_PREFIX = r"[a-z]" + r"[a-z0-9]{0,7}"
+_NODE_HEX = r"[0-9a-f]{4,8}"
+_NODE_ID_RE = re.compile(_NODE_PREFIX + "-" + _NODE_HEX)
+_PLAN_NODE_RE = re.compile(
+    "-(?P<prefix>" + _NODE_PREFIX + ")-(?P<hex>" + _NODE_HEX + r")\.md$"
+)
 
-    An empty slug or node collapses its dangling separator, so the default
-    template degrades cleanly: no node -> ``20260711-slug.md``, no slug ->
-    ``20260711-x-8af8.md``, never ``--`` or ``-.md``.
-    """
-    import datetime as _dt
-    import re as _re
 
-    stamp = now if isinstance(now, _dt.datetime) else _dt.datetime.now()
-    name = stamp.strftime(_settings().plans_filename).format(slug=slug, node=node)
-    name = _re.sub(r"-{2,}", "-", name)
-    if name.endswith("-.md"):
-        name = name[: -len("-.md")] + ".md"
-    return name.lstrip("-")
+def plan_filename_node_id(path: str | os.PathLike[str], prefixes: set[str] | None = None) -> str | None:
+    """Return the node id encoded by a plan basename, if it has one."""
+    match = _PLAN_NODE_RE.search(Path(str(path).split("#", 1)[0]).name)
+    if match is None:
+        return None
+    prefix = match.group("prefix")
+    if prefixes is not None and prefix not in {p.rstrip("-") for p in prefixes}:
+        return None
+    return f"{prefix}-{match.group('hex')}"
 
 
 def plan_doc_path(
     slug: str,
     node: str = "",
     project_root: Optional[Path] = None,
-    now: Optional[object] = None,
+    now: Optional[datetime | int | float] = None,
 ) -> Path:
     """The save path for a NEW plan/design doc: resolved plans dir + filename.
 
-    ``now`` (default today) sources the filename's date. Threading it lets a
-    recompute from a durable timestamp (e.g. a node's ``created_at``) mint the
-    same path on a later day instead of a fresh-dated duplicate.
+    Resolution and rendering are the Rust chain's (``plans_path.rs``); the
+    door forwards. ``now`` (datetime or epoch seconds, default today) sources
+    the filename's date. Threading it lets a recompute from a durable
+    timestamp (e.g. a node's ``created_at``) mint the same path on a later
+    day instead of a fresh-dated duplicate.
     """
-    return plans_content_dir(project_root) / plan_doc_filename(slug, node, now)
+    root = project_root or resolve_repo_root()
+    args = ["state", "plan-path", "--slug", slug, "--node", node]
+    if now is not None:
+        epoch = now.timestamp() if isinstance(now, datetime) else now
+        args += ["--now", str(int(epoch))]
+    return Path(_plan_path_door([*args, str(root)]))
 
 
 def handoffs_dir(project_root: Optional[Path] = None) -> Path:
@@ -1060,6 +1395,10 @@ def briefs_dir() -> Path:
     if override is not None:
         return _guard_state_path(_resolve(override))
     return state_dir() / "briefs"
+
+
+def lead_faqs_dir() -> Path:
+    return briefs_dir() / "lead-faqs"
 
 
 def sidecar_dir() -> Path:
@@ -1163,10 +1502,11 @@ def hook_logs_dir() -> Path:
 
 def agents_registry_path() -> Path:
     """Return the path to the agents registry JSON file."""
-    settings = _settings()
-    override = settings.paths.agents_registry_path
-    if override is not None:
-        return _guard_state_path(_resolve(override))
+    if os.environ.get("FNO_AGENTS_HOME"):
+        # Same rule as Rust AgentsHome::from_env: a declared home wins, so a
+        # caller that seeded its own home never writes the live registry
+        # (the 2026-09-27 probe overwrite).
+        return _guard_state_path(agents_home_dir() / "registry.json")
     return state_dir() / "agents" / "registry.json"
 
 
@@ -1181,42 +1521,52 @@ def agents_home_dir() -> Path:
     override = os.environ.get("FNO_AGENTS_HOME")
     if override:
         return Path(override).expanduser().resolve()
+    return default_agents_home_dir()
+
+
+def default_agents_home_dir() -> Path:
+    """Return the default Rust agents home, independent of FNO_AGENTS_HOME."""
     return (Path.home() / ".fno" / "agents").resolve()
+
+
+def agents_runtime_registry_path() -> Path:
+    """Return the Rust agents runtime registry, independently of config.state_dir."""
+    return agents_home_dir() / "registry.json"
 
 
 def inbox_dir(project_root: Optional[Path] = None) -> Path:
     """Return the inbox directory.
 
-    Default is project-relative: <project_root>/.fno/inbox/.
+    Default is the space: <space>/inbox/.
     """
     settings = _settings()
     override = settings.paths.inbox_dir
     if override is not None:
         return _resolve(override, project_root=project_root)
     root = project_root or resolve_repo_root()
-    return (root / ".fno" / "inbox").resolve()
+    space = space_dir(root) / "inbox"
+    migrate_from_checkout(root / ".fno" / "inbox", space)
+    return space.resolve()
 
 
 def project_log(name: str, project_root: Optional[Path] = None) -> Path:
-    """Return ``<repo>/.fno/<name>`` for a project-local log/state file.
+    """Return ``<space>/<name>`` for a project log/state file.
 
-    Anchored to :func:`resolve_repo_root` (never CWD) so a hook or CLI
-    subcommand invoked from any subdirectory of the repo lands on the same
-    file. This is the single accessor ad-hoc writers (events.jsonl,
-    finalize.stderr.log, worktree-log.jsonl, inbox-errors.jsonl, ...) route
-    through instead of hand-building ``".fno/" + name`` strings, per the
-    placement rule (state lives only under ``~/.fno/``, ``<project>/.fno/``,
-    or ``internal/<project>/``). Callers needing a nested path (e.g.
-    ``"claims/foo.lock"``) pass the sub-path as part of ``name``.
+    Anchored to the space (one per repository, keyed on the canonical root)
+    so any subdirectory or worktree lands on the same file. The single
+    accessor ad-hoc writers (events.jsonl, finalize.stderr.log,
+    worktree-log.jsonl, inbox-errors.jsonl, ...) route through instead of
+    hand-building ``".fno/" + name`` strings, per the placement rule.
+    Nested paths pass the sub-path as part of ``name``.
     """
     root = project_root or resolve_repo_root()
-    return (root / ".fno" / name).resolve()
+    space = space_dir(root) / name
+    migrate_from_checkout(root / ".fno" / name, space)
+    return space.resolve()
 
 
 def status_sinks_dir(project_root: Optional[Path] = None) -> Path:
-    """Directory holding per-sink cursor + error-log files for the status
-    fanout (``<repo>/.fno/status-sinks/``, x-2057). Routes through
-    :func:`project_log` so callers never hand-assemble a ``.fno/`` path."""
+    """Per-sink cursors + error logs for the status fanout."""
     return project_log("status-sinks", project_root=project_root)
 
 
@@ -1321,23 +1671,27 @@ def inbox_path(project_root: Optional[Path] = None) -> Path:
     Resolution order:
       1. ``config.paths.inbox_path`` explicit override (template-expanded).
       2. ``config.post_merge.parking_lot_path`` when set - the per-project queue
-         the producer (``/fno:pr merged``) writes its narrative to. The
+         the producer (``/fno:ship pr merged``) writes its narrative to. The
          design unifies the two: the capture-tier inbox and the post-merge prose
          file are ONE file, so honoring this keeps ``fno backlog capture
          add/list/tidy/promote/dismiss`` and the producer pointed at the same
          file in EVERY repo - not the fno-area default, which is the wrong
          file outside this repo (and would make producer-written items invisible
          to the read commands).
-      3. With Obsidian enabled: ``<project_root>/internal/fno/backlog/parking-lot.md``
+      3. With Obsidian enabled AND this repo already carries an ``internal/``
+         (the vault symlink setup-worktree creates): ``<project_root>/internal/fno/backlog/parking-lot.md``
          (canonical default), unless a legacy
          ``internal/fno/backlog/inbox.md`` already exists, in which case that
          file keeps being used (back-compat, so old captures still resolve).
+         The global Obsidian flag is machine-level consent, not per-project:
+         a repo without its own ``internal/`` never gets one created.
       4. Without a vault, but a legacy ``internal/fno/backlog/inbox.md``
          already exists under the repo: keep using it (back-compat, so an
          upgrade never strands previously captured fu-* items).
       5. Without a vault, but a legacy ``.fno/backlog/inbox.md`` exists: keep it.
-      6. Without a vault and no legacy file: ``<project_root>/.fno/backlog/parking-lot.md``
-         so a non-vault repo never has a stray ``internal/`` directory materialized.
+      6. Otherwise: ``<project_root>/.fno/backlog/parking-lot.md``
+         so a repo without its own vault link never has a stray ``internal/``
+         directory materialized.
 
     The Obsidian default is plain-relative and anchors to the repo root
     (mirrors plans_dir). ``.resolve()`` follows the ``internal/`` symlink to
@@ -1358,7 +1712,7 @@ def inbox_path(project_root: Optional[Path] = None) -> Path:
         raw = override
     elif post_merge_parking_lot is not None:
         raw = post_merge_parking_lot
-    elif settings.obsidian.enabled:
+    elif settings.obsidian.enabled and (root / "internal").exists():
         if (root / "internal/fno/backlog/inbox.md").exists():
             raw = "internal/fno/backlog/inbox.md"
         else:
@@ -1413,19 +1767,19 @@ def config_file() -> Path:
     actual = loaded_from()
     if actual is not None:
         return actual
-    return state_dir() / "config.toml"
+    return root_state_file("config.toml")
 
 
 # ---------------------------------------------------------------------------
-# Plugin-script resolution with a self-healing persisted pointer (#2)
+# Plugin-script resolution with a persisted pointer (#2)
 # ---------------------------------------------------------------------------
 # `fno do target init` / `fno gate set` need scripts that ship with the PLUGIN
 # (hooks/, scripts/lib/), not the active project. From a foreign project with
 # no env hint those were unreachable (the uv-tool wheel carries no hooks/, and
 # CLAUDE_PLUGIN_ROOT is not propagated to `fno` subprocesses), forcing a
-# hand-set FNO_REPO_ROOT. resolve_plugin_script() adds a persisted
-# ~/.fno/plugin-root pointer, primed by the session-start hook and
-# self-healed on any env/pkg resolve, as the env-less fallback.
+# hand-set FNO_REPO_ROOT. resolve_plugin_script() falls back to the persisted
+# ~/.fno/install/plugin-root pointer, written by the session-start hook from an
+# installed or canonical root, as the env-less fallback.
 
 _PLUGIN_ROOT_POINTER_NAME = "plugin-root"
 _PLUGIN_MARKER_RELPATH = "hooks/helpers/init-target-state.sh"
@@ -1434,11 +1788,11 @@ _PLUGIN_MARKER_RELPATH = "hooks/helpers/init-target-state.sh"
 def _plugin_root_pointer() -> Path:
     # ~/.fno (or $FNO_HOME). Computed inline - paths.py has no
     # fno_home() helper, and reading the env fresh each call (no cache)
-    # matches the session-start hook's ${FNO_HOME:-$HOME/.fno}
+    # matches the session-start hook's ${FNO_HOME:-$HOME/.fno}/install
     # exactly, so the hook-written pointer and this reader always agree.
     home = os.environ.get("FNO_HOME")
     base = Path(home).expanduser() if home else Path.home() / ".fno"
-    return base / _PLUGIN_ROOT_POINTER_NAME
+    return base / "install" / _PLUGIN_ROOT_POINTER_NAME
 
 
 def _is_plugin_root(root: Path) -> bool:
@@ -1473,12 +1827,13 @@ def _canonical_plugin_root(root: Path) -> Path:
 
 
 def _read_persisted_plugin_root() -> "Path | None":
-    """Read ~/.fno/plugin-root, returning it only if it still looks like
+    """Read ~/.fno/install/plugin-root, returning it only if it still looks like
     the plugin (marker present). A stale pointer (plugin moved/removed) returns
     None so resolution falls through rather than handing back a dead path. The
-    session-start hook writes the CURRENT (often a linked-worktree) checkout, so
-    the pointer is canonicalized to the main checkout here - the sole read point
-    - rather than shelling out in the subprocess-sensitive persist/env path."""
+    session-start hook writes installed and canonical roots only, but pointers
+    written before that guard may still name a linked worktree, so the pointer
+    is canonicalized to the main checkout here - the sole read point - rather
+    than shelling out on the env/pkg resolve path."""
     try:
         pointer = _plugin_root_pointer()
         if not pointer.is_file():
@@ -1489,48 +1844,23 @@ def _read_persisted_plugin_root() -> "Path | None":
     return cand if _is_plugin_root(cand) else None
 
 
-def _persist_plugin_root(root: Path) -> None:
-    """Best-effort cache of *root* to ~/.fno/plugin-root. Only writes a
-    root carrying the plugin manifest (.claude-plugin/plugin.json), so an
-    env/test fake with just a stub hook can never poison the pointer. A
-    worktree root is canonicalized at READ time (_read_persisted_plugin_root),
-    not here, so this stays subprocess-free. Never raises - priming is an
-    optimization, not a contract."""
-    try:
-        if not (root / ".claude-plugin" / "plugin.json").is_file():
-            return
-        pointer = _plugin_root_pointer()
-        new = str(root)
-        if pointer.is_file() and pointer.read_text().strip() == new:
-            return
-        pointer.parent.mkdir(parents=True, exist_ok=True)
-        tmp = pointer.with_name(pointer.name + ".tmp")
-        tmp.write_text(new + "\n")
-        tmp.replace(pointer)
-    except OSError:
-        pass
-
-
 def resolve_plugin_script(relpath: str) -> Path:
     """Resolve a script that ships with the fno PLUGIN (not the active
     project), e.g. ``hooks/helpers/init-target-state.sh`` or
     ``scripts/setup/setup-worktree.sh``.
 
     Order: env hint (CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT / FNO_REPO_ROOT, authoritative) ->
-    package-relative -> persisted ~/.fno/plugin-root pointer -> repo.
-    Self-heals the pointer on any env/pkg resolve (manifest-gated)."""
+    package-relative -> persisted ~/.fno/install/plugin-root pointer -> repo."""
     for env_name in ("CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"):
         root = os.environ.get(env_name)
         if root:
             base = Path(root).expanduser()
-            _persist_plugin_root(base)
             return base / relpath
     pkg_root = Path(__file__).resolve().parents[3]
     if _is_plugin_root(pkg_root):
-        _persist_plugin_root(pkg_root)
         return pkg_root / relpath
     persisted = _read_persisted_plugin_root()
-    if persisted is not None:
+    if persisted is not None and (persisted / relpath).exists():
         return persisted / relpath
     return resolve_repo_root() / relpath
 

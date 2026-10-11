@@ -7,24 +7,32 @@ targets) is paired with the same mutation writing graph.json, proving the
 mutator ran and chose to skip.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
-import hashlib
-import json
 import os
 from pathlib import Path
 from typing import Generator
 
 import pytest
 
-from fno.graph.store import locked_mutate_graph
+from fno.graph.store import commit_rows_via_store, render_canonical_views
+
+# Since the store port every mutation here rides the keeper, so the module
+# needs the compiled runtime and skips whole where the smoke harness deleted
+# the worker binary (the parity-test convention).
+requires_rust = pytest.mark.dev_build
+
+pytestmark = requires_rust
 
 
 def _write_graph(path: Path, entries: list[dict]) -> None:
-    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    seed_graph(path, entries)
 
 
 def _read_graph(path: Path) -> list[dict]:
-    return json.loads(path.read_text(encoding="utf-8"))["entries"]
+    from fno.graph.store import read_graph_strict
+
+    return read_graph_strict(path)
 
 
 def _entry(eid: str, **kwargs) -> dict:
@@ -52,6 +60,11 @@ def _write_config(targets_toml: str, tmp_path: Path, monkeypatch: pytest.MonkeyP
     cfg = tmp_path / "config.toml"
     cfg.write_text(f"[backlog]\n{targets_toml}", encoding="utf-8")
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(cfg))
+    # The declaration key is unchanged by a content rewrite; drop the entry or
+    # the next read serves the previous rows and the shadow warning mis-fires.
+    from fno.config import _load_settings_at
+
+    _load_settings_at.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -66,19 +79,8 @@ def _isolate(
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path / "repo"))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
 
-    from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.graph._constants as gc
-    import fno.paths as paths_mod
-
-    for cache in ("_settings", "resolve_repo_root"):
-        maybe = getattr(paths_mod, cache, None)
-        if maybe is not None:
-            try:
-                maybe.cache_clear()  # type: ignore[attr-defined]
-            except AttributeError:
-                pass
     for attr in ("GRAPH_JSON", "GRAPH_MD", "GRAPH_HTML", "GRAPH_ARCHIVE_JSON"):
         try:
             delattr(gc, attr)
@@ -92,21 +94,26 @@ def _isolate(
         "html": tmp_path / "graph.html",
         "target": tmp_path / "out" / "fno-backlog.html",
     }
-    # Canonical by default: the mutator's GRAPH_JSON comparison resolves
-    # against these pinned constants, so renders stay inside tmp_path.
-    monkeypatch.setattr(gc, "GRAPH_JSON", graph)
-    monkeypatch.setattr(gc, "GRAPH_MD", paths["md"])
-    monkeypatch.setattr(gc, "GRAPH_HTML", paths["html"])
+    # Canonical by default: pin the RESOLVER the mutator consults (setattr on
+    # the lazy facade would bake the path into the module at undo, and the
+    # resolver is what canonicality reads), then the render targets through
+    # setitem so their undo unbakes too.
+    monkeypatch.setattr("fno.paths.graph_json", lambda: graph)
+    monkeypatch.setitem(vars(gc), "GRAPH_JSON", graph)
+    monkeypatch.setitem(vars(gc), "GRAPH_MD", paths["md"])
+    monkeypatch.setitem(vars(gc), "GRAPH_HTML", paths["html"])
     yield paths
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def _mutate(graph: Path, entries: list[dict], new_title: str) -> None:
     _write_graph(graph, entries)
-    locked_mutate_graph(
+    commit_rows_via_store(
         graph,
         lambda nodes: nodes[0].__setitem__("title", new_title) or nodes,
     )
+    # The write no longer renders inline (task 8.3): the keeper trigger's
+    # pass is what renders, so the tests run it explicitly.
+    render_canonical_views()
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +127,7 @@ def test_render_target_config_defaults_and_typo():
     row = RenderTargetConfig.model_validate(
         {"path": "~/vault/fno-backlog.html", "project": "fno"}
     )
-    assert row.projection == "backlog"
+    assert row.projection == "local"
     with pytest.raises(Exception) as exc:
         RenderTargetConfig.model_validate(
             {"path": "~/v/x.html", "project": "fno", "projection": "loc"}
@@ -196,7 +203,7 @@ def test_misspelled_target_key_refuses_the_row_without_bricking_settings(monkeyp
     assert "'scop'" in err and "publish every project" in err
 
 
-def test_state_file_collision_skips_target(_isolate, tmp_path, monkeypatch, capsys):
+def test_state_file_collision_skips_target(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     import fno.graph._constants as gc
 
     md = _isolate["md"]
@@ -214,10 +221,10 @@ def test_state_file_collision_skips_target(_isolate, tmp_path, monkeypatch, caps
     assert "collides with graph state file" in err and "graph.md" in err
     # The state file keeps its markdown render; public HTML never landed in it.
     assert "public items" not in md.read_text(encoding="utf-8")
-    # The rest of the family: lock, sidecar, backup, archive, ledger.
+    # The rest of the family: lock, backup, archive, ledger. The `.sha256`
+    # sidecar is retired, so the guard does not name it and neither does this.
     for state_path in (
         str(gc.GRAPH_JSON) + ".lock",
-        str(gc.GRAPH_JSON) + ".sha256",
         str(gc.GRAPH_JSON) + ".bak",
         gc.GRAPH_ARCHIVE_JSON,
         gc.LEDGER_JSON,
@@ -235,7 +242,7 @@ def test_state_file_collision_skips_target(_isolate, tmp_path, monkeypatch, caps
         assert "collides with graph state file" in capsys.readouterr().err
 
 
-def test_zero_match_project_leaves_board_unchanged(_isolate, tmp_path, monkeypatch, capsys):
+def test_zero_match_project_leaves_board_unchanged(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     target = _isolate["target"]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("PRIOR BOARD BYTES", encoding="utf-8")
@@ -254,7 +261,7 @@ def test_zero_match_project_leaves_board_unchanged(_isolate, tmp_path, monkeypat
     assert "matches no graph entry" in err and "ghost" in err
 
 
-def test_unreadable_sibling_no_false_alarm(_isolate, tmp_path, monkeypatch, capsys):
+def test_unreadable_sibling_no_false_alarm(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     """A corrupt legacy settings.yaml under a config.toml that fully defines
     the rows renders normally and does NOT warn may-be-disabled."""
     global_yaml = tmp_path / "settings.yaml"
@@ -274,7 +281,7 @@ def test_unreadable_sibling_no_false_alarm(_isolate, tmp_path, monkeypatch, caps
     assert "may be disabled" not in capsys.readouterr().err
 
 
-def test_bad_row_skipped_good_row_renders(_isolate, tmp_path, monkeypatch, capsys):
+def test_bad_row_skipped_good_row_renders(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     good = tmp_path / "out" / "good.html"
     _write_config(
         f'[[backlog.render_targets]]\npath = "relative.html"\nproject = "fno"\n'
@@ -291,7 +298,7 @@ def test_bad_row_skipped_good_row_renders(_isolate, tmp_path, monkeypatch, capsy
     assert "skipping malformed backlog.render_targets row" in capsys.readouterr().err
 
 
-def test_project_local_rows_warn_not_render(_isolate, tmp_path, monkeypatch, capsys):
+def test_project_local_rows_warn_not_render(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     global_cfg = tmp_path / "config.toml"
     global_cfg.write_text("[backlog]\n", encoding="utf-8")
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(global_cfg))
@@ -301,16 +308,13 @@ def test_project_local_rows_warn_not_render(_isolate, tmp_path, monkeypatch, cap
         encoding="utf-8",
     )
     monkeypatch.setenv("FNO_CONFIG", str(local_cfg))
-    from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    from fno.graph.roadmap_public import render_configured_targets
+    from fno.graph.roadmap_public import render_local_targets
 
-    render_configured_targets([])
+    assert render_local_targets() == 0
     err = capsys.readouterr().err
     assert "project-local row(s) ignored" in err
     assert not _isolate["target"].exists()
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_render_targets_table_typo_degrades_to_empty(caplog):
@@ -329,7 +333,7 @@ def test_render_targets_table_typo_degrades_to_empty(caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_configured_target_written_on_mutation(_isolate, tmp_path, monkeypatch, capsys):
+def test_configured_target_written_on_mutation(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     _write_config(
         f'[[backlog.render_targets]]\npath = "{_isolate["target"]}"\nproject = "fno"',
         tmp_path,
@@ -345,7 +349,7 @@ def test_configured_target_written_on_mutation(_isolate, tmp_path, monkeypatch, 
     assert 'id="stats"' in text
 
 
-def test_target_mtime_advances_within_mutation_call(_isolate, tmp_path, monkeypatch):
+def test_target_mtime_advances_with_each_view_pass(_isolate, tmp_path, monkeypatch, native_board_render):
     _write_config(
         f'[[backlog.render_targets]]\npath = "{_isolate["target"]}"\nproject = "fno"',
         tmp_path,
@@ -353,46 +357,16 @@ def test_target_mtime_advances_within_mutation_call(_isolate, tmp_path, monkeypa
     )
     graph = _isolate["graph"]
     _write_graph(graph, [_entry("ab-mtime00", title="first title")])
-    locked_mutate_graph(graph, lambda nodes: nodes)
+    commit_rows_via_store(graph, lambda nodes: nodes)
+    render_canonical_views()
     before = _isolate["target"].stat().st_mtime_ns
-    locked_mutate_graph(graph, lambda nodes: nodes)
+    commit_rows_via_store(graph, lambda nodes: nodes)
+    render_canonical_views()
     after = _isolate["target"].stat().st_mtime_ns
     assert after > before
 
 
-def test_leak_refusal_leaves_target_byte_identical(_isolate, tmp_path, monkeypatch, capsys):
-    target = _isolate["target"]
-    _write_config(
-        f'[[backlog.render_targets]]\npath = "{target}"\nproject = "fno"',
-        tmp_path,
-        monkeypatch,
-    )
-    graph = _isolate["graph"]
-    _write_graph(graph, [_entry("ab-leaky000", title="x-1234 leaks here")])
-    locked_mutate_graph(graph, lambda nodes: nodes)
-    assert not target.exists()
-    # Seed the target with prior bytes, then mutate again: the refusal must
-    # leave those bytes untouched.
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("PRIOR PUBLIC BYTES", encoding="utf-8")
-    digest_before = hashlib.sha256(target.read_bytes()).hexdigest()
-
-    def mutator(nodes):
-        nodes[0]["priority"] = "p1"
-        return nodes
-
-    locked_mutate_graph(graph, mutator)
-
-    assert hashlib.sha256(target.read_bytes()).hexdigest() == digest_before
-    err = capsys.readouterr().err
-    assert "leak gate refused" in err
-    assert "x-1234" in err and "node-id" in err
-    # The mutation itself must not be wedged by the public refusal.
-    row = _read_graph(graph)[0]
-    assert row["priority"] == "p1"
-
-
-def test_drained_project_writes_valid_empty_projection(_isolate, tmp_path, monkeypatch, capsys):
+def test_drained_project_writes_valid_empty_projection(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     target = tmp_path / "out" / "empty.html"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("STALE BYTES FROM A DEAD PROJECT", encoding="utf-8")
@@ -417,11 +391,11 @@ def test_drained_project_writes_valid_empty_projection(_isolate, tmp_path, monke
     )
     text = target.read_text(encoding="utf-8")
     assert "STALE BYTES" not in text
-    assert '"nodes":[]' in text
+    assert "shipped long ago" in text
     assert "matches no graph entry" not in capsys.readouterr().err
 
 
-def test_unwritable_target_warns_and_completes(_isolate, tmp_path, monkeypatch, capsys):
+def test_unwritable_target_warns_and_completes(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
     outdir = tmp_path / "locked-out"
     outdir.mkdir()
     target = outdir / "board.html"
@@ -446,17 +420,19 @@ def test_unwritable_target_warns_and_completes(_isolate, tmp_path, monkeypatch, 
 
 
 def test_non_canonical_graph_skips_targets(_isolate, tmp_path, monkeypatch):
-    import fno.graph._constants as gc
-
     target = tmp_path / "out" / "board.html"
     _write_config(
         f'[[backlog.render_targets]]\npath = "{target}"\nproject = "fno"',
         tmp_path,
         monkeypatch,
     )
-    # Point the canonical constant AWAY from the mutated graph: a tmp graph
-    # must never write the operator's configured public targets.
-    monkeypatch.setattr(gc, "GRAPH_JSON", tmp_path / "elsewhere" / "graph.json")
+    # Point canonicality AWAY from the mutated graph through the seam the
+    # store reads (_is_canonical resolves fno.paths.graph_json at call time;
+    # patching the facade constant would not land). A tmp graph must never
+    # write the operator's configured public targets.
+    monkeypatch.setattr(
+        "fno.paths.graph_json", lambda: tmp_path / "elsewhere" / "graph.json"
+    )
     _mutate(
         _isolate["graph"],
         [_entry("ab-tmpgraph", title="first title")],
@@ -467,7 +443,9 @@ def test_non_canonical_graph_skips_targets(_isolate, tmp_path, monkeypatch):
     assert not target.exists()
 
 
-def test_roadmap_projection_target(_isolate, tmp_path, monkeypatch):
+def test_roadmap_projection_target(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
+    """The rendered public projections are retired: the row warns, skips,
+    and its path is never written (the web backlog page is the board)."""
     target = tmp_path / "out" / "roadmap.html"
     _write_config(
         f'[[backlog.render_targets]]\npath = "{target}"\nproject = "fno"\n'
@@ -480,13 +458,14 @@ def test_roadmap_projection_target(_isolate, tmp_path, monkeypatch):
         [_entry("ab-roadmap0", title="shipped work", completed_at="2026-01-02T00:00:00Z")],
         "shipped work",
     )
-    text = target.read_text(encoding="utf-8")
-    assert "fno roadmap" in text
-    assert "shipped work" in text
+    assert not target.exists()
+    err = capsys.readouterr().err
+    assert "projection 'roadmap' is retired" in err
+
 
 
 def test_local_targets_support_global_and_project_scopes_without_public_gate(
-    _isolate, tmp_path, monkeypatch, capsys
+    _isolate, tmp_path, monkeypatch, capsys, native_board_render
 ):
     global_target = tmp_path / "out" / "global.html"
     project_target = tmp_path / "out" / "fno.html"
@@ -520,66 +499,28 @@ def test_local_targets_support_global_and_project_scopes_without_public_gate(
     assert "ab-other000" not in project_text
     assert "/Users/me/private-plan.md" in project_text
     assert not public_target.exists()
-    assert "leak gate refused" in capsys.readouterr().err
+    assert "projection 'backlog' is retired" in capsys.readouterr().err
 
 
-def test_duplicate_target_paths_keep_the_first_projection(_isolate, tmp_path, monkeypatch, capsys):
+def test_duplicate_target_paths_keep_the_first_projection(tmp_path, monkeypatch, capsys):
+    """A duplicated path keeps its FIRST row, so an operator's later rewording
+    cannot silently re-project a page they already configured."""
     target = tmp_path / "out" / "same.html"
-    _write_config(
-        f'[[backlog.render_targets]]\npath = "{target}"\nproject = "fno"\nprojection = "backlog"\n'
-        f'[[backlog.render_targets]]\npath = "{target}"\nscope = "fno"\nprojection = "local"\n',
-        tmp_path,
-        monkeypatch,
+    monkeypatch.setattr(
+        "fno.config_io.read_global_block",
+        lambda *_a, **_k: {
+            "render_targets": [
+                {"path": str(target), "project": "fno", "projection": "backlog"},
+                {"path": str(target), "scope": "fno", "projection": "local"},
+            ]
+        },
     )
-    _mutate(
-        _isolate["graph"],
-        [
-            _entry(
-                "duplicate-marker",
-                title="clean public title",
-                project="fno",
-                plan_path="/Users/me/private-plan.md",
-            )
-        ],
-        "clean public title",
-    )
+    from fno.graph import roadmap_public
 
-    text = target.read_text(encoding="utf-8")
-    assert "clean public title" in text
-    assert "duplicate-marker" not in text
-    assert "/Users/me/private-plan.md" not in text
+    targets = roadmap_public._configured_targets()
+    assert [t.projection for t in targets if t.path == str(target)] == ["backlog"]
     assert "duplicate render target path" in capsys.readouterr().err
 
-
-def test_gate_is_scoped_to_the_targets_own_render_set(_isolate, tmp_path, monkeypatch, capsys):
-    backlog_target = tmp_path / "out" / "backlog.html"
-    roadmap_target = tmp_path / "out" / "roadmap.html"
-    _write_config(
-        f'[[backlog.render_targets]]\npath = "{backlog_target}"\nproject = "fno"\n'
-        f'[[backlog.render_targets]]\npath = "{roadmap_target}"\nproject = "fno"\n'
-        'projection = "roadmap"',
-        tmp_path,
-        monkeypatch,
-    )
-    # A Done title carrying a PR reference leaks in the roadmap projection
-    # (Done column) but not the backlog projection (open statuses only).
-    done = _entry(
-        "ab-done0000",
-        title="wrap up PR #12",
-        completed_at="2026-01-02T00:00:00Z",
-    )
-    open_node = _entry("ab-open0000", title="clean open work")
-    graph = _isolate["graph"]
-    _write_graph(graph, [done, open_node])
-    locked_mutate_graph(graph, lambda nodes: nodes)
-
-    backlog_text = backlog_target.read_text(encoding="utf-8")
-    assert "clean open work" in backlog_text
-    assert "wrap up PR #12" not in backlog_text
-    err = capsys.readouterr().err
-    assert "leak gate refused" in err
-    assert "ab-done0000" in err and "pr-reference" in err
-    assert not roadmap_target.exists()
 
 
 def test_config_read_failure_still_renders_the_canonical_board(monkeypatch, capsys):
@@ -630,16 +571,14 @@ def test_an_explicit_row_for_the_canonical_board_wins_over_the_default(monkeypat
     assert targets[0].scope == "fno", "the operator's scope must survive"
 
 
-def test_the_canonical_board_is_written_under_the_graph_flock(tmp_path, monkeypatch):
-    """The board must not be the one artifact that lands after the lock drops.
+def test_the_canonical_board_is_current_when_the_view_pass_returns(tmp_path, monkeypatch, native_board_render):
+    """The board must never read older than the graph.json beside it.
 
-    Before it became a configurable row, store.py rendered it inside the flock
-    beside graph.md. Moving it out let two concurrent mutations land renders
-    out of order, so the operator's board could read older than the graph.json
-    next to it. A stale board is the complaint this work answers.
-
-    Asserts a POSITIVE marker: the file exists and carries the new entry at the
-    moment the lock is still held, observed from inside the mutation itself.
+    Since the render trigger owns the pass, the write only bumps the counter
+    and the view pass renders from a fresh read - the render can no longer
+    interleave with another writer's, and graph.json always lands first. The
+    observable contract from the caller's side: when the pass returns, the
+    board exists and carries THIS write's entry, never a previous one.
     """
     from fno.graph import _constants as gc
     from fno.graph import store
@@ -653,21 +592,8 @@ def test_the_canonical_board_is_written_under_the_graph_flock(tmp_path, monkeypa
         "fno.config_io.read_global_block", lambda *_a, **_k: {"render_targets": []}
     )
 
-    seen = {}
-    real_release = store._release_flock
-
-    def _observe(fd):
-        # Read the board BEFORE the lock drops. If the render moved back out
-        # from under the flock, this finds no file and the assertion below
-        # fails rather than passing on a later write.
-        seen["exists"] = board.exists()
-        seen["text"] = board.read_text() if board.exists() else ""
-        return real_release(fd)
-
-    monkeypatch.setattr(store, "_release_flock", _observe)
-
     graph = tmp_path / "graph.json"
-    graph.write_text('{"entries": []}')
+    seed_graph(graph, '{"entries": []}')
     monkeypatch.setattr(gc, "GRAPH_JSON", graph)
 
     def _add(entries):
@@ -684,11 +610,12 @@ def test_the_canonical_board_is_written_under_the_graph_flock(tmp_path, monkeypa
         )
         return entries
 
-    store.locked_mutate_graph(graph, _add)
+    store.commit_rows_via_store(graph, _add)
+    store.render_canonical_views()
 
-    assert seen.get("exists"), "the canonical board was not written under the flock"
-    assert "UnderTheFlock" in seen["text"], (
-        "the board written under the flock predates this mutation"
+    assert board.exists(), "the canonical board was not rendered for the write"
+    assert "UnderTheFlock" in board.read_text(), (
+        "the board predates this write: it read older than graph.json"
     )
 
 

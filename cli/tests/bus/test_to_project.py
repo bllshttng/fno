@@ -132,9 +132,7 @@ def test_ac6_fr_malformed_peers_hint_degrades_to_registry(env, tmp_path, monkeyp
         encoding="utf-8",
     )
     from fno import config as _cfg
-    _cfg.load_settings.cache_clear()
     import fno.paths as _paths
-    _paths._settings.cache_clear()
 
     cwd = _project_cwd(tmp_path, "projA")
     _register("alpha", cwd, status="live")
@@ -155,9 +153,7 @@ def test_peers_project_hint_associates_peer_without_matching_cwd(env, tmp_path, 
         encoding="utf-8",
     )
     from fno import config as _cfg
-    _cfg.load_settings.cache_clear()
     import fno.paths as _paths
-    _paths._settings.cache_clear()
     # The peers hint is read from cwd (the running agent's project); run there.
     monkeypatch.chdir(tmp_path)
 
@@ -182,9 +178,7 @@ def test_peers_hint_does_not_hide_peer_from_its_cwd_project(env, tmp_path, monke
         encoding="utf-8",
     )
     from fno import config as _cfg
-    _cfg.load_settings.cache_clear()
     import fno.paths as _paths
-    _paths._settings.cache_clear()
     monkeypatch.chdir(tmp_path)
 
     other = _project_cwd(tmp_path, "elsewhere")
@@ -208,7 +202,7 @@ def test_ac6_hp_dispatch_records_resolved_recipient(env, tmp_path, monkeypatch):
     _register("alpha", cwd, status="live")
 
     # Stub the by-name send so we exercise the resolver wiring, not the provider.
-    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None):
+    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None, subject=None):
         return dmod.DispatchSendResult(msg_id="msg-deadbe", delivery="hosted")
 
     monkeypatch.setattr(dmod, "dispatch_send", fake_send)
@@ -261,6 +255,8 @@ def runner() -> CliRunner:
 
 
 def test_cli_send_to_project_durable_stdout(env, tmp_path, runner):
+    import json as _json
+
     from fno.mail.cli import mail_app
 
     _project_cwd(tmp_path, "projA")
@@ -268,30 +264,33 @@ def test_cli_send_to_project_durable_stdout(env, tmp_path, runner):
         mail_app, ["send", "--to-project", "projA", "hi there project"]
     )
     assert res.exit_code == 0, res.output
-    out = res.stdout.strip()
-    assert out.startswith("msg-")
-    assert "queued (durable) for project projA" in out
+    receipt = _json.loads(res.stdout.strip())
+    assert receipt["msg_id"].startswith("fmail-")
+    assert receipt["to"] == "projA"
+    assert "queued (durable)" in receipt["status"]
 
 
 def test_cli_send_to_project_demoted_peer_reports_peer_not_project(env, tmp_path, runner, monkeypatch):
-    # One live peer resolved, but injection demotes to durable: the envelope is
-    # addressed to the peer, so the line must say "for <peer>", not "for project".
+    # One live peer resolved, but injection demotes to durable: the receipt is
+    # addressed to the peer, so `to` must name "alpha", not the project.
+    import json as _json
+
     from fno.agents import dispatch as dmod
     from fno.mail.cli import mail_app
 
     cwd = _project_cwd(tmp_path, "projA")
     _register("alpha", cwd, status="live")
 
-    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None):
+    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None, subject=None):
         return dmod.DispatchSendResult(msg_id="msg-dem01", delivery="durable")
 
     monkeypatch.setattr(dmod, "dispatch_send", fake_send)
 
     res = runner.invoke(mail_app, ["send", "--to-project", "projA", "hi"])
     assert res.exit_code == 0, res.output
-    out = res.stdout.strip()
-    assert "queued (durable) for alpha" in out
-    assert "for project projA" not in out  # would be the misleading mismatch
+    receipt = _json.loads(res.stdout.strip().splitlines()[0])
+    assert receipt["to"] == "alpha"
+    assert "queued (durable)" in receipt["status"]
 
 
 def test_cli_send_to_project_carries_the_lock_timeout_reason(env, tmp_path, runner, monkeypatch):
@@ -305,7 +304,7 @@ def test_cli_send_to_project_carries_the_lock_timeout_reason(env, tmp_path, runn
     cwd = _project_cwd(tmp_path, "projA")
     _register("alpha", cwd, status="live")
 
-    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None):
+    def fake_send(*, name, message, provider, cwd, lock_timeout, from_name, origin=None, subject=None):
         return dmod.DispatchSendResult(
             msg_id="msg-lock01",
             delivery="durable",

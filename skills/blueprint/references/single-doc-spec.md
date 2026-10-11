@@ -1,6 +1,6 @@
 # Single-Doc Blueprint Spec
 
-Reference for the `/blueprint` mutation behavior introduced in PR1 (2026-05-18, `ab-69f7ee8f`). The architectural overview lives at [docs/architecture/lean-blueprint.md](../../../docs/architecture/lean-blueprint.md).
+Reference for the `/blueprint` mutation behavior introduced in PR1 (2026-05-18, ``). The architectural overview lives at [docs/architecture/lean-blueprint.md](../../../docs/architecture/lean-blueprint.md).
 
 ## Design doc shape
 
@@ -22,7 +22,7 @@ difficulty: <low | medium | high>   # Required for plans created after 2026-08-2
 sources: [<artifacts actually read>]
 consolidation:
   outcome: <absorb | append | proceed_alone>
-  proceed_alone_against: []   # or absorbed: / appended_to:, each entry an id with its reason
+  proceed_alone_against: []   # or absorbed: / appended_to: / rejected:, each entry an id with its reason
 ---
 
 # <Title>
@@ -73,6 +73,7 @@ Enforced by `fno.plan._status.validate_transition(old, new)`. Backward transitio
 BLUEPRINT_WRITE_ALLOWLIST = frozenset({
     "Execution Strategy",
     "File Ownership Map",
+    "Five questions",
     "Patterns to Reuse",
     "kill_criteria",
     "execution_mode",
@@ -80,6 +81,7 @@ BLUEPRINT_WRITE_ALLOWLIST = frozenset({
     "acceptance_contract",
     "consolidation",
     "difficulty",
+    "join",
 })
 ```
 
@@ -112,7 +114,7 @@ Positional canonical form. Flag aliases (`--quick`, `--greenfield`, etc.) are ac
 
 | Modifier | Effect |
 |----------|--------|
-| `quick` | Skip Execution Strategy; stamp status and kill_criteria only (single-task plans) |
+| `quick` | Emit Execution Strategy as one parallel wave, one task per numbered change, and stamp status and kill_criteria |
 | `greenfield` | Force greenfield mode regardless of file-existence probe |
 | `brownfield` | Force brownfield mode regardless of file-existence probe |
 | `rewrite` | Allow re-running on `status: ready` docs; replaces /blueprint-owned sections in place, never touches /think or downstream sections |

@@ -30,20 +30,20 @@ This phase runs as a **separate context** from Execute to avoid negative-instruc
 
 ## Review Phase (4) - Native final-head review
 
-The ship review is a native review request after `/fno:pr create` returns the PR number. Run `fno do target request-self-review --pr <n>`; it resolves the PR head and base, refuses a mismatch, and sends one explicit payload naming `HEAD <sha> of PR <n> against origin/<base>` through `--to-self --raw`. The request is the producer, not advisory prose, and the promise waits for its clean head-pinned `code-review` attestation. The decision is `preship_review_plan(config.review.reviewers)` in `cli/src/fno/review_capability.py`:
+The ship review runs the fno review lane in this session, BEFORE `/fno:ship pr create`, on the final local HEAD. Run `/fno:review <size> --comment` (Codex: `$fno:review <size> --comment`). Size by the diff: `medium` under 300 changed lines, `high` above. Use `xhigh` for a risky surface (merge, claims, graph writes, hooks, auth). No mail, no paste, no turn boundary. The review runs as ordinary tool calls and emits the head-pinned attestation itself. With no PR yet, `--comment` holds the findings on branch and HEAD. Once the PR opens, the create flow's publish-review step posts them as one PR comment. The promise waits for the stop gate to read review coverage covered: a clean round that tiles the head, or the budget spent.
 
-- **sigma NOT configured (the default):** run the request on the final pushed HEAD. The reviewer it names is the fno review lane, which runs inline wherever the plugin runs; a `started` result waits for the completion marker; blocking findings enter the existing fix, commit, push, and re-request loop. A `refused` or `unconfirmed` result stops with its lane error and never downgrades to an advisory read. A busy Codex mux pane may positively return `queued`; that request is the last tool action of the turn, with no polling, pane inspection, mail read, retry, or promise, so the next turn boundary starts the review without a human interrupt. A docs-only payload or explicit `self_review_required = false` opt-out keeps its existing exemption.
+- **default (always):** the fno review lane is the reviewer, on every harness. Blocking findings enter the fix, commit, and re-review loop inside the round budget (`review.max_rounds`, default 2). A clean round or a spent budget can precede the push. A rebase with an unchanged code delta carries the attestation. A docs-only payload or explicit `self_review_required = false` opt-out keeps its exemption.
 - **sigma configured:** impossible as of its retirement - `fno do target init` refuses a config still naming sigma with the default lane named as the replacement, so no run reaches this branch. There is no post-ship panel run to defer to.
 
-**The request is substrate-aware and fail-closed.** The raw self-send router selects the live harness lane. A positive `queued` result is a turn-boundary handoff, not permission to continue the same turn; any unreadable frame, missing target marker, mismatched queued payload, or failed lane returns `unconfirmed` or `refused`, never a clean review.
-
-If a review you run does spawn agents (a peer review), do NOT emit `<promise>` while they are still running: wait until all of them have returned, Critical and High findings are addressed (fixed or verified as false positives), and the report verdict is ready. Do not assess the code yourself in lieu of waiting - the agents exist precisely to catch what you missed. If both that review and external review (`/pr check`) flag the same issue, that's confirmation - fix it once, both gates benefit.
+If a review you run does spawn agents (a peer review), do NOT emit `<promise>` while they are still running. Wait until all of them have returned. Critical and High findings must be addressed (fixed or verified as false positives), and the report verdict must be ready. Do not assess the code yourself in lieu of waiting - the agents exist precisely to catch what you missed. If both that review and external review (`/fno:ship pr check`) flag the same issue, that is confirmation - fix it once, both gates benefit.
 
 While the PR's CI is still polling, read posted optional bot reviews at first-post rather than deferring every read to green - the first-post review watch and its once-at-green backstop are specified in the "Watch for posted optional reviews" / "Drain a posted optional review" paragraphs of [SKILL.md](../SKILL.md). Same story on both surfaces: a real finding folds into the fix round in flight instead of adding a post-green round.
 
+When a lens row's condition holds for the diff under review, read that lens file and apply its question to the built code. These are the code lenses blueprint retired from drafting under lean dispatch. The review phase carries those checks now. The index: [review-lenses.md](review-lenses.md).
+
 ## Intent verification (no promise-time self-grade)
 
-There is no promise-time self-grade phase (control-plane step 6, ab-f8e5f214).
+There is no promise-time self-grade phase (control-plane step 6).
 Intent is checked through CI, not an agent grading its own homework: the BDD
 acceptance criteria that matter become tests during `/execute` (TDD) and run in CI,
 which `fno-agents loop-check`'s CI read already covers. A genuinely missing test
@@ -107,4 +107,4 @@ Log: "Direction check passed ({score}%). Continuing." Reset `alignment.drift_det
 
 See [state-schema.md](state-schema.md) for full alignment tracking fields.
 
-**Critical for Phase 6:** If `no_ship: true`, skip this phase entirely. Set `artifact_shipped: skipped` and `pr_number: null`. Also set `external_review_passed: skipped` (no PR to review). Otherwise, MUST capture `pr_number` from output. If null, STOP and retry `/pr create`.
+**Critical for Phase 6:** `no_ship: true` means skip this phase entirely. Set `artifact_shipped: skipped` and `pr_number: null`. Also set `external_review_passed: skipped` (no PR to review). Otherwise, MUST capture `pr_number` from output. If null, STOP and retry `/fno:ship pr create`.

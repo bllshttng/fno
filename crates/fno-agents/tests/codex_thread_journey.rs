@@ -1,8 +1,8 @@
-//! The six-step unattended journey that earns Codex `thread = true`.
+//! The six-step unattended journey that earns Codex a `native` spawn claim.
 //!
 //! This is opt-in because it uses the installed Codex account and deliberately
 //! kills a private mux server. A default run skips the live journey and must
-//! not be used as evidence for flipping the capability bit.
+//! not be used as evidence for a capability claim.
 
 use fno_agents::paths::AgentsHome;
 use serde_json::Value;
@@ -26,7 +26,9 @@ fn codex_available() -> bool {
 
 fn run(env: &[(String, String)], args: &[&str]) -> Output {
     let mut command = Command::new(CLIENT);
-    command.args(args);
+    command
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(args);
     for (key, value) in env {
         command.env(key, value);
     }
@@ -36,6 +38,7 @@ fn run(env: &[(String, String)], args: &[&str]) -> Output {
 fn run_without_capture(env: &[(String, String)], args: &[&str]) -> bool {
     let mut command = Command::new(CLIENT);
     command
+        .envs(fno_agents::test_run::self_owner_env())
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -86,7 +89,7 @@ fn wait_for_file(path: &Path, budget: Duration) {
 }
 
 fn registry_row(home: &AgentsHome, name: &str) -> Value {
-    let raw = std::fs::read_to_string(home.registry_json()).expect("registry exists");
+    let raw = registry_text(&home.registry_json()).expect("registry exists");
     let registry: Value = serde_json::from_str(&raw).expect("registry JSON");
     registry["agents"]
         .as_array()
@@ -396,4 +399,10 @@ fn codex_thread_stop_mid_turn_interrupts() {
         std::thread::sleep(Duration::from_millis(200));
     }
     panic!("app-server child {pid} outlived a reported stop");
+}
+
+fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
+    fno_agents::registry_store::read(path)
+        .map(|doc| serde_json::to_string_pretty(&doc).unwrap())
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }

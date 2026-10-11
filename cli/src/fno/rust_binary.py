@@ -21,8 +21,9 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Sequence
 
 BINARY_NAME = "fno-agents.exe" if os.name == "nt" else "fno-agents"
 
@@ -77,12 +78,22 @@ def _path_binary() -> Optional[Path]:
     return Path(found) if found else None
 
 
+def newest_runnable(candidates: Sequence[Path]) -> Optional[Path]:
+    """The newest runnable candidate, or None when none is runnable."""
+    runnable = [c for c in candidates if c.is_file() and os.access(c, os.X_OK)]
+    return max(runnable, key=lambda c: c.stat().st_mtime_ns, default=None)
+
+
 def _cargo_dev_binary() -> Optional[Path]:
-    """Dev fallback: a ``cargo build --release`` artifact under the repo tree.
+    """Dev fallback: a ``cargo build`` artifact under the repo tree.
 
     ``__file__`` is ``cli/src/fno/rust_binary.py`` so the repo root is
     ``parents[3]``. Checks both a crate-local ``target/`` and a workspace
     ``target/`` so it works whether or not a workspace is introduced later.
+    The newest artifact wins so a fresh build is never shadowed by a stale
+    one, but a debug build counts too: the CI smoke lanes build debug and
+    strip ``FNO_*`` env, so this finder is the only reader left for the
+    footprint door there.
     """
     here = Path(__file__).resolve()
     try:
@@ -97,15 +108,29 @@ def _cargo_dev_binary() -> Optional[Path]:
     candidates = (
         repo_root / "crates" / "fno-agents" / "target" / "release" / BINARY_NAME,
         repo_root / "target" / "release" / BINARY_NAME,
+        repo_root / "crates" / "fno-agents" / "target" / "debug" / BINARY_NAME,
+        repo_root / "target" / "debug" / BINARY_NAME,
     )
-    for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+    return newest_runnable(candidates)
+
+
+def _front_binary() -> Optional[Path]:
+    """The checkout-scoped front binary CI and the doctor tooling export
+    (``$FNO_AGENTS_FRONT``, from the smoke-setup action). Sits behind PATH so
+    a stale export never outranks a fresh install, but ahead of the cargo dev
+    walk so a lane that built the binary and exported only the FRONT name
+    stays readable - the footprint door now resolves through this finder, and
+    a resolver blind to FRONT refuses every dispatch on those lanes.
+    """
+    raw = (os.environ.get("FNO_AGENTS_FRONT") or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 
 def resolve_binary() -> Optional[Path]:
-    """Locate ``fno-agents``: env override -> bundled -> sibling -> PATH -> cargo dev.
+    """Locate ``fno-agents``: env override -> bundled -> sibling -> PATH -> FRONT -> cargo dev.
 
     Bundled beats PATH so a ``pip install fno`` wheel is self-contained even when
     a different (older) ``fno-agents`` happens to be on PATH. The launcher-sibling
@@ -118,12 +143,150 @@ def resolve_binary() -> Optional[Path]:
         _bundled_binary,
         _sibling_binary,
         _path_binary,
+        _front_binary,
         _cargo_dev_binary,
     ):
         found = finder()
         if found is not None:
             return found
     return None
+
+
+def call_binary_json(
+    verb: str, args: Sequence[str] = (), *, timeout: Optional[float] = 60,
+    binary: Optional[Path] = None,
+    input_text: Optional[str] = None,
+) -> tuple[Optional[str], Any]:
+    """Run one direct ``fno-agents`` client verb and parse its JSON stdout.
+
+    ``input_text`` feeds the child's stdin when given, so a large payload
+    rides stdin instead of an argv entry (the OS per-argument cap would
+    otherwise become an undocumented body cap).
+
+    Returns ``(error, parsed)``: ``error`` is None on success; a missing
+    binary, non-zero exit, timeout, or unparseable stdout yields a short error
+    text and a None payload. Callers keep the failure shape theirs (refuse
+    closed, raise, or exit) - this seam only standardizes the door.
+
+    ``binary`` pre-resolves the door; the dev build outranks the stale
+    installed copy (the rule :func:`verb_call` states).
+    """
+    import json
+    import subprocess
+
+    binary = binary or resolve_binary()
+    if binary is None:
+        return ("fno-agents binary not found", None)
+    try:
+        proc = subprocess.run(
+            [str(binary), verb, *args], capture_output=True, text=True, timeout=timeout,
+            input=input_text,
+        )
+    except subprocess.TimeoutExpired:
+        bound = f"{timeout:.1f}s" if timeout is not None else "the caller's bound"
+        return (f"timed out after {bound}", None)
+    except OSError as exc:
+        return (str(exc)[:200], None)
+    if proc.returncode != 0:
+        return ((proc.stderr or "verb failed").strip()[:200], None)
+    try:
+        return (None, json.loads(proc.stdout or "null"))
+    except ValueError:
+        return ("unreadable JSON receipt", None)
+
+
+def style_receipt(
+    text: str, surface: str, word_cap: Optional[int] = None
+) -> tuple[Optional[str], Any]:
+    """One style-gate read through the door: ``(error, receipt)``.
+
+    The body rides stdin, so the OS per-argument cap never becomes an
+    undocumented body cap. The receipt carries ``exception``, ``word_count``,
+    ``violations`` and ``report``. An error tuple means the gate could not
+    run, and the caller keeps its own failure posture.
+    """
+    argv = ["--surface", surface, "--stdin", "--json"]
+    if word_cap is not None:
+        argv += ["--word-cap", str(word_cap)]
+    return call_binary_json("style-check", argv, input_text=text)
+
+
+def style_word_count(text: str) -> int:
+    """Masked word count through the style door; 0 when the door fails.
+
+    The counting sites are advisory (a ledger row, a long-note nudge), so a
+    door failure counts zero rather than blocking the send.
+    """
+    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
+    if err or not isinstance(receipt, dict):
+        return 0
+    return int(receipt.get("word_count") or 0)
+
+
+def style_word_count_checked(text: str) -> int:
+    """Masked word count for an ENFORCING site: raises
+    ``budget.BudgetCountUnavailable`` on a door failure instead of answering a
+    silent zero (a zero would read as unlimited traffic under the control
+    lane's rolling cap). Imported lazily: budget.py never imports this module,
+    so there is no cycle.
+    """
+    from fno.mail.budget import BudgetCountUnavailable
+
+    err, receipt = call_binary_json("style-check", ["--stdin", "--json"], input_text=text)
+    if err or not isinstance(receipt, dict):
+        raise BudgetCountUnavailable(f"style count unavailable: {err or 'no receipt'}")
+    return int(receipt.get("word_count") or 0)
+
+
+def mint_fno_id() -> str:
+    """Footnote's one session-id mint lives in Rust: `fno-agents state mint-id`.
+
+    Raises VerbUnavailable when the binary is missing or answers nothing; no
+    Python-side fallback exists, by the rule that keeps the mint single.
+    """
+    import subprocess
+
+    binary = resolve_binary()
+    if binary is None:
+        raise VerbUnavailable("fno-agents binary not found; run `fno doctor update`")
+    proc = subprocess.run(
+        [str(binary), "state", "mint-id"], capture_output=True, text=True, timeout=10
+    )
+    minted = proc.stdout.strip()
+    if proc.returncode != 0 or not minted:
+        raise VerbUnavailable(
+            (proc.stderr or "fno-agents state mint-id answered nothing").strip()[:200]
+        )
+    return minted
+
+
+@lru_cache(maxsize=1)
+def delivered_terminals() -> frozenset:
+    """The delivered-terminal vocabulary, owned by Rust
+    (`TerminationReason::is_delivered` in loopcheck.rs) and served through one
+    fail-closed `fno-agents terminals` subprocess per process, like the roster.
+
+    The set counts a run DELIVERED for telemetry: DonePRGreen, DoneAdvisory,
+    DoneDelivery, DoneBatched. DoneAwaitingMerge and DoneUnreviewed are
+    deliberately absent (complete-but-unmerged and waiting are not landed).
+    Raises VerbUnavailable when the binary is missing or answers nothing; no
+    Python-side fallback exists, by the rule that keeps the vocabulary single.
+    """
+    error, payload = call_binary_json(
+        "terminals", timeout=15, binary=find_dev_binary() or resolve_binary()
+    )
+    if error is not None:
+        raise VerbUnavailable(
+            "the delivered-terminal vocabulary lives in the fno-agents binary"
+            " (loopcheck.rs TerminationReason::is_delivered) and the read"
+            f" failed: {error}; run `fno doctor update --rust` or set FNO_AGENTS_BIN"
+        )
+    names = payload.get("delivered") if isinstance(payload, dict) else None
+    if not names or not all(isinstance(n, str) and n for n in names):
+        raise VerbUnavailable(
+            f"fno-agents terminals answered no usable delivered list: {payload!r}"[:200]
+        )
+    return frozenset(names)
 
 
 def resolve_installed_binary() -> Optional[Path]:
@@ -164,8 +327,143 @@ def find_dev_binary() -> Optional[Path]:
         return None
     if not (repo_root / "crates" / "fno-agents").is_dir():
         return None
-    for profile in ("release", "debug"):
-        candidate = repo_root / "crates" / "fno-agents" / "target" / profile / BINARY_NAME
-        if candidate.is_file():
-            return candidate
-    return None
+    base = repo_root / "crates" / "fno-agents" / "target"
+    return newest_runnable([base / p / BINARY_NAME for p in ("release", "debug")])
+
+
+class VerbUnavailable(RuntimeError):
+    """The fno-agents binary is missing, failed, or answered malformed JSON."""
+
+    # Structured exit code for the non-zero-exit failure; None on the other
+    # paths (binary missing, OSError/timeout, bad JSON). The gh budget's admit
+    # gate reads it: a negative code or 137 is a signalled reader, which is a
+    # machine in distress, not a ledger that cannot answer.
+    returncode: Optional[int] = None
+
+
+def verb_call(
+    verb: "str | list[str]",
+    payload: dict,
+    unavailable: type = VerbUnavailable,
+    *,
+    timeout: float = 30,
+    passthrough_stderr: bool = False,
+) -> dict:
+    """One subprocess round-trip with the fno-agents binary: JSON payload in,
+    parsed JSON answer out. The dev checkout's own build outranks any stale
+    installed copy. Raises the caller's ``unavailable`` exception - a named
+    refusal, never a silent fallback.
+
+    ``timeout`` defaults to the 30s a pure local resolver needs. A verb that
+    makes its own network round trips must raise it, or the door reports the
+    owner unreachable for a decision that was merely still running - and an
+    unread authorization refuses the merge.
+
+    ``passthrough_stderr`` leaves the child's stderr attached to this process
+    instead of capturing it: a gate that queues for minutes streams its
+    ``spawn queued: ...`` prose live, so an operator watching the spawn sees
+    the wait instead of silence.
+    """
+    import json
+    import os
+    import subprocess
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        raise unavailable(
+            "the fno-agents binary was not found; reinstall fno,"
+            " run `fno doctor update --rust`, or set FNO_AGENTS_BIN"
+        )
+    verb_display = verb if isinstance(verb, str) else " ".join(verb)
+    try:
+        proc = subprocess.run(
+            [str(binary), *(verb if isinstance(verb, list) else [verb])],
+            input=json.dumps(payload),
+            stdout=subprocess.PIPE,
+            stderr=None if passthrough_stderr else subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise unavailable(f"fno-agents {verb_display} failed: {exc}") from exc
+    if proc.returncode != 0:
+        # With passthrough_stderr the child owns the real stderr (None here),
+        # so name where it went instead of crashing on strip().
+        detail = f"fno-agents {verb_display} exited {proc.returncode}"
+        if passthrough_stderr:
+            detail += " (its stderr went to your terminal)"
+        else:
+            detail += f": {proc.stderr.strip()[:200]}"
+        raised = unavailable(detail)
+        raised.returncode = proc.returncode
+        raise raised
+    try:
+        return json.loads(proc.stdout)
+    except ValueError as exc:
+        raise unavailable(f"fno-agents {verb_display} bad output: {exc}") from exc
+    finally:
+        if os.environ.get("FNO_ROUTE_SLOT_DEBUG"):
+            print(json.dumps({"payload": payload}), flush=True)
+
+
+def chats_verb(args: "list[str]", payload: dict) -> dict:
+    return verb_call(["chats", *args], payload, timeout=30)
+
+
+def resolve_front_binary() -> Optional[Path]:
+    """The native ``fno`` front binary: this checkout's build, then ``PATH``."""
+    import shutil
+
+    root = Path(__file__).resolve().parents[3] / "crates" / "fno" / "target"
+    for profile in ("debug", "release"):
+        if (root / profile / "fno").exists():
+            return root / profile / "fno"
+    return Path(found) if (found := shutil.which("fno")) else None
+
+class FrontTimeout(VerbUnavailable):
+    """The law door gave no answer in time. A retry meets the same wait."""
+
+
+#: The law door's default bound. The read is machine-relative: measured 18s
+#: wall for 2.7s user at load 176 (2026-10-06) and 61s at load 80
+#: (2026-10-09), so the old fixed 60s wedged blueprint validation on a loaded
+#: machine. Raise the knob there; an explicit ``timeout=`` argument outranks
+#: it, and junk falls back to 60.
+LAW_DOOR_TIMEOUT_ENV = "FNO_LAW_DOOR_TIMEOUT_SECONDS"
+
+
+def _law_door_timeout() -> float:
+    raw = os.environ.get(LAW_DOOR_TIMEOUT_ENV, "").strip()
+    try:
+        return float(raw) if raw else 60.0
+    except ValueError:
+        return 60.0
+
+
+def call_front_json(payload: dict, *, timeout: Optional[float] = None) -> dict:
+    """One round-trip with the front's law door, fail-closed like verb_call."""
+    import json
+    import subprocess
+
+    if timeout is None:
+        timeout = _law_door_timeout()
+
+    binary = resolve_front_binary()
+    if binary is None:
+        raise VerbUnavailable("the native fno binary was not found")
+    try:
+        done = subprocess.run([str(binary), "inbox", "law", "match"],
+            input=json.dumps(payload), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # The read needs about 3s of CPU. Measured 2026-10-06 at load 176: 18s
+        # wall for 2.7s user, so a timeout means the machine had no CPU to give.
+        try:
+            load = f"{os.getloadavg()[0]:.0f} on {os.cpu_count()} cores"
+        except OSError:
+            load = "unreadable"
+        raise FrontTimeout(
+            f"`fno inbox law match` gave no answer in {timeout:g}s (machine load {load})"
+        ) from None
+    if done.returncode != 0:
+        raise VerbUnavailable(f"fno inbox law match exited {done.returncode}: {done.stderr.strip()}")
+    return json.loads(done.stdout)

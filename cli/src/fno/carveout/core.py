@@ -11,9 +11,9 @@ raw-signal/triaged-node line crisp is why this lives under `fno backlog carveout
 
 The ``backfill`` kind is special-cased downstream: the generic retro harvest
 SKIPS it (``retro.harvest.harvest_carveouts``) so it SURVIVES untouched for
-``/fno:pr merged``'s backfill slot, which reads it via
+``/fno:ship pr merged``'s backfill slot, which reads it via
 :func:`read_carveouts` and removes it via :func:`consume_carveouts` once run or
-filed as a node (ab-4a1a4fea, Group 3).
+filed as a node (Group 3).
 
 Records append one JSON line to ``.fno/carveouts.jsonl`` using the same
 mkdir-mutex + append convention as the events.jsonl writer
@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 # kind is a closed enum: a deferred decision, an out-of-scope bug, or a data
-# backfill the merged PR enables. ``backfill`` is consumed by /pr merged, not
-# the generic retro harvest (ab-4a1a4fea).
+# backfill the merged PR enables. ``backfill`` is consumed by /fno:ship pr merged, not
+# the generic retro harvest.
 BACKFILL_KIND = "backfill"
 VALID_KINDS: Tuple[str, ...] = ("deferred", "oos-bug", BACKFILL_KIND)
 # Severity is orthogonal to kind: how much a left-out item matters. Routed to
@@ -56,12 +56,10 @@ def resolve_carveout_root() -> Path:
     - not per-session state like ``target-state.md``. A carve-out captured
     inside a linked worktree must survive that worktree's archival so the
     retro-triage harvest (which runs from the main checkout at merge) can still
-    find it; ``setup-worktree.sh`` does NOT symlink ``carveouts.jsonl``, so a
-    worktree-local ledger is simply lost on teardown (ab-44408b6e). Resolving
-    the PATH to canonical (vs symlinking the file) also co-locates the ledger
-    with its ``.lock.d`` mutex, so concurrent writers across worktrees actually
-    serialize - a per-worktree file + symlink would keep the lock
-    worktree-local and not cross-serialize appends.
+    find it. The ledger itself lands in the repo's space via
+    :func:`fno.paths.project_log` (co-located with its ``.lock.d`` mutex, so
+    concurrent writers across worktrees serialize - a per-worktree file would
+    keep the lock worktree-local and not cross-serialize appends).
 
     Uses ``git worktree list --porcelain`` (the PR #400 pattern, robust across
     ``--separate-git-dir`` layouts), via
@@ -94,7 +92,7 @@ class Carveout:
     need: Optional[str]
     description: str
     truncated: bool
-    # Optional crown scope this carve-out discharges (e.g. an epic id). The king
+    # Optional role scope this carve-out discharges (e.g. an epic id). The lead
     # orphan check (hooks/context-nudge.sh) reads this FIELD rather than
     # grepping `description` free text, so rewording a sentence cannot silently
     # silence it. Optional + last so existing records and retro-triage parse
@@ -125,10 +123,16 @@ def resolve_session_id(repo_root: Path) -> Optional[str]:
     ``session_id`` fallback), then the ``$CLAUDECODE_SESSION_ID`` env var.
     None means the caller records the
     carve-out unscoped (capture is never lost over a missing session).
+
+    The manifest comes from its owning resolver, never built by hand. A worktree
+    session's lives in the project SPACE, and a hand-built path missed it, filed
+    the carve-out unscoped, and covered nothing at the fidelity gate.
     """
     import os
 
-    state_path = repo_root / ".fno" / "target-state.md"
+    from fno.paths import target_state_path_or_legacy
+
+    state_path = target_state_path_or_legacy(repo_root)
     if state_path.exists():
         try:
             from fno.state.io import read_frontmatter
@@ -150,7 +154,7 @@ def resolve_session_id(repo_root: Path) -> Optional[str]:
 def _owning_node_id(repo_root: Path) -> Optional[str]:
     """The node THIS worker provably owns, as a bare id, or None.
 
-    The claim lockfile is the liveness authority (x-4af4), and it is
+    The claim lockfile is the liveness authority, and it is
     harness-agnostic: a live ``node:<id>`` claim held by
     ``target-session:<this harness session>`` names the owner for a codex or
     gemini executor too, not just claude. init acquires the claim before the
@@ -178,12 +182,12 @@ def _owning_node_id(repo_root: Path) -> Optional[str]:
         wanted = {f"target-session:{c}" for c in candidates}
         try:
             from fno.claims.core import list_claims
-            from fno.claims.io import claims_dir, global_claims_root
+            from fno.claims.io import global_claims_root
 
             matches = [
                 claim.get("key", "")
                 for claim in list_claims(
-                    prefix="node:", root=claims_dir(global_claims_root())
+                    prefix="node:", root=global_claims_root()
                 )
                 if (claim.get("holder") or "") in wanted
             ]
@@ -301,7 +305,7 @@ def add_carveout(
     :func:`resolve_carveout_root` (the canonical/main worktree) so a carve-out
     written inside a linked worktree survives that worktree's archival; the
     default keeps both roots equal for callers that don't split them
-    (ab-44408b6e).
+.
     """
     if kind not in VALID_KINDS:
         raise CarveoutError(
@@ -395,7 +399,7 @@ class CarveoutNotFound(CarveoutError):
     """Raised when the id to update is not on the ledger.
 
     Its own type because the CLI must NOT fall back to creating the row. A
-    create-on-miss would resurrect a carve-out ``/pr merged`` already consumed,
+    create-on-miss would resurrect a carve-out ``/fno:ship pr merged`` already consumed,
     under a later PR's number - the exact re-filing hazard ``consume_carveouts``
     exists to prevent.
     """
@@ -521,7 +525,7 @@ def read_carveouts(
 ) -> "list[dict[str, Any]]":
     """Read the carve-out ledger under ``root``; return parsed records in order.
 
-    Filtered to ``kind`` when given (e.g. ``backfill`` for /pr merged's slot),
+    Filtered to ``kind`` when given (e.g. ``backfill`` for /fno:ship pr merged's slot),
     and to ``session_ids`` when given (the carve-out's ``session_id`` must be in
     the set). ``include_unscoped`` additionally keeps rows whose ``session_id``
     is null: they belong to no session, so an equality filter would hide them
@@ -535,7 +539,7 @@ def read_carveouts(
     cannot hide the rest - capture is never lost. A MISSING ledger returns
     ``[]`` (the common case, not an error). But a ledger that EXISTS yet cannot
     be read/decoded raises ``CarveoutError`` rather than masquerading as empty:
-    a failed read must not be a silent success (the /pr merged backfill slot
+    a failed read must not be a silent success (the /fno:ship pr merged backfill slot
     would otherwise drop a real backfill with no signal). Read-only: never
     mutates the ledger.
     """

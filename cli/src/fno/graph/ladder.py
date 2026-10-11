@@ -29,10 +29,10 @@ same reason.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date
 from enum import Enum
 from typing import Optional
 
@@ -105,10 +105,11 @@ class Rung(Enum):
     """Where a node's plan sits, or why we cannot tell.
 
     ``NONE`` and ``IDEA`` stay distinct even though both derive to graph status
-    ``idea``: ``NONE`` (nothing on disk) is COLD-DISPATCHABLE - ``/target``
-    authors the plan - while ``IDEA`` (a linked-but-undesigned decompose
-    scaffold) needs warm inline-fill, so it stays gated behind
-    ``--include-ideas``. See :func:`is_cold_dispatchable`.
+    ``idea``: ``NONE`` (nothing on disk) is COLD-DISPATCHABLE - the derived
+    verb authors the plan (low -> ``/target``, medium/high -> ``/blueprint``)
+    - while ``IDEA`` (a linked-but-undesigned decompose scaffold) needs warm
+    inline-fill, so it stays gated behind ``--include-ideas``. See
+    :func:`is_cold_dispatchable` and ``harness_map.resolve_effective_verb``.
     """
 
     NONE = "none"  # no usable plan_path - nothing on disk
@@ -141,8 +142,8 @@ _STATUS_TO_RUNG: dict[str, Rung] = {
 # its `grep | sed | tr` block rather than a new policy. Rung.NONE is NOT here:
 # a plan-less node has no plan to launch "against". It is instead COLD-dispatched
 # (the worker authors the plan via think -> blueprint) through the separate
-# :func:`is_cold_dispatchable` gate, which adds the required ``status == "idea"``
-# conjunct so a blocked/done plan-less node is never admitted (x-e24a). Keeping
+#:func:`is_cold_dispatchable` gate, which adds the required ``status == "idea"``
+# conjunct so a blocked/done plan-less node is never admitted. Keeping
 # NONE out of this set preserves is_dispatchable's "has a launchable plan"
 # contract; the cold path is its own predicate, not an overload of this one.
 _DISPATCHABLE: frozenset[Rung] = frozenset(
@@ -224,103 +225,53 @@ def _read_status_scalar(probe: str) -> tuple[Optional[str], bool]:
     return (str(fm["status"] if fm["status"] is not None else ""), True)
 
 
-def dispatch_hold(entry: object) -> DispatchHold:
-    """Read one plan's hold declaration, failing closed on an unreadable plan."""
-    if not isinstance(entry, dict):
-        return DispatchHold(DispatchHoldState.ABSENT)
-    plan_path = entry.get("plan_path")
-    if not isinstance(plan_path, str) or not plan_path:
-        return DispatchHold(DispatchHoldState.ABSENT)
-    probe = resolve_plan_probe(entry)
-    if not probe:
-        return DispatchHold(DispatchHoldState.ABSENT)
-    # Cross-project and temporarily unmounted plan ROOTS are an established
-    # no-signal case: there is no declaration to validate in this process. An
-    # existing file that cannot be parsed is different - its hold state was
-    # reached but is unreadable, and that fails closed below. So is a missing
-    # file under an EXISTING root (round-12 finding 6): the plan tree is
-    # mounted and the plan is absent from where the node says it lives (a
-    # stale path, a typo, a mid-fetch checkout), which must not read as
-    # unheld - only a root that is itself absent keeps ABSENT.
-    if not os.path.exists(probe):
-        if os.path.isdir(os.path.dirname(probe)):
-            return DispatchHold(
-                DispatchHoldState.INVALID,
-                detail=f"plan file is missing under its existing plan root: {probe}",
-            )
-        return DispatchHold(DispatchHoldState.ABSENT)
-    fm, readable = _read_frontmatter(probe)
-    if not readable or fm is None:
-        return DispatchHold(
-            DispatchHoldState.INVALID,
-            detail=f"plan frontmatter is unreadable: {probe}",
-        )
-    if "dispatch_hold" not in fm:
-        return DispatchHold(DispatchHoldState.ABSENT)
-    try:
-        from fno.plan.schema import DispatchHoldBlock
-
-        parsed = DispatchHoldBlock.model_validate(fm["dispatch_hold"])
-    except Exception as exc:  # noqa: BLE001 - invalid means refuse, never raise
-        return DispatchHold(
-            DispatchHoldState.INVALID,
-            detail=f"dispatch_hold is invalid: {exc}",
-        )
-    review_on = parsed.review_on.isoformat()
-    detail = ""
-    if parsed.review_on < date.today():
-        detail = f"review date {review_on} has passed; hold remains active"
-    return DispatchHold(
-        DispatchHoldState.HELD,
-        reason=parsed.reason,
-        release_when=parsed.release_when,
-        review_on=review_on,
-        set_by=parsed.set_by,
-        detail=detail,
-    )
-
-
 def dispatch_hold_verdict(
     entry: object,
     entries_by_id: dict,
 ) -> Optional[DispatchHoldVerdict]:
-    """Find a hold on a node, its parents, or its contained delivery owner."""
+    """Find a hold on a node, its parents, or its contained delivery owner.
+
+    One fno-agents verdict receipt answers; an unreadable one fails CLOSED,
+    never as unheld.
+    """
     if not isinstance(entry, dict):
         return None
-    queue = [entry]
-    seen: set[str] = set()
-    # Enqueue-time dedup (codex round on PR 1282): `seen` only gains an id at
-    # DEQUEUE, so reconverging siblings each enqueue the same ancestor and the
-    # duplicates burned the whole 64-step budget before deeper unique
-    # ancestors were evaluated - cap exhaustion returned None (unheld) with a
-    # held ancestor never visited, the fail-open direction. With one queue
-    # slot per node id, every dequeue is a unique node and the cap counts
-    # exactly what it documents.
-    enqueued: set[str] = set()
-    steps = 0
-    while queue and steps < 64:
-        current = queue.pop(0)
-        # Every dequeue counts (round-12 finding 9): the guard used to fire
-        # before this increment, so duplicates never counted against the
-        # 64-step cost bound this loop documents.
-        steps += 1
-        node_id = str(current.get("id") or "unknown")
-        if node_id in seen:
-            continue
-        seen.add(node_id)
-        hold = dispatch_hold(current)
-        if hold.state is not DispatchHoldState.ABSENT:
-            return DispatchHoldVerdict(node_id, hold)
-        for relation in ("contained_in", "parent"):
-            related = current.get(relation)
-            if isinstance(related, str) and related and related not in seen:
-                ancestor = entries_by_id.get(related)
-                if isinstance(ancestor, dict):
-                    ancestor_id = str(ancestor.get("id") or "unknown")
-                    if ancestor_id not in enqueued:
-                        enqueued.add(ancestor_id)
-                        queue.append(ancestor)
-    return None
+    from fno.paths import graph_json
+    from fno.rust_binary import call_binary_json
+
+    error, receipt = call_binary_json(
+        "authorized-merge",
+        [
+            json.dumps(
+                {
+                    "op": "hold-verdict",
+                    "node": str(entry.get("id") or ""),
+                    "graph": str(graph_json()),
+                }
+            )
+        ],
+        timeout=15,
+    )
+    if error is not None or not isinstance(receipt, dict):
+        return DispatchHoldVerdict(
+            str(entry.get("id") or "unknown"),
+            DispatchHold(
+                DispatchHoldState.INVALID,
+                detail=f"hold verdict read failed: {error or receipt!r}",
+            ),
+        )
+    if receipt.get("outcome") == "absent":
+        return None
+    state = (
+        DispatchHoldState.HELD if receipt.get("outcome") == "held" else DispatchHoldState.INVALID
+    )
+    fields = {
+        k: str(receipt.get(k) or "")
+        for k in ("reason", "release_when", "review_on", "set_by", "detail")
+    }
+    return DispatchHoldVerdict(
+        str(receipt.get("owner") or "unknown"), DispatchHold(state, **fields)
+    )
 
 
 def plan_rung(entry: object) -> Rung:
@@ -394,13 +345,15 @@ def is_dispatchable(entry: object) -> bool:
 def is_cold_dispatchable(entry: object) -> bool:
     """A plan-less idea node the autonomous drain may dispatch without a plan.
 
-    The SOLE admission path for ``Rung.NONE`` (x-e24a): ``is_dispatchable`` stays
+    The SOLE admission path for ``Rung.NONE`` : ``is_dispatchable`` stays
     False for plan-less nodes (no plan to launch against), so this predicate -
     not ``_DISPATCHABLE`` - is what the four drain selectors OR into their status
     gate. Requires ``status == "idea"`` (so blocked / in_progress / done
     plan-less nodes are excluded) AND ``plan_rung`` is ``NONE`` (so a linked
-    decompose stub, ``Rung.IDEA``, stays excluded). ``/target`` authors the plan
-    (think -> blueprint -> do), so a plan-less idea is dispatchable as-is.
+    decompose stub, ``Rung.IDEA``, stays excluded). The derived verb authors
+    the plan - low dispatches ``/target`` (think -> blueprint -> do);
+    medium/high blueprint first - so a plan-less idea is dispatchable
+    as-is either way.
 
     The status conjunct is load-bearing: ``plan_rung`` is ``NONE`` for any node
     without a plan_path, including one whose graph status is ``blocked``, so the

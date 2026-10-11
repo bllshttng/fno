@@ -1,4 +1,4 @@
-"""Shared gate_escape telemetry (x-f894 Tier-1 + x-91b5 Tier-2).
+"""Shared gate_escape telemetry (Tier-1 + Tier-2).
 
 One emit path for the autonomy-debt counter: reconcile's auto ``dead-bot``
 emit, the ``spawn-cap`` auto emit from both spawn gates, and the manual
@@ -64,7 +64,9 @@ def default_dedup_key(reason: str, env: Optional[Mapping[str, str]] = None) -> s
     processes from one operator burst collapse rather than triple-count.
     """
     e = _env(env)
-    session = (e.get("FNO_SESSION") or e.get("FNO_SESSION_PID") or "").strip()
+    session = (
+        e.get("FNO_SERVER") or e.get("FNO_SESSION") or e.get("FNO_SESSION_PID") or ""
+    ).strip()
     return f"{reason}:{session}:{_utc_day(e)}"
 
 
@@ -124,14 +126,16 @@ def record_emit_failure(
     # refusal prevented, and writing a fixture-shaped row into it. Measured:
     # events.jsonl absent, `<outside>/.fno/gate_escape_emit_failures.jsonl`
     # present. Refuse here on the same terms; a dropped failure log in a test is
-    # not a loss, because the refusal already printed above.
+    # not a loss, because the refusal already printed above. A REFUSAL holds; a
+    # BROKEN PROBE does not, or an import failure during teardown would cost the
+    # durable row this function exists to keep.
     try:
-        from fno.events import HermeticEscapeError, _refuse_hermetic_escape
+        from fno.hermetic import declared_root
 
-        _refuse_hermetic_escape(Path(log_path))
-    except HermeticEscapeError:
+        declared_root(Path(log_path))
+    except RuntimeError:  # both refusals subclass it; an ImportError does not
         return
-    except Exception:  # noqa: BLE001 - never raise from the telemetry path
+    except Exception:  # noqa: BLE001 - a broken probe still writes the row
         pass
     try:
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
@@ -174,25 +178,26 @@ def already_emitted(
     if pr is None and dedup_key is None:
         return False
     try:
-        # Stream line-by-line: the canonical events log grows unboundedly, so
-        # never slurp it whole just to scan for a dup (gemini review on #241).
-        with Path(events_path).open("r", encoding="utf-8") as fh:
-            for line in fh:
-                if '"gate_escape"' not in line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(ev, dict) or ev.get("type") != "gate_escape":
-                    continue
-                data = ev.get("data")
-                if not isinstance(data, dict) or data.get("reason") != reason:
-                    continue
-                if pr is not None and data.get("pr") == pr:
-                    return True
-                if dedup_key is not None and data.get("dedup_key") == dedup_key:
-                    return True
+        # Committed rows from the store: the writer commits in SQL, so the
+        # dedup must read what a reader would see, never journal bytes.
+        from fno.events.store_client import read_committed_lines
+
+        for line in read_committed_lines(Path(events_path)):
+            if '"gate_escape"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(ev, dict) or ev.get("type") != "gate_escape":
+                continue
+            data = ev.get("data")
+            if not isinstance(data, dict) or data.get("reason") != reason:
+                continue
+            if pr is not None and data.get("pr") == pr:
+                return True
+            if dedup_key is not None and data.get("dedup_key") == dedup_key:
+                return True
     except (OSError, UnicodeDecodeError):
         return False
     return False
@@ -232,7 +237,7 @@ def emit_gate_escape(
         raise ValueError("emit_gate_escape: pass pr XOR dedup_key, not both")
 
     resolved: Optional[Path] = Path(events_path) if events_path is not None else None
-    from fno.events import ValidationError, _build, append_event
+    from fno.events import ValidationError, _build
 
     try:
         event = _build("gate_escape", source, _escape_data(reason, pr, node_id, detail, dedup_key))
@@ -244,7 +249,9 @@ def emit_gate_escape(
             resolved = canonical_events_path(cwd)
         if already_emitted(resolved, reason, pr=pr, dedup_key=dedup_key):
             return None
-        append_event(event, events_path=resolved)
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(event, resolved)
         return resolved
     except Exception as exc:  # AC1-FR: any runtime failure fails OPEN
         record_emit_failure(

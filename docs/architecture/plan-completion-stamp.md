@@ -5,6 +5,12 @@ status: accepted
 
 # Plan Completion Stamp
 
+## Is this page for you?
+
+You want to know from the plan file alone whether a plan shipped, where the PR lives, and which sessions ran it. This page owns the frontmatter stamp and the prose completion log the ship gate writes. Misreading it sends you into `ledger.json` and `git log` for an answer the plan already carries.
+
+Not for: how completion is decided from the world (PR + CI + review). That is [control-plane-loop.md](control-plane-loop.md).
+
 ## Overview
 
 The plan completion stamp makes shipped plans self-describing. When `/target`
@@ -81,12 +87,11 @@ nothing retroactively parks. A refusal exits **6** from `backlog done` / `done`.
 `reconcile` (an unattended sweep) holds the node open in a `promise_unmet`
 bucket and names it in the summary rather than exiting. `--force --reason`
 bypasses the gate on `backlog done` so a deliberate half-ship is a recorded
-line, not silence. The Rust loop closer needs no change: its catch-all maps any
-non-zero, non-5 exit to `Parked` with the refusal text intact.
+line, not silence. The Rust loop closer maps exit 6 through its catch-all to `Parked` with the refusal text intact, which is right for a half-ship: `Parked` is the circuit breaker's failure input, and a repeated unmet promise is work genuinely owed.
 
-The gate fails open on an absent/unreadable/unparseable plan (a stale
-`plan_path` never wedges a close) or a gh outage while counting ships (retryable,
-matching the merge gate). Those limits are stated in the refusal/warning text.
+**Closing needs positive evidence.** The verdict has three outcomes. Only `ok` closes. Every close boundary asks `verdict.satisfied`, never a test against one refusal name. `promise_unmet` is the policy refusal above. `promise_unknown` is a retryable read outage while counting ships. The reader failed on some refs, so the count is unconfirmed in both directions. The node, its plan and its dependents stay open until a later sweep confirms the declared count. It exits **4**, the merge gate's outage code, which `active_backlog.rs` keeps beside exit 5 rather than parking. `Parked` feeds `breaker.record_failure`, so parking an outage auto-defers a healthy node during a long GitHub incident, which is the opposite of holding it open. `reconcile` holds it in a `promise_unknown` bucket beside `promise_unmet`. Returning `ok` there is what closed declared multi-ship nodes on the strength of a gh timeout. A NON-retryable read failure (bad credentials, a stale ref) stays `promise_unmet`. Retrying will not fix a policy problem.
+
+The gate still fails open on an absent, unreadable or unparseable plan, so a stale `plan_path` never wedges a close. A plan with no declaration never reaches the ship count. The refusal and warning text state these limits.
 
 ## Invocation Points
 
@@ -98,7 +103,7 @@ flowchart TD
     SP --> FM[plan frontmatter updated]
     SP --> CM[COMPLETION.md appended]
 
-    MEGA[megawalk graduation step] -->|after target sub-session| GRAD[stamp-plan.py graduate]
+    FIN[fno-agents finalize] -->|terminal-allow, every mode| GRAD[stamp-plan.py graduate]
     GRAD -->|"len(urls) >= expected"| DONE[status: in_review -> done]
     GRAD -->|"len(urls) < expected"| NOOP[no-op, wait for more ships]
 
@@ -123,21 +128,16 @@ Stamp failure here is non-fatal. The graph and ledger writes are already
 committed by the time stamp runs, so the plan is recoverable via the
 stop-hook backfill or a manual invocation.
 
-### 2. Megawalk graduation
+### 2. Graduate (multi-ship plans)
 
-After each target sub-session completes, megawalk runs the graduate step:
+The retired megawalk walker ran the graduate step after each target sub-session. Today `fno-agents finalize` runs it on the terminal-allow boundary in every mode (attended, autonomous, worker). See `skills/target/references/pre-promise.md`:
 
 ```bash
 python3 "${REPO_ROOT}/scripts/lib/stamp-plan.py" graduate \
   --plan-path "$PLAN_PATH"
 ```
 
-`graduate` is conditional: it reads `expected_url_count` from the frontmatter,
-counts the current `urls` list, and only flips `in_review` to `done` when the
-count is met. On intermediate ships of a cross-project plan it exits 0 without
-touching the file. See `skills/megawalk/references/bare-loop-execution.md`
-step 7b (graduation step) for the surrounding protocol, including the
-graph.json sync that follows a `done` transition.
+`graduate` is conditional. It reads `expected_url_count` from the frontmatter and counts the current `urls` list. At the full count, `in_review` flips to `done`. On intermediate ships of a cross-project plan it exits 0 without touching the file. The graph.json sync follows a `done` transition.
 
 ### 3. Stop-hook backfill
 
@@ -239,7 +239,7 @@ Several extensions were considered and deliberately deferred:
 | `scripts/lib/stamp-plan.py` | Core stamper - stdlib only, ~430 lines. `stamp` and `graduate` subcommands. |
 | `hooks/target-stop-hook.sh` | Backfill path (lines 310-348). Runs at every session boundary. |
 | `skills/target/references/pre-promise.md` | "Stamp Plan Frontmatter" subsection. Primary stamp call site (extracted from SKILL.md in the 2026-04-29 diet). |
-| `skills/megawalk/references/bare-loop-execution.md` | Graduation step (step 7b). `graduate` call after each sub-session. |
+| `fno-agents finalize` | Runs the graduate step at terminal-allow in every mode (supersedes the retired megawalk graduation step). |
 | `tests/test-stamp-plan.sh` | 48 assertions covering parser, serializer, stamp, graduate, atomic write, idempotency. |
 | `tests/test-ship-stamp-integration.sh` | 5 end-to-end scenarios: single-project, cross-project, backfill, re-stamp, dry-run. |
 | `tests/test-quick-plan-sidecar.sh` | 9 assertions for single-file plan sidecar contract (flipped from folder behavior). |

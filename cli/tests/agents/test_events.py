@@ -14,17 +14,17 @@ Tests lock down:
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from fno.paths_testing import use_tmpdir
+from tests._event_rows import event_rows
 
 
 def test_emit_writes_one_jsonl_line(tmp_path: Path, monkeypatch) -> None:
-    """emit() appends exactly one JSON line per call."""
+    """emit() commits exactly one row per call."""
     use_tmpdir(monkeypatch, tmp_path)
     from fno.agents.events import emit
 
@@ -32,10 +32,9 @@ def test_emit_writes_one_jsonl_line(tmp_path: Path, monkeypatch) -> None:
     emit("agent_ask_started", name="foo", provider="claude", path=events_path)
     emit("agent_ask_done", name="foo", duration_ms=42, path=events_path)
 
-    lines = events_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2
-    for line in lines:
-        parsed = json.loads(line)
+    rows = event_rows(events_path)
+    assert len(rows) == 2
+    for parsed in rows:
         assert "ts" in parsed
         assert "kind" in parsed
 
@@ -55,33 +54,12 @@ def test_emit_includes_kind_and_data_fields(tmp_path: Path, monkeypatch) -> None
         reply_chars=456,
         path=events_path,
     )
-    line = events_path.read_text(encoding="utf-8").strip()
-    parsed = json.loads(line)
+    parsed = event_rows(events_path)[0]
     assert parsed["kind"] == "agent_ask_done"
     assert parsed["name"] == "bar"
     assert parsed["provider"] == "codex"
     assert parsed["short_id"] == "7c5dcf5d"
     assert parsed["duration_ms"] == 1234
-
-
-def test_emit_provider_rate_limited_records_provider_account_and_timestamp(
-    tmp_path: Path, monkeypatch
-) -> None:
-    use_tmpdir(monkeypatch, tmp_path)
-    from fno.agents.events import emit_provider_rate_limited
-
-    events_path = tmp_path / ".fno" / "events.jsonl"
-    emit_provider_rate_limited(
-        provider="zai",
-        account="readyrule",
-        observed_at="2026-08-20T10:00:00Z",
-        path=events_path,
-    )
-    parsed = json.loads(events_path.read_text(encoding="utf-8").strip())
-    assert parsed["kind"] == "provider_rate_limited"
-    assert parsed["provider"] == "zai"
-    assert parsed["account"] == "readyrule"
-    assert parsed["observed_at"] == "2026-08-20T10:00:00Z"
 
 
 def test_emit_promotes_fair_usage_error_to_rate_limited_event(
@@ -98,7 +76,7 @@ def test_emit_promotes_fair_usage_error_to_rate_limited_event(
         error="HTTP 429 Fair Usage code 1313",
         path=events_path,
     )
-    records = [json.loads(line) for line in events_path.read_text().splitlines()]
+    records = event_rows(events_path)
     assert records[-1]["kind"] == "provider_rate_limited"
     assert records[-1]["provider"] == "zai"
     assert records[-1]["account"] == "readyrule"
@@ -110,8 +88,8 @@ def test_emit_ts_is_iso8601_utc(tmp_path: Path, monkeypatch) -> None:
     from fno.agents.events import emit
 
     events_path = tmp_path / ".fno" / "events.jsonl"
-    emit("agent_ping", path=events_path)
-    parsed = json.loads(events_path.read_text(encoding="utf-8").strip())
+    emit("agent_ask_started", path=events_path)
+    parsed = event_rows(events_path)[0]
     ts = parsed["ts"]
     # Must parse as ISO8601
     assert ts.endswith("Z") or "+" in ts
@@ -127,11 +105,10 @@ def test_emit_default_path_under_state_dir(tmp_path: Path, monkeypatch) -> None:
     import fno.paths as paths
     from fno.agents.events import emit
 
-    emit("agent_test", name="x")
+    emit("agent_ask_started", name="x")
     expected = paths.state_dir() / "events.jsonl"
-    assert expected.exists()
-    parsed = json.loads(expected.read_text(encoding="utf-8").strip())
-    assert parsed["kind"] == "agent_test"
+    parsed = event_rows(expected)[0]
+    assert parsed["kind"] == "agent_ask_started"
 
 
 def test_emit_creates_parent_dir_if_missing(tmp_path: Path, monkeypatch) -> None:
@@ -141,8 +118,10 @@ def test_emit_creates_parent_dir_if_missing(tmp_path: Path, monkeypatch) -> None
 
     deep_path = tmp_path / "nested" / "deeper" / "events.jsonl"
     assert not deep_path.parent.exists()
-    emit("agent_test", path=deep_path)
-    assert deep_path.exists()
+    emit("agent_ask_started", path=deep_path)
+    from fno.events.store_client import store_db_path
+
+    assert store_db_path(deep_path).exists()
 
 
 def test_emit_kind_is_required_positional(tmp_path: Path, monkeypatch) -> None:
@@ -167,13 +146,13 @@ def test_emit_data_cannot_overwrite_ts(tmp_path: Path, monkeypatch) -> None:
 
     events_path = tmp_path / ".fno" / "events.jsonl"
     emit(
-        "agent_test",
+        "agent_ask_started",
         path=events_path,
         ts="HACKED",  # type: ignore[arg-type]
         useful_field="ok",
     )
-    parsed = json.loads(events_path.read_text(encoding="utf-8").strip())
-    assert parsed["kind"] == "agent_test"
+    parsed = event_rows(events_path)[0]
+    assert parsed["kind"] == "agent_ask_started"
     # ts must be a real ISO timestamp, not the user's override
     assert parsed["ts"] != "HACKED"
     assert parsed["ts"].endswith("Z") or "+" in parsed["ts"]
@@ -196,13 +175,13 @@ def test_emit_swallows_oserror_and_warns(
 
     try:
         # Must not raise — telemetry failures cannot break primary ops.
-        emit("agent_test", path=target)
+        emit("agent_ask_started", path=target)
     finally:
         parent.chmod(0o700)  # let pytest clean up
 
     captured = capsys.readouterr()
     assert "warning" in captured.err.lower()
-    assert "agent_test" in captured.err
+    assert "agent_ask_started" in captured.err
 
 
 def test_emit_identity_resolution_records_markers_disposition_collision(
@@ -239,7 +218,7 @@ def test_emit_identity_resolution_records_markers_disposition_collision(
     )
     emit_identity_resolution(owned, path=events_path)
 
-    rec = json.loads(events_path.read_text(encoding="utf-8").strip())
+    rec = event_rows(events_path)[0]
     assert rec["kind"] == KIND_HARNESS_IDENTITY_RESOLVED
     assert rec["disposition"] == "proven"
     assert rec["harness"] == "claude"

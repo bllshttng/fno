@@ -1,4 +1,4 @@
-"""Incarnation fence (x-eea5 1.3).
+"""Incarnation fence (1.3).
 
 A mail-wake fork and the supervisor-restarted original can both be alive on one
 lineage. The one that LOST the ``session:<uuid>`` single-writer claim must refuse
@@ -90,6 +90,29 @@ def _describe_process(pid: object) -> str:
         return "<uninspectable>"
 
 
+def _holder_hosts_caller(pid: object) -> bool:
+    """True when the claim's holder pid is in the caller's process ancestry:
+    the holder is this worker's own host (the pooled bg-spare a thread
+    worker's tool shells hang off), not a rival: a rival never sits in the
+    caller's parent chain. Unprovable input -> False."""
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    import psutil
+
+    try:
+        cur = psutil.Process(os.getpid())
+        for _ in range(32):
+            nxt = cur.parent()
+            if nxt is None:
+                return False
+            if nxt.pid == pid:
+                return True
+            cur = nxt
+    except Exception:  # noqa: BLE001 - dead/unreadable chain: not provably ours
+        return False
+    return False
+
+
 def incarnation_fence_blocks(
     session_uuid: Optional[str], *, claims_root: Optional[Path] = None
 ) -> Tuple[bool, str]:
@@ -104,11 +127,10 @@ def incarnation_fence_blocks(
     if not session_uuid:
         return False, ""
     from .core import claim_status
-    from .io import claims_root_for
 
     key = f"session:{session_uuid}"
     try:
-        info = claim_status(key, root=claims_root or claims_root_for(key))
+        info = claim_status(key, root=claims_root)
     except Exception:  # noqa: BLE001 - unreadable single-writer state -> fail closed
         return True, f"incarnation-fence: claims directory unreadable for {key}"
     state = info.get("state")
@@ -125,8 +147,13 @@ def incarnation_fence_blocks(
         return False, ""  # ours
     holder = info.get("holder", "?")
     pid = info.get("pid", "?")
+    if same_machine and _holder_hosts_caller(pid):
+        # Own host, not a rival; the claim itself still gates real adopters.
+        return False, ""
     return True, (
         f"incarnation-fence: {key} held by {holder} "
         f"(pid={pid}, {_describe_process(pid)}); "
-        f"refusing outward action - another incarnation owns this lineage"
+        f"refusing outward action - another incarnation owns this lineage; "
+        f"if the holder is stale, release it with: "
+        f"fno agents claim release {key} --force --reason \"stale holder\""
     )

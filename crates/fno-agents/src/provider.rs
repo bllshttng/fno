@@ -28,7 +28,7 @@
 //! adapter that shape was also drawn from has since been deleted, so no
 //! Python counterpart remains for that provider.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::envelope::{Envelope, JsonEnvelope, NoEnvelope};
@@ -81,6 +81,9 @@ pub struct ResumeContext {
 pub struct AgentEntry {
     pub name: String,
     pub provider: String,
+    /// The selected fno substrate. Serve-hosted opencode rows use HTTP
+    /// session reachability; other opencode rows retain the store probe.
+    pub substrate: Option<String>,
     /// `None` when no session id was ever recorded (e.g. a create that failed
     /// before the id was captured); reachability treats it as inconclusive.
     pub session_id: Option<String>,
@@ -170,7 +173,7 @@ pub trait ProviderWithPty: Provider {
 pub struct ClaudeProvider;
 
 /// The stream-json host-lane resume argv for claude adoption (Group 1,
-/// ab-5896938c). The daemon builds this to launch the per-session stream worker.
+///). The daemon builds this to launch the per-session stream worker.
 ///
 /// Unlike [`ClaudeProvider::create_argv`] (which uses `--bg`, the subscription
 /// lane), the stream-json host lane REQUIRES `claude -p`: `--input-format
@@ -222,7 +225,7 @@ impl Provider for ClaudeProvider {
             "--name".into(),
             ctx.name.clone(),
             "--".into(),
-            ctx.message.clone(),
+            render_verb_seed(&ctx.message, "claude"),
         ]);
         argv
     }
@@ -240,7 +243,7 @@ impl Provider for ClaudeProvider {
             Some(&ctx.session_id),
         )
         .expect("embedded claude headless-resume capability");
-        argv.extend(["--".into(), ctx.message.clone()]);
+        argv.extend(["--".into(), render_verb_seed(&ctx.message, "claude")]);
         argv
     }
 
@@ -431,38 +434,251 @@ impl ProviderWithPty for ClaudeInteractiveProvider {
 /// `cli/tests/agents/fixtures/codex-jsonl-sample.jsonl`.
 pub struct CodexProvider;
 
-pub fn normalize_codex_command(message: &str) -> String {
-    let command = message.trim();
-    if let Some(verb) = command.strip_prefix("/fno:") {
-        format!("$fno:{verb}")
-    } else if let Some(verb) = command.strip_prefix('/') {
-        format!("$fno:{verb}")
-    } else if command.starts_with("$fno:") {
-        command.to_string()
+/// The verb-token shape every reader shares: a leading `/` or `$`
+/// sigil, no second `/` inside the token (an absolute path never matches),
+/// an optional `fno:` namespace, and a lowercase-word remainder. Returns
+/// `(verb, namespaced)`; both sigils parse.
+pub fn parse_verb_token(tok: &str) -> Option<(&str, bool)> {
+    let sigil = tok.chars().next()?;
+    if sigil != '/' && sigil != '$' {
+        return None;
+    }
+    let body = &tok[1..];
+    if body.is_empty() || body.contains('/') {
+        return None;
+    }
+    let (verb, namespaced) = match body.strip_prefix("fno:") {
+        Some(rest) => (rest, true),
+        None => (body, false),
+    };
+    let mut it = verb.chars();
+    match it.next() {
+        Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() => {}
+        _ => return None,
+    }
+    if !verb
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+    {
+        return None;
+    }
+    Some((verb, namespaced))
+}
+
+/// The shipped footnote verb roster, mirroring Python's `footnote_verbs()`:
+/// every `skills/<name>/SKILL.md` and `commands/<name>.md` the plugin ships.
+/// Read from the surface, never a retyped literal. Resolved from the plugin
+/// root env hints, then the persisted `~/.fno/install/plugin-root` pointer; empty on
+/// any resolution failure, where pass-through is the safe direction and the
+/// plugin-qualified `/fno:` spelling keeps working on namespace alone.
+/// The roster for out-of-crate callers (the parity tests), sorted so the
+/// order is deterministic.
+pub fn footnote_verbs_public() -> Vec<String> {
+    let mut verbs: Vec<String> = footnote_verbs().into_iter().collect();
+    verbs.sort();
+    verbs
+}
+
+pub(crate) fn footnote_verbs() -> std::collections::HashSet<String> {
+    static VERBS: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    if let Some(verbs) = VERBS.get() {
+        return verbs.clone();
+    }
+    let verbs = read_footnote_verbs();
+    // An EMPTY read means the surface did not RESOLVE, never that footnote
+    // ships no verbs - like Python, cache only a real answer so the next call
+    // can succeed after the environment settles.
+    if verbs.is_empty() {
+        return verbs;
+    }
+    let _ = VERBS.set(verbs.clone());
+    verbs
+}
+
+fn read_footnote_verbs() -> std::collections::HashSet<String> {
+    let Some(root) = plugin_root() else {
+        return Default::default();
+    };
+    read_verbs_from(&root)
+}
+
+/// The roster from ONE resolved root, so the installer reads the same
+/// surface as the seed renderers instead of carrying a second list.
+pub(crate) fn read_verbs_from(root: &Path) -> std::collections::HashSet<String> {
+    let mut verbs = std::collections::HashSet::new();
+    if let Ok(entries) = std::fs::read_dir(root.join("skills")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.join("SKILL.md").is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    verbs.insert(name.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(root.join("commands")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                    verbs.insert(stem.to_string());
+                }
+            }
+        }
+    }
+    verbs
+}
+
+pub(crate) fn plugin_root() -> Option<PathBuf> {
+    for name in ["CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "FNO_REPO_ROOT"] {
+        if let Ok(root) = std::env::var(name) {
+            if !root.is_empty() {
+                return Some(PathBuf::from(root));
+            }
+        }
+    }
+    let mut pointer = match std::env::var("FNO_HOME") {
+        Ok(home) if !home.is_empty() => PathBuf::from(home),
+        // The pointer anchors at the STATE ROOT (~/.fno), not $HOME: the
+        // session-start hook and the install verb write
+        // ~/.fno/install/plugin-root, so a $HOME anchor read a file that
+        // never existed (2026-10-02 gap audit 6).
+        _ => crate::paths::dirs_home().join(".fno"),
+    };
+    pointer = crate::state_layout::place(&pointer, "plugin-root");
+    let text = std::fs::read_to_string(pointer).ok()?;
+    let root = PathBuf::from(text.trim());
+    // Only a root carrying the plugin manifest answers: a stale pointer
+    // falls through to empty rather than naming a dead path.
+    if root.join(".claude-plugin").join("plugin.json").is_file() {
+        Some(root)
     } else {
-        message.to_string()
+        None
     }
 }
 
-impl CodexProvider {
-    fn sandbox_create(yolo: bool) -> Vec<String> {
-        // codex.py::sandbox_flag (LD5/LD6): mutually exclusive; never both.
-        if yolo {
-            vec!["--dangerously-bypass-approvals-and-sandbox".into()]
-        } else {
-            vec!["--sandbox".into(), "workspace-write".into()]
+/// The ONE verb-seed renderer: parse the message's FIRST token and
+/// render it for `harness` from the capability row. A seed's sigil says WHO
+/// WROTE it, never which harness runs it. The rest of the message
+/// is kept byte for byte; a first token that does not parse, a harness the
+/// contract cannot answer for, or a bare `$verb` on a codex-skill surface
+/// returns the message unchanged.
+pub fn render_verb_seed(message: &str, harness: &str) -> String {
+    let command = message.trim();
+    let first = command.split_whitespace().next().unwrap_or("");
+    let Some((verb, namespaced)) = parse_verb_token(first) else {
+        return message.to_string();
+    };
+    let Ok(contract) = crate::harness_capabilities::HarnessContract::packaged() else {
+        return message.to_string();
+    };
+    let Ok(caps) = contract.capabilities(harness) else {
+        return message.to_string();
+    };
+    let tail = &command[first.len()..];
+    let native = |v: &str| caps.native_verbs.iter().any(|n| n == v);
+    match caps.command_surface.as_str() {
+        "codex-skill" => {
+            if !first.starts_with('/') {
+                return message.to_string();
+            }
+            // The namespaced spelling is unambiguous by namespace: it always
+            // rewrites, native or not (`/fno:review` names the fno lane even
+            // though bare `/review` is codex's native verb).
+            if namespaced {
+                return format!("$fno:{verb}{tail}");
+            }
+            // A bare `/verb` is rewritten only when it is nobody's native
+            // verb and IS a footnote verb (the shipped roster, with the
+            // name-mint vocabulary as the always-present floor); an unknown
+            // verb stays literal instead of being captured into a phantom
+            // `$fno:` skill.
+            if native(&format!("/{verb}")) {
+                return message.to_string();
+            }
+            if crate::naming::is_word_code_verb(verb) || footnote_verbs().contains(verb) {
+                return format!("$fno:{verb}{tail}");
+            }
+            message.to_string()
         }
+        "slash" => {
+            if !namespaced {
+                // A bare `$verb` says nothing about this surface; a native
+                // verb stays literal (`/undo` on opencode). Both pass
+                // through, as does a bare `/verb` when the prefix is empty
+                // (claude/agy inject the skill natively).
+                if !first.starts_with('/') || native(&format!("/{verb}")) {
+                    return message.to_string();
+                }
+                let prefix = caps.slash_prefix.as_str();
+                if prefix.is_empty() {
+                    return message.to_string();
+                }
+                return format!("/{prefix}{verb}{tail}");
+            }
+            // A namespaced token renders through the row's own prefix when it
+            // declares one (pi's `/skill:<verb>`, opencode's `/fno:<verb>`),
+            // falling back to the agy and `fno:` forms. A row with no prefix
+            // has no surface of its own for the namespace, so the `fno:`
+            // spelling stands.
+            if !caps.slash_prefix.is_empty() {
+                format!("/{}{verb}{tail}", caps.slash_prefix.as_str())
+            } else if harness == "agy" {
+                format!("/{verb}{tail}")
+            } else {
+                format!("/fno:{verb}{tail}")
+            }
+        }
+        _ => message.to_string(),
     }
+}
 
-    fn sandbox_resume(yolo: bool) -> Vec<String> {
-        // codex.py::sandbox_flag_resume: resume has no `--sandbox`; only the
-        // bypass flag is honored, else inherit the session's original mode.
-        if yolo {
-            vec!["--dangerously-bypass-approvals-and-sandbox".into()]
-        } else {
-            vec![]
+/// The uv cache directory a bounded codex worker must be able to write: 58
+/// denials on `~/.cache/uv` across 44 rollouts. An explicit `UV_CACHE_DIR` is
+/// authoritative - uv reads exactly that variable, so a missing path grants
+/// nothing rather than falling back to a cache uv will not use; otherwise the
+/// first of `$XDG_CACHE_HOME/uv` and `$HOME/.cache/uv` that exists wins.
+/// Existing-only, like the Python grant filter: a root naming a missing path
+/// buys nothing.
+pub(crate) fn codex_cache_roots() -> Vec<String> {
+    fn env_dir(key: &str) -> Option<std::path::PathBuf> {
+        std::env::var_os(key)
+            .map(std::path::PathBuf::from)
+            .filter(|p| !p.as_os_str().is_empty())
+    }
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    match env_dir("UV_CACHE_DIR") {
+        Some(dir) => candidates.push(dir),
+        None => {
+            if let Some(xdg) = env_dir("XDG_CACHE_HOME") {
+                candidates.push(xdg.join("uv"));
+            }
+            if let Some(home) = env_dir("HOME") {
+                candidates.push(home.join(".cache").join("uv"));
+            }
         }
     }
+    for dir in candidates {
+        if dir.is_dir() {
+            if let Ok(resolved) = dir.canonicalize() {
+                return vec![resolved.to_string_lossy().into_owned()];
+            }
+        }
+    }
+    vec![]
+}
+
+/// The [`codex_cache_roots`] grant in `--add-dir` form for the exec create
+/// paths. Empty when no cache directory resolves.
+pub(crate) fn codex_cache_writable_args() -> Vec<String> {
+    let roots = codex_cache_roots();
+    if roots.is_empty() {
+        return vec![];
+    }
+    let mut args = vec!["--add-dir".to_string()];
+    args.extend(roots);
+    args
 }
 
 /// Mirror of `codex.py::git_writable_args`: grant the git COMMON dir so a
@@ -496,24 +712,25 @@ pub(crate) fn codex_plan_writable_args(cwd: &std::path::Path) -> Vec<String> {
 /// Mirror of `codex.py::sandbox_config_args_resume`: re-pin a BOUNDED posture
 /// across `codex exec resume`, which takes neither `--sandbox` nor `--add-dir`
 /// and re-resolves the sandbox from config instead of inheriting the
-/// create-time one. `-c` is the only carrier, so it pins both the mode and the
-/// writable roots that `--add-dir` grants on create.
-///
-/// Empty on any failure: a posture we cannot resolve must never break a resume.
+/// create-time one. `-c` is the only carrier, so it pins the mode and network
+/// unconditionally - a resume whose cwd resolves no writable root must still
+/// not fall back to config's network-off sandbox - and appends the writable
+/// roots that `--add-dir` grants on create when any resolve.
 pub(crate) fn codex_sandbox_config_args_resume(cwd: &std::path::Path) -> Vec<String> {
-    let grant = codex_writable_config_args(cwd);
-    if grant.is_empty() {
-        return vec![];
-    }
-    let mut args = vec!["-c".into(), "sandbox_mode=workspace-write".into()];
-    args.extend(grant);
+    let mut args = vec![
+        "-c".into(),
+        "sandbox_mode=workspace-write".into(),
+        "-c".into(),
+        crate::codex_posture::BOUNDED_NETWORK_OVERRIDE.into(),
+    ];
+    args.extend(codex_writable_config_args(cwd));
     args
 }
 
-/// The single whole-value `writable_roots` override used by interactive resume
-/// lanes that must grant roots without also changing the operator's sandbox
-/// mode.
-pub(crate) fn codex_writable_config_args(cwd: &std::path::Path) -> Vec<String> {
+/// The root list the interactive resume and turn/start lanes grant: the repo's
+/// git common dir, the plan content dir, and the seam-published state dirs.
+/// Empty when none resolve.
+pub(crate) fn codex_writable_roots(cwd: &std::path::Path) -> Vec<String> {
     let mut roots: Vec<String> = [git_common_dir(cwd), plan_content_dir(cwd)]
         .into_iter()
         .flatten()
@@ -528,6 +745,23 @@ pub(crate) fn codex_writable_config_args(cwd: &std::path::Path) -> Vec<String> {
             roots.push(extra);
         }
     }
+    // The uv cache rides with the state dirs: a bounded worker installing
+    // sdists writes the cache (58 denials across 44 rollouts), and
+    // `writable_roots` is a whole-value override, so omitting it here removes
+    // a grant the create lane's `--add-dir` made.
+    for extra in codex_cache_roots() {
+        if !roots.contains(&extra) {
+            roots.push(extra);
+        }
+    }
+    roots
+}
+
+/// The single whole-value `writable_roots` override used by interactive resume
+/// lanes that must grant roots without also changing the operator's sandbox
+/// mode.
+pub(crate) fn codex_writable_config_args(cwd: &std::path::Path) -> Vec<String> {
+    let roots = codex_writable_roots(cwd);
     if roots.is_empty() {
         return vec![];
     }
@@ -541,7 +775,7 @@ pub(crate) fn codex_writable_config_args(cwd: &std::path::Path) -> Vec<String> {
 }
 
 fn plan_content_dir(cwd: &std::path::Path) -> Option<String> {
-    let out = match std::process::Command::new("fno")
+    let out = match std::process::Command::new(crate::scrape::fno_bin())
         .args(["do", "plan", "path", "--slug", "codex-sandbox-grant"])
         .current_dir(cwd)
         .output()
@@ -596,7 +830,7 @@ fn resolve_allow_missing(path: &std::path::Path) -> std::path::PathBuf {
 ///
 /// A failing `git rev-parse` writes only to stderr, so empty stdout already
 /// covers every failure the exit code would report.
-fn git_common_dir(cwd: &std::path::Path) -> Option<String> {
+pub(crate) fn git_common_dir(cwd: &std::path::Path) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
@@ -624,10 +858,12 @@ impl Provider for CodexProvider {
             // validated codex.py create path always passes it.
             "--skip-git-repo-check".into(),
         ]);
-        argv.extend(Self::sandbox_create(ctx.yolo));
+        argv.extend(crate::codex_ask::sandbox_flag(ctx.yolo));
+        argv.extend(crate::codex_ask::hook_trust_flag());
         if !ctx.yolo {
             argv.extend(codex_git_writable_args(&ctx.cwd));
             argv.extend(codex_plan_writable_args(&ctx.cwd));
+            argv.extend(codex_cache_writable_args());
         }
         if let Some(effort) = ctx.reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
             argv.push("-c".into());
@@ -636,7 +872,7 @@ impl Provider for CodexProvider {
         // Behind `--`: clap's own prescription ("to pass ... as a value, use
         // '-- ...'"), so a leading-flag seed is the PROMPT, not a flag.
         argv.push("--".into());
-        argv.push(normalize_codex_command(&ctx.message));
+        argv.push(render_verb_seed(&ctx.message, "codex"));
         argv
     }
 
@@ -648,14 +884,15 @@ impl Provider for CodexProvider {
         )
         .expect("embedded codex headless-resume capability");
         argv.extend(["--json".into(), "--skip-git-repo-check".into()]);
-        argv.extend(Self::sandbox_resume(ctx.yolo));
+        argv.extend(crate::codex_ask::sandbox_flag_resume(ctx.yolo));
+        argv.extend(crate::codex_ask::hook_trust_flag());
         if !ctx.yolo {
             argv.extend(codex_sandbox_config_args_resume(&ctx.cwd));
         }
         // Behind `--`: clap's own prescription ("to pass ... as a value, use
         // '-- ...'"), so a leading-flag seed is the PROMPT, not a flag.
         argv.push("--".into());
-        argv.push(normalize_codex_command(&ctx.message));
+        argv.push(render_verb_seed(&ctx.message, "codex"));
         argv
     }
 
@@ -994,7 +1231,7 @@ impl ProviderWithPty for GeminiProvider {
 /// lives in `agy_ask.rs`). `-p`/`--print` takes the prompt as its VALUE, so it
 /// is appended LAST in every argv.
 ///
-/// x-3ab8 caveat — STATELESS interactive: a plain `spawn --provider agy` now
+/// caveat — STATELESS interactive: a plain `spawn --provider agy` now
 /// defaults to an owned interactive pane (like the other PTY providers), and the
 /// pane is drivable WHILE attached. But because agy mints no session id, there is
 /// NO re-attach after it settles — nothing to key a resume on (`resume_argv`
@@ -1093,7 +1330,7 @@ impl ProviderWithPty for AgyProvider {
 // Opencode — PTY-managed pane, PLAIN-TEXT (v1 hosts the TUI; acp is a future lane).
 // ---------------------------------------------------------------------------
 
-/// opencode provider (x-51f6). v1 hosts the interactive PTY-TUI — bare
+/// opencode provider. v1 hosts the interactive PTY-TUI — bare
 /// `opencode`, with the message on `--prompt` (the positional is a PROJECT
 /// PATH, not a prompt) — mirroring the codex/gemini pane pattern; opencode's
 /// structured `acp` protocol is a documented future lane, not wired here.
@@ -1102,7 +1339,7 @@ impl ProviderWithPty for AgyProvider {
 /// `opencode run` shapes, carried for trait completeness — no client-side
 /// one-shot lane is wired in v1 (`spawn --substrate headless` refuses with a
 /// pointer to `pane`). Session ids are captured at spawn, probed against
-/// opencode's own store, and resumable (x-830c) — unlike agy, whose rows stay
+/// opencode's own store, and resumable — unlike agy, whose rows stay
 /// live-only.
 /// Trailing argv for an `opencode run` dispatch: route a footnote slash command
 /// through `--command`, else pass a prose prompt as the message positional.
@@ -1111,9 +1348,9 @@ impl ProviderWithPty for AgyProvider {
 /// expand the plugin command (verified against v1.14.50: `run "/fno:target ..."`
 /// starts a model turn on the literal text). The fno opencode plugin registers
 /// the footnote verbs, so a rendered `/fno:verb args` must ride `opencode run
-/// --command fno:verb <args>` to actually invoke the command (x-de43 / codex P1).
+/// --command fno:verb <args>` to actually invoke the command (/ codex P1).
 /// A non-slash prompt (a plain `ask`/build message) passes through unchanged.
-pub(crate) fn opencode_run_tail(message: &str) -> Vec<String> {
+pub fn opencode_run_tail(message: &str) -> Vec<String> {
     if let Some(rest) = message.strip_prefix('/') {
         let mut parts = rest.splitn(2, ' ');
         // `/fno:target --no-merge x` -> --command fno:target, then the args as
@@ -1160,7 +1397,7 @@ impl Provider for OpencodeProvider {
         // `opencode run [prompt]` is the headless one-shot;
         // `--dangerously-skip-permissions` (auto-approve permissions) is the
         // never-prompt lane so an unattended run cannot wedge on its first
-        // approval. Confirmed vs opencode v1.14.50 `run --help` (x-567d); the
+        // approval. Confirmed vs opencode v1.14.50 `run --help`; the
         // docs' `--auto` is stale.
         let mut argv =
             crate::harness_capabilities::render_session_argv("opencode", "headless_create", None)
@@ -1203,6 +1440,13 @@ impl Provider for OpencodeProvider {
         entry: &AgentEntry,
         timeout: Duration,
     ) -> Result<bool, ReachabilityProbeError> {
+        if entry.substrate.as_deref() == Some("thread") {
+            return crate::opencode_serve::serve_session_reachable(
+                entry.session_id.as_deref().unwrap_or(""),
+                timeout.max(OPENCODE_PROBE_MIN_BUDGET),
+            )
+            .map_err(|reason| ReachabilityProbeError::new("opencode", reason));
+        }
         opencode_reachable_with(
             entry,
             timeout.max(OPENCODE_PROBE_MIN_BUDGET),
@@ -1239,7 +1483,7 @@ pub(crate) fn is_opencode_session_id(s: &str) -> bool {
 /// opencode reachability: membership in opencode's own session store, the same
 /// question codex's probe answers ("does the session still exist" = resumable),
 /// NOT "is the pane live" — a default TUI leaves no on-disk liveness artifact,
-/// so liveness stays the registry row's pid axis (x-5e58).
+/// so liveness stays the registry row's pid axis.
 ///
 /// Tri-state mirrors codex: id present -> `Ok(true)`, clean query without it ->
 /// `Ok(false)`, any infrastructure failure -> `Err` (inconclusive), so a missing
@@ -1285,8 +1529,8 @@ fn opencode_reachable_with(
 ///
 /// Shelling out to opencode's own binary (rather than opening the sqlite file)
 /// inherits its channel-aware database resolution (`opencode-<channel>.db`,
-/// `OPENCODE_DB`) for free, keeps this crate free of a sqlite dependency, and
-/// pins to the CLI verb rather than a storage layout mid-migration to v2.
+/// `OPENCODE_DB`) for free, and pins to the CLI verb rather than a storage
+/// layout mid-migration to v2.
 ///
 /// The query is a single-row lookup, so its output cannot fill the stdout pipe
 /// while we poll. On timeout only the child pid is killed — never its process
@@ -1345,7 +1589,7 @@ impl ProviderWithPty for OpencodeProvider {
 }
 
 // ---------------------------------------------------------------------------
-// pi — DUAL-LANE: `--mode rpc` drives, the plain TUI watches (x-c198).
+// pi — DUAL-LANE: `--mode rpc` drives, the plain TUI watches.
 // ---------------------------------------------------------------------------
 
 /// pi (`@earendil-works/pi-coding-agent`) provider.
@@ -1590,10 +1834,102 @@ pub fn gemini_session_id_from_blob(blob: &str) -> Option<String> {
 }
 
 /// The provider roster: every provider name the Rust side can DISPATCH/host —
-/// the spawn gates in `bin/client.rs` and [`for_name`] ride THIS list (x-51f6
+/// the spawn gates in `bin/client.rs` and [`for_name`] ride THIS list (
 /// US1: one source of truth, no per-site `matches!` copies).
 ///
-/// NAMING SKEW (x-8dfc, Discretion 4 — commented, not lockstep-renamed, to keep
+/// grok provider, roster parity like cursor's: the lanes fno dispatches on
+/// (pane, keeper-hosted thread) are composed in Python (`build_pane_argv`,
+/// `_lane_b_thread_spawn`); the row's argv lives in the capability contract
+/// both languages embed. What lives HERE is the interactive-lane rendering
+/// the provider contract exercises and an honest reachability answer.
+pub struct GrokProvider;
+
+impl Provider for GrokProvider {
+    fn name(&self) -> &'static str {
+        "grok"
+    }
+
+    fn create_argv(&self, ctx: &CreateContext) -> Vec<String> {
+        let session_id = ctx
+            .session_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| panic!("grok create requires a caller-assigned session uuid"));
+        crate::harness_capabilities::render_session_argv(
+            "grok",
+            "interactive_create",
+            Some(session_id),
+        )
+        .expect("embedded grok interactive-create capability")
+    }
+
+    fn resume_argv(&self, ctx: &ResumeContext) -> Vec<String> {
+        // The declared form only. The documented [PROMPT] positional is an
+        // unfenced seed seam and no grok lane consumes this argv - Python
+        // owns grok's lanes and its seed rides the keeper paste, which
+        // fences through Input frames rather than argv - so no message is
+        // appended here.
+        crate::harness_capabilities::render_session_argv(
+            "grok",
+            "interactive_resume",
+            Some(&ctx.session_id),
+        )
+        .expect("embedded grok interactive-resume capability")
+    }
+
+    fn parse_stream_event(&self, chunk: &str) -> ParsedEvent {
+        // `grok -p` prints plain text (exercised once in the
+        // measurement); a chunk is reply text, same reading as pi's.
+        if chunk.trim().is_empty() {
+            ParsedEvent::Unknown {
+                raw: chunk.to_string(),
+            }
+        } else {
+            ParsedEvent::ReplyComplete {
+                text: chunk.to_string(),
+                duration_ms: 0,
+            }
+        }
+    }
+
+    fn reachability(
+        &self,
+        _entry: &AgentEntry,
+        _timeout: Duration,
+    ) -> Result<bool, ReachabilityProbeError> {
+        // The session store (`grok sessions`) is cwd-scoped and its layout is
+        // unwired; an inconclusive answer is the honest one until a probe is
+        // measured against it.
+        Err(ReachabilityProbeError::new(
+            "grok",
+            "session store layout unwired; reachability requires live cross-process recall",
+        ))
+    }
+}
+
+/// The COMPLETE harness roster: every harness footnote supports, dispatch or
+/// not. This is the one list - Python's `fno.harness_names` proxies
+/// it through the [`crate::harness_roster`] verb instead of carrying a tuple
+/// copy, and `scripts/ci/check-harness-roster-parity.py` holds every evidence
+/// surface (setup docs, `for_name` arms, adapter rows) as a subset of it. A
+/// name may sit here without a [`for_name`] arm (hermes, openclaw: docs-only
+/// hosts); every [`KNOWN_PROVIDERS`] name MUST be here (test-enforced).
+pub const KNOWN_HARNESSES: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "agy",
+    "opencode",
+    "pi",
+    "hermes",
+    "openclaw",
+    "cursor-agent",
+    "grok",
+    "zcode",
+    "footnote",
+];
+
+/// NAMING SKEW (Discretion 4 — commented, not lockstep-renamed, to keep
 /// the diff small): this 5-name list mirrors Python's `READABLE_PROVIDERS` (the
 /// spawn/pane read-tolerance roster), NOT Python's narrower 3-name
 /// `KNOWN_PROVIDERS` (its dispatch set). A cli test pins this == READABLE.
@@ -1601,7 +1937,18 @@ pub fn gemini_session_id_from_blob(blob: &str) -> Option<String> {
 /// now shape-checks identity, so an alien harness reads without bricking; this
 /// list gates only spawn/`for_name`. Every name here MUST have a [`for_name`]
 /// arm (test-enforced).
-pub const KNOWN_PROVIDERS: &[&str] = &["claude", "codex", "gemini", "agy", "opencode", "pi"];
+pub const KNOWN_PROVIDERS: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "agy",
+    "opencode",
+    "pi",
+    "cursor-agent",
+    "grok",
+    "zcode",
+    "footnote",
+];
 
 /// The roster joined for error messages ("claude, codex, gemini, agy, opencode, pi").
 pub fn known_providers_csv() -> String {
@@ -1621,6 +1968,10 @@ pub fn for_name(name: &str) -> Option<Box<dyn Provider>> {
         "agy" => Some(Box::new(AgyProvider)),
         "opencode" => Some(Box::new(OpencodeProvider)),
         "pi" => Some(Box::new(PiProvider)),
+        "cursor-agent" => Some(Box::new(crate::cursor_agent::CursorAgentProvider)),
+        "grok" => Some(Box::new(GrokProvider)),
+        "zcode" => Some(Box::new(crate::zcode::ZcodeProvider)),
+        "footnote" => Some(Box::new(crate::footnote_harness::FootnoteProvider)),
         _ => None,
     }
 }
@@ -1658,7 +2009,7 @@ mod tests {
     // ---- argv shapes ----
 
     #[test]
-    fn claude_create_argv_uses_bg_not_print() {
+    fn claude_argv_rows() {
         let argv = ClaudeProvider.create_argv(&create_ctx());
         assert_eq!(
             argv,
@@ -1672,10 +2023,7 @@ mod tests {
             ]
         );
         assert!(!argv.iter().any(|a| a == "-p"), "LD38: never claude -p");
-    }
 
-    #[test]
-    fn claude_resume_argv_is_headless_resume() {
         let ctx = ResumeContext {
             session_id: "7c5dcf5d".into(),
             message: "follow up".into(),
@@ -1687,10 +2035,7 @@ mod tests {
             ClaudeProvider.resume_argv(&ctx),
             vec!["claude", "-p", "--resume", "7c5dcf5d", "--", "follow up"]
         );
-    }
 
-    #[test]
-    fn claude_stream_json_resume_argv_uses_p_and_full_uuid() {
         // The stream-json host lane resumes by the FULL UUID with -p +
         // stream-json IO (the only flags that yield a drivable bidirectional
         // pipe). -p here is the deliberate adoption lane (LD1), distinct from
@@ -1713,8 +2058,46 @@ mod tests {
         );
     }
 
+    /// Pin `UV_CACHE_DIR` for one test and restore the prior value on drop,
+    /// holding the crate-wide env lock the whole time: cache resolution reads
+    /// process-global env, so an unpinned run depends on the host's real
+    /// cache. `to_absent` names a missing path, and since `UV_CACHE_DIR` is
+    /// authoritative, that grants nothing.
+    struct UvCachePin {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl UvCachePin {
+        fn to(value: &str) -> Self {
+            let guard = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("UV_CACHE_DIR");
+            unsafe { std::env::set_var("UV_CACHE_DIR", value) };
+            Self {
+                _guard: guard,
+                prev,
+            }
+        }
+
+        fn to_absent() -> Self {
+            Self::to("/nonexistent-fno-uv-cache-probe")
+        }
+    }
+
+    impl Drop for UvCachePin {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
+                None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
+            }
+        }
+    }
+
     #[test]
     fn codex_create_argv_defaults_to_workspace_write_sandbox() {
+        let _no_uv = UvCachePin::to_absent();
         let argv = CodexProvider.create_argv(&create_ctx());
         assert_eq!(
             argv,
@@ -1727,6 +2110,8 @@ mod tests {
                 "--skip-git-repo-check",
                 "--sandbox",
                 "workspace-write",
+                "-c",
+                crate::codex_posture::BOUNDED_NETWORK_OVERRIDE,
                 "--add-dir",
                 &expected_plan_grant(),
                 "--",
@@ -1741,38 +2126,13 @@ mod tests {
     /// so a bounded worker cannot take index.lock and every commit fails. The
     /// Python create path grants it; this lane builds its own argv and would
     /// otherwise stay broken (a guard on one of N paths is decorative).
-    #[test]
-    fn codex_create_argv_grants_git_common_dir_when_cwd_is_a_repo() {
-        let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        let mut ctx = create_ctx();
-        ctx.cwd = dir.path().to_path_buf();
-        let argv = CodexProvider.create_argv(&ctx);
-
-        let i = argv
-            .iter()
-            .position(|a| a == "--add-dir")
-            .expect("--add-dir");
-        assert_eq!(
-            std::fs::canonicalize(&argv[i + 1]).unwrap(),
-            std::fs::canonicalize(dir.path().join(".git")).unwrap()
-        );
-    }
 
     #[cfg(unix)]
     #[test]
     fn codex_create_and_resume_argv_grant_the_resolved_plan_directory() {
         // PATH mutation is process-global: take the lib-wide test mutex so a
         // concurrent PATH-dependent test does not inherit this stub.
-        let _path_guard = crate::PATH_TEST_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        use std::os::unix::fs::PermissionsExt;
+        let _path_guard = crate::path_test_guard();
 
         let _guard = crate::claims::test_env_lock()
             .lock()
@@ -1786,34 +2146,20 @@ mod tests {
         let plan_dir = dir.path().join("configured-plans");
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        let fake_fno = bin.join("fno");
-        std::fs::write(
-            &fake_fno,
-            format!(
+        crate::write_exec_stub(
+            &bin,
+            "fno",
+            &format!(
                 "#!/bin/sh\n[ \"$*\" = 'do plan path --slug codex-sandbox-grant' ] || exit 64\nprintf '%s\\n' '{}'\n",
                 plan_dir.join("probe.md").display()
             ),
-        )
-        .unwrap();
-        let mut perms = std::fs::metadata(&fake_fno).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&fake_fno, perms).unwrap();
+        );
         let old_path = std::env::var_os("PATH");
-        // PREPEND, never replace. PATH is process-global and this test holds it
-        // for the whole argv build, so replacing it took `git` away from every
-        // concurrent test in the binary. That is what made the paths and
-        // roster_progress git fixtures fail at random. The stub still wins for
-        // `fno`, which is all this test needs.
-        let stubbed = match &old_path {
-            Some(prev) => {
-                let mut v = std::ffi::OsString::from(&bin);
-                v.push(":");
-                v.push(prev);
-                v
-            }
-            None => std::ffi::OsString::from(&bin),
-        };
-        unsafe { std::env::set_var("PATH", stubbed) };
+        let prev_bin = std::env::var_os("FNO_BIN");
+        unsafe { std::env::set_var("PATH", crate::path_with(std::path::Path::new(&bin))) };
+        // The codex lane execs through scrape::fno_bin, which under cfg!(test)
+        // answers only a declared FNO_BIN: pin the same stub PATH pins.
+        unsafe { std::env::set_var("FNO_BIN", bin.join("fno")) };
 
         let mut create_ctx = create_ctx();
         create_ctx.cwd = dir.path().to_path_buf();
@@ -1829,6 +2175,10 @@ mod tests {
         match old_path {
             Some(path) => unsafe { std::env::set_var("PATH", path) },
             None => unsafe { std::env::remove_var("PATH") },
+        }
+        match prev_bin {
+            Some(v) => unsafe { std::env::set_var("FNO_BIN", v) },
+            None => unsafe { std::env::remove_var("FNO_BIN") },
         }
 
         let grants: Vec<&String> = create
@@ -1878,9 +2228,10 @@ mod tests {
 
     /// AC7-ERR: a non-repo cwd never panics. The GIT grant is absent (no repo
     /// to resolve), but the plan-dir grant is independent of git-repo-ness and
-    /// still applies (x-6163).
+    /// still applies.
     #[test]
     fn codex_create_argv_outside_a_repo_omits_only_the_git_grant() {
+        let _no_uv = UvCachePin::to_absent();
         let argv = CodexProvider.create_argv(&create_ctx());
         let grants: Vec<&String> = argv
             .iter()
@@ -1888,6 +2239,35 @@ mod tests {
             .filter_map(|(i, token)| (token == "--add-dir").then(|| &argv[i + 1]))
             .collect();
         assert_eq!(grants, vec![&expected_plan_grant()]);
+    }
+
+    /// AC4-HP: a bounded exec create grants the uv cache, canonicalized. The
+    /// cache holds sdists a worker installs; 58 denials across 44 rollouts.
+    #[test]
+    fn codex_create_argv_grants_the_uv_cache_when_it_exists() {
+        let cache = tempfile::tempdir().unwrap();
+        let _pin = UvCachePin::to(cache.path().to_str().unwrap());
+        let argv = CodexProvider.create_argv(&create_ctx());
+        let want = std::fs::canonicalize(cache.path()).unwrap();
+        assert!(
+            argv.iter()
+                .any(|a| *a == want.to_string_lossy().into_owned()),
+            "argv should grant {want:?}: {argv:?}"
+        );
+    }
+
+    /// AC4-ERR: `UV_CACHE_DIR` is authoritative, so a missing path grants
+    /// nothing and the spawn proceeds.
+    #[test]
+    fn codex_create_argv_grants_no_missing_uv_cache() {
+        let _pin = UvCachePin::to_absent();
+        let argv = CodexProvider.create_argv(&create_ctx());
+        assert!(
+            !argv
+                .iter()
+                .any(|a| a.contains("fno-uv-cache-probe") || a.contains(".cache/uv")),
+            "no uv root should resolve: {argv:?}"
+        );
     }
 
     /// The bounded posture does NOT survive `codex exec resume` on its own:
@@ -1912,6 +2292,11 @@ mod tests {
         };
         let argv = CodexProvider.resume_argv(&ctx);
         assert!(argv.contains(&"sandbox_mode=workspace-write".to_string()));
+        // AC2-HP: the bounded posture is re-pinned even when no writable root
+        // resolves, so network stays on for gh and the graph keeper socket.
+        assert!(argv
+            .iter()
+            .any(|a| a == crate::codex_posture::BOUNDED_NETWORK_OVERRIDE));
         let roots = argv
             .iter()
             .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
@@ -1927,40 +2312,71 @@ mod tests {
         assert!(!CodexProvider.resume_argv(&yolo).iter().any(|a| a == "-c"));
     }
 
+    /// AC2-HP: a bounded resume whose cwd resolves NO writable root still
+    /// re-pins mode and network. A resume that fell back to config could
+    /// inherit the operator's network-off `sandbox_workspace_write`.
     #[test]
-    fn codex_create_argv_yolo_is_mutually_exclusive_with_sandbox() {
+    fn codex_resume_argv_pins_posture_without_any_root() {
+        let _no_uv = UvCachePin::to_absent();
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ResumeContext {
+            session_id: "s1".into(),
+            message: "follow up".into(),
+            cwd: dir.path().to_path_buf(),
+            from_name: None,
+            yolo: false,
+        };
+        let argv = CodexProvider.resume_argv(&ctx);
+        assert!(argv.contains(&"sandbox_mode=workspace-write".to_string()));
+        assert!(argv
+            .iter()
+            .any(|a| a == crate::codex_posture::BOUNDED_NETWORK_OVERRIDE));
+        assert!(!argv
+            .iter()
+            .any(|a| a.starts_with("sandbox_workspace_write.writable_roots=")));
+    }
+
+    #[test]
+    fn codex_sandbox_rows() {
         let mut ctx = create_ctx();
         ctx.yolo = true;
         let argv = CodexProvider.create_argv(&ctx);
         assert!(argv.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()));
         assert!(!argv.iter().any(|a| a == "--sandbox"));
-    }
+        // Hook trust rides every posture, but only on a codex that ships the
+        // flag.
+        let trust = ["--dangerously-bypass-hook-trust".to_string()];
+        assert_eq!(crate::codex_ask::hook_trust_tokens(Some("0.162.0")), trust);
+        assert_eq!(crate::codex_ask::hook_trust_tokens(Some("0.148.0")), trust);
+        assert!(crate::codex_ask::hook_trust_tokens(Some("0.147.9")).is_empty());
+        assert!(crate::codex_ask::hook_trust_tokens(None).is_empty());
+        // The env pin parses like the Python twin's regex.
+        let pin = crate::codex_ask::pinned_version;
+        assert_eq!(pin("0.148.0").as_deref(), Some("0.148.0"));
+        assert_eq!(pin("codex-cli 0.150.0 (abc)").as_deref(), Some("0.150.0"));
+        assert_eq!(pin("0.148"), None);
+        assert_eq!(pin(""), None);
 
-    #[test]
-    fn codex_create_argv_appends_reasoning_effort() {
         let mut ctx = create_ctx();
         ctx.reasoning_effort = Some("high".into());
         let argv = CodexProvider.create_argv(&ctx);
         assert!(argv
             .windows(2)
             .any(|w| w == ["-c", "model_reasoning_effort=high"]));
-    }
 
-    #[test]
-    fn codex_create_and_resume_normalize_direct_slash_commands() {
         let mut create = create_ctx();
-        create.message = "  /fno:target x-81ad  ".into();
+        create.message = "  /fno:target x-aaaa  ".into();
         assert_eq!(
             CodexProvider
                 .create_argv(&create)
                 .last()
                 .map(String::as_str),
-            Some("$fno:target x-81ad")
+            Some("$fno:target x-aaaa")
         );
 
         let resume = ResumeContext {
             session_id: "uuid-1".into(),
-            message: "  /fno:target x-81ad  ".into(),
+            message: "  /fno:target x-aaaa  ".into(),
             cwd: PathBuf::from("/x"),
             from_name: None,
             yolo: false,
@@ -1970,19 +2386,164 @@ mod tests {
                 .resume_argv(&resume)
                 .last()
                 .map(String::as_str),
-            Some("$fno:target x-81ad")
+            Some("$fno:target x-aaaa")
         );
 
         assert_eq!(
-            normalize_codex_command("  review this\n  code  "),
+            render_verb_seed("  review this\n  code  ", "codex"),
             "  review this\n  code  "
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let mut ctx = create_ctx();
+        ctx.cwd = dir.path().to_path_buf();
+        let argv = CodexProvider.create_argv(&ctx);
+
+        let i = argv
+            .iter()
+            .position(|a| a == "--add-dir")
+            .expect("--add-dir");
+        assert_eq!(
+            std::fs::canonicalize(&argv[i + 1]).unwrap(),
+            std::fs::canonicalize(dir.path().join(".git")).unwrap()
         );
     }
 
-    /// The plan-dir grant is independent of git-repo-ness (x-6163), so even a
+    /// the sigil says WHO WROTE the seed, never which harness runs
+    /// it. A codex-authored `$fno:verb` command reaching a claude target is
+    /// rewritten to claude's native `/fno:verb`; a slash seed is already
+    /// claude's spelling, and prose or an inline mention is never touched.
+    #[test]
+    fn verb_rows() {
+        let mut create = create_ctx();
+        create.message = "  $fno:target x-aaaa  ".into();
+        assert_eq!(
+            ClaudeProvider
+                .create_argv(&create)
+                .last()
+                .map(String::as_str),
+            Some("/fno:target x-aaaa")
+        );
+
+        let resume = ResumeContext {
+            session_id: "uuid-1".into(),
+            message: "  $fno:blueprint x-aaaa  ".into(),
+            cwd: PathBuf::from("/x"),
+            from_name: None,
+            yolo: false,
+        };
+        assert_eq!(
+            ClaudeProvider
+                .resume_argv(&resume)
+                .last()
+                .map(String::as_str),
+            Some("/fno:blueprint x-aaaa")
+        );
+
+        assert_eq!(render_verb_seed("/fno:target x", "claude"), "/fno:target x");
+        assert_eq!(
+            render_verb_seed("do a $fno:blueprint", "claude"),
+            "do a $fno:blueprint"
+        );
+        assert_eq!(
+            render_verb_seed("build feature X", "claude"),
+            "build feature X"
+        );
+
+        for seed in ["/fno:target x-aaaa", "/target x-aaaa", "$fno:target x-aaaa"] {
+            assert_eq!(
+                render_verb_seed(seed, "codex"),
+                "$fno:target x-aaaa",
+                "seed: {seed}"
+            );
+        }
+        for seed in [
+            "/review",
+            "/model gpt-5.6-luna",
+            "/compact",
+            "/usr/bin/script x",
+            "/diff",
+            "see /fno:docs",
+            "  review this\n  code  ",
+        ] {
+            assert_eq!(render_verb_seed(seed, "codex"), seed, "seed: {seed}");
+        }
+
+        assert_eq!(
+            render_verb_seed("$fno:blueprint x", "claude"),
+            "/fno:blueprint x"
+        );
+        assert_eq!(
+            render_verb_seed("$fno:blueprint x", "opencode"),
+            "/fno:blueprint x"
+        );
+        assert_eq!(render_verb_seed("$fno:blueprint x", "agy"), "/blueprint x");
+        assert_eq!(render_verb_seed("/undo", "opencode"), "/undo");
+        assert_eq!(
+            render_verb_seed("do a $fno:blueprint", "claude"),
+            "do a $fno:blueprint"
+        );
+
+        assert_eq!(
+            render_verb_seed("/fno:target resume", "pi"),
+            "/skill:target resume"
+        );
+        assert_eq!(render_verb_seed("/target x", "pi"), "/skill:target x");
+        assert_eq!(render_verb_seed("/name", "pi"), "/name");
+        // The other slash surfaces are unchanged by the prefix arm.
+        assert_eq!(
+            render_verb_seed("/fno:target resume", "opencode"),
+            "/fno:target resume"
+        );
+        assert_eq!(
+            render_verb_seed("/fno:target resume", "claude"),
+            "/fno:target resume"
+        );
+        assert_eq!(
+            render_verb_seed("/fno:target resume", "agy"),
+            "/target resume"
+        );
+
+        assert_eq!(parse_verb_token("/fno:target"), Some(("target", true)));
+        assert_eq!(parse_verb_token("$fno:target"), Some(("target", true)));
+        assert_eq!(parse_verb_token("/target"), Some(("target", false)));
+        assert_eq!(parse_verb_token("$target"), Some(("target", false)));
+        for tok in [
+            "/Users/bb16/plan.md",
+            "$HOME/x",
+            "//fno:x",
+            "/Target",
+            "review",
+            "/fno:",
+        ] {
+            assert_eq!(parse_verb_token(tok), None, "token: {tok}");
+        }
+    }
+
+    /// the one renderer reads every sigil spelling and renders per
+    /// harness. Codex receives `$fno:verb` from all three seed spellings;
+    /// its native verbs and foreign prose stay literal.
+
+    /// slash surfaces render the namespaced spelling per row; agy
+    /// strips the namespace it injects natively.
+
+    /// pi's skill-command form: a namespaced token AND a bare footnote verb
+    /// render through the row's nonempty `slash_prefix`, while pi's own
+    /// native verb stays literal (AC7-HP, AC7-EDGE).
+
+    /// the parse owner reads both sigils with the shared shape rule.
+
+    /// The plan-dir grant is independent of git-repo-ness, so even a
     /// non-repo cwd re-pins `writable_roots` on resume unless yolo.
     #[test]
     fn codex_resume_argv_grants_plan_dir_outside_a_repo_unless_yolo() {
+        let _no_uv = UvCachePin::to_absent();
         let ctx = ResumeContext {
             session_id: "uuid-1".into(),
             message: "m".into(),
@@ -2002,6 +2563,8 @@ mod tests {
                 "-c",
                 "sandbox_mode=workspace-write",
                 "-c",
+                crate::codex_posture::BOUNDED_NETWORK_OVERRIDE,
+                "-c",
                 "sandbox_workspace_write.writable_roots=[\"/x/.fno/plans\"]",
                 "--",
                 "m"
@@ -2010,7 +2573,7 @@ mod tests {
     }
 
     #[test]
-    fn gemini_create_argv_passes_session_id_and_default_approval() {
+    fn gemini_argv_rows() {
         let mut ctx = create_ctx();
         ctx.session_id = Some("uuid-g".into());
         let argv = GeminiProvider.create_argv(&ctx);
@@ -2029,10 +2592,7 @@ mod tests {
                 "uuid-g"
             ]
         );
-    }
 
-    #[test]
-    fn gemini_resume_argv_uses_resume_flag() {
         let ctx = ResumeContext {
             session_id: "uuid-g".into(),
             message: "m".into(),
@@ -2062,21 +2622,36 @@ mod tests {
     // ---- as_pty type-level routing ----
 
     #[test]
-    fn claude_is_not_pty_managed_others_are() {
+    fn pty_rows() {
         // The shellout `--bg` claude stays non-PTY; the interactive claude (E1)
         // and codex/gemini are PTY-managed.
         assert!(ClaudeProvider.as_pty().is_none());
         assert!(ClaudeInteractiveProvider.as_pty().is_some());
         assert!(CodexProvider.as_pty().is_some());
         assert!(GeminiProvider.as_pty().is_some());
+
+        assert!(OpencodeProvider.as_pty().is_some());
+        // An id-less row has nothing to look up, so the probe stays inconclusive
+        // and never orphans the pane. A row WITH an id is probed for real
+        // - see the opencode store-probe cases above.
+        let entry = AgentEntry {
+            name: "oc".into(),
+            provider: "opencode".into(),
+            substrate: None,
+            session_id: None,
+            cwd: PathBuf::from("/x"),
+        };
+        assert!(OpencodeProvider
+            .reachability(&entry, Duration::from_secs(1))
+            .is_err());
     }
 
     // ---- ClaudeInteractiveProvider (E1 keystone) ----
 
-    // ---- OpencodeProvider (x-51f6) ----
+    // ---- OpencodeProvider ----
 
     #[test]
-    fn opencode_create_argv_is_headless_run_never_bare_tui() {
+    fn opencode_argv_rows() {
         // The trait's create path is the headless `opencode run` one-shot
         // (never-prompt via --dangerously-skip-permissions); the bare-`opencode`
         // TUI is the PANE form and lives in mux_spawn.build_pane_argv, not here.
@@ -2091,15 +2666,12 @@ mod tests {
                 "build feature X"
             ]
         );
-    }
 
-    #[test]
-    fn opencode_create_argv_routes_slash_command_via_command_flag() {
         // A rendered footnote slash command rides `--command <verb>` (opencode
         // expands the plugin command) with the rest as args - NOT a prose prompt
-        // that `run` would run verbatim (x-de43 / codex P1).
+        // that `run` would run verbatim (/ codex P1).
         let mut ctx = create_ctx();
-        ctx.message = "/fno:target --no-merge x-abcd".into();
+        ctx.message = "/fno:target --no-merge x-bbbb".into();
         assert_eq!(
             OpencodeProvider.create_argv(&ctx),
             vec![
@@ -2110,29 +2682,26 @@ mod tests {
                 "fno:target",
                 "--",
                 "--no-merge",
-                "x-abcd"
+                "x-bbbb"
             ]
         );
-    }
 
-    #[test]
-    fn opencode_run_tail_prose_through_and_bare_verb() {
         // Prose rides behind the `--` fence; a bare verb has no args tail.
         assert_eq!(
             opencode_run_tail("build feature X"),
             vec!["--", "build feature X"]
         );
-        assert_eq!(opencode_run_tail("/fno:pr"), vec!["--command", "fno:pr"]);
+        assert_eq!(
+            opencode_run_tail("/fno:ship"),
+            vec!["--command", "fno:ship"]
+        );
         // A non-dash args tail keeps the one-positional shape: multiword
         // free-text args reach the command unsplit (round 11).
         assert_eq!(
             opencode_run_tail("/fno:blueprint my multi word idea"),
             vec!["--command", "fno:blueprint", "my multi word idea"]
         );
-    }
 
-    #[test]
-    fn opencode_resume_argv_uses_session_flag() {
         let ctx = ResumeContext {
             session_id: "ses_abc".into(),
             message: "m".into(),
@@ -2155,28 +2724,11 @@ mod tests {
     }
 
     #[test]
-    fn opencode_is_pty_managed_and_id_less_probe_is_inconclusive() {
-        assert!(OpencodeProvider.as_pty().is_some());
-        // An id-less row has nothing to look up, so the probe stays inconclusive
-        // and never orphans the pane. A row WITH an id is probed for real
-        // (x-830c) - see the opencode store-probe cases above.
-        let entry = AgentEntry {
-            name: "oc".into(),
-            provider: "opencode".into(),
-            session_id: None,
-            cwd: PathBuf::from("/x"),
-        };
-        assert!(OpencodeProvider
-            .reachability(&entry, Duration::from_secs(1))
-            .is_err());
-    }
-
-    #[test]
     fn for_name_round_trips_every_known_provider() {
         // for_name is the LD8 single registration point; a copy-paste slip
         // (e.g. "codex" => GeminiProvider) would pass every other test, so
         // assert each name resolves to a provider reporting that same name.
-        // Iterating KNOWN_PROVIDERS (x-51f6 US1 / AC1-FR) makes this the
+        // Iterating KNOWN_PROVIDERS (US1 / AC1-FR) makes this the
         // roster-parity gate too: a name added to the const without a
         // for_name arm fails here, and the consolidation can never silently
         // narrow the roster (the old hardcoded list had already drifted —
@@ -2190,12 +2742,50 @@ mod tests {
             );
         }
         assert!(for_name("nope").is_none(), "unknown provider must be None");
+        // KNOWN_HARNESSES is the one roster: every dispatchable provider is
+        // rostered, and every rostered name is lowercase kebab so the
+        // setup-doc glob, the parity gate's extractors, and the Python
+        // readers all agree on its shape.
+        for name in KNOWN_PROVIDERS {
+            assert!(
+                KNOWN_HARNESSES.contains(name),
+                "{name} is dispatchable but absent from KNOWN_HARNESSES"
+            );
+        }
+        assert!(!KNOWN_HARNESSES.is_empty());
+        for name in KNOWN_HARNESSES {
+            assert!(
+                !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '-'
+                        || c == '_'),
+                "roster name {name:?} is not lowercase kebab"
+            );
+        }
+        let mut sorted = KNOWN_HARNESSES.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), KNOWN_HARNESSES.len(), "duplicate roster name");
+        // The bundled capability table's harness rows stay a subset of the
+        // one roster. The Python import-time assert that used to hold this
+        // moved here, where the table's source lives: the packaged copy the
+        // Python tree reads is byte-identical (the freshness gate), so this
+        // pin covers it transitively.
+        let caps = crate::harness_capabilities::HarnessContract::packaged()
+            .expect("the packaged capability table parses");
+        for name in caps.harness.keys() {
+            assert!(
+                KNOWN_HARNESSES.contains(&name.as_str()),
+                "capability row {name} is absent from KNOWN_HARNESSES"
+            );
+        }
     }
 
     // ---- claude short-id parse ----
 
     #[test]
-    fn claude_parses_short_id_from_bg_line() {
+    fn claude_parse_rows() {
         let ev = ClaudeProvider.parse_stream_event("backgrounded · 7c5dcf5d · worker-A");
         assert_eq!(
             ev,
@@ -2203,10 +2793,7 @@ mod tests {
                 session_id: "7c5dcf5d".into()
             }
         );
-    }
 
-    #[test]
-    fn claude_non_id_line_is_unknown() {
         assert!(matches!(
             ClaudeProvider.parse_stream_event("starting up"),
             ParsedEvent::Unknown { .. }
@@ -2221,7 +2808,7 @@ mod tests {
     // ---- codex JSONL parse (pinned to fixture vocabulary) ----
 
     #[test]
-    fn codex_thread_started_is_session_created() {
+    fn codex_stream_rows() {
         let ev = parse_codex_line(
             r#"{"type":"thread.started","thread_id":"019e4958-80d1-7492-8054-2854dfda502c"}"#,
         );
@@ -2231,10 +2818,7 @@ mod tests {
                 session_id: "019e4958-80d1-7492-8054-2854dfda502c".into()
             }
         );
-    }
 
-    #[test]
-    fn codex_agent_message_is_output_chunk() {
         let ev = parse_codex_line(
             r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"hello"}}"#,
         );
@@ -2244,10 +2828,7 @@ mod tests {
                 text: "hello".into()
             }
         );
-    }
 
-    #[test]
-    fn codex_error_item_is_provider_error() {
         let ev = parse_codex_line(
             r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"boom"}}"#,
         );
@@ -2257,10 +2838,7 @@ mod tests {
                 message: "boom".into()
             }
         );
-    }
 
-    #[test]
-    fn codex_command_execution_is_tool_use() {
         let ev = parse_codex_line(
             r#"{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"echo hi"}}"#,
         );
@@ -2271,10 +2849,7 @@ mod tests {
             }
             other => panic!("expected ToolUse, got {other:?}"),
         }
-    }
 
-    #[test]
-    fn codex_turn_completed_is_reply_complete_marker() {
         let ev = parse_codex_line(r#"{"type":"turn.completed","usage":{"output_tokens":91}}"#);
         assert_eq!(
             ev,
@@ -2283,10 +2858,7 @@ mod tests {
                 duration_ms: 0
             }
         );
-    }
 
-    #[test]
-    fn codex_preamble_and_control_frames_are_unknown() {
         assert!(matches!(
             parse_codex_line("Reading additional input from stdin..."),
             ParsedEvent::Unknown { .. }
@@ -2300,7 +2872,7 @@ mod tests {
     // ---- gemini blob parse ----
 
     #[test]
-    fn gemini_blob_response_is_reply_complete_with_latency() {
+    fn gemini_stream_rows() {
         let blob = r#"{
           "session_id": "abc",
           "response": "PONG",
@@ -2313,10 +2885,7 @@ mod tests {
                 duration_ms: 3359
             }
         );
-    }
 
-    #[test]
-    fn gemini_latency_sums_across_models() {
         let blob = r#"{
           "response": "ok",
           "stats": {"models": {
@@ -2331,10 +2900,7 @@ mod tests {
                 duration_ms: 350
             }
         );
-    }
 
-    #[test]
-    fn gemini_session_only_blob_is_session_created() {
         let ev = parse_gemini_blob(r#"{"session_id":"xyz"}"#);
         assert_eq!(
             ev,
@@ -2342,18 +2908,12 @@ mod tests {
                 session_id: "xyz".into()
             }
         );
-    }
 
-    #[test]
-    fn gemini_partial_or_garbage_is_unknown() {
         assert!(matches!(
             parse_gemini_blob(r#"{"session_id": "incomplete"#),
             ParsedEvent::Unknown { .. }
         ));
-    }
 
-    #[test]
-    fn gemini_session_id_recoverable_from_create_blob_even_with_reply() {
         // parse_stream_event surfaces the reply (single-event return), but the
         // session id is still recoverable from the same blob for the create path.
         let blob = r#"{"session_id":"abc-123","response":"hi","stats":{}}"#;
@@ -2376,6 +2936,7 @@ mod tests {
         let entry = AgentEntry {
             name: "a".into(),
             provider: "codex".into(),
+            substrate: None,
             session_id: None,
             cwd: PathBuf::from("/x"),
         };
@@ -2389,12 +2950,13 @@ mod tests {
         AgentEntry {
             name: "a".into(),
             provider: "codex".into(),
+            substrate: None,
             session_id: Some(session_id.into()),
             cwd: PathBuf::from("/x"),
         }
     }
 
-    // -- opencode store probe (x-830c) ------------------------------------
+    // -- opencode store probe ------------------------------------
     // Every case drives an injected runner, so the suite never shells out to a
     // real opencode binary or reads ~/.local/share/opencode.
 
@@ -2404,6 +2966,7 @@ mod tests {
         AgentEntry {
             name: "o".into(),
             provider: "opencode".into(),
+            substrate: None,
             session_id: session_id.map(Into::into),
             cwd: PathBuf::from("/x"),
         }
@@ -2596,6 +3159,7 @@ mod tests {
         AgentEntry {
             name: "g".into(),
             provider: "gemini".into(),
+            substrate: None,
             session_id: Some(session_id.into()),
             cwd: PathBuf::from(cwd),
         }
@@ -2710,11 +3274,20 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var_os("HOME");
+        let prev_codex = std::env::var_os("CODEX_HOME");
         std::env::set_var("HOME", home);
+        // CODEX_HOME reaches past the swapped HOME into whatever fake-daemon
+        // home a parallel test has set. The fresh install these tests model
+        // has neither, so the codex home is neutralized for the closure.
+        std::env::remove_var("CODEX_HOME");
         f();
         match prev {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
+        }
+        match prev_codex {
+            Some(v) => std::env::set_var("CODEX_HOME", v),
+            None => std::env::remove_var("CODEX_HOME"),
         }
     }
 }

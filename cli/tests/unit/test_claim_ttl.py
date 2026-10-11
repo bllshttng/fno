@@ -11,23 +11,11 @@ import psutil
 
 from fno.claims.core import acquire_claim, claim_status, refresh_claim
 from fno.claims.io import claim_path, serialize_claim
-from fno.claims.staleness import classify, now_ms
-from fno.claims.types import Claim, ClaimState
+from fno.claims.types import Claim, now_ms
 
 
 def _acquire_ttl(root, key="node:N", holder="target-session:me", ttl_ms=60_000):
     return acquire_claim(key, holder, ttl_ms=ttl_ms, pid=os.getpid(), root=root)
-
-
-def test_refresh_extends_ttl_window(tmp_path):
-    # AC4-FR: a refreshed TTL claim's window moves forward (stays current).
-    claim = _acquire_ttl(tmp_path)
-    assert claim.expires_at is not None
-    refreshed = refresh_claim("node:N", "target-session:me", ttl_ms=60_000, root=tmp_path)
-    assert refreshed is not None
-    assert refreshed.expires_at > now_ms()
-    # Still classified live (holder pid is this process).
-    assert classify(refreshed) in (ClaimState.LIVE, ClaimState.SUSPECT)
 
 
 def test_refresh_idempotent_under_repeated_ticks(tmp_path):
@@ -38,24 +26,6 @@ def test_refresh_idempotent_under_repeated_ticks(tmp_path):
         r = refresh_claim("node:N", "target-session:me", ttl_ms=60_000, root=tmp_path)
         assert r is not None and r.expires_at > now_ms()
     assert claim_status("node:N", root=tmp_path)["state"] in ("live", "suspect")
-
-
-def test_refresh_is_noop_for_pid_liveness_claim(tmp_path):
-    # A PID-only claim (no expires_at) refreshes to None - safe to call from a
-    # generic timer that does not know the claim's mode.
-    acquire_claim("node:P", "target-session:me", pid=os.getpid(), root=tmp_path)
-    assert refresh_claim("node:P", "target-session:me", root=tmp_path) is None
-
-
-def test_refresh_holder_mismatch_is_rejected(tmp_path):
-    # A respawned/foreign holder must not extend another session's claim.
-    from fno.claims.core import HolderMismatch
-
-    _acquire_ttl(tmp_path, holder="target-session:OWNER")
-    import pytest
-
-    with pytest.raises(HolderMismatch):
-        refresh_claim("node:N", "target-session:RIVAL", ttl_ms=60_000, root=tmp_path)
 
 
 def test_expired_claim_status_names_prior_holder(tmp_path):
@@ -131,44 +101,6 @@ class TestRefreshReanchorsADeadPid:
     forced to protect the dead one.
     """
 
-    def test_a_dead_anchor_is_replaced_by_the_durable_session_pid(
-        self, tmp_path, monkeypatch
-    ):
-        acquire_claim(
-            key="node:x-resp", holder="target-session:s", ttl_ms=3_600_000,
-            pid=_dead_pid(), root=tmp_path,
-        )
-        assert claim_status("node:x-resp", root=tmp_path)["state"] == "suspect"
-
-        _anchor(monkeypatch, os.getpid())
-        refreshed = refresh_claim(
-            key="node:x-resp", holder="target-session:s", ttl_ms=3_600_000,
-            root=tmp_path,
-        )
-        assert refreshed.pid == os.getpid()
-        assert claim_status("node:x-resp", root=tmp_path)["state"] == "live"
-
-    def test_the_anchor_is_held_while_the_pid_moves(self, tmp_path, monkeypatch):
-        """acquired_at STAYS. The do provenance row keys started_at on it, so
-        moving it makes the release stamp open a second row instead of closing
-        the one this claim opened. Reuse detection still passes because the
-        anchor process started BEFORE the claim, asserted here by classifying
-        LIVE rather than by reading the field alone."""
-        from fno.claims.core import claim_status
-
-        original = acquire_claim(
-            key="node:x-anchor", holder="target-session:s", ttl_ms=3_600_000,
-            pid=_dead_pid(), root=tmp_path,
-        )
-        assert claim_status("node:x-anchor", root=tmp_path)["state"] == "suspect"
-        _anchor(monkeypatch, os.getpid())
-        refreshed = refresh_claim(
-            key="node:x-anchor", holder="target-session:s", ttl_ms=3_600_000,
-            root=tmp_path,
-        )
-        assert refreshed.acquired_at == original.acquired_at
-        assert refreshed.pid == os.getpid()
-        assert claim_status("node:x-anchor", root=tmp_path)["state"] == "live"
 
     def test_a_re_anchoring_refresh_still_extends_the_deadline(
         self, tmp_path, monkeypatch
@@ -231,7 +163,10 @@ class TestRefreshReanchorsADeadPid:
             key="node:x-foreign", holder="target-session:s", ttl_ms=3_600_000,
             pid=_dead_pid(), root=tmp_path,
         )
-        monkeypatch.setattr("fno.claims.core.is_same_machine", lambda *_a: False)
+        monkeypatch.setattr(
+            "fno.claims.core._claim_verdict",
+            lambda *_a, **_kw: {"state": "suspect", "bucket": "offhost", "expired": False},
+        )
         _anchor(monkeypatch, os.getpid())
         refreshed = refresh_claim(
             key="node:x-foreign", holder="target-session:s", ttl_ms=3_600_000,

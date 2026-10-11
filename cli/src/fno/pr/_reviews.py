@@ -1,6 +1,6 @@
-"""Optional-review signal for `fno do pr status` (x-705b).
+"""Optional-review signal for `fno do pr status`.
 
-x-d996 raised the drain-optional-review floor with SKILL.md prose, but prose is
+ raised the drain-optional-review floor with SKILL.md prose, but prose is
 miss-able: an agent shortcut to `gh pr checks` + `reviewDecision` (empty for a
 `COMMENTED` bot review) and promised green without ever reading the inline
 findings. This attaches the signal to the ONE command the loop already polls -
@@ -13,10 +13,11 @@ The read is strictly additive and time-boxed: any failure degrades to the
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from fno.graph._reconcile import repo_slug_from_url
 from fno.pr import _quota
@@ -25,12 +26,23 @@ from fno.pr_watch._discover import _reviewer_matches
 
 Runner = Callable[..., Result]
 
-_COUNTED_FRESHNESS = {
-    "fresh",
-    "carried_base_sync",
-    "carried_docs_only",
-    "carried_subset",
-}
+#: Freshness labels the Rust producer writes that count toward coverage.
+#: The carried_interdiff labels are parameterized by their measured numbers
+#: (`carried_interdiff(n=6, cap=100)`), so membership is a prefix test on
+#: that one shape rather than an open-ended set the producer could drift from.
+_COUNTED_FRESHNESS = frozenset(
+    {"fresh", "carried_base_sync", "carried_docs_only", "carried_subset"}
+)
+_INTERDIFF_PREFIX = "carried_interdiff("
+
+
+def counted_freshness(label: object) -> bool:
+    """Whether a stored freshness label counts toward coverage."""
+    if not isinstance(label, str):
+        return False
+    return label in _COUNTED_FRESHNESS or (
+        label.startswith(_INTERDIFF_PREFIX) and label.endswith(")")
+    )
 _KNOWN_REVIEW_VERDICTS = {"reviewed", "stale", "refused", "errored", "absent"}
 _KNOWN_COVERAGE_PRODUCERS = {"github_app", "local_attestation"}
 _KNOWN_REVIEW_STATES = {"reviewed", "unreviewed", "reviewer_refused"}
@@ -97,7 +109,7 @@ def optional_reviewer_names(cwd: Optional[str] = None) -> list[str]:
     return [n for n in names if n]
 
 
-# x-0eaf: coverage read degrades to this on any failure (additive, fail-open).
+# coverage read degrades to this on any failure (additive, fail-open).
 # Annotated because the values are heterogeneous (str, None, list) and mypy
 # cannot infer a useful type from the literal alone.
 _UNKNOWN_COVERAGE: dict[str, object] = {
@@ -106,7 +118,14 @@ _UNKNOWN_COVERAGE: dict[str, object] = {
     "self_attested_count": None,
     "head_sha": None,
     "stale_verdicts": [],
+    "note": "coverage probe failed",
 }
+
+#: The remedy an unmeasurable coverage answer names: the instrument is
+#: missing, and the fix is installing it, never recomputing the answer in a
+#: second language (the mirror this constant's path replaces did exactly
+#: that, and diverged from the gate).
+_UNMEASURABLE_REASON = "fno-agents not on PATH; install it or run fno doctor update"
 
 # A TERMINAL PR (merged or closed) is never ASKED for coverage: the gate guards
 # what WOULD merge and a terminal PR has no would left. Distinct from
@@ -122,6 +141,7 @@ _NOT_ASKED_COVERAGE: dict[str, object] = {
     "self_attested_count": 0,
     "head_sha": None,
     "stale_verdicts": [],
+    "note": "not asked: PR is terminal (merged or closed); this says nothing about coverage at merge time",
 }
 
 
@@ -148,7 +168,27 @@ def _repo_root(cwd: Optional[str] = None) -> Path:
 # `finalize.rs` instead of one. Re-exported under the old private names so every
 # call site and test here reads unchanged.
 from fno.paths import repo_identity as _repo_identity  # noqa: E402
-from fno.pr._merge import _is_documentation_path  # noqa: E402
+
+
+def journal_lines(path: Path, types: tuple[str, ...]) -> Iterator[str]:
+    """The lines of ``path``'s journal for ``types``, across rotations.
+
+    The native event read imports the live journal, then answers the store
+    rows in commit order. Without the binary the live file alone answers.
+    """
+    from fno.events.store_client import native_rows
+
+    live = path.resolve()
+    live = live.with_name(re.sub(r"\.\d+$", "", live.name))
+    rows = native_rows(live, types=list(types), include_rejected=True, legacy_fallback=True)
+    if rows is not None:
+        for line in rows:
+            yield line + "\n"
+        return
+    try:
+        yield from live.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+    except OSError:
+        return
 
 
 def _scan_coverage(
@@ -174,30 +214,29 @@ def _scan_coverage(
     latest: Optional[dict] = None
     latest_ts = ""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for raw in fh:
-                # Cheap reject before the JSON parse; 99.99% of lines are other
-                # event types and the logs are large enough for this to matter.
-                if "review_coverage" not in raw:
+        for raw in journal_lines(path, ("review_coverage",)):
+            # Cheap reject before the JSON parse; 99.99% of lines are other
+            # event types and the logs are large enough for this to matter.
+            if "review_coverage" not in raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict) or ev.get("type") != "review_coverage":
+                continue
+            data = ev.get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            try:
+                if int(data.get("pr", -1)) != pr_number:
                     continue
-                try:
-                    ev = json.loads(raw)
-                except ValueError:
-                    continue
-                if not isinstance(ev, dict) or ev.get("type") != "review_coverage":
-                    continue
-                data = ev.get("data") or {}
-                if not isinstance(data, dict):
-                    continue
-                try:
-                    if int(data.get("pr", -1)) != pr_number:
-                        continue
-                except (TypeError, ValueError):
-                    continue
-                if repo_slug is not None and data.get("repo") != repo_slug:
-                    continue
-                latest = data
-                latest_ts = str(ev.get("ts") or "")
+            except (TypeError, ValueError):
+                continue
+            if repo_slug is not None and data.get("repo") != repo_slug:
+                continue
+            latest = data
+            latest_ts = str(ev.get("ts") or "")
     except OSError:
         return None, ""
     return latest, latest_ts
@@ -208,22 +247,24 @@ def _coverage_logs(
 ) -> tuple[Optional[Path], Optional[Path], Optional[str]]:
     """The logs a coverage read consults: ``(project, global, slug)``, either None.
 
-    The project entry is read UNSCOPED (a repo-local file needs no scoping) and
-    the global entry SCOPED by ``slug``. Both can be None; see the same-file case
-    below, which is why the project entry is optional rather than always present.
-
-    The global log is None when it cannot be scanned safely - no ``~/.fno``, the
-    same file as the project log, or no resolvable git-remote slug. Without a
-    slug nothing in the cross-project log can be attributed to this repo, so
+    The project entry is the repo's SPACE journal - scoped by construction,
+    because the slug is in its path - so it reads unscoped. The global entry is
+    read SCOPED by ``slug``. The global log is None when it cannot be scanned
+    safely - no ``~/.fno`` or no resolvable git-remote slug. Without a slug
+    nothing in the cross-project log can be attributed to this repo, so
     scanning it could only produce a cross-repo false positive.
 
     Separate from the scan so a caller that only wants to NAME the logs (the
     refusal text) does not read tens of MB of JSONL to learn two filenames.
     """
     root = _repo_root(cwd)
-    project_path = (
-        project_events if project_events is not None else root / ".fno" / "events.jsonl"
-    )
+    if project_events is not None:
+        project_path = project_events
+    else:
+        # project_log: producers write the space journal; a raw .fno path goes
+        # quiet once any writer migrates it, and every PR then reads unreviewed.
+        from fno.paths import project_log
+        project_path = project_log("events.jsonl", project_root=root)
     try:
         from fno import paths as _paths
 
@@ -236,14 +277,6 @@ def _coverage_logs(
         slug = _repo_identity(root)
     except Exception:  # noqa: BLE001 - no global log -> project log alone
         return project_path, None, None
-    if global_path == project_path:
-        # The two resolve to ONE file when the git top-level is $HOME (a
-        # `git init ~` dotfiles checkout). The project log is normally read
-        # unscoped because it is repo-local; here it IS the cross-project
-        # journal, so an unscoped read would let any repo's PR N satisfy this
-        # repo's guard. Drop the unscoped read and keep only the scoped one -
-        # and with no identity to scope by, nothing here is safe to read.
-        return None, (global_path if slug else None), slug
     if not slug:
         return project_path, None, slug
     return project_path, global_path, slug
@@ -269,7 +302,7 @@ def latest_review_coverage_row(
     writes into the events file of the directory it runs in, so a review
     attested inside a worktree lands in that worktree's project log; a merge run
     from canonical reads canonical's. They agreed only by luck, and the
-    disagreement read as "nobody reviewed this" (x-f43c). ``~/.fno`` is the one
+    disagreement read as "nobody reviewed this". ``~/.fno`` is the one
     file both stand in, so it is the tiebreaker rather than a fallback.
 
     The project log is scanned unscoped (it is already repo-local); the global
@@ -412,8 +445,10 @@ def review_coverage_for_gate(
     pr_number: int,
     cwd: Optional[str] = None,
     head: Optional[str] = None,
+    *,
+    recompute_postureless: bool = True,
 ) -> tuple[Optional[dict], str]:
-    """The coverage event a gate should act on, recomputed at most ONCE (x-3a3f).
+    """The coverage event a gate should act on, recomputed at most ONCE.
 
     Reads :func:`latest_review_coverage`; when there is no usable row (nothing
     found, the found row pins a head that is not ``head``, or it says
@@ -440,7 +475,9 @@ def review_coverage_for_gate(
     07:48:55Z, the gate still refused, and two readers reached opposite wrong
     conclusions. So an uncovered row is overtaken when an in-scope attestation
     for the same head is NEWER than the row, and the read is paid only on the
-    uncovered branch, where it can change the answer.
+    uncovered branch, where it can change the answer. A later fail at the same
+    head overtakes too: the verdict does not flip the row's word, but the
+    round and the review count it reports have moved.
 
     Returns ``(data_or_None, note)``; ``note`` is ``""`` when no recompute ran,
     else ``"recomputed"``, ``"recompute produced no row"``,
@@ -463,7 +500,23 @@ def review_coverage_for_gate(
     )
     ev_head = (raw or {}).get("head_sha")
     mismatch = bool(head and raw and ev_head and head != ev_head)
-    unusable = data is not None and data.get("coverage") == "unknown"
+    # A covered row with NO posture verdict is also stale in the sense that
+    # matters: the producer that wrote it resolved no rung (an fno-agents
+    # binary from before review.posture), so the merge gate would refuse on an
+    # unknown posture a fresh recompute might satisfy. The recompute is paid
+    # only on this covered arm, where it can change the answer - and only by a
+    # caller that can ACT on the producer-upgrade refusal (the merge gate).
+    # Receipt surfaces (status) report the row as-is: recomputing under them
+    # rewrites the same postureless row every read until the binary upgrades,
+    # a per-read cost that changes no answer the receipt can print.
+    unusable = data is not None and (
+        data.get("coverage") == "unknown"
+        or (
+            data.get("coverage") == "covered"
+            and "review_posture" not in data
+            and recompute_postureless
+        )
+    )
     overtaken = _uncovered_row_overtaken(data, raw_ts, cwd, head)
     pinned = _pinned_note(data, raw_ts)
     if raw is None or mismatch or unusable or overtaken:
@@ -481,6 +534,21 @@ def review_coverage_for_gate(
                 pinned = ""
         else:
             note = f"recompute unavailable: {why}"
+            if data is None and why == "fno-agents not found":
+                # No stored row AND no instrument to compute one: the answer
+                # is "unmeasurable", never a Python-side freshness. The
+                # git-walk mirror this replaces guessed an answer here and
+                # diverged from the gate (class); refusing with the
+                # remedy named is the posture every other missing-instrument
+                # gate takes (validate-plan.sh, check-proto-version-bump.sh).
+                data = {
+                    "coverage": "unmeasurable",
+                    "reason": _UNMEASURABLE_REASON,
+                    "reviewed_count": 0,
+                    "stale_verdicts": [],
+                    "verdicts": [],
+                }
+                note = f"{note}; {_UNMEASURABLE_REASON}"
     return data, "; ".join(x for x in (note, pinned) if x)
 
 
@@ -528,20 +596,38 @@ def split_pin_note(note: str) -> tuple[str, str]:
 def _uncovered_row_overtaken(
     data: Optional[dict], row_ts: str, cwd: Optional[str], head: Optional[str]
 ) -> bool:
-    """Whether a head-matching UNCOVERED row has been overtaken by a later pass.
+    """Whether a head-matching stored NO row has been overtaken by a later
+    attestation.
 
     Narrow by construction. It fires only for a row that is UNCOVERED at the
-    head being asked about, and only when an in-scope attestation pinned to
-    that same head carries a LATER timestamp than the row. A covered row, a
-    head mismatch and an unknown row are all handled by the arms beside it,
-    and a row with no timestamp cannot be compared, so it is left alone rather
-    than recomputed on a guess.
+    head being asked about, or a covered row whose review posture is explicitly
+    unsatisfied, and only when an in-scope attestation pinned to that same head
+    carries a LATER timestamp than the row. A covered row with a satisfied or
+    absent posture, a head mismatch and an unknown row are handled by the arms
+    beside it, and a row with no timestamp cannot be compared, so it is left
+    alone rather than recomputed on a guess.
+
+    Any verdict overtakes, not only a pass. A later fail at the head moved
+    what the row reports - a round is spent, and the review count changed -
+    even though the row's word may still read uncovered. A retraction is a
+    fail row too, so no verdict filter stays.
 
     The chain read is scoped by exact head sha, never by branch: the question
     is only "did something attest THIS head after the row was written", and a
     branch-scoped read would pull in rounds for other commits.
     """
-    if not head or not row_ts or not data or data.get("coverage") != "uncovered":
+    if not head or not row_ts or not isinstance(data, dict):
+        return False
+    posture = data.get("review_posture")
+    stored_no = bool(
+        data.get("coverage") == "uncovered"
+        or (
+            data.get("coverage") == "covered"
+            and isinstance(posture, dict)
+            and posture.get("posture_satisfied") is False
+        )
+    )
+    if not stored_no:
         return False
     if data.get("head_sha") != head:
         return False
@@ -555,7 +641,6 @@ def _uncovered_row_overtaken(
     return any(
         _is_after(str(event.get("ts") or ""), row_ts, row_at)
         and event.get("head_sha") == head
-        and event.get("verdict") == "pass"
         for event in chain
     )
 
@@ -592,257 +677,15 @@ def _is_after(candidate: str, baseline_ts: str, baseline: Optional[datetime]) ->
 
 
 def _is_covered(data: Optional[dict]) -> bool:
-    """Whether a coverage event reports a real pass (covered AND count > 0)."""
+    """Whether a coverage event reports covered, keyed on the WORD alone.
+
+    The count is a fact beside the word, never a conjunct of it: a budget
+    spent on fail rounds reads covered with passed_count 0, and every reader
+    that tested ``covered AND count > 0`` reported zero reviews on a PR two
+    rounds were spent reviewing."""
     if not data or data.get("coverage") != "covered":
         return False
-    try:
-        return int(data.get("reviewed_count") or 0) > 0
-    except (TypeError, ValueError):
-        return False
-
-
-def _pr_code_diff_identity(
-    sha: str, base_ref: str, cwd: Optional[str]
-) -> Optional[tuple[str, frozenset[str]]]:
-    """Content identity of the PR's own CODE changes at ``sha``.
-
-    A faithful mirror of ``pr_code_diff_identity`` in loopcheck.rs, decision
-    for decision: the same ``git diff --raw --no-abbrev --no-renames
-    base...sha`` (one line per changed path carrying both blob SHAs, so a
-    sibling edit to the same file or a reindent changes the identity where a
-    patch-id would not), documentation paths dropped, sorted, hashed. The
-    hash algorithm differs (sha256 vs blake3) but only the EQUALITY decision
-    crosses the language line, and the line sets make the subset test
-    possible. ``None`` on any git failure AND when nothing outside
-    documentation changed - an empty code diff is not evidence, the
-    absence-matched-against-absence trap."""
-    try:
-        diff = run(
-            ["git", "diff", "--raw", "--no-abbrev", "--no-renames", f"{base_ref}...{sha}"],
-            cwd=cwd,
-            timeout=15,
-        )
-    except Exception:  # noqa: BLE001 - an unreadable proof is not fresh
-        return None
-    if diff.returncode != 0:
-        return None
-    lines = []
-    for line in (diff.stdout or "").splitlines():
-        line = line.rstrip()
-        if not line:
-            continue
-        path = line.split("\t")[1].strip() if "\t" in line else ""
-        if _is_documentation_path(path):
-            continue
-        lines.append(line)
-    if not lines:
-        return None
-    lines.sort()
-    import hashlib
-
-    digest = hashlib.sha256()
-    for line in lines:
-        digest.update(line.encode("utf-8", "replace"))
-        digest.update(b"\n")
-    return digest.hexdigest(), frozenset(lines)
-
-
-# Sha-keyed identity and tree-path memos. A commit's identity never changes,
-# so the entry is valid forever - provided the BASE side of the key is also
-# immutable, so identities key on the base ref's resolved COMMIT, not the
-# moving ref name. The bound keeps a long-lived process from growing without
-# limit. A base branch CAN be retargeted, so the ref resolution carries a TTL.
-_IDENTITY_CACHE: dict[tuple[str, str, str], "Optional[tuple[str, frozenset[str]]]"] = {}
-_TREE_PATHS_CACHE: dict[tuple[str, str, str], bool] = {}
-_BASE_REF_CACHE: dict[tuple[str, int], tuple[float, Optional[str]]] = {}
-_BASE_COMMIT_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
-_BASE_REF_TTL = 300.0
-_CACHE_BOUND = 256
-
-
-def _base_commit_of(base_ref: str, cwd: Optional[str]) -> str:
-    """The commit ``base_ref`` resolves to, for use as an immutable cache key
-    (the ref name moves under a fetch; the commit does not). Empty on any
-    failure, which simply de-duplicates less. TTL-memoized: it runs per
-    identity lookup."""
-    key = (base_ref, cwd or "")
-    hit = _BASE_COMMIT_CACHE.get(key)
-    now = time.monotonic()
-    if hit is not None and now - hit[0] < _BASE_REF_TTL:
-        return hit[1]
-    try:
-        result = run(
-            ["git", "rev-parse", f"{base_ref}^{{commit}}"],
-            cwd=cwd,
-            timeout=5,
-        )
-        commit = result.stdout.strip() if result.returncode == 0 else ""
-    except Exception:  # noqa: BLE001
-        commit = ""
-    if commit:
-        # Only successes memoize: a failed resolve cached as "" would key
-        # later identities on the moving ref NAME, the exact aliasing the
-        # resolved-commit key exists to prevent.
-        if len(_BASE_COMMIT_CACHE) >= _CACHE_BOUND:
-            _BASE_COMMIT_CACHE.pop(next(iter(_BASE_COMMIT_CACHE)))
-        _BASE_COMMIT_CACHE[key] = (now, commit)
-    return commit
-
-
-def _identity_of(
-    sha: str, base_ref: str, cwd: Optional[str]
-) -> "Optional[tuple[str, frozenset[str]]]":
-    base_commit = _base_commit_of(base_ref, cwd)
-    key = (sha, base_commit or base_ref, cwd or "")
-    # The diff runs against the RESOLVED COMMIT, the same object the key
-    # names. Diffing the live ref would let a base rewrite inside the
-    # base-commit TTL compare two identities built against different bases
-    # under one key; pinning both sides to one commit keeps the comparison
-    # coherent even when the TTL serves the pre-rewrite resolution.
-    effective_base = base_commit or base_ref
-    if key not in _IDENTITY_CACHE:
-        value = _pr_code_diff_identity(sha, effective_base, cwd)
-        if value is not None:
-            # Only successes memoize: None means the git read failed (or the
-            # code diff is empty), and either recomputes cheaply. Pinning a
-            # transient failure would keep verdicts stale for the process
-            # life.
-            if len(_IDENTITY_CACHE) >= _CACHE_BOUND:
-                _IDENTITY_CACHE.pop(next(iter(_IDENTITY_CACHE)))
-            _IDENTITY_CACHE[key] = value
-        return value
-    return _IDENTITY_CACHE[key]
-
-
-def _tree_paths_readable(reviewed_sha: str, head: str, cwd: Optional[str]) -> bool:
-    """Whether the two-dot name-only diff between the shas is READABLE.
-
-    The Rust rule requires the tree-paths read on an identity match: a carry
-    that cannot name why it carries is Stale. Python does not split the carry
-    reasons, so only the readability conjunct crosses the language line."""
-    key = (reviewed_sha, head, cwd or "")
-    if key not in _TREE_PATHS_CACHE:
-        try:
-            result = run(
-                ["git", "diff", "--name-only", "--no-renames", reviewed_sha, head],
-                cwd=cwd,
-                timeout=10,
-            )
-            readable = result.returncode == 0
-        except Exception:  # noqa: BLE001 - an unreadable proof is not fresh
-            readable = False
-        if readable:
-            # Only successes memoize: a False from a transient git failure
-            # is not a property of the sha pair.
-            if len(_TREE_PATHS_CACHE) >= _CACHE_BOUND:
-                _TREE_PATHS_CACHE.pop(next(iter(_TREE_PATHS_CACHE)))
-            _TREE_PATHS_CACHE[key] = readable
-        return readable
-    return _TREE_PATHS_CACHE[key]
-
-
-def _resolve_base_ref(cwd: Optional[str], pr_number: int = 0) -> Optional[str]:
-    """The ref the PR merges into, remote-qualified like the Rust resolver.
-
-    ``gh pr view`` supplies the real base branch first. When that read
-    SUCCEEDS, the qualified ref is the answer the Rust resolver would use:
-    if it does not resolve locally, the content test is unanswerable (None,
-    fail closed) - falling back to origin/main there would compute both
-    identities against the wrong base and CARRY a rebase the stop gate
-    expired, the disagreement this mirror exists to prevent. A FAILED read
-    with a PR number is the same unanswerable state: the Rust resolver
-    expires everything when its read fails, so the defaults (origin/main,
-    then origin/master) apply only when there is no PR to ask at all.
-    Memoized with a TTL: status polls fire this per pass, the read spends
-    the per-USER GraphQL quota, and a base retarget is rare."""
-    key = (cwd or "", pr_number)
-    hit = _BASE_REF_CACHE.get(key)
-    now = time.monotonic()
-    if hit is not None and now - hit[0] < _BASE_REF_TTL:
-        return hit[1]
-    resolved: Optional[str] = None
-    candidates: list[str] = []
-    base_known = False
-    if pr_number:
-        try:
-            view = run(
-                ["gh", "pr", "view", str(pr_number), "--json", "baseRefName"],
-                cwd=cwd,
-                timeout=10,
-            )
-            if view.returncode == 0:
-                base = (json.loads(view.stdout or "{}") or {}).get("baseRefName")
-                if isinstance(base, str) and base.strip():
-                    candidates.append(f"origin/{base.strip()}")
-                    base_known = True
-        except Exception:  # noqa: BLE001 - a failed read is fail-closed below
-            pass
-        if not base_known:
-            # Unanswerable, not defaultable: cache None so the poll loop
-            # cannot hammer a failing gh, and let the TTL bound the blip.
-            if len(_BASE_REF_CACHE) >= _CACHE_BOUND:
-                _BASE_REF_CACHE.pop(next(iter(_BASE_REF_CACHE)))
-            _BASE_REF_CACHE[key] = (now, None)
-            return None
-    else:
-        candidates += ["origin/main", "origin/master"]
-    for ref in candidates:
-        try:
-            result = run(
-                ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
-                cwd=cwd,
-                timeout=5,
-            )
-        except Exception:  # noqa: BLE001 - next ref may still resolve
-            continue
-        if result.returncode == 0:
-            resolved = ref
-            break
-    if len(_BASE_REF_CACHE) >= _CACHE_BOUND:
-        _BASE_REF_CACHE.pop(next(iter(_BASE_REF_CACHE)))
-    _BASE_REF_CACHE[key] = (now, resolved)
-    return resolved
-
-
-def _reviewed_sha_still_describes_head(
-    reviewed_sha: str,
-    head: str,
-    cwd: Optional[str],
-    pr_number: int = 0,
-) -> bool:
-    """Whether the change the reviewer read still ships at ``head``.
-
-    The SAME rule ``review_freshness`` applies, decision for decision, with
-    no extra arms: the reviewer read this exact commit; or the code-diff
-    identities at ``reviewed_sha`` and at ``head`` carry equal (and the
-    tree-paths read between them is readable, like the Rust carry's own
-    auditability requirement); or the head delta strictly SHRANK (every raw
-    line still shipping was read; the vanished lines are paths the base
-    absorbed on the rebase). Anything else - a push of new unreviewed code
-    after the review, a sibling edit to the same file, a reindented
-    resolution, an unreadable identity on either side - is a new review.
-    There is deliberately NO ancestry arm: ancestry alone proved a push-after-
-    review head fresh here while the Rust rule expired it, and a merge must
-    not accept an increment the stop gate calls stale. Resolves its own base
-    (fail closed) through the module caches, and is the one seam hermetic
-    tests stub."""
-    if reviewed_sha == head:
-        return True
-    base_ref = _resolve_base_ref(cwd, pr_number)
-    if base_ref is None:
-        return False
-    reviewed = _identity_of(reviewed_sha, base_ref, cwd)
-    if reviewed is None:
-        return False
-    current_head = _identity_of(head, base_ref, cwd)
-    if current_head is None:
-        return False
-    if reviewed[0] == current_head[0]:
-        # The Rust carry is auditable: it requires the tree-paths read, and a
-        # carry that cannot name why it carries is Stale. Readability is the
-        # only part of that read the equal-identity decision depends on.
-        return _tree_paths_readable(reviewed_sha, head, cwd)
-    return current_head[1] < reviewed[1]
+    return True
 
 
 def _tiling_chain(data: dict) -> set[str]:
@@ -862,69 +705,6 @@ def _tiling_chain(data: dict) -> set[str]:
     if not isinstance(heads, list):
         return set()
     return {h for h in heads if isinstance(h, str) and h}
-
-
-def _verdicts_with_current_freshness(
-    data: dict, head: Optional[str], cwd: Optional[str], pr_number: int = 0
-) -> list[dict]:
-    """Copy verdicts and recheck stored freshness against current history.
-
-    A freshness stamp describes the branch only when it was written. When a
-    current head is available, the reviewed change must still ship at that
-    head under the SAME rule the Rust predicate applies (x-e8db: every rebase
-    used to invalidate every attestation, even one that reviewed
-    byte-identical content). Missing metadata or an unreadable identity
-    cannot prove freshness. The base ref and the head identity resolve lazily
-    and once per pass: N stale verdicts at N shas cost one base read and one
-    head diff, not N of each.
-
-    A member of a TILED chain is exempt from the single-sha recheck: its
-    range, not its head alone, is what covers the PR.
-    """
-    verdicts = data.get("verdicts")
-    if not isinstance(verdicts, list):
-        return []
-    # Narrowed once for the closure below (mypy cannot carry the loop's
-    # truthiness guard into it): the closure is only invoked under `head`.
-    current_head = head or ""
-    chain = _tiling_chain(data)
-
-    def _describes(reviewed_sha: str) -> bool:
-        # The one seam: hermetic tests stub the describes-test, so the closure
-        # delegates straight to it and every memo (base ref, identities, tree
-        # paths) lives in the module caches the callee reads.
-        if not current_head:
-            return False
-        return _reviewed_sha_still_describes_head(
-            reviewed_sha, current_head, cwd, pr_number=pr_number
-        )
-
-    describes: dict[str, bool] = {}
-    shaped: list[dict] = []
-    for verdict in verdicts:
-        if not isinstance(verdict, dict):
-            continue
-        current = dict(verdict)
-        verdict_kind = verdict.get("verdict")
-        stale = verdict_kind == "stale"
-        reviewed_sha = verdict.get("reviewed_sha")
-        if verdict_kind == "reviewed":
-            stale = verdict.get("freshness") not in _COUNTED_FRESHNESS
-        elif verdict_kind != "stale":
-            current.pop("freshness", None)
-        if verdict_kind == "reviewed" and head:
-            in_chain = isinstance(reviewed_sha, str) and reviewed_sha in chain
-            if not in_chain:
-                if not isinstance(reviewed_sha, str) or not reviewed_sha:
-                    stale = True
-                elif reviewed_sha not in describes:
-                    describes[reviewed_sha] = _describes(reviewed_sha)
-                if isinstance(reviewed_sha, str) and not describes.get(reviewed_sha, False):
-                    stale = True
-        if stale:
-            current["freshness"] = "stale"
-        shaped.append(current)
-    return shaped
 
 
 def _stale_verdicts(verdicts: list[dict]) -> list[dict]:
@@ -990,6 +770,7 @@ def _derive_review_state(
     verdicts: object,
     chain: set[str] | None = None,
     github_approval_satisfies: bool = False,
+    rounds_exhausted: bool = False,
 ) -> str | None:
     """Derive one known outcome from validated per-reviewer verdicts.
 
@@ -999,6 +780,13 @@ def _derive_review_state(
     ``github_approval_satisfies`` defaults False (today's semantics) so the
     pre-flag call sites and rows stay unchanged; the shaper resolves the
     config flag and passes it.
+    A refusal names the state only when the verdict was OWED: the required
+    key mirrors the Rust producer's bit. Only an explicit false reads
+    not-owed - a missing key (every row emitted before the field existed)
+    and any non-bool value read required, the fail-closed direction.
+    ``rounds_exhausted`` is the producer's budget bit (d-0fa92eb9): at a
+    spent budget a covered row IS reviewed, whatever the verdict freshness.
+    A malformed verdict list still returns None first, so it fails closed.
     """
     chain = chain or set()
     if coverage == "unknown":
@@ -1012,40 +800,77 @@ def _derive_review_state(
         for verdict in verdicts
     ):
         return None
+    if rounds_exhausted and coverage == "covered":
+        return "reviewed"
     if any(
         verdict.get("verdict") == "reviewed"
         and _human_approval_counts(verdict, github_approval_satisfies)
         and (
-            verdict.get("freshness") in _COUNTED_FRESHNESS
+            counted_freshness(verdict.get("freshness"))
             or verdict.get("reviewed_sha") in chain
         )
         for verdict in verdicts
     ):
         return "reviewed"
-    if any(verdict.get("verdict") == "refused" for verdict in verdicts):
+    if any(
+        verdict.get("verdict") == "refused" and verdict.get("required") is not False
+        for verdict in verdicts
+    ):
         return "reviewer_refused"
     return "unreviewed"
+
+
+def _verdicts_as_stored(data: dict) -> list[dict]:
+    """Copy verdicts, dropping the freshness label off non-review rows.
+
+    Freshness is a READ here, never a recomputation: the Rust producer
+    computed it at emit time against its own head, and a row whose head no
+    longer matches the caller's is the recompute arm's input, not
+    this function's. The Python git-walk mirror this replaces answered the
+    same question a second way and diverged from the gate (class);
+    principle 9 deletes the leg instead of maintaining the twin.
+    """
+    verdicts = data.get("verdicts")
+    if not isinstance(verdicts, list):
+        return []
+    shaped: list[dict] = []
+    for verdict in verdicts:
+        if not isinstance(verdict, dict):
+            continue
+        current = dict(verdict)
+        if current.get("verdict") not in ("reviewed", "stale"):
+            current.pop("freshness", None)
+        shaped.append(current)
+    return shaped
 
 
 def _shape_review_coverage(
     data: dict, head: Optional[str], cwd: Optional[str], pr_number: int = 0
 ) -> dict:
-    """Shape one event and invalidate any unproven covered verdict."""
+    """Shape one event and invalidate any unproven covered verdict.
+
+    A spent budget (``rounds_exhausted`` true, d-0fa92eb9) keeps a covered
+    row covered and reviewed; ``reviewed_count`` is the producer's count and
+    is never overwritten here (d-e1f84036: never report 0 reviews when
+    reviews happened).
+    """
     shaped = dict(data)
-    verdicts = _verdicts_with_current_freshness(data, head, cwd, pr_number)
+    verdicts = _verdicts_as_stored(data)
     shaped["verdicts"] = verdicts
     shaped["stale_verdicts"] = _stale_verdicts(verdicts)
+    spent = data.get("rounds_exhausted") is True
     review_state = _derive_review_state(
         data.get("coverage"),
         verdicts,
         _tiling_chain(data),
         _resolved_github_approval_flag(cwd),
+        rounds_exhausted=spent,
     )
     if review_state in _KNOWN_REVIEW_STATES:
         shaped["review_state"] = review_state
     else:
         shaped.pop("review_state", None)
-    if data.get("coverage") != "covered":
+    if data.get("coverage") != "covered" or spent:
         return shaped
 
     raw_verdicts = data.get("verdicts")
@@ -1066,11 +891,10 @@ def _shape_review_coverage(
     valid = [
         v
         for v in reviewed
-        if v.get("freshness") in _COUNTED_FRESHNESS or v.get("reviewed_sha") in chain
+        if counted_freshness(v.get("freshness")) or v.get("reviewed_sha") in chain
     ]
     if malformed or not reviewed or len(valid) != len(reviewed):
         shaped["coverage"] = "uncovered"
-        shaped["reviewed_count"] = len(valid)
     return shaped
 
 
@@ -1120,26 +944,29 @@ def read_review_coverage(
     head: Optional[str] = None,
     *,
     recompute: bool = False,
+    recompute_postureless: bool = True,
 ) -> dict:
     """The ``review_coverage`` verdict for a PR, recomputed once when there is
-    no usable row and ``recompute`` is set (x-3a3f). The default stays a pure
+    no usable row and ``recompute`` is set. The default stays a pure
     read so direct callers (and hermetic tests) never spawn a subprocess; the
     two gate surfaces - ``fno do pr merge`` and ``fno do pr status`` - opt in.
     Event-read failures degrade to the unknown sentinel. When ``head`` is
     supplied, verdict freshness fails closed unless Git proves the reviewed
     change still ships at that head (ancestry, or an identical content delta
-    across a rebase - x-e8db).
+    across a rebase -).
     Python still consumes the event rather than recomputing coverage itself
     (Ownership: Rust computes, Python reads) - the recompute shells out to the
     SAME Rust producer the stop hook runs.
 
-    Carries ``head_sha`` and ``stale_verdicts`` (x-5b99) so a reader can see
+    Carries ``head_sha`` and ``stale_verdicts`` so a reader can see
     WHICH commit was covered and by whom, and ``recompute`` (only when one ran)
     so a human report and the merge gate can name how the number arrived.
     """
     try:
         if recompute:
-            latest, note = review_coverage_for_gate(pr_number, cwd, head)
+            latest, note = review_coverage_for_gate(
+                pr_number, cwd, head, recompute_postureless=recompute_postureless
+            )
         else:
             latest, note = review_coverage_for_head(pr_number, cwd, head), ""
     except Exception:  # noqa: BLE001 - additive signal, never hard-fails
@@ -1149,10 +976,22 @@ def read_review_coverage(
     shaped = {
         "coverage": latest.get("coverage", "unknown"),
         "reviewed_count": latest.get("reviewed_count"),
+        "passed_count": latest.get("passed_count"),
         "self_attested_count": latest.get("self_attested_count"),
         "head_sha": latest.get("head_sha"),
         "stale_verdicts": latest.get("stale_verdicts", []),
     }
+    # The gate's own round budget, passed through verbatim: one producer per
+    # number. Keys stay absent when the row predates them, and the
+    # status payload reads that absence as "no row at this head" rather than
+    # re-deriving a floor from events.
+    for _key in ("rounds_used", "rounds_max", "rounds_exhausted"):
+        if latest.get(_key) is not None:
+            shaped[_key] = latest[_key]
+    if latest.get("reason"):
+        # The unmeasurable row's remedy: a synthesized answer has no event to
+        # re-read, so the reason rides the shaped dict to every consumer.
+        shaped["reason"] = latest["reason"]
     if latest.get("review_state") in _KNOWN_REVIEW_STATES:
         shaped["review_state"] = latest["review_state"]
     # The raw verdict list rides along when present (older events carry none):

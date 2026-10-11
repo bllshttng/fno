@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from fno.agents.naming import parse_dispatch_agent_name
 from fno.claims.core import claim_status
 
 # Claim-live + a fire within this window reads as working; older reads waiting.
@@ -45,25 +46,20 @@ RECENCY_WINDOW_S = 1800  # 30 min
 # fire per session is always near the end (append-ordered).
 _TAIL_BYTES = 256 * 1024
 
-# Worker names are ``target-<node-id>-<slug>`` (dispatch-node.sh). node ids are
-# ``<prefix>-<hex>``. A loose match is safe: a mis-parse yields a key that does
-# not resolve -> unknown -> no change (fail-quiet, AC7).
-_NAME_NODE_RE = re.compile(r"^target-([a-z][a-z0-9]*-[0-9a-f]+)(?:-|$)")
-
-# Same shape widened to the design-pass dispatcher's ``think-<node>[-<reason>]``
-# (provenance/spawn_think.py). Kept separate from _NAME_NODE_RE so the
-# ``fno agents list`` node join through parse_node_id cannot regress.
-_NAME_MISSION_RE = re.compile(r"^(target|think)-([a-z][a-z0-9]*-[0-9a-f]+)(?:-|$)")
+# Canonical and pre-cutover names both parse via parse_dispatch_agent_name
+# (the binary owns the legacy target-/think- window). A mis-parse fails
+# quiet (AC7).
+_VERB_TO_MISSION = {"t": "target", "f": "target", "bp": "think", "r": "think", "th": "think"}
 
 _HOLDER_PREFIX = "target-session:"
 
 
 def parse_node_id(name: Optional[str]) -> Optional[str]:
-    """Extract a node id from a ``target-<node>-<slug>`` worker name, or None."""
+    """Extract a node id from a worker name (canonical + legacy window), or None."""
     if not name:
         return None
-    m = _NAME_NODE_RE.match(name)
-    return m.group(1) if m else None
+    parsed = parse_dispatch_agent_name(name)
+    return parsed.node if parsed else None
 
 
 def parse_worker_mission(name: Optional[str]) -> Optional[tuple[str, str]]:
@@ -71,14 +67,17 @@ def parse_worker_mission(name: Optional[str]) -> Optional[tuple[str, str]]:
 
     Kind is ``target`` (PR-shaped mission) or ``think`` (design pass, whose only
     completion artifact is a linked ``plan_path``). Names are a *convention*, not
-    a guarantee - real spawns like ``tgt-x-4175-liveness`` exist - so this is only
+    a guarantee - real spawns like ``tgt-x-aaaa-liveness`` exist - so this is only
     ever the fallback behind a manifest read, and a miss returns None rather than
     a guess (the caller fails closed on None).
     """
     if not name:
         return None
-    m = _NAME_MISSION_RE.match(name)
-    return (m.group(2), m.group(1)) if m else None
+    parsed = parse_dispatch_agent_name(name)
+    if parsed is None or not parsed.node:
+        return None
+    kind = _VERB_TO_MISSION.get(parsed.verb)
+    return (parsed.node, kind) if kind else None
 
 
 def _session_from_holder(holder: Optional[str]) -> Optional[str]:
@@ -227,27 +226,13 @@ def resolve_truth_status(
         return unknown
 
     # node:<id> claims are GLOBAL (like ~/.fno/graph.json): they live under the
-    # global root ($FNO_CLAIMS_ROOT / $HOME), NOT the cwd/canonical .fno/claims
-    # that claim_status's default resolution uses. Route through claims_root_for
-    # so `fno agents list` reads the same dir the claim was written to; without
-    # this the list always reads `free` and the fill never appears (codex P2).
-    # Imported HERE, not at module scope. A module-level `from fno.claims.io
-    # import claims_root_for` binds whatever that name points at during THIS
-    # module's first import, permanently, because sys.modules caches the module
-    # thereafter. A test that redirects `fno.claims.io.claims_root_for` at its
-    # own tmp dir and happens to trigger the first import while that patch is
-    # live leaves the stale lambda bound for every later caller in the process,
-    # and monkeypatch's teardown cannot see it to restore.
-    #
-    # Measured: `mail drain-self` read a node claim as `free` while a direct
-    # read of the same key answered `live`, because this function was resolving
-    # the claims root of an unrelated test's tmp dir. The same trap is called
-    # out on `fno.mail.reply_resolve._read_own_transcript_text`.
-    from fno.claims.io import claims_root_for
-
+    # global root ($FNO_CLAIMS_ROOT / $HOME), and the native leg routes them
+    # there, so a bare read answers from the same dir the claim was written
+    # to; without that routing the list always reads `free` and the fill never
+    # appears (codex P2). An explicit ``claims_root`` argument still wins, so
+    # a caller with its own store keeps its answer.
     key = f"node:{node_id}"
-    root = claims_root if claims_root is not None else claims_root_for(key)
-    claim = claim_status(key, root=root)
+    claim = claim_status(key, root=claims_root)
     cs = claim.get("state")
     holder = claim.get("holder")
     sid = _manifest_session_for_holder(manifest_cwd, holder, key)

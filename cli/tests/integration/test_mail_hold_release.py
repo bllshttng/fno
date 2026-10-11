@@ -3,7 +3,7 @@
 Mail drains at exactly two moments in this codebase, SessionStart and
 UserPromptSubmit, and both need the operator to type. This test exercises the
 third trigger end to end: a REAL detached `fno agents mail hold-release` process wakes
-on its own clock, clears the flag, dedupes, and emits its marker. No prompt, no
+on its own clock, preserves each held message, and emits its marker. No prompt, no
 injected text, no user-shaped input anywhere in the run.
 
 The assertion is the POSITIVE marker on the release. Nothing here asserts that
@@ -67,10 +67,16 @@ def state(tmp_path, monkeypatch):
     # Set the bus override on THIS process too, so mail written here and mail
     # read by the child timer resolve to one log.
     monkeypatch.setenv("FNO_BUS_DIR", str(home / ".fno" / "bus"))
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(home / ".fno" / "agents"))
     env = dict(os.environ)
     env["HOME"] = str(home)
     env["FNO_AGENTS_HOME"] = str(home / ".fno" / "agents")
     env.pop("FNO_STATE_DIR", None)
+    # The child timer must resolve THIS home's state dir: drop the autouse
+    # sandbox's settings pins, which would otherwise hide the hold clock.
+    env.pop("FNO_CONFIG", None)
+    env.pop("FNO_GLOBAL_SETTINGS_PATH", None)
+    env.pop("FNO_NO_CANONICAL_CONFIG", None)
     return env, home
 
 
@@ -143,7 +149,7 @@ def test_a_held_message_lands_after_expiry_with_no_operator_input(state, tmp_pat
     result = json.loads(proc.stdout.strip().splitlines()[-1])
     assert result["handle"] == HANDLE
     assert result["held_count"] == 3, "the release must see everything held"
-    assert result["deduped_count"] == 1, "the two identical bodies collapse to one"
+    assert result["deduped_count"] == 0, "every held message remains a separate entry"
     # The transport is the only thing this environment cannot exercise: there is
     # no daemon socket to inject through, so the outcome is the honest miss. The
     # delivered branch and its cursor advance are asserted in
@@ -151,11 +157,12 @@ def test_a_held_message_lands_after_expiry_with_no_operator_input(state, tmp_pat
     assert result["outcome"] in ("delivered", "inject-missed")
 
     # The positive marker, on the release, in the durable event log.
-    events = (home / ".fno" / "events.jsonl").read_text(encoding="utf-8")
+    from tests._event_rows import event_rows
+
     released = [
-        json.loads(line)
-        for line in events.splitlines()
-        if line.strip() and json.loads(line).get("kind") == "mail_hold_released"
+        e
+        for e in event_rows(home / ".fno" / "events.jsonl")
+        if e.get("kind") == "mail_hold_released"
     ]
     assert len(released) == 1, "the release must emit exactly one marker"
     assert released[0]["handle"] == HANDLE
@@ -173,10 +180,34 @@ def test_the_timer_exits_quietly_when_the_hold_was_lifted_by_hand(state):
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == ""
+    from tests._event_rows import event_rows
+
     events_path = home / ".fno" / "events.jsonl"
-    assert not events_path.exists() or "mail_hold_released" not in events_path.read_text(
-        encoding="utf-8"
+    assert not any(
+        e.get("kind") == "mail_hold_released" for e in event_rows(events_path)
     )
+
+
+def test_an_expired_clock_releases_on_the_first_wake_and_delivers(state):
+    """An already-expired clock releases immediately, with nothing to wait for.
+
+    The release verb's Rust arm lifts the stamp, rewrites the clock EXPIRED,
+    and arms this standard timer - so the sideline menu's Release hold is
+    the ordinary expiry path whose deadline has already passed.
+    """
+    env, home = state
+    hold_dir = home / ".fno" / "mail-hold"
+    hold_dir.mkdir(parents=True, exist_ok=True)
+    _send_to_held_session("menu release report", ts="2026-08-20T10:00:00Z")
+    _arm_clock(hold_dir, seconds_out=-1)
+
+    proc = _run_release(env)
+
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["held_count"] == 1, "the release delivers what the hold kept"
+    assert result["outcome"] in ("delivered", "inject-missed")
+    assert not (hold_dir / f"{HANDLE}.json").exists()
 
 
 def test_an_idle_rearm_extends_the_hold_past_the_original_deadline(state):
@@ -249,7 +280,13 @@ def test_an_idle_timer_never_runs_past_its_two_window_ceiling(state):
             time.sleep(0.6)
             now = float(int(time.time()))
             until = min(now + 2, ceiling)
-            clock.write_text(
+            # Atomic replace, matching the production write discipline: the
+            # polled reader runs concurrently, and a torn in-place rewrite can
+            # parse as garbage, which the holder treats as no live hold and
+            # releases seconds early (observed: the CI runner fired the final
+            # assertion 0.34s short of the ceiling).
+            tmp = clock.with_suffix(".json.tmp")
+            tmp.write_text(
                 json.dumps(
                     {
                         "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
@@ -260,6 +297,7 @@ def test_an_idle_timer_never_runs_past_its_two_window_ceiling(state):
                 ),
                 encoding="utf-8",
             )
+            os.replace(tmp, clock)
         stdout, stderr = proc.communicate(timeout=10)
     finally:
         if proc.poll() is None:

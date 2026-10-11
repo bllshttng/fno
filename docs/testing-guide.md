@@ -161,7 +161,7 @@ until ! grep -q pending out; do sleep 45; fno do pr status "$PR" --json > out; d
 until grep -q '"settled": true' out; do sleep 45; fno do pr status "$PR" --json > out; done
 ```
 
-The sanctioned watcher applies this rule for you. `fno do pr wait "$PR" --until settled --timeout 30m` polls the positive settled marker through the coalescing cache. N waiters on one PR cost one network read per TTL. The verb exits with the status verb's own code. Reach for it instead of writing either loop by hand.
+The sanctioned watcher applies this rule for you. `fno do pr wait "$PR" --until settled --timeout 15m` polls the positive settled marker through the coalescing cache. N waiters on one PR cost one network read per TTL. The verb exits with the status verb's own code. Reach for it instead of writing either loop by hand.
 
 Both wait on a file the loop keeps rewriting, and they are one condition apart.
 The first tests for an ABSENCE, and an absence has two explanations: the checks really finished, or the command never produced usable output.
@@ -195,9 +195,6 @@ Last, and it is the one a control does not save you from: believe the reading on
 ### Metrics and Health
 
 ```bash
-# Track session costs
-./scripts/metrics/cost-tracker.sh
-
 # Register a completed task
 python scripts/metrics/register-task.py --task-id 1.1 --status done
 
@@ -439,12 +436,12 @@ The target pipeline runs as a persistent loop until the feature is complete.
 
 **Cross-session loop:**
 
-- One Rust runtime drives the loop: `fno-agents loop run --driver target|megawalk|megatron` (the old `fno loop` verb is removed)
+- One Rust runtime drives the loop: `fno-agents loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` verb is gone too
 - The walk stops on a `TerminationReason` event (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted, Aborted) or the iteration ceiling
 
 **External review polling:**
 
-- The `/pr check` skill no longer uses a bash polling loop
+- The `/fno:ship pr check` skill no longer uses a bash polling loop
 - Two one-shot `CronCreate` checks fire at +5 and +10 minutes after invocation
 - If the review is already present at invocation, it is processed immediately without scheduling crons
 - The required-bot review read is part of `loop-check`'s `done()` check; a session that never satisfies it resolves via the budget / NoProgress backstop
@@ -511,7 +508,7 @@ Before resetting a `COMPLETE` or `BLOCKED` state file, the helper checks the `cr
 - Enforces the interactive spend cap
 - Checks the routed model against the attested one
 
-**Context pressure (`fno whoami context`, backed by `cli/src/fno/context_probe.py`, and the skill-local probe is a shim over the verb):**
+**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/context_window.rs` and exposed through the Python bridge `cli/src/fno/context_probe.py`; the skill-local probe is a shim over the verb):**
 
 - Counts tokens from the transcript and reports `used_pct` against a per-family window
 
@@ -724,6 +721,14 @@ exit $FAILURES
 **validate-test-first.sh blocks build commands:**
 - The hook detected a build/start command without a recent `.fno/.last-test-run` marker
 - Run your test suite first, then retry the build command
+
+### A `Timeout (>300.0s) from pytest-timeout` failure
+
+A test exceeded the 300-second per-test ceiling in `cli/pyproject.toml`'s pytest ini table, and pytest-timeout raised inside it. The failure IS the hang being named. Before the ceiling existed, a blocked test stalled its smoke shard until the CI cap killed it with no test name in the log.
+
+The stack in the failure report (the `~~ Stack of MainThread ~~` block) is the evidence. It points at the call the test was blocked in, usually a wait on a subprocess, a lock, or a keeper process. Read the stack before touching the test. A rerun tells you nothing the hang did not.
+
+File what the stack shows as its own finding. Two known consumers wait on exactly this evidence. One is the open node about a leaked `fno-agents-worker` keeper process surviving job cleanup. The other is the pr-watch work that classifies a pytest red as rerunnable. A named pytest failure is an input that classifier already parses. The ceiling itself is guarded by `cli/tests/unit/test_pytest_timeout_configured.py`, so a `uv sync` cannot quietly drop it.
 
 ### Debug Mode
 

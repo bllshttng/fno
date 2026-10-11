@@ -19,7 +19,7 @@ from fno.graph._intake import (
 )
 
 # Canonical Kanban column order, left to right. Single source of truth for both
-# renderers: render_graph_md (below) and render_html.COLUMNS import this, so the
+# renderers: render_graph_md (below) and roadmap_public's board render import this, so the
 # column set + order can never drift between the markdown board and the HTML
 # board. In Progress leads, Now holds ready today-work, Triage holds the
 # awaiting-ack queue, and Done is terminal.
@@ -104,7 +104,7 @@ def _kanban_column(
     if status == "in_progress":
         return "In Progress"
     entry_id = entry.get("id")
-    # In-progress epic (x-33b2): a container with a done/claimed child has no
+    # In-progress epic: a container with a done/claimed child has no
     # claim of its own (sessions claim the children) but is genuinely underway,
     # so surface it in In Progress. The set is derived from children by the
     # caller; the epic's `status` stays honest (never a claim without a session_id).
@@ -132,7 +132,9 @@ def make_kanban_column(
     strict_claims: bool = False,
 ):
     """Bind whole-graph overlays into the sole kanban column authority."""
-    live_claimed = frozenset()
+    # Overwriting the parameter here discarded every caller's claim snapshot and
+    # made `strict_claims` dead, so rank.py's refusal could never fire.
+    live_claimed = frozenset(live_claimed or ())
     in_progress_epics = in_progress_epic_ids(entries)
     priority_for = make_effective_priority(entries)
 
@@ -155,12 +157,9 @@ def make_kanban_classifiers(
     live_claimed: Collection[str] | None = None,
 ):
     """Bind one live-claim snapshot into board ordering and column routing."""
-    live_claimed = frozenset()
+    live_claimed = frozenset(live_claimed or ())
     board_order = make_selection_sort_key(
-        entries,
-        orphans,
-        swimlane=swimlane,
-        live_claimed=live_claimed,
+        entries, orphans, swimlane=swimlane, live_claimed=live_claimed
     )
     return board_order, make_kanban_column(entries, live_claimed)
 
@@ -178,7 +177,7 @@ def _kanban_card(
 
     # Project lane label leads the metadata tail so per-project clusters are
     # legible (the Obsidian Kanban plugin is column-only, so a per-card label
-    # plus clustered sort order is the honest ceiling for swimlanes - ab-95a4a479).
+    # plus clustered sort order is the honest ceiling for swimlanes -).
     project = _project_key(entry)
     header = f"- {marker} **{title}** `{eid}` · {project} · {priority}"
     if eid in orphans:
@@ -203,6 +202,13 @@ def _kanban_card(
         reason = (entry.get("deferred_reason") or "").strip()
         body_lines.append(f"  deferred: {reason}" if reason else "  deferred")
 
+    # A contained, not-done row sits in its priority column (only deferred and
+    # superseded rows hide); without this line the card reads as a
+    # dispatchable idea when its work actually ships inside the owner's PR.
+    contained_in = entry.get("contained_in")
+    if isinstance(contained_in, str) and contained_in and not is_done:
+        body_lines.append(f"  ships inside: {contained_in}")
+
     pr_url = entry.get("pr_url")
     if pr_url and is_done:
         body_lines.append(f"  {pr_url}")
@@ -221,7 +227,7 @@ def _kanban_card(
     # artifact_url: the user-supplied design/doc link (done --link). Shown
     # on the board so the field has a purpose-built reader, not just a writer.
     # Non-http(s) schemes render as code so a markdown auto-linker cannot turn a
-    # javascript:/data: URI into a clickable anchor (parity with render_html).
+    # javascript:/data: URI into a clickable anchor (parity with the web backlog page).
     artifact_url = (entry.get("artifact_url") or "").strip()
     if artifact_url:
         if artifact_url.startswith(("https://", "http://")):
@@ -288,6 +294,10 @@ def render_graph_md(
         for entry in columns[col]:
             lines.append(_kanban_card(entry, id_to_entry, orphans))
             lines.append("")
+
+    # Before the Obsidian footer: the kanban:settings block must stay last.
+    from fno.branch_provenance_cache import provenance_lines
+    lines.extend(provenance_lines())
 
     if obsidian:
         lines.append("***")

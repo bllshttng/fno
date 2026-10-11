@@ -360,7 +360,7 @@ def test_rank_band_excludes_bool_and_nonfinite():
 
 def test_render_md_tolerates_huge_int_rank(tmp_path):
     """A huge-int rank (hand-edited graph.json) must not raise out of the render
-    path: render fires inside locked_mutate_graph and only OSError is swallowed."""
+    path: render fires inside commit_rows_via_store and only OSError is swallowed."""
     entries = [_entry("ab-rb000020", project="web", priority="p1", rank=10**400)]
     output = tmp_path / "graph.md"
     render_graph_md(entries, output)  # must not raise OverflowError
@@ -646,3 +646,153 @@ def test_render_md_does_not_place_live_claimed_in_now(tmp_path):
     content = output.read_text()
     later_section = content.split("## Later")[1].split("## Triage")[0]
     assert "LiveNode" in later_section
+
+
+# -- fan-out in the selection key (x-e451) --
+
+
+def test_selection_fanout_orders_a_node_with_dependents_first():
+    """Two loose p2 nodes: the one open work hangs on sorts first, even when
+    the idle one is older. A measurement sits after priority, so a p1 still
+    outranks fan-out, and a curated rank outranks everything."""
+    X = _entry("ab-22220001", created_at="2026-02-01T00:00:00Z")
+    Y = _entry("ab-22220002", created_at="2026-01-01T00:00:00Z")
+    d1 = _entry("ab-22220003", blocked_by=["ab-22220001"])
+    d2 = _entry("ab-22220004", blocked_by=["ab-22220001"])
+    ordered = [e["id"] for e in sorted([X, Y, d1, d2], key=_lane_key([X, Y, d1, d2]))]
+    assert ordered[:2] == ["ab-22220001", "ab-22220002"]
+
+    # Priority is a decision and outranks the measurement.
+    Y["priority"] = "p1"
+    ordered = [e["id"] for e in sorted([X, Y, d1, d2], key=_lane_key([X, Y, d1, d2]))]
+    assert ordered[0] == "ab-22220002"
+
+    # A curated rank still outranks everything unranked.
+    Y["rank"] = 3.0
+    ordered = [e["id"] for e in sorted([X, Y, d1, d2], key=_lane_key([X, Y, d1, d2]))]
+    assert ordered[0] == "ab-22220002"
+
+
+def test_selection_fanout_counts_only_open_dependents():
+    """A blocked_by from a done or superseded-closed node is not fan-out."""
+    X = _entry("ab-22220011", created_at="2026-02-01T00:00:00Z")
+    Y = _entry("ab-22220012", created_at="2026-01-01T00:00:00Z")
+    done_dep = _entry("ab-22220013", blocked_by=["ab-22220011"],
+                      completed_at="2026-03-01T00:00:00Z")
+    ordered = [e["id"] for e in sorted([X, Y, done_dep], key=_lane_key([X, Y, done_dep]))]
+    # Y is older, and X's only dependent is closed: Y first.
+    assert ordered[0] == "ab-22220012"
+
+
+# -- Branch Provenance section --
+
+
+def _cache_rows():
+    return [
+        {
+            "branch": "feature/x-04ce-review-fixes",
+            "node": "x-04ce",
+            "node_title": "review fixes",
+            "klass": "STRANDED",
+            "unpushed": 23,
+            "has_remote": False,
+            "age": "33 hours ago",
+            "pr_number": None,
+            "live": False,
+            "path": "/wt/a",
+        },
+        {
+            "branch": "fix/x-129b-payload-cache-head",
+            "node": None,
+            "node_title": None,
+            "klass": "UNKNOWN",
+            "unpushed": 0,
+            "has_remote": True,
+            "age": "12 hours ago",
+            "pr_number": None,
+            "live": True,
+            "path": "/wt/b",
+        },
+    ]
+
+
+def test_branch_provenance_renders_cached_rows_incl_unmapped(tmp_path, monkeypatch):
+    """The board must answer 'do we pick this back up' per branch - and an
+    unmapped branch is exactly the interesting case, rendered, never dropped."""
+    import json
+
+    repo = tmp_path / "repo"
+    cache_file = repo / ".fno" / "branch-provenance.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text(json.dumps(_cache_rows()))
+    monkeypatch.setattr("fno.branch_provenance_cache._provenance_roots", lambda: [repo])
+
+    output = tmp_path / "graph.md"
+    render_graph_md([_entry("ab-99990001")], output)
+    content = output.read_text()
+
+    assert "## Branch Provenance" in content
+    assert (
+        "- **x-04ce** (feature/x-04ce-review-fixes): "
+        "no remote, 23 unpushed, no PR, newest commit 33 hours ago" in content
+    )
+    assert (
+        "- *(unmapped)* (fix/x-129b-payload-cache-head): "
+        "has remote, 0 unpushed, no PR, LIVE, newest commit 12 hours ago" in content
+    )
+
+
+def test_branch_provenance_omitted_when_cache_empty(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.setattr("fno.branch_provenance_cache._provenance_roots", lambda: [repo])
+
+    output = tmp_path / "graph.md"
+    render_graph_md([_entry("ab-99990002")], output)
+    content = output.read_text()
+
+    assert "Branch Provenance" not in content
+    assert content.rstrip().endswith("%%")  # Obsidian footer untouched
+
+
+def test_branch_provenance_stays_above_the_kanban_footer(tmp_path, monkeypatch):
+    """The %% kanban:settings %% block must remain the LAST thing in the file
+    or the Obsidian Kanban plugin stops parsing the board."""
+    from fno.branch_provenance_cache import write_cache
+    from fno.worktree_stranded import STRANDED, Row
+
+    repo = tmp_path / "repo"
+    row = Row(
+        STRANDED,
+        "x-9ed9",
+        3,
+        "5 hours ago",
+        {"path": "/wt/c", "branch": "feature/x-9ed9", "has_remote": False,
+         "pr_number": None, "live": False},
+    )
+    write_cache(repo, [row])
+    monkeypatch.setattr("fno.branch_provenance_cache._provenance_roots", lambda: [repo])
+
+    output = tmp_path / "graph.md"
+    render_graph_md([_entry("ab-99990003")], output)
+    lines = output.read_text().rstrip("\n").splitlines()
+
+    assert lines[-1] == "%%"
+    provenance_idx = lines.index("## Branch Provenance")
+    footer_idx = lines.index("%% kanban:settings")
+    assert provenance_idx < footer_idx
+
+
+def test_branch_provenance_fails_open_on_bad_cache(tmp_path, monkeypatch):
+    from fno.branch_provenance_cache import provenance_lines
+
+    repo = tmp_path / "repo"
+    (repo / ".fno").mkdir(parents=True)
+    (repo / ".fno" / "branch-provenance.json").write_text("{not json")
+    monkeypatch.setattr("fno.branch_provenance_cache._provenance_roots", lambda: [repo])
+
+    assert provenance_lines() == []
+
+    output = tmp_path / "graph.md"
+    render_graph_md([_entry("ab-99990004")], output)
+    assert "Branch Provenance" not in output.read_text()

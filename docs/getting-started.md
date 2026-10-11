@@ -23,9 +23,9 @@ The rest of this page fills in the details.
    ```
    This is the most common cold-start failure.
    If it is not, run `gh auth login`.
-4. Run the setup wizard and accept every default:
+4. Run the one run-once setup and accept every default:
    ```bash
-   fno config setup wizard
+   fno config setup run --yes
    ```
 5. Point the loop at a small task:
    ```
@@ -46,7 +46,19 @@ In any Claude Code session:
 /plugin install fno@footnote
 ```
 
-The postinstall hook puts the `fno` CLI on your PATH in a new session. Prefer the CLI standalone? `curl -fsSL fno.sh | sh`, `uv tool install fno`, `brew install bllshttng/fno/fno`, or `cargo install fno`. Full options: the [README](../README.md).
+On the first session after install, footnote prints the install plan and starts nothing: a person's yes is what runs it. On a yes, run `bash <plugin root>/.claude-plugin/postinstall.sh`. Its output ends with `installer exit 0` on success. Then open a new session, and `fno` is on your PATH. Prefer the CLI standalone? `curl -fsSL fno.sh | sh`, `uv tool install fno`, `pip install fno`, or `brew install bllshttng/fno/fno` each install the published PyPI wheel. The wheel bundles the complete set: the Rust `fno` front door, the three `fno-agents` binaries, and the Python CLI (`fno-py`). `cargo install fno` is the source route. It builds the Rust front door with your Rust toolchain. The front door bootstraps the Python CLI on first use. Full options: the [README](../README.md).
+
+### Local clone
+
+Clone, run setup, get the CLI:
+
+```bash
+git clone https://github.com/bllshttng/footnote.git
+cd footnote
+bash scripts/setup.sh
+```
+
+The setup checks the prerequisites (`bash`, `git`, `gh`, `jq`, and `python3` 3.11+ or `uv`). It registers the global `~/.fno` state dir and scaffolds `.fno/config.toml` in the clone. When no `fno` answers, it installs the CLI through the same `fno.sh` the curl one-liner uses. Afterwards `fno`, `fno-agents`, and the mux all answer. Per-path overrides live in the `config.paths.*` keys: see [path configuration](path-config.md).
 
 ### Windows (WSL2)
 
@@ -66,7 +78,7 @@ Then open the Ubuntu shell and do everything from there: install `gh`, Python 3.
 fno --version          # prints a version
 ```
 
-If `fno` is "command not found", you have the Python CLI (`fno-py`) but not the Rust **`fno` front door**. `fno` owns the mux and terminal command and bootstraps the Python CLI. Install it with `cargo install fno` or, from a clone, `fno doctor update --rust`. Both commands build Rust, so they need a **Rust toolchain** (`rustup`). A Python-only machine installed through `uv` or `pip` must add Rust first. When the front door is missing, a Claude Code session also reminds you. Until it is installed, reach the CLI directly as `fno-py`.
+If `fno` is "command not found", your install predates the complete payload or is a source/editable dev build (those are development artifacts and carry no binaries). Every supported channel ships the Rust **`fno` front door**: the wheel, the plugin's first-session installer, `fno.sh`, and Homebrew. The front door owns the mux and bootstraps the Python CLI. Repair: upgrade to a current release through your channel, or install the front door directly with `cargo install fno` (needs a **Rust toolchain**, `rustup`). When the front door is missing, a Claude Code session also reminds you. Until it is installed, reach the CLI directly as `fno-py`. When even `fno-py` is missing, run the zero-binary doctor from the installed plugin tree: `bash ~/.claude/plugins/cache/footnote/fno/*/scripts/install/bootstrap.sh`. It prints every prerequisite's state and exact fix as JSON. `--repair` runs the plugin's own installer and never edits shell rc files. `--from-source <checkout>` builds and installs from a clone.
 
 Inside Claude Code, type `/fno:` and you should see skill autocomplete (`target`, `think`, `blueprint`, ...).
 
@@ -88,8 +100,9 @@ Configuration lives in `.fno/config.toml` (project-local) layered over `~/.fno/c
 **In the terminal, no agent (CLI-native):**
 
 ```bash
-fno config setup wizard            # asks the few real per-project decisions, writes them validated
-fno config setup wizard --advanced # also surfaces the advanced settings
+fno config setup run --yes         # takes every recommended default, never prompts, prints the JSON report
+fno config setup run --list --json # the step table (global, project, contributor layers)
+fno config setup plan --advanced   # the advanced config tier, as JSON
 ```
 
 Both walk the same schema-derived question plan and write through the validated config writer, so a typo or an out-of-range value is rejected, not silently stored.
@@ -99,14 +112,14 @@ The terminal wizard also offers, defaulting to No, to wire footnote's SessionSta
 ### Reading and editing config directly
 
 ```bash
-fno config get config.review.required_bots          # read one value
+fno config get config.review.github_apps            # read one value
 fno config set config.auto_merge.enabled true       # set one key (atomic, schema-checked)
 fno config set a.b=1 c.d=2                           # set several keys in one atomic call
 fno config unset config.auto_merge.enabled          # remove a key (reverts to its default)
 fno config doctor                                    # what resolved, and any suspicious values
 ```
 
-`fno config set` also takes a whole block as JSON when you need it: `fno config set config.review '{"required_bots":["chatgpt-codex-connector"]}'`.
+`fno config set` also takes a whole block as JSON: `fno config set config.review '{"github_apps":["chatgpt-codex-connector"]}'`.
 
 ### The settings you'll touch first
 
@@ -114,12 +127,14 @@ These are real keys in `config.toml` (run `fno config get <key>` to read any of 
 
 | Key | What it does | Default |
 |-----|--------------|---------|
-| `config.review.required_bots` | External review bots that must approve before `target` calls a PR done | none (no gate) |
-| `config.review.external_reviewers` | Which reviewer(s) `pr check` waits on (e.g. `gemini`, `codex`) | none |
+| `config.review.github_apps` | External review bots that must approve before `target` calls a PR done; none set means no external gate | none |
+| `config.review.posture` | How much review a code PR needs before it can merge; unset floors at `self_review` (nine-rung ladder) | none |
+| `config.review.max_rounds` | Review rounds per PR, counted across its whole life | `2` |
+| `config.review.external_reviewers` | Which reviewer(s) `pr check` waits on (e.g. `gemini`, `codex`) | `[]` |
 | `config.auto_merge.enabled` | Let `target` merge a PR itself once review passes | `false` |
 | `config.target.defaults.max_iterations` | How many times `target` retries before stopping | `40` |
-| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`) | `ab-` |
-| `config.obsidian.enabled` + `.vault` | Store plans and design docs in an Obsidian vault | off |
+| `config.backlog.id_prefix` | The prefix for minted backlog node ids (e.g. `fno-a3f9`); unset falls back to `ab-` | none |
+| `config.obsidian.enabled` + `.vault` | Store plans and design docs in an Obsidian vault | `false` |
 | `config.project.vision` | One line: what this codebase is and why (project-scoped) | none |
 
 Budget and skip behavior are not config keys; they're flags you pass to a run, for example `/fno:target --budget 25 "..."` or `/fno:target --no-external "..."`. See [the target guide](guides/target.md) for the full flag list.
@@ -132,7 +147,9 @@ Budget and skip behavior are not config keys; they're flags you pass to a run, f
 /fno:target "add a health check endpoint that returns server status"
 ```
 
-Target explores the design, plans it, implements with TDD, runs the internal review, and opens the PR. Watch it or walk away; it won't quit until the PR is open and CI is green. With no `config.review.required_bots` set there is no external-review gate; pin a bot there to make target also wait for a review pass.
+Target explores the design, plans it, implements with TDD, runs the internal review, and opens the PR. Watch it or walk away. It will not quit until the PR is open and CI is green. The internal review is the configured inline lane: one head-pinned reviewer by default (`config.review.posture` floors at `self_review`), with at most `config.review.max_rounds` rounds (default 2). With no `config.review.github_apps` set there is no external-bot gate. Name a bot there to make target also wait for that review.
+
+A green, reviewed PR is the finish line, not a merge. Target merges on its own only with `config.auto_merge.enabled` (default `false`). Otherwise it stops and the merge is yours.
 
 ### Option B: drive it step by step
 
@@ -160,10 +177,10 @@ The PR has a lifecycle, and there's a verb for each step. Full walkthrough: [the
 
 | Command | What it's for |
 |---------|---------------|
-| `/fno:review` | Review a diff before you push. Default `sigma` is the internal six-agent panel; `peer` gets a cross-model second opinion (e.g. have Codex review Claude's code). |
-| `/fno:pr create` | Open a PR from your commits (a Haiku worker writes the description). |
-| `/fno:pr check` | Poll for the external review bot, then implement its feedback. |
-| `/fno:pr merged` | The post-merge ritual: reconcile the backlog, run the retro, and file any follow-up work. Run it after a PR merges. |
+| `/fno:review` | Review a diff before you push. Default is the owned lane: one inline reviewer that emits a head-pinned attestation; `peer` gets a cross-model second opinion (e.g. have Codex review Claude's code). |
+| `/fno:ship pr create` | Open a PR from your commits inline in the invoking session. |
+| `/fno:ship pr check` | Poll for the external review bot, then implement its feedback. |
+| `/fno:ship pr merged` | The post-merge ritual: reconcile the backlog, run the retro, and file any follow-up work. Run it after a PR merges. |
 
 `target` runs review, `pr create`, and (by default) `pr check` for you. Reach for the individual verbs when you're driving by hand or picking up a PR mid-flight.
 
@@ -172,8 +189,8 @@ The PR has a lifecycle, and there's a verb for each step. Full walkthrough: [the
 footnote can spawn a worker on another provider and coordinate with it over a message bus. Quickstart: [the agents guide](guides/agents-quickstart.md).
 
 ```bash
-fno agents spawn "review the diff on this branch" --name reviewer -H codex   # spawn a Codex peer
-fno agents ask reviewer "what did you find?"                          # message it; it works on its own
+fno agents spawn "find why tests/test_login.py is flaky" --name helper -H codex
+fno agents ask helper "what did you find?"
 ```
 
 For a one-off question to another model without keeping a peer around, spawn an ephemeral worker:
@@ -186,11 +203,15 @@ Each agent runs its own loop; Claude, Codex, and Gemini, one project.
 
 ### Keep going past one feature
 
-```
-/fno:megawalk          # walk the backlog, shipping ready work until it's done or out of budget
+The backlog is the queue. Capture work, see what is ready, ship it:
+
+```bash
+fno backlog idea "add webhook retries"   # capture work as a backlog node
+fno backlog next                          # what's ready to ship now
+/fno:target <node-id>                     # ship a ready node end to end
 ```
 
-`megawalk` reads a dependency graph (`fno backlog ...` manages it) and picks what ships next. Optional; `/fno:target "feature"` runs end to end with no backlog required.
+To work a whole board instead of one node: `/fno:target bg --all-ready` dispatches every ready, non-deferred node as background workers. `fno backlog advance` (opt-in, merge-triggered) dispatches a node's dependents after its PR merges. The backlog is optional. `/fno:target "feature"` runs end to end with no backlog required.
 
 ## Keeping fno up to date
 
@@ -203,6 +224,29 @@ fno agents restart --mux   # restart the daemon AND the mux server onto the fres
 ```
 
 `fno agents restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive** - it ends live mux sessions - so it is opt-in; reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills/hooks after a pull.
+
+## Uninstall
+
+Run it from a plain terminal, not from inside an fno mux pane:
+
+```bash
+fno uninstall --dry-run    # list every item found; change nothing
+fno uninstall              # ask once, then remove them all
+fno uninstall --yes        # no question; needed when stdin is not a terminal
+```
+
+It removes each item through its own uninstall verb, in this order:
+
+1. The launchd agents (`~/Library/LaunchAgents/sh.fno.*.plist` and the autocorrect agents).
+2. The Claude Code and Codex plugins and their `footnote` marketplaces, and the OpenCode plugin files.
+3. The hooks fno added to `~/.claude/settings.json`, `~/.gemini/settings.json` and `~/.codex/config.toml`. Your own hooks stay.
+4. The `uv` tool, the Homebrew formula and the bootstrap cache.
+5. The daemon and the mux sessions, which it stops.
+6. The `cargo` binaries, `fno` last.
+
+`~/.fno` stays. `--purge` deletes it too, after you type `purge`. It holds your backlog and any worktrees under `~/.fno/worktrees`, so commit or push that work first. The run ends with a list of anything named fno that is still on `PATH`, in `LaunchAgents` or running. Exit 0 means that list is empty.
+
+## Next steps
 
 - [Target pipeline](guides/target.md) - the full autonomous loop: flags, gates, cross-project, resume
 - [Think and plan](guides/think-and-plan.md) - design exploration and planning

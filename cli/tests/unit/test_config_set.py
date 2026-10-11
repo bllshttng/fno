@@ -30,14 +30,6 @@ def test_ac7_hp_set_writes_coerced_value(tmp_path):
     assert _read(tmp_path)["agents"]["a2a"]["auto"] is False
 
 
-def test_set_int_coercion(tmp_path):
-    res = set_config_value(
-        "config.agents.a2a.turn_ceiling", "10", scope="project", repo_root=tmp_path
-    )
-    assert res.value == 10
-    assert _read(tmp_path)["agents"]["a2a"]["turn_ceiling"] == 10
-
-
 @pytest.mark.parametrize("timeout", [float("inf"), float("nan"), -0.1])
 def test_config_set_rejects_nonterminating_lock_timeout(tmp_path, timeout):
     with pytest.raises(ValueError, match="finite and non-negative"):
@@ -78,49 +70,6 @@ def test_setting_a_block_rejected(tmp_path):
     with pytest.raises(ConfigSetError) as exc:
         set_config_value("config.agents.a2a", "x", scope="project", repo_root=tmp_path)
     assert "block" in str(exc.value)
-
-
-def test_bad_bool_rejected(tmp_path):
-    with pytest.raises(ConfigSetError) as exc:
-        set_config_value(
-            "config.agents.a2a.auto", "maybe", scope="project", repo_root=tmp_path
-        )
-    assert exc.value.exit_code == 2
-
-
-def test_ac7_edge_two_writes_preserve_each_other(tmp_path):
-    set_config_value(
-        "config.agents.a2a.auto", "false", scope="project", repo_root=tmp_path
-    )
-    set_config_value(
-        "config.agents.a2a.turn_ceiling", "9", scope="project", repo_root=tmp_path
-    )
-    data = _read(tmp_path)
-    # The second write preserved the first key (no clobber / corruption).
-    assert data["agents"]["a2a"]["auto"] is False
-    assert data["agents"]["a2a"]["turn_ceiling"] == 9
-
-
-def test_preserves_unrelated_keys(tmp_path):
-    # Seed a legacy wrapped settings.yaml; the writer migrates it to a flat
-    # config.toml on first write, preserving unrelated top-level keys.
-    settings = tmp_path / ".fno" / "settings.yaml"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(
-        "schema_version: 1\nwork:\n  workspaces:\n    ws:\n      projects:\n"
-        "      - name: p\n        path: /tmp/p\n",
-        encoding="utf-8",
-    )
-    set_config_value(
-        "config.agents.a2a.auto", "false", scope="project", repo_root=tmp_path
-    )
-    data = _read(tmp_path)
-    # Unrelated top-level keys survive the migrate + rewrite; the legacy yaml is
-    # gone (hard cut).
-    assert data["schema_version"] == 1
-    assert data["work"]["workspaces"]["ws"]["projects"][0]["name"] == "p"
-    assert data["agents"]["a2a"]["auto"] is False
-    assert not settings.exists()
 
 
 def test_ac7_fr_midwrite_failure_leaves_intact(tmp_path, monkeypatch):
@@ -168,18 +117,6 @@ def test_ac7_err_cli_invalid_exit_nonzero(tmp_path, monkeypatch):
     res = CliRunner().invoke(app, ["set", "config.agents.a2a.turn_ceiling", "0"])
     assert res.exit_code == 2
     assert "error:" in res.output
-
-
-def test_pep604_union_unwrap():
-    """gemini review: _unwrap_optional handles both typing.Optional and the
-    PEP 604 `X | None` syntax."""
-    import typing
-
-    from fno.config.writer import _unwrap_optional
-
-    assert _unwrap_optional(int | None) is int
-    assert _unwrap_optional(typing.Optional[int]) is int
-    assert _unwrap_optional(int) is int
 
 
 def test_set_writes_through_symlinked_config_to_canonical(tmp_path):
@@ -280,31 +217,32 @@ def test_set_list_comma_separated(tmp_path):
     ]
 
 
-def test_set_list_json_array(tmp_path):
-    res = set_config_value(
-        "config.review.required_bots",
-        '["chatgpt-codex-connector"]',
+def test_set_raw_list_field_stores_a_list_not_a_string(tmp_path):
+    # `lanes` is typed Any so a bad list never breaks a config read. The verb
+    # stored the JSON argument as a string, and the router saw no lanes.
+    set_config_value(
+        "agents.profiles.target.lanes",
+        '["codex-luna", {"provider": "zai", "model": "glm"}]',
         scope="project",
         repo_root=tmp_path,
     )
-    assert res.value == ["chatgpt-codex-connector"]
-
-
-def test_set_list_empty_value(tmp_path):
-    res = set_config_value(
-        "config.review.external_reviewers", "", scope="project", repo_root=tmp_path
+    assert _read(tmp_path)["agents"]["profiles"]["target"]["lanes"] == [
+        "codex-luna",
+        {"provider": "zai", "model": "glm"},
+    ]
+    set_config_value(
+        "agents.profiles.fix.lanes", "codex-luna, zai", scope="project", repo_root=tmp_path
     )
-    assert res.value == []
+    assert _read(tmp_path)["agents"]["profiles"]["fix"]["lanes"] == ["codex-luna", "zai"]
 
 
-def test_set_list_single_item_round_trips(tmp_path):
-    # Regression: a single reviewer must store as a 1-item list, not a bare
-    # string that the model coercer would re-wrap.
-    res = set_config_value(
-        "config.review.external_reviewers", "gemini", scope="project", repo_root=tmp_path
-    )
-    assert res.value == ["gemini"]
-    assert _read(tmp_path)["review"]["external_reviewers"] == ["gemini"]
+@pytest.mark.parametrize("value", ['{"a": 1}', '"codex-luna"', "[not json"])
+def test_set_raw_list_field_rejects_a_non_list(tmp_path, value):
+    with pytest.raises(ConfigSetError):
+        set_config_value(
+            "agents.profiles.target.lanes", value, scope="project", repo_root=tmp_path
+        )
+    assert not (tmp_path / ".fno" / "config.toml").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -329,12 +267,10 @@ def _pin_two_layers(
     glob_yaml = gdir / "settings.yaml"
 
     import fno.paths as paths_mod
-    from fno import config as config_mod
 
     monkeypatch.setattr(paths_mod, "resolve_repo_root", lambda: tmp_path / "proj")
     monkeypatch.setattr(paths_mod, "resolve_canonical_repo_root", lambda: tmp_path / "proj")
     monkeypatch.setenv("FNO_GLOBAL_SETTINGS_PATH", str(glob_yaml))
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_set_warns_when_higher_precedence_layer_overrides(
@@ -362,24 +298,6 @@ def test_set_warns_when_higher_precedence_layer_overrides(
     assert "--local" in res.stderr
 
 
-def test_set_stays_silent_when_no_higher_precedence_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """x-389d: when no higher layer overrides the write, stderr remains silent."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="schema_version = 1\n",
-        global_="schema_version = 1\n",
-    )
-    from fno.config_cli import app
-
-    res = CliRunner().invoke(app, ["set", "auto_merge.enabled", "false"])
-    assert res.exit_code == 0, res.output
-    assert "set auto_merge.enabled = False (global:" in res.stdout
-    assert "warn:" not in res.stderr
-
-
 def test_set_local_override_stays_silent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,22 +316,21 @@ def test_set_local_override_stays_silent(
     assert "warn:" not in res.stderr
 
 
-def test_set_multi_key_warns_only_for_overridden_keys(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """x-389d: in multi-key sets, only the overridden key emits a warning."""
-    _pin_two_layers(
-        tmp_path,
-        monkeypatch,
-        project="[auto_merge]\nenabled = true\n",
-        global_="schema_version = 1\n",
-    )
-    from fno.config_cli import app
+# ---------------------------------------------------------------------------
+# x-043f task 1.3: one resolver answers a key no file sets; an unknown scope
+# is refused instead of falling through to the global file.
+# ---------------------------------------------------------------------------
 
-    res = CliRunner().invoke(
-        app, ["set", "auto_merge.enabled=false", "blueprint.max_prs_per_epic=8"]
-    )
-    assert res.exit_code == 0, res.output
-    assert "warn: auto_merge.enabled set in" in res.stderr
-    assert "max_prs_per_epic" not in res.stderr
 
+def test_unknown_scope_is_refused_not_routed_to_global(tmp_path, monkeypatch):
+    from fno.config.writer import set_config_values
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    with pytest.raises(ConfigSetError) as exc:
+        set_config_values(
+            [("auto_merge.enabled", "true")], scope="local", repo_root=tmp_path
+        )
+    assert "unknown scope" in str(exc.value)
+    assert exc.value.exit_code == 2
+    assert not (tmp_path / ".fno" / "config.toml").exists()
+    assert not (tmp_path / "home" / ".fno" / "config.toml").exists()

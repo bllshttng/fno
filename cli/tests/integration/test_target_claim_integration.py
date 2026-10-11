@@ -11,12 +11,15 @@ itself is covered, not just the Python primitive (which test_claims_*.py
 already covers).
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests._init_space import install_state_path_stub
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -62,10 +65,8 @@ def test_init_target_state_writes_a_state_file_for_a_free_text_input_no_fno(tmp_
     fno_home = tmp_path / ".fno-home"
     fno_home.mkdir()
     graph = fno_home / "graph.json"
-    graph.write_text(
-        '{"entries":[{"id":"ab-testit","plan_path":"plans/test.md",'
-        '"status":"ready","priority":"p2","project":"fno"}]}'
-    )
+    seed_graph(graph, '{"entries":[{"id":"ab-testit","plan_path":"plans/test.md",'
+        '"status":"ready","priority":"p2","project":"fno"}]}')
 
     # Set up a fake repo root with .fno/ and the resolvable plan path
     repo = tmp_path / "repo"
@@ -79,11 +80,22 @@ def test_init_target_state_writes_a_state_file_for_a_free_text_input_no_fno(tmp_
     subprocess.run(["git", "init", "-q", "-b", "feature/sandbox"], cwd=repo, check=True)
 
     env = os.environ.copy()
+    # The pytest runner's PYTHONPATH points this subprocess's real `fno` binary
+    # at the checkout under test, whose package no longer matches the installed
+    # entry point (ImportError: no `main` in cli.py). Drop it: the binary runs
+    # its own snapshot, exactly as it would outside pytest.
+    env.pop("PYTHONPATH", None)
+    # The state-path stub pins WHERE init writes, so the test reads the same
+    # location with or without a real fno-agents on PATH.
+    bindir = tmp_path / "bin"
+    stub_env = install_state_path_stub(bindir, tmp_path / "space")
     env.update({
         "TARGET_START": "1",
         "TARGET_INPUT": "ship the widget",
         "TARGET_SIZE": "S",
         "HOME": str(fno_home.parent),  # so the script's path-discovery works
+        "PATH": f"{bindir}{os.pathsep}" + env["PATH"],
+        **stub_env,
     })
 
     # Run from the fake repo root
@@ -104,7 +116,7 @@ def test_init_target_state_writes_a_state_file_for_a_free_text_input_no_fno(tmp_
     # code embedded in the message: the code under test had failed and the
     # instrument reported green. An instrument that can no-op must not report
     # success on its no-op path.
-    state = repo / ".fno" / "target-state.md"
+    state = tmp_path / "space" / "target-state.md"
     if not state.exists():
         pytest.fail(
             f"init-target-state.sh wrote no state file. That is the invariant "

@@ -38,7 +38,7 @@ def _live_codex_registry_entry(session_id: str):
     """A codex registry candidate addressable as ``session_id``, preferring one
     that carries a live transport (``mux``), or ``None``.
 
-    v10 (x-880e): every codex row records its id in the canonical
+    v10 : every codex row records its id in the canonical
     ``harness_session_id`` (a mux_spawn pane row carries it plus a ``mux`` ref; a
     SessionStart-registered row carries it with no transport). Both match on that
     one field, so the transportless row alone would make ``_deliver_live`` fall
@@ -184,10 +184,20 @@ def inject_pr_merged(
         entry = _live_codex_registry_entry(session_id)
         if entry is None:
             return False, "not-live"
+        # The sender string should name this session, not a literal no row
+        # resolves. Best-effort: an unresolvable identity keeps the
+        # default rather than blocking the ritual.
+        try:
+            from fno.agents.self_stamp import resolve_self_identity
+
+            _session = getattr(resolve_self_identity(), "session_id", None)
+        except Exception:  # noqa: BLE001 - identity is metadata here, never a gate
+            _session = None
+        from_name = canonical_handle(_session) if _session else "fno"
         try:
             from fno.agents.dispatch import _deliver_live
 
-            delivered = _deliver_live(entry, command, from_name="fno", mail=None)
+            delivered = _deliver_live(entry, command, from_name=from_name, mail=None)
         except Exception as exc:
             return False, f"inject-error: {exc}"[:120]
         return (True, "delivered") if delivered else (False, "not-live")
@@ -487,14 +497,19 @@ class ColdRitualResult:
     tail: str = ""
 
 
-def _default_run_ritual_verb(pr_number: int, cwd: str) -> ColdRitualResult:
+def _default_run_ritual_verb(
+    pr_number: int, cwd: str, timeout: float = 300.0
+) -> ColdRitualResult:
     """Run ``fno do pr ritual <n> --autonomous`` from the candidate canonical root.
 
     A bounded subprocess: the launchd tick never overlaps, so an unbounded verb
-    would wedge every future tick (x-97d8). A non-zero exit is a dispatch failure
+    would wedge every future tick. A non-zero exit is a dispatch failure
     the retry/park machinery handles. The verb owns its default-on conditional
     headless judgment leg, so this is the ONLY model-capable layer on the cold
-    path - pr-watch adds none of its own (AC1-HP)."""
+    path - pr-watch adds none of its own (AC1-HP). The timeout is the caller's
+    phase slice : the verb must fail as an ordinary, recorded dispatch
+    failure before the slice's alarm fires, because an alarm cut mid-subprocess
+    would skip the caller's state persist and replay the same ritual next tick."""
     try:
         from fno import _subprocess_util
 
@@ -503,7 +518,7 @@ def _default_run_ritual_verb(pr_number: int, cwd: str) -> ColdRitualResult:
             "do", "pr", "ritual", str(pr_number), "--autonomous",
         ]
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=cwd, timeout=300
+            cmd, capture_output=True, text=True, cwd=cwd, timeout=timeout
         )
     except (subprocess.SubprocessError, OSError) as exc:
         return ColdRitualResult(ok=False, tail=f"verb-error: {exc}"[:200])
@@ -583,7 +598,6 @@ def dispatch_post_merge_ritual(
         return PostMergeDispatchResult("already-dispatched", pr_number, detail="marker-exists")
 
     from fno import claims
-    from fno.claims.io import claims_root_for
 
     def _persist_marker() -> None:
         try:
@@ -596,9 +610,7 @@ def dispatch_post_merge_ritual(
     # verb is already running for this PR. Read via the GLOBAL claims root.
     ritual_key = f"reconcile:pr-{pr_number}"
     try:
-        ritual_state = claims.claim_status(
-            ritual_key, root=claims_root_for(ritual_key)
-        ).get("state")
+        ritual_state = claims.claim_status(ritual_key).get("state")
     except Exception:  # noqa: BLE001 - the guard must never break dispatch
         ritual_state = None
     if ritual_state == "live":
@@ -608,14 +620,17 @@ def dispatch_post_merge_ritual(
         # Crashed attended ritual: retry under a new attempt_id once the TTL clears.
         return PostMergeDispatchResult("already-dispatched", pr_number, detail="lock-contention")
 
-    lock_key = f"post-merge-ritual:{dispatch_id}"
-    holder = f"post-merge-dispatch:{pr_number}"
-    try:
-        claims.acquire_claim(
-            lock_key, holder, ttl_ms=_POST_MERGE_DISPATCH_TTL_MS,
-            reason="post-merge ritual dispatch", root=canonical,
-        )
-    except claims.CLAIM_UNAVAILABLE:
+    from fno.backlog.single_flight import acquire_flight
+
+    # This process holds the dispatch lease for its whole run: the flight gate
+    # stamps holder-process, so a dead dispatcher's lease is reclaimed on the
+    # pid probe and never healed through this session's witness.
+    flight = acquire_flight(
+        f"post-merge-ritual:{dispatch_id}", scope="post-merge ritual dispatch",
+        name=f"post-merge-dispatch:{pr_number}", root=canonical,
+        ttl_ms=_POST_MERGE_DISPATCH_TTL_MS,
+    )
+    if flight is None or flight.held:
         # In-flight, not done, not a reason to crash the merge-dispatch tick
         # loop with a traceback.
         return PostMergeDispatchResult("already-dispatched", pr_number, detail="lock-contention")
@@ -719,7 +734,4 @@ def dispatch_post_merge_ritual(
             pr_number, short_id="verb", detail=f"cold: {cold_reason}",
         )
     finally:
-        try:
-            claims.release_claim(lock_key, holder, root=canonical)
-        except Exception:  # noqa: BLE001 - TTL-bounded; a failed release self-heals
-            pass
+        flight.release()

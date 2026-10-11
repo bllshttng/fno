@@ -10,7 +10,9 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
+import pytest
 
+from fno.agents import events as _events
 from fno.config import PostMergeBlock
 from fno.pr import _ritual
 from fno.pr._proc import Result
@@ -26,12 +28,14 @@ class FakeRunner:
                  spawn_rc=0, agent_rows=None, branch="feat/x", state="MERGED",
                  reconcile_held=None, reconcile_candidates=None,
                  reconcile_contained=None, reconcile_errors=(),
-                 reconcile_sync_outcome=None, reconcile_closure_refused=None):
+                 reconcile_sync_outcome=None, reconcile_closure_refused=None,
+                 reconcile_unknown=None):
         self.calls: list[list[str]] = []
         self._diff = (diff_files, additions, deletions)
         self._deferred = deferred or []
         self._closed = reconcile_closed or []
         self._held = reconcile_held or []
+        self._unknown = reconcile_unknown or []
         self._candidates = reconcile_candidates
         self._contained = reconcile_contained or ()
         self._errors = reconcile_errors
@@ -46,8 +50,12 @@ class FakeRunner:
         # test_pr_ritual_merge_guard.py for the refusal cases.
         self._state = state
 
-    def __call__(self, argv, *, cwd=None, timeout=None):
+    def __call__(self, argv, *, cwd=None, timeout=None, **kw):
         self.calls.append(list(argv))
+        if argv and argv[0] == "env":
+            # env(1) prefix (x-626f): KEY=VAL pairs, then the real tool. The
+            # record keeps the full argv so tests can assert on the env.
+            argv = argv[2:]
         head = argv[0]
         if head == "gh":
             if "list" in argv:
@@ -66,6 +74,7 @@ class FakeRunner:
             if self._candidates is not None:
                 payload["candidates"] = [{"node_id": n} for n in self._candidates]
             payload["promise_unmet"] = [{"node_id": n} for n in self._held]
+            payload["promise_unknown"] = [{"node_id": n} for n in self._unknown]
             if self._contained:
                 payload["contained_closed"] = list(self._contained)
             if self._errors:
@@ -110,11 +119,17 @@ def _bare(tmp_path, runner, *, autonomous=False, pr=7, parking_lot=None,
     return r
 
 
+def _tool_argv(argv: list[str]) -> list[str]:
+    """argv past the env(1) prefix the reconcile leg rides (x-626f)."""
+    return argv[2:] if argv[:1] == ["env"] else argv
+
+
 def _argv_sub(calls, sub):
     """First fno call argv whose fno subcommand == sub."""
     for c in calls:
-        if len(c) > 1 and c[0] != "gh" and c[1] == sub:
-            return c
+        t = _tool_argv(c)
+        if len(t) > 1 and t[0] != "gh" and t[1] == sub:
+            return t
     return None
 
 
@@ -176,6 +191,26 @@ def test_leg_sync_canonical_calls_real_verb(tmp_path, capsys):
     assert any(c[1:4] == ["do", "pr", "sync-canonical"] for c in runner.calls)
 
 
+def test_leg_sync_canonical_runs_detached(tmp_path, capsys):
+    """The sync leg runs in its own session with its own 900s leg
+    bound, so the watcher's slice timeout killing the ritual cannot kill a
+    mid-build sync with it (the corpse then held post-merge-sync for its
+    whole 30-minute TTL)."""
+    seen = {}
+
+    def runner(cmd, cwd=None, timeout=None, start_new_session=False):
+        seen.update(argv=cmd, timeout=timeout, start_new_session=start_new_session)
+        return _ritual.Result(0, "", "")
+
+    r = _bare(tmp_path, runner)
+    r.ctx.pm = SimpleNamespace(sync_command="git pull", self_reap=False,
+                               parking_lot_path=None)
+    r.leg_sync_canonical()
+    assert seen["argv"][1:4] == ["do", "pr", "sync-canonical"]
+    assert seen["timeout"] == 900.0
+    assert seen["start_new_session"] is True
+
+
 def test_sync_canonical_skipped_when_unconfigured(tmp_path, capsys):
     runner = FakeRunner()
     r = _bare(tmp_path, runner)  # pm.sync_command = None
@@ -211,7 +246,7 @@ def test_advance_stream_emits_progress(tmp_path, capsys, monkeypatch):
 def test_failing_leg_records_failure_and_exit(tmp_path, capsys):
     # AC3-ERR: a non-zero exit surfaces as status=failed and run() exits 1.
     class _FailSync(FakeRunner):
-        def __call__(self, argv, *, cwd=None, timeout=None):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
             super().__call__(argv, cwd=cwd, timeout=timeout)
             if argv[1:4] == ["do", "pr", "sync-canonical"]:
                 return Result(3, "sync failed: boom", "")
@@ -226,7 +261,7 @@ def test_failing_leg_records_failure_and_exit(tmp_path, capsys):
         def __init__(self, inner):
             self._inner = inner
 
-        def __call__(self, argv, *, cwd=None, timeout=None):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
             self._inner.calls.append(list(argv))
             if argv[1:4] == ["do", "pr", "sync-canonical"]:
                 return Result(3, "sync failed: boom", "")
@@ -244,10 +279,11 @@ def test_failing_leg_records_failure_and_exit(tmp_path, capsys):
 def test_run_exits_nonzero_when_a_leg_fails(tmp_path, capsys, monkeypatch):
     # AC3 end-to-end: reconcile failure -> exit 1, every later leg still runs.
     class _FailReconcile(FakeRunner):
-        def __call__(self, argv, *, cwd=None, timeout=None):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
             self.calls.append(list(argv))
-            sub = argv[1] if len(argv) > 1 and argv[0] != "gh" else ""
-            if sub == "backlog" and "reconcile" in argv and "session" not in argv:
+            t = _tool_argv(argv)
+            sub = t[1] if len(t) > 1 and t[0] != "gh" else ""
+            if sub == "backlog" and "reconcile" in t and "session" not in t:
                 return Result(1, "corrupt graph", "")
             return FakeRunner.__call__(self, argv, cwd=cwd, timeout=timeout)
 
@@ -275,7 +311,29 @@ def test_reconcile_held_open_reads_deferred_never_ok(tmp_path, capsys):
     r.leg_stamp()
     out = capsys.readouterr().out
     assert "step=reconcile status=deferred" in out
-    assert "held_open=2: x-ffc9, x-6c67" in out
+    assert "held_open=2 (unmet=2 unknown=0): x-ffc9, x-6c67" in out
+    assert "step=reconcile status=ok" not in out
+
+
+def test_reconcile_receipt_counts_unknown_apart_from_unmet(tmp_path, capsys):
+    """An unmet promise owes the operator work; a retryable read outage clears
+    itself on a later sweep. One merged held_open count reads the second as the
+    first, so the receipt names both."""
+    r = _bare(tmp_path, FakeRunner(reconcile_held=["x-ffc9"], reconcile_unknown=["x-uu1"]))
+    r.leg_stamp()
+    out = capsys.readouterr().out
+    assert "step=reconcile status=deferred" in out
+    assert "held_open=2 (unmet=1 unknown=1): x-ffc9, x-uu1" in out
+
+
+def test_reconcile_unknown_alone_still_reads_deferred(tmp_path, capsys):
+    """The bucket the ritual could not see at all before: a sweep that held
+    nodes only on unreadable ship counts must not read as a clean run."""
+    r = _bare(tmp_path, FakeRunner(reconcile_unknown=["x-uu1", "x-uu2"]))
+    r.leg_stamp()
+    out = capsys.readouterr().out
+    assert "step=reconcile status=deferred" in out
+    assert "held_open=2 (unmet=0 unknown=2): x-uu1, x-uu2" in out
     assert "step=reconcile status=ok" not in out
 
 
@@ -389,7 +447,8 @@ def test_judgment_autonomous_empty_skips(tmp_path, capsys):
 def test_judgment_autonomous_nonempty_spawns_headless(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(_ritual, "fno_py_cmd", lambda: ["fno-py"])
     runner = FakeRunner(diff_files=14, additions=300, deletions=20)
-    r = _bare(tmp_path, runner, autonomous=True, parking_lot="internal/x/parking-lot.md")
+    r = _bare(tmp_path, runner, autonomous=True, parking_lot="internal/x/parking-lot.md",
+              node_ids=["x-7test"])
     r.leg_judgment()
     out = capsys.readouterr().out
     assert "step=judgment status=ok" in out
@@ -407,7 +466,8 @@ def test_judgment_autonomous_nonempty_spawns_headless(tmp_path, capsys, monkeypa
     # grammar this leg depends on.
     assert argv[-1].startswith("Post-merge judgment")   # the prompt = message
     i = argv.index("--name")
-    assert argv[i + 1] == "judgment-pr-7" and len(argv[i + 1]) <= 64
+    # x-84b2: pm-r-<node>-pr-<n> - the post-merge source and the bound node.
+    assert argv[i + 1] == "pm-r-x-7test-pr-7" and len(argv[i + 1]) <= 64
     # codex P2: the worker gets its own --timeout, not a 60s outer kill.
     assert "--timeout" in argv
     # Guard against silent grammar drift: the constructed argv must SURVIVE the
@@ -417,7 +477,22 @@ def test_judgment_autonomous_nonempty_spawns_headless(tmp_path, capsys, monkeypa
 
     spawn_argv = argv[argv.index("spawn"):]  # ["spawn", ...]
     normalized = normalize_spawn_args(spawn_argv)  # raises SystemExit(2) if invalid
-    assert normalized[normalized.index("--name") + 1] == "judgment-pr-7"
+    assert normalized[normalized.index("--name") + 1] == "pm-r-x-7test-pr-7"
+
+
+def test_judgment_pr_without_node_binding_refuses(tmp_path, capsys, monkeypatch):
+    """x-84b2: a merged PR that binds no graph node spawns no pm-r worker -
+    substituting the PR number as a fake node would orphan the provenance."""
+    monkeypatch.setattr(_ritual, "fno_py_cmd", lambda: ["fno-py"])
+    runner = FakeRunner(diff_files=14, additions=300, deletions=20)
+    r = _bare(tmp_path, runner, autonomous=True, parking_lot="internal/x/parking-lot.md")
+    r.leg_judgment()
+    captured = capsys.readouterr()
+    assert "step=judgment status=failed" in captured.out
+    assert "binds no node" in captured.err
+    assert not any(
+        len(c) > 1 and c[1] == "agents" and "spawn" in c for c in runner.calls
+    )
 
 
 def test_judgment_spawn_forwards_configured_model(tmp_path, capsys, monkeypatch):
@@ -429,7 +504,8 @@ def test_judgment_spawn_forwards_configured_model(tmp_path, capsys, monkeypatch)
     """
     monkeypatch.setattr(_ritual, "fno_py_cmd", lambda: ["fno-py"])
     runner = FakeRunner(diff_files=14, additions=300, deletions=20)
-    r = _bare(tmp_path, runner, autonomous=True, parking_lot="internal/x/parking-lot.md")
+    r = _bare(tmp_path, runner, autonomous=True, parking_lot="internal/x/parking-lot.md",
+              node_ids=["x-7test"])
     r.leg_judgment()
     argv = [c for c in runner.calls if len(c) > 1 and c[1] == "agents" and "spawn" in c][0]
     assert argv[argv.index("--model") + 1] == PostMergeBlock().model
@@ -452,7 +528,7 @@ def test_judgment_spawn_omits_model_when_unset(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(_ritual, "fno_py_cmd", lambda: ["fno-py"])
     runner = FakeRunner(diff_files=14, additions=300, deletions=20)
     r = _bare(tmp_path, runner, autonomous=True,
-              parking_lot="internal/x/parking-lot.md", model="")
+              parking_lot="internal/x/parking-lot.md", model="", node_ids=["x-7test"])
     r.leg_judgment()
     argv = [c for c in runner.calls if len(c) > 1 and c[1] == "agents" and "spawn" in c][0]
     assert "--model" not in argv
@@ -509,7 +585,7 @@ def test_judgment_autonomous_spawns_without_parking_lot_above_bar(
     # availability).
     monkeypatch.setattr(_ritual, "fno_py_cmd", lambda: ["fno-py"])
     runner = FakeRunner(diff_files=14, additions=300, deletions=20)
-    r = _bare(tmp_path, runner, autonomous=True, pr=7)  # NO parking_lot
+    r = _bare(tmp_path, runner, autonomous=True, pr=7, node_ids=["x-7test"])  # NO parking_lot
     r.leg_judgment()
     out = capsys.readouterr().out
     assert "step=judgment status=ok" in out
@@ -595,28 +671,30 @@ def test_origin_slug_rejects_lookalike_hosts():
 
 def test_scan_nodes_acs():
     # AC1: pr_number match -> unioned. AC2c: two same-repo matches -> both.
+    # The scan lives in fno.agents.events so both mint sites recover ids
+    # through the one helper.
     entries = [
         {"id": "x-1234", "pr_number": 292, "pr_url": "https://github.com/o/r/pull/292"},
         {"id": "x-5678", "pr_number": 292, "pr_url": "https://github.com/o/r/pull/292"}]
-    assert set(_ritual._scan_nodes(entries, 292, "o/r")) == {"x-1234", "x-5678"}
+    assert set(_events.scan_pr_nodes(entries, 292, "o/r")) == {"x-1234", "x-5678"}
     # AC4: a same-numbered PR in a FOREIGN repo is excluded.
     entries = [{"id": "x-mine", "pr_number": 292, "pr_url": "https://github.com/o/r/pull/292"},
                {"id": "x-theirs", "pr_number": 292, "pr_url": "https://github.com/other/repo/pull/292"}]
-    assert _ritual._scan_nodes(entries, 292, "o/r") == ["x-mine"]
+    assert _events.scan_pr_nodes(entries, 292, "o/r") == ["x-mine"]
     # AC5: a superstring slug is excluded; a case-differing slug still matches.
     entries = [{"id": "x-super", "pr_number": 292, "pr_url": "https://github.com/o/r-extra/pull/292"},
                {"id": "x-upper", "pr_number": 292, "pr_url": "https://github.com/O/R/pull/292"}]
-    assert _ritual._scan_nodes(entries, 292, "o/r") == ["x-upper"]
+    assert _events.scan_pr_nodes(entries, 292, "o/r") == ["x-upper"]
     # AC6: a url-less node is never matched. AC7: a corrupt non-string pr_url is
     # skipped, not fatal to the scan.
     entries = [{"id": "x-here", "pr_number": 292},
                {"id": "x-corrupt", "pr_number": 292, "pr_url": {"not": "a string"}},
                {"id": "x-good", "pr_number": 292, "pr_url": "https://github.com/o/r/pull/292"}]
-    assert _ritual._scan_nodes(entries, 292, "o/r") == ["x-good"]
+    assert _events.scan_pr_nodes(entries, 292, "o/r") == ["x-good"]
     # AC3: no matching pr_number -> empty.
-    assert _ritual._scan_nodes(entries, 999, "o/r") == []
+    assert _events.scan_pr_nodes(entries, 999, "o/r") == []
     # No slug -> empty (AC8: the union is skipped wholesale).
-    assert _ritual._scan_nodes(entries, 292, None) == []
+    assert _events.scan_pr_nodes(entries, 292, None) == []
 
 
 def test_recover_skips_when_no_origin_slug(tmp_path, monkeypatch):
@@ -633,7 +711,7 @@ def test_recover_falls_through_to_gh(tmp_path, monkeypatch):
     # AC9: a non-GitHub git origin (a mirror) falls through to the gh fallback.
 
     class _GhFallback(FakeRunner):
-        def __call__(self, argv, *, cwd=None, timeout=None):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
             self.calls.append(list(argv))
             if argv[:1] == ["git"] and "get-url" in argv:
                 return Result(0, "git@gitlab.com:mirror/x.git\n", "")
@@ -650,15 +728,15 @@ def test_recover_falls_through_to_gh(tmp_path, monkeypatch):
 
 # --- reap ACs (ported US1/US2/US3 from the shell harness) ----------------
 
-def test_reap_stop_precedes_rm_when_self_reap_on(tmp_path, capsys):
-    # US1: self_reap on, finished row -> stop THEN rm, naming the row.
+def test_reap_calls_rm_alone_when_self_reap_on(tmp_path, capsys):
+    # US1 (x-a33f): self_reap on, finished row -> one rm call, no stop.
 
     class _Rec(FakeRunner):
         def __init__(self):
             super().__init__(agent_rows=[{"name": "target-x-1234-slug", "status": "orphaned"}])
             self.order = []
 
-        def __call__(self, argv, *, cwd=None, timeout=None):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
             self.calls.append(list(argv))
             if len(argv) > 1 and argv[1] == "agents" and "stop" in argv:
                 self.order.append(("stop", argv[-1]))
@@ -672,7 +750,7 @@ def test_reap_stop_precedes_rm_when_self_reap_on(tmp_path, capsys):
     r = _bare(tmp_path, runner, node_ids=["x-1234"])
     r.ctx.pm = SimpleNamespace(sync_command=None, self_reap=True, parking_lot_path=None)
     r.leg_reap_rows()
-    assert runner.order == [("stop", "target-x-1234-slug"), ("rm", "target-x-1234-slug")]
+    assert runner.order == [("rm", "target-x-1234-slug")]
 
 
 def test_reap_self_reap_off_removes_nothing_prints_manual_cmd(tmp_path, capsys):
@@ -684,7 +762,7 @@ def test_reap_self_reap_off_removes_nothing_prints_manual_cmd(tmp_path, capsys):
     out = capsys.readouterr().out
     assert not any(len(c) > 1 and c[1] == "agents" and ("stop" in c or "rm" in c)
                    for c in runner.calls)
-    assert "fno agents stop target-x-1234-slug && fno agents rm target-x-1234-slug" in out
+    assert "fno agents rm target-x-1234-slug" in out
 
 
 def test_reap_live_row_untouched(tmp_path, capsys):
@@ -716,98 +794,195 @@ def test_archive_defers_when_run_inside_worktree(tmp_path, capsys, monkeypatch):
     # AC5-EDGE: never self-remove; defer to the standing sweep with a named receipt.
     runner = FakeRunner(branch="feature/x")
     r = _bare(tmp_path, runner)
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: str(r.cwd))
     r.leg_archive()
     out = capsys.readouterr().out
     # `deferred`, not `skipped`. The old emit attached a command to a skipped
     # status; it read as "nothing to do" and nobody ever ran the command, which
     # is why the freshest merged worktrees were the ones left on disk.
     assert "step=archive status=deferred" in out
-    assert "sweep-will-reap" in out
+    assert "cleanup-requested" in out
 
 
-def test_archive_defer_mints_the_reap_order(tmp_path, capsys, monkeypatch):
-    # The deferred debt is now a fact in the world: a TTL claim the daemon's
-    # periodic sweep consumes (it applies while any order stands), so "later"
-    # no longer depends on a human remembering the sweep verb.
+def test_archive_emits_one_merge_cleanup_request(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        _events,
+        "_emit_daemon_envelope",
+        lambda kind, data: seen.append((kind, data)),
+    )
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner, node_ids=["x-90ee"])
+
+    r.leg_archive()
+
+    requests = [data for kind, data in seen if kind == "merge_cleanup_requested"]
+    assert len(requests) == 1
+    request = requests[0]
+    assert request["pr"] == 7
+    assert request["branch"] == "feature/x"
+    assert request["worktree"] is None
+    assert request["node_ids"] == ["x-90ee"]
+    assert request["request_id"].startswith("merge-cleanup-")
+
+
+def test_mint_binds_node_ids_when_reconcile_closed_nothing(tmp_path, monkeypatch, capsys):
+    # The ship gate closes the node before the ritual runs, so reconcile's
+    # .closed[] is empty and the mint keyed empty node_ids: the reaper held
+    # (no-node-ids) and two mint sites for one merge never folded to one
+    # request id. The mint must run the same recovery leg_reap_rows runs.
+    seen = []
+    monkeypatch.setattr(
+        _events,
+        "_emit_daemon_envelope",
+        lambda kind, data: seen.append((kind, data)),
+    )
     runner = FakeRunner(branch="feature/x")
     r = _bare(tmp_path, runner)
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: str(r.cwd))
+    # The grace anchor rides the memoized gh read: the mint must stamp the
+    # PR's real merge time, not its own now, or the last mint per shared
+    # request id pushes the reap a full grace window past the merge.
+    r._merge_state = ("MERGED", "feature/x", "2026-09-07T15:00:00Z")
+    monkeypatch.setattr(r, "_resolve_origin_slug", lambda: "owner/repo")
+    _patch_sidecar_scan(monkeypatch, [
+        {"id": "fno-abc1", "pr_number": 7, "pr_url": "https://github.com/owner/repo/pull/7"}])
+
     r.leg_archive()
+
+    requests = [data for kind, data in seen if kind == "merge_cleanup_requested"]
+    assert len(requests) == 1
+    assert requests[0]["node_ids"] == ["fno-abc1"]
+    assert requests[0]["merged_at"] == "2026-09-07T15:00:00Z"
+    # The request id keys on project, PR and branch only: the merge mint
+    # (which bound [] and recovered) and this ritual mint fold to ONE id.
+    bound = _events.merge_cleanup_request_id("", 7, "feature/x")
+    assert requests[0]["request_id"] == bound
+    assert _events.merge_cleanup_request_id("", 7, "feature/x") == bound
+
+    # The ids stay bound, so the reap leg completes instead of skipping.
+    r.leg_reap_rows()
     out = capsys.readouterr().out
-    order_calls = [c for c in runner.calls if "reap:pr-7" in " ".join(c)]
-    assert order_calls, "the defer must mint the reap order"
-    c = order_calls[0]
-    assert "acquire" in c and "--ttl" in c and "24h" in c
-    assert "reap-order reap:pr-7 standing" in out
+    assert "step=reap-rows" in out
+    assert "no closed node ids" not in out
 
 
-def test_archive_refusal_leaves_a_standing_order(tmp_path, capsys, monkeypatch):
-    # A guarded refusal (live session, salvage) leaves the tree in place: the
-    # work is still owed, so the order stands for the sweep to retry.
-    inner = FakeRunner(branch="feature/x")
-
-    class _RefusingRunner:
-        calls = inner.calls
-
-        def __call__(self, argv, *, cwd=None, timeout=None):
-            if argv and "archive-worktree.sh" in " ".join(argv):
-                return Result(2, "", "strict check failed")
-            return inner(argv, cwd=cwd, timeout=timeout)
-
-    r = _bare(tmp_path, _RefusingRunner())
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    (tmp_path / "scripts" / "setup").mkdir(parents=True)
-    (tmp_path / "scripts" / "setup" / "archive-worktree.sh").write_text("#!/bin/sh\nexit 0\n")
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: str(wt))
-    r.leg_archive()
-    out = capsys.readouterr().out
-    assert "step=archive status=failed" in out
-    assert "exit=2" in out
-    assert "reap-order reap:pr-7 standing" in out
-
-
-def test_reap_order_already_standing_is_not_a_failure(tmp_path, capsys, monkeypatch):
-    # acquire rc 1 = an earlier ritual for this PR already ordered it; the
-    # standing order is the desired end state, not an error.
-    runner = FakeRunner(branch="feature/x", claim_rc=1)
+def test_archive_defer_mints_the_cleanup_request(tmp_path, capsys, monkeypatch):
+    # The deferred debt is a fact in the world: the request envelope the
+    # daemon's merge reaper consumes after the grace window, so "later" no
+    # longer depends on a human remembering the sweep verb.
+    runner = FakeRunner(branch="feature/x")
     r = _bare(tmp_path, runner)
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: str(r.cwd))
+    r.leg_archive()
+    out = capsys.readouterr().out
+    assert "cleanup-requested request_id=merge-cleanup-" in out
+
+
+def test_archive_refusal_leaves_a_standing_request(tmp_path, capsys, monkeypatch):
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner)
     r.leg_archive()
     out = capsys.readouterr().out
     assert "step=archive status=deferred" in out
-    assert "already standing" in out
+    assert "cleanup-requested request_id=" in r.ctx.receipts[-1].detail
+    assert not any("archive-worktree.sh" in " ".join(c) for c in runner.calls)
 
 
-def test_archive_runs_script_when_worktree_found(tmp_path, capsys, monkeypatch):
-    # AC1-HP: a found worktree for the merged branch is archived.
+def test_cleanup_request_mint_is_idempotent_by_id(tmp_path, monkeypatch):
+    # Two mints for the same merge carry the SAME request id; the daemon's
+    # fold (not the mint) collapses them into one pending request.
     runner = FakeRunner(branch="feature/x")
     r = _bare(tmp_path, runner)
-    wt = tmp_path / "wt"
-    wt.mkdir()
-    (tmp_path / "scripts" / "setup").mkdir(parents=True)
-    (tmp_path / "scripts" / "setup" / "archive-worktree.sh").write_text("#!/bin/sh\nexit 0\n")
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: str(wt))
-    r.leg_archive()
-    out = capsys.readouterr().out
-    assert "step=archive status=ok" in out
-    assert "archived" in out
-    # the archive script was invoked with --yes, never --force, and carries
-    # the removal-event caller stamp
-    archive_calls = [c for c in runner.calls if "archive-worktree.sh" in " ".join(c)]
-    assert archive_calls and "--yes" in archive_calls[0]
-    assert "--force" not in archive_calls[0]
-    assert "FNO_WT_REMOVE_CALLER=post-merge ritual" in archive_calls[0]
+    first = r._register_cleanup_request("feature/x", str(tmp_path / "wt"), "merged-pr")
+    second = r._register_cleanup_request("feature/x", str(tmp_path / "wt"), "merged-pr")
+    first_id = first.split("request_id=")[1].split(";")[0]
+    second_id = second.split("request_id=")[1].split(";")[0]
+    assert first_id == second_id
 
 
-def test_archive_skips_when_no_worktree(tmp_path, capsys, monkeypatch):
+def test_cleanup_request_clears_the_sweep_stamp(tmp_path, monkeypatch):
+    # Minting makes the next idle tick the request's first payment window.
+    agents_home = tmp_path / "agents"
+    agents_home.mkdir()
+    stamp = agents_home / "worktree-sweep.stamp"
+    stamp.write_text("123")
+    monkeypatch.setattr(_ritual, "agents_home_dir", lambda: agents_home, raising=False)
+    r = _bare(tmp_path, FakeRunner())
+
+    r._register_cleanup_request("feature/x", str(tmp_path / "wt"), "test")
+
+    assert not stamp.exists()
+
+
+def test_archive_mints_request_without_running_script(tmp_path, capsys, monkeypatch):
+    # AC5-HP: the ritual mints the request and leaves removal to the daemon.
     runner = FakeRunner(branch="feature/x")
     r = _bare(tmp_path, runner)
-    monkeypatch.setattr(r, "_find_worktree", lambda branch: None)
     r.leg_archive()
     out = capsys.readouterr().out
-    assert "step=archive status=skipped" in out
+    assert "step=archive status=deferred" in out
+    assert "daemon resolves the tree from feature/x" in out
+    assert not any("archive-worktree.sh" in " ".join(c) for c in runner.calls)
+
+
+def test_archive_never_runs_script_or_removes_rows(tmp_path, monkeypatch):
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner, node_ids=["x-90ee"])
+    r.leg_archive()
+    assert not any("archive-worktree.sh" in " ".join(call) for call in runner.calls)
+
+
+def test_archive_receipt_names_daemon_tree_resolution(
+    tmp_path, capsys, monkeypatch
+):
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner)
+
+    r.leg_archive()
+
+    out = capsys.readouterr().out
+    assert "step=archive status=deferred" in out
+    assert "daemon resolves the tree from feature/x" in out
+    assert "cleanup-requested request_id=" in out
+
+
+def test_archive_without_a_worktree_still_mints_the_request(tmp_path, capsys, monkeypatch):
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner)
+    r.leg_archive()
+    out = capsys.readouterr().out
+    assert "step=archive status=deferred" in out
+    assert "daemon resolves the tree from feature/x" in out
+    assert "cleanup-requested request_id=" in out
+
+
+def test_archive_receipt_is_written_to_the_daemon_journal(
+    tmp_path, monkeypatch
+):
+    runner = FakeRunner(branch="feature/x")
+    r = _bare(tmp_path, runner)
+    events = []
+    monkeypatch.setattr(
+        _events,
+        "_emit_daemon_envelope",
+        lambda kind, data: events.append((kind, data)),
+        raising=False,
+    )
+
+    r.leg_archive()
+
+    assert events[0][0] == "merge_cleanup_requested"
+    assert events[0][1]["pr"] == 7
+    assert events[0][1]["branch"] == "feature/x"
+    assert events[0][1]["worktree"] is None
+    assert events[1] == (
+        "post_merge_archive",
+        {
+            "pr": 7,
+            "project": "",
+            "outcome": "deferred",
+            "detail": events[1][1]["detail"],
+        },
+    )
+    assert "cleanup-requested" in events[1][1]["detail"]
 
 
 # --- AC4: idempotency / mutex -------------------------------------------
@@ -870,3 +1045,20 @@ def test_lane_project_reads_worktree_local_override(tmp_path, monkeypatch):
 
     assert r.ctx.project == "fno"
     assert r.ctx.lane_project == "fno-lane-node"
+
+
+def test_reconcile_leg_takes_the_probe_safe_bound(tmp_path):
+    """x-626f round-2: the ritual's reconcile leg runs at the merge's
+    300s bound (above reconcile's 240s close-probe budget), not the 120s
+    leg default."""
+    seen = {}
+
+    class _ProbeRunner(FakeRunner):
+        def __call__(self, argv, *, cwd=None, timeout=None, **kw):
+            if "reconcile" in argv:
+                seen["timeout"] = timeout
+            return FakeRunner.__call__(self, argv, cwd=cwd, timeout=timeout)
+
+    r = _bare(tmp_path, _ProbeRunner())
+    r.leg_stamp()
+    assert seen["timeout"] == 300.0

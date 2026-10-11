@@ -40,9 +40,11 @@ def _resolve_path(path: Optional[Path], type_: Optional[str]) -> Path:
     if path is not None:
         return Path(path)
     repo_root = _v2_repo_root()
-    if type_ is not None:
-        return repo_root / ".fno" / f"{type_}-state.md"
-    return repo_root / ".fno" / "target-state.md"
+    if type_ is None or type_ == "target":
+        from fno.paths import target_state_path_or_legacy
+
+        return target_state_path_or_legacy(repo_root)
+    return repo_root / ".fno" / f"{type_}-state.md"
 
 
 def _detect_type(path: Path) -> str:
@@ -144,7 +146,7 @@ def _v2_repo_root() -> Path:
 
 _IMMUTABLE_MANIFEST_MSG = (
     "target-state.md is an immutable session manifest "
-    "(control-plane collapse, ab-d0337fbc); "
+    "(control-plane collapse); "
     "only first-fill of plan_path is allowed"
 )
 
@@ -153,7 +155,7 @@ def _is_target_manifest(state_path: Path, type_: Optional[str], data: dict) -> b
     """Return True when the file is an immutable target-type manifest.
 
     An immutable manifest (written by the new init-target-state.sh after
-    ab-d0337fbc) has no 'status:' field. Old-style manifests (written by
+) has no 'status:' field. Old-style manifests (written by
     pre-wedge init) carry 'status: IN_PROGRESS' and are mutable; the
     write-once rule does not apply to them so existing workflows stay intact.
 
@@ -177,7 +179,7 @@ def set_field(
 ) -> None:
     """Set a single field in a state file atomically.
 
-    For target manifests (control-plane collapse, ab-d0337fbc): the file is
+    For target manifests (control-plane collapse): the file is
     immutable after init. Only first-fill of an empty plan_path is allowed.
     Any other field write is refused with exit code 5.
     """

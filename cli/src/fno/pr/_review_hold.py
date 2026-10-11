@@ -40,14 +40,17 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import suppress
 from typing import Any, Callable, NamedTuple, Optional
 
 from pathlib import Path
+from fno.review.invocation import VERIFY_FIXES
 
 
-# Not one of ``claims.io._GLOBAL_ID_PREFIXES``, so the key routes to the
+# Not a global-id prefix (the native routing list lives in
+# crates/fno-agents/src/claims_root.rs), so the key routes to the
 # canonical repo root: every linked worktree of a project shares one hold, and
-# a review running in a worktree is visible to a king in the main checkout.
+# a review running in a worktree is visible to a lead in the main checkout.
 REVIEW_HOLD_PREFIX = "review:branch:"
 
 # A review is unbounded, so the TTL is a wedge bound rather than an estimate:
@@ -162,6 +165,142 @@ def acquire_review_hold(
         return None
 
 
+# --- The review-cap invocation gate: the cap held at the merge decision only,
+# so rounds three through five ran against a saturated counter.
+VERIFY_FIXES_FLAG = f"--{VERIFY_FIXES}"  # spelled by invocation, the flag authority
+
+
+def _code_patch_lines(cwd: str, base: str, sha: str) -> Optional[list[str]]:
+    """Content lines of the PR's code patch at ``sha``, or ``None``. Mirror of ``code_patch_lines``
+    in review_freshness.rs; the two must measure alike or the gates answer one rebase differently."""
+    import subprocess
+
+    # Function-local: _merge imports this module (a cycle at module level).
+    from fno.pr._merge import _is_documentation_path
+
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--no-color", "--no-ext-diff", "--no-renames", f"{base}...{sha}"],
+            cwd=cwd,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001 - an unreadable patch must not gate
+        return None
+    if out.returncode != 0 or len(out.stdout) > 8 * 1024 * 1024:
+        return None
+    lines: list[str] = []
+    in_docs_section = False
+    for raw in out.stdout.decode("utf-8", errors="replace").splitlines():
+        if raw.startswith("diff --git a/"):
+            in_docs_section = _is_documentation_path(raw[13:].split(" b/")[0].strip('"'))
+            continue
+        if raw and not in_docs_section and not raw.startswith(("index ", "---", "+++", "@@")):
+            lines.append(raw.rstrip())
+    return lines
+
+
+def _interdiff_lines(cwd: str, base: str, old_sha: str, new_sha: str) -> Optional[int]:
+    """Multiset symmetric difference of the two patches against the base (review_freshness.rs mirror)."""
+    old_patch = _code_patch_lines(cwd, base, old_sha)
+    new_patch = _code_patch_lines(cwd, base, new_sha)
+    if old_patch is None or new_patch is None:
+        return None
+    counts: dict[str, int] = {}
+    for line in old_patch:
+        counts[line] = counts.get(line, 0) + 1
+    for line in new_patch:
+        counts[line] = counts.get(line, 0) - 1
+    return sum(abs(c) for c in counts.values())
+
+
+def review_invocation_refusal(
+    branch: str, head: str, flags: Optional[list[str]] = None, cwd: Optional[str] = None
+) -> str:
+    """Why a NEW hunting round may not start, or ``""`` when it may. Carveouts,
+    both the law's own: ``--verify-fixes`` is a scoped fix-verification (not a
+    round) and a rebase delta at or over ``review.carry_interdiff_lines``; an
+    unmeasurable interdiff fails open."""
+    from fno.pr._coverage_gate import attestation_chain, resolved_max_rounds, rounds_since_last_pass
+
+    where = cwd or os.getcwd()
+    chain = attestation_chain(where, head_branch=branch, head=head)
+    rounds_used = rounds_since_last_pass(chain)
+    max_rounds = resolved_max_rounds(where)
+    if rounds_used < max_rounds:
+        return ""
+    if flags and VERIFY_FIXES_FLAG in flags:
+        return ""
+    last_head = chain[-1].get("head_sha", "") if chain else ""
+    if last_head and head and last_head != head:
+        base = chain[-1].get("reviewed_base_sha", "")
+        if base:
+            carry = 100
+            with suppress(Exception):
+                from fno.config import load_settings
+
+                carry = int(getattr(load_settings().review, "carry_interdiff_lines", 100))
+            measured = _interdiff_lines(where, base, last_head, head)
+            if measured is None or measured >= carry:
+                return ""
+    return (
+        f"review refused: the configured round cap is spent for this head ({rounds_used} of {max_rounds} rounds used); "
+        "a new hunting round may not start. The review phase is complete: merge on green CI - open findings stay "
+        "in the PR conversation. A scoped fix-verification with "
+        f"{VERIFY_FIXES_FLAG} is the one review-shaped act the cap still funds."
+    )
+
+
+def scoped_verify_round(branch: str, head: str, cwd: Optional[str] = None) -> int:
+    """The round a scoped fix-verification at ``head`` verifies.
+
+    Floored at 1: a verify with no round behind it still names a round, so a
+    declared row can never read the chain down to zero.
+    """
+    from fno.pr._coverage_gate import attestation_chain, rounds_since_last_pass
+
+    where = cwd or os.getcwd()
+    return max(1, rounds_since_last_pass(attestation_chain(where, head_branch=branch, head=head)))
+
+
+def verify_fixes_advisory(branch: str, head: str, cwd: Optional[str] = None) -> str:
+    """The nudge a driver needs exactly when the default flow misleads: two
+    careful drivers both fixed findings and re-ran a full pass, spending the
+    round the law reserved for the verify. Advisory only - it never refuses
+    and never classifies the pass, because a fresh hunting round after a fix
+    looks identical from here and silently counting it as a verify would
+    under-spend a cap the operator set."""
+    from fno.pr._coverage_gate import attestation_chain
+
+    where = cwd or os.getcwd()
+    chain = attestation_chain(where, head_branch=branch, head=head)
+    if not chain:
+        return ""
+    last = chain[-1]
+    last_head = last.get("head_sha") or ""
+    if not last_head or last_head == head:
+        return ""
+    blocking = sum(
+        1
+        for f in (last.get("findings") or [])
+        if isinstance(f, dict) and f.get("blocking") is True
+    )
+    if blocking > 0:
+        detail = f"raised {blocking} blocking finding(s)"
+    elif last.get("findings_truncated") is True:
+        # The findings array was shed to fit the record: the blockers are real
+        # but unnamed, and a silenced advisory here is exactly the driver who
+        # most needs it. Advise without a count rather than staying quiet.
+        detail = "raised blocking finding(s) the record could not carry"
+    else:
+        return ""
+    return (
+        f"review-hold: the last round at {last_head[:8]} {detail} and the head has moved.\n"
+        f"If this pass verifies those fixes, invoke it with {VERIFY_FIXES_FLAG}: a scoped "
+        "fix-verification declares the round it verifies and does not spend a new one."
+    )
+
+
 def release_review_hold(
     branch: str, *, holder: Optional[str] = None, root: Optional[Path] = None
 ) -> bool:
@@ -189,14 +328,13 @@ def release_review_hold(
         state = status.get("state")
         if state == ClaimState.FREE.value:
             return False
-        # A corrupted lockfile has no readable holder, so no release_claim call
-        # can name one; unlink it directly. Leaving it is the worse outcome:
-        # every read classifies it CORRUPTED, which BLOCKS, forever.
+        # A corrupted claim has no readable holder, so no release_claim call
+        # can name one; force-drop it. Leaving it is the worse outcome: every
+        # read classifies it CORRUPTED, which BLOCKS, forever.
         if state == ClaimState.CORRUPTED.value:
-            from fno.claims.io import claim_path
+            from fno.claims.core import force_release_claim
 
-            claim_path(key, root=root).unlink(missing_ok=True)
-            return True
+            return force_release_claim(key, "corrupted review hold", root=root).archived
         return release_claim(key, holder or status.get("holder") or "", root=root) is not None
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(f"review-hold: could not release hold on {branch}: {exc}\n")
@@ -257,6 +395,26 @@ def _parse_worktree_list(stdout: str) -> list[dict]:
     if current.get("path"):
         entries.append(current)
     return entries
+
+
+def resolve_pr_worktree(pr_number: int, repo: str) -> str:
+    """The PR's local worktree path, or ``""`` when the branch has none here.
+
+    ``""`` is an answer, not a failure: the verb's exit-3 refusal is a
+    successful enumeration of a PR that is simply not checked out locally,
+    and a PR with no local worktree carries no worktree hold. Callers read
+    it as "no hold" - staying in their own checkout, whose worktree list
+    still enumerates every worktree of the repo - never as a blocker. Any
+    other failure still raises: a dead instrument blocks.
+    """
+    from fno.rust_binary import VerbUnavailable, verb_call
+
+    try:
+        return str(verb_call("pr-worktree", {"cwd": repo, "pr": pr_number})["worktree"])
+    except VerbUnavailable as exc:
+        if exc.returncode == 3 and "no local worktree" in str(exc):
+            return ""
+        raise
 
 
 def _worktree_probe(
@@ -436,7 +594,8 @@ def review_activity(
         sys.stderr.write(
             f"note: review hold on {branch} expired (holder {holder}, "
             f"expires_at {status.get('expires_at')}); it no longer blocks. "
-            "A reviewer that died mid-run leaves no findings behind it.\n"
+            "A review hold is a lease: it lapses on its TTL whether or not the "
+            "holder session still runs.\n"
         )
         _emit_expired(
             key=key,

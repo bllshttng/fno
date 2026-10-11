@@ -9,7 +9,7 @@
 # renders nothing at session start - eval output is a background log/artifact,
 # not a reminder. The throttle stamp and singleton claim both resolve against
 # the CANONICAL repo root (not the session cwd), so one sweep fires per repo
-# per day regardless of how many worktrees start a session (x-dbdf). Its own
+# per day regardless of how many worktrees start a session. Its own
 # stamp (.fno/.eval-sweep-stamp) keeps the two cadences independent. The whole
 # run is detached (nohup), bounded per stage, and logged to
 # .fno/logs/eval-sweep.log so a wedge dies and is diagnosable instead of
@@ -45,7 +45,7 @@ EVAL_SWEEP_LOG_MAX_BYTES="${EVAL_SWEEP_LOG_MAX_BYTES:-1048576}"
 # File mtime in epoch seconds. GNU (stat -c) FIRST so Linux never reaches BSD's
 # `stat -f %m`, which on GNU coreutils prints non-numeric output (not a clean
 # failure) and would crash the caller's arithmetic under `set -u`. Scrubbed to
-# digits so a non-numeric fallback can never break `$(( ))`.
+# digits so a non-numeric fallback can never break `$(())`.
 _eval_sweep_mtime() {
     local m
     m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)
@@ -72,6 +72,11 @@ _eval_sweep_canonical_root() {
 _eval_sweep_stage() {
     local log="$1" secs="$2"; shift 2
     local rc=0
+    # Announce the stage before it runs: a healthy stage's only log line is
+    # its own stdout, which for a quiet sweep is nothing - indistinguishable
+    # from a stage that never fired. This line is what makes ran vs skipped
+    # readable in the log.
+    printf '[eval-sweep] stage: %s\n' "$*" >> "$log" 2>/dev/null
     with_timeout "$secs" "$@" >> "$log" 2>&1 || rc=$?
     (( rc == 0 )) || printf '[eval-sweep] stage rc=%s: %s\n' "$rc" "$*" >> "$log" 2>/dev/null
     return 0
@@ -109,6 +114,9 @@ _eval_sweep_run_stages() {
     _eval_sweep_stage "$log" "$EVAL_SWEEP_STAGE_TIMEOUT" "$fno_cmd" doctor observer sweep  --skill review
     _eval_sweep_stage "$log" "$EVAL_SWEEP_STAGE_TIMEOUT" "$fno_cmd" doctor skill-diff tick --skill blueprint
     _eval_sweep_stage "$log" "$EVAL_SWEEP_STAGE_TIMEOUT" "$fno_cmd" doctor skill-diff tick --skill review
+    # Stage five: the scratch-shape sweep files at most one node per
+    # run, so a daily cadence drains a backlog of shapes one at a time.
+    _eval_sweep_stage "$log" "$EVAL_SWEEP_STAGE_TIMEOUT" "$fno_cmd" doctor scratch sweep
     [[ -n "$claim_key" ]] && "$fno_cmd" agents claim release "$claim_key" --holder "$holder" >/dev/null 2>&1
     return 0
 }
@@ -156,6 +164,8 @@ eval_sweep_maybe_fire() {
     local repo_root="${1:-$PWD}"
     local canonical
     canonical="$(_eval_sweep_canonical_root "$repo_root")"
+    # HOME-as-repo guard: the state root is not a checkout; never stamp it.
+    _reconcile_repo_space_safe "$canonical" || return 0
     # Only fire in an already-initialized project; never create .fno in a virgin dir.
     [[ -d "$canonical/.fno" ]] || return 0
     local stamp="$canonical/.fno/.eval-sweep-stamp"

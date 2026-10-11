@@ -94,7 +94,6 @@ def init(
     what did not.
     """
     from fno.config.writer import ConfigSetError, set_config_values
-    from fno.config import load_settings
 
     if repo_root is None:
         from fno.paths import resolve_repo_root
@@ -111,22 +110,7 @@ def init(
 
     target = _state_dir_for(project_id)
 
-    # Refusal 1: an explicit agents-registry override outlives `state_dir`.
-    # `paths.agents_registry_path` is honored BEFORE the state_dir fallback, so
-    # an environment minted under it gets an isolated graph and a SHARED
-    # roster - a half-isolation nobody would notice until two fleets collided.
-    override = load_settings().paths.agents_registry_path
-    if override:
-        typer.echo(
-            f"refusing: config.paths.agents_registry_path is set ({override}).\n"
-            "That override is honored ahead of state_dir, so this environment "
-            "would get its own graph and share your agent roster.\n"
-            "Unset it (`fno config unset paths.agents_registry_path`) and re-run.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-    # Refusal 2: a state_dir already pinned to somewhere else. Overwriting it
+    # Refusal: a state_dir already pinned to somewhere else. Overwriting it
     # would silently move a live environment's graph, ledger and mail bus.
     existing = _read_project_toml(repo_root).get("state_dir")
     if isinstance(existing, str) and existing.strip() and existing.strip() != target:
@@ -171,6 +155,8 @@ def receipt(project_id: str, state_dir: str) -> str:
         f"project {project_id}: isolated\n"
         f"  state_dir  {state_dir}   "
         "(graph, ledger, briefs, agent registry, mail bus)\n"
+        "  The only fno file left in the checkout is .fno/config.toml; session\n"
+        "  state lives in the repo's space.\n"
         "  NOT isolated: the claude daemon namespace and any codex app-server.\n"
         "  Those are machine-global and fno does not own them. A session started here\n"
         "  shares them with your real fleet, so an ambient identity marker crosses this\n"

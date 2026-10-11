@@ -38,7 +38,8 @@ def gate_calls(monkeypatch):
             FakeGuard.released += 1
 
     def fake_run_gate(
-        name, substrate, *, force=False, no_wait=False, route_provider=None
+        name, substrate, *, force=False, no_wait=False, route_provider=None,
+        account=None, seed=None, session_phase=None, succession_scope=None,
     ):
         calls.append(
             {
@@ -47,6 +48,10 @@ def gate_calls(monkeypatch):
                 "force": force,
                 "no_wait": no_wait,
                 "route_provider": route_provider,
+                "account": account,
+                "seed": seed,
+                "session_phase": session_phase,
+                "succession_scope": succession_scope,
             }
         )
         return FakeGuard()
@@ -80,7 +85,7 @@ def test_bg_spawn_gates_as_bg_and_receipt_is_byte_identical(
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg"],
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread"],
     )
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -90,6 +95,10 @@ def test_bg_spawn_gates_as_bg_and_receipt_is_byte_identical(
             "force": False,
             "no_wait": False,
             "route_provider": None,
+            "account": None,
+            "seed": "hi",
+            "session_phase": "",
+            "succession_scope": None,
         }
     ]
     # Hand-rolled f-string receipt, byte-parity with the Rust path (LD10).
@@ -120,6 +129,52 @@ def test_once_maps_to_headless_for_the_gate(runner, gate_calls, monkeypatch):
     assert calls[0]["substrate"] == "headless"
 
 
+def test_succeed_passes_the_role_scope_to_the_gate(runner, gate_calls, monkeypatch):
+    calls, _ = gate_calls
+    _fake_created(monkeypatch)
+    from fno.agents import role
+    from fno.agents.cli import agents_app
+
+    monkeypatch.setattr(role, "resolve_role", lambda scopes: (1, "x-epic"))
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn", "--name", "w1", "hi", "--harness", "claude",
+            "--substrate", "thread", "--promote", "x-epic", "--succeed",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls[0].get("succession_scope") == "x-epic"
+
+
+def test_role_without_succeed_does_not_send_a_succession_scope(
+    runner, gate_calls, monkeypatch
+):
+    calls, _ = gate_calls
+    _fake_created(monkeypatch)
+    from fno.agents import role
+    from fno.agents.cli import agents_app
+
+    monkeypatch.setattr(role, "resolve_role", lambda scopes: (1, "x-epic"))
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn",
+            "--name",
+            "w1",
+            "hi",
+            "--harness",
+            "claude",
+            "--substrate",
+            "thread",
+            "--promote",
+            "x-epic",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls[0]["succession_scope"] is None
+
+
 def test_gate_refusal_propagates_exit_code(runner, monkeypatch):
     """A gate refusal exits with the gate's code; nothing dispatches."""
 
@@ -138,12 +193,33 @@ def test_gate_refusal_propagates_exit_code(runner, monkeypatch):
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
             "--no-wait",
         ],
     )
     assert result.exit_code == spawn_gate.EXIT_NO_WAIT
     assert not dispatched
+
+
+def test_sandbox_policy_refusal_happens_before_the_gate(
+    runner, gate_calls, tmp_path
+):
+    """A refusal after admission would leak the gate mutex; this one refuses first."""
+    calls, _ = gate_calls
+    policy = tmp_path / "policy.json"
+    policy.write_text("{}")
+    from fno.agents.cli import agents_app
+
+    result = runner.invoke(
+        agents_app,
+        [
+            "spawn", "--name", "w1", "hi", "--harness", "claude",
+            "--substrate", "pane", "--sandbox-write-policy", str(policy),
+        ],
+    )
+    assert result.exit_code == 2, result.output
+    assert "--sandbox-write-policy needs the thread substrate" in result.output
+    assert calls == []
 
 
 def test_force_and_no_wait_flags_reach_the_gate(runner, gate_calls, monkeypatch):
@@ -154,7 +230,7 @@ def test_force_and_no_wait_flags_reach_the_gate(runner, gate_calls, monkeypatch)
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "bg",
+            "spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "thread",
             "--force", "--no-wait",
         ],
     )
@@ -190,7 +266,6 @@ def test_pane_spawn_gates_as_pane_and_releases_on_success(
         unbound_reason=None,
         seed="submitted",
         seed_source="delivered",
-        fno_id="abcd1234",
         log_path="",
         recovered=False,
         readiness="ready",
@@ -198,13 +273,14 @@ def test_pane_spawn_gates_as_pane_and_releases_on_success(
     )
 
     monkeypatch.setattr(
-        mux_mod, "dispatch_spawn_pane", lambda **kw: pane_result
+        mux_mod, "dispatch_spawn_bounded_pane", lambda **kw: pane_result
     )
     monkeypatch.setattr(mux_mod, "resolve_provenance", lambda *a: None)
     from fno.agents.cli import agents_app
 
     result = runner.invoke(
-        agents_app, ["spawn", "--name", "w1", "hi", "--harness", "claude"]
+        agents_app,
+        ["spawn", "--name", "w1", "hi", "--harness", "claude", "--substrate", "pane"],
     )
     assert result.exit_code == 0, result.output
     assert calls[0]["substrate"] == "pane"

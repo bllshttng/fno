@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # with-timeout.sh - the one wall-clock bound for shelling out to a binary from
-# shell. (The Python side has its own in cli/src/fno/context_observation.py,
-# which agrees on the contract: 124, TERM then KILL, by process group.)
+# shell. (The Rust runner bounds its children the same way: TERM then KILL, by
+# process group.)
 #
 # Replaces six hand-rolled "portable timeout" helpers that all preferred GNU
 # coreutils `timeout` and then disagreed on the fallback. Measured against a hung
@@ -24,7 +24,10 @@
 # depends on whether TERM or the KILL escalation landed; a command killed by an
 # unrelated external signal also reads 124, which is the same decision for a
 # caller either way. Safe under `OUTPUT=$(with_timeout ...)`, which is how every
-# caller uses it.
+# caller uses it. The caller's stdin passes through: the async job carries an
+# explicit `<&0`, because bash hands a background job /dev/null when job control
+# is off, which silently emptied every piped caller (law-stage-inject measured
+# 2026-09-22).
 with_timeout() {
   local secs="$1"; shift
 
@@ -46,7 +49,7 @@ with_timeout() {
   # instead of the bound silently no-opping.
   set -m
 
-  "$@" &
+  "$@" <&0 &
   local pid=$!
 
   # Three things here are load-bearing:

@@ -25,9 +25,9 @@ from fno.claims import (
     ClaimValidationError,
     acquire_claim,
     claim_status,
+    native_claims_root,
     release_claim,
 )
-from fno.claims.io import claims_dir, claims_root_for
 from fno.config.optouts import (
     MERGE_GATING_OPTOUT_DEFAULTS,
     MERGE_GATING_OPTOUTS,
@@ -68,14 +68,13 @@ def _optout_claim_key(key: str) -> str:
 
 def _optout_status(key: str) -> dict[str, Any]:
     claim_key = _optout_claim_key(key)
-    return claim_status(claim_key, root=claims_root_for(claim_key))
+    return claim_status(claim_key)
 
 
 def _release_optout_claim(key: str, holder: str) -> None:
     release_claim(
         _optout_claim_key(key),
         holder,
-        root=claims_root_for(_optout_claim_key(key)),
     )
 
 
@@ -105,21 +104,8 @@ def _lease_dict(claim: Any) -> dict[str, Any]:
 
 def _claim_state(key: str) -> str:
     """Read the opt-out instrument, distinguishing unreadable from absent."""
-    root = claims_root_for(f"config-optout:{key}")
     try:
-        directory = claims_dir(root)
-        try:
-            directory.stat()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            return "unreadable"
-        else:
-            try:
-                with os.scandir(directory):
-                    pass
-            except OSError:
-                return "unreadable"
+        root = native_claims_root(f"config-optout:{key}")
         return str(
             claim_status(f"config-optout:{key}", root=root).get(
                 "state", "unreadable"
@@ -218,7 +204,6 @@ def _prepare_set_leases_locked(
         status = _optout_status(key)
         state = status.get("state")
         claim_key = _optout_claim_key(key)
-        root = claims_root_for(claim_key)
 
         if after_active:
             holder = _resolve_optout_holder()
@@ -257,7 +242,6 @@ def _prepare_set_leases_locked(
                     reason="merge-gating opt-out",
                     ttl_ms=_optout_ttl_ms(data),
                     metadata=metadata,
-                    root=root,
                 )
             except ClaimHeldByOther as exc:
                 raise ConfigSetError(str(exc), 1) from exc

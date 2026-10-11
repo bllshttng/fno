@@ -1,4 +1,5 @@
-//! `fno-agents` substrate crate (Phase 6, ab-a09e1eaf).
+//! `fno-agents` substrate crate (Phase 6).
+#![recursion_limit = "512"]
 //!
 //! This crate is the Rust substrate for PTY-managed agents (codex / gemini /
 //! future OpenCode). It is split per the design's Locked Decisions:
@@ -39,84 +40,478 @@
 //!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
 //!   [`readiness`]).
 
+// daemon.rs's `agent.list` row is one json! literal with a key set pinned by
+// schemas/agents-list-row.json; the crate-level recursion_limit above covers
+// the macro expansion since `spawned_by_session` joined the contract.
+
+pub mod acceptance_evidence;
+pub mod acp_stdio;
 pub mod active_backlog;
+pub mod additional_prs;
+pub(crate) mod adopt_carry;
+pub(crate) mod adopt_identity;
 mod agent_lock;
+pub mod agent_ref;
 pub mod agents_config;
+pub(crate) mod agents_event;
+pub mod agents_top;
 pub mod agy_ask;
+pub mod agy_hooks;
+pub mod agy_launch;
+pub mod announce;
+pub mod arm_repair;
+pub mod arm_watch;
+pub mod attach;
+pub(crate) mod attended;
+pub mod attention;
+pub mod attention_arm;
+pub mod attention_file;
+pub mod attention_http;
+pub mod attention_reply;
+pub mod attention_route;
+pub mod authorized_merge;
+pub mod backlog;
+pub mod backlog_ready;
+pub mod backlog_share;
+pub mod bash_census;
+#[cfg(test)]
+#[path = "birth_guard_tests.rs"]
+mod birth_guard_tests;
+pub mod blueprint_judge;
+mod boot_revival;
+mod bounded_cmd;
+mod bounded_spawn;
+pub mod burn_watch;
+mod cancel_sentinel;
+pub mod canonical_check;
+pub mod capability_leaves;
+pub mod capacity;
+pub mod cargo_build_dirs;
+pub(crate) mod cargo_builds;
+pub(crate) mod cargo_orphans;
+pub mod census;
+pub mod chats;
 pub mod check_supersession;
+pub mod claim_cli;
+pub mod claim_lanes_cli;
+pub mod claim_queue;
+pub mod claim_store;
+pub mod claim_verbs;
 pub mod claims;
+pub mod claims_root;
 pub mod claude_adopt;
 pub mod claude_ask;
 pub mod claude_attach;
+pub mod claude_config_tmp;
 pub mod claude_drive;
+pub mod claude_login;
+pub mod claude_resume;
 pub mod claude_roster;
+pub mod claude_sessions;
+pub mod claude_stream_entry;
+pub mod claude_supervisor;
+pub mod claude_transcript_paths;
+pub mod claude_vault;
+pub mod cli_args;
 pub mod client;
+pub mod client_render;
 pub mod client_verbs;
 pub mod codex_ask;
+pub mod codex_daemon_readiness;
+pub mod codex_daemon_upgrade;
 /// Test support: a fake shared codex app-server daemon. Public because the
 /// in-crate daemon tests and the integration tests both need one fake, and
 /// only a library item reaches both.
 #[doc(hidden)]
 pub mod codex_fake_daemon;
 pub mod codex_inject;
+/// Public because `codex_resume` (pub, exercised by the parity test) names
+/// [`CodexRoute`] in its signature.
+pub mod codex_posture;
+pub mod codex_route;
+pub mod codex_store;
 pub mod codex_thread;
+mod codex_thread_entry;
+pub mod codex_watch;
+pub mod compaction;
 mod completion_output;
+pub mod component_update;
+pub mod context_run;
+pub mod context_window;
+pub mod convert;
+pub mod correction_meter;
+pub mod corrections_verify;
+pub mod cursor_agent;
 pub mod daemon;
+pub mod day;
+pub mod decide_door;
+pub mod decision_index;
+pub mod decision_trace;
 pub mod delivery_completion;
 pub mod digest;
+pub mod dispatch_credit;
+pub mod disposition_gate;
+pub mod distress;
 pub mod drift;
+pub mod duration;
+pub mod effect_gate;
+pub mod effect_map;
+pub mod effort_surface;
 pub mod envelope;
+pub mod escalation;
+pub mod eval_attempt;
+pub mod eval_part4;
+pub mod evals_arm;
+pub mod evals_macro;
+pub mod evals_qualification;
+pub mod evals_trend;
+pub mod event_rules;
+pub mod event_store;
 pub mod events;
 pub mod events_limits;
+pub mod evidence;
+pub mod fallback_chain;
+pub mod feed;
 pub mod finalize;
+pub mod finalize_run_summary;
+pub mod first_check;
+pub mod fleet_incident;
+pub mod fleet_load;
+pub mod fleet_page;
+pub mod fleet_task;
+pub mod flight_gate;
+pub mod footnote_harness;
+pub mod footnote_transcript;
+pub(crate) mod footprint_cache;
+pub mod gate_probes;
 pub mod gc;
+pub mod gc_adopt;
+pub mod gc_claude_stop;
+pub mod gc_inventory;
+pub mod gc_native;
+pub mod gc_open_pr_guard;
+pub mod gc_sweep;
+pub mod gc_verify;
 pub mod gemini_ask;
+pub mod gh_budget;
+pub mod gh_cache;
+pub mod gh_incident;
+#[cfg(test)]
+mod git_test_helpers;
+pub mod graph_get;
+pub mod graph_keeper;
+pub mod graph_store;
+pub mod grok_ask;
+pub mod grok_store;
+pub mod harness_beat;
 pub mod harness_capabilities;
 pub mod harness_daemon;
-mod identity;
+pub mod harness_matrix;
+pub mod harness_reader;
+pub mod harness_roster;
+pub mod harness_verbs;
+pub mod heal;
+pub mod heal_pid;
+pub mod help_router;
+pub mod hold_label;
+pub mod honesty_sweep;
+pub mod hook;
+pub mod identity;
+pub mod incident_claim;
+pub mod install_verify;
+pub mod intel;
+pub mod intel_html;
+pub mod intel_insights;
+pub mod intel_rollup;
 pub mod interrupt_classify;
+pub mod json_output;
+pub(crate) mod keeper_revival;
 pub mod kill_criteria;
+pub mod lane_heal;
+pub mod lanes;
+pub mod launch_record;
+pub mod launch_workdir;
+pub mod law_match;
+pub mod lead_answers;
+pub mod lead_checkin;
+pub mod lead_checkin_blueprint;
+pub mod lead_checkin_lineup;
+pub mod lead_checkin_machine;
+pub mod lead_escalation;
+pub mod lead_eval;
+pub mod lead_goal;
+pub mod lead_history;
+pub mod lead_hygiene;
+pub mod lead_mail;
+pub mod lead_pushback;
+pub mod lead_settle;
+pub mod lead_state;
+pub mod lead_term;
+pub mod lead_termination;
+pub mod lead_verdict_inputs;
+pub mod lead_wake;
+pub mod lease_heartbeat;
+pub mod ledger_axes;
+pub(crate) mod ledger_workers;
+mod lifecycle_child;
+pub mod list_row;
+pub mod live_store_fence;
+pub mod liveness_sweep;
+pub mod lock_queue;
 pub mod logs;
 pub mod logs_client;
 pub mod loop_dispatch;
-pub mod loop_king;
+pub mod loop_lead;
+pub mod loop_readiness;
 pub mod loop_runtime;
 pub mod loop_target;
 pub mod loopcheck;
+pub mod loops_pause;
+pub mod machine_load;
+pub mod machine_mail;
+pub mod machine_sample;
+pub mod machine_watch;
+pub mod mail_backfill;
+pub mod mail_control_drain;
+pub mod mail_envelope;
+pub mod mail_header;
+pub mod mail_hold;
 pub mod mail_inject;
+pub mod mail_notify_self;
+pub mod mail_receipt;
+pub mod mail_teach;
+pub mod mail_threads;
+pub mod main_ci;
+pub mod main_ci_proof;
 pub mod manifest;
 pub mod manifest_lookup;
+pub mod merge_close;
+pub mod merge_freeze;
+pub mod merge_gates;
+pub mod merge_grant;
+pub mod merge_hold;
+pub mod merge_posture;
+pub mod merge_provenance;
+pub mod merge_reap;
+#[cfg(test)]
+#[path = "mint_guard_tests.rs"]
+mod mint_guard_tests;
 pub mod model_env_scrub;
+pub mod model_family;
+pub mod model_price;
+pub mod naming;
 pub mod needs;
+pub mod node_branch;
+pub mod node_origin;
+pub mod node_reading;
+pub mod node_route;
+pub mod node_seed;
+pub mod notice_route;
 pub mod nudge;
+pub mod occupancy_login;
 pub mod opencode_ask;
+pub mod opencode_config;
+pub mod opencode_install;
 pub mod opencode_serve;
+pub mod opencode_transcript;
+pub mod operator_notice;
+pub mod operator_turns;
+pub mod operator_witness;
+pub mod org_board;
+pub mod org_fold;
+pub mod org_rivals;
+pub mod orphan_reap;
 pub mod osc;
+pub mod otel_ingest;
+pub mod otel_read;
+pub(crate) mod owner_ladder;
 pub mod pane_keeper;
+pub mod pane_rebind;
+pub mod pane_relaunch;
+pub mod pane_stop;
 pub mod paths;
+pub mod paths_cli;
+pub mod pending_session_row;
+pub mod phase_close;
 pub mod pi;
+pub mod plan_doc;
+pub mod planning_lane;
+pub mod plans_dirs;
+pub mod plans_path;
+pub mod plugin_install;
+pub mod pr_admission;
+pub mod pr_body_check;
+pub mod pr_create;
+pub mod pr_draft_ready;
+pub mod pr_list;
+pub mod pr_nudge;
+pub mod pr_park;
+pub mod pr_push;
+pub mod pr_rebase;
+pub mod pr_status;
+pub mod pr_status_facts;
+pub mod pr_watch;
+pub mod pr_worktree;
+pub mod process_owner;
+pub mod process_probe;
 pub mod protocol;
+pub mod prove_it_verdicts;
+pub mod provenance;
 pub mod provider;
+pub mod provider_cap;
+pub mod provider_cap_verbs;
+pub mod provider_key;
+pub mod publish_review;
+pub mod quarantine;
+pub mod question_clear;
+pub mod question_intake;
+pub mod question_sweep;
+pub mod quiet_retire;
+pub mod reader_cost;
 pub mod readiness;
+pub mod real_session;
+pub mod reap_release;
+pub mod reap_render;
 pub mod receipt;
+pub mod reclaim;
 pub mod reentry;
+pub mod refusal_rate;
+pub mod refusal_trend;
+pub mod registry_commit;
+pub mod registry_guard;
+pub mod registry_json;
+pub mod registry_read;
+pub mod registry_store;
+pub mod release_notes;
+pub mod removals;
+pub mod rename;
+pub mod repeated_asks;
+pub(crate) mod resolve_tier;
+pub mod restart_run;
+pub mod resume_args;
+pub mod resume_gate;
+pub mod resume_pin;
+pub mod resume_receipt;
+pub(crate) mod resume_route;
+pub mod resume_wake;
+pub mod retask;
+pub mod review_freshness;
+pub mod review_summary;
+pub mod revival_check;
+pub mod revive_proof;
+pub mod rm_receipt;
+pub mod rm_tombstone;
+pub mod role_migration;
 pub mod roster_progress;
+pub mod roster_reap;
+pub mod route_capacity;
+pub mod route_gather;
+pub mod route_inventory;
+pub mod route_node_pin;
+pub mod route_recovery;
+pub mod route_slot;
+pub mod row_truth;
+pub mod row_verdict;
 pub mod run_outcome;
 pub mod run_state;
+pub mod rundown;
+pub mod sandbox_probe;
+pub mod scoreboard;
+pub mod scoreboard_escalation;
+pub mod scoreboard_provider;
 pub mod scrape;
+pub mod scratch;
 pub mod screen;
+pub mod select_read;
+pub(crate) mod served_liveness;
+pub mod session_activity;
+pub mod session_backfill;
+pub mod session_cost;
+pub mod session_join;
+pub mod session_names_fold;
+pub(crate) mod session_origin;
+pub mod session_report;
+pub mod session_start_bytes;
+pub mod session_truth;
+pub mod single_flight;
+pub mod skill_drift;
+pub mod slot_cutover;
+pub mod source_pin;
+pub mod spawn;
+pub mod spawn_axes;
+pub mod spawn_backends;
+pub mod spawn_compose;
+pub mod spawn_context;
+pub mod spawn_contract;
+pub mod spawn_cwd;
+pub mod spawn_edge;
 pub mod spawn_gate;
+pub mod spawn_gate_admission;
+pub mod spawn_gate_lanes;
+pub mod spawn_gate_reservations;
+pub mod spawn_gate_verb;
+pub mod spawn_lineage;
+pub mod spawn_overlay;
 pub mod spawn_payload;
+pub mod spawn_phase;
+pub mod spawn_transaction;
+pub mod stale_spaces;
 pub mod state;
+pub mod state_layout;
+pub mod state_layout_sqlite;
+pub mod state_path;
+pub mod state_root_drift;
+pub mod store_conn;
+pub mod store_exec;
+pub mod store_export;
+pub mod store_remote;
 pub mod stream_worker;
+pub mod stuck_work;
+pub mod subagent_hold;
 pub mod subprocess_ask;
 pub mod subscribe;
+pub mod succession_txn;
 pub mod supervisor;
+pub mod surface_check;
+pub mod sync_canonical;
+pub mod system_sender;
+pub mod task_context;
+pub mod team_alarm;
+pub mod team_identity;
+pub mod team_names;
+pub mod team_reap;
+pub mod team_rescope;
+pub mod team_settle;
+pub mod team_spawn;
+pub mod team_split;
+pub mod team_widen;
+pub mod terminal_route;
 pub mod terminal_stop;
+pub mod terminal_vocab;
+pub mod territory;
+pub mod test_delta;
+pub mod test_hold;
+pub mod test_run;
+pub mod tick_ledger;
+pub mod tool_activity;
+pub mod tracker;
+pub mod transcript_activity;
+pub mod truth_probe;
+pub mod update_journal;
+pub mod usage;
 pub mod verify_evidence;
 pub mod version;
 pub mod wait;
+pub mod wake_meter;
+pub mod wake_name;
+pub mod watch_expiry;
+pub mod wave;
+pub mod worked_nodes;
+pub mod worker_wake;
+pub mod worktree_reapable;
 pub mod write_queue;
+pub mod zcode;
+pub mod zcode_ask;
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -309,21 +704,18 @@ fn raw_monotonic_nanos() -> u64 {
         .saturating_add(ts.tv_nsec.max(0) as u64)
 }
 
+/// Mach ticks to nanoseconds via the once-read timebase ratio, shared by
+/// the monotonic clock and the reader-cost probe's CPU-time reads (which
+/// are ticks on the same clock). `libc` deprecated its mach timebase
+/// helpers, so the libSystem symbol is declared directly.
 #[cfg(target_os = "macos")]
-fn raw_monotonic_nanos() -> u64 {
-    // mach_continuous_time() counts during sleep; convert mach ticks -> ns via
-    // the timebase ratio (1/1 on current Apple hardware, but we must not assume
-    // it). `libc` deprecated its mach timebase helpers and dropped
-    // mach_continuous_time entirely (it lives in the `mach2` crate now), so we
-    // declare the two libSystem symbols directly to avoid a macOS-only crate
-    // dependency. Both are part of libSystem, linked by default on macOS.
+pub(crate) fn mach_ticks_to_ns(ticks: u64) -> u64 {
     #[repr(C)]
     struct MachTimebaseInfo {
         numer: u32,
         denom: u32,
     }
     extern "C" {
-        fn mach_continuous_time() -> u64;
         fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
     }
     use std::sync::OnceLock;
@@ -339,10 +731,20 @@ fn raw_monotonic_nanos() -> u64 {
             (info.numer as u64, info.denom as u64)
         }
     });
+    ((ticks as u128 * numer as u128) / denom as u128) as u64
+}
+
+#[cfg(target_os = "macos")]
+fn raw_monotonic_nanos() -> u64 {
+    // mach_continuous_time() counts during sleep. `libc` dropped the symbol
+    // entirely (it lives in the `mach2` crate now), so the libSystem symbol
+    // is declared directly to avoid a macOS-only crate dependency.
+    extern "C" {
+        fn mach_continuous_time() -> u64;
+    }
     // SAFETY: no arguments; returns a monotonic tick count that counts sleep.
     let ticks = unsafe { mach_continuous_time() };
-    // ns = ticks * numer / denom, computed in u128 to avoid overflow.
-    ((ticks as u128 * numer as u128) / denom as u128) as u64
+    mach_ticks_to_ns(ticks)
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -373,9 +775,143 @@ fn raw_monotonic_nanos() -> u64 {
 #[cfg(test)]
 pub static PATH_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Hold [`PATH_TEST_MUTEX`] for the rest of the scope, poisoning ignored: a
+/// panicking test leaves the env restored by its own guard, so refusing the
+/// lock afterwards would fail every later test instead of the broken one.
+#[cfg(test)]
+pub fn path_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    PATH_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Point `FNO_AGENTS_HOME` at `path` for the rest of the scope. Serialized by
+/// [`crate::claims::test_env_lock`], so every test that resolves the agents
+/// home shares one lane, and the previous value is restored on drop, panic
+/// included.
+#[cfg(test)]
+pub(crate) struct AgentsHomeEnvGuard {
+    previous: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl AgentsHomeEnvGuard {
+    pub(crate) fn set(path: &std::path::Path) -> Self {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", path);
+        Self { previous, _lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for AgentsHomeEnvGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+    }
+}
+
+/// The process `PATH` with `dir` in front. PREPEND, never replace: PATH is
+/// process-global, so a test that replaces it takes the system tools away from
+/// every concurrent test in the binary, and a stub only needs to win.
+#[cfg(test)]
+pub fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut value = std::ffi::OsString::from(dir);
+    if let Some(previous) = std::env::var_os("PATH") {
+        value.push(":");
+        value.push(previous);
+    }
+    value
+}
+
+/// Write `body` to `dir/name` as a 0755 executable and return the path.
+///
+/// A child /bin/sh writes the bytes, never this process. A write fd held
+/// here is copied into the child of any sibling test thread that forks in
+/// that window, and an exec of the stub then fails with ETXTBSY until that
+/// child execs. A temp name plus rename does not help: the copied fd follows
+/// the inode. The writer has exited before this returns.
+#[cfg(test)]
+pub(crate) fn write_exec_stub(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    use std::io::Write;
+    let path = dir.join(name);
+    let mut child = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"cat > "$1.tmp.$$" && chmod 755 "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1""#,
+            "sh",
+        ])
+        .arg(&path)
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn /bin/sh to write an exec stub");
+    // A writer that fails early (a missing dir) closes its stdin first, so
+    // this write can see a broken pipe. The exit status below names the
+    // real failure, so the write error is not the one to report.
+    let _ = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(body.as_bytes());
+    let status = child.wait().expect("wait for the stub writer");
+    assert!(
+        status.success(),
+        "could not write exec stub {}: {status}",
+        path.display()
+    );
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // AC2-HP: the host boot reading is a real past instant, and on macOS its
+    // second count matches what `sysctl -n kern.boottime` prints.
+    #[test]
+    fn host_boot_epoch_ms_reads_a_past_boot() {
+        let boot = host_boot_epoch_ms().expect("this host exposes a boot time");
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!(boot > 0, "boot must be positive: {boot}");
+        assert!(boot < now_ms, "boot must predate now: {boot} vs {now_ms}");
+        let sysctl = std::process::Command::new("sysctl")
+            .args(["-n", "kern.boottime"])
+            .output();
+        if let Ok(out) = sysctl {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(sec) = text
+                .split("sec = ")
+                .nth(1)
+                .and_then(|rest| rest.split([',', ' ', '}']).next())
+                .and_then(|v| v.parse::<i64>().ok())
+            {
+                let window_start = sec * 1000;
+                assert!(
+                    boot >= window_start && boot < window_start + 1000,
+                    "boot ms {boot} outside boot second {sec}"
+                );
+            }
+        }
+    }
+
+    // AC2-ERR: a non-positive boot second count is a failed reading.
+    #[test]
+    fn boot_ms_from_refuses_a_non_positive_second() {
+        assert_eq!(boot_ms_from(0, 0), None);
+        assert_eq!(boot_ms_from(-5, 0), None);
+        assert_eq!(boot_ms_from(1, 0), Some(1000));
+        assert_eq!(boot_ms_from(1789997638, 500_000), Some(1789997638500));
+    }
 
     #[test]
     fn short_id_rejects_empty() {
@@ -457,6 +993,25 @@ mod tests {
     // surfaces. This test scans every production call site and fails on drift.
 
     // ── fire the registry check HERE, not only in CI ──────────────────────
+    /// The lead events: a lead journals these from the session, and
+    /// `fno doctor event audit --type` resolves the name through this table.
+    /// A kind dropped here makes the done-probe read "unknown type", which is
+    /// the absence-lie in audit form.
+    #[test]
+    fn event_table_knows_lead() {
+        for kind in [
+            "lead_armed",
+            "lead_checkin",
+            "lead_dispatch_exception",
+            "lead_term",
+        ] {
+            assert!(
+                KNOWN_EVENT_KINDS.contains(&kind),
+                "{kind} missing from KNOWN_EVENT_KINDS"
+            );
+        }
+    }
+
     // `KNOWN_EVENT_KINDS` and `schema.yaml` cannot be generated from each
     // other: the YAML entry carries description/sources/data/consumers the
     // const does not have, and the two sets are a deliberate partition. So
@@ -575,7 +1130,20 @@ mod tests {
         // examples inside doc comments in the test module that the byte-level
         // scanner picks up. (Escaped `.emit(\"...\")` in the scanner self-check
         // string is NOT matched: the char after `(` is a backslash, not `"`.)
-        const TEST_ONLY_EMIT_KINDS: &[&str] = &["tick", "heartbeat", "foo", "x"];
+        // `mux_pane_counters`/`operator_decision` are real kinds whose production
+        // emitters live outside this crate (the mux server shells out to the
+        // Python CLI; operator_decision is Python-only); the routing unit tests
+        // in events.rs emit them below the test boundary.
+        const TEST_ONLY_EMIT_KINDS: &[&str] = &[
+            "tick",
+            "heartbeat",
+            "foo",
+            "x",
+            "mux_pane_counters",
+            "operator_decision",
+            // The hook emits this in Python; Rust only stages fixtures of it.
+            "loop_check_watch_idle",
+        ];
         let test_only: BTreeSet<&str> = TEST_ONLY_EMIT_KINDS.iter().copied().collect();
 
         let mut below_only: Vec<String> = Vec::new();
@@ -665,6 +1233,29 @@ mod tests {
     /// kind is dynamic and not statically checkable. The line number (1-based)
     /// is reported so a drift failure points straight at the offending call.
     fn scan_emit_kinds(src: &str) -> Vec<(String, usize)> {
+        // Comment lines are blanked (offsets preserved) first: a doc comment
+        // may SHOW an emit shape (`.emit("...")` in prose) and the scan reads
+        // bytes, not syntax.
+        let bytes = src.as_bytes();
+        let mut blanked = bytes.to_vec();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let line_end = bytes[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map(|p| i + p)
+                .unwrap_or(bytes.len());
+            let first = bytes[i..line_end]
+                .iter()
+                .find(|&&c| c != b' ' && c != b'\t');
+            if first == Some(&b'/') {
+                for b in &mut blanked[i..line_end] {
+                    *b = b' ';
+                }
+            }
+            i = line_end + 1;
+        }
+        let src = std::str::from_utf8(&blanked).unwrap_or(src);
         let bytes = src.as_bytes();
         let mut kinds = Vec::new();
         for needle in [".emit", ".emit_fields"] {
@@ -705,11 +1296,178 @@ mod tests {
         kinds
     }
 
+    // The exec-stub guard: a lib test that writes an executable stub
+    // in-process holds a write fd, and a sibling test thread's fork copies it
+    // into a child; an exec of the stub then fails with ETXTBSY until that
+    // child reaches its own exec. The one writer is `write_exec_stub`, whose
+    // child /bin/sh exits before returning. ponytail: the regex matches only
+    // the literal-mode idiom; a mode built in a variable not named `mode`
+    // evades it.
+    #[test]
+    fn every_exec_stub_goes_through_write_exec_stub() {
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_root, &mut files);
+        assert!(!files.is_empty(), "found no .rs files under {src_root:?}");
+
+        // Byte-level scan, like the emit-kind guard: no regex crate here.
+        // Matches the plan regex `(from_mode|set_mode|\.mode)\((0o7[0-7]{2}|mode)\)`
+        // per line: after the needle, trimmed whitespace, either a 0o7xx octal
+        // literal closed by `)`, or the variable form `mode)`.
+        const NEEDLES: [&str; 3] = ["from_mode(", "set_mode(", ".mode("];
+        let mut offenders: Vec<String> = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            let lines: Vec<&str> = text.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                let mut hit = false;
+                for needle in NEEDLES {
+                    let mut from = 0;
+                    while let Some(pos) = line[from..].find(needle) {
+                        let rest = line[from + pos + needle.len()..].trim_start();
+                        let octal = rest.as_bytes();
+                        let matched = (octal.len() >= 6
+                            && octal[..3] == *b"0o7"
+                            && (b'0'..=b'7').contains(&octal[3])
+                            && (b'0'..=b'7').contains(&octal[4])
+                            && octal[5] == b')')
+                            || rest.starts_with("mode)");
+                        if matched {
+                            hit = true;
+                            break;
+                        }
+                        from += pos + needle.len();
+                    }
+                    if hit {
+                        break;
+                    }
+                }
+                if hit {
+                    let name = file.strip_prefix(&src_root).unwrap_or(file);
+                    offenders.push(format!("{}:{}", name.display(), idx + 1));
+                }
+            }
+        }
+
+        // The allowed files: production binary repair (install_verify), four
+        // production dir modes (paths, fleet_incident, chats, the
+        // session-state pin dir), two dir-mode
+        // restores in tests (claims, operator_turns); the bin test target
+        // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
+        // production mode-preserve on its atomic plan-file replace
+        // (plan_doc/codec).
+        const ALLOWED: &[(&str, usize)] = &[
+            ("install_verify.rs", 1),
+            ("paths.rs", 1),
+            ("org_board/claims.rs", 1),
+            ("hook/session_state.rs", 1),
+            ("operator_turns.rs", 1),
+            ("client_tests.rs", 2),
+            ("plan_doc/codec.rs", 1),
+            ("fleet_incident.rs", 1),
+            ("chats.rs", 1),
+        ];
+        let allowed_counts: std::collections::HashMap<&str, usize> =
+            ALLOWED.iter().copied().collect();
+        let mut by_file: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for o in &offenders {
+            let file = o.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap();
+            *by_file.entry(file).or_insert(0) += 1;
+        }
+        for (file, count) in &by_file {
+            let allowed = allowed_counts.get(file.as_str()).copied().unwrap_or(0);
+            assert!(
+                *count <= allowed,
+                "this test writes an executable stub from inside the test \
+                 process, where a sibling test's fork can hold the write fd \
+                 open and the exec fails with Text file busy. Write it with \
+                 crate::write_exec_stub. Offenders: {offenders:?}"
+            );
+        }
+        for (file, allowed) in ALLOWED {
+            let actual = by_file.get(*file).copied().unwrap_or(0);
+            assert!(
+                actual <= *allowed,
+                "{file} now matches {actual} times (allowance {allowed}); \
+                 the extra site must go through crate::write_exec_stub. {offenders:?}"
+            );
+        }
+    }
+
     fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         if needle.is_empty() || haystack.len() < needle.len() {
             return None;
         }
         haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    // AC1-HP / AC1-EDGE: the stub writer never holds the write fd in this
+    // process, so execs of its output survive sibling threads forking in a
+    // loop (darwin has no /bin/true, so the forking threads use
+    // /usr/bin/true). Each stub prints its own name and the exec asserts it.
+    #[test]
+    fn write_exec_stub_survives_sibling_forks() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut forkers = Vec::new();
+        for _ in 0..4 {
+            let stop = Arc::clone(&stop);
+            forkers.push(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::process::Command::new("/usr/bin/true").status();
+                }
+            }));
+        }
+        let mut writers = Vec::new();
+        for t in 0..4u32 {
+            let dir = dir.path().to_path_buf();
+            writers.push(std::thread::spawn(move || {
+                for i in 0..25u32 {
+                    let body = format!("#!/bin/sh\nprintf '%s' '{t}-{i}'\n");
+                    let stub = crate::write_exec_stub(&dir, &format!("s{t}-{i}"), &body);
+                    let out = std::process::Command::new(&stub)
+                        .output()
+                        .expect("exec stub");
+                    assert!(
+                        out.status.success(),
+                        "exec of {} failed: {out:?}",
+                        stub.display()
+                    );
+                    let mut text = String::new();
+                    std::io::Cursor::new(&out.stdout)
+                        .read_to_string(&mut text)
+                        .expect("stdout is utf-8");
+                    assert_eq!(text, format!("{t}-{i}"));
+                }
+            }));
+        }
+        for w in writers {
+            w.join().expect("writer thread");
+        }
+        stop.store(true, Ordering::Relaxed);
+        for f in forkers {
+            f.join().expect("forker thread");
+        }
+        let mode = std::fs::metadata(dir.path().join("s0-0"))
+            .expect("stub exists")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "stub mode must be 0755");
+    }
+
+    // AC1-ERR: a missing destination dir surfaces as the writer's exit
+    // status, naming the path.
+    #[test]
+    #[should_panic(expected = "could not write exec stub")]
+    fn write_exec_stub_refuses_a_missing_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = crate::write_exec_stub(&dir.path().join("absent"), "fno", "#!/bin/sh\n");
     }
 }
 
@@ -737,69 +1495,202 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // Reconcile's post-close emits (the Python twins declared both in
+    // events/schema.yaml; session_satisfied carries the pr_merge data source).
+    "session_satisfied",
+    "human_touch",
+    // Triage apply telemetry (the native triage engine): one row per
+    // committed apply, carrying the applied counts, the priority moves and
+    // the dropped-entry count.
+    "triage_applied",
+    // The pr-watch sweep flipped an open fno-bound draft PR back to ready
+    // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
+    "pr_watch_draft_flip",
+    // The question intake's journal write (the ask port): the durable half
+    // of `fno inbox outstanding ask`.
+    "operator_question",
+    // One hop in a traced decision (decision_trace.rs): ask, route,
+    // correction, or guard block, written through emit_span into the
+    // project journal; the Python side documents the shape for the
+    // validator, the way operator_question does.
+    "decision_span",
     // Agent lifecycle (daemon-emitted)
     "agent_spawned",
+    // Spawn coordinator: the durable accepted record written BEFORE
+    // any backend launch; not a birth, correlated to it by spawn_id.
+    "agent_spawn_accepted",
+    // A launch the spawn gate or the dispatch door refused before any
+    // worker existed; the feed projects it so a refused launch shows.
+    "agent_spawn_refused",
+    // A reaped session came back (client-emitted): one event per revive
+    // naming the verb, the actor session, the prior name and the session id.
+    "agent_revived",
+    // The keeper's render trigger failed a pass (waves 8-9 store cutover);
+    // carries the version and a stderr tail, and the backoff retries it.
+    "graph_render_failed",
+    // Pane-to-thread conversion: one per phase of the agent.convert
+    // transaction (classified, claims-held, pane-stopped, hand-off,
+    // resumed, flipped, rolled-back), carrying the name and strategy.
+    "agent_convert_phase",
+    // Spawn gate: registry writer-floor incompatibility, latched by the
+    // writer/floor/reader tuple so repeated refusals emit once.
+    "version_skew",
     "agent_stopped",
+    // Stop/rm claims release: the receipt event for the claims a
+    // stopped or removed worker held; one emit per stop/rm that ran one.
+    "agent_stop_claims_released",
     // A stop the daemon REFUSED to claim: the interrupt never confirmed a
     // terminal turn, so the row stays live and the work is still running.
     "agent_stop_refused",
     "agent_exited",
+    // The sweep's observed lifecycle word for an owned row: one row per
+    // applied status transition (exit or restart) with its evidence cause
+    // (ruling d-e096c669), so an exit or a restart is never silent again.
+    "row_lifecycle_observed",
     "agent_removed",
+    // Served facts (daemon-emitted): the sweep is the only writer of the
+    // registry's measured surfaces, so each of these announces a change that
+    // a reader would otherwise learn from a snapshot field. `agent_renamed`
+    // is the harness's title moving against the row's last-seen baseline
+    // (the label is never rewritten); `agent_model_changed` /
+    // `agent_effort_changed` are PostModelSwitch axis changes verified by
+    // the report write; `session_aliases_merged` is the session-names
+    // overlay folding legible aliases onto rows.
+    "agent_renamed",
+    "agent_model_changed",
+    "agent_effort_changed",
+    "agent_posture_changed",
+    "session_aliases_merged",
+    "merge_cleanup_requested",
+    "merge_cleanup_skipped",
+    "merge_cleanup_completed",
+    "merge_cleanup_refused",
+    // Merge reaper (daemon-emitted): a pending request was HELD (the
+    // node reads open, the list is empty, or the graph would not read) and is
+    // retried next pass; a request aged past its expiry window and is
+    // tombstoned; a row's harness was stopped ahead of its registry removal.
+    "merge_cleanup_held",
+    "merge_cleanup_expired",
+    "merge_reaper_stopped",
     "agent_inconsistent",
     "agent_ask_done",
+    "codex_turn_error",
+    "quiet_worker_nudge",
+    "quiet_worker_recovery",
+    "quiet_worker_error",
     "agent_create_no_session",
     "agent_orphan_reaped",
     "agent_orphan_state_archived",
-    // Late bind (daemon-emitted, x-9de7 task 2): a pane-hosted codex row whose
+    // Orphaned-test-binary reap sweep (daemon-emitted): one event per pid
+    // the footprint verb killed on the daemon's behalf.
+    "orphan_test_binary_reaped",
+    "orphan_owner_server_reaped",
+    // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
     // spawn-time bind window expired got its `harness_session_id` resolved on
     // a later reconcile tick, from the pane-tree rollout probe. Makes "the row
     // bound 40 seconds after spawn" visible instead of inferred.
     "agent_late_bind",
-    // Late-bind write failure (daemon-emitted, x-9de7 follow-up): the registry
+    // Late-bind write failure (daemon-emitted, follow-up): the registry
     // write that would have bound `harness_session_id` failed, most often a
     // collision with a session id already claimed by another row. Distinct
     // from a probe miss (no event, just skipped) and from `agent_late_bind`
     // (the write succeeded).
     "agent_late_bind_failed",
-    // Dead-row GC (daemon/reap-verb-emitted, x-b1aa): a terminal, past-grace,
+    // Dead-row GC (daemon/reap-verb-emitted): a terminal, past-grace,
     // clean agent-view row was removed from the registry by the GC sweep or
     // `fno agents reap`. Distinct from `agent_orphan_reaped` (which flips a
     // live-but-unowned PID to exited); this REMOVES the row entirely.
     "agent_row_reaped",
-    // Choke-point removal accounting (x-a879): ANY write path that drops a
+    // One row per daemon retire tick that held rows: every held id
+    // with its reason, detail and age, so the fleet reads one event stream.
+    "retire_holds",
+    // The retirement sweep held a row fno's verdict keeps live while the
+    // vendor roster reads it finished: the recorded disagreement, never
+    // an override.
+    "row_liveness_drift",
+    // One bounded count summary for every configured state-retention pass.
+    "state_reap",
+    "graph_write_gate",
+    // Choke-point removal accounting: ANY write path that drops a
     // registry row emits one of these, receipt staged first. Distinct from
     // `agent_row_reaped` (the GC door's own event); this fires for every
     // door, including ones nobody has enumerated yet.
     "registry_row_removed",
-    // Worktree report sweep (daemon-emitted, x-5a30): one line per repo per 24h
+    // One lossy save, grouped: the writer, pid, verb, and every
+    // lost id in one event, beside the per-row receipts above, so a save
+    // that drops rows can never vanish without a door being named.
+    "registry_rows_lost",
+    // Orphan process sweep (daemon-emitted): the row GC beside it reaps
+    // registry ROWS, this reaps the `fno-py` children that init inherited and
+    // nobody was waiting on. Emitted on EVERY run including the ones that reap
+    // nothing, because a reaper that speaks only when it kills cannot be told
+    // apart from a reaper that never ran.
+    "orphan_reap_sweep",
+    // Worktree report sweep (daemon-emitted): one line per repo per 24h
     // saying what `fno agents workspace worktree cleanup --merged` WOULD archive. Report-only by
     // construction, because a timer tick is not proof that work landed; removal
     // stays on the merge-triggered path. Emitted even when the counts are zero,
     // so a quiet repo cannot be mistaken for a sweep that never ran.
     "worktree_sweep",
     // Stale-question reconcile (daemon-emitted): `fno agents stale-escalate`
-    // ran on its 6h floor and reconciled the durable [watchdog-stale:*]
-    // operator question to the measured fleet. Report-only: rows past the
-    // wake ceiling are the needs-human bucket no action lane may take.
+    // ran on its 6h floor and reconciled the lane's fleet tasks (the former
+    // [watchdog-stale:*] operator question) to the measured fleet through
+    // the Rust fleet-task door. Report-only: a lead reads open tasks on the
+    // board's fleet_task queue.
     // Emitted even on outcome none/duplicate, so a quiet run cannot be
     // mistaken for a sweep that never ran.
     "stale_sweep",
+    // Question sweep (daemon-emitted): `fno agents question-sweep` ran on
+    // its interval floor and closed the node-closed questions it found,
+    // appending one empty-answer row per question (a non-empty answer would
+    // arm the unrecorded-decision gate against the asking session). Emitted
+    // even on outcome none, so a quiet run cannot be mistaken for a sweep
+    // that never ran.
+    "question_sweep",
+    // Park sweep (daemon-emitted): `fno-agents pr-park sweep` ran on its 10-minute
+    // floor and un-parked open rows whose head moved or whose park passed
+    // 24h, marking finished rows handled. Emitted even on a quiet or skipped
+    // run, so a quiet run cannot be mistaken for a sweep that never ran.
+    "park_sweep",
+    // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
+    // (the lead row's verb) or by the sweep.
+    "pr_watch_unparked",
     // Dead-row GC also reconstructs the loop's canonical failure event when a
     // convention-named dispatch disappeared without a termination receipt.
     "node_failed",
-    // Terminal-stop sweep (daemon-emitted, x-fcbf): a fire-and-forget
+    // The merge reaper emits the same kind the cleanup verb does when
+    // it takes a merged node's tree, so one removal, one event, wherever the
+    // caller lives.
+    "worktree_removed",
+    // Terminal-stop sweep (daemon-emitted): a fire-and-forget
     // `claude --bg` worker that finalize marked terminal was `claude stop`ped so
     // its slot frees instead of parking at an idle prompt forever.
     "bg_worker_terminal_stopped",
+    // Nudge ladder (daemon-emitted): a session the retirement sweep keeps on
+    // an open PR is mailed or resumed to drive the PR to merge; a stuck one
+    // escalates to the operator; a recorded merge order pauses the ladder.
+    "pr_nudge_sent",
+    "pr_nudge_escalated",
+    "pr_nudge_paused",
+    // Open-PR reap guard (daemon-emitted): the retirement sweep refused to
+    // reap a driver row whose node PR is open with no recorded termination.
+    // Filed once per row, beside the reap-keep task it announces.
+    "worker_reap_refused",
+    // Burn arm (daemon-emitted): a worker whose spend or node age grows on
+    // a flat sample is woken; three unanswered wakes escalate as one fleet
+    // task through the pr-nudge store.
+    "burn_watch_wake",
+    "burn_watch_escalated",
+    "loop_check_watch_expiry_wake",
     "agent_spawn_failed",
     // A codex thread was auto-resumed with no reconstructible state-root grant
-    // (x-f22f). The roots reach a spawn as an RPC param from the Python seam,
+    //. The roots reach a spawn as an RPC param from the Python seam,
     // and daemon-side recovery has no such param, so that worker may be unable
     // to claim or mail. Emitted so the loss is readable instead of silent.
     "codex_thread_resumed_without_state_grant",
     "agent_stop_error",
     "agent_spawn_cwd_fallback",
-    // Claude stream-json adoption front door (daemon-emitted, ab-734fcd6c):
+    // Claude stream-json adoption front door (daemon-emitted):
     // advisory note that the single-writer claim substrate could not be consulted
     // before spawning, so the adopt proceeded fail-open (the registry one-host
     // re-check is the authoritative guard).
@@ -810,15 +1701,19 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "daemon_started",
     "daemon_exited",
     "daemon_idle_pending_exit",
+    // Drift retirement (daemon-emitted): the daemon measured its own
+    // build drifted and, at a quiet tick with no live worker, retired through
+    // the graceful tail so the next lazy start runs the installed binary.
+    "daemon_drift_pending_exit",
     "daemon_shutting_down",
     // The socket path stopped resolving to the inode this daemon bound, so
-    // something else now owns it and this process is unreachable (x-ef7f).
+    // something else now owns it and this process is unreachable.
     // It retires rather than keep running as an invisible CPU burner.
     "daemon_socket_lost",
     "daemon_state",
     "daemon_recovery_error",
     "daemon_recovery_interrupted_temp",
-    // Binary-version drift (daemon-emitted, plan ab-1891cdff): advisory note that
+    // Binary-version drift (daemon-emitted, plan): advisory note that
     // the daemon could not fingerprint its own executable at startup, so every
     // client drift check fails safe to Unknown.
     "daemon_exe_fingerprint_unavailable",
@@ -835,10 +1730,53 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "reconcile_deferred",
     "reconcile_done",
     "reconcile_error",
-    // Startup reconcile sweep (daemon-emitted, plan ab-70faa65b Architecture B)
+    // Lead (lead-emitted): the tenured-lead skill journals these from
+    // the leading session; audit resolves the names through this table.
+    "lead_armed",
+    "lead_checkin",
+    "lead_dispatch_exception",
+    // The lead-wake arm's receipt: one row per daemon wake episode, the
+    // dedupe memory the arm folds before it wakes again (lead_wake.rs).
+    "lead_wake",
+    "worker_wake",
+    // The beat's cron act receipt: the wake resumed a parked codex lead's
+    // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
+    // the wake-mode loop emits for its dispatch-side resume.
+    "lead_goal_resumed",
+    // A team's term declared or extended (`fno agents org term <spec>
+    // [--reason]`), before or after a Stop-hook gate observed it reached.
+    // The receipt a lead's tenure bound leaves; `fno doctor event audit`
+    // resolves it through this table exactly like the lead kinds above.
+    "lead_term",
+    // A team whose holder session is proven dead left its territory: the
+    // dead-team sweep journals the vacate with cause holder_dead, the
+    // death evidence, and the inheritor (team_reap.rs; the daemon retire
+    // arm and `fno agents reap`). Python's attended `lead done` emits the
+    // same kind through the shared emitter.
+    "agent_team_vacated",
+    // A succession reverted: the reap sweep restored the predecessor's
+    // session after a successor died unbound past the window (team_reap.rs;
+    // the daemon retire arm and `fno agents reap`).
+    "team_succession_reverted",
+    // The succession transaction (succession_txn.rs): announce (plus its
+    // failed row), transfer, verify, release (plus the unproven row), and
+    // the retro receipt (plus its unmeasured row). All share one
+    // succession_id.
+    "team_succession_announced",
+    "team_succession_announce_failed",
+    "team_succession_transferred",
+    "team_succession_verified",
+    "team_succession_released",
+    "team_succession_release_unproven",
+    "team_succession_retro_filed",
+    "team_succession_retro_unmeasured",
+    // Startup reconcile sweep (daemon-emitted, plan Architecture B)
     "startup_reconcile_done",
     "startup_reconcile_failed",
-    // Registry-side keeper sweep (daemon-emitted, x-ac6b): the daemon-start
+    // Truth warm pass (daemon-emitted): every row's cursor rebuilt after a
+    // restart, so no session answers `warming` past this point.
+    "truth_warm_done",
+    // Registry-side keeper sweep (daemon-emitted): the daemon-start
     // walk of the lane-B keeper thread sockets. Every dead or wedged verdict
     // carries its reason; the rebound/dead/wedged row events name the row.
     "keeper_sweep_done",
@@ -852,14 +1790,22 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     "keeper_row_rebound",
     "keeper_row_superseded",
     "keeper_row_terminal_socket_live",
+    // Store-keeper socket hygiene (daemon-start sweep): dead store sockets in
+    // the state root and the hashed temp root are unlinked, as are orphaned
+    // seat locks; live listeners are left as found.
+    "store_socket_unlinked",
+    "store_seat_lock_unlinked",
     // Deliver (daemon-emitted, Task 2.2 US4)
     "agent_deliver_injected",
     "agent_deliver_demoted",
     "agent_deliver_status_write_failed",
-    // Unwrapped-injection audit (mail-inject binary + mux pane, x-c24d): an
+    // Unwrapped-injection audit (mail-inject binary + mux pane): an
     // agent_raw_inject records a payload delivered without the <fno_mail>
     // envelope, so the provenance marker survives in the ledger, not transcript.
     "agent_raw_inject",
+    // Prompt-boundary mail delivery (mail_notify_self.rs): one receipt per
+    // drained id, so a sender can join events to a terminal drained state.
+    "agent_mail_drained",
     // Review invocation attempt/outcome join (daemon-emitted): the
     // canonical repo-local event records how a Codex review was fired and
     // whether its transport confirmed delivery.
@@ -871,15 +1817,35 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // exempt from this registry by design.
     "active_backlog_task_crashed",
     // A mission drain loop retired (its epic deactivated / all children done,
-    // x-a4dc K2). An EventEmitter emit, so a first-class registered kind.
+    // K2). An EventEmitter emit, so a first-class registered kind.
     "active_backlog_mission_retired",
-    // Harness-aware dispatch guard (walker-emitted, x-3e70): the shared node
+    // Harness-aware dispatch guard (walker-emitted): the shared node
     // chokepoint deferred a node to a foreign harness that owns / is working it
     // (a foreign-tagged claim, a codex/gemini branch, or a foreign worktree)
     // instead of default-spawning a claude worker. Unlike the journal-based
     // active_backlog decision events above, this is an EventEmitter emit, so it
     // is a first-class registered kind.
     "dispatch_deferred",
+    // Control-plane arms readout: the supervisor-level
+    // active_backlog tick row is an EventEmitter emit (the mission-level rows
+    // ride Journal::append and are exempt like the drain decision events).
+    "control_plane_tick",
+    // Evals demand (Python-emitted from the pr-watch tick's evals
+    // leg): the scheduled regression-tier run's outcome, and the could-not-
+    // fire row whose journal entries are the operator-notice rate bound.
+    "evals_scheduled_run",
+    "evals_stale",
+    // Scratch-shape sweep (agents-emitted from the `scratch sweep`
+    // stage of the daily eval-sweep ignition): one row per new (job, shape)
+    // recurrence the jobs-dir walker found, and one row per node the sweep
+    // filed, folded, or seeded for a shape. The journal is the sweep's own
+    // dedupe index: a pair already observed in the window never re-emits.
+    "scratch_shape_observed",
+    "scratch_shape_filed",
+    // Node-closed question sweep (daemon-emitted): the periodic walk that
+    // auto-closes open operator questions whose node has closed; one emit
+    // per pass names how many it closed and, when any, which.
+    "question_sweep",
     // Meta (daemon/worker-emitted)
     "event_payload_too_large",
     // Inside-leg state push (daemon-emitted, inside-out E3.2): a per-turn hook
@@ -887,6 +1853,14 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // daemon dropped a report (stale seq / unknown session) without storing it.
     "inside_leg_report",
     "inside_leg_report_dropped",
+    // Session-start report (daemon-emitted): a harness hook's raw SessionStart
+    // payload was stamped onto the matching registry row, or was dropped
+    // (unknown session / third distinct id) without storing.
+    "session_report_stored",
+    "session_report_dropped",
+    // The same failure the Python identification arm emits: the manifest
+    // rebind at a promoted row's first self-identification did not land.
+    "role_manifest_arm_failed",
     // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
     // an inside-leg report is going Exited; the completion is published before
     // the registry clears the report (AC-X2-4).
@@ -896,19 +1870,36 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // flushed onto the row at creation.
     "inside_leg_report_buffered",
     "inside_leg_buffer_flushed",
+    // Driver-sourced thread-row status: the codex thread actor's
+    // turn phases land on the row's inside_leg through the shared seq gate;
+    // one event per state change.
+    "codex_thread_inside_leg",
     // Screen-manifest fallback rung (daemon-emitted, scrape sweep): a scraped
     // verdict was stored/refreshed/cleared on a hook-less mux row, or a
     // provider's manifest failed to load.
     "screen_state_change",
+    // CI heal drive loop (pr-heal verb): one row per --all --apply
+    // invocation carrying the per-tick counts, so the arm is visible in the
+    // journal even on a quiet cycle. Emitted even when every PR is skipped,
+    // for the same reason worktree_sweep is: a quiet repo must not read as a
+    // loop that never ran. The Python tick emits nothing for this family.
+    "pr_heal_tick",
+    // The heal loop's acted-on rows: one flake guard staged per flapping
+    // (sha, run id, check), and one remedy row per PR the loop acted on.
+    "pr_heal_flake",
+    "pr_heal_pr",
+    // Daemon startup scope declaration: sandbox home vs the operator's
+    // shared home. Fleet gating and board routing key off it.
+    "daemon_fleet_scope",
     // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
-    // run_summary, x-dbaf) are NOT registered here. They are Python-defined in
+    // run_summary) are NOT registered here. They are Python-defined in
     // cli/src/fno/events/schema.yaml; the parity gate partitions names (a kind
     // in both the Python schema and this Rust registry is a COLLISION). finalize
     // emits run_summary via a custom envelope writer (not the registered
     // `.emit()` path), so the production-emit-kind guard does not require it.
 ];
 
-/// Build the unified (x-2901) events.jsonl envelope JSON Schema and the
+/// Build the unified events.jsonl envelope JSON Schema and the
 /// `status-v1` AgentState schema as static JSON objects.
 ///
 /// This mirrors `schemas/events-v3.json` (single envelope) and
@@ -929,7 +1920,7 @@ pub fn emit_schema_json() -> serde_json::Value {
     use serde_json::json;
     json!({
         "envelope": {
-            "$comment": "Unified events.jsonl envelope (x-2901). Emitted by crates/fno-agents/src/events.rs; structurally equal to schemas/events-v3.json after doc-key stripping (the parity gate diffs them).",
+            "$comment": "Unified events.jsonl envelope. Emitted by crates/fno-agents/src/events.rs; structurally equal to schemas/events-v3.json after doc-key stripping (the parity gate diffs them).",
             "type": "object",
             "required": ["ts", "type", "source", "data"],
             "properties": {
@@ -944,8 +1935,8 @@ pub fn emit_schema_json() -> serde_json::Value {
                 "source": {
                     "type": "string",
                     "anyOf": [
-                        { "enum": ["active-backlog", "agents", "approvals", "backlog", "bash", "config", "daemon", "fno-loop", "hook", "loop", "megatron", "megawalk", "migration", "observer", "skill_diff", "subagent", "target", "test"] },
-                        { "pattern": "^(worker|stream-worker):.+$" }
+                        { "enum": ["active-backlog", "agents", "approvals", "backlog", "bash", "cli", "config", "daemon", "fno-loop", "hook", "legacy", "loop", "megatron", "megawalk", "migration", "observer", "pr-heal", "pr-park", "python", "rust", "skill_diff", "subagent", "target", "test"] },
+                        { "pattern": "^(worker|stream-worker|footnote):.+$" }
                     ],
                     "description": "Producer identity: a fixed-string source or a per-agent worker (worker:<id> / stream-worker:<id>)"
                 },
@@ -1035,4 +2026,102 @@ pub fn emit_schema_json() -> serde_json::Value {
             "data_size_encoding": events_limits::data_size_encoding()
         }
     })
+}
+
+/// A file's tail, at most `cap` bytes, starting on a line boundary: a seek
+/// into the middle of a line drops that partial line, so every admitted row
+/// is whole. Empty on any read failure, never a guess. The one tail walk:
+/// `tail_text` lossy-repairs it for observational readers, and a guard that
+/// must fail closed takes [`tail_text_strict`] instead.
+pub(crate) fn tail_bytes(path: &std::path::Path, cap: u64) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return Vec::new(),
+    };
+    let start = len.saturating_sub(cap);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if file.take(len - start).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    if start > 0 {
+        match buf.iter().position(|&b| b == b'\n') {
+            // No whole line inside the window: nothing to admit.
+            Some(p) => buf.split_off(p + 1),
+            None => Vec::new(),
+        }
+    } else {
+        buf
+    }
+}
+
+/// [`tail_bytes`] as lossy text: observational readers never fail on bytes.
+pub(crate) fn tail_text(path: &std::path::Path, cap: u64) -> String {
+    String::from_utf8_lossy(&tail_bytes(path, cap)).into_owned()
+}
+
+/// [`tail_bytes`] as text, None when the tail is not valid UTF-8: a guard
+/// that answers with an allow reads corrupt evidence as unreadable, never
+/// as a repaired guess.
+pub(crate) fn tail_text_strict(path: &std::path::Path, cap: u64) -> Option<String> {
+    String::from_utf8(tail_bytes(path, cap)).ok()
+}
+
+/// Host boot as epoch ms. Linux reuses `claims::linux_boot_time_s` (the
+/// cached `/proc/stat` btime); macOS reads sysctl `kern.boottime`. None on
+/// any failure, never "now": a caller that cannot know the boot must drop
+/// the boot clause, not invent one.
+#[cfg(target_os = "linux")]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    crate::claims::linux_boot_time_s().and_then(|s| boot_ms_from(s, 0))
+}
+
+/// The macOS leg: sysctl `kern.boottime` into a zeroed timeval, the same
+/// call shape `census.rs` uses for its CTL_KERN probes. Cached like the
+/// Linux btime: constant for the life of the host, read once per process.
+#[cfg(target_os = "macos")]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    static BOOT: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    *BOOT.get_or_init(|| {
+        let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+        let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
+        let mut size = std::mem::size_of::<libc::timeval>();
+        // SAFETY: sysctl fills a caller-owned zeroed buffer; mib and size live
+        // in this frame and are read only during the call.
+        let done = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                2,
+                &mut tv as *mut _ as *mut libc::c_void,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if done != 0 {
+            return None;
+        }
+        boot_ms_from(tv.tv_sec as i64, tv.tv_usec as i64)
+    })
+}
+
+/// Platforms with neither reader read absent, like every other bound.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    None
+}
+
+/// Boot epoch ms from a boot-time second count. A non-positive count is a
+/// failed reading, not "the host booted at the epoch".
+fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
+    if sec <= 0 {
+        return None;
+    }
+    Some(sec * 1000 + usec / 1000)
 }

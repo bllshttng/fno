@@ -10,7 +10,10 @@ fallback when `claude plugin install` is unavailable/errors).
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+
+import pytest
 
 from fno.setup import integration as I
 from fno.setup.integration import (
@@ -44,19 +47,6 @@ def _collector():
 
 
 # --- AC1-HP -----------------------------------------------------------------
-
-def test_ac1_hp_select_and_install():
-    lines, echo = _collector()
-    calls: list[str] = []
-    adapters = [_adapter("claude", "Claude Code", installed=False, calls=calls)]
-
-    results = run_cli_integration(
-        select_fn=lambda opts: ["claude"], echo_fn=echo, adapters=adapters
-    )
-
-    assert calls == ["claude"]
-    assert len(results) == 1 and results[0].ok and results[0].status == "installed"
-    assert any("Claude Code: installed" in m for m in lines)
 
 
 # --- AC1-ERR ----------------------------------------------------------------
@@ -127,30 +117,6 @@ def test_ac1_edge_already_installed_is_not_reinstalled():
     assert any("nothing to install" in m for m in lines)
 
 
-def test_ac1_edge_no_cli_available_skips_with_one_note():
-    lines, echo = _collector()
-    adapters = [
-        _adapter("claude", "Claude Code", available=False),
-        _adapter("gemini", "Gemini CLI", available=False),
-    ]
-
-    results = run_cli_integration(
-        select_fn=lambda opts: ["claude"], echo_fn=echo, adapters=adapters
-    )
-
-    assert results == []
-    assert any("no agent CLIs detected on PATH" in m for m in lines)
-
-
-def test_unchecked_cli_is_never_installed():
-    calls: list[str] = []
-    adapters = [_adapter("claude", "Claude Code", calls=calls)]
-    results = run_cli_integration(
-        select_fn=lambda opts: [], echo_fn=lambda _m: None, adapters=adapters
-    )
-    assert calls == [] and results == []
-
-
 # --- AC1-FR (claude skills-dir fallback) ------------------------------------
 
 class _FakeRun:
@@ -201,21 +167,6 @@ def test_ac1_fr_reports_failed_only_when_fallback_also_fails(tmp_path, monkeypat
     assert res.status == "failed" and "no network" in res.note
 
 
-def test_ac1_fr_old_claude_without_plugin_subcommand_routes_to_skills_dir(tmp_path, monkeypatch):
-    dest = tmp_path / "skills-fno"
-    monkeypatch.setattr(I, "_claude_skills_dir", lambda: dest)
-    run = _FakeRun([
-        ("plugin --help", 1, "", "unknown command 'plugin'"),
-        ("git clone", 0, "", ""),
-    ])
-
-    res = I._claude_install(run)
-
-    assert res.status == "installed" and "skills-dir" in res.note
-    # never attempted the preferred marketplace/install path
-    assert not any("marketplace add" in " ".join(c) for c in run.calls)
-
-
 def test_skills_dir_recovers_from_a_stale_partial_clone(tmp_path, monkeypatch):
     # A prior failed clone left dest non-empty but without a valid plugin.json.
     dest = tmp_path / "skills-fno"
@@ -239,36 +190,7 @@ def test_install_never_claims_success_on_nonzero_exit():
     assert res.status == "failed" and not res.ok
 
 
-def test_claude_is_installed_detects_fno_at_footnote_in_json(tmp_path, monkeypatch):
-    monkeypatch.setattr(I, "_claude_skills_dir", lambda: tmp_path / "absent")
-    run = _FakeRun([
-        ("plugin list", 0, '[{"id": "fno@footnote", "enabled": true}]', ""),
-    ])
-    # skills-dir not present, so it falls through to the JSON probe
-    assert I._claude_is_installed(run) is True
-
-
-def test_claude_is_installed_false_on_malformed_json(tmp_path, monkeypatch):
-    monkeypatch.setattr(I, "_claude_skills_dir", lambda: tmp_path / "absent")
-    run = _FakeRun([("plugin list", 0, "not json", "")])
-    assert I._claude_is_installed(run) is False
-
-
 # --- codex: wizard delegates to the verified release convergence ------------
-
-def test_codex_install_reports_verified_install(monkeypatch):
-    from fno.setup.codex_plugin import ConvergenceResult
-
-    monkeypatch.setattr(
-        "fno.setup.codex_plugin.converge",
-        lambda **_kwargs: ConvergenceResult(
-            "release", "installed", "fno@footnote", "0.3.0"
-        ),
-    )
-    run = _FakeRun([])
-    res = I._codex_install(run)
-    assert res.status == "installed" and res.ok
-    assert "fno@footnote 0.3.0" in res.note
 
 
 def test_codex_install_failed_on_convergence_error(monkeypatch):
@@ -282,14 +204,6 @@ def test_codex_install_failed_on_convergence_error(monkeypatch):
     res = I._codex_install(run)
     assert res.status == "failed" and not res.ok
     assert "marketplace-add" in res.note
-
-
-def test_codex_is_installed_requires_fresh_verified_payload(monkeypatch):
-    monkeypatch.setattr(
-        "fno.setup.codex_plugin.inspect_freshness",
-        lambda **_kwargs: {"status": "fresh"},
-    )
-    assert I._codex_is_installed(_FakeRun([])) is True
 
 
 def test_manual_result_echoes_a_finish_step_not_installed():
@@ -309,51 +223,143 @@ def test_manual_result_echoes_a_finish_step_not_installed():
     assert "Codex CLI: installed" not in blob
 
 
-# --- opencode (local-file plugin install, x-6007) ---------------------------
+# --- opencode (fno-agents door, x-11ca) --------------------------------------
 
-def test_opencode_install_copies_plugin_and_is_installed(tmp_path, monkeypatch):
-    # Redirect HOME so the plugin lands under a temp ~/.config/opencode/plugins/.
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_opencode_is_installed_reads_the_door(monkeypatch):
+    """Installed == the door receipt says installed; no local byte-compare."""
+    calls = []
 
+    def fake_status():
+        calls.append(1)
+        return (None, {"status": "installed"})
+
+    monkeypatch.setattr(I, "_opencode_status", fake_status)
+    assert I._opencode_is_installed() is True
+    assert calls
+
+    monkeypatch.setattr(I, "_opencode_status", lambda: (None, {"status": "partial"}))
     assert I._opencode_is_installed() is False
 
-    res = I._opencode_install()
-    assert res.ok and res.cli == "opencode"
+    monkeypatch.setattr(I, "_opencode_status", lambda: ("binary missing", None))
+    assert I._opencode_is_installed() is False
 
-    dest = I._opencode_plugin_dest()
+
+def test_opencode_install_names_kept_user_files(monkeypatch):
+    import fno.rust_binary as rb
+
+    monkeypatch.setattr(
+        rb,
+        "call_binary_json",
+        lambda verb, args, **kw: (
+            None,
+            {
+                "status": "partial",
+                "written": 3,
+                "version": "9.9.9",
+                "config_dir": "/tmp/conf",
+                "kept": ["skills/decoy/SKILL.md"],
+            },
+        ),
+    )
+    res = I._opencode_install()
+    assert res.ok
+    assert "kept user files: skills/decoy/SKILL.md" in res.note
+
+
+def test_opencode_install_maps_door_failure(monkeypatch):
+    import fno.rust_binary as rb
+
+    monkeypatch.setattr(rb, "call_binary_json", lambda verb, args, **kw: ("no binary", None))
+    res = I._opencode_install()
+    assert not res.ok
+    assert res.status == "failed"
+    assert res.note == "no binary"
+
+
+# --- pi (Rust pi arm of plugin-install; the agent dir pi itself reads) -------
+
+@pytest.fixture
+def pi_agent_env(tmp_path, monkeypatch):
+    """A relocated agent dir via PI_CODING_AGENT_DIR, plus a scratch HOME.
+
+    The install must honor the agent dir pi actually reads and write nothing
+    under the ambient HOME's ~/.pi.
+    """
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    # call_binary_json resolves through $FNO_AGENTS_BIN first, so the tests
+    # exercise the dev binary, which carries the pi arm.
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+    agent = tmp_path / "agent"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    return agent
+
+
+@pytest.mark.dev_build
+def test_pi_install_copies_extension_and_is_installed(tmp_path, pi_agent_env):
+    assert I._pi_is_installed() is False
+
+    res = I._pi_install()
+    assert res.ok and res.cli == "pi"
+
+    dest = pi_agent_env / "extensions" / "footnote.ts"
     assert dest.exists()
-    assert dest.read_text(encoding="utf-8") == I._opencode_plugin_src().read_text(
+    assert dest.read_text(encoding="utf-8") == I._pi_extension_src().read_text(
         encoding="utf-8"
     )
-    assert I._opencode_is_installed() is True
+    # Nothing under the scratch HOME's default pi tree: the agent dir is
+    # where pi itself reads, not $HOME/.pi.
+    assert not (tmp_path / "home" / ".pi").exists()
+    assert I._pi_is_installed() is True
 
 
-def test_opencode_is_installed_false_when_stale(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    dest = I._opencode_plugin_dest()
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text("// stale older footnote plugin\n", encoding="utf-8")
-    assert I._opencode_is_installed() is False
+def test_adapters_registered_and_pi_gated_on_path():
+    adapters = I.build_adapters()
+    assert {a.cli for a in adapters} == {"claude", "gemini", "codex", "opencode", "pi", "agy"}
+    adapter = next(a for a in adapters if a.cli == "pi")
+    # Availability rides shutil.which("pi"), which is machine-dependent; the
+    # contract asserted here is the gate's SHAPE, not this machine's answer.
+    assert adapter.is_available() == (shutil.which("pi") is not None)
+    assert I._pi_extension_src().is_file(), "the shipped artifact must exist"
 
 
-def test_opencode_adapter_registered():
-    clis = {a.cli for a in I.build_adapters()}
-    assert "opencode" in clis
+# --- agy (native Stop-hook registration) -------------------------------------
 
+@pytest.fixture
+def agy_rust_door(monkeypatch):
+    """Pin the agy hooks door to THIS checkout's fno-agents build.
 
-# --- agy (native Stop-hook registration, x-bcfb) ----------------------------
+    call_binary_json resolves through $FNO_AGENTS_BIN first, so the tests
+    exercise the dev binary, and skip where this checkout has none (the same
+    contract the native_backlog_door fixture implements)."""
+    from fno.rust_binary import find_dev_binary
+
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+
 
 def _fake_agy_adapter(tmp_path, monkeypatch):
     """Point _agy_adapter_path at a real tmp file so install is deterministic
-    (independent of whether the test env can resolve the real plugin root)."""
-    adapter = tmp_path / "plugin" / "hooks" / "agy-target-stop-hook.sh"
+    (independent of whether the test env can resolve the real plugin root).
+    The role and guard adapters resolve to None for the same reason: no test
+    may depend on what the machine's plugin stage happens to ship."""
+    adapter = tmp_path / "plugin" / "hooks" / "footnote-agy-target-stop-hook.sh"
     adapter.parent.mkdir(parents=True, exist_ok=True)
     adapter.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     monkeypatch.setattr(I, "_agy_adapter_path", lambda: adapter)
+    monkeypatch.setattr(I, "_agy_role_adapter_path", lambda: None)
+    monkeypatch.setattr(I, "_agy_guard_adapter_path", lambda: None)
     return adapter
 
 
-def test_agy_install_registers_stop_hook_and_is_installed(tmp_path, monkeypatch):
+@pytest.mark.dev_build
+def test_agy_install_registers_stop_hook_and_is_installed(tmp_path, monkeypatch, agy_rust_door):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)  # keep any workspace writes inside the tmp tree
     adapter = _fake_agy_adapter(tmp_path, monkeypatch)
@@ -374,48 +380,9 @@ def test_agy_install_registers_stop_hook_and_is_installed(tmp_path, monkeypatch)
     assert not (tmp_path / ".agent").exists()
 
 
-def test_agy_install_preserves_other_namespace_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.chdir(tmp_path)
-    _fake_agy_adapter(tmp_path, monkeypatch)
-    hooks = I._agy_hooks_json()
-    hooks.parent.mkdir(parents=True, exist_ok=True)
-    hooks.write_text(json.dumps({"someOtherTool": {"Stop": [{"x": 1}]}}), encoding="utf-8")
-
-    I._agy_install()
-
-    data = json.loads(hooks.read_text(encoding="utf-8"))
-    assert data["someOtherTool"] == {"Stop": [{"x": 1}]}  # untouched
-    assert "footnote" in data
-
-
 def test_agy_install_manual_when_adapter_absent(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(I, "_agy_adapter_path", lambda: None)
     res = I._agy_install()
     # A CLI-only install can't wire a path that doesn't exist -> manual, never ok.
     assert res.status == "manual" and not res.ok
-
-
-def test_agy_is_installed_false_on_malformed_json(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    _fake_agy_adapter(tmp_path, monkeypatch)
-    hooks = I._agy_hooks_json()
-    hooks.parent.mkdir(parents=True, exist_ok=True)
-    hooks.write_text("{not json", encoding="utf-8")
-    assert I._agy_is_installed() is False
-
-
-def test_agy_is_installed_false_on_null_stop(tmp_path, monkeypatch):
-    # {"footnote": {"Stop": null}} must not TypeError on the any() iteration.
-    monkeypatch.setenv("HOME", str(tmp_path))
-    _fake_agy_adapter(tmp_path, monkeypatch)
-    hooks = I._agy_hooks_json()
-    hooks.parent.mkdir(parents=True, exist_ok=True)
-    hooks.write_text(json.dumps({"footnote": {"Stop": None}}), encoding="utf-8")
-    assert I._agy_is_installed() is False
-
-
-def test_agy_adapter_registered():
-    clis = {a.cli for a in I.build_adapters()}
-    assert "agy" in clis

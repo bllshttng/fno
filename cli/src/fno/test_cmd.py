@@ -11,11 +11,10 @@ Footguns this verb encodes (tribal knowledge made runtime behavior):
    `RTK_DISABLED=1` in the child env so nothing re-wraps it.
 3. `... | tail && echo OK` masks the real exit code (false green). We propagate
    the child's *actual* return code.
-4. Full test output in an agent transcript is re-read by every later request in
-   the session. Default mode therefore captures ALL output to
-   `<repo>/.fno/last-test.log` and prints only a summary: on failure, the TAIL
-   of the log (errors live at the end - read from the end, expand upward via
-   the log path). `--stream` restores inherited stdio for interactive runs.
+4. Full test output in an agent transcript is re-read by every later request in the session.
+   Default mode therefore captures ALL output to `<repo>/.fno/last-test.log` and prints only a
+   summary: on failure, the TAIL of the log (errors live at the end - read from the end,
+   expand upward via the log path). `--stream` restores inherited stdio for interactive runs.
 
 The interpreter is resolved worktree-venv -> canonical-venv -> the running
 interpreter, so a fresh worktree with no local `.venv` still runs.
@@ -27,6 +26,7 @@ uses it verbatim, giving `UNPROCESSED` passthrough: every pytest flag (`-x`,
 from __future__ import annotations
 
 import fnmatch
+import ast
 import atexit
 import json
 import os
@@ -34,7 +34,6 @@ import posixpath
 import re
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -47,6 +46,7 @@ from xml.etree import ElementTree
 import click
 
 from fno.hermetic import neutralise, poison
+from fno.test_runner import run_suite_bounded, test_timeout_seconds, wait_or_kill_group
 
 _TAIL_LINES = 40
 
@@ -60,6 +60,17 @@ _AMBIENT_MODE = "clean"
 
 _STATE_MODES = ("clean", "populated", "both")
 _STATE_MODE = "clean"
+# Set by any lane whose filesystem canary refused. `--state both` discards the
+# populated lane's exit code on purpose, because that lane is red by design on
+# its own positive control, so a canary refusal there has no other way out.
+_STATE_CANARY_LEAKED = False
+# Set by any lane whose canary could not take a baseline. It rides beside the
+# leak flag for the same reason and out of the same discarded exit code, but it
+# is a SEPARATE signal: a leak says a step wrote to the operator state root, and
+# this says nothing was measured at all. Both are "not green"; only one is a
+# leak, and reporting the instrument's own failure as a leak is the
+# misattribution the plant guard exists to prevent.
+_STATE_CANARY_BROKEN = False
 STATE_LEAK_CANARY = "STATE_LEAK_CANARY"
 _STATE_FIXTURE_DIR = Path(__file__).resolve().parents[3] / "cli" / "tests" / "fixtures" / "populated-state"
 
@@ -109,7 +120,7 @@ def _populate_state(sandbox: Path) -> Path:
         encoding="utf-8",
     )
     (state_dir / "agents" / "registry.json").write_text(
-        json.dumps({"entries": [{"name": "state-canary", "crown_label": "state-canary"}]}),
+        json.dumps({"entries": [{"name": "state-canary", "role_label": "state-canary"}]}),
         encoding="utf-8",
     )
     (state_dir / "claims" / "state-canary.lock").write_text(
@@ -156,11 +167,24 @@ def _state_verdict_diff(clean: Path, populated: Path) -> list[str]:
     )
 
 
+# The one positive control the state lanes read, matched on its own test name.
+# A substring match on "test_state_canary" also hits every testcase in
+# test_state_canary_wiring.py, and under parallel execution one of those can be
+# read in the control's place, so a healthy run is rejected on a passing wiring
+# test. startswith rather than equality so a future parametrisation still
+# matches; the wiring names do not begin with this string.
+_STATE_CONTROL_TEST = "test_state_canary_detects_populated_state"
+
+
+def _is_state_control(nodeid: str) -> bool:
+    return nodeid.rsplit("::", 1)[-1].startswith(_STATE_CONTROL_TEST)
+
+
 def _state_canary_status(path: Path) -> str | None:
     """Return the recorded state-canary verdict, or None when it did not run."""
     verdicts = _state_verdicts(path)
     for nodeid, verdict in verdicts.items():
-        if "test_state_canary" in nodeid:
+        if _is_state_control(nodeid):
             return verdict
     return None
 
@@ -170,6 +194,8 @@ def _state_both_exit(
     diff: Sequence[str],
     canary_clean: str | None,
     canary_populated: str | None,
+    canary_leaked: bool = False,
+    canary_broken: bool = False,
 ) -> int:
     """The --state both verdict, decided by the junit comparison alone.
 
@@ -177,14 +203,26 @@ def _state_both_exit(
     positive control), so its raw exit code can never decide the verdict: an
     exit code fed from it reports failure on the tool's own definition of
     success. The comparison is the verdict; the raw populated rc is not read.
+
+    canary_leaked is the one thing the discarded rc still has to carry. The
+    FILESYSTEM canary is a different instrument from the junit control above,
+    and a lane that wrote to the operator state root is never green, so it is
+    passed in beside the comparison rather than being thrown away with the rc.
+
+    canary_broken rides beside it for the same reason and answers a different
+    question: not "did a lane write to the operator state root" but "was that
+    root measured at all". An unmeasured root is not a clean one, so it is
+    never green either.
     """
+    if canary_leaked or canary_broken:
+        return 1
     if canary_clean != "passed" or canary_populated != "failed":
         return 1
     if clean_rc:
         return clean_rc
     if not diff:
         return 1
-    if any("test_state_canary" not in nodeid for nodeid in diff):
+    if any(not _is_state_control(nodeid) for nodeid in diff):
         return 1
     return 0
 
@@ -280,6 +318,9 @@ def _child_env(root: Path) -> dict:
     if _AMBIENT_MODE == "dirty":
         parent = poison(os.environ, _poison_fixtures(root))
     env = neutralise(parent, _sandbox())
+    # The outer runner declares its sandbox explicitly: the tripwire inside the
+    # child cannot infer provenance from a rewritten HOME.
+    env["FNO_TEST_SANDBOX"] = str(_sandbox())
     # A nested `fno doctor test` can run inside an outer xdist worker. Its child is a
     # fresh pytest controller, not that worker, so inherited transport markers
     # make pytest-xdist send session-finish over a closed channel and strand the
@@ -294,32 +335,54 @@ def _child_env(root: Path) -> dict:
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = src + (os.pathsep + existing if existing else "")
     env["RTK_DISABLED"] = "1"  # never let rtk re-wrap the child run
+    # Cargo intermediates are pinned by neutralise itself: _child_env runs
+    # against the same _sandbox(), so the value is identical here and in the
+    # shell/cargo trees (x-19f1).
+    # TMPDIR is deliberately left ambient. The fence allows journal roots
+    # under TMPDIR (fno.events._hermetic_allowed_roots), and the sandbox is
+    # created by mkdtemp under that same TMPDIR, so every sandbox path is
+    # already inside the allowed root without rewriting it. Rewriting it also
+    # pushes pytest's basetemp under the sandbox, and the lane-B keeper socket
+    # then crosses the 108-byte AF_UNIX limit on the runner (the reason
+    # neutralise's own ambient list refuses to touch TMPDIR).
     return env
 
 
 def _run_captured(cmds: Sequence[Sequence[str]], env: dict, log: Path) -> int:
     """Run each command with output captured to `log`; print the terse verdict.
 
-    The header (command + log path) prints BEFORE the run so a long suite never
-    looks stalled - a watcher can `tail -f` the log. Returns the first non-zero
-    child exit code, else 0.
+    The header prints BEFORE the run so a watcher can `tail -f` the log. The
+    log's last line is always ``EXIT=<rc>``: a reader recovers the real code
+    even where an outer tee or harness flattens this process's exit.
     """
+    timeout = test_timeout_seconds()
     rc = 0
     with open(log, "w", encoding="utf-8") as fh:
         for cmd in cmds:
-            print(f"running: {' '.join(map(str, cmd))} | log: {log}", flush=True)
+            print(
+                f"running: {' '.join(map(str, cmd))} | log: {log} | timeout: {timeout}s",
+                flush=True,
+            )
             fh.write(f"$ {' '.join(map(str, cmd))}\n")
             fh.flush()
             try:
-                proc = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT)
+                rc_cmd = run_suite_bounded(
+                    cmd, env, timeout, stdout=fh, stderr=subprocess.STDOUT
+                )
             except OSError as exc:
                 sys.stderr.write(f"fno doctor test: failed to run {cmd[0]}: {exc}\n")
+                fh.write("EXIT=127\n")
                 return 127
-            if proc.returncode != 0:
-                rc = proc.returncode
+            if rc_cmd != 0:
+                rc = rc_cmd
                 break  # first failure wins; its output is the log tail
+        fh.write(f"EXIT={rc}\n")
     if rc == 0:
-        lines = [ln.rstrip() for ln in _tail(log, 5) if ln.strip()]
+        # The EXIT marker is bookkeeping, not a verdict summary; the terse
+        # PASS line shows the suite's own last output.
+        lines = [
+            ln.rstrip() for ln in _tail(log, 5) if ln.strip() and not ln.startswith("EXIT=")
+        ]
         summary = lines[-1] if lines else "(no output)"
         print(f"PASS | {summary}")
     else:
@@ -331,7 +394,7 @@ def _run_captured(cmds: Sequence[Sequence[str]], env: dict, log: Path) -> int:
     return rc
 
 
-def _run(args: Sequence[str], stream: bool = False) -> int:
+def _run(args: Sequence[str], stream: bool = False, log_override: Optional[Path] = None) -> int:
     """Resolve interpreter + env, run pytest, return its real exit code."""
     root = _repo_root(Path.cwd()) or Path.cwd()
     interp = _resolve_interpreter(root)
@@ -360,29 +423,177 @@ def _run(args: Sequence[str], stream: bool = False) -> int:
     cmd = [interp, "-m", "pytest", *pytest_args]
     if stream:
         try:
-            proc = subprocess.run(cmd, env=env)  # inherit stdio; no pipe, no mask
+            return run_suite_bounded(cmd, env, test_timeout_seconds())
         except OSError as exc:
             # FileNotFoundError (missing) AND PermissionError (present but not
             # executable) are both OSError; either means we could not run it.
             sys.stderr.write(f"fno doctor test: failed to run interpreter {interp}: {exc}\n")
             return 127
-        return proc.returncode
-    return _run_captured([cmd], env, _log_path(root))
+    return _run_captured([cmd], env, log_override or _log_path(root))
 
 
-def _run_rust(args: Sequence[str], stream: bool = False) -> int:
+# The per-process lanes reading behind _lanes_threads(). One reading per
+# invocation is the semantic; the cache only stops repeated in-process calls
+# (the unit suite) re-paying the up-to-5 s macmon sample. Tests reset it.
+_LANES_READING: Optional[tuple[Optional[int], str]] = None
+
+
+def _lanes_threads() -> tuple[Optional[int], str]:
+    """Test-thread cap from the `fno doctor lanes` reading, or None at default.
+
+    `lane_count` is how many MORE lanes fit, answered by the spawn-gate probe
+    itself (the learned effective cap minus the live slot count), so the suite
+    reads the same decider the gate refuses with. A spawn-load ceiling breach
+    forces 0, which clamps to 1 (serial). A refused reading (a dark sensor is
+    never headroom) or a failed one returns None so the runner keeps its own
+    default where sensors are dark (CI).
+    """
+    global _LANES_READING
+    if _LANES_READING is not None:
+        return _LANES_READING
+    try:
+        from fno.doctor_lanes import read_lanes
+
+        reading = read_lanes()
+    except Exception as exc:  # the reading must never block the suite
+        _LANES_READING = (None, f"reading failed ({exc})")
+        return _LANES_READING
+    lane_count = reading.lane_count
+    if lane_count is None:
+        _LANES_READING = (None, f"reading refused ({reading.refusal_reason})")
+        return _LANES_READING
+    _LANES_READING = (
+        max(1, int(lane_count)),
+        f"{lane_count} more fit (fno doctor lanes)",
+    )
+    return _LANES_READING
+
+
+def _last_flag_value(
+    args: Sequence[str], long_flag: str, short_flag: str = "", limit: Optional[int] = None
+) -> Optional[tuple[int, str, int]]:
+    """Last parseable `long_flag N` / `long_flag=N` / `short_flagN` in
+    ``args[:limit]``. Returns ``(index, form, value)`` - ``form`` is ``"sep"``
+    (value is the next token), ``"eq"`` (`--flag=N`), or ``"short"`` (`-jN`).
+    An unparseable match at a given index is skipped, not recorded, so a
+    malformed value never masks a real one seen elsewhere.
+    """
+    n = len(args) if limit is None else limit
+    found = None
+    for i in range(n):
+        a = args[i]
+        if a == long_flag and i + 1 < n:
+            try:
+                found = (i, "sep", int(args[i + 1]))
+                continue
+            except ValueError:
+                pass
+        if a.startswith(long_flag + "="):
+            try:
+                found = (i, "eq", int(a[len(long_flag) + 1 :]))
+                continue
+            except ValueError:
+                pass
+        if short_flag and a == short_flag and i + 1 < n:
+            try:
+                found = (i, "sep", int(args[i + 1]))
+                continue
+            except ValueError:
+                pass
+        if short_flag and a.startswith(short_flag) and a != short_flag and a[len(short_flag) :].isdigit():
+            found = (i, "short", int(a[len(short_flag) :]))
+    return found
+
+
+def _clamp_flag(
+    args: list[str], hit: tuple[int, str, int], long_flag: str, short_flag: str, ceiling: int
+) -> tuple[int, int]:
+    """Clamp a found flag's value to ``ceiling``, rewriting it in place.
+
+    Returns ``(requested, effective)``.
+    """
+    index, form, value = hit
+    effective = min(value, ceiling)
+    if effective != value:
+        if form == "sep":
+            args[index + 1] = str(effective)
+        elif form == "eq":
+            args[index] = f"{long_flag}={effective}"
+        else:
+            args[index] = f"{short_flag}{effective}"
+    return value, effective
+
+
+def _run_rust(args: Sequence[str], stream: bool = False, log_override: Optional[Path] = None) -> int:
     """Run the Rust suites: nextest when installed, else `cargo test -q`.
 
     No workspace root exists, so without an explicit `--manifest-path` we sweep
     every `crates/*/Cargo.toml` (the two-test-trees lesson: a green subset is
     not proof).
+
+    The test-thread count comes from the `fno doctor lanes` reading, capped at
+    the machine's own CPU count: a lane is a worker-lane headroom count, not a
+    thread count, so an idle box's 64-lane reading must never become 64 test
+    threads on a 12-core machine. A bare `--` (libtest args follow) or an
+    unrelated `--jobs`/`-j` build-parallelism flag no longer suppresses the
+    cap - only an explicit `--test-threads` does, and even that is clamped to
+    the CPU ceiling rather than trusted past it. `--jobs`/`-j` (cargo's own
+    build parallelism, unrelated to test concurrency) is bounded to the same
+    ceiling independently. The reading (and what it did) prints so a slow run
+    explains itself.
     """
     root = _repo_root(Path.cwd()) or Path.cwd()
     cargo_args = list(args)
-    if shutil.which("cargo-nextest"):
+    nextest = bool(shutil.which("cargo-nextest"))
+    threads, lanes_note = _lanes_threads()
+    ceiling = max(1, os.cpu_count() or 1)
+    timeout = test_timeout_seconds()
+
+    sep_index = cargo_args.index("--") if "--" in cargo_args else None
+    notes: list[str] = []
+
+    build_hit = _last_flag_value(cargo_args, "--jobs", "-j", limit=sep_index)
+    if build_hit is not None:
+        requested, effective = _clamp_flag(cargo_args, build_hit, "--jobs", "-j", ceiling)
+        if effective != requested:
+            notes.append(f"build jobs {requested} capped at {effective}")
+
+    thread_hit = _last_flag_value(cargo_args, "--test-threads")
+
+    if nextest:
         base = ["cargo", "nextest", "run"]
     else:
         base = ["cargo", "test", "-q"]
+    cap_tail: list[str] = []
+
+    if thread_hit is not None:
+        requested, effective = _clamp_flag(cargo_args, thread_hit, "--test-threads", "", ceiling)
+        if effective != requested:
+            notes.append(f"explicit --test-threads {requested} capped at {effective}")
+        else:
+            notes.append(f"explicit --test-threads {requested} kept")
+    elif threads is None:
+        notes.append("runner default parallelism")
+    else:
+        effective = max(1, min(threads, ceiling))
+        cap_note = f"test threads capped at {effective}"
+        if effective != threads:
+            cap_note += f" (requested {threads}, ceiling {ceiling})"
+        notes.append(cap_note)
+        if nextest:
+            base = [*base, "--test-threads", str(effective)]
+        elif sep_index is not None:
+            insert_at = sep_index + 1
+            cargo_args = [
+                *cargo_args[:insert_at],
+                "--test-threads",
+                str(effective),
+                *cargo_args[insert_at:],
+            ]
+        else:
+            cap_tail = ["--", "--test-threads", str(effective)]
+
+    sys.stdout.write(f"fno doctor test rust: lanes {lanes_note}; {'; '.join(notes)}; timeout {timeout}s\n")
 
     if "--manifest-path" in cargo_args:
         cmds = [[*base, *cargo_args]]
@@ -392,20 +603,21 @@ def _run_rust(args: Sequence[str], stream: bool = False) -> int:
             sys.stderr.write(f"fno doctor test rust: no crates/*/Cargo.toml under {root}\n")
             return 2
         cmds = [[*base, "--manifest-path", str(m), *cargo_args] for m in manifests]
+    if cap_tail:
+        cmds = [[*c, *cap_tail] for c in cmds]
 
     env = _child_env(root)
     if stream:
-        rc = 0
         for cmd in cmds:
             try:
-                proc = subprocess.run(cmd, env=env)
+                rc = run_suite_bounded(cmd, env, timeout)
             except OSError as exc:
                 sys.stderr.write(f"fno doctor test: failed to run {cmd[0]}: {exc}\n")
                 return 127
-            if proc.returncode != 0:
-                return proc.returncode
-        return rc
-    return _run_captured(cmds, env, _log_path(root))
+            if rc != 0:
+                return rc
+        return 0
+    return _run_captured(cmds, env, log_override or _log_path(root))
 
 
 # ---------------------------------------------------------------------------
@@ -440,9 +652,9 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
         # always green. It is exercised deliberately, in BOTH lanes, by
         # tests/ci/test_hermetic_lanes.sh, which is where the assertion belongs.
         "uv run pytest --tb=short -q -n auto --maxprocesses=4 --dist=loadgroup "
+        "-m 'not slow_e2e' "
         "--ignore=tests/unit/test_ambient_canary.py",
     ),
-    ("paths.sh hash gate", "cli", "uv run fno-py paths verify ../scripts/lib/paths.sh"),
     ("Bash events-validate harness", ".", "bash tests/events/test-bash-validator.sh"),
     ("frontend-craft gate harness", ".",
      "bash tests/lib/test_frontend_surface.sh\n"
@@ -450,10 +662,7 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      "bash tests/lib/test_resolve_plan_executor.sh"),
     ("config global-precedence harness", ".", "bash tests/lib/test_config_global_precedence.sh"),
     ("cost-accuracy harness", ".",
-     "uv run --project cli python tests/lib/test_cost_tracker_pricing.py\n"
-     "uv run --project cli python tests/metrics/test_session_cost_dedup.py\n"
-     "uv run --project cli python tests/metrics/test_backfill_cost_recompute.py\n"
-     "bash tests/lib/test_cost_tracker_sh_parity.sh"),
+     "uv run --project cli python cli/tests/unit/test_session_cost_dedup.py"),
     ("loop-check shim + immutable manifest harness", ".",
      "bash tests/hooks/test_loop_check_shim.sh\n"
      "bash tests/hooks/test_manifest_immutable.sh\n"
@@ -471,14 +680,12 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     # cases sat unrun, including the ones covering this very gate. Named
     # explicitly rather than globbed so adding a fourth is a visible edit.
     #
-    # This closes tests/hooks/ ONLY, and the gap is wider: tests/operator/,
-    # tests/spec/, tests/integration/*_bdd_invariants.py and about a dozen
-    # loose tests/test_*.py files are in neither tree either. They are left out
-    # deliberately, not overlooked - running them today gives 3 failed, 159
-    # passed, 1 error, so wiring them in would red the build on pre-existing
-    # rot that has nothing to do with the guard this PR adds. Whoever repairs
-    # those files should add them here in the same change, and the honest
-    # reading until then is that this step fixes one directory, not the class.
+    # This closes tests/hooks/ ONLY. `tests/spec/` is routed by the
+    # auto-discovered `scripts/tests/test-spec-suite.sh`; remaining gaps are
+    # tests/operator/, tests/integration/*_bdd_invariants.py, and loose
+    # tests/test_*.py files. Keep those out until their owners have a green
+    # baseline, rather than making unrelated pre-existing failures part of
+    # this suite.
     ("Python hook harnesses (outside both test trees)", ".",
      "uv run --project cli python -m pytest -q "
      "tests/hooks/test_git_protection_push.py "
@@ -497,8 +704,27 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("state-dir path gate self-test", ".",
      "bash scripts/tests/check-no-hardcoded-paths-selftest.sh"),
     ("corrections.log placement migration", ".", "bash scripts/tests/test_corrections_migrate.sh"),
+    ("corrections fixture-row filter in the packet", ".", "bash scripts/tests/test_autocorrect_pack_fixture_rows.sh"),
+    ("autocorrect packet skill-file leg", ".", "bash scripts/tests/test_autocorrect_pack_skill_files.sh"),
+    ("autocorrect prompt contract", ".", "bash scripts/tests/test_autocorrect_prompt_contract.sh"),
+    ("corrections skill-commit SOURCE resolution", ".", "bash tests/hooks/test_corrections_skill_commit.sh"),
     ("placement-rule lint self-test", ".", "bash scripts/tests/test_check_placement_rule.sh"),
-    ("Build fno-agents debug binary (for journey tests)", "crates/fno-agents", "cargo build"),
+    # The workspace .cargo/config.toml redirects build-dir to the cargo-home
+    # base, so a plain `cargo build` writes the binary THERE and leaves the
+    # classic target/ the FRONT export and the claim-door pin both name
+    # abandoned for cargo to reclaim - the resolver then reads None mid-run.
+    # Pin the classic layout, the same spell smoke-setup uses.
+    ("Build fno-agents debug binary (for journey tests)", "crates/fno-agents",
+     'CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build'),
+    # The hash gate needs the Rust front door, and a fresh CI runner has no
+    # global `fno` on PATH (see the fno-on-PATH family above): build both
+    # binaries with the classic layout smoke-setup pins, then invoke the front
+    # by path with the worker env-pinned (env outranks PATH in resolve_binary).
+    ("Build the fno front door (for the hash gate)", "crates/fno",
+     'CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build --quiet --bin fno'),
+    ("paths.sh hash gate", ".",
+     'FNO_AGENTS_WORKER="$PWD/crates/fno-agents/target/debug/fno-agents-worker" '
+     'crates/fno/target/debug/fno config paths verify scripts/lib/paths.sh'),
     # The debug binary is present here, so the @requires_rust parity suites run
     # instead of skipping. Stub the provider CLIs on PATH (test_rust_verb_parity
     # presence-checks them without faking); per-test fakes still win where a
@@ -510,7 +736,8 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      'FAKE_BIN="$(mktemp -d)"\n'
      'for p in codex gemini opencode; do printf "%s\\n%s\\n" "#!/bin/sh" "exit 0" > "$FAKE_BIN/$p"; chmod +x "$FAKE_BIN/$p"; done\n'
      'PATH="$FAKE_BIN:$PATH" uv run pytest --tb=short -q '
-     "tests/agents/test_rust_verb_parity.py tests/agents/test_ask_e2e_dispatch.py"),
+     "tests/agents/test_rust_verb_parity.py tests/agents/test_ask_e2e_dispatch.py "
+     "tests/unit/test_claims_core.py::TestSessionWitnessVerdicts"),
     # Same shard contract as the parity suites above: the wrapper carries the
     # @requires_rust marker, so in the pytest shard (binary deleted) it skips,
     # and here, after the build step, it runs for real. Never inside the
@@ -519,8 +746,6 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("Keyless dispatch-to-terminal smoke (binary present)", "cli",
      "uv run pytest --tb=short -q tests/unit/test_keyless_smoke.py"),
     ("registry-miss heal across the Rust/Python seam", ".", "bash tests/test-agents-heal-token.sh"),
-    ("Cross-impl claims compat matrix (merge gate; fails loudly, never skips here)", "cli",
-     "FNO_CLAIMS_COMPAT_REQUIRED=1 uv run pytest --tb=short -q tests/integration/test_claims_cross_impl.py"),
     ("loop-check journey tests (e2e + emission-schema + backstop-subprocess)", ".",
      "bash tests/hooks/test_loop_check_e2e.sh\n"
      "bash tests/events/test-loop-check-emission-schema.sh\n"
@@ -534,7 +759,9 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
      "bash tests/target/test_backfill_plan.sh\n"
      "bash tests/target/test_detect_pending_plan.sh\n"
      "bash tests/target/test_plan_mode_e2e.sh"),
-    ("bg-dispatch + ready-gated auto-launch harness", ".", "bash tests/test-bg-dispatch.sh"),
+    ("bg-dispatch harness", ".", "bash tests/test-bg-dispatch.sh"),
+    ("init claim-wait harness", ".", "bash tests/test-init-claim-wait.sh"),
+    ("dispatch grant posture harness", ".", "bash tests/target/test_dispatch_grant_posture.sh"),
     ("agent skill harness", ".",
      "bash tests/skills/test_agent_normalize.sh\n"
      "bash tests/skills/test_agent_receipt.sh\n"
@@ -546,9 +773,6 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("events-discipline lint", ".", "bash scripts/lint/events-discipline.sh"),
     ("events-discipline lint self-test", ".", "bash tests/lint/test-events-discipline.sh"),
     ("No quarantined events.invalid.jsonl rows", ".", "bash scripts/lint/no-invalid-events.sh"),
-    ("ruff + mypy (both repo-wide)", "cli",
-     "uv run ruff check --no-respect-gitignore src/\n"
-     "uv run mypy src/"),
     ("Smoke tests", ".", "bash cli/tests/smoke/run-all.sh"),
     ("no hardcoded paths", ".", "bash scripts/ci/check-no-hardcoded-paths.sh"),
     ("placement rule", ".", "bash scripts/ci/check-placement-rule.sh"),
@@ -560,17 +784,23 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("Company module boundary check", ".", "bash scripts/ci/check-company-boundaries.sh --baseline"),
     ("Skill snippet hazard lint", ".", "bash scripts/ci/check-skill-snippets.sh"),
     ("Skill snippet lint self-test", ".", "bash tests/ci/test_check_skill_snippets.sh"),
-    # Both gates measure the always-loaded SessionStart preamble. Neither could
-    # FAIL anywhere but CI before this entry: `fno doctor` prints the number,
-    # but advisorily, and never changes its own exit code. So the only local
-    # signal was a line nobody had to act on, and an AGENTS.md edit went green
-    # locally and red on push - which is how the preamble reached 55 bytes of
-    # headroom with nobody watching the slope.
-    ("SessionStart preamble byte budget", ".", "bash scripts/ci/check-preamble-budget.sh"),
+    # CI gates under scripts/ci/ that guards.yml already runs on every push and
+    # pull_request are NOT registered here. A second registration makes one
+    # failure red two check runs (guards plus smoke/changed-smoke), which is how
+    # one prose breach in AGENTS.md went three-checks-red in one night. The
+    # preamble byte budget keeps its local signal through
+    # `fno doctor lint preamble-budget`, which exits with the gate's own code;
+    # `fno doctor` also prints the number advisorily at session start. The
+    # ruff+mypy and file-budget gates are reachable by running their scripts.
+    # test_smoke_registry_shares_no_ci_scripts_with_guards holds this open.
     ("Pitfalls corpus cap", ".", "bash scripts/ci/check-pitfalls.sh"),
     ("No stale /spec refs (blueprint rename audit)", ".", "bash scripts/ci/check-no-stale-spec-refs.sh"),
     ("Config schema docs freshness", ".", "bash scripts/ci/check-config-schema-drift.sh"),
     ("Skill bundles freshness check", ".", "bash scripts/lint/check-skill-bundles-fresh.sh"),
+    # Single owner: this entry replaced the duplicate step in the cli-ci
+    # smoke-rest job, so one failure is red exactly once and the changed
+    # packet can carry the lint on every PR.
+    ("Hook exec bits", ".", "bash scripts/ci/check-hook-exec-bit.sh"),
     ("No ${REPO_ROOT}/scripts in skills", ".", "bash scripts/lint/no-repo-root-scripts-in-skills.sh"),
     ("Marketplace-readiness lint (no Skill calls, no path escapes, fno declared)", ".",
      "bash scripts/lint/no-cross-skill-runtime-calls.sh"),
@@ -581,16 +811,14 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("Repo-root shell-out drift guard (clone-only allowlist)", "cli", "uv run fno-py doctor lint shellout-drift"),
     ("Spawn-shape lint (single-line argv guard)", "cli", "uv run fno-py doctor lint spawn-paths"),
     ("State-roots ratchet (declared root, R4/R5)", "cli", "uv run fno-py doctor lint state-roots"),
+    ("Agent field coverage accounting", "cli", "uv run fno-py doctor lint field-coverage"),
     ("In-N-Out menu-cap ratchet", "cli", "uv run fno-py doctor lint menu-caps"),
+    ("Spawn flag-ownership ratchet (owner + provenance per flag)", "cli", "uv run fno-py doctor lint spawn-flag-owners"),
     ("Verb-surface ratchet (real count, both binaries)", "cli", "uv run fno-py doctor lint verb-ratchet"),
     ("Schema parity self-test", ".", "bash scripts/tests/check-event-schema-parity-selftest.sh"),
     ("Schema parity check (Python side)", ".", "bash scripts/check-event-schema-parity.sh"),
-    ("Registry schema parity selftest", ".", "bash scripts/ci/check-registry-schema-parity.sh --selftest"),
-    ("Registry schema parity check", ".", "bash scripts/ci/check-registry-schema-parity.sh"),
     ("Provider vocabulary parity selftest", ".", "bash tests/ci/test_provider_vocabulary_parity.sh"),
     ("Provider vocabulary parity check", ".", "bash scripts/ci/check-provider-vocabulary-parity.sh"),
-    ("Spawn lineage parity selftest", ".", "bash tests/ci/test_spawn_lineage_parity.sh"),
-    ("Spawn lineage parity check", ".", "bash scripts/ci/check-spawn-lineage-parity.sh"),
     ("Reviewer descriptor parity selftest", ".",
      "bash scripts/ci/check-reviewer-descriptor-parity.sh --selftest"),
     ("Reviewer descriptor parity check", ".",
@@ -601,6 +829,7 @@ _STRUCTURAL_STEPS: tuple[tuple[str, str, str], ...] = (
     ("preflight orchestration self-test", ".", "bash tests/ci/test_preflight.sh"),
     ("changed/full CI job-boundary guard", ".", "bash tests/ci/test_changed_smoke_workflow.sh"),
     ("smoke duration reporter self-test", ".", "bash tests/ci/test_smoke_duration_report.sh"),
+    ("workflow timeout-comment guard", ".", "bash scripts/ci/check-workflow-timeout-comments.sh"),
 )
 
 # Owned shell-harness trees: a new file here runs with zero registry edits.
@@ -756,12 +985,9 @@ def _smoke_discovered_steps(root: Path, referenced: set[str]) -> list[tuple[str,
 
 
 # Shell harnesses discover_shell_harnesses finds but smoke must not run yet.
-# 16 entries held. 10 are RED on both platforms (pre-existing rot; each its own
-# debugging session, out of scope here). The other 6 are macOS-green and
+# 15 entries held. 10 are RED on both platforms (pre-existing rot; each its own
+# debugging session, out of scope here). The other 5 are macOS-green and
 # Linux-red, so a developer census calls them drainable and CI does not:
-#
-#   tests/hooks/test_hook_events.sh - a non-portable perm check; GNU stat does
-#     not fail on -f, so the Linux fallback branch never runs.
 #
 #   THE `fno`-ON-PATH FAMILY - five live harnesses, one cause, TWO SHAPES.
 #   A fresh runner ships only the venv `fno-py`; a dev machine has a global
@@ -827,14 +1053,12 @@ def _smoke_discovered_steps(root: Path, referenced: set[str]) -> list[tuple[str,
 _DISCOVERY_DEFERRED: frozenset[str] = frozenset("""
 scripts/tests/test_graph_resolve.sh
 tests/events/test-check-pr-emits-polling.sh
-tests/hooks/test_hook_events.sh
 tests/hooks/test_init_claim_stderr_and_modern_claim.sh
 tests/hooks/test_init_contested_steal_guard.sh
 tests/hooks/test_init_node_guard_tokenize.sh
 tests/smoke-megatron-e2e.sh
 tests/smoke-target-shim.sh
 tests/test-backlog-triage.sh
-tests/test-graph-resolve.sh
 tests/test-worktree-inside-checkout-redirect.sh
 tests/test_emit_gate_transition.sh
 tests/test_provider_substrate_e2e.sh
@@ -862,6 +1086,52 @@ def _smoke_env(root: Path) -> dict:
         env["STATE_PROFILE_DIR"] = str(_sandbox() / "home" / ".fno")
         env["CLAUDE_CODE_SESSION_ID"] = "state-canary-session"
     return env
+
+
+def _state_canary_snapshot() -> str:
+    """Snapshot path for this process, so two runs on one box never share a FILE.
+
+    plant and verify run in the SAME process, so the pid keys both halves. CI
+    gives each shard its own runner and would not collide anyway; a developer
+    running two checkouts at once would.
+
+    It separates the snapshots, not the measurements. Both runs still watch one
+    HOME state root, so run B's writes land between run A's plant and verify
+    and read as ADDED there. On a live operator root that is already true of
+    every other session on the box, which is why a watching run is advisory
+    (see check-state-canary.sh). On a fresh root, two concurrent smoke runs
+    can still cross-report.
+    """
+    return str(Path(tempfile.gettempdir()) / f"fno-state-canary.{os.getpid()}.snapshot")
+
+
+def _run_state_canary(root: Path, verb: str) -> int:
+    """Run scripts/ci/check-state-canary.sh on the PARENT HOME.
+
+    Deliberately NOT under _smoke_env: the sandbox is what the suite is allowed
+    to write, and the parent HOME is the surface the canary exists to protect.
+    Handing it the sandbox would measure the wrong root and pass forever.
+
+    A missing script is fatal on verify and non-fatal on plant. A verify that
+    cannot run must never read as a green; that is the absence-reads-as-success
+    failure this runner refuses everywhere else.
+
+    Not to be confused with _state_canary_status, which reads the state-lane
+    junit and answers a different question.
+    """
+    script = root / "scripts" / "ci" / "check-state-canary.sh"
+    if not script.is_file():
+        if verb == "verify":
+            sys.stderr.write(
+                f"smoke: {script} is missing - cannot verify the operator state "
+                "root was untouched, refusing to call this green\n"
+            )
+            return 1
+        return 0
+    env = dict(os.environ)
+    env["FNO_STATE_CANARY_SNAPSHOT"] = _state_canary_snapshot()
+    proc = subprocess.run(["bash", str(script), verb], cwd=str(root), env=env)
+    return proc.returncode
 
 
 def _read_failure_record(path: str, known: set[str]) -> set[str]:
@@ -937,6 +1207,53 @@ def _name_matches(name: str, globs: str) -> bool:
     return any(fnmatch.fnmatch(name, g.strip()) for g in globs.split(",") if g.strip())
 
 
+def _parse_smoke_shard(spec: str) -> tuple[int, int]:
+    parts = spec.strip().split("/")
+    if len(parts) != 2:
+        raise ValueError(
+            f"smoke: --shard must be I/N with 1 <= I <= N, got {spec!r}"
+        )
+    try:
+        index, total = (int(part) for part in parts)
+    except ValueError:
+        raise ValueError(
+            f"smoke: --shard must be I/N with 1 <= I <= N, got {spec!r}"
+        ) from None
+    if total < 1 or index < 1 or index > total:
+        raise ValueError(
+            f"smoke: --shard must be I/N with 1 <= I <= N, got {spec!r}"
+        )
+    return index, total
+
+
+def _shard_selected_indices(
+    steps: Sequence[tuple[str, str, str]], selected: Sequence[int],
+    index: int, total: int,
+) -> list[int]:
+    """Partition selected registry steps while retaining shared prerequisites."""
+    names = [name for name, _cwd, _cmd in steps]
+    pytest_step = "Pytest (unit + integration)"
+    build_index = next(
+        (step_index for step_index, name in enumerate(names)
+         if name == _RUST_BUILD_STEP),
+        None,
+    )
+    selected_set = set(selected)
+    kept = {
+        step_index for step_index in selected
+        if names[step_index] == "Sync + build"
+        or names[step_index] == pytest_step
+        or step_index % total == index - 1
+    }
+    if build_index in selected_set and any(
+        step_index > build_index and step_index in selected_set
+        and step_index % total == index - 1
+        for step_index in selected
+    ):
+        kept.add(build_index)
+    return sorted(kept)
+
+
 def _parse_smoke_args(args: Sequence[str]) -> dict:
     """Parse smoke flags into an options dict.
 
@@ -946,10 +1263,11 @@ def _parse_smoke_args(args: Sequence[str]) -> dict:
     opts: dict = {
         "list": False, "keep_going": False, "retry_failed": False,
         "verbose": False, "only": "", "skip": "", "changed": False,
-        "base": "", "head": "", "ambient": "clean", "state": "clean",
+        "base": "", "head": "", "shard": "", "ambient": "clean", "state": "clean",
     }
     valued = {
         "--only": "only", "--skip": "skip", "--base": "base", "--head": "head",
+        "--shard": "shard",
         "--ambient": "ambient", "--state": "state",
     }
     pending = ""
@@ -998,8 +1316,12 @@ def _parse_smoke_args(args: Sequence[str]) -> dict:
                 ("--retry-failed", opts["retry_failed"])) if on]
     if len(subsets) > 1:
         raise ValueError(f"smoke: {' and '.join(subsets)} are separate subset modes - pick one")
+    if opts["shard"] and opts["retry_failed"]:
+        raise ValueError("smoke: --retry-failed and --shard are separate subset modes - pick one")
     if (opts["base"] or opts["head"]) and not opts["changed"]:
         raise ValueError("smoke: --base/--head only apply to --changed")
+    if opts["shard"]:
+        _parse_smoke_shard(opts["shard"])
     if opts["ambient"] not in _AMBIENT_MODES:
         raise ValueError(
             f"smoke: --ambient {opts['ambient']!r} is not one of "
@@ -1041,6 +1363,28 @@ _INFRA_SELECTS = (
     "tests/ci/test_smoke_modes.sh",
     "tests/ci/test_preflight.sh",
     "tests/ci/test_changed_smoke_workflow.sh",
+)
+
+# Repo-wide lints that ride EVERY changed packet: each reads the whole tree,
+# so no per-path rule can fire it, and all of them are seconds long. A
+# crates-only merge once went green while the placement rule failed on main
+# and the nightly refused. Gated on the script existing so the selector
+# contract tests' synthetic fixtures (no scripts/ tree) keep their exact
+# selection lists.
+_ALWAYS_LINTS: tuple[tuple[str, str], ...] = (
+    ("placement rule", "scripts/ci/check-placement-rule.sh"),
+    ("No stale /spec refs (blueprint rename audit)", "scripts/ci/check-no-stale-spec-refs.sh"),
+    ("Skill bundles freshness check", "scripts/lint/check-skill-bundles-fresh.sh"),
+    ("Hook exec bits", "scripts/ci/check-hook-exec-bit.sh"),
+)
+
+# A changed file listed as a bundle source in skill-bundles.yaml selects the
+# bundle freshness tests: an edited schema once drifted the bundled copies
+# because no packet member owned them. The freshness STEP itself rides in
+# _ALWAYS_LINTS.
+_BUNDLE_TEST_TARGETS = (
+    "cli/tests/unit/test_skill_bundles.py",
+    "cli/tests/unit/test_bundle_cli.py",
 )
 
 
@@ -1130,6 +1474,127 @@ def _conventional_tests(root: Path, stem: str) -> list[str]:
     hits = {p.relative_to(root).as_posix() for p in tests.rglob(f"test_{stem}.py")}
     hits |= {p.relative_to(root).as_posix() for p in tests.rglob(f"test_{stem}_*.py")}
     return sorted(hits)
+
+
+def _module_name(rel: str) -> str:
+    """cli/src/fno/mail/envelope.py -> fno.mail.envelope; "" for anything else.
+
+    A co-located ``__init__.py`` maps to its package, not ``pkg.__init__``.
+    """
+    prefix = "cli/src/"
+    if not rel.startswith(prefix) or not rel.endswith(".py"):
+        return ""
+    dotted = rel[len(prefix):].removesuffix(".py").replace("/", ".")
+    return dotted.removesuffix(".__init__")
+
+
+def _import_refs(text: str, mod: str, is_package: bool = False) -> set[str]:
+    """Every module name `text` references through import, at any depth.
+
+    Function-level imports are the point (test_mux_inject imports dispatch
+    inside its fixtures), so this walks the AST rather than the first
+    column. `from X import y` records both X and X.y: which of the two is a
+    module is not knowable without executing, and recording both is the
+    optimistic reading a selector should take. Every ancestor package is
+    recorded too: importing any submodule executes its __init__, so a
+    change to the package owns those importers.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+    refs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            refs.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                parts = mod.split(".")
+                # A module file's package is its parent; a package's package
+                # is itself. One dot resolves inside that package.
+                base_parts = parts if is_package else parts[:-1]
+                base_parts = base_parts[: len(base_parts) - (node.level - 1)]
+                base = ".".join(base_parts)
+            else:
+                base = node.module or ""
+            if base:
+                refs.add(base)
+                refs.update(f"{base}.{alias.name}" for alias in node.names)
+    expanded: set[str] = set()
+    for ref in refs:
+        parts = ref.split(".")
+        for i in range(1, len(parts) + 1):
+            expanded.add(".".join(parts[:i]))
+    return expanded
+
+
+def _fno_importers(root: Path) -> dict[str, set[str]]:
+    """Module -> the modules it imports, across cli/src/fno, one AST each."""
+    graph: dict[str, set[str]] = {}
+    src = root / "cli" / "src" / "fno"
+    if not src.is_dir():
+        return graph
+    for p in src.rglob("*.py"):
+        rel = p.relative_to(root).as_posix()
+        mod = _module_name(rel)
+        if not mod:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        refs = _import_refs(text, mod, is_package=rel.endswith("__init__.py"))
+        if refs:
+            graph[mod] = refs
+    return graph
+
+
+def _importer_neighbourhood(graph: dict[str, set[str]], mod: str) -> set[str]:
+    """`mod` plus the modules that import it directly (one hop).
+
+    The red-on-main mux chain was exactly this shape: the test imports
+    dispatch, dispatch imports envelope. Full transitive closure is honest
+    reach but selects ~950 of ~1100 test files for a hub module - the
+    everything-run the packet exists to avoid - so the widening stops at one
+    hop and leaves deeper chains to the full gate on main. ponytail: depth
+    1; raise it only when a replayed miss proves depth > 1 matters.
+    """
+    hit = {mod}
+    hit.update(m for m, refs in graph.items() if mod in refs)
+    return hit
+
+
+def _test_reach_index(root: Path) -> list[tuple[str, str, set[str]]]:
+    """(rel, text, import refs) for every test file, read once per selection.
+
+    The literal scan needs the text, the import scan needs the refs, and the
+    infix scan needs the names; one pass feeds all three. Covers cli/tests,
+    the root tests/ tree, and tests co-located in cli/src (test_harness_map).
+    """
+    out: list[tuple[str, str, set[str]]] = []
+    for base in ("cli/tests", "tests", "cli/src"):
+        d = root / base
+        if not d.is_dir():
+            continue
+        for p in d.rglob("test_*.py"):
+            rel = p.relative_to(root).as_posix()
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            out.append((rel, text, _import_refs(text, _module_name(rel))))
+    return out
+
+
+def _bundle_sources(root: Path) -> set[str]:
+    """Repo-rooted source paths listed in skill-bundles.yaml."""
+    try:
+        text = (root / "skill-bundles.yaml").read_text(encoding="utf-8",
+                                                       errors="replace")
+    except OSError:
+        return set()
+    return {m.group(1)
+            for m in re.finditer(r"^\s*-\s*source:\s*(\S+)\s*$", text, re.M)}
 
 
 def _rust_family(rel: str) -> list[str]:
@@ -1228,6 +1693,51 @@ def select_changed(root: Path, paths: Sequence[str]) -> tuple[list[dict], list[s
             fallback(rel)
             continue
         fallback(rel)
+
+    # Reach widening: the rules above match names; a test can also be reached
+    # by an infix file name, an import chain, or a path literal, and a bundle
+    # member drags its freshness tests. Additive to the rules above; `add`
+    # dedupes. The indices build lazily and at most once, so a diff with no
+    # widened shapes pays nothing.
+    reach: list[tuple[str, str, set[str]]] | None = None
+
+    def reach_index() -> list[tuple[str, str, set[str]]]:
+        nonlocal reach
+        if reach is None:
+            reach = _test_reach_index(root)
+        return reach
+
+    bundle_sources = _bundle_sources(root)
+    graph: dict[str, set[str]] | None = None
+    for rel in paths:
+        base = os.path.basename(rel)
+        if rel in bundle_sources:
+            for target in _BUNDLE_TEST_TARGETS:
+                if (root / target).exists():
+                    add("bundle-member", rel, "pytest", target)
+        if rel.startswith("cli/src/") and rel.endswith(".py"):
+            stem = base[:-3]
+            if len(stem) >= 4:
+                for trel, _text, _refs in reach_index():
+                    if stem in os.path.basename(trel):
+                        add("python-source-infix", rel, "pytest", trel)
+            mod = _module_name(rel)
+            if mod:
+                if graph is None:
+                    graph = _fno_importers(root)
+                mods = _importer_neighbourhood(graph, mod)
+                for trel, _text, refs in reach_index():
+                    if refs & mods:
+                        add("python-source-importers", rel, "pytest", trel)
+        for trel, text, _refs in reach_index():
+            if rel in text:
+                add("path-literal", rel, "pytest", trel)
+
+    # The repo-wide lints ride every packet: each reads the whole tree, so no
+    # per-path rule can fire it, and all of them are seconds long.
+    for name, script in _ALWAYS_LINTS:
+        if (root / script).exists():
+            add("repo-wide-lint", "*", "step", name)
     return selections, unmapped
 
 
@@ -1235,21 +1745,65 @@ def select_changed(root: Path, paths: Sequence[str]) -> tuple[list[dict], list[s
 # the packet counts as a failure - so selecting one without its build step
 # produces a false red instead of feedback. The registry already owns the
 # build; selection has to carry it along.
-_RUST_BIN_MARKER = "target/debug/fno-agents"
+_RUST_BIN_MARKERS = (
+    "target/debug/fno-agents",
+    # A harness may resolve the binary through the env pin or the release
+    # fallback instead of spelling the debug path (test_loop_check_shim.sh);
+    # each spelling is a real dependency on a binary being present.
+    "target/release/fno-agents",
+    "FNO_AGENTS_BIN",
+)
 _RUST_BUILD_STEP = "Build fno-agents debug binary (for journey tests)"
+_CLAIM_DOOR_NAME = "fno-agents-claim-door"
 
 
 def _needs_rust_binary(root: Path, rel: str) -> bool:
     try:
-        return _RUST_BIN_MARKER in (root / rel).read_text(encoding="utf-8", errors="replace")
+        text = (root / rel).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
+    return any(marker in text for marker in _RUST_BIN_MARKERS)
 
 
-def _changed_steps(root: Path, selections: Sequence[dict]) -> list[tuple[str, str, str]]:
-    """Turn selections into runner steps, fastest-signal first."""
+def _changed_steps(
+    root: Path, selections: Sequence[dict], shard: str = "",
+) -> list[tuple[str, str, str]]:
+    """Turn selections into runner steps, fastest-signal first.
+
+    "Fastest-signal first" has one exception: the graph store's read path is
+    the keeper, and the keeper needs ``fno-agents-worker`` on disk. A packet
+    that runs pytest before the build makes every graph-touching test crash
+    with StoreUnavailable instead of answering - measured on a PR whose stem
+    selection pulled in tests/graph/test_board.py while the crates change
+    selected the build step that would have satisfied it. So when pytest AND
+    the build are both mapped, the build goes first, exactly as the full
+    smoke orders it.
+
+    ``shard`` (``I/N``, the full lane's contract) splits only the pytest file
+    list, round-robin by sorted-file index: leg k of N always runs the same
+    files, and the non-pytest steps run in every leg because each matrix leg
+    is its own fresh runner. Measured 2026-10-05: a 313-file packet on ONE
+    runner died 7 of 8 attempts at a fixed point ~1/3 into the suite (the
+    runner shuts down; every test to that point green), while the same head's
+    full lane passed the identical tests 13-ways sharded - volume on one
+    runner, not content, is what kills it.
+    """
     pytest_targets = [s["target"] for s in selections if s["kind"] == "pytest"]
+    if shard:
+        index, total = _parse_smoke_shard(shard)
+        pytest_targets = [
+            target for position, target in enumerate(sorted(set(pytest_targets)))
+            if position % total == index - 1
+        ]
+    shell_rels = sorted({s["target"] for s in selections if s["kind"] == "shell"})
+    by_name = {name: (name, cwd, cmd) for name, cwd, cmd in _STRUCTURAL_STEPS}
+    build_selected = (_RUST_BUILD_STEP in by_name) and (
+        any(s["kind"] == "step" and s["target"] == _RUST_BUILD_STEP for s in selections)
+        or any(_needs_rust_binary(root, rel) for rel in shell_rels)
+    )
     steps: list[tuple[str, str, str]] = []
+    if pytest_targets and build_selected:
+        steps.append(by_name[_RUST_BUILD_STEP])
     if pytest_targets:
         targets = sorted(set(pytest_targets))
         # xdist costs more than it saves on a handful of files.
@@ -1257,20 +1811,68 @@ def _changed_steps(root: Path, selections: Sequence[dict]) -> list[tuple[str, st
         steps.append((f"Pytest (changed subset, {len(targets)} file(s))", ".",
                       f"uv run --project cli pytest --tb=short -q{par} "
                       + " ".join(shlex.quote(t) for t in targets)))
-    shell_rels = sorted({s["target"] for s in selections if s["kind"] == "shell"})
-    by_name = {name: (name, cwd, cmd) for name, cwd, cmd in _STRUCTURAL_STEPS}
+    # The pytest shard DELETES the debug binary on exit (the @requires_rust
+    # seam), so any shell harness after pytest needs a build of its own there;
+    # after a warm pre-build it is a no-op (~0.1s), never a second compile.
     if any(_needs_rust_binary(root, rel) for rel in shell_rels) and _RUST_BUILD_STEP in by_name:
         steps.append(by_name[_RUST_BUILD_STEP])
     for rel in shell_rels:
         steps.append((rel, ".", f"bash {shlex.quote(rel)}"))
     shell_targets = set(shell_rels)
     for name in sorted({s["target"] for s in selections if s["kind"] == "step"}):
+        if name == _RUST_BUILD_STEP:
+            continue
         step = by_name[name]
+        if name == _RUST_BUILD_STEP and steps and steps[0] == step:
+            continue  # already placed ahead of pytest; never run the build twice
         refs = {t.strip("./") for t in _SH_PATH_RE.findall(step[2])}
         if refs and refs <= shell_targets:
             continue  # every harness it wraps is already selected directly
         steps.append(step)
     return steps
+
+
+_TARGET_BIN_RELS = (
+    "crates/fno-agents/target/debug/fno-agents",
+    "crates/fno-agents/target/release/fno-agents",
+)
+
+
+def _scrub_target_bins(root: Path) -> None:
+    """Remove the checkout's target/ binaries: the parity-test marker."""
+    for rel in _TARGET_BIN_RELS:
+        try:
+            (root / rel).unlink()
+        except OSError:
+            pass
+
+
+def _pin_claim_door(env: dict[str, str], binary: Path) -> None:
+    """Pin the claim door: the env name outranks PATH in resolve_binary.
+
+    Never touches PATH. Hook harnesses shell bare `fno-agents` and route on
+    its absence (spaces fallback); a PATH-visible binary would flip those
+    writes onto space paths mid-shard.
+    """
+    env["FNO_AGENTS_BIN"] = str(binary)
+
+
+def _preserve_claim_door(root: Path, env: dict[str, str]) -> None:
+    """Keep the native claim reader available after the Rust-marker scrub."""
+    candidates = [Path(v) for v in (env.get("FNO_AGENTS_BIN"), env.get("FNO_AGENTS_FRONT")) if v]
+    candidates += [root / rel for rel in _TARGET_BIN_RELS]
+    source = next((c for c in candidates if c.is_file() and os.access(c, os.X_OK)), None)
+    if source is None:
+        return
+    preserved_dir = _sandbox() / _CLAIM_DOOR_NAME
+    preserved_dir.mkdir(parents=True, exist_ok=True)
+    preserved = preserved_dir / "fno-agents"
+    shutil.copyfile(source, preserved)
+    preserved.chmod(source.stat().st_mode & 0o777)
+    # The scrub unlinks the target/ copies this function may have been handed,
+    # so a BIN inherited from the job env goes dead at exactly the moment the
+    # claim consumers run. Re-point it at the preserved copy.
+    _pin_claim_door(env, preserved)
 
 
 def _write_changed_receipt(path: str, payload: dict) -> None:
@@ -1284,6 +1886,50 @@ def _write_changed_receipt(path: str, payload: dict) -> None:
             fh.write("\n")
     except OSError:
         pass  # a receipt we cannot write is not a reason to fail the packet
+
+
+def _changed_packet_counts(selections: Sequence[dict]) -> tuple[int, int]:
+    """(pytest files, shell harnesses) the packet maps, deduped by target.
+
+    One spelling for both consumers of the counts: the estimate prices them
+    and the receipt line prints them.
+    """
+    pytest_files = len({s["target"] for s in selections if s["kind"] == "pytest"})
+    shell = len({s["target"] for s in selections if s["kind"] == "shell"})
+    return pytest_files, shell
+
+
+def _estimate_changed_minutes(root: Path, selections: Sequence[dict]) -> int:
+    """Minutes the changed packet plausibly needs, from its selection alone.
+
+    The packet scales with the diff, so its CI cap must too; this estimate is
+    what the changed-smoke cap is sized from. Constants are measured ceilings,
+    not guesses: the full tree runs 894 pytest files in a 1036s step under
+    xdist (about 1.2s a file), so 1.5 tenths of a minute (9s) a file carries
+    roughly 7x headroom; a shell harness is at most about a minute (the stress
+    contract is 35.9s a trial, one trial in changed mode); provisioning
+    includes runner setup plus a cold cargo build, so it gets a flat 5 with
+    the build step adding 3 more. It is deliberately generous: the cost of
+    over-estimating is a wider ceiling on one job, the cost of
+    under-estimating is a run killed by its own cap with no receipt.
+    """
+    pytest_files, shell = _changed_packet_counts(selections)
+    structural = {s["target"] for s in selections if s["kind"] == "step"}
+    # The build is priced whether it arrives as an explicit rust-family
+    # selection or is injected by _changed_steps for a harness whose content
+    # needs the binary - one spelling of does-the-packet-build.
+    shell_rels = sorted({s["target"] for s in selections if s["kind"] == "shell"})
+    build = 1 if (_RUST_BUILD_STEP in structural
+                  or any(_needs_rust_binary(root, rel) for rel in shell_rels)) else 0
+    # Tenths of a minute, so the arithmetic stays in integers. The build is
+    # priced at 15 on its own; the other structural steps at 1 each. The build
+    # price is measured, not guessed: a Rust-source change invalidates the
+    # workspace cargo cache, and the CI rebuild ran 15 to 25 minutes across
+    # four consecutive runs on 2026-09-09 (a local cold build ran 30), while
+    # the old 3-minute price left every such packet half under its real cost.
+    tenths = 50 + (pytest_files * 3) // 2 + shell * 10 \
+        + (len(structural) - build) * 10 + build * 150
+    return max(15, -(-tenths // 10))
 
 
 def _run_changed(root: Path, opts: dict, env: dict) -> int:
@@ -1306,19 +1952,29 @@ def _run_changed(root: Path, opts: dict, env: dict) -> int:
         return CHANGED_RC_UNEVALUATED
 
     selections, unmapped = select_changed(root, paths)
-    steps = _changed_steps(root, selections)
+    steps = _changed_steps(root, selections, opts["shard"])
     select_s = time.monotonic() - t0
 
+    estimate = _estimate_changed_minutes(root, selections)
     print(f"smoke: base={opts['base'] or resolved_base} "
           f"head={opts['head'] or candidate[:12]} changed={len(paths)} "
           f"selected={len(steps)} unmapped={len(unmapped)}", flush=True)
+    # One line both callers size from: the CI sizer job clamps it into a job
+    # ceiling, and the run job refuses the packet when the estimate cannot fit
+    # the ceiling it was given. Printed raw (unclamped) so the fit comparison
+    # sees the real number.
+    pytest_files, shell = _changed_packet_counts(selections)
+    print(f"smoke: changed-estimate minutes={estimate} "
+          f"pytest_files={pytest_files} "
+          f"shell={shell} "
+          f"steps={len(steps)}", flush=True)
     for s in selections:
         print(f"  select  {s['rule']:20} {s['path']} -> {s['target']}", flush=True)
     for u in unmapped:
         print(f"  unmapped {u}  (no rule; covered only by the full gate)", flush=True)
 
     receipt = {
-        "mode": "CHANGED SUBSET", "candidate": candidate,
+        "mode": "CHANGED SUBSET", "shard": opts["shard"], "candidate": candidate,
         "base": opts["base"] or resolved_base, "head": opts["head"] or candidate,
         "changed_paths": paths, "unmapped_paths": unmapped,
         "selections": selections, "selected_count": len(steps),
@@ -1344,18 +2000,15 @@ def _run_changed(root: Path, opts: dict, env: dict) -> int:
         return CHANGED_RC_PREREQ
 
     # Same faithful-ordering guard the full run applies: the pytest step must
-    # see NO fno-agents binary so the @requires_rust parity tests skip, as they
-    # do in CI. preflight deliberately preserves target/ across runs, so without
-    # this the packet runs ~15 tests the full gate skips - and a failure there
-    # aborts preflight on a discrepancy the gate would never report. Any journey
-    # harness that needs the binary is preceded by its build step (above).
+    # see NO checkout fno-agents binary so the @requires_rust parity tests skip,
+    # as they do in CI. The claim door is preserved outside target/ first.
     if any(n.startswith("Pytest (changed subset") for n, _, _ in steps):
-        for rel in ("crates/fno-agents/target/debug/fno-agents",
-                    "crates/fno-agents/target/release/fno-agents"):
-            try:
-                (root / rel).unlink()
-            except OSError:
-                pass
+        # The door always reads a sandbox COPY: a build-dir override in the
+        # packet's build step, or a later scrub, must not strand the claim
+        # consumers the way a direct target/ pin did.
+        _preserve_claim_door(root, env)
+        if _RUST_BUILD_STEP not in {name for name, _, _ in steps}:
+            _scrub_target_bins(root)
 
     e0 = time.monotonic()
     results, rc = _execute_steps(root, env, steps, keep_going=opts["keep_going"])
@@ -1405,16 +2058,17 @@ def _planned_step_lines(
 ) -> list[str]:
     """The one-line-per-step plan the full-mode prologue prints.
 
-    `fno.pr._failures.unreached_runner_steps` parses this exact prefix
-    (`smoke: planned: <name>`), so a red log names the steps fail-fast never
-    reached without re-deriving the registry. Emitter and parser share the
-    format through this function's docstring; change both together.
+    `pr_status::unreached_runner_steps` (crates/fno-agents) parses this exact
+    prefix (`smoke: planned: <name>`), so a red log names the steps fail-fast
+    never reached without re-deriving the registry. Emitter and parser share
+    the format through this function's docstring; change both together.
     """
     return [f"smoke: planned: {steps[i][0]}" for i in selected]
 
 
 def _execute_steps(
-    root: Path, env: dict, steps: Sequence[tuple[str, str, str]], keep_going: bool
+    root: Path, env: dict, steps: Sequence[tuple[str, str, str]], keep_going: bool,
+    pytest_shard: str = "",
 ) -> tuple[list[tuple[str, str, float]], int]:
     """Run steps in order -> (per-step results, first non-zero child rc).
 
@@ -1430,10 +2084,14 @@ def _execute_steps(
             print(f"\n=== {name} ===", flush=True)
         t0 = time.monotonic()
         try:
+            step_env = dict(env)
+            step_env.pop("FNO_PYTEST_SHARD", None)
+            if pytest_shard and name == "Pytest (unit + integration)":
+                step_env["FNO_PYTEST_SHARD"] = pytest_shard
             proc = subprocess.run(
                 ["bash", "-eo", "pipefail", "-c", cmd],
                 cwd=str(root / cwd) if cwd != "." else str(root),
-                env=env,
+                env=step_env,
             )
             rc = proc.returncode
         except OSError as exc:
@@ -1461,11 +2119,12 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
     actual rc (no pipe/tail masking), so preflight's attestation gate reads the
     truth.
 
-    Flags: --list [--verbose], --keep-going, --only <globs>, --skip <globs>, --retry-failed,
-    and --changed [--base REV --head REV] for the changed-surface packet (a
+    Flags: --list [--verbose], --keep-going, --only <globs>, --skip <globs>, --shard I/N,
+    --retry-failed, and --changed [--base REV --head REV] for the changed-surface packet (a
     CHANGED SUBSET; exits 20 when nothing mapped, 21 when the diff is not
     trustworthy - neither is a green verdict, and the full run still gates).
-    The four subset modes are mutually exclusive.
+    `--shard` can combine with `--only` or `--skip`, but not with `--changed` or
+    `--retry-failed`.
 
     --ambient clean|dirty|both (default clean) picks the ambient shape every
     step's child process runs under. `dirty` poisons this runner's own
@@ -1482,6 +2141,7 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
     there is not evidence the test is hermetic, and a failure may be your
     machine. `fno doctor test smoke --only '<glob>'` runs the same step hermetically.
     """
+    global _STATE_CANARY_LEAKED, _STATE_CANARY_BROKEN
     root = _repo_root(Path.cwd()) or Path.cwd()
     if any(a in ("-h", "--help") for a in args):
         print(_run_smoke.__doc__)
@@ -1537,6 +2197,8 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
             if a.startswith("--state="):
                 continue
             state_rest.append(a)
+        _STATE_CANARY_LEAKED = False
+        _STATE_CANARY_BROKEN = False
         print("state: clean lane")
         clean_rc = _run_smoke([*state_rest, "--state=clean"], stream=stream)
         print("state: populated lane")
@@ -1562,7 +2224,29 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
                 "state verdict diff: no changed testcase; verify the populated "
                 "lane ran its positive control before trusting this result\n"
             )
-        return _state_both_exit(clean_rc, diff, canary_clean, canary_populated)
+        if _STATE_CANARY_LEAKED:
+            sys.stderr.write(
+                "state: a lane's filesystem canary refused, so a step wrote to "
+                "the operator state root. The populated lane's exit code is "
+                "discarded by design, so that refusal has no other way out and "
+                "is carried here instead. The run is NOT green.\n"
+            )
+        if _STATE_CANARY_BROKEN:
+            sys.stderr.write(
+                "state: a lane's canary could not take a baseline, so that "
+                "lane's state root was never measured. The populated lane's "
+                "exit code is discarded by design, so this has no other way "
+                "out and is carried here instead. The run is NOT green, "
+                "because an unmeasured root is not a clean one.\n"
+            )
+        return _state_both_exit(
+            clean_rc,
+            diff,
+            canary_clean,
+            canary_populated,
+            _STATE_CANARY_LEAKED,
+            _STATE_CANARY_BROKEN,
+        )
 
     global _AMBIENT_MODE, _STATE_MODE
     _AMBIENT_MODE = opts["ambient"]
@@ -1570,6 +2254,7 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
     list_mode, keep_going = opts["list"], opts["keep_going"]
     retry_failed, verbose, only_glob = opts["retry_failed"], opts["verbose"], opts["only"]
     skip_glob = opts["skip"]
+    shard_spec = opts["shard"]
 
     env = _smoke_env(root)
 
@@ -1635,6 +2320,18 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
     else:
         selected = list(range(total))
 
+    shard_index, shard_total = (0, 0)
+    if shard_spec:
+        shard_index, shard_total = _parse_smoke_shard(shard_spec)
+        if shard_total > 1:
+            selected = _shard_selected_indices(
+                steps, selected, shard_index, shard_total
+            )
+
+    if not selected:
+        sys.stderr.write("smoke: shard selected zero steps - never green\n")
+        return 1
+
     if list_mode:
         for i in selected:
             if verbose:
@@ -1652,8 +2349,15 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
         label = "ONLY SUBSET"
     elif skip_glob:
         label = "SKIP SUBSET"
+    if shard_total > 1:
+        label = "SHARD SUBSET"
     kg = " keep-going" if keep_going else ""
-    print(f"smoke: mode={label} steps={len(selected)}/{total}{kg}", flush=True)
+    shard_header = ""
+    if shard_total > 1:
+        pytest_name = "Pytest (unit + integration)"
+        pytest_marker = " pytest=split" if pytest_name in [names[i] for i in selected] else ""
+        shard_header = f" shard={shard_index}/{shard_total}{pytest_marker}"
+    print(f"smoke: mode={label}{shard_header} steps={len(selected)}/{total}{kg}", flush=True)
     # One line per planned step: fail-fast means later steps never run, and a
     # reader diffing these lines against the `smoke: pass|fail` lines below can
     # name what was unreached from the log alone. Per-line, never a joined
@@ -1687,32 +2391,62 @@ def _run_smoke(args: Sequence[str], stream: bool = False) -> int:
     # keeps using whatever binary is already on disk.
     _DELETE_TRIGGERS = {"Pytest (unit + integration)", _RUST_BUILD_STEP}
     if _DELETE_TRIGGERS & {names[i] for i in selected}:
-        for rel in ("crates/fno-agents/target/debug/fno-agents",
-                    "crates/fno-agents/target/release/fno-agents"):
-            try:
-                (root / rel).unlink()
-            except OSError:
-                pass
+        _preserve_claim_door(root, env)
+        _scrub_target_bins(root)
 
-    if not selected:
-        sys.stderr.write("smoke: zero steps selected - never green\n")
-        return 1
+    # The canary brackets the whole run: plant before the first step, verify
+    # after the last. Both halves sit around the single _execute_steps call
+    # site, so this is one pair rather than a per-step hook.
+    plant_rc = _run_state_canary(root, "plant")
+    results, first_rc = _execute_steps(
+        root, env, [steps[i] for i in selected], keep_going,
+        pytest_shard=shard_spec if shard_total > 1 else "",
+    )
+    # A plant that never took a baseline makes verify refuse for want of a
+    # snapshot. That is the instrument failing, not a step writing to the
+    # operator state root, and the two must never share a message: an
+    # unwritable HOME would otherwise redden every green run while naming a
+    # leak that did not happen.
+    canary_broken = plant_rc != 0
+    if canary_broken:
+        _STATE_CANARY_BROKEN = True
+    canary_rc = _run_state_canary(root, "verify")
+    if canary_rc != 0 and not canary_broken:
+        # Recorded beside the exit code, not only in it: `--state both` throws
+        # the populated lane's rc away on purpose.
+        _STATE_CANARY_LEAKED = True
+    # Journey/rust/bash steps leak keepers via CLI subprocesses no conftest reaches.
+    from fno.graph.store import sweep_orphaned_keepers
 
-    results, first_rc = _execute_steps(root, env, [steps[i] for i in selected], keep_going)
+    sweep_orphaned_keepers(timeout=15.0)
     failed = sum(1 for _, s, _ in results if s == "fail")
     if first_rc != 0 and not keep_going:
         _write_failure_record(failure_record, [n for n, s, _ in results if s == "fail"])
         return 1
 
     print("", flush=True)
-    kind = ("retry-subset" if retry_failed else "only-subset" if only_glob
+    kind = ("shard-subset" if shard_total > 1 else
+            "retry-subset" if retry_failed else "only-subset" if only_glob
             else "skip-subset" if skip_glob else "full")
     print(f"smoke: summary ({kind}, {len(results)} steps)", flush=True)
     for n, s, d in results:
         print(f"  {s:6} {d:4.0f}s  {n}", flush=True)
 
     _write_failure_record(failure_record, [n for n, s, _ in results if s == "fail"])
-    return 1 if failed else 0
+    if canary_broken:
+        sys.stderr.write(
+            f"smoke: the state canary could not take a baseline (plant exit "
+            f"{plant_rc}), so nothing was measured. This is the INSTRUMENT "
+            "failing, not a step writing to the operator state root. The run "
+            "is not called green, because an unmeasured root is not a clean "
+            "one.\n"
+        )
+    elif canary_rc != 0 and not failed:
+        sys.stderr.write(
+            "smoke: every step passed but the state canary refused - a step "
+            "wrote to the operator state root. The run is NOT green.\n"
+        )
+    return 1 if (failed or canary_rc != 0) else 0
 
 
 # --census-deferred: stop _DISCOVERY_DEFERRED from silently holding green
@@ -1753,7 +2487,8 @@ def _run_bounded(cmd: Sequence[str], env: dict, cwd: Path, kill_bound_s: int) ->
     + os.killpg, never the `timeout` binary: that is absent on macOS (a recorded
     trap) and exits 127, measuring nothing. start_new_session makes the child a
     group leader so killpg reaches its grandchildren too, since a shell harness
-    spawns subprocesses a direct SIGKILL would orphan.
+    spawns subprocesses a direct SIGKILL would orphan. The wait/kill ladder is
+    shared with the suite runner (`wait_or_kill_group`).
     """
     start = time.monotonic()
     proc = subprocess.Popen(
@@ -1761,31 +2496,7 @@ def _run_bounded(cmd: Sequence[str], env: dict, cwd: Path, kill_bound_s: int) ->
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
-    try:
-        rc = proc.wait(timeout=kill_bound_s)
-        killed = False
-    except subprocess.TimeoutExpired:
-        # ProcessLookupError is the TOCTOU window where the child exited between
-        # the timeout and getpgid; wait() reaps it. PermissionError is NOT caught:
-        # start_new_session makes us own the group so it is near-impossible, and
-        # if it ever surfaces a loud crash beats a wedged proc.wait() with no kill.
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
-        rc = proc.returncode if proc.returncode is not None else 124
-        killed = True
-    except KeyboardInterrupt:
-        # The harness runs in its own session (start_new_session), so it does not
-        # share the terminal's SIGINT and would outlive a Ctrl-C with all its
-        # grandchildren. Kill the group before re-raising so nothing is orphaned.
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
-        raise
+    rc, killed = wait_or_kill_group(proc, kill_bound_s)
     return rc, time.monotonic() - start, killed
 
 
@@ -1849,29 +2560,56 @@ def _run_census_deferred(args: Sequence[str]) -> int:
     name="test",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
-        "Run the Python suite (default), or a sub-suite: `fno doctor test "
-        "rust ...` (crates) or `fno doctor test smoke [flags]` (the full CI "
-        "smoke: structural steps plus auto-discovered shell harnesses). "
-        "`fno doctor test --census-deferred` runs every _DISCOVERY_DEFERRED "
-        "entry bounded and "
-        "exits non-zero if any passes inside the 60s tranche, so the quarantine "
-        "cannot silently hold working tests. The real exit code is "
-        "propagated, rtk is bypassed (RTK_DISABLED=1), and PYTHONPATH is "
-        "pinned to the worktree's cli/src. Use this, never a bare `pytest` in "
-        "a worktree: that imports the canonical fno, lets rtk re-wrap the run, "
-        "and masks the exit code. Bare `fno doctor test` runs the Python suite in parallel "
-        "and captures to .fno/last-test.log (the transcript gets PASS or the failing tail); "
-        "--stream restores full inherited-stdio output."
+        "Run the Python suite (default), or a sub-suite: `rust` (crates) or "
+        "`smoke [flags]` (the full CI smoke). The real exit code is propagated, "
+        "rtk is bypassed, and PYTHONPATH is pinned to the worktree's cli/src. "
+        "Bare `fno doctor test` runs the Python suite in parallel and captures "
+        "to .fno/last-test.log; `--stream` restores inherited stdio. "
+        "--census-deferred refuses a quarantined test that now passes. "
+        "Tests only: this verb never type-checks; ruff + mypy run in CI job "
+        "main-python-static and locally via bash scripts/ci/check-python-static.sh."
     ),
 )
 @click.option("--stream", is_flag=True, help="Stream full output (no capture/log).")
+@click.option(
+    "--log",
+    "log_override",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Capture here instead of .fno/last-test.log; the file's last line is "
+        "always EXIT=<rc>. (Claims the token: pytest's passthrough has no bare --log.)"
+    ),
+)
 @click.argument("runner_args", nargs=-1, type=click.UNPROCESSED)
-def test_command(stream: bool, runner_args: tuple[str, ...]) -> None:
+def test_command(stream: bool, log_override: Optional[Path], runner_args: tuple[str, ...]) -> None:
     args = list(runner_args)
+    # Scope statement, every RUN, pass or fail: a green run here is pytest's
+    # verdict alone, and the reader must learn the typing gate lives elsewhere
+    # at the moment they might conclude otherwise. Skipped where output is a
+    # machine contract, not a run verdict: `smoke --list` is verbatim-stable
+    # (one name per line) and the census emits parsed rows.
+    machine_output = bool(args) and (
+        args[0] == "--census-deferred" or (args[0] == "smoke" and "--list" in args)
+    )
+    if not machine_output:
+        print(
+            "fno doctor test runs tests only and does NOT type-check; ruff + mypy "
+            "run separately: bash scripts/ci/check-python-static.sh (CI job "
+            "main-python-static runs the same script).",
+            flush=True,
+        )
+    if log_override is not None and (
+        stream or (args and args[0] in ("smoke", "--census-deferred"))
+    ):
+        sys.stderr.write(
+            "--log supports the python and rust suites; drop --log or the conflicting flag\n"
+        )
+        raise SystemExit(2)
     if args and args[0] == "rust":
-        raise SystemExit(_run_rust(args[1:], stream=stream))
+        raise SystemExit(_run_rust(args[1:], stream=stream, log_override=log_override))
     if args and args[0] == "smoke":
         raise SystemExit(_run_smoke(args[1:], stream=stream))
     if args and args[0] == "--census-deferred":
         raise SystemExit(_run_census_deferred(args[1:]))
-    raise SystemExit(_run(args, stream=stream))
+    raise SystemExit(_run(args, stream=stream, log_override=log_override))

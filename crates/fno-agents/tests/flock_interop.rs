@@ -209,7 +209,7 @@ fn python_update_registry_interleaves_with_a_running_daemon() {
     let reg_path = seed_loss_shaped_registry(&home);
 
     let _child = common::start_daemon(&home);
-    common::wait_for_event(&home, "startup_reconcile_done", Duration::from_secs(30));
+    common::wait_for_event(&home, "startup_reconcile_done", common::RECONCILE_BUDGET);
 
     let cli_src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../cli/src");
     let script = format!(
@@ -239,6 +239,7 @@ print("APPENDED")
         .arg("-c")
         .arg(&script)
         .env("FNO_AGENTS_HOME", home.root())
+        .env("HOME", home.root())
         .output()
         .expect("python spawns");
     assert!(
@@ -264,7 +265,7 @@ print("APPENDED")
         29,
         "the daemon's rows were not dropped by the interleaved write"
     );
-    let events = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+    let events = fno_agents::event_store::journal_text(&home.events_jsonl(), &[]);
     assert!(
         !events.contains("registry_row_removed"),
         "an interleave that keeps every row must announce nothing: {events}"

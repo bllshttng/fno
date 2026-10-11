@@ -9,7 +9,7 @@ use serde_json::json;
 
 /// The machine-readable version payload `fno doctor` / `fno doctor update` read off a
 /// resolved binary (`<bin> version --json`). `crates_rev` is the crates/ subtree
-/// rev the rust-staleness verdict keys on (ab-716cd330) -- the same quantity
+/// rev the rust-staleness verdict keys on -- the same quantity
 /// Python's `update._rust_subtree_rev` computes, so the comparison is
 /// apples-to-apples. `git_rev` stays the full HEAD the binary was built from.
 pub fn version_json() -> serde_json::Value {
@@ -24,6 +24,9 @@ pub fn version_json() -> serde_json::Value {
         "crates_rev": env!("FNO_AGENTS_CRATES_REV"), // crates/ subtree rev, or "unknown"
         "dirty": env!("FNO_AGENTS_GIT_DIRTY") == "1",
         "profile": profile,
+        // The retirement receipt's build pin, readable off every bin so the
+        // triad's agreement is checkable from outside a single process.
+        "build": crate::gc_verify::current_build(),
     })
 }
 

@@ -1,4 +1,5 @@
 use fno_agents::codex_fake_daemon::{Behavior, FakeDaemon, Interrupt, Steer};
+use fno_agents::codex_posture::CodexPosture;
 use fno_agents::codex_thread::{
     parse_thread_start_response, thread_start_request_json, CodexThread, CodexThreadActor,
     InterruptOutcome, ThreadStartError,
@@ -59,7 +60,7 @@ async fn turn_survives_more_frames_and_a_longer_gap_than_the_old_bounds() {
         .with_turn_duration(Duration::from_secs(16));
     with_fake_daemon(behavior, async {
         let worktree = tempfile::tempdir().unwrap();
-        let mut thread = CodexThread::start(worktree.path(), None, false, None)
+        let mut thread = CodexThread::start(worktree.path(), None, &CodexPosture::bounded(), None)
             .await
             .expect("thread starts against the fake daemon");
         assert_eq!(thread.thread_id(), "thread-bounds");
@@ -80,10 +81,114 @@ async fn turn_survives_more_frames_and_a_longer_gap_than_the_old_bounds() {
 
 async fn start_actor() -> (CodexThreadActor, tempfile::TempDir) {
     let worktree = tempfile::tempdir().unwrap();
-    let driver = CodexThread::start(worktree.path(), None, false, None)
+    let driver = CodexThread::start(worktree.path(), None, &CodexPosture::bounded(), None)
         .await
         .expect("thread starts against the fake daemon");
-    (driver.into_actor(Arc::new(|_| {})), worktree)
+    (
+        driver.into_actor(Arc::new(|_| {}), Arc::new(|_| {})),
+        worktree,
+    )
+}
+
+async fn failed_completion_case(manual_followup: bool) {
+    let behavior = Behavior {
+        failed_turns: 1,
+        turn_duration: Duration::from_millis(20),
+        ..Behavior::quick()
+    };
+    let received = behavior.received.clone();
+    with_fake_daemon(behavior, async move {
+        let worktree = tempfile::tempdir().unwrap();
+        let driver = CodexThread::start(worktree.path(), None, &CodexPosture::bounded(), None)
+            .await
+            .unwrap();
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let observed = phases.clone();
+        let receipts = Arc::new(Mutex::new(Vec::new()));
+        let observed_receipts = receipts.clone();
+        let actor = driver.into_actor(
+            Arc::new(move |receipt| observed_receipts.lock().unwrap().push(receipt)),
+            Arc::new(move |phase| {
+                observed.lock().unwrap().push(phase);
+            }),
+        );
+        let reply = actor
+            .submit("continue the assigned work".into())
+            .await
+            .unwrap();
+        let recovered = if manual_followup {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if receipts
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|r: &fno_agents::codex_thread::TurnReceipt| r.status == "failed")
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("failed receipt is observed before retry delay");
+            let followup = actor.submit("operator follow-up".into()).await.unwrap();
+            vec![
+                tokio::time::timeout(Duration::from_secs(5), reply)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
+                tokio::time::timeout(Duration::from_secs(5), followup)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
+            ]
+        } else {
+            vec![tokio::time::timeout(Duration::from_secs(40), reply)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()]
+        };
+        assert!(
+            recovered
+                .iter()
+                .all(|r| r.turn_id == "turn-2" && r.status == "completed"),
+            "{recovered:?}"
+        );
+        assert_eq!(
+            phases.lock().unwrap().first(),
+            Some(&fno_agents::codex_thread::ThreadTurnPhase::Working)
+        );
+        assert_eq!(
+            received
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f["method"] == "turn/start")
+                .count(),
+            2
+        );
+        assert_eq!(
+            phases
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|p| **p == fno_agents::codex_thread::ThreadTurnPhase::Done)
+                .count(),
+            1
+        );
+        actor.shutdown().await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_completion_retries_without_reporting_done() {
+    failed_completion_case(false).await;
+    failed_completion_case(true).await;
 }
 
 /// AC1: two back-to-back submits against an idle thread make ONE turn/start,
@@ -271,12 +376,15 @@ async fn expired_submit_wait_leaves_turn_running_and_receipt_arrives_later() {
         Behavior::quick().with_turn_duration(Duration::from_millis(1500)),
         async move {
             let worktree = tempfile::tempdir().unwrap();
-            let driver = CodexThread::start(worktree.path(), None, false, None)
+            let driver = CodexThread::start(worktree.path(), None, &CodexPosture::bounded(), None)
                 .await
                 .expect("thread starts");
-            let actor = driver.into_actor(Arc::new(move |receipt| {
-                seen.lock().unwrap().push(receipt.turn_id.clone());
-            }));
+            let actor = driver.into_actor(
+                Arc::new(move |receipt| {
+                    seen.lock().unwrap().push(receipt.turn_id.clone());
+                }),
+                Arc::new(|_| {}),
+            );
             let reply = actor.submit("slow question".into()).await.unwrap();
             let expired = tokio::time::timeout(std::time::Duration::from_millis(250), reply).await;
             assert!(expired.is_err(), "the bounded wait expires first");
@@ -362,10 +470,21 @@ async fn granted_thread_puts_the_roots_on_every_turn_start() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let daemon = FakeDaemon::start(Behavior::quick().with_thread_id("thread-grant"));
     let worktree = tempfile::tempdir().unwrap();
-    let mut thread =
-        CodexThread::start_with_state_dirs(worktree.path(), None, false, None, &grant_roots())
-            .await
-            .expect("thread starts");
+    std::process::Command::new("git")
+        .arg("init")
+        .current_dir(worktree.path())
+        .output()
+        .expect("git init runs");
+    let mut thread = CodexThread::start_with_state_dirs(
+        worktree.path(),
+        None,
+        &CodexPosture::bounded(),
+        None,
+        &grant_roots(),
+        None,
+    )
+    .await
+    .expect("thread starts");
     thread.drive_turn("first").await.expect("turn 1");
     thread.drive_turn("second").await.expect("turn 2");
 
@@ -386,24 +505,59 @@ async fn granted_thread_puts_the_roots_on_every_turn_start() {
     for turn in turns {
         let policy = &turn["params"]["sandboxPolicy"];
         assert_eq!(policy["type"], "workspaceWrite");
+        assert_eq!(policy["networkAccess"], true);
         assert_eq!(policy["writableRoots"][0], "/Users/x/.fno");
+        assert!(
+            policy["writableRoots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|root| root.as_str())
+                .any(|root| root.ends_with("/.git")),
+            "the git common dir rides every turn: {policy}"
+        );
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ungranted_thread_emits_todays_frames_unchanged() {
+async fn ungranted_thread_resumes_large_history_without_a_turn_policy() {
     let _guard = ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let daemon = FakeDaemon::start(Behavior::quick().with_thread_id("thread-plain"));
+    // The test pins the NO-ROOTS frame. The uv cache is a root now, so pin
+    // UV_CACHE_DIR to a missing path (authoritative, so nothing resolves):
+    // a runner with a real cache would grow a sandboxPolicy and fail here.
+    let uv_prev = std::env::var_os("UV_CACHE_DIR");
+    unsafe { std::env::set_var("UV_CACHE_DIR", "/nonexistent-fno-uv-cache-probe") };
+    let daemon = FakeDaemon::start(Behavior {
+        resume_history_bytes: 17 * 1024 * 1024,
+        cold_thread: true,
+        ..Behavior::quick().with_thread_id("thread-plain")
+    });
     let worktree = tempfile::tempdir().unwrap();
-    let mut thread = CodexThread::start_with_state_dirs(worktree.path(), None, false, None, &[])
-        .await
-        .expect("thread starts");
+    let mut thread = CodexThread::resume_with_state_dirs(
+        worktree.path(),
+        "thread-plain",
+        None,
+        &CodexPosture::bounded(),
+        None,
+        &[],
+        None,
+    )
+    .await
+    .expect("thread resumes without returning its oversized history");
     thread.drive_turn("go").await.expect("turn");
 
-    let start = daemon.first_params("thread/start").expect("a thread/start");
-    assert_eq!(start["sandbox"], "workspace-write");
+    match uv_prev {
+        Some(v) => unsafe { std::env::set_var("UV_CACHE_DIR", v) },
+        None => unsafe { std::env::remove_var("UV_CACHE_DIR") },
+    }
+
+    let resume = daemon
+        .first_params("thread/resume")
+        .expect("a thread/resume");
+    assert_eq!(resume["sandbox"], "workspace-write");
+    assert_eq!(resume["excludeTurns"], true);
     let turn = daemon.first_params("turn/start").expect("a turn/start");
     assert!(
         turn.get("sandboxPolicy").is_none(),
@@ -411,26 +565,45 @@ async fn ungranted_thread_emits_todays_frames_unchanged() {
     );
 }
 
-/// A yolo thread is already `danger-full-access`. A workspaceWrite policy
-/// would NARROW it, so the roots are dropped rather than sent.
+/// A yolo thread's turn policy is built from its REQUEST when the server
+/// names no sandbox. The old frame fabricated `workspaceWrite` from nothing
+/// and narrowed a full-access thread on every turn (AC2-HP): the full-access
+/// posture is now spelled onto the policy, and nothing invents a bounded
+/// posture the caller never asked for.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn yolo_thread_is_never_narrowed_by_the_grant() {
+async fn yolo_thread_carries_its_requested_posture_onto_every_turn() {
     let _guard = ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let daemon = FakeDaemon::start(Behavior::quick().with_thread_id("thread-yolo"));
     let worktree = tempfile::tempdir().unwrap();
-    let mut thread =
-        CodexThread::start_with_state_dirs(worktree.path(), None, true, None, &grant_roots())
-            .await
-            .expect("thread starts");
+    std::process::Command::new("git")
+        .arg("init")
+        .current_dir(worktree.path())
+        .output()
+        .expect("git init runs");
+    let mut thread = CodexThread::start_with_state_dirs(
+        worktree.path(),
+        None,
+        &CodexPosture::full_access(),
+        None,
+        &grant_roots(),
+        None,
+    )
+    .await
+    .expect("thread starts");
     thread.drive_turn("go").await.expect("turn");
 
     let start = daemon.first_params("thread/start").expect("a thread/start");
     assert_eq!(start["sandbox"], "danger-full-access");
     let turn = daemon.first_params("turn/start").expect("a turn/start");
+    let policy = &turn["sandboxPolicy"];
+    assert_eq!(
+        policy["type"], "dangerFullAccess",
+        "a full-access request builds a full-access policy: {turn}"
+    );
     assert!(
-        turn.get("sandboxPolicy").is_none(),
-        "a full-access thread must not be handed a narrower policy: {turn}"
+        policy.get("writableRoots").is_none(),
+        "roots mean nothing under full access: {turn}"
     );
 }

@@ -43,15 +43,12 @@ fn journal_in(tmp: &Path) -> (Journal, PathBuf) {
 }
 
 fn journal_events(project_journal: &Path) -> Vec<String> {
-    if !project_journal.exists() {
-        return vec![];
+    // Committed rows are the journal's durable content; raw bytes are an
+    // implementation detail the store owns.
+    match fno_agents::event_store::query_events(project_journal, &Default::default()) {
+        Ok(rows) => rows.into_iter().map(|r| r.line).collect(),
+        Err(_) => vec![],
     }
-    fs::read_to_string(project_journal)
-        .unwrap()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|s| s.to_string())
-        .collect()
 }
 
 fn cfg_for(tmp: &Path, fno_bin: PathBuf, mission: &str) -> DrainConfig {
@@ -59,7 +56,14 @@ fn cfg_for(tmp: &Path, fno_bin: PathBuf, mission: &str) -> DrainConfig {
         cwd: tmp.to_path_buf(),
         fno_bin: fno_bin.display().to_string(),
         mission: mission.to_string(),
+        project: "fno".to_string(),
+        scope: String::new(),
+        leadless: false,
+        members: Vec::new(),
         failure_limit: 3,
+        interval_seconds: 300,
+        rotation: None,
+        advance_timeout_s: 30,
     }
 }
 
@@ -92,7 +96,9 @@ fn dispatch_records_pending_and_forwards_epic_seam() {
     let fno = stub_advance(
         &tmp.path().join("bin"),
         &args_file,
-        r#"{"epic_id":"x-epic","deactivated":false,"all_done":false,"dispatched":["x-a","x-b"]}"#,
+        r#"{"epic_id":"x-epic","deactivated":false,"all_done":false,"dispatched":["x-a","x-b"],
+            "children":[{"node_id":"x-a","decision":"dispatched","substrate":"thread"},
+                        {"node_id":"x-b","decision":"dispatched","substrate":"thread"}]}"#,
     );
     let (journal, project_journal) = journal_in(tmp.path());
     let cfg = cfg_for(tmp.path(), fno, "x-epic");
@@ -107,10 +113,12 @@ fn dispatch_records_pending_and_forwards_epic_seam() {
         "both dispatched children tracked for reconcile"
     );
 
-    // The converge core is invoked as `advance --epic <mission> --continuation --json`.
+    // The converge core is invoked as
+    // `advance --epic <mission> --continuation --source ab --json` (x-84b2:
+    // the daemon origin rides every worker name).
     let args = fs::read_to_string(&args_file).expect("advance argv recorded");
     assert!(
-        args.contains("advance --epic x-epic --continuation --json"),
+        args.contains("advance --epic x-epic --continuation --source ab --json"),
         "epic seam not forwarded: {args}"
     );
 

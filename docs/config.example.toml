@@ -33,8 +33,6 @@ schema_version = 1
 prefix = "fno"
 
 [paths]
-# Override path to the backlog graph.json.
-# graph_json = <unset>   # optional; no default
 # Override path to ledger.json.
 # ledger_json = <unset>   # optional; no default
 # Override path to the evals-history.jsonl bank-run ledger.
@@ -47,6 +45,8 @@ prefix = "fno"
 # postmortems_dir = <unset>   # optional; no default
 # Override base dir for worktrees.
 # worktrees_base = <unset>   # optional; no default
+# Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
+# cargo_targets_base = <unset>   # optional; no default
 # Override path to the memory dir.
 # memory_dir = <unset>   # optional; no default
 # Override path to hook logs.
@@ -55,20 +55,20 @@ prefix = "fno"
 # inbox_dir = <unset>   # optional; no default
 # Override path to the capture-tier inbox/parking-lot file.
 # inbox_path = <unset>   # optional; no default
-# Override path to the agents registry.json.
-# agents_registry_path = <unset>   # optional; no default
 # Override path to the handoffs dir.
 # handoffs_dir = <unset>   # optional; no default
 # Override path to the retro-pending dir.
 # retro_pending_dir = <unset>   # optional; no default
 # Override path to the cross-project mail bus dir.
 # bus_dir = <unset>   # optional; no default
-# Override path to the loops pause-all sentinel.
-# loops_paused_json = <unset>   # optional; no default
+# Override root dir for the per-chat message store (default ~/.fno/chats).
+# chats = <unset>   # optional; no default
 # Override path to the observer harness digest dir.
 # observer_reports_dir = <unset>   # optional; no default
 # Override path to the operator's priorities lane.
 # operator_lane = <unset>   # optional; no default
+# Override path to the per-repo spaces root.
+# spaces_dir = <unset>   # optional; no default
 
 [obsidian]
 # Whether this project uses an Obsidian vault for plans/docs.
@@ -85,6 +85,12 @@ enabled = false
 [inbox]
 # Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (turn-boundary nudge + `fno agents mail status`).
 unclaimed_ttl = 1800
+# Seconds past which an outstanding sent message drops off the nag entirely and is never grepped again.
+landed_abandon_ttl = 21600
+
+[user]
+# What fno calls you. Empty falls back to `git config user.name`.
+name = ""
 
 [sandbox]
 # When a headless harness has no confinement backend: refuse before spawn (default) or explicitly warn and continue unconfined.
@@ -93,6 +99,12 @@ on_unavailable = "refuse"
 [blueprint]
 # Default cap on group PRs per decomposed epic; an epic plan-doc's max_children frontmatter overrides it per-epic and --max-prs may only tighten it.
 max_prs_per_epic = 4
+# Added lines a cli/src/fno Python change that does not shrink the tree may add under law d-a9cddc93 (default 30). The push-time tally in check-file-budget.sh passes a change whose Python tree net is negative (a port that deletes more than it adds); this budget binds a change whose net is zero or positive. Also read by the plan gate in validate-plan.sh.
+python_repair_added_lines = 30
+
+[plan]
+# Added lines a target session's branch may carry before the commit-time diff-budget guard (hooks/diff-budget-commit.sh) names the overrun; the bound plan's frontmatter diff_budget key overrides it per plan (default 300; 0 is off).
+default_diff_budget = 300
 
 [backlog]
 # Prefix for minted node IDs (<=7 chars; not cv-/fu-/tgt-).
@@ -101,14 +113,24 @@ max_prs_per_epic = 4
 id_hex_width = 8
 # Age (days) before an unmoved ready node is quarantined from selection.
 staleness_days = 21
-# Auto-rendered projections (GLOBAL config file only): every graph mutation re-renders each {path, scope, projection=local|backlog|roadmap} target; public targets use the leak gate and local is full-detail.
+# Most open children an epic may hold. A write that would parent one more open child under a full epic is refused and names the new-epic verb. Unset means no cap. The graph store reads it from the config.toml beside graph.json, the global config on a default install.
+# epic_max_open_children = <unset>   # optional; no default
+# Most unplanned, machine-filed ideas one nearest-epic or project scope may hold (default 25; 0 is off). Operator asks are never capped. The graph store reads it from the config.toml beside graph.json.
+max_open_ideas = 25
+# Auto-rendered boards (GLOBAL config file only): every graph mutation re-renders each {path, scope, projection=local|backlog|roadmap} target; local (the default) writes the unified board page, backlog and roadmap are retired and warn-skip.
 render_targets = []
+# Seconds an open local board, fleet.html or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
+page_reload_s = 60
 
 [backlog.maintain]
 # Age (days) before an idea is flagged stale.
 staleness_days = 30
 # Consecutive failures before a node auto-defers.
 max_failed_attempts = 3
+# Idle hours before `maintain --apply` and `requeue` settle an open do row with no live claim and no reachable worker on its node.
+abandoned_do_row_hours = 24
+# Wall-clock budget (seconds) for one `fno backlog maintain` pass; a short run exits 4 with a partial receipt naming the leg it stopped in.
+budget_seconds = 300
 # Age (days) before a stale idea enters the validity sweep.
 validity_days = 60
 # Oldest-first validity-sweep batch size (clamped to 100).
@@ -131,7 +153,7 @@ max_nodes = 3
 enabled = true
 # Whether a post-merge watcher self-reaps.
 self_reap = false
-# Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git checkout main && git pull && fno doctor update && fno agents restart`). Unset = off.
+# Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git fetch origin main && git merge --ff-only origin/main && fno doctor update && fno agents restart`). Unset = off.
 # sync_command = <unset>   # optional; no default
 # Repo-relative fnmatch globs gating the canonical sync (empty = always run; e.g. `["cli/**", "crates/**"]` skips a docs-only merge).
 sync_paths = []
@@ -149,6 +171,8 @@ model = "claude-opus-5"
 # output_dir = <unset>   # optional; no default
 
 [review]
+# How much review a code PR must have before it can merge, as one rung of a nine-step ladder (no_review | tests_pass | self_review | independent_review | github_review | peer_review | self_and_github | self_and_peer | self_github_and_peer). Default self_review: one real final-head review, author context allowed. Auto-merge (config grants, env grants, finalize, GitHub-native arming) refuses below self_review and names the remedy. Unset infers one visible posture from the legacy settings and prints the exact `fno config set review.posture <rung>` command that makes it permanent.
+# posture = <unset>   # optional; no default
 # GitHub App bot logins that must have reviewed before the ship gate goes green (the GATE). Legacy alias: required_bots.
 # github_apps = <unset>   # optional; no default
 # Legacy alias for config.review.github_apps (a straight rename); github_apps wins if both are set.
@@ -169,12 +193,16 @@ reviewer_registry = {}
 reviewers = []
 # When true (default), a code payload floors the harness-resolved self-review reviewer (claude /code-review, codex /review) onto the required set on a stock install, so a /target that ships code is held for a head-pinned attestation instead of asking an epic leader. Set false only under a live claim; the opt-out lapses after review.optout_ttl_minutes and disarms unattended auto-merge while held.
 self_review_required = true
-# When true (default false), a PR whose only coverage is the author's own (self_attested) local attestation reads as uncovered; the refusal names both satisfying paths: a second session's head-pinned attestation, or a GitHub App review. Read `fno doctor`'s self-attestation report before flipping it - that row is the number of recent merged PRs that would have been held.
+# DEPRECATED, ignored since 2026-09-05: origin never gates. Setting it changes nothing; the key is kept so an existing config still loads. Every review counts as a round, whoever or whatever session produced it.
 require_corroboration = false
-# When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own and the corroboration term - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.
+# When true (default), a non-author human GitHub APPROVED review satisfies coverage on its own - the one producer a stranger's GitHub project emits with no footnote machinery. The approver's login must differ from the PR author's (GitHub refuses an author's approval server-side; the gate asserts it, and an unreadable PR author excludes fail-closed). Set false to keep today's recorded-but-never-counted behavior. Limit: GitHub's refusal is per identity, not per human - a second account with its own token can still self-approve.
 github_approval_satisfies = true
-# The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. Past this many rounds, a finding still open is FILED as a backlog node and the merge proceeds. The exception is a CONFIRMED correctness or security finding, or a truncated remainder. Those keep the IMPOSSIBLE verdict and need a non-author GitHub approval or the coverage-override label. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
+# The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. At this many rounds the review phase is complete: the PR merges on green CI and open findings stay in the PR conversation - nothing is filed to the backlog and no finding class holds the PR past its own budget. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
 max_rounds = 2
+# How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation law d-608344c1). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.
+carry_interdiff_lines = 100
+# How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report and the stop hook run the sweep; it is idempotent, so re-running adds nothing.
+invocation_ttl_minutes = 15
 # Categories a finding may carry and still be non-blocking when its verdict is not CONFIRMED (default: docs, formatting, naming, nit, simplification, style, test-coverage, typo). A configured list EXTENDS that default rather than replacing it, so naming one category cannot silently narrow the gate. A CONFIRMED verdict blocks whatever the category says, and a finding missing a required field blocks too. The gate re-derives blocking from this list itself and never reads the producer's own blocking count.
 # nonblocking_categories = <unset>   # optional; no default
 # How long a registered review hold blocks a merge before it ages out (default 90). A review that starts registers review:branch:<branch>; fno do pr status and fno do pr merge refuse while it is live, so a merge cannot land on the pre-review code. A wedge bound, not an estimate: an expired hold clears with a receipt rather than holding the lane forever.
@@ -187,16 +215,12 @@ external_reviewers = []
 agent_harnesses = {}
 # Legacy alias for config.review.agent_harnesses (a straight rename); agent_harnesses wins if both are set.
 agent_providers = {}
-# Opt-in per-agent harness/provider/model routes for named sigma sessions.
+# RETIRED with the sigma panel: the review-posture ladder (config.review.posture) replaced per-agent review routing. An empty value is accepted; any configured route refuses with the replacement named, so remove the key.
 agent_routes = {}
 
 [review.cross_model]
 # Enable cross-model (codex/gemini) second-opinion review.
 enabled = false
-
-[style]
-# Rolling per-pair mail word budget inside the 10-minute window (default 80). Raise it alongside style.word_cap.mail: a higher per-message cap that leaves this at 80 refuses the very message the cap now permits.
-pair_budget_words = 80
 
 [style.word_cap]
 # Masked-word cap for style rule 7 on a mail body (default 80). The refusal names the number enforced here, not the built-in.
@@ -219,16 +243,14 @@ artifacts = {}
 [target]
 # Opt-in cleanup of provably-dead duplicate state files.
 dedupe_dead_duplicates = false
-# Auto-launch a /target worker when a node reaches ready via /blueprint. Harness and substrate come from the dispatch capability map, never a claude hardcode: claude and codex resolve to a native interactive thread, opencode and agy degrade to headless. The worker defaults to no-merge and lands a PR for review; merge posture resolves per node from auto_merge.grant. It never fires on a node that is not ready, one under a live claim, an epic with no ready child, a plan stamped source: claude-plan-mode, or a fleet at agents.max_live past the dispatch wait ceiling (FNO_AUTOLAUNCH_TIMEOUT, default 180s).
-auto_launch_on_blueprint = false
 
 [target.handoff]
 # Enable explicit target capability escalation.
 enabled = true
 # Context-used %% that triggers a general-session compact nudge.
 used_pct_trigger = 50
-# Context-used %% that triggers an earlier king compact nudge.
-king_used_pct_trigger = 40
+# Context-used %% that triggers an earlier lead compact nudge.
+lead_used_pct_trigger = 40
 
 [target.blast]
 # Enable blast-radius routing.
@@ -248,8 +270,32 @@ no_docs = false
 # Session-input default: max pipeline iterations.
 max_iterations = 40
 
+[test]
+# Wall-clock bound for one suite run under `fno doctor test`; on expiry the run's whole process group is killed, so the deps test binary cargo exec'd dies with it (default 1800).
+timeout_seconds = 1800
+# Cap on net-new test declarations enforced at pr push and `fno-agents test-delta`; unset means no cap.
+# max_net_new = <unset>   # optional; no default
+
+[guards]
+# Guardrail preset: strict (every gatable guard), standard (default: the two destructive-write guards stay on), or off. Read in Rust by guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.
+preset = "standard"
+
+[store]
+# The sqld primary every machine dials out to (an http:// URL on a private network). Set, the claim keys that decide dispatch run on the primary. Read from the global config only. Unset = local store, no socket. Default unset.
+# remote_url = <unset>   # optional; no default
+# Bearer token for store.remote_url, when the primary asks for one. Default unset.
+# remote_token = <unset>   # optional; no default
+# true moves the backlog itself to the primary named by store.remote_url; both keys must be set. Default false.
+share_backlog = false
+
 [agents]
-# Per-verb spawn-defaults overlay keyed by the seed's leading slash-verb. A profile may set scalar fields or a strict ordered lanes list whose links use {provider,model,effort,substrate,permission_mode,route,account,pane_group}. Lane fields sit one rung above profile scalars; explicit flags still win. Malformed lanes refuse at the spawn seam rather than billing an unintended vendor.
+# Seconds a single-flight answer counts as fresh (default 60, one liveness cadence). Callers arriving inside the window read one child's stdout instead of each spawning their own; the latch is keyed on the normalized argv, so two `do pr wait` calls for different PRs stay two flights.
+single_flight_ttl_seconds = 60
+# Seconds a later caller waits for the in-flight holder's answer before running its own (default 30). Set over the 23.2 s worst-measured roster read: load is when the latch has to hold. An exhausted budget spawns and says so, because a latch that can wedge a caller is worse than the fan-out it prevents.
+single_flight_join_budget_seconds = 30
+# Age at which an fno child that init inherited is reaped (default 5400). Three times `do pr wait --timeout 30m`, the longest detached child allowed to be running. The sweep also needs parent pid 1 and a pid no registry row names live.
+orphan_reap_after_seconds = 5400
+# Per-verb spawn-defaults overlay keyed by the seed's leading slash-verb. A profile may set scalar fields or a strict ordered lanes list: each lane is either the name of a [[routing.models]] row (harness, model, effort, route, account) or an inline table {provider,model,effort,substrate,permission_mode,route,account,pane_group,args}. Lanes are walked in declared order (the list is the rank), each lane's capacity read per its account, and the first lane that passes is the spawn's coordinate. by_difficulty optionally keys low|medium|high overlays that replace lanes and the policy fields; omitted fields inherit the base slot, and the effective difficulty comes from the dispatched node, rounding up to high. on_exhausted declares the all-lanes-skipped terminal: refuse (default; the spawn stops), degrade (the profile scalars answer), or queue (a typed capacity refusal, exit 78). on_low governs a low-capacity observation: allow, prefer_healthy (default; demote low behind healthy lanes), or skip. on_unknown governs stale, absent or unproven observations: allow (default) or skip. A lane named on the command line or FNO_SPAWN_GATE=0 degrades whatever on_exhausted says. Malformed lanes, overlays and unknown row names refuse at the spawn seam rather than billing an unintended vendor. A profile may also carry a harness table (agents.profiles.<verb>.harness.<h>) whose entries re-answer permission_mode, effort, substrate or args for ONE harness; it sits between the lane rung and the profile scalars, and the same lane-field refusal applies. agents.profiles.blueprint.max_live (default 5) and agents.profiles.blueprint.max_live_per_territory (default 1) cap live blueprint threads; the spawn gate refuses past either and teaches the subagent path.
 profiles = {}
 # Ordered fallback chain per node size, consulted ONLY when a provider refuses and the account queue cannot answer (agents.fallback.<S|M|L|default> = a list of {harness,model,effort,substrate,permission_mode,route,account} links). The operator rule 'simple work to a claude sonnet bg thread, complex work to codex' written where a daemon can read it. Give every size more than one link: a claude weekly cap and a z.ai five-hour cap are different meters with different periods, and either can be the one that is down. A link whose own provider reads EXHAUSTED with an unexpired reset is SKIPPED; UNKNOWN is not exhausted and stays eligible. An all-exhausted chain returns empty rather than link zero, because routing into a known-capped provider is worse than holding. Unlike agents.profiles this block REFUSES a malformed value rather than degrading open: degrading open on the failover path spawns a worker at an unintended vendor and bills it.
 fallback = {}
@@ -261,28 +307,34 @@ confirm = "auto"
 auto_register_sessions = false
 # Launch routed claude panes through happy for remote monitoring; default false and pane-only.
 happy_routed_panes = false
-# Seconds a finished agent-view row stays before dead-row GC reaps it (default 3600).
-dead_row_grace = 3600
-# Cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3).
+# Minutes after spawn before the daemon checks worker progress (default 10, range 1 to 60). With no progress it mails the spawning lead and checks once more after the same interval.
+first_check_minutes = 10
+# Seconds a worker's transcript must be quiet past, once every node its session is named on is done, before the daemon's retirement sweep drops its registry row (default 900). The receipt and the node's sessions[] row keep the resume handle. A legacy recovery.retire_grace_s still parses and lifts onto this key with a warning.
+retire_grace_s = 900
+# Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agents status` carries the value the loop enforces.
+retire_interval_s = 300
+# Seconds a reaper hold (sources disagree, transcript unresolved, open do row, needs live stop, stop refused) must sit past before the reap report names its release verb and the stale-escalate arm asks the operator (default 5400). A hold whose age cannot be measured never escalates.
+hold_escalate_after_s = 5400
+# Backstop cap on concurrent live worker processes (fno registry + claude roster union); spawn queues at cap (default 3). Sized from RAM, because every live row holds RAM whether or not it works: floor((RAM_GB - 4 GB OS reserve - your desktop apps) / 1 GB per worker). The 1 GB planning figure is generous on purpose (a build or a test suite bursts past the measured 430 MB a quiet worker holds); the CPU axis (max_fleet_cpu_share) binds first on any machine with real headroom, so raise this instead of tuning it.
 max_live = 3
-# Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers, `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.
+# Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).
+max_live_per_territory = 4
+# Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.
 provider_limits = { zai = { lanes = 5, subagents = 1 } }
 # Maximum panes placed in one named pane_group tab before a spawn creates the next numbered sibling tab (default 4).
 pane_group_max = 4
-# Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4).
+# Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB box, 3 on 16 GB, 4 above.
 min_free_gb = 4.0
-# Load at which spawn preflight stops trusting load average and consults fleet CPU attribution: this factor times the CPU count on the 1-min load average (<= 0 disables the whole check; default 8). A TRIGGER, not a refusal - it refused outright until the fleet-share governor landed, twice on load the fleet did not cause, because load average counts blocked processes and measures nobody's CPU share. Measured motivation for keeping a load signal at all: load 309 on 12 CPUs while the RAM floor held ten times its margin.
+# Swap-pressure ceiling in percent used for spawn preflight, checked beside agents.min_free_gb on EVERY spawn; spawn refuses when swap used is at or above the cap AND the machine swaps in at 1 MiB/s or more over a 1 s sample (<= 0 disables; default 90). macOS keeps swap allocated after pressure ends, so allocation alone refused every spawn with 69 percent of RAM free and no paging. The receipt names the failing term; raising min_free_gb does not fix a swap refusal.
+max_swap_pct = 90.0
+# DEPRECATED and ignored since 2026-09-09: admission decides on the fleet's CPU share (agents.max_fleet_cpu_share) on every spawn, never on a load trigger - the 1-minute load moved 101 points in three minutes with no change in real work. The key parses for one release and prints one deprecation line when set; delete it.
 max_load_per_cpu = 8.0
-# Share of CPU capacity the fleet may hold before spawn preflight refuses, checked only above agents.max_load_per_cpu (default 0.5). This is the figure the refusal already printed and never decided on. Unreadable attribution refuses, because an unknown share is not evidence of headroom.
+# Share of CPU capacity the fleet may hold, checked on EVERY spawn (default 0.5). An attribution gap widens the share to an interval bounded above by the whole machine's measured CPU: over by its own attributed work the gate holds and re-samples; the ceiling inside the interval refuses and names both bounds plus the gap; above the interval the gate admits and says the reading was an upper bound. Leave 0.5 unless the box is dedicated, then 0.6.
 max_fleet_cpu_share = 0.5
-# Absolute machine backstop for spawn preflight: refuse above this factor times the CPU count regardless of whose load it is (<= 0 disables; default 40). Pure fleet-share admits spawns onto a box already thrashing from foreign work. Keep it well above agents.max_load_per_cpu.
-hard_max_load_per_cpu = 40.0
 # Worker CPU/IO priority: utility (background QoS, default) or off.
 worker_qos = "utility"
 # Absolute override for the doctor footprint sustained-CPU threshold, in cores. Unset, the threshold derives from measured CPU capacity (a fraction per core) instead of an absolute constant that asked a 12-core machine's fleet to idle at 8%.
 # footprint_sustained_cpu_cores = <unset>   # optional; no default
-# Default --permission-mode for autonomous dispatchers only (dispatch-node.sh / backlog advance / think dispatch); defaults to bypassPermissions so fire-and-forget workers skip the worktree-entry prompt. An explicit flag wins; opt out with an explicit "" (forward nothing) or "default" (prompt positively). Claude-native, fail-closed at the spawn seam.
-spawn_permission_mode = "bypassPermissions"
 
 [agents.a2a]
 # Allow agents to auto-open agent-to-agent threads.
@@ -297,7 +349,7 @@ provider = ""
 model = ""
 # Default reasoning effort for bare spawns (minimal|low|medium|high|xhigh|max); an explicit --effort wins, empty = unset. Config-sourced effort degrades open on providers with no effort surface (gemini/agy).
 effort = ""
-# Default substrate for bare spawns (pane|thread|headless); bg is a deprecated alias for thread for one release. An explicit substrate wins, empty = unset (per-provider default). Config-sourced value degrades open with a warning if incompatible with the resolved provider (e.g. thread needs the harness's journey-proven lane, claude only today).
+# Default substrate for bare spawns (pane|thread|headless). An explicit substrate wins, empty = unset (per-provider default). Config-sourced value degrades open with a warning if incompatible with the resolved provider (e.g. thread needs the harness's journey-proven lane, claude only today).
 substrate = ""
 # Default --permission-mode for bare spawns; an explicit flag wins, empty = unset. Config-sourced value degrades open with a warning if the resolved provider cannot map it (an explicit --permission-mode stays fail-closed).
 permission_mode = ""
@@ -305,12 +357,34 @@ permission_mode = ""
 route = ""
 # Default claude account pin for bare spawns, forwarded as --account; an explicit --account wins, empty = unset.
 account = ""
+# Per-harness answers under the spawn defaults, keyed by harness name: each entry may set permission_mode, effort, substrate, or an opaque args list appended behind a -- passthrough fence (the harness's own bundle, e.g. codex --profile <name>). The scalar fields on agents.defaults are the base that works for most; an entry here re-answers one harness whose flag vocabulary differs. Precedence: explicit flag > lane > profiles.<verb>.harness.<h> > profiles.<verb> > agents.defaults.harness.<h> > agents.defaults. provider/model/route/account are refused here (lane fields, never per-harness answers); an unknown harness name refuses at the spawn seam.
+harness = {}
 
 [agents.reap_receipts]
 # Days a reap receipt (the resume handle for a reaped row) stays before the GC sweep expires it (default 7). A receipt whose reaped_at cannot be read is kept and named, never deleted on a failed read.
 retain_days = 7
 
+[agents.reap]
+# Which rows the roster sweep may retire: off retires nothing and reads roster=off on the tick, provenanced (the default) only rows whose provenance resolves to fno and whose work is done, all widens to rows fno itself spawned (sessions or registry provenance) with open work. The daemon's retire arm runs the sweep after the registry sweep, so off stops the scheduled pass; the manual verb keeps its own default. An unowned session retires only on an ownership marker: a sessions[] row fno wrote, or a reap receipt an earlier retirement staged for the same session. A present value that cannot be honored degrades in place to the default and is named by fno config doctor.
+roster_scope = "provenanced"
+
+[agents.state_reap]
+# Run age-based cleanup for expendable lock, expired-claim, and PR-status cache files (default true).
+enabled = true
+# Days to retain inactive lock files before state cleanup removes them (default 7).
+locks_retain_days = 7
+# Days to retain claims moved into the expired-claims graveyard (default 30).
+expired_claims_retain_days = 30
+# Days to retain expendable PR-status cache files (default 14).
+pr_status_cache_retain_days = 14
+
+[agents.claude]
+# What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat.
+beat = "auto"
+
 [agents.codex]
+# What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat.
+beat = "auto"
 # Use full-yolo (drop sandbox) for headless codex workers.
 headless_yolo = false
 
@@ -325,26 +399,52 @@ max_processes = 400
 [dispatch]
 # DEPRECATED: the stage table (config.agents.profiles.<verb>.provider) is the home for the harness axis; this key reads as the fallback rung beneath it for one release. Migrate with `fno config set agents.profiles.target.provider <harness>`. Formerly the configured harness for autonomous dispatch.
 harness = ""
-# Default dispatch substrate (thread|headless|pane); bg is a deprecated alias for thread for one release. Empty = per-harness default (claude=thread, else headless; a harness's thread bit must be journey-proven).
+# Default dispatch substrate (thread|headless|pane). Empty = per-harness default (claude=thread, else headless; a harness's thread bit must be journey-proven).
 substrate = ""
 # Dispatch command template with a single {id}. Empty = '/target --no-merge {id}'. Written in canonical claude slash syntax and normalized per-harness at resolve. A leading /verb becomes $fno:verb on codex and /fno:verb on opencode. The deprecated gemini is refused. A non-slash template passes through literally.
 command = ""
-# Verb allowlist a node's dispatch_verb must match or the resolver refuses (default: /target, /think).
-allowed_verbs = ["/target", "/think"]
+# Dispatch verbs from outside fno, as [dispatch.verb_registry.<name>] tables with the descriptor fields (invocation, invocations, requires, takes_node_id, asserts, session_phase). Unioned with the allowed_verbs allowlist at resolve; a key naming an allowlisted verb is dropped, so a project cannot redefine a shipped one. invocation is the worker's exact spelling and is rendered verbatim (never fno-namespaced); invocations maps harness to spelling and doubles as the harness allowlist, so a dispatch to any other harness refuses. requires=skill probes the harness skill roots at resolve and refuses naming them; asserts records what a completion proves (pr | doc | invocation); session_phase names the sessions-row phase stamped for the worker (a --node dispatch of a registry verb without one is refused).
+verb_registry = {}
+# Verb allowlist a node's dispatch_verb must match or the resolver refuses (default: /target, /think, /blueprint).
+allowed_verbs = ["/target", "/think", "/blueprint"]
 # DEPRECATED: reads as auto_merge.grant for one release ('dispatch' when true); migrate with `fno config set auto_merge.grant <none|dispatch>`. Formerly the per-project merge posture for autonomous dispatch.
 auto_merge = false
 # On provider exhaustion during autonomous dispatch: 'defer' (default; a fresh install is unchanged) waits for headroom; 'failover' rotates to the next non-exhausted provider in the active combo. A full-combo exhaustion falls back to defer; any unknown value degrades to 'defer'.
 on_exhaustion = "defer"
 # Minutes after which a LOW (not yet exhausted) quota window whose reset is FARTHER out than this arms a cross-harness cutover instead of a wait. Default 0 = off (a fresh install is unchanged). The predicate is inverted from the defer horizon on purpose: for deferring a distant reset means wait, for cutover it means leave now. Needs dispatch.on_exhaustion='failover' and a healthy candidate in the active combo; any non-integer or negative value degrades to 0.
 cutover_low_after_minutes = 0
+# The blueprint floor for a plan-less node (lean dispatch). 'high' (the default) routes a plan-less node to /blueprint only when its difficulty is high, its size is L, or an open premise question blocks it (the premise-question tag); every other plan-less node goes straight to /target, which states its own scope. 'medium' restores the pre-lean table (blueprint for medium and up). 'low' blueprints every plan-less node; 'never' targets everything. The lead check-in routes each unplanned row through the same table: blueprint candidates against the one-per-lead ceiling, the rest print as target-ready. Any unknown value degrades to 'high'.
+blueprint_floor = "high"
 
 [routing]
 # How the grid orders candidates that already clear the band: cheapest-that-clears (default), best-available, or prefer-harness. A value outside those three degrades to the default, so a typo can never select an objective nobody named.
 objective = "cheapest-that-clears"
 # The harness the prefer-harness objective favors. A tiebreaker WITHIN a band, never a reason to lower one.
 prefer_harness = ""
-# The routing inventory: a list of {name, harness, model, route, account, band, effort, cost_per_mtok_in, context} rows. A small built-in table is a FALLBACK under this key: a row here OVERRIDES the built-in of the same name per field and a new name EXTENDS the set, so adding a model is a config edit and never a Python edit. Declare none and the grid still records no-inventory-declared and injects nothing; the fallback only keeps a tier request answerable. `fno/routing_sample.toml` ships as a labelled sample no code path reads.
+# The routing inventory: {name, harness, model, route, account, band, effort, cost_per_mtok_in, context, context_measured_at, context_source} rows. A row OVERRIDES the built-in of the same name per field; a new name EXTENDS the set. A row's context counts as a measured window only beside a context_measured_at date; an unmeasured model falls back to the id-based default. Declare none and the grid records no-inventory-declared; the fallback only keeps tier requests answerable. `fno_routing_sample/routing_sample.toml` ships as a labelled sample.
 models = []
+# Opt-in strict inventory: a spawn qualifies against its effective work-kind slot's CONFIG-declared lanes only, and an unresolvable request is a named refusal. A typed --model, -P, or --route is an operator pin and outranks the declared lanes; every axis the operator did not name still qualifies against them. Default off.
+enforce_inventory = false
+# The operator's access posture: local (attending), remote (only verified-native-view rows qualify), or unknown (the default; filters like remote, labeled unknown in receipts). Never inferred.
+operator_access = "unknown"
+
+[sideline]
+# The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach.
+layout = "card"
+
+[sideline.colors]
+# Lane colors keyed by harness name (e.g. codex = "cyan"). The cascade's coarsest config key; see sideline.colors.route.
+harness = {}
+# Lane colors keyed by the vendor lane the row bills (route, else provider), e.g. openrouter = "magenta". The DEFAULT colored axis: it separates bills where harness and model each fail alone.
+route = {}
+# Lane colors keyed by the recorded model string, quoted ("glm-5.3-flash[1m]" = "green"). Rendered verbatim; never imply an alias resolved.
+model = {}
+# Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row.
+row = {}
+
+[split]
+# Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.
+opens = "pane"
 
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.
@@ -385,7 +485,7 @@ enabled = false
 interval = "5m"
 # Consecutive dispatch failures before a node is parked.
 failure_limit = 3
-# In-flight nodes per project per tick (v1 == 1).
+# Global ceiling on concurrent converge runs across all missions.
 max_concurrent = 1
 # Scope the drain daemon to a single mission's nodes.
 # mission = <unset>   # optional; no default
@@ -395,20 +495,26 @@ max_concurrent = 1
 max_lanes = 1
 
 [auto_merge]
-# Auto-merge a PR once external review passes.
+# Auto-merge a PR once CI is green AND the review posture is satisfied. There is no 'external review' step unless the review posture demands one: with review.posture below self_review (the floor) the merge refuses and names the rung to set. Read review.posture for what the rung requires before enabling this.
 enabled = false
 # WHO may merge once enabled passes (actor scope): 'none' = humans only via `fno do pr merge`; 'dispatch' = autonomously dispatched /target workers may merge too. Replaces the deprecated dispatch.auto_merge bool. Any unknown value degrades to 'none'.
 grant = "none"
 # Merge strategy: merge | squash | rebase.
 merge_strategy = "merge"
-# Delete the remote branch after a merge. Executor paths only (`fno do pr merge`, pr verify); GitHub's native auto-merge queue has no branch-delete hook.
+# Delete the remote branch after a merge. Honored on every path: the executor merges (`fno do pr merge`, pr verify) delete it inline, and a merge GitHub's own auto-merge queue lands later is cleaned up by the PR watcher when it observes the merge.
 delete_branch_on_merge = true
 # Require CI green before auto-merge.
 require_checks_pass = true
+# Require green pull_request checks to have run against the current base tip.
+require_fresh_ci = true
 # Conflict-resolution agent for auto-merge rebases.
 conflict_resolution = "opus"
 # Post-failure remediation policy for auto-merge.
 remediation = "attempt"
+
+[auto_heal]
+# Arm the CI healer: each tick spawns one detached pr-heal --all --apply drive loop over every project root, off the tick's own budget. Default false. Measured 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. Arm with: fno config set auto_heal.enabled true.
+enabled = false
 
 [pr_watch]
 # Enable the global PR-state watcher daemon.
@@ -421,40 +527,64 @@ retries = 3
 max_age_days = 14
 # Claude model used for headless PR-watcher skill fires.
 model = "claude-haiku-4-5"
-# Wall-clock ceiling for one PR-watcher tick; unset derives 0.8x the poll interval so a stalled tick can never suppress its successor.
+# Wall-clock ceiling for one PR-watcher tick; unset derives 0.8x the poll interval so a stalled tick can never suppress its successor. Each phase also runs under its own alarm slice inside that ceiling, so one slow phase cannot abort the phases after it.
 # tick_timeout_seconds = <unset>   # optional; no default
 # Skip the PR-watcher's per-PR dispatch pass when the shared GraphQL budget falls below this floor.
 graphql_min_remaining = 200
+# Consecutive broken tick ends (timeout/error) at a fresh watermark before the watcher reads `wedged` and auto-heal re-renders its plist via `fno do pr watch refresh`.
+wedged_after_ticks = 3
 
 [groom]
 # Enable the daily backlog-grooming worker spawn (fno backlog groom). Defaults true.
 enabled = true
 
-[restart]
-# Enable crash-recovery worker revival after `fno agents restart --mux` kills a server. Defaults true.
-enabled = true
-
 [evals]
 # Enable the headless eval-suite grading-worker spawn. Defaults true.
 enabled = true
+# Days between scheduled regression-tier runs on the pr-watch tick (0 disables).
+schedule_days = 7
+# Age in days at which the newest regression-tier run reads STALE in doctor and triage health.
+stale_days = 7
+# Distinct jobs inside the window at which a recurring scratch shape files one p1 node.
+scratch_threshold = 3
+# Window in days the scratch-shape sweep reads job tmp dirs over.
+scratch_window_days = 28
 
 [recovery]
-# Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.spawn_permission_mode default); a non-bypass worker cannot run autonomously and is not resumed.
+# Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed.
 enabled = true
 # How stale a bg session must be (seconds) before recovery acts on it.
 idle_threshold_seconds = 900
 # Per-session cap on held-by-design surfaces before recovery stops surfacing a stuck session (close notifications are once-only, tracked separately).
 max_nudges = 3
-# External fleet watchdog lane on the same tick: off (default) | report (publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless PRs older than 24h, each finding naming its clearing verb) | wake (report, plus resume positively stalled sessions). Reap and reroute never fire from a tick; they need a manual `fno agents watchdog --apply-all`.
-watchdog = "off"
-# Mail handle the unfinished-work digest is pushed to when the finding set changes (agent name, short id, or project:<slug>). Empty (default) mails nobody.
-watchdog_mail_to = ""
-# Whether `fno agents watchdog --apply-all` may EXECUTE the reap lane (default false). Reap runs stop then rm, which deletes the session's worktree; work that exists only there is gone with it. Wake and reroute are recoverable, so they ship on. Reap verdicts are still computed, reported and mailed when this is off - only the destructive action is withheld.
-watchdog_reap = false
 # Whether daemon startup may archive orphan state directories and rewrite dead-PID rows as exited. Defaults false so restart recovery preserves every resume record.
 startup_destructive = false
-# How long a finished worker stays parked before `fno agents watchdog --apply-all` stops it (default 900 seconds; 0 turns the retire lane off). A worker that declares itself done and never exits holds a live slot against config.agents.max_live forever. The grace is the follow-up window, so a worker that just delivered can still be asked one more thing. Unlike reap this ships armed: retire only runs stop, so the worktree, the transcript and the registry row all survive and `fno agents resume` undoes it.
-retire_grace_s = 900
+# Minimum distinct-session votes required to open a provider/account breaker; default 2, configurable down to 1 so a lone worker's outage can move provider ownership when the operator says so.
+provider_outage_quorum = 2
+# Fair Usage Policy cross-session quorum window in seconds; minimum and default 300.
+provider_outage_fup_window_seconds = 300
+# Consecutive assistant 529 records required per session; minimum and default 3.
+provider_outage_529_count = 3
+# Minimum span in seconds for one persistent 529 session; minimum and default 120.
+provider_outage_529_span_seconds = 120
+# Cross-session window in seconds for persistent 529 quorum; minimum and default 600.
+provider_outage_529_cross_session_window_seconds = 600
+# Maximum age in seconds for a persisted pane snapshot to vote; minimum and default 120.
+provider_outage_pane_freshness_seconds = 120
+# Maximum age in seconds for durable transcript outage evidence; minimum and default 600 so the full cross-session overload window remains observable. Evidence naming a reset epoch still in the future stays admissible past this age, by name, so a multi-hour cap cannot age out of view.
+provider_outage_evidence_freshness_seconds = 600
+# Grace after a reset-bearing limit before the breaker may close; minimum and default 120.
+provider_outage_reset_grace_seconds = 120
+# Maximum age in seconds for a persisted destination canary marker; minimum and default 120.
+provider_health_marker_ttl_seconds = 120
+
+[recovery.watchdog]
+# Whether the external fleet watchdog lane runs on the pr_watch tick (default false). The depth it goes to is recovery.watchdog.mode.
+enabled = false
+# How far an enabled watchdog lane goes: report (default; publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless open PRs (a PR whose owner reads unknown waits 24h), each finding naming its clearing verb) | wake (report, plus resume positively stalled sessions) | handoff (also permit a proved cross-provider outage transaction). Reroute never fires from a tick; it needs a manual `fno agents watchdog --apply-all`.
+mode = "report"
+# Mail handle the unfinished-work digest is pushed to when the finding set changes (agent name, short id, or project:<slug>). Empty (default) mails nobody.
+mail_to = ""
 
 [health_monitor]
 # Enable backlog health monitoring.
@@ -543,15 +673,25 @@ sandbox = false
 [worktree]
 # Global worktree-isolation policy (never|harness-native|external); default harness-native. `never` launches code payloads in place (e.g. an Obsidian vault checkout). A per-project work.workspaces.<slug>.projects[].worktree key overrides it.
 # policy = <unset>   # optional; no default
+# Run dependency install when a new worktree is set up (read by hooks/worktree-setup.sh and worktree-manager.sh); set false to skip it. Default true.
+auto_install = true
+# Explicit setup command run after a new worktree is created, whatever auto_install says (read by hooks/worktree-setup.sh and worktree-manager.sh). Default empty.
+setup_command = ""
+# Skip the post-setup verification step in a new worktree (read by hooks/worktree-setup.sh). Default false.
+skip_verification = false
+# Verification command for a new worktree (read by hooks/worktree-setup.sh); falls back to the script's own detection when empty. Default empty.
+test_command = ""
+# How far the merged sweep's done-node arm goes on a done tree with uncommitted tracked changes: balanced (default) keeps the tree and reports the diff; aggressive salvages the tracked diff to refs/fno/salvage/<node>, then prunes once the 30m grace passes and no live session holds the tree. Both keep the branch, salvage untracked files, and still block on conflicts, unborn trees, unreadable probes, live claims, and live sessions.
+prune_done = "balanced"
 
 [model_routing]
 # Route auxiliary roles (coordinate/tidy/orient/consolidate/post-merge) and the opt-in build lane to a secondary provider at spawn.
 enabled = true
-# Secondary providers (name -> {protocol, base_url, api_key_env, api_key_file, haiku_model, wire_api}); 'zai' is built in.
+# Secondary providers (name -> {protocol, base_url, api_key_env, api_key_file, haiku_model, tier_models, wire_api}); 'zai' is built in. tier_models maps a Claude tier to a model ({opus = "glm-5.3[1m]"}); keys are opus|sonnet|haiku|fable and undeclared tiers keep the spawn model.
 providers = {}
 # Per-role target map (role -> 'provider/model', e.g. tidy: 'zai/glm-4.7'; legacy 'provider,model' comma form also accepted); manage via `fno config route set/unset`. The opt-in 'build' lane routes delivery spawns (/target bg).
 roles = {}
-# Extra env merged into routed spawns (e.g. API_TIMEOUT_MS, per-tier model overrides).
+# Extra env merged into routed spawns (e.g. API_TIMEOUT_MS). Prefer tier_models for per-tier models; extra_env still wins as a hand pin.
 extra_env = {}
 
 [mux]
@@ -575,13 +715,19 @@ attach_digest_threshold_min = 10
 hover_focus = true
 # Show the mux status row at the bottom of the terminal (default on).
 status_row = true
-# Mux chrome theme: terminal (default, inherits the emulator colors) | catppuccin | tokyo-night | gruvbox. A named palette recolors the chrome while the body stays the emulator's inverse block. Set from the settings picker.
+# How the mux shows machine load: simple (default) says it in plain words, e.g. 'CPU 80% busy: agents 58%, everything else 22%'; detailed shows the raw numbers (cores, load averages, GB). Both draw a CPU graph. Latched at mux client start.
+load_readout = "simple"
+# Mux chrome theme: footnote-superscript (default, the brand dark palette) | footnote-paper (auto-picked on a light terminal background) | terminal (no-op, inherits the emulator colors) | catppuccin | tokyo-night | gruvbox. A named palette recolors the chrome while the body stays the emulator's inverse block. Set from the settings picker. Role overrides: quote-dotted keys in [mux] - "theme.brand", "theme.needs_you" and "theme.border" take #rrggbb values that hold under any theme, and every role also takes `default` to pin that role to the terminal's own text color (white on a dark ground, black on paper); theme.border recolors every border at once (the pane frame, the modal outlines). The tab-bar mark's stamp takes no override.
 # theme = <unset>   # optional; no default
+# While a footnote theme is active, paint the terminal's own background, foreground and 16-color palette from the theme (OSC 11/10/4) and restore them on exit (default on).
+paint_background = true
+# What the sideline card's graph slot plots: activity (default) draws the tool-activity ramp colored ok/warn/error per interval, context draws the context percent's fill bar, steady for the whole session. Latched at mux client start.
+card_graph = "activity"
 
 [mux.restore]
 # Rebuild named held panes for pane-substrate workers after a mux server restart; focusing a held pane resumes its persisted harness session (default on).
 hold_workers = true
-# Startup restore policy for worker members: hold (rebuild named held panes, default), idle (members stay idle rows), or resume (run the bulk restore and resume every member through its own harness). Overrides hold_workers when set.
+# Startup restore policy for worker members: hold (rebuild named held panes, resume on focus, skip tabs whose every slot binds a done worker, default), idle (members stay idle rows), or resume (relaunch every member that is not tombstoned, gone, or reap-retired, finished work included). The policy never decides the tab count by itself: tabs rebuild from the stored tab trees under every value, so no value restores zero tabs. Overrides hold_workers when set.
 # policy = <unset>   # optional; no default
 
 [dev]
@@ -596,19 +742,29 @@ http_timeout_secs = 5
 # Retry budget per webhook dispatch before drop/short-circuit.
 retries = 2
 
-[king]
-# Arm the king loop: hold a king session open while its board names work it can shrink. Defaults false.
+[lead]
+# Arm the lead loop: hold a lead session open while its board names work it can shrink. Defaults false.
 enabled = false
-# Let the king merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the king's own work.
+# Let the lead merge a green mergeable PR. Defaults false; until set, a mergeable PR is reported and never counted as the lead's own work.
 autonomous_merge = false
-# Arm the pr-watch tick's wake phase: respawn a king whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
+# Arm the pr-watch tick's wake phase: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Needs the pr-watcher LaunchAgent loaded (RunAtLoad is false by design). Defaults false.
 wake_enabled = false
-# Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived reign.
+# Wakes allowed per scope per ROLLING 24h (default 32, ~1.5x the worst measured day). Never a lifetime constant: a lifetime cap strands a long-lived lead.
 wake_ceiling = 32
-# Minimum gap between billed wakes (default 900): a king woken inside the window is still working under its own in-session arm.
+# Minimum gap between billed wakes (default 900): a lead woken inside the window is still working under its own in-session arm.
 wake_debounce_seconds = 900
 # Timer-backstop interval (default 1800). An approximation of the mail and board-change triggers, kept so a missed event cannot strand a scope forever; the interval is a policy choice, not a measurement.
 wake_backstop_seconds = 1800
+# Minutes a blocked distress row may sit unanswered before the blocked_child board queue surfaces it (default 30). An answer is mail to that session, a claim release on the node, or the node closing.
+blocked_child_grace_minutes = 30
+# What a titled org session may write through the lead-delegation-guard hook. refuse (default) denies a write whose target resolves inside the repo, outside its .fno state tree, build output and any lead.write_roots entry, and names the rejected path. warn prints the refusal on stderr and allows, so a lead adopts the guard without a surprise. off silences the guard. An unknown value degrades to refuse.
+implementation_guard = "refuse"
+# In-repo paths a titled org session may still write through the lead-delegation-guard hook. A relative entry resolves against the repo root, and a leading ~/ against $HOME. The match is by realpath, so a symlinked entry covers its target. Default empty: every in-repo path outside .fno and build output is source and refused. A blank entry is dropped. '.' allows the whole repo, the same as implementation_guard = off. Paths outside the repo always allow and need no entry.
+write_roots = []
+# The /loop interval a lead self-injects on Claude (default 55m, under the one-hour prompt cache). Fail-safe: a value that is not <digits>[smhd] degrades to 55m at load, never raises.
+checkin_interval = "55m"
+# The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle).
+checkin_text = "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
 
 [accounts]
 # Name of the account record currently active for provider rotation.

@@ -21,16 +21,21 @@ Two load-bearing invariants, both from the epic:
   identified - unknown implementer identity or no diverse capacity. That is the
   one policy allowed to withhold a passing verdict.
 
-Pure and total: no I/O, never raises. The thin production accessor that feeds
-these from the real ledger/provider substrate lives in
-``fno.worker.review.review_assurance``.
+Pure and total: no I/O, never raises for the two functions above. The thin
+production accessor that feeds them from the real ledger/provider substrate
+(``review_assurance``, below) lives here too since the sigma
+panel's removal: it assesses the policy against the reviewer capacity that will
+actually run, which after the panel's removal is the lane's own runtime plus
+the configured cross-model provider kinds.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Sequence
+from pathlib import Path
+from typing import Literal, Optional, Sequence
 
+from fno.harness_identity import resolve_harness_identity
 from fno.review.provider_resolution import CLAUDE, DISPATCHABLE_PROVIDERS
 
 Effective = Literal["diverse", "portable", "unresolved"]
@@ -189,3 +194,127 @@ def assess_assurance(
         effective="portable",
         reason="same-family fresh-context review (no different-family capacity)",
     )
+
+
+# ── production accessors (moved here from the deleted panel worker) ──
+
+
+def _read_state(state_path: Path) -> dict:
+    """The target manifest's session_id read, tolerating absence.
+
+    The manifest is YAML frontmatter, not JSON, so only ``session_id`` is
+    parsed out of it (the same read init-target-state.sh performs).
+    """
+    import re
+
+    try:
+        text = state_path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 - manifest is optional for these reads
+        return {}
+    match = re.search(r"^session_id:\s*(.+)$", text, re.MULTILINE)
+    return {"session_id": match.group(1).strip()} if match else {}
+
+
+def _local_runtime_kind() -> Optional[str]:
+    """The harness this session runs on, or None when no marker resolves."""
+    try:
+        harness = (resolve_harness_identity().harness or "").strip().lower()
+    except Exception:  # noqa: BLE001 - an identity read never breaks review
+        return None
+    return harness or None
+
+
+def _cross_model_enabled() -> bool:
+    """``config.review.cross_model.enabled`` - the diversity switch.
+
+    Fail-open on an unreadable settings load (the substrate decides capacity;
+    this switch only decides whether non-claude kinds MAY serve), matching the
+    cross-model gates' own read direction.
+    """
+    try:
+        from fno.config import load_settings
+
+        return bool(load_settings().review.cross_model.enabled)
+    except Exception:  # noqa: BLE001 - unreadable config never narrows capacity
+        return True
+
+
+def resolve_session_id(session_id: Optional[str], state_path: Path) -> Optional[str]:
+    """Resolve the session nonce: explicit arg, else the state file's value.
+
+    The ONE place assurance resolution reads the session, so every surface
+    that names the implementer provider resolves identically. ``None`` when
+    neither source has it; callers decide whether that is fatal.
+    """
+    if session_id:
+        return session_id
+    return _read_state(state_path).get("session_id")
+
+
+def review_assurance(
+    session_id: Optional[str],
+    *,
+    size: Optional[str],
+    risk_surfaces: Optional[list[str]] = None,
+    state_path: Optional[Path] = None,
+) -> dict:
+    """Assess the review policy against the reviewer that will ACTUALLY run.
+
+    - implementer family + whether it was established come from real ledger
+      provenance (``load_implementer_identity``); a session id with no ledger
+      row is *unknown*, not defaulted-claude. When the ledger has no row yet,
+      the ambient harness of the session asking (the session that wrote the
+      code) stands in as the implementer.
+    - the effective reviewer kinds are the local runtime (the session's
+      ambient harness, else the implementer kind) plus every provider kind the
+      capacity substrate can genuinely serve TODAY while
+      config.review.cross_model is enabled: exhausted kinds are removed, a
+      disabled cross-model switch yields the ambient kind alone (F2), and an
+      unreadable headroom read fails CLOSED - only the ambient kind counts
+      when headroom cannot be measured, because treating a read error as
+      "nothing exhausted" reopens the diversity hole.
+
+    Never raises.
+    """
+    from fno.review import provider_resolution as pr
+
+    implementer, identity_known = pr.load_implementer_identity(session_id or "")
+    ambient = _local_runtime_kind()
+    if not identity_known and ambient:
+        implementer, identity_known = ambient, True
+
+    # exhausted_provider_kinds returns None when the headroom read FAILED. For
+    # this gate an unreadable headroom fails CLOSED: we cannot trust a
+    # non-claude kind can actually serve, so it does not count toward
+    # diversity.
+    exhausted = pr.exhausted_provider_kinds()
+    headroom_unknown = exhausted is None
+    exhausted = exhausted or set()
+
+    effective_kinds: set[str] = {ambient or implementer}
+    if _cross_model_enabled():
+        for kind in pr.available_provider_kinds():
+            kind = str(kind).strip().lower()
+            if kind in exhausted or headroom_unknown:
+                if kind != CLAUDE:
+                    continue
+            effective_kinds.add(kind)
+
+    policy = classify_review_policy(size=size, risk_surfaces=risk_surfaces)
+    verdict = assess_assurance(
+        policy,
+        effective_reviewer_kinds=sorted(effective_kinds),
+        implementer_provider=implementer,
+        identity_known=identity_known,
+    )
+    return {
+        "policy": verdict.policy.value,
+        "satisfied": verdict.satisfied,
+        "effective": verdict.effective,
+        "reason": verdict.reason,
+        "implementer_provider": implementer,
+        "identity_known": identity_known,
+        "effective_reviewer_kinds": sorted(effective_kinds),
+        "exhausted_kinds": sorted(exhausted),
+        "headroom_unknown": headroom_unknown,
+    }

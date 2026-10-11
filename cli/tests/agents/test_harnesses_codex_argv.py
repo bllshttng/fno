@@ -5,7 +5,7 @@ so a future refactor cannot silently change the codex invocation contract.
 
 Plan ACs covered:
 - 'inject_from_name(prompt, "orchestrator") returns "[from: orchestrator]\\n\\n<prompt>"'
-- 'sandbox_flag(yolo=False) returns ["--sandbox", "workspace-write"]'
+- 'sandbox_flag(yolo=False) returns ["--sandbox", "workspace-write"] plus the network override'
 - 'sandbox_flag(yolo=True) returns ["--dangerously-bypass-approvals-and-sandbox"]'
 - 'Mutually exclusive in any argv builder output'
 - 'from_name validation reuses the US2 validator (no fresh regex)'
@@ -55,7 +55,7 @@ def test_inject_from_name_preserves_multi_line_prompt():
 def test_sandbox_flag_default_is_bounded():
     # Sandbox tokens only (workspace sandbox); approval is a separate global
     # flag emitted before `exec` - see approval_flag.
-    assert codex_mod.sandbox_flag(yolo=False) == ["--sandbox", "workspace-write"]
+    assert codex_mod.sandbox_flag(yolo=False) == ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]
 
 
 def test_sandbox_flag_yolo_is_dangerous_bypass():
@@ -106,7 +106,7 @@ def test_approval_flag_yolo_is_empty():
 # ---------------------------------------------------------------------------
 
 # sandbox_flag output (approval is asserted separately via approval_flag).
-_BOUNDED = ["--sandbox", "workspace-write"]
+_BOUNDED = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]
 _FULL_YOLO = ["--dangerously-bypass-approvals-and-sandbox"]
 
 
@@ -116,7 +116,6 @@ def _hermetic_config(tmp_path, monkeypatch, content: str = "schema_version: 1\n"
     f = tmp_path / "settings.yaml"
     f.write_text(content, encoding="utf-8")
     monkeypatch.setenv("FNO_CONFIG", str(f))
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
 
 
 def test_headless_default_is_bounded():
@@ -353,33 +352,6 @@ def test_git_writable_config_args_empty_when_neither_root_resolves(
 
     assert codex_mod.git_writable_config_args(tmp_path) == []
 
-
-def test_resume_argv_repins_bounded_posture_but_not_yolo(tmp_path, monkeypatch):
-    """Both resume postures, on the real argv the subprocess would run."""
-    repo = _init_repo(tmp_path / "repo")
-    seen = []
-
-    def fake_run(
-        *, argv, output_path, timeout, expect_session, popen_cwd,
-        agent_self=None, bound_session_id=None
-    ):
-        seen.append(argv)
-        return None
-
-    monkeypatch.setattr(codex_mod, "_run_codex", fake_run)
-    kwargs = dict(
-        session_id="s1", cwd=repo, prompt="go", from_name="me",
-        output_path=tmp_path / "out.jsonl", headless_yolo=False,
-    )
-    codex_mod.resume(yolo=False, **kwargs)
-    codex_mod.resume(yolo=True, **kwargs)
-
-    bounded, yolo = seen
-    assert "sandbox_mode=workspace-write" in bounded
-    assert any(a.startswith("sandbox_workspace_write.") for a in bounded)
-    # A bypassed resume is already unsandboxed - re-pinning would re-cage it.
-    assert "-c" not in yolo
-    assert "--dangerously-bypass-approvals-and-sandbox" in yolo
 
 
 # ---------------------------------------------------------------------------

@@ -109,9 +109,13 @@ fi
     echo "To fix:"
     echo "  - PR body/title: edit the field to remove the URL. A re-push alone does"
     echo "    NOT help - the body/title is stored on the PR, not in a commit."
+    echo "    Re-running THIS job after the edit does not help either: a rerun"
+    echo "    replays the original event payload, which still carries the old"
+    echo "    body. Push a commit so a fresh run reads the edited field."
     echo "  - commit message: rewrite the offending commit(s) to strip the trailer,"
     echo "      git rebase -i ${BASE}      # reword each flagged commit"
     echo "    then force-push the branch; the leak is gone only once the commit"
     echo "    carrying it is rewritten."
+    echo "  Check an edited body before you send it: fno-agents pr-body-check --body-file <file>"
 } >&2
 exit 1

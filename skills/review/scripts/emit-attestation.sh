@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Emit a head-pinned review_attestation event (x-e703, Phase 2).
+# Emit a head-pinned review_attestation event (Phase 2).
 #
 # WHAT THIS CERTIFIES: a CLEAN review at the current head. It is a hand-run of
 # a producer that missed, never a way past an open finding. Running it over
@@ -10,12 +10,12 @@
 # local reviewer that leaves NO GitHub review object emits this event so
 # `fno-agents loop-check` can read it as gate evidence. The reviewer name is
 # NOT an allowlist here - a project-registered reviewer
-# (config.review.reviewer_registry, x-a534) attests through this same helper,
+# (config.review.reviewer_registry) attests through this same helper,
 # which is why the registry needed no new producer machinery.
 #
 # STILL RUN THIS AFTER THE REVIEWED COMMIT IS THE TIP. The old rule here was
 # "a pass on a prior commit stops counting the moment a new commit lands",
-# and that is no longer true (x-5b99 / x-62a1): loop-check now decides
+# and that is no longer true (/): loop-check now decides
 # freshness from the PR's own code-diff identity, so an attestation carries
 # across a rebase or a documentation-only advance. It still dies on any real
 # code change, and it still dies on every failure path, so emitting before
@@ -29,7 +29,9 @@
 # Usage: emit-attestation.sh <reviewer> [verdict] [reviewer_context] [execution_context] [output_contract] [--findings-file <path>]
 #   <reviewer>  a built-in (sigma | peer | code-review | declare) or any name declared
 #               in config.review.reviewer_registry (a leading '/' is stripped)
-#   [verdict]   pass (default) | fail
+#   [verdict]   pass (default) | fail; IGNORED when --findings-file is given -
+#               that path delegates to `fno do review classify --attest`, and
+#               the verdict is the one the classifier measured
 #   [reviewer_context]  fresh | shared | unknown (default unknown); positive
 #                       context evidence only, never inferred from the sender
 #   [execution_context] inline (default) | fork; where the review ran
@@ -38,7 +40,7 @@
 #                       prose_unparseable means the review ANSWERED and its
 #                       answer was not machine-readable; it always rides a
 #                       fail verdict, because an unreadable answer must leave
-#                       a row without clearing coverage (x-c446).
+#                       a row without clearing coverage.
 #   [--findings-file <path>]  a JSON findings payload; classified by `fno do
 #               review classify` and carried on the event as the finding record.
 #               A malformed or unreadable file is a refusal, never an empty record.
@@ -126,8 +128,8 @@ head_sha="$(git rev-parse HEAD 2>/dev/null)" || {
   exit 1
 }
 
-# The journal is SHARED across worktrees by design (setup-worktree.sh links
-# every worktree's .fno/events.jsonl to canonical), so head_sha alone cannot
+# The journal is SHARED across worktrees by design (one repo-space journal
+# every worktree resolves), so head_sha alone cannot
 # say which PR an attestation is about: two branches can carry the same code
 # delta and a global head-sha match then counts a foreign review. The branch
 # is what scopes the event to the PR that was reviewed.
@@ -196,10 +198,17 @@ fi
 # read" (the 2026-08-30 shape: open PRs sat uncovered while their reviews
 # reported clean over empty diffs).
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-session_id=""; harness=""
+# The emits below pass NO --events: the writer's default resolution keys on
+# the cwd's repo and routes through the same space accessors (and the same
+# pins) as every reader. Naming a path here would fork this emitter from
+# whichever algorithm computed it - a binary with an older slug shape would
+# file the attestation in a directory no reader of this source resolves.
+session_id=""; harness_session_id=""; harness=""
 if [[ -f "$repo_root/.fno/target-state.md" ]]; then
   session_id=$(grep '^session_id:' "$repo_root/.fno/target-state.md" \
     | head -1 | sed 's/^session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
+  harness_session_id=$(grep '^harness_session_id:' "$repo_root/.fno/target-state.md" \
+    | head -1 | sed 's/^harness_session_id:[[:space:]]*//' | tr -d '[:space:]' || true)
   harness=$(grep '^harness:' "$repo_root/.fno/target-state.md" \
     | head -1 | sed 's/^harness:[[:space:]]*//' | tr -d '[:space:]' || true)
 fi
@@ -211,13 +220,13 @@ if [[ -n "$local_branch" ]]; then
 fi
 invocation_id="$(printf '%s' "$hold_json" \
   | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
-if [[ -z "$invocation_id" && -n "$session_id" ]]; then
+if [[ -z "$invocation_id" && -n "$harness_session_id" && "$harness_session_id" != "null" ]]; then
   invocation_id="$(jq -r '.invocation_id // empty' \
-    "${FNO_HOME:-$HOME/.fno}/review-invocations/${session_id}.json" \
+    "${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" \
     2>/dev/null || true)"
 fi
 if [[ -z "$invocation_id" ]]; then
-  invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$"
+  invocation_id="UNJOINED"
 fi
 review_verb="$(printf '%s' "$hold_json" | jq -r '.metadata.verb // "/code-review"' 2>/dev/null || echo /code-review)"
 # jq reads EMPTY stdin as zero inputs: no output, exit 0, so the || default
@@ -247,7 +256,6 @@ if [[ -z "$reviewed_base_sha" ]]; then
   # an unrecorded one. A failed journal is reported AS a failure, never hidden.
   refusal_row_note="the refused review_invocation row could NOT be journaled (the event writer failed); the attempt is unrecorded"
   if "${FNO:-fno}" doctor event emit -t review_invocation -s daemon \
-    --events "$repo_root/.fno/events.jsonl" \
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
@@ -280,7 +288,6 @@ if (( reviewed_file_count == 0 )); then
   # unresolvable-base refusal above).
   refusal_row_note="the refused review_invocation row could NOT be journaled (the event writer failed); the attempt is unrecorded"
   if "${FNO:-fno}" doctor event emit -t review_invocation -s daemon \
-    --events "$repo_root/.fno/events.jsonl" \
     -d "$(jq -cn \
       --arg invocation_id "$invocation_id" \
       --arg stage refused \
@@ -297,6 +304,18 @@ if (( reviewed_file_count == 0 )); then
   fi
   echo "emit-attestation: the diff under review is empty (no changed files, base ${reviewed_base_sha} .. HEAD ${reviewed_head_sha} on branch ${branch})." >&2
   echo "A review with nothing to read is not a pass; ${refusal_row_note}." >&2
+  if [[ "$branch" == "$base" ]]; then
+    # The rewrite cannot produce the base name, so branch == base with an empty
+    # diff is the canonical checkout sitting on the repo default: exactly the
+    # shape, where the attestation would be lost for the real PR and in
+    # scope for any PR whose headRefName is literally the base. Name it rather
+    # than refusing here - work committed directly ON the default branch attests
+    # honestly (the actor producer runs on main-based sessions), so only the
+    # nothing-to-read case carries the default-branch warning.
+    echo "You are on the repo default branch '${base}': an attestation recorded here" >&2
+    echo "is lost for the real PR and in scope for any PR whose head is '${base}'. Run" >&2
+    echo "from the PR's worktree." >&2
+  fi
   echo "If you are reviewing a worktree from the canonical checkout, hand the review its" >&2
   echo "target explicitly: run from the worktree path, or pass the PR number to the review verb." >&2
   exit 1
@@ -318,6 +337,16 @@ review_flags="$(printf '%s' "$hold_json" | jq -c '.metadata.flags // []' 2>/dev/
 [[ -n "$review_flags" ]] || review_flags='[]'
 if ! jq -e 'type == "array" and all(.[]; type == "string")' <<<"$review_flags" >/dev/null 2>&1; then
   review_flags='[]'
+fi
+# A declared scope stamps the round it verifies: when the invocation carried
+# --verify-fixes, the pass declares review_round so the counter reads the
+# round it verified, not a fresh one (law: a scoped fix-verification is not a
+# round). Fail closed: an unresolvable round stamps nothing and the pass
+# counts as a fresh round, exactly as an undeclared pass always has.
+review_round=""
+if jq -e 'index("--verify-fixes")' <<<"$review_flags" >/dev/null 2>&1; then
+  review_round="$("${FNO:-fno}" do pr review-hold round --branch "$branch" --head "$head_sha" 2>/dev/null || true)"
+  [[ "$review_round" =~ ^[0-9]+$ ]] || review_round=""
 fi
 review_model_family=""
 if [[ -n "$session_id" ]]; then
@@ -360,65 +389,17 @@ review_event_data="$(jq -cn \
 # a started row with no attestation row is the lost-review marker, so a
 # refusal must not manufacture one. The emit itself sits after those checks.
 
-# Record WHICH MODEL rendered the verdict. Model routing stamps ANTHROPIC_MODEL
-# (and every tier var) for the whole worker process, so a worker routed to a
-# cheap secondary provider renders its own review verdict there - and no
-# per-spawn role guard can see it, because the verdict is a later activity
-# inside an already-routed process. Reading the env is the only signal available
-# at emit; it reports what the environment CLAIMED, never proof of the model
-# that answered, so both stay empty rather than defaulting to a guess a later
-# reader would mistake for evidence. Empty means NO CLAIM WAS MADE, not
-# "primary": resolve_codex_route carries a codex worker's route in `-c model=...`
-# config args with only the API key in env, so a routed codex verdict reads empty
-# here. A claim that WAS made and then refused reads `unobserved` instead, so the
-# two never collapse into one value - see the drift block below. The receipt line
-# at the end prints the stored value verbatim for the same reason.
-model="${ANTHROPIC_MODEL:-}"
+# The emitter does NOT claim a model. The routed-model env names the model the
+# session ASKED for, which can differ from the one that answered; the emit
+# chokepoint (fno doctor event emit) stamps data.model from the session's own
+# transcript instead. provider stays an honest environment fact here: the
+# endpoint host the session was pointed at.
 provider=""
 if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
   provider="${ANTHROPIC_BASE_URL#*://}"   # strip scheme
   provider="${provider%%/*}"              # host only, no path
   provider="${provider##*@}"              # drop userinfo: a key in the URL must not land in the log
 fi
-
-# A foreign model name over an Anthropic base is the routing-drift case: the
-# request falls back to the primary Anthropic model, so ANTHROPIC_MODEL names a
-# model that did NOT answer. hooks/attest-model.sh already warns at SessionStart.
-# Warning there and stamping the value here anyway would put a known-false claim
-# in the one record the reviewers gate reads.
-#
-# It records the literal `unobserved` rather than blanking the field. Empty here
-# means the env carried no claim at all, so reusing it would leave one value with
-# two explanations - nothing was set, versus something was set and refused - and
-# a reader could not tell a declined claim from an unset field. That is the same
-# assert-a-positive-marker trap this script exists to keep out of the record, one
-# level down. The refusal is a finding, so it is written as one.
-#
-# Host match is exact-or-subdomain so notanthropic.com stays foreign. The RULE
-# is hooks/attest-model.sh's and this copy may not extend it: a skill script
-# cannot source outside its own directory, so the rule lives in two bodies held
-# equal by tests/hooks/test_attest_model.sh, which drives both over one env
-# matrix (aliases, case, padding, userinfo hosts included) and fails when they
-# disagree. Change the rule there first, then mirror it here, or the matrix
-# goes red.
-drift_host="${ANTHROPIC_BASE_URL:-}"
-drift_host="${drift_host#*://}"; drift_host="${drift_host%%/*}"
-drift_host="${drift_host##*@}"; drift_host="${drift_host%%:*}"
-drift_host="$(printf '%s' "$drift_host" | tr '[:upper:]' '[:lower:]')"
-# Judge a trimmed, case-folded copy like the hook does (Python's
-# is_anthropic_model lowercases, and "Claude-Haiku-4-5" is coherent); store the
-# original verbatim when the claim stands.
-claim="${model#"${model%%[![:space:]]*}"}"
-claim="${claim%"${claim##*[![:space:]]}"}"
-claim="$(printf '%s' "$claim" | tr '[:upper:]' '[:lower:]')"
-case "$claim" in
-  ""|claude-*|opus|sonnet|haiku|fable) ;;
-  *)
-    if [[ -z "$drift_host" || "$drift_host" == "anthropic.com" || "$drift_host" == *.anthropic.com ]]; then
-      model="unobserved"
-    fi
-    ;;
-esac
 
 # The harness session of the EMITTING PROCESS (attester_session_id) is NOT read
 # here. A script-side read of its own env is one `VAR=<other-session>` assignment
@@ -457,24 +438,67 @@ if [[ -n "$findings_file" ]]; then
   fi
 fi
 if [[ -n "$review_event_data" ]]; then
-  "${FNO:-fno}" doctor event emit -t review_invocation -s daemon -d "$review_event_data" \
-    --events "$repo_root/.fno/events.jsonl" >/dev/null 2>&1 || true
+  "${FNO:-fno}" doctor event emit -t review_invocation -s daemon -d "$review_event_data" >/dev/null 2>&1 || true
 fi
-data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdict "$verdict" \
-  --arg session_id "$session_id" --arg harness "$harness" \
-  --arg model "$model" --arg provider "$provider" \
-  --arg reviewer_context "$reviewer_context" \
-  --arg invocation_id "$invocation_id" \
-  --arg branch "$branch" \
-  --arg reviewed_base_sha "$reviewed_base_sha" \
-  --arg reviewed_head_sha "$reviewed_head_sha" \
-  --argjson reviewed_line_count "$reviewed_line_count" \
-  --argjson reviewed_file_count "$reviewed_file_count" \
-  --argjson findings "$findings_json" \
-  '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,model:$model,provider:$provider,reviewer_context:$reviewer_context,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings')"
-# FNO overrides the binary (defaults to the mux); tests point it at fno-py,
-# which is on PATH in the uv test env where the mux is not installed.
-"${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
+if [[ -n "$findings_file" ]]; then
+  # ONE WRITER: the verb re-classifies the same file and emits the row with
+  # the verdict IT measured; the verdict typed on argv is ignored on this
+  # path, so a row can never read milder than the classified findings. The
+  # verb's stderr line is the emit receipt. The typed-verdict emit below
+  # stays for `declare` and for hand runs with no findings file.
+  # The declared scope rides BOTH emit paths, and so does the branch: classify
+  # re-resolves the branch from cwd, which in a reviewer worktree names the
+  # LOCAL checkout, not the PR. The rewrite's result crosses through
+  # FNO_ATTEST_BRANCH - a new typer.Option is refused by the flag-surface
+  # ratchet (scripts/ci/check_flag_registry.py), so the producer passes the
+  # branch through the environment. The hold join/release inside classify
+  # still key on its own cwd-resolved local name, which is what the hook set
+  # the hold under.
+  if [[ -n "$review_round" ]]; then
+    FNO_ATTEST_BRANCH="$branch" "${FNO:-fno}" do review classify \
+      --findings-file "$findings_file" \
+      --emit-record --attest "$reviewer" --reviewer-context "$reviewer_context" \
+      --execution-context "$execution_context" --output-contract "$output_contract" \
+      --review-round "$review_round" >/dev/null
+  else
+    FNO_ATTEST_BRANCH="$branch" "${FNO:-fno}" do review classify \
+      --findings-file "$findings_file" \
+      --emit-record --attest "$reviewer" --reviewer-context "$reviewer_context" \
+      --execution-context "$execution_context" --output-contract "$output_contract" >/dev/null
+  fi
+else
+  data="$(jq -cn --arg reviewer "$reviewer" --arg head_sha "$head_sha" --arg verdict "$verdict" \
+    --arg session_id "$session_id" --arg harness "$harness" \
+    --arg provider "$provider" \
+    --arg reviewer_context "$reviewer_context" \
+    --arg invocation_id "$invocation_id" \
+    --arg branch "$branch" \
+    --arg reviewed_base_sha "$reviewed_base_sha" \
+    --arg reviewed_head_sha "$reviewed_head_sha" \
+    --argjson reviewed_line_count "$reviewed_line_count" \
+    --argjson reviewed_file_count "$reviewed_file_count" \
+    --argjson findings "$findings_json" \
+    --arg review_round "$review_round" \
+    '{reviewer:$reviewer,head_sha:$head_sha,verdict:$verdict,session_id:$session_id,harness:$harness,provider:$provider,reviewer_context:$reviewer_context,invocation_id:$invocation_id,branch:$branch,reviewed_base_sha:$reviewed_base_sha,reviewed_head_sha:$reviewed_head_sha,reviewed_line_count:$reviewed_line_count,reviewed_file_count:$reviewed_file_count} + $findings + (if $review_round == "" then {} else {review_round: ($review_round | tonumber)} end)')"
+  # FNO overrides the binary (defaults to the mux); tests point it at fno-py,
+  # which is on PATH in the uv test env where the mux is not installed.
+  "${FNO:-fno}" doctor event emit -t review_attestation -s target -d "$data"
+fi
+
+# The per-round disposition comment (the law's human-visible half): when the
+# findings file carried dispositions, the writer posts ONE machine-parseable
+# `fno-review-round` comment indexing each finding's outcome - fixed at sha,
+# declined with a reason, or no disposition. Best-effort and quiet: the
+# attestation is the gate evidence, the comment is its index, and a failed
+# post must never fail an emit. The subcommand is idempotent at (pr, head)
+# and posts nothing on a findings-free round, so this call site adds no
+# second copy of either rule.
+if [[ -n "$findings_file" ]] && jq -e '((.dispositions // []) | length) > 0' \
+    <<<"$findings_json" >/dev/null 2>&1; then
+  FNO_REVIEW_ROUND="$review_round" \
+  "${FNO:-fno}" do review post-dispositions --findings-file "$findings_file" \
+    --head "$head_sha" --reviewer "$reviewer" >/dev/null 2>&1 || true
+fi
 
 # The review has landed a verdict for this head, so the hold that said one was
 # RUNNING has nothing left to protect. Released HERE, at the positive completion
@@ -502,4 +526,8 @@ for _b in "${branch:-}" "$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   "${FNO:-fno}" do pr review-hold release --branch "$_b" >/dev/null 2>&1 || true
 done
 
-echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict session=${session_id:-none} harness=${harness:-unknown} model=${model:-unset} provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2
+# The typed-verdict path prints its own receipt; the delegated path's receipt
+# is the verb's stderr line.
+if [[ -z "$findings_file" ]]; then
+  echo "review_attestation emitted: reviewer=$reviewer head_sha=${head_sha:0:8} branch=${branch:-detached} verdict=$verdict run=${session_id:-none} run_harness=${harness:-unknown} attester=<stamped-at-emit> model=<stamped-at-emit> provider=${provider:-unset} reviewer_context=$reviewer_context lines=$reviewed_line_count files=$reviewed_file_count" >&2
+fi

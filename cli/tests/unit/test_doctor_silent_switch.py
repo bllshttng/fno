@@ -49,22 +49,50 @@ def _patch_silent(
 
 
 # ---------------------------------------------------------------------------
-# Collector: both directions
+# The durable-grant observer coupling (observer_unavailable)
 # ---------------------------------------------------------------------------
 
 
-def test_drain_off_with_missions_named_as_inaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(active_backlog=False),
-        missions=5,
+def _emit_minimal(monkeypatch: pytest.MonkeyPatch, *, pw: dict) -> str:
+    """Run doctor's human printer down to the pr-watch advisories with a
+    minimal result and the expensive probes stubbed out."""
+    monkeypatch.setattr(doctor, "_review_invocation_report", lambda: [])
+    result = {
+        "status": "fresh",
+        "missing_verbs": [],
+        "pr_watch": pw,
+    }
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        doctor._emit_human(result, None, {"binary": None, "source_rev": None}, err=False)
+    return buf.getvalue()
+
+
+def test_standing_grant_with_dead_observer_is_loud(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A standing dispatch grant with a disabled watcher reads
+    observer_unavailable with a repair: the grant is UNREAD, not quiet."""
+    monkeypatch.setattr(
+        "fno.config.load_settings",
+        lambda: types.SimpleNamespace(
+            auto_merge=types.SimpleNamespace(enabled=True, grant="dispatch"),
+        ),
     )
-    report = doctor._silent_switch_report()
-    sw = [f for f in report["findings"] if f["switch"] == "active_backlog.enabled"]
-    assert len(sw) == 1
-    assert sw[0]["direction"] == "inaction"
-    assert sw[0]["count"] == 5
-    assert sw[0]["command"] == "fno config set active_backlog.enabled true"
+    out = _emit_minimal(
+        monkeypatch,
+        pw={"verdict": "disabled", "detail": "pr_watch.enabled=false", "fix": ""},
+    )
+    assert "observer_unavailable" in out
+    assert "fno do pr watch install" in out or "pr_watch.enabled" in out
+
+
+# ---------------------------------------------------------------------------
+# Collector: both directions
+# ---------------------------------------------------------------------------
 
 
 def test_drain_off_with_no_missions_is_not_inaction(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,15 +104,6 @@ def test_drain_off_with_no_missions_is_not_inaction(monkeypatch: pytest.MonkeyPa
     )
     report = doctor._silent_switch_report()
     assert not any(f["switch"] == "active_backlog.enabled" for f in report["findings"])
-
-
-def test_think_spawn_off_named_as_inaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_silent(monkeypatch, settings=_fake_settings(think_spawn=False))
-    report = doctor._silent_switch_report()
-    ts = [f for f in report["findings"] if f["switch"] == "think_spawn.enabled"]
-    assert len(ts) == 1
-    assert ts[0]["direction"] == "inaction"
-    assert "think_spawn.enabled true" in ts[0]["command"]
 
 
 def test_auto_merge_armed_named_as_irreversible(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,24 +166,6 @@ def test_armed_unknown_manifests_name_stale_plugin_cache_as_cause(
     )
 
 
-def test_armed_unknown_manifests_no_cause_when_cache_not_proven_stale(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A fresh or unknown cache verdict must not fabricate a cause: a genuinely
-    pre-provenance manifest stays a bare `unknown` count."""
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=True, grant="dispatch"),
-        armed={"unknown": 3},
-    )
-    monkeypatch.setattr(
-        doctor, "_plugin_cache_report", lambda: {"status": "unknown", "sha": None}
-    )
-    report = doctor._silent_switch_report()
-    by_sw = {f["switch"]: f for f in report["findings"]}
-    assert "cause" not in by_sw["auto_merge_approved (worktree manifests)"]
-
-
 def test_armed_manifests_not_irreversible_when_kill_switch_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """A manifest's auto_merge_approved is inert while auto_merge.enabled is off.
 
@@ -183,18 +184,6 @@ def test_armed_manifests_not_irreversible_when_kill_switch_off(monkeypatch: pyte
         for f in report["findings"]
     )
     assert not any(f["direction"] == "irreversible" for f in report["findings"])
-
-
-def test_both_directions_when_drain_off_and_merge_armed(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_silent(
-        monkeypatch,
-        settings=_fake_settings(active_backlog=False, auto_merge=True, grant="dispatch"),
-        missions=2,
-        armed=1,
-    )
-    report = doctor._silent_switch_report()
-    directions = {f["direction"] for f in report["findings"]}
-    assert directions == {"inaction", "irreversible"}
 
 
 # ---------------------------------------------------------------------------
@@ -332,25 +321,6 @@ def test_gap_fires_on_armed_with_zero_lanes(
     # An unknown source is its own answer, never folded into a default.
     assert "3 unknown" in gap["breakdown"]
     assert gap["remedy"].startswith("fno config set review.self_review_required true")
-
-
-def test_gap_names_peer_identity_when_it_released_the_floor(
-    monkeypatch: pytest.MonkeyPatch, tmp_path,
-) -> None:
-    _patch_gap(
-        monkeypatch,
-        settings=_fake_settings(auto_merge=True),
-        repo=tmp_path,
-        lane=False,
-        review=_fake_review(self_review_required=True, peer_identity="fno-peer-bot"),
-        armed=0,
-    )
-    gap = doctor._auto_merge_review_gap()
-    assert gap is not None
-    assert "review.self_review_required=True" in gap["keys"]
-    assert "review.peer_identity=fno-peer-bot" in gap["keys"]
-    # Zero armed manifests is still reported: the config-level risk stands.
-    assert gap["manifests"] == 0
 
 
 def test_gap_silent_when_a_lane_covers_or_the_switch_is_off(

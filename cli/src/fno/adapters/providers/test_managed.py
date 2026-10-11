@@ -26,6 +26,13 @@ def _blob(token: str) -> str:
     return json.dumps({"claudeAiOauth": {"accessToken": token}})
 
 
+def _pids(root) -> tuple[int, ...]:
+    """The pids recorded on the claude taint marker."""
+    writers = managed.tainting_writers("claude", root)
+    assert writers is not None, "no taint marker to read pids from"
+    return tuple(pid for pid, _started in writers)
+
+
 def _codex_blob(token: str) -> str:
     return json.dumps(
         {
@@ -58,6 +65,21 @@ def no_profile_network(monkeypatch):
         raise urllib.error.URLError("network disabled in tests")
 
     monkeypatch.setattr(managed.urllib.request, "urlopen", _no_network)
+
+
+@pytest.fixture(autouse=True)
+def no_vault_network(monkeypatch):
+    """Keep existing switch tests hermetic while the Rust actor owns decisions."""
+    original = managed._vault
+    monkeypatch.setattr(
+        managed,
+        "_vault",
+        lambda action, *args: {
+            "action": action,
+            "verdict": "unchanged" if action == "sync" else "fresh",
+        },
+    )
+    return original
 
 
 @pytest.fixture()
@@ -194,24 +216,46 @@ class TestSwitch:
         assert fake_slot["claude"] == _blob("A0")
         assert managed.active_slot_id("claude", tmp_path) == "work-a"
 
-    def test_capture_before_overwrite_saves_outgoing_rotated_token(self, fake_slot, tmp_path):
-        """AC2-HP: switching away re-snapshots the outgoing account's CURRENT
-        (rotated) slot token before the slot is overwritten."""
+    def test_spent_target_refuses_before_writing_the_slot(self, fake_slot, tmp_path, monkeypatch):
         by_id = _register_two(fake_slot, tmp_path)
-        # B's token rotated in the slot since register (B0 -> B1).
-        fake_slot["claude"] = _blob("B1")
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-        # work-b's store now holds B1, not the stale B0.
-        assert (tmp_path / "work-b" / "blob").read_text() == _blob("B1")
+        before = fake_slot["claude"]
+        monkeypatch.setattr(managed, "_vault", lambda action, *args: {"verdict": "dead"})
+        monkeypatch.setattr(
+            managed,
+            "_write_slot_blob",
+            lambda *_args, **_kwargs: pytest.fail("spent credential reached the slot writer"),
+        )
+        with pytest.raises(managed.ManagedStoreError, match=r"is spent \(invalid_grant\)"):
+            managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
+        assert fake_slot["claude"] == before
 
-    def test_round_trip_capture(self, fake_slot, tmp_path):
-        """AC2-HP round-trip: use A then use B captures A's switch-away token."""
+    def test_missing_vault_binary_refuses_before_writing_the_slot(
+        self, fake_slot, tmp_path, monkeypatch, no_vault_network
+    ):
+        from fno import rust_binary
+
         by_id = _register_two(fake_slot, tmp_path)
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)  # slot -> A0
-        fake_slot["claude"] = _blob("A1")  # A rotates while active
-        managed.switch(by_id["work-b"], by_id=by_id, root=tmp_path)
-        assert (tmp_path / "work-a" / "blob").read_text() == _blob("A1")
-        assert fake_slot["claude"] == _blob("B0")
+        before = fake_slot["claude"]
+        monkeypatch.setattr(managed, "_vault", no_vault_network)
+        monkeypatch.setattr(rust_binary, "find_dev_binary", lambda: None)
+        monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+        with pytest.raises(managed.ManagedStoreError, match="fno-agents binary not found"):
+            managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
+        assert fake_slot["claude"] == before
+
+    def test_refreshed_target_blob_is_the_one_materialized(self, fake_slot, tmp_path, monkeypatch):
+        by_id = _register_two(fake_slot, tmp_path)
+        refreshed = _blob("A_REFRESHED")
+
+        def vault(action, *args):
+            if action == "refresh":
+                managed._atomic_write_private(tmp_path / "work-a" / "blob", refreshed)
+                return {"verdict": "refreshed"}
+            return {"verdict": "unchanged"}
+
+        monkeypatch.setattr(managed, "_vault", vault)
+        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
+        assert fake_slot["claude"] == refreshed
 
     def test_already_active_is_noop(self, fake_slot, tmp_path):
         by_id = _register_two(fake_slot, tmp_path)  # active = work-b
@@ -332,20 +376,6 @@ class TestSwitchGuards:
             managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
         assert fake_slot["claude"] == outgoing_blob  # rolled back to B
         assert managed.active_slot_id("claude", tmp_path) == "work-b"  # stamp not advanced
-
-    def test_capture_keychain_error_aborts_without_overwrite(self, fake_slot, tmp_path, monkeypatch):
-        """A Keychain read failure during capture-before-overwrite must ABORT the
-        switch (not be swallowed), so the outgoing account's token is never lost."""
-        by_id = _register_two(fake_slot, tmp_path)
-        before = fake_slot["claude"]  # B0, still in the slot
-
-        def _boom(cli):
-            raise managed.KeychainError("security find-generic-password timed out")
-
-        monkeypatch.setattr(managed, "canonical_slot_blobs", _boom)
-        with pytest.raises(managed.KeychainError):
-            managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-        assert fake_slot["claude"] == before  # slot never overwritten
 
     def test_rollback_failure_reported_truthfully(self, fake_slot, tmp_path, monkeypatch):
         """When verify fails AND the rollback write also fails, the receipt says
@@ -1541,17 +1571,6 @@ class TestReconcileSlot:
         result = managed.reconcile_slot("codex", by_id={}, root=tmp_path)
         assert result.outcome == "unsupported-harness"
 
-    def test_capture_before_overwrite_preserves_a_stored_principal(
-        self, fake_slot, tmp_path
-    ):
-        """A re-snapshot must not wipe the identity that makes reconcile work."""
-        by_id = _register_two(fake_slot, tmp_path)
-        _bind("work-b", "acct-b", tmp_path)
-        fake_slot["claude"] = _blob("B1")
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-        assert managed.record_principal("work-b", tmp_path)["account_uuid"] == "acct-b"
-
-
 class TestReconcileConcurrency:
     def test_held_switch_lock_yields_a_typed_refusal(self, fake_slot, tmp_path):
         """AC5-CON: reconciliation waits on the SAME mutex a switch takes."""
@@ -1676,7 +1695,7 @@ class TestReconcileRespectsLiveTaintWriters:
         so the conservative scan is the only honest answer."""
         by_id = self._arm(fake_slot, tmp_path, monkeypatch, [])
         managed._atomic_write_private(managed._slot_taint_path("claude", tmp_path), "1")
-        assert managed.tainting_pids("claude", tmp_path) is None
+        assert managed.tainting_writers("claude", tmp_path) is None
         monkeypatch.setattr(
             managed, "pinning_sessions",
             lambda config_dir=None: [managed.PinningSession(4242, "claude")],
@@ -1695,7 +1714,7 @@ class TestReconcileRespectsLiveTaintWriters:
             lambda config_dir=None: [managed.PinningSession(77, "claude")],
         )
         managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-        assert managed.tainting_pids("claude", tmp_path) == (77,)
+        assert _pids(tmp_path) == (77,)
 
 
 class TestCanonicalSlotRead:
@@ -1717,7 +1736,7 @@ class TestCanonicalSlotRead:
 
         monkeypatch.setattr(managed, "_read_claude_blob", _record)
 
-        assert managed.read_canonical_slot_blob("claude") == _blob("CANONICAL")
+        assert managed.canonical_slot_blobs("claude") == [_blob("CANONICAL")]
         assert asked == [(tmp_path / ".claude", True)]
 
     def test_both_keychain_items_are_candidates(self, tmp_path, monkeypatch):
@@ -1766,6 +1785,8 @@ class TestCanonicalSlotRead:
         result = managed.reconcile_slot("claude", by_id=by_id, root=tmp_path)
 
         assert result.outcome == "ambiguous-slot"
+        assert "no `/logout`" in result.detail
+        assert "sign out" not in result.detail
         assert _store_state(tmp_path) == before
 
     def test_agreeing_items_reconcile_normally(
@@ -1864,23 +1885,11 @@ class TestForcedRebindNeverLeavesAStalePrincipal:
         fake_slot["claude"] = _blob("SOMEONE_ELSE")
         managed.snapshot_current(record, root=tmp_path)
         assert managed.record_principal("work-a", tmp_path) is not None  # preserved
-        managed.capture_record_principal(record, root=tmp_path, force=True)
+        managed._clear_record_principal("work-a", tmp_path)
 
         assert managed.record_principal("work-a", tmp_path) is None
         # The rest of the metadata survives.
         assert managed.read_meta("work-a", tmp_path)["harness"] == "claude"
-
-    def test_an_unforced_capture_leaves_a_bound_record_alone(self, fake_slot, tmp_path):
-        """A switch of an already-bound record must not spend a call, nor clear
-        a binding that is still correct."""
-        record = _rec("work-a")
-        fake_slot["claude"] = _blob("A0")
-        managed.snapshot_current(record, root=tmp_path)
-        _bind("work-a", "acct-a", tmp_path)
-
-        managed.capture_record_principal(record, root=tmp_path)
-
-        assert managed.record_principal("work-a", tmp_path)["account_uuid"] == "acct-a"
 
 
 class TestTaintWriterIdentity:
@@ -2050,7 +2059,9 @@ class TestOrganizationScopedIdentity:
                 {"account_uuid": "human-1", "organization_uuid": orgs[blob]}, None
             ),
         )
-        assert managed.canonical_slot_principal("claude") == (None, "ambiguous-slot")
+        assert managed.principal_of_blobs(
+            managed.canonical_slot_blobs("claude")
+        ) == (None, None, "ambiguous-slot")
         assert managed.reconcile_slot(
             "claude", by_id=by_id, root=tmp_path
         ).outcome == "ambiguous-slot"
@@ -2383,7 +2394,13 @@ class TestUnreadableSlotIsARefusal:
 
         assert result.outcome == "slot-unreadable" and "timed out" in result.detail
 
-    def test_drift_reports_nothing_rather_than_raising(self, tmp_path, monkeypatch):
+    def test_an_unreadable_slot_is_typed_for_the_binding_too(
+        self, tmp_path, monkeypatch
+    ):
+        """The drift read moved to `binding`; a denied Keychain still refuses
+        rather than raising, and reads as unknown rather than as healthy."""
+        from fno.adapters.providers import binding
+
         managed.stamp_active_slot("claude", "work-a", tmp_path)
         managed.write_record_principal(
             "work-a", {"account_uuid": "a", "organization_uuid": "o"}, tmp_path
@@ -2393,7 +2410,10 @@ class TestUnreadableSlotIsARefusal:
             raise managed.KeychainError("denied")
 
         monkeypatch.setattr(managed, "canonical_slot_blobs", _boom)
-        assert managed.slot_identity_drift("claude", tmp_path) is None
+        got = binding.resolve_account_binding(None, harness="claude", root=tmp_path)
+
+        assert got.status == binding.UNKNOWN
+        assert got.reason == "credential-unreadable"
 
 
 class TestRegisterPostWriteSlotMove:
@@ -2663,7 +2683,7 @@ class TestRegisterRespectsALiveTaintWriter:
         assert failure.startswith("slot-pinned:") and str(os.getpid()) in failure
         assert principal is None
         assert not (tmp_path / "work-a" / "blob").exists()
-        assert managed.tainting_pids("claude", tmp_path) == (os.getpid(),)
+        assert _pids(tmp_path) == (os.getpid(),)
 
     def test_a_dead_writer_does_not_block(self, tmp_path, monkeypatch):
         managed._set_slot_taint("claude", tmp_path, True, [999_999])
@@ -2683,46 +2703,6 @@ class TestRegisterRespectsALiveTaintWriter:
 
         assert failure is None and principal["account_uuid"] == "acct-a"
         assert not managed.slot_tainted("claude", tmp_path)
-
-
-class TestCaptureBeforeOverwriteAgreesWithIdentity:
-    """Reconciliation may store the PROVEN (unscoped) credential while a
-    scoped-first capture would write the other one straight back over it - the
-    two reads must not disagree about which credential belongs to a record."""
-
-    def test_capture_reads_the_same_candidates_identity_does(
-        self, fake_slot, tmp_path, monkeypatch
-    ):
-        by_id = _register_two(fake_slot, tmp_path)
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs", lambda cli: [_blob("B_ROTATED")]
-        )
-
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-
-        assert (tmp_path / "work-b" / "blob").read_text() == _blob("B_ROTATED")
-
-    def test_two_credentials_in_the_slot_capture_nothing(
-        self, fake_slot, tmp_path, monkeypatch
-    ):
-        """Guessing would file another account's credential under this record -
-        silent, where a lost rotated token is recoverable with a login."""
-        by_id = _register_two(fake_slot, tmp_path)
-        monkeypatch.setattr(
-            managed, "canonical_slot_blobs",
-            lambda cli: [_blob("SCOPED_OTHER"), _blob("UNSCOPED_B")],
-        )
-
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-
-        # work-b keeps its earlier snapshot rather than gaining a stranger's.
-        assert (tmp_path / "work-b" / "blob").read_text() == _blob("B0")
-
-    def test_an_empty_slot_captures_nothing(self, fake_slot, tmp_path, monkeypatch):
-        by_id = _register_two(fake_slot, tmp_path)
-        monkeypatch.setattr(managed, "canonical_slot_blobs", lambda cli: [])
-        managed.switch(by_id["work-a"], by_id=by_id, root=tmp_path)
-        assert (tmp_path / "work-b" / "blob").read_text() == _blob("B0")
 
 
 class TestCredentialFileIsACandidate:

@@ -15,7 +15,7 @@ from pathlib import Path
 from fno.pr import _reviews
 
 
-def _row(*, tiled=None, chain=None, freshness="stale", reviewed_sha="c3"):
+def _row(*, tiled=None, chain=None, freshness="stale", reviewed_sha="c3", rounds_exhausted=None):
     """One review_coverage row: a local_attestation verdict plus tiling data."""
     data = {
         "pr": 42,
@@ -33,6 +33,8 @@ def _row(*, tiled=None, chain=None, freshness="stale", reviewed_sha="c3"):
             }
         ],
     }
+    if rounds_exhausted is not None:
+        data["rounds_exhausted"] = rounds_exhausted
     if tiled is not None or chain is not None:
         data["range_tiling"] = {
             "tiled": bool(tiled),
@@ -44,11 +46,10 @@ def _row(*, tiled=None, chain=None, freshness="stale", reviewed_sha="c3"):
 
 
 class TestTilingChainExemption:
-    def test_tiled_chain_member_keeps_the_row_covered(self, monkeypatch):
-        # The describes-test fails closed for everything: only the chain
-        # exemption can carry this verdict, so the test proves the exemption
-        # rather than a lucky freshness carry.
-        monkeypatch.setattr(_reviews, "_reviewed_sha_still_describes_head", lambda *a, **k: False)
+    def test_tiled_chain_member_keeps_the_row_covered(self):
+        # The stored freshness label is stale and the shaper recomputes
+        # nothing, so only the chain exemption can carry this verdict: the
+        # test proves the exemption rather than a lucky freshness carry.
         shaped = _reviews._shape_review_coverage(
             _row(tiled=True, chain=["c3"], reviewed_sha="c3", freshness="stale"),
             head="head",
@@ -58,18 +59,16 @@ class TestTilingChainExemption:
         assert shaped["review_state"] == "reviewed"
         assert shaped["reviewed_count"] == 1
 
-    def test_no_tiling_data_keeps_today_single_sha_rule(self, monkeypatch):
-        monkeypatch.setattr(_reviews, "_reviewed_sha_still_describes_head", lambda *a, **k: False)
+    def test_no_tiling_data_keeps_today_single_sha_rule(self):
         shaped = _reviews._shape_review_coverage(
             _row(reviewed_sha="c3", freshness="stale"),
             head="head",
             cwd=None,
         )
         assert shaped["coverage"] == "uncovered"
-        assert shaped["reviewed_count"] == 0
+        assert shaped["reviewed_count"] == 1
 
-    def test_not_tiled_chain_does_not_rescue(self, monkeypatch):
-        monkeypatch.setattr(_reviews, "_reviewed_sha_still_describes_head", lambda *a, **k: False)
+    def test_not_tiled_chain_does_not_rescue(self):
         shaped = _reviews._shape_review_coverage(
             _row(tiled=False, chain=["c3"], reviewed_sha="c3", freshness="stale"),
             head="head",
@@ -77,8 +76,7 @@ class TestTilingChainExemption:
         )
         assert shaped["coverage"] == "uncovered"
 
-    def test_chain_member_outside_the_chain_is_not_rescued(self, monkeypatch):
-        monkeypatch.setattr(_reviews, "_reviewed_sha_still_describes_head", lambda *a, **k: False)
+    def test_chain_member_outside_the_chain_is_not_rescued(self):
         shaped = _reviews._shape_review_coverage(
             _row(tiled=True, chain=["c9"], reviewed_sha="c3", freshness="stale"),
             head="head",
@@ -86,8 +84,7 @@ class TestTilingChainExemption:
         )
         assert shaped["coverage"] == "uncovered"
 
-    def test_fresh_verdict_still_counts_without_any_chain(self, monkeypatch):
-        monkeypatch.setattr(_reviews, "_reviewed_sha_still_describes_head", lambda *a, **k: True)
+    def test_fresh_verdict_still_counts_without_any_chain(self):
         shaped = _reviews._shape_review_coverage(
             _row(reviewed_sha="head", freshness="fresh"),
             head="head",
@@ -161,6 +158,16 @@ def _covered_row(ts, head=_H, pr=1242):
             "review_state": "reviewed",
             "reviewed_count": 1,
             "head_sha": head,
+            # A modern producer resolves a rung on every covered row; a row
+            # without this key reads as written by a pre-posture producer and
+            # the gate demands a recompute, which is its own test below.
+            "review_posture": {
+                "posture": "self_review",
+                "rank": 3,
+                "source": "legacy",
+                "posture_satisfied": True,
+                "posture_gaps": [],
+            },
             # The shaper refuses a covered row carrying no verdict proof, so a
             # fixture without this shapes back to uncovered and the test would
             # read as "the recompute did not help" when it did.
@@ -191,6 +198,44 @@ def _pass_attestation(ts, head=_H):
             "branch": "feature/x-e555",
         },
     }
+
+
+class TestPosturelessRowRecomputeScope:
+    """A covered row with no review_posture is unusable to a GATE (the
+    producer predates the field), but only a caller that can act on the
+    producer-upgrade refusal pays the recompute; a receipt surface reports
+    the row as-is instead of rewriting the same postureless row every read."""
+
+    def _postureless_world(self, monkeypatch, tmp_path):
+        _isolate_logs(monkeypatch, tmp_path)
+        row = _covered_row("2026-08-28T08:00:00Z")
+        del row["data"]["review_posture"]
+        _write_log(tmp_path, row)
+        fired = []
+        monkeypatch.setattr(
+            _reviews,
+            "_fire_review_coverage_verb",
+            lambda *a, **k: (fired.append(a) or (True, "")),
+        )
+        return fired
+
+    def test_gate_default_recomputes_a_postureless_row(self, monkeypatch, tmp_path):
+        fired = self._postureless_world(monkeypatch, tmp_path)
+        data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+        assert fired, "the gate must demand a posture-capable producer"
+        assert "recomputed" in note
+
+    def test_receipt_surface_does_not_recompute_a_postureless_row(
+        self, monkeypatch, tmp_path
+    ):
+        fired = self._postureless_world(monkeypatch, tmp_path)
+        data, note = _reviews.review_coverage_for_gate(
+            1242, str(tmp_path), _H, recompute_postureless=False
+        )
+        assert not fired
+        assert note == ""
+        assert data["coverage"] == "covered"
+        assert "review_posture" not in data
 
 
 def _isolate_logs(monkeypatch, tmp_path):
@@ -240,6 +285,73 @@ class TestCachedNegativeNamesItsInput:
         assert data["coverage"] == "covered"
         assert "recomputed" in note
 
+    def test_a_later_pass_refreshes_a_covered_row_with_unsatisfied_posture(
+        self, monkeypatch, tmp_path
+    ):
+        _isolate_logs(monkeypatch, tmp_path)
+        stale = _covered_row("2026-08-28T07:15:38Z")
+        stale["data"]["review_posture"]["posture_satisfied"] = False
+        passed = _pass_attestation("2026-08-28T07:48:55Z")
+        _write_log(tmp_path, stale, passed)
+        fired = []
+
+        def fake_fire(pr_number, cwd, head):
+            fired.append((pr_number, head))
+            _write_log(tmp_path, stale, passed, _covered_row("2026-08-28T08:00:00Z"))
+            return True, ""
+
+        monkeypatch.setattr(_reviews, "_fire_review_coverage_verb", fake_fire)
+        data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+
+        assert fired == [(1242, _H)]
+        assert data["coverage"] == "covered"
+        assert "recomputed" in note
+
+    def test_an_unsatisfied_covered_row_without_a_newer_pass_stays_cached(
+        self, monkeypatch, tmp_path
+    ):
+        _isolate_logs(monkeypatch, tmp_path)
+        stale = _covered_row("2026-08-28T07:15:38Z")
+        stale["data"]["review_posture"]["posture_satisfied"] = False
+        _write_log(tmp_path, stale)
+        fired = []
+        monkeypatch.setattr(
+            _reviews,
+            "_fire_review_coverage_verb",
+            lambda *a, **k: (fired.append(a) or (True, "")),
+        )
+
+        data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+
+        assert fired == []
+        assert data["coverage"] == "covered"
+        assert data["review_posture"]["posture_satisfied"] is False
+        assert note == ""
+
+    def test_satisfied_or_postureless_covered_rows_do_not_use_this_refresh_arm(
+        self, monkeypatch, tmp_path
+    ):
+        _isolate_logs(monkeypatch, tmp_path)
+        passed = _pass_attestation("2026-08-28T07:48:55Z")
+        fired = []
+        monkeypatch.setattr(
+            _reviews,
+            "_fire_review_coverage_verb",
+            lambda *a, **k: (fired.append(a) or (True, "")),
+        )
+
+        _write_log(tmp_path, _covered_row("2026-08-28T07:15:38Z"), passed)
+        _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+        assert fired == []
+
+        postureless = _covered_row("2026-08-28T08:15:38Z")
+        del postureless["data"]["review_posture"]
+        _write_log(tmp_path, postureless, passed)
+        _reviews.review_coverage_for_gate(
+            1242, str(tmp_path), _H, recompute_postureless=False
+        )
+        assert fired == []
+
     def test_an_earlier_attestation_does_not_force_a_recompute(
         self, monkeypatch, tmp_path
     ):
@@ -266,11 +378,43 @@ class TestCachedNegativeNamesItsInput:
         # whether or not the recompute arm fires.
         assert note == "coverage row pinned to 74106361b at 2026-08-28T07:15:38Z"
 
-    def test_a_fail_attestation_is_not_a_later_pass(self, monkeypatch, tmp_path):
-        """Only a PASS overtakes an uncovered row. A later FAIL agrees with it."""
+    def test_a_later_fail_at_the_head_overtakes_the_row(
+        self, monkeypatch, tmp_path
+    ):
+        """A fail round spends a round and moves the count even when the row's
+        word still reads uncovered, so it overtakes like a pass does."""
         _isolate_logs(monkeypatch, tmp_path)
         failed = _pass_attestation("2026-08-28T07:48:55Z")
         failed["data"]["verdict"] = "fail"
+        _write_log(tmp_path, _uncovered_row("2026-08-28T07:15:38Z"), failed)
+        fired = []
+
+        def fake_fire(pr_number, cwd, head):
+            fired.append((pr_number, head))
+            refreshed = _uncovered_row("2026-08-28T07:15:38Z")
+            refreshed["ts"] = "2026-08-28T08:00:00Z"
+            refreshed["data"]["rounds_used"] = 1
+            _write_log(
+                tmp_path,
+                _uncovered_row("2026-08-28T07:15:38Z"),
+                failed,
+                refreshed,
+            )
+            return True, ""
+
+        monkeypatch.setattr(_reviews, "_fire_review_coverage_verb", fake_fire)
+        data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+
+        assert fired == [(1242, _H)], fired
+        assert "recomputed" in note
+
+    def test_a_fail_at_another_head_does_not_overtake(self, monkeypatch, tmp_path):
+        """The chain is scoped by exact head sha: a round for another commit
+        says nothing about this head's row."""
+        _isolate_logs(monkeypatch, tmp_path)
+        failed = _pass_attestation("2026-08-28T07:48:55Z")
+        failed["data"]["verdict"] = "fail"
+        failed["data"]["head_sha"] = "f" * 40
         _write_log(tmp_path, _uncovered_row("2026-08-28T07:15:38Z"), failed)
         fired = []
         monkeypatch.setattr(
@@ -280,6 +424,31 @@ class TestCachedNegativeNamesItsInput:
         )
         _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
         assert fired == []
+
+    def test_the_recomputed_row_is_not_overtaken_again(
+        self, monkeypatch, tmp_path
+    ):
+        """The recompute writes a row stamped after the attestation, so the
+        next read finds nothing newer than the row - the arm cannot spin."""
+        _isolate_logs(monkeypatch, tmp_path)
+        failed = _pass_attestation("2026-08-28T07:48:55Z")
+        failed["data"]["verdict"] = "fail"
+        _write_log(
+            tmp_path,
+            _uncovered_row("2026-08-28T07:15:38Z"),
+            failed,
+            _uncovered_row("2026-08-28T08:00:00Z"),
+        )
+        fired = []
+        monkeypatch.setattr(
+            _reviews,
+            "_fire_review_coverage_verb",
+            lambda *a, **k: (fired.append(a) or (True, "")),
+        )
+        data, note = _reviews.review_coverage_for_gate(1242, str(tmp_path), _H)
+
+        assert fired == []
+        assert "recomputed" not in note
 
     def test_the_pin_names_the_head_and_the_time(self, monkeypatch, tmp_path):
         """Corollary 5's field. A reader who cannot see the pin cannot tell a
@@ -423,3 +592,55 @@ class TestCachedNegativeNamesItsInput:
         assert _reviews._instant("not-a-timestamp") is None
         assert _reviews._is_after("zzz", "aaa", None) is True
         assert _reviews._is_after("aaa", "zzz", None) is False
+
+
+def test_review_state_matches_the_shared_table():
+    """One oracle, two readers: the Rust review_state test walks the SAME
+    file, so the two derivations cannot drift on which refusals name the
+    state (the optional_apps_default.json pattern)."""
+    golden = json.loads(
+        (Path(__file__).resolve().parents[1] / "config" / "review_state_table.json").read_text()
+    )
+    assert golden["rows"], "a golden nothing reads is a green control aimed at nothing"
+    for row in golden["rows"]:
+        state = _reviews._derive_review_state(
+            "covered",
+            row["verdicts"],
+            set(),
+            False,
+            rounds_exhausted=row.get("rounds_exhausted", False),
+        )
+        assert state == row["expected_state"], f"row {row['name']} diverged: {state}"
+
+
+class TestSpentBudgetShaping:
+    def test_spent_row_with_a_stale_verdict_stays_covered_and_reviewed(self):
+        # d-0fa92eb9: at the cap the row IS reviewed. The shaper keeps the
+        # producer's covered word and the producer's count - it changes the
+        # state word only.
+        shaped = _reviews._shape_review_coverage(
+            _row(reviewed_sha="c3", freshness="stale", rounds_exhausted=True),
+            head="head",
+            cwd=None,
+        )
+        assert shaped["coverage"] == "covered"
+        assert shaped["review_state"] == "reviewed"
+        assert shaped["reviewed_count"] == 1
+
+    def test_the_same_row_unspent_still_reads_uncovered(self):
+        shaped = _reviews._shape_review_coverage(
+            _row(reviewed_sha="c3", freshness="stale", rounds_exhausted=False),
+            head="head",
+            cwd=None,
+        )
+        assert shaped["coverage"] == "uncovered"
+        assert shaped["review_state"] == "unreviewed"
+        assert shaped["reviewed_count"] == 1
+
+    def test_spent_row_with_a_malformed_verdict_names_no_state(self):
+        # A malformed list returns None before the spent arm, so a broken
+        # row fails closed even past the budget.
+        row = _row(rounds_exhausted=True)
+        row["verdicts"] = [{"producer": "local_attestation", "verdict": "junk"}]
+        shaped = _reviews._shape_review_coverage(row, head="head", cwd=None)
+        assert "review_state" not in shaped

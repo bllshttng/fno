@@ -11,13 +11,17 @@ depending on the installed `fno` snapshot. Proves:
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests._init_space import install_state_path_stub
+from tests.fixtures.graph_seed import seed_graph
+
+from fno.rust_binary import find_dev_binary
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INIT_SCRIPT = REPO_ROOT / "hooks" / "helpers" / "init-target-state.sh"
@@ -29,12 +33,22 @@ INIT_SCRIPT = REPO_ROOT / "hooks" / "helpers" / "init-target-state.sh"
 # call with the path in the message.
 
 NODE_ID = "ab-deadbeef"  # matches ^ab-[0-9a-f]{8}$
+LEGACY_NODE_ID = "xd863"  # legacy prefix plus hex, without the separator
 
 MOCK_ABI = """#!/usr/bin/env bash
 # Mock `fno`: log argv + the claims-root env, control claim-acquire exit code.
 echo "ARGS:$* ROOT:${FNO_CLAIMS_ROOT:-UNSET}" >> "$MOCK_ABI_LOG"
 if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "acquire" ]]; then
-  exit "${MOCK_ABI_ACQUIRE_RC:-0}"
+  # A canned success fakes the lock: under the claim projection the graph row
+  # answers from the store, so the success path must write a REAL claim. The
+  # human flags (--ttl 2h, handover, harness) are front-surface, so delegate
+  # verbatim to this checkout's fno front - exactly what production runs.
+  # Only the refusal codes stay canned - those tests assert the refusal
+  # wiring, not the store.
+  if [[ "${MOCK_ABI_ACQUIRE_RC:-0}" == "0" ]]; then
+    exec "${MOCK_ABI_FRONT:?no fno front}" "$@"
+  fi
+  exit "$MOCK_ABI_ACQUIRE_RC"
 fi
 # `backlog get` is how the node guard establishes that a token IS a graph node.
 # Delegating (rather than exiting 0 with no output, which reads as "not a node")
@@ -52,27 +66,29 @@ if [[ "$1" == "do" && "$2" == "target" && "$3" == "resolve-owned-identity" ]]; t
   exit 0
 fi
 # The graph lock stamp is the one call whose EFFECT a test asserts, so swallowing
-# it as a bare success would hollow out the identity assertion. Delegate to the
-# real writer under the pinned python3; the shim exposes graph.cli directly, so
-# the leading `backlog` token is dropped.
+# it as a bare success would hollow out the identity assertion. The update leaf
+# answers natively now, so delegate to this checkout's fno-agents dev build - the
+# same writer the installed fno front dispatches to.
 if [[ "$1" == "backlog" && "$2" == "update" ]]; then
   # MOCK_ABI_STALE simulates an installed fno predating the harness flags.
   if [[ -n "${MOCK_ABI_STALE:-}" && "$*" == *--locked-by-harness* ]]; then
     echo "Error: No such option: --locked-by-harness" >&2
     exit 2
   fi
-  exec python3 "$MOCK_ABI_SHIM" "${@:2}"
+  export FNO_STATE_DIR="${MOCK_ABI_STATE_DIR}"
+  exec "${MOCK_ABI_NATIVE:?no dev fno-agents build}" "${@:1}"
 fi
 exit 0
 """
 
 
-def _sandbox(tmp_path: Path):
+def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     home = tmp_path / "home"
     (home / ".fno").mkdir(parents=True)
-    (home / ".fno" / "graph.json").write_text(
-        '{"entries":[{"id":"%s","title":"t","status":"idea","priority":"p2",'
-        '"project":"fno","plan_path":null}]}' % NODE_ID
+    seed_graph(
+        home / ".fno" / "graph.json",
+        [{"id": node_id, "title": "t", "status": "idea", "priority": "p2",
+          "project": "fno", "plan_path": None}],
     )
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -86,6 +102,13 @@ def _sandbox(tmp_path: Path):
     mock.chmod(0o755)
     log = tmp_path / "fno.log"
 
+    # The stub answers `fno-agents state path` so init writes its state into the
+    # test-owned space dir whether or not a real fno-agents sits on PATH. The
+    # legacy $REPO_ROOT/.fno leg stays pinned by the no-binary tests in
+    # test_init_target_state_skip_flags.py.
+    space = tmp_path / "space"
+    stub_env = install_state_path_stub(bindir, space)
+
     # Pin `python3` to the interpreter running these tests. Production no longer
     # shells an interpreter for the stamp, but the mock's delegation to the
     # real writer below does, and it needs fno's dependencies importable; an
@@ -95,16 +118,30 @@ def _sandbox(tmp_path: Path):
     py.write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
     py.chmod(0o755)
 
+    native = find_dev_binary()
+    if native is None:
+        pytest.skip("no dev fno-agents build under crates/fno-agents/target")
+
+    # The real acquire delegate: this checkout's fno front (fno.cli:main),
+    # same interpreter the tests run under.
+    front = Path(sys.executable).with_name("fno-py")
+    if not front.exists():
+        pytest.skip("no fno-py console script beside the test interpreter")
+
     env = os.environ.copy()
     env.update({
         "TARGET_START": "1",
-        "TARGET_INPUT": NODE_ID,
+        "TARGET_INPUT": node_id,
         "TARGET_SIZE": "S",
         "TARGET_SESSION_ID": "worker-session",
         "HOME": str(home),
         "PATH": f"{bindir}:{env['PATH']}",
         "MOCK_ABI_LOG": str(log),
         "MOCK_ABI_SHIM": str(REPO_ROOT / "scripts" / "roadmap-tasks.py"),
+        "MOCK_ABI_NATIVE": str(native),
+        "MOCK_ABI_STATE_DIR": str(home / ".fno"),
+        "MOCK_ABI_FRONT": str(front),
+        **stub_env,
     })
     return repo, home, log, env
 
@@ -124,26 +161,29 @@ def _run_init(repo: Path, env: dict):
 
 
 def _state(repo: Path) -> str:
-    f = repo / ".fno" / "target-state.md"
+    assert not (repo / ".fno" / "target-state.md").exists(), \
+        "state must live in the stub space, not the legacy path"
+    f = repo.parent / "space" / "target-state.md"
     return f.read_text() if f.exists() else ""
 
 
-def test_bare_node_id_acquires_global_ttl_claim(tmp_path):
-    repo, home, log, env = _sandbox(tmp_path)
+@pytest.mark.parametrize("node_id", [NODE_ID, LEGACY_NODE_ID])
+def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
+    repo, home, log, env = _sandbox(tmp_path, node_id)
     env["TARGET_SESSION_ID"] = "worker-session-a"
     env["MOCK_ABI_ACQUIRE_RC"] = "0"
     r = _run_init(repo, env)
     state = _state(repo)
     assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
 
-    assert f'target_claim_key: "node:{NODE_ID}"' in state, state
+    assert f'target_claim_key: "node:{node_id}"' in state, state
     assert "target_claim_holder:" in state
     assert 'target_claim_ttl: "2h"' in state
     assert not (repo / ".fno" / ".target-cancelled").exists()
 
     log_text = log.read_text()
     acquire_lines = [ln for ln in log_text.splitlines()
-                     if "claim acquire" in ln and NODE_ID in ln]
+                     if "claim acquire" in ln and node_id in ln]
     assert acquire_lines, log_text
     line = acquire_lines[0]
     assert "--ttl 2h" in line, line
@@ -207,8 +247,13 @@ def test_self_blind_refusal_says_the_session_cannot_see_itself(tmp_path):
     assert "claim acquire" not in log.read_text()
 
 
-def test_codex_thread_identity_aligns_manifest_graph_and_claim(tmp_path):
+def test_codex_thread_identity_aligns_manifest_graph_and_claim(
+    tmp_path, monkeypatch
+):
     repo, home, log, env = _sandbox(tmp_path)
+    # The projection reads the claims db through the ROOT env (claims live at
+    # <root>/.fno/claims); the init script acquires with the same root.
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(home))
     (repo / "scripts").symlink_to(REPO_ROOT / "scripts", target_is_directory=True)
     thread_id = "019f48e4-codex-owner"
     env.update(
@@ -224,7 +269,10 @@ def test_codex_thread_identity_aligns_manifest_graph_and_claim(tmp_path):
     result = _run_init(repo, env)
     state = _state(repo)
     assert state, result.stderr
-    graph = json.loads((home / ".fno" / "graph.json").read_text())["entries"][0]
+    # The store owns state; the json mirror can lag the last write.
+    from fno.graph.store import read_graph_strict
+
+    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
     acquire = next(
         line for line in log.read_text().splitlines() if "claim acquire" in line
     )
@@ -235,28 +283,38 @@ def test_codex_thread_identity_aligns_manifest_graph_and_claim(tmp_path):
         if line.startswith("session_id:")
     )
     assert manifest_session_id != thread_id
-    assert "-cx" in manifest_session_id
     assert f"codex_thread_id: {thread_id}" in state
-    assert graph["session_id"] == thread_id
+    assert "harness: codex" in state, state
+    assert f"harness_session_id: {thread_id}" in state, state
+    # The projection serves the claim HOLDER, and a target dispatch holds
+    # under the target-session: prefix; the raw thread id stays manifest-only.
+    assert graph["session_id"] == f"target-session:{thread_id}"
     assert f'--holder target-session:{thread_id}' in acquire
     assert f'target_claim_holder: "target-session:{thread_id}"' in state
 
 
-def test_stale_installed_fno_stamps_owner_only_and_says_so(tmp_path):
-    """An fno predating the harness flags must still stamp the owner - but must
-    NOT pass for a clean stamp, or the missing harness metadata goes silent."""
+def test_stale_installed_fno_stamps_owner_only(tmp_path, monkeypatch):
+    """An fno predating the harness flags must still leave the owner stamped.
+    The claim store IS the stamp now: the acquire lands the owner claim, the
+    rejected harness flag only loses metadata, and the projection serves the
+    holder regardless - no second stamp attempt exists to announce."""
     repo, home, log, env = _sandbox(tmp_path)
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(home))
     env["MOCK_ABI_ACQUIRE_RC"] = "0"
     env["MOCK_ABI_STALE"] = "1"
 
     r = _run_init(repo, env)
-    graph = json.loads((home / ".fno" / "graph.json").read_text())["entries"][0]
+    # The store owns state; the json mirror can lag the last write.
+    from fno.graph.store import read_graph_strict
 
-    assert graph.get("locked_by"), f"owner must survive a stale fno: {graph}"
+    graph = read_graph_strict(home / ".fno" / "graph.json")[0]
+
+    assert graph.get("locked_by") == "target-session:worker-session", \
+        f"owner must survive a stale fno: {graph}"
     assert not graph.get("locked_by_harness"), \
         "the stale fno rejected the harness flag; it must not appear stamped"
-    assert "WITHOUT harness metadata" in r.stderr, \
-        "degraded stamp must be announced, not silent: " + r.stderr[-600:]
+    assert not (repo.parent / "space" / ".target-cancelled").exists(), \
+        "a rejected harness flag must not block the session"
 
 
 def test_held_by_other_refuses(tmp_path):
@@ -266,7 +324,7 @@ def test_held_by_other_refuses(tmp_path):
     state = _state(repo)
     assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
 
-    assert (repo / ".fno" / ".target-cancelled").exists(), \
+    assert (repo.parent / "space" / ".target-cancelled").exists(), \
         "exit 1 must touch the cancel sentinel"
     assert "target_claim_blocked_reason: claim_held_by_other" in state
     assert f"graph_node_id: {NODE_ID}" in state
@@ -281,7 +339,7 @@ def test_non_contention_error_does_not_block(tmp_path):
     state = _state(repo)
     assert state, f"no state written: rc={r.returncode} stderr={r.stderr[:600]!r}"
 
-    assert not (repo / ".fno" / ".target-cancelled").exists(), \
+    assert not (repo.parent / "space" / ".target-cancelled").exists(), \
         "a non-contention acquire failure must NOT block"
     assert "target_claim_blocked_reason: acquire_error_rc_2" in state
     assert f'target_claim_key: "node:{NODE_ID}"' not in state

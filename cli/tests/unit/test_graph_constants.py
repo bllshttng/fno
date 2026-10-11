@@ -31,18 +31,7 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     # assertion comparison).
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.paths as paths_mod
-    if hasattr(paths_mod, "_settings"):
-        try:
-            paths_mod._settings.cache_clear()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-    if hasattr(paths_mod, "resolve_repo_root"):
-        try:
-            paths_mod.resolve_repo_root.cache_clear()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
     # Flush any stale real-attribute values that other tests may have pinned
     # onto the _constants module via monkeypatch.setattr. When monkeypatch
     # undoes a setattr on a previously-__getattr__-resolved attribute it
@@ -56,14 +45,6 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
         except AttributeError:
             pass
     yield
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    if hasattr(paths_mod, "_settings"):
-        try:
-            paths_mod._settings.cache_clear()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
-
-
 def _write_settings(tmp_path: Path, content: str) -> Path:
     settings_dir = tmp_path / ".fno"
     settings_dir.mkdir(parents=True, exist_ok=True)
@@ -73,30 +54,29 @@ def _write_settings(tmp_path: Path, content: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# AC2-HP: GRAPH_JSON constant respects config.paths.graph_json override
+# The retired paths.graph_json setting cannot move the store anchor.
 # ---------------------------------------------------------------------------
 
 
-def test_graph_json_constant_respects_paths_override(
+def test_graph_json_constant_uses_state_dir_even_with_retired_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """AC2-HP: fno.graph._constants.GRAPH_JSON uses config.paths.graph_json when set."""
+    """GRAPH_JSON uses the state directory even if the old key is present."""
     custom_graph = tmp_path / "custom" / "my-graph.json"
+    state = tmp_path / "state"
     settings_file = _write_settings(
         tmp_path,
-        f"schema_version: 1\nconfig:\n  paths:\n    graph_json: '{custom_graph}'\n",
+        f"schema_version: 1\nconfig:\n  state_dir: '{state}'\n  paths:\n    graph_json: '{custom_graph}'\n",
     )
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.paths as paths_mod
-    if hasattr(paths_mod, "_settings"):
-        paths_mod._settings.cache_clear()  # type: ignore[attr-defined]
 
     from fno.graph import _constants
     result = _constants.GRAPH_JSON
-    assert result == custom_graph, (
-        f"GRAPH_JSON should respect config.paths.graph_json override, got {result}"
+    # A fresh state dir holds no store, so the ladder answers db/.
+    assert result == state / "db" / "graph.json", (
+        f"GRAPH_JSON should use the fixed state-dir anchor, got {result}"
     )
 
 
@@ -111,10 +91,7 @@ def test_ledger_json_constant_respects_paths_override(
     )
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.paths as paths_mod
-    if hasattr(paths_mod, "_settings"):
-        paths_mod._settings.cache_clear()  # type: ignore[attr-defined]
 
     from fno.graph import _constants
     result = _constants.LEDGER_JSON
@@ -134,10 +111,7 @@ def test_briefs_dir_constant_respects_paths_override(
     )
     monkeypatch.setenv("FNO_CONFIG", str(settings_file))
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.paths as paths_mod
-    if hasattr(paths_mod, "_settings"):
-        paths_mod._settings.cache_clear()  # type: ignore[attr-defined]
 
     from fno.graph import _constants
     result = _constants.BRIEFS_DIR

@@ -1,9 +1,10 @@
-"""fno do pr CLI - in-package gh/git PR operations (ab-d4c98550).
+"""fno do pr CLI - in-package gh/git PR operations.
 
 Verbs:
     merge  - merge a PR with the fno-canonical guards (-> _merge.py)
     verify - audit an external PR gate, merged|reviews (-> _verify.py)
-    rebase - two-phase rebase with conflict delegation (-> _rebase.py)
+    rebase - two-phase rebase with conflict delegation (-> fno-agents pr-rebase)
+    push   - the one guarded push: fetch, rebase, preflight, push once (-> fno-agents pr-push)
     logs   - tail the failing CI job, spool the rest (-> _logs.py)
     wait   - poll status through the coalescing cache until settled/green (-> _wait.py)
 
@@ -15,11 +16,16 @@ dependency. Each module preserves the bash exit-code / output contract.
 from __future__ import annotations
 
 import enum
+import functools
 import json
 import os
+import subprocess
+import sys
 from typing import List, Optional
 
 import typer
+
+from fno.pr._proc import run
 
 
 pr_app = typer.Typer(
@@ -28,6 +34,23 @@ pr_app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+@pr_app.callback()
+def _select_pr_worktree(ctx: typer.Context) -> None:
+    if not (command := ctx.invoked_subcommand) or command not in {"verify", "status", "base-lineage-check", "merge-result-check", "coverage-check"}:
+        return
+    if pr := next((arg.partition("=")[2] if arg.startswith("--pr-number=") else arg for arg in sys.argv[sys.argv.index(command) + 1:] if arg.isdigit() or arg.startswith("--pr-number=")), None):
+        from fno.pr._review_hold import resolve_pr_worktree
+
+        try:
+            worktree = resolve_pr_worktree(int(pr), os.getcwd())
+        except Exception as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        # "" = no local worktree on the PR branch: nothing to select, and the
+        # command's own checkout lists every worktree of the repo anyway.
+        if worktree:
+            os.chdir(worktree)
 
 
 class VerifyKind(str, enum.Enum):
@@ -128,7 +151,8 @@ def verify(
     help=(
         "One authoritative CI verdict for a PR from statusCheckRollup. Prints a "
         "JSON line {pr, verdict, settled, green, checks}; exit 0 green, 1 red, "
-        "2 pending, 3 unknown (no checks), 4 fetch error, 127 gh-missing. "
+        "2 pending, 3 unknown (no checks), 4 read failed (fetch error or "
+        "reader crash; stdout still carries one JSON line), 127 gh-missing. "
         "In-progress checks read as pending, never red. settled is true only "
         "when every latest run carries a real conclusion, so a cancelled run "
         "reads red AND unsettled. checks.total counts the whole rollup: "
@@ -152,14 +176,10 @@ def status(
         ),
     ),
 ) -> None:
-    from fno.pr import _status
-
-    # main() routes through the coalescing cache: the watcher
-    # recipe polls this verb every 60s per session, and N sessions polling one
-    # PR must collapse to one network read per TTL or they trip the REST
-    # secondary limit (which counts request rate, not budget).
-    rc = _status.main([str(pr_number)] + (["--refresh"] if refresh else []))
-    raise typer.Exit(code=rc)
+    _forward_to_binary(
+        "authorized-merge",
+        [json.dumps({"op": "status-read", "cwd": os.getcwd(), "pr": pr_number, "refresh": refresh})],
+    )
 
 
 @pr_app.command(
@@ -172,8 +192,9 @@ def status(
         "wakes when a new review posts on the PR. N waiters on "
         "one PR cost one network read per cache TTL, a rate-limit backoff is "
         "ridden out rather than hammered, and the gh-call count prints at "
-        "exit. --timeout (30m default) exits with the last observed code and "
-        "a still-unsettled note. Use this instead of a hand-rolled "
+        "exit. --timeout (15m default) exits with the last observed code and "
+        "a still-unsettled note. Red cancels the head's runs, exits 1; CONFLICTING exits 5 with a "
+        "rebase receipt. Use this instead of a hand-rolled "
         "`while/sleep/grep` loop - every such loop is an uncoordinated poll "
         "against a quota the whole machine shares."
     ),
@@ -182,27 +203,15 @@ def wait(
     pr_number: int = typer.Argument(..., help="GitHub PR number"),
     until: str = typer.Option(
         "settled", "--until",
-        help="Exit when: settled (any terminal verdict), green, or a new review posts.",
+        help="settled (terminal, or red at once), red (fail fast), green (every check), review.",
     ),
-    timeout: str = typer.Option("30m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
+    timeout: str = typer.Option("15m", "--timeout", help="Max wait, e.g. 30m / 90s / 1h."),
     interval: str = typer.Option("60", "--interval", help="Poll interval in seconds (minimum 5)."),
 ) -> None:
-    from fno.pr import _wait
-
-    # No ToolMissing handler here: `_wait.main` maps it to 127 itself, and a
-    # second handler for the same exception is a copy that drifts.
-    rc = _wait.main(
-        [
-            str(pr_number),
-            "--until",
-            until,
-            "--timeout",
-            timeout,
-            "--interval",
-            interval,
-        ]
+    _forward_to_binary(
+        "authorized-merge",
+        [json.dumps({"op": "status-wait", "cwd": os.getcwd(), "pr": pr_number, "until": until, "timeout": timeout, "interval": interval})],
     )
-    raise typer.Exit(code=rc)
 
 
 @pr_app.command(
@@ -275,42 +284,26 @@ def list_cmd(
         None, "--repo", help="GitHub owner/repo; defaults to origin"
     ),
 ) -> None:
-    from fno.pr import _rest
+    import subprocess
 
-    if state not in {"open", "closed", "all"}:
-        typer.echo(json.dumps({"error": "--state must be open, closed, or all"}))
-        raise typer.Exit(code=2)
-    slug, slug_reason = _rest._slug_or_reason(os.getcwd(), repo=repo)
-    if not slug:
-        typer.echo(json.dumps({"error": slug_reason}, separators=(",", ":")))
-        raise typer.Exit(code=4)
-    rows, reason = _rest.list_prs_rest(slug, state=state, cwd=os.getcwd(), details=True)
-    if rows is None:
-        typer.echo(json.dumps({"error": reason}, separators=(",", ":")))
-        raise typer.Exit(code=4)
-    open_rows = [row for row in rows if row.get("state") == "OPEN"]
-    if open_rows:
-        from fno.graph._reconcile import classify_open_pr_bindings
-        from fno.graph.store import read_graph_strict
-        from fno.paths import graph_json
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
 
-        try:
-            bindings = classify_open_pr_bindings(open_rows, read_graph_strict(graph_json()))
-        except Exception as exc:  # noqa: BLE001 - report the unreadable binding source
-            for row in open_rows:
-                row["node_binding_error"] = f"graph binding read failed: {exc}"
-        else:
-            by_pr = {binding.pr_number: binding for binding in bindings}
-            for row in rows:
-                number = row.get("number")
-                if not isinstance(number, int):
-                    continue
-                binding = by_pr.get(number)
-                if binding is None:
-                    continue
-                row["node_id"] = binding.node_id
-                row["node_binding"] = binding.verdict
-    typer.echo(json.dumps(rows, separators=(",", ":")))
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno do pr list: the fno-agents binary was not found. It ships in "
+            "the `pip install fno` wheel and with the plugin; reinstall fno or "
+            "run `fno doctor update --rust`, or set FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+
+    argv = [str(binary), "pr-heal", "list", "--state", state]
+    if repo:
+        argv += ["--repo", repo]
+    result = subprocess.run(argv, check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @pr_app.command(
@@ -360,20 +353,63 @@ def logs(
     lines: int = typer.Option(40, "--lines", help="Tail length."),
     full: bool = typer.Option(False, "--full", help="Print the whole log, not a tail."),
 ) -> None:
-    from fno.pr import _logs
-    from fno.pr._proc import ToolMissing
+    # pr 0 asks the door to resolve the current branch's PR.
+    _forward_to_binary(
+        "authorized-merge",
+        [json.dumps({"op": "status-logs", "cwd": os.getcwd(), "pr": pr_number or 0, "job": job, "lines": lines, "full": full})],
+    )
 
-    try:
-        rc = _logs.run_logs(
-            str(pr_number) if pr_number is not None else None,
-            job=job,
-            lines=lines,
-            full=full,
+
+def _forward_to_binary(verb: str, args: list[str]) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct. The shared
+    body of the do-pr binary verbs (heal, push, rebase)."""
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            f"fno do pr {verb.replace('pr-', '')}: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
         )
-    except ToolMissing as exc:
-        typer.echo(f"fno do pr logs: {exc.tool} not found on PATH", err=True)
-        rc = 127
-    raise typer.Exit(code=rc)
+        raise typer.Exit(code=127)
+    result = subprocess.run([str(binary), verb, *args], check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
+
+
+@pr_app.command(
+    "heal",
+    hidden=True,
+    help=(
+        "Classify a red check by signature, apply the mechanical fix, push "
+        "once. Dry run unless --apply. --playbook prints the signature table; "
+        "--all reports every red open PR; --all --apply drives them (each "
+        "from its own worktree, behind four refusals). Exit 0 nothing red, "
+        "1 escalations remain, 2 a run is in flight, 3 wrong branch or dirty "
+        "tree, 4 read error, 127 binary missing."
+    ),
+)
+def heal(
+    pr_number: Optional[int] = typer.Argument(None, help="GitHub PR number."),
+    apply: bool = typer.Option(False, "--apply", help="Fix, commit, push once."),
+    all_prs: bool = typer.Option(False, "--all", "-A", help="Report every red open PR."),
+    playbook: bool = typer.Option(False, "--playbook", help="Print the signature table."),
+) -> None:
+    argv = []
+    if pr_number is not None:
+        argv.append(str(pr_number))
+    if apply:
+        argv.append("--apply")
+    if all_prs:
+        argv.append("--all")
+    if playbook:
+        argv.append("--playbook")
+    _forward_to_binary("pr-heal", argv)
 
 
 @pr_app.command(
@@ -418,6 +454,21 @@ def base_lineage_check(
         typer.echo(f"fno do pr base-lineage-check: {exc.tool} not found on PATH", err=True)
         rc = 127
     raise typer.Exit(code=rc)
+
+
+@pr_app.command(
+    "merge-result-check",
+    hidden=True,
+    help=(
+        "Compile the merge result of <pr_number> against its base: git merge-tree plus the"
+        " repo-wide ruff + mypy step on that tree. Exit 0 ok, 3 red (rebase, fix, push,"
+        " retry), 4 unknown (a probe failed)."
+    ),
+)
+def merge_result_check(pr_number: int = typer.Argument(..., help="GitHub PR number")) -> None:
+    from fno.pr import _merge_result
+
+    raise typer.Exit(code=_merge_result.run_merge_result_check(pr_number))
 
 
 @pr_app.command(
@@ -471,6 +522,17 @@ def coverage_waive(
     raise typer.Exit(code=_coverage_gate.run_coverage_waive(pr_number, reason))
 
 
+def _parse_flags(flags_json: Optional[str]) -> Optional[List[str]]:
+    """The --flags-json payload as a list, or None when absent/unreadable."""
+    if flags_json is None:
+        return None
+    try:
+        parsed = json.loads(flags_json)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, list) and all(isinstance(flag, str) for flag in parsed) else None
+
+
 @pr_app.command(
     "review-hold",
     hidden=True,
@@ -478,11 +540,11 @@ def coverage_waive(
         "Register, clear, or read the hold that says a review of this PR's head "
         "is RUNNING. Merge readiness only knows what verdicts EXIST for a head, "
         "so a review still writing its fixes is invisible to it. Actions: "
-        "check <pr> (exit 0 clear, 3 held, 4 unanswered), acquire, release."
+        "check <pr> (exit 0 clear, 3 held, 4 unanswered), acquire, release, round."
     ),
 )
 def review_hold(
-    action: str = typer.Argument(..., help="check | acquire | release"),
+    action: str = typer.Argument(..., help="check | acquire | release | round"),
     pr_number: Optional[int] = typer.Argument(None, help="GitHub PR number (check)"),
     branch: Optional[str] = typer.Option(None, "--branch", help="Head branch (acquire/release)."),
     head: str = typer.Option("", "--head", help="The head sha being reviewed (acquire)."),
@@ -534,9 +596,12 @@ def review_hold(
         typer.echo(f"PR {pr_number}: no review in flight on {branch}")
         raise typer.Exit(code=0)
 
-    if not branch:
+    if not branch and not (action == "acquire" and pr_number is not None):
         typer.echo(f"review-hold {action} needs --branch", err=True)
         raise typer.Exit(code=1)
+    # A PR-number acquire resolves the branch below; every path reaching here
+    # otherwise holds one. Rebound so the callers read as typed.
+    branch = branch or ""
     if action == "release":
         # --holder is OPTIONAL here, and omitting it is the normal case: this is
         # a lane lock, not an ownership assertion. The refusal an operator reads
@@ -554,18 +619,74 @@ def review_hold(
 
         typer.echo(json.dumps(claim_status(_review_hold.review_hold_key(branch))))
         raise typer.Exit(code=0)
+    if action == "round":
+        if not head:
+            typer.echo("review-hold round needs --head", err=True)
+            raise typer.Exit(code=1)
+        # The instrument must have RUN: an empty chain is an absence with more
+        # than one explanation, and journals missing on both mirrors means no
+        # read ever answered. Fail closed so the caller stamps nothing rather
+        # than trusting a zero-shaped read.
+        from fno.pr._reviews import _coverage_logs
+
+        try:
+            journal_paths = _coverage_logs(cwd)[:2]
+        except Exception:  # noqa: BLE001 - a dead probe never mints a round
+            raise typer.Exit(code=1) from None
+        if not any(path is not None and path.exists() for path in journal_paths):
+            raise typer.Exit(code=1)
+        try:
+            round_no = _review_hold.scoped_verify_round(branch, head, cwd=cwd)
+        except Exception:  # noqa: BLE001 - fail closed: no number, no stamp
+            raise typer.Exit(code=1) from None
+        typer.echo(round_no)
+        raise typer.Exit(code=0)
     if not holder:
         typer.echo("review-hold acquire needs --holder", err=True)
         raise typer.Exit(code=1)
     if action == "acquire":
-        flags = None
-        if flags_json is not None:
+        if pr_number is not None:
+            # a review that names its PR keys the hold on that PR's head
+            # ref, resolved from GitHub - never on whatever branch this checkout
+            # stands on. No hold rather than a guessed one: a hold on a
+            # bystander branch reports protection of a PR it is not protecting.
+            # The verb runs inside a PreToolUse hook, so the read is bounded.
+            from fno.pr._merge import _pr_head_ref_and_oid
+
             try:
-                parsed_flags = json.loads(flags_json)
-            except json.JSONDecodeError:
-                parsed_flags = None
-            if isinstance(parsed_flags, list) and all(isinstance(flag, str) for flag in parsed_flags):
-                flags = parsed_flags
+                refs = _pr_head_ref_and_oid(
+                    pr_number, cwd, runner=functools.partial(run, timeout=10)
+                )
+            except subprocess.TimeoutExpired:
+                refs = None
+            if refs is None:
+                typer.echo(
+                    f"review-hold: not registered on PR {pr_number}: the PR read failed; "
+                    "no hold rather than a guessed branch",
+                    err=True,
+                )
+                raise typer.Exit(code=0)
+            resolved_branch, resolved_head, resolved_state = refs
+            if resolved_state != "OPEN":
+                typer.echo(
+                    f"review-hold: not registered on PR {pr_number}: {resolved_state}; "
+                    "no hold rather than a guessed branch",
+                    err=True,
+                )
+                raise typer.Exit(code=0)
+            # The PR's own head ref and head replace whatever the caller passed.
+            branch = resolved_branch
+            head = resolved_head
+        flags = _parse_flags(flags_json)
+        # The cap gate: the prefixed line lets the hook surface the denial;
+        # policy, not infra, so the one acquire failure that blocks.
+        refusal = _review_hold.review_invocation_refusal(branch, head, flags=flags, cwd=cwd)
+        if refusal:
+            typer.echo(f"review-invocation-refused: {refusal}")
+            raise typer.Exit(code=3)
+        advisory = _review_hold.verify_fixes_advisory(branch, head, cwd=cwd)
+        if advisory:
+            typer.echo(advisory, err=True)
         claim = _review_hold.acquire_review_hold(
             branch,
             head=head,
@@ -596,9 +717,14 @@ def hold_check(
     repo: Optional[str] = typer.Option(None, "--repo", help="Repository working directory."),
 ) -> None:
     """Refuse a PR whose bound plan ancestry carries an active or unreadable hold."""
-    from fno.pr._hold import merge_hold_reason
+    from fno.pr import _hold, _review_hold
 
-    reason = merge_hold_reason(pr_number, repo or os.getcwd())
+    worktree = _review_hold.resolve_pr_worktree(pr_number, repo or os.getcwd())
+    # "" = no local worktree on the PR branch. The hold reader is
+    # graph-resident and runs from the caller's checkout (its cwd only
+    # resolves the canonical root), so an empty path hands it that checkout -
+    # a graph-bound hold still gates a PR that is not checked out here.
+    reason = _hold.merge_hold_reason(pr_number, worktree or repo or os.getcwd())
     if reason:
         typer.echo(reason, err=True)
         raise typer.Exit(code=3)
@@ -667,11 +793,12 @@ def global_receipt_events_path() -> None:
 @pr_app.command(
     "sync-canonical",
     help=(
-        "Post-merge canonical-checkout sync (x-47be). Runs "
+        "Post-merge canonical-checkout sync. Runs "
         "config.post_merge.sync_command in the CANONICAL checkout after a PR "
         "merges (opt-in; unset command = no-op). Exactly-once per merge SHA via "
         "a marker + single-flight lock; fail-open. Exit 0 no-op/skipped/synced, "
-        "non-zero only on a failed sync_command (marker withheld -> retries)."
+        "non-zero on a failed sync_command or a canonical checkout dirty on "
+        "paths this merge touches (marker withheld -> retries)."
     ),
 )
 def sync_canonical(
@@ -684,6 +811,55 @@ def sync_canonical(
 
 
 @pr_app.command(
+    "publish-review",
+    hidden=True,
+    help=(
+        "Post a review verdict to GitHub as config.review.bot_identity "
+        "(--pr-number N; --verdict defaults to the newest head-pinned "
+        "attestation for HEAD). One bot-review: receipt line; exit 0 posted,"
+        " 1 skipped|refused|failed, 2 no attestation to default from."
+    ),
+)
+def publish_review_cmd(
+    pr_number: Optional[int] = typer.Option(None, "--pr-number", help="GitHub PR number"),
+    pr_legacy: Optional[int] = typer.Option(
+        None, "--pr", hidden=True, help="[DEPRECATED] alias for --pr-number."
+    ),
+    verdict: Optional[str] = typer.Option(
+        None, "--verdict", help="pass | fail; default: newest head-pinned attestation for HEAD."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", "-N", help="Resolve and refuse-check, but make no POST."
+    ),
+) -> None:
+    from fno._flag_aliases import merge_deprecated_alias
+    from fno.pr._publish_review import PublishReviewUnavailable, publish_review_call
+
+    pr_number = merge_deprecated_alias(
+        pr_number, pr_legacy, canonical_flag="--pr-number", legacy_flag="--pr"
+    )
+    if pr_number is None:
+        typer.echo("publish-review: missing option --pr-number", err=True)
+        raise typer.Exit(code=2)
+    try:
+        result = publish_review_call(
+            {
+                "pr_number": pr_number,
+                "head_sha": "",
+                "verdict": verdict or "",
+                "reviewer": "",
+                "cwd": os.getcwd(),
+                "dry_run": dry_run,
+            }
+        )
+    except PublishReviewUnavailable as exc:
+        typer.echo(f"bot-review: failed ({exc})", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(result.get("receipt", ""), err=True)
+    raise typer.Exit(code=int(result.get("exit", 1)))
+
+
+@pr_app.command(
     "rebase",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     help=(
@@ -693,17 +869,41 @@ def sync_canonical(
     ),
 )
 def rebase(ctx: typer.Context) -> None:
-    from fno.pr import _rebase
+    _forward_to_binary("pr-rebase", list(ctx.args))
 
-    rc = _rebase.run_rebase(list(ctx.args))
-    raise typer.Exit(code=rc)
+
+@pr_app.command(
+    "push",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    help=(
+        "The one guarded push: fetch, rebase onto origin/main, optionally preflight, "
+        "push exactly once, print one receipt. Refuses while a CI run on the remote "
+        "head is still in flight, unless the head's checks already carry a failure: "
+        "then it cancels that stale run, records the bypass row, and pushes with no "
+        "flag. A head with no red row is never cancelled. --no-preflight is an "
+        "accepted no-op; --force-ci-cancel still overrides. Exit 0 pushed "
+        "(ci=settled|bypassed|red-cancel), 1 preflight red, 2 a live run in flight, "
+        "3 a refusal the caller must fix (protected branch, dirty tree, conflict), 4 a read error, 127 binary missing."
+    ),
+)
+def push(ctx: typer.Context) -> None:
+    _forward_to_binary("pr-push", list(ctx.args))
+
+
+@pr_app.command(
+    "create", hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    help="Duplicate-guarded create; exit 3 refuses a twin (--not-duplicate <pr>).",
+)
+def create(ctx: typer.Context) -> None:
+    _forward_to_binary("pr-create", list(ctx.args))
 
 
 @pr_app.command(
     "ritual",
     hidden=True,
     help=(
-        "Mechanical core of the post-merge ritual (x-bbde). Runs the CLI-only "
+        "Mechanical core of the post-merge ritual. Runs the CLI-only "
         "steps as one idempotent sequence, printing a per-leg receipt line "
         "(step=<name> status=<ok|skipped|failed> detail=...). Non-zero if any "
         "leg failed; no leg is swallowed. The judgment residue (deferral triage "
@@ -734,16 +934,21 @@ def ritual(
 @pr_app.command(
     "closure-trailer",
     help=(
-        "Print the exact `Backlog-Closure:` trailer for NODE plus its "
+        "Print the exact `Fixes` closure line for NODE plus its "
         "contained_in descendants. Compose it into a PR body before "
         "`gh pr create` so every node the PR ships gets bound at merge, not "
         "just the one stamped by --pr-number. Prints nothing (exit 0) when "
         "NODE is unresolvable or nothing well-formed remains, so a caller "
-        "can append the output to a body unconditionally."
+        "can append the output to a body unconditionally. Exit 4 means the "
+        "graph read itself failed - a dead reader is not an unresolvable "
+        "node, and a caller must not append empty output on it. Omit NODE "
+        "to resolve it from the current branch instead: exactly one real "
+        "graph node must be named, and any failure exits NONZERO with the "
+        "reason - a producer that cannot verify must not read as empty."
     ),
 )
 def closure_trailer(
-    node: str = typer.Argument(..., help="Node id to render the trailer for."),
+    node: Optional[str] = typer.Argument(None, help="Node id to render the trailer for; omit to resolve from the current branch."),
     extra: List[str] = typer.Option(
         [],
         "--extra",
@@ -751,23 +956,58 @@ def closure_trailer(
         "contained_in descendants (repeatable).",
     ),
 ) -> None:
-    from fno.graph.store import read_graph
+    from fno.graph.api import wire_rows
     from fno.paths import graph_json
     from fno.pr.closure import render_pr_closure_trailer
     from fno.tracker import active_backend_name
 
     from fno.graph._constants import is_wellformed_node_id
 
-    if active_backend_name() != "graph":
+    external = active_backend_name() != "graph"
+    if node is None:
+        # Bare mode is LOUD on every failure: silent empty is how a
+        # trailer-less PR ships. It never takes the legacy early returns.
+        if external:
+            typer.echo(
+                "closure-trailer: branch resolution needs the graph backend; "
+                "pass the node explicitly instead",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    elif external:
         # graph.json is not the delivery record of truth under an external
         # tracker backend - nothing to render from, matching this command's
         # own contract (prints nothing, exit 0, on any unresolvable input).
         return
 
+    # One read for both modes, loud on failure: a dead keeper used to answer
+    # exactly like an unresolvable node here (bare except, print nothing,
+    # exit 0) and three PRs sat red on the closure gate with no cause.
     try:
-        entries = read_graph(graph_json())
-    except Exception:
-        return
+        entries = wire_rows(path=graph_json())
+    except Exception as exc:  # noqa: BLE001 - the read failure IS the message
+        typer.echo(
+            f"closure-trailer: the graph read failed ({exc}); "
+            "exit 4 names a dead reader, not an unresolvable node",
+            err=True,
+        )
+        raise typer.Exit(code=4)
+
+    if node is None:
+        from fno.pr.closure import BranchResolutionError, resolve_branch_node_id
+
+        known_ids = frozenset(
+            str(entry["id"])
+            for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        )
+        try:
+            node_id: str = resolve_branch_node_id(known_ids, cwd=os.getcwd())
+        except BranchResolutionError as exc:
+            typer.echo(f"closure-trailer: {exc}", err=True)
+            raise typer.Exit(code=1)
+    else:
+        node_id = node
     # render_pr_closure_trailer silently drops a malformed id with no other
     # signal - a bare-hex or slug typo in --extra would otherwise ship with
     # the trailer one node short and no one the wiser (round-7 review fix).
@@ -778,7 +1018,7 @@ def closure_trailer(
             f"{', '.join(dropped)} (need the full <prefix>-<hex> form)",
             err=True,
         )
-    line = render_pr_closure_trailer(entries, node, extra_ids=list(extra))
+    line = render_pr_closure_trailer(entries, node_id, extra_ids=list(extra))
     if line:
         typer.echo(line)
 
@@ -786,7 +1026,6 @@ def closure_trailer(
 @pr_app.command("bind-created", hidden=True)
 def bind_created(
     url: str = typer.Option(..., "--url", help="Created PR URL."),
-    owner: Optional[str] = typer.Option(None, "--owner", help="Best-known live owner."),
     repo: Optional[str] = typer.Option(None, "--repo", help="Repository worktree."),
     node: Optional[str] = typer.Option(
         None,
@@ -797,7 +1036,7 @@ def bind_created(
     """Bind a raw ``gh pr create`` result to its one real node."""
     from fno.pr.closure import bind_created_pr_from_branch
 
-    result = bind_created_pr_from_branch(url, owner=owner, cwd=repo or os.getcwd(), node_id=node)
+    result = bind_created_pr_from_branch(url, cwd=repo or os.getcwd(), node_id=node)
     if result.outcome == "bound":
         # The ship row follows the binding, not one particular verb. This used
         # to ride on `backlog update --pr-number`; when ship switched to this

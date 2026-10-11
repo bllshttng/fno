@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Tuple, Union
 
 from fno.harness_identity import (
+    live_thread_row_for_cwd,
     parse_canonical_identity,
+    present_harness_markers,
     resolve_attester_identity,
     resolve_owned_identity,
     session_identity_key,
@@ -18,66 +21,202 @@ from fno.harness_identity import (
 def resolve_self_identity(
     env: Optional[Mapping[str, str]] = None,
     *,
-    collide: Optional[Callable[[str, str], Optional[str]]] = None,
+    collide: Optional[
+        Callable[[str, str, Optional[Tuple[str, str]]], Optional[str]]
+    ] = None,
+    witness: Optional[Callable[[str], frozenset]] = None,
 ):
     """Resolve the harness identity this process can prove it owns.
 
-    The prover is the process-tree walk, and it is the ONLY prover. The nearest
-    harness ancestor is what a process actually runs under, so it separates a
-    marker this session minted from one it merely inherited.
+    The prover is the process-tree walk, and it is the only prover for an
+    AMBIENT marker: the nearest harness ancestor separates a marker this
+    session minted from one it merely inherited. A self-set marker such as
+    ``CLAUDECODE`` is never a prover - it survives a fork, so a codex session
+    under a shell that ran claude inherits it, and env alone cannot tell the
+    two cases apart (see
+    :data:`fno.harness_identity.SELF_SET_HARNESS_MARKERS`). When the walk has
+    no answer, resolution refuses rather than guesses, except for the
+    uncontended single-family elimination; a walk that cannot tell is
+    "cannot tell" (``None``), never a contradiction (``False``) - only a walk
+    that found a DIFFERENT harness contradicts (: returning False on a
+    silent walk refused every spawned worker whose ancestry the sandbox
+    hides).
 
-    A self-set marker does NOT belong here, and the attempt is worth recording
-    because it looks correct. ``CLAUDECODE`` is written by the claude binary at
-    startup, so a shell that never ran claude cannot produce it; that reads like
-    proof of a claude self. It is not. The variable survives a fork, so a codex
-    session started from a shell that HAD run claude inherits it, and promoting
-    it to a prover contradicts that session's own ``CODEX_THREAD_ID``: a sole
-    codex marker that resolved cleanly degrades to ambiguous, and every identity
-    consumer loses a valid codex session. Environment alone cannot tell the two
-    cases apart, because they carry the identical name set. Only ancestry can,
-    which is what the walk reads.
+    The spawn record is a separate, narrower source that fills a session id
+    ancestry structurally cannot supply: a codex thread worker owns no
+    process, and the daemon-written registry row keyed by this process's cwd
+    is the only per-worker identity the lane has. See
+    :func:`_fill_spawn_record`, which runs after the walk and never
+    overwrites a proven session id.
 
-    So when the walk has no answer - psutil denied, no harness ancestor, a
-    container that hides the parent chain - resolution refuses rather than
-    guesses, and ``fno whoami`` names the inherited family so the operator can
-    clear it. See :data:`fno.harness_identity.SELF_SET_HARNESS_MARKERS`.
+    ``collide(harness, session_id, own_pair) -> owner | None`` reports a live
+    registry row owning an id. ``own_pair`` is this process's own
+    ``(harness, session_id)`` pair, or None when nothing proves an id: a row
+    agreeing with the pair on both halves is the caller's OWN row and never
+    contention. The id half must come from the STAMP or a witness, never from
+    the ambient marker under test - that pair would assert exactly what the
+    marker claims, and a leaked marker meeting its owner's live row would
+    read as self (round-1 P1). The bounded exception lives in the registry:
+    its ``walk_harness`` ground accepts a walk-proven family row whose pid
+    is dead or names this process, the restart-re-registered row. A name_only
+    worker resolves when an
+    independent ground witnesses its marker: the attester's ancestry read,
+    the rollout fd, the spawn-minted name row (keyed by FNO_AGENT_SELF /
+    FNO_WORKER_NAME), or the cwd-keyed spawn record when that single row
+    holds the id - and fails closed otherwise. The agreement check stays in
+    the registry; this layer computes the pair and hands it over.
+
+    ``witness(harness) -> frozenset[session_id]`` names the session ids a live
+    rollout fd witnesses for this process (see
+    ``fno.agents.codex_rollout.codex_rollout_witness``). The id comes from the
+    fd, not the marker under test, so completing a name_only stamp's pair with
+    it is not circular.
     """
     from fno.claims.session_pid import resolve_session_harness
 
     true_harness = resolve_session_harness()
     canonical = parse_canonical_identity(env)
+
+    def collide_with(pair: Optional[Tuple[str, str]]) -> Callable[[str, str], Optional[str]]:
+        # The 3-arg collide (with own_pair) is THIS resolver's contract; the
+        # shared resolve_owned_identity takes the 2-arg shape.
+        def _collide(harness: str, session_id: str) -> Optional[str]:
+            if collide is None:
+                return None
+            return collide(harness, session_id, pair)
+
+        return _collide
+
     if canonical.disposition not in {"complete", "name_only"}:
         fallback_prove = (
             None if true_harness is None else (lambda harness, sid: harness == true_harness)
         )
-        return resolve_owned_identity(env, prove=fallback_prove)
+        # No collide here: a session with no stamp at all (a hand-started
+        # joined session) resolves by the uncontended single-family
+        # elimination, exactly as the registry's own SessionStart
+        # registration expects - colliding would read that session's OWN
+        # registered row as contention and refuse every role grantor,
+        # whoami and --from-self for it. The fail-closed collide lives in
+        # the stamped branches below, where an attester can still witness
+        # self.
+        return _fill_spawn_record(resolve_owned_identity(env, prove=fallback_prove))
 
     try:
-        attested_session_id, witness = resolve_attester_identity(env)
+        attested_session_id, attester_witness = resolve_attester_identity(env)
     except Exception:
-        attested_session_id, witness = "", ""
+        attested_session_id, attester_witness = "", ""
     canonical_session_id = canonical.session_id or attested_session_id
     canonical_proven = bool(
         true_harness
         and canonical.harness == true_harness
-        and witness == "process"
+        and attester_witness == "process"
         and canonical_session_id
         and attested_session_id
         and session_identity_key(canonical_session_id)
         == session_identity_key(attested_session_id)
     )
 
+    # a name_only codex stamp carries no id and codex never carries
+    # CODEX_THREAD_ID in its own env, so the attester cannot complete the
+    # pair. A marker value the rollout witness sees in a live fd IS this
+    # process's id; the thread id wins (CODEX_SESSION_ID is the ROOT session).
+    # The witness keys on the STAMP family: a silent walk (a thread worker
+    # whose ancestry hides the harness process) must not blind the spawn-row
+    # ground, and a re-dispatched worker whose env lost the spawn-minted name
+    # still holds the cwd-keyed spawn record - the same non-circular ground
+    # _fill_spawn_record adopts - so a marker naming the worker's OWN fresh
+    # row proves self instead of reading as contention.
+    witnessed_value: Optional[str] = None
+    if (
+        witness is not None
+        and not canonical_proven
+        and canonical.disposition == "name_only"
+        and canonical.harness
+        and (true_harness is None or canonical.harness == true_harness)
+    ):
+        environ_w = os.environ if env is None else env
+        seen = {session_identity_key(s) for s in witness(canonical.harness)}
+        row = live_thread_row_for_cwd(_own_cwd())
+        if row and row[0] == canonical.harness:
+            seen.add(session_identity_key(row[1]))
+        thread_value = (environ_w.get("CODEX_THREAD_ID") or "").strip()
+        if thread_value and session_identity_key(thread_value) in seen:
+            witnessed_value = thread_value
+        else:
+            witnessed = [
+                value
+                for _marker, harness, value in present_harness_markers(environ_w)
+                if harness == canonical.harness and session_identity_key(value) in seen
+            ]
+            if len(witnessed) == 1:
+                witnessed_value = witnessed[0]
+        if witnessed_value:
+            canonical_session_id = witnessed_value
+            canonical_proven = True
+
     def prove(harness: str, session_id: str) -> Optional[bool]:
+        if true_harness is None:
+            return None
         if harness != true_harness:
             return False
         if not canonical_proven:
             return None
         return session_identity_key(session_id) == session_identity_key(canonical_session_id)
 
-    return resolve_owned_identity(
-        env,
-        prove=prove,
-        collide=None if canonical_proven else collide,
+    # The stamp-declared pair: a COMPLETE stamp names the id independently of
+    # the markers under test (spawn writes the stamp and the row in one act),
+    # which is the non-circular ground. A name_only stamp names only
+    # the family and completes NO pair - the ambient marker would be
+    # self-attesting, and own_pair stays None so the collider keeps its full
+    # ambient-leak strength there.
+    own_pair: Optional[Tuple[str, str]] = None
+    if canonical.harness and canonical.session_id:
+        own_pair = (
+            canonical.harness.strip().lower(),
+            session_identity_key(canonical.session_id),
+        )
+    elif witnessed_value and true_harness:
+        own_pair = (true_harness, session_identity_key(witnessed_value))
+
+    return _fill_spawn_record(
+        resolve_owned_identity(
+            env,
+            prove=prove,
+            collide=None if canonical_proven else collide_with(own_pair),
+        )
+    )
+
+
+def _own_cwd() -> str:
+    # A pruned worktree cannot read its own cwd; identity must degrade, not
+    # crash (an empty cwd makes the registry reader answer None).
+    try:
+        return os.getcwd()
+    except OSError:
+        return ""
+
+
+def _fill_spawn_record(owned):
+    """Fill a session id the walk could not supply from the cwd-keyed spawn
+    record.
+
+    Guards, in order: a resolved session id short-circuits before the read, a
+    fail-closed disposition is never overwritten, and a process carrying ANY
+    other family's marker never adopts - cwd is shared by bystanders.
+    """
+    if owned.session_id or owned.disposition in {"invalid", "contradiction"}:
+        return owned
+    row = live_thread_row_for_cwd(_own_cwd())
+    if row is None:
+        return owned
+    harness, session_id = row
+    if owned.harness and owned.harness != harness:
+        return owned
+    marker_families = {h for _m, h, _v in owned.markers_present}
+    if marker_families - {harness}:
+        return owned
+    return replace(
+        owned, harness=harness, session_id=session_id, disposition="spawn_record"
     )
 
 
@@ -95,7 +234,8 @@ _MANIFEST_IDENTITY_FIELDS = (
 #: Dispositions of :class:`fno.harness_identity.OwnedHarnessIdentity` whose
 #: session id is PROVEN by this process's own ancestry. Every other
 #: disposition with an id present is an inherited marker, and an inherited
-#: marker that matches the worktree manifest is a shared anchor, not a self.
+#: marker matching the worktree manifest is a shared anchor, not a self
+#: (``spawn_record`` stays absent: see :func:`_fill_spawn_record`).
 _PROVEN_DISPOSITIONS = frozenset({"canonical", "proven"})
 
 
@@ -187,7 +327,7 @@ def _roster_name_for_session(session_id: str) -> str:
     name is this worker's own - the same guarantee the ``FNO_WORKER_NAME``
     export was meant to give. The env write cannot reach a daemon-forked
     worker: the serving session inherits the claude daemon's env, never the
-    spawning process's (x-6de8), so a spawned worker's holder degraded to a
+    spawning process's, so a spawned worker's holder degraded to a
     raw session id (live join proof, 2026-08-27). The registry row survives
     that fork. Best-effort by design: an unreadable registry, a missing row,
     or an ambiguous session id (two names) answers "" and the caller keeps
@@ -204,11 +344,9 @@ def _roster_name_for_session(session_id: str) -> str:
     if not sid:
         return ""
     try:
-        import json
+        from fno.registry_door import read_registry_document
 
-        from fno.paths import agents_registry_path
-
-        raw = json.loads(agents_registry_path().read_text(encoding="utf-8"))
+        raw = read_registry_document()[0]
     except Exception:  # noqa: BLE001 - identity must degrade, never crash
         return ""
     rows = raw.get("agents") if isinstance(raw, dict) else None

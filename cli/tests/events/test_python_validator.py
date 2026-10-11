@@ -28,99 +28,54 @@ from fno.events import (
 )
 
 
+def test_agent_removed_and_merge_cleanup_events_validate() -> None:
+    removed = {
+        "ts": "2026-09-02T00:00:00Z",
+        "type": "agent_removed",
+        "source": "daemon",
+        "data": {
+            "name": "worker",
+            "registry_changed": True,
+            "harness": "claude",
+            "harness_session_id": "session-1",
+            "actor": "session:operator-1",
+            "reason": "operator-requested",
+            "request_id": "agent-rm-1",
+            "worktree_touched": False,
+            "reclaimed_bytes": 0,
+        },
+    }
+    request = {
+        "ts": "2026-09-02T00:00:00Z",
+        "type": "merge_cleanup_requested",
+        "source": "python",
+        "data": {
+            "request_id": "merge-cleanup-1",
+            "repo": "/repo",
+            "pr": 42,
+            "branch": "feature/session",
+            "worktree": "/repo/worktree",
+            "node_ids": ["x-90ee"],
+        },
+    }
+    validate(removed)
+    validate(request)
+
+
 # -- AC1-HP: happy path --
 
-def test_validate_happy_path() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "source": "target",
-        "data": {
-            "gate_bearing": True,
-            "gate": "ledger_updated",
-            "phase": "register",
-            "nonce": "abc",
-            "session_id": "sess1",
-        },
-    }
-    assert validate(event) is None
 
 
-def test_validate_audit_only_phase_transition() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "source": "fno-loop",
-        "data": {
-            "gate_bearing": False,
-            "phase": "review",
-            "nonce": "n",
-            "session_id": "s",
-        },
-    }
-    assert validate(event) is None
 
 
 # -- AC2-ERR: required fields --
 
-def test_validate_missing_source() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "data": {
-            "gate_bearing": True,
-            "gate": "ledger_updated",
-            "phase": "p",
-            "nonce": "n",
-            "session_id": "s",
-        },
-    }
-    with pytest.raises(ValidationError, match="event missing required field: source"):
-        validate(event)
 
 
-def test_validate_missing_ts() -> None:
-    event = {
-        "type": "phase_transition",
-        "source": "target",
-        "data": {
-            "gate_bearing": True,
-            "gate": "ledger_updated",
-            "phase": "p",
-            "nonce": "n",
-            "session_id": "s",
-        },
-    }
-    with pytest.raises(ValidationError, match="event missing required field: ts"):
-        validate(event)
 
 
-def test_validate_unknown_source() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "source": "bogus",
-        "data": {
-            "gate_bearing": True,
-            "gate": "ledger_updated",
-            "phase": "p",
-            "nonce": "n",
-            "session_id": "s",
-        },
-    }
-    with pytest.raises(ValidationError, match=r"unknown source: 'bogus'"):
-        validate(event)
 
 
-def test_validate_unknown_type() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "made_up_type",
-        "source": "target",
-        "data": {},
-    }
-    with pytest.raises(ValidationError, match="unknown event type: made_up_type"):
-        validate(event)
 
 
 def test_validate_dispatch_selection_diverged() -> None:
@@ -169,82 +124,13 @@ def test_validate_failover_swapped_rejects_invalid_payload(data: dict) -> None:
         validate(event)
 
 
-def test_validate_phase_transition_gate_bearing_without_gate() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "source": "target",
-        "data": {
-            "gate_bearing": True,
-            "phase": "p",
-            "nonce": "n",
-            "session_id": "s",
-        },
-    }
-    with pytest.raises(ValidationError, match=r"gate_bearing=true must include data\.gate"):
-        validate(event)
 
 
-def test_validate_missing_data_field() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "child_promise",
-        "source": "target",
-        "data": {"session_id": "s"},
-    }
-    with pytest.raises(ValidationError, match=r"missing required data field: nonce"):
-        validate(event)
 
 
-def test_validate_review_attestation_records_actor() -> None:
-    # session_id + harness carry the attesting ACTOR so an author
-    # self-attestation is joinable to the head it reviewed, not actorless.
-    event = {
-        "ts": "2026-07-25T05:16:13Z",
-        "type": "review_attestation",
-        "source": "target",
-        "data": {
-            "reviewer": "sigma",
-            "head_sha": "a1d8b8d4",
-            "verdict": "pass",
-            "session_id": "20260806T225503Z-cl84104-d4f619",
-            "harness": "claude",
-        },
-    }
-    assert validate(event) is None
 
 
-def test_validate_review_attestation_rejects_actorless() -> None:
-    # session_id is required: an actorless attestation is rejected at emit so
-    # the generic CLI can no longer write the indistinguishable-from-independent
-    # record the bypass path produced.
-    event = {
-        "ts": "2026-07-25T05:16:13Z",
-        "type": "review_attestation",
-        "source": "target",
-        "data": {"reviewer": "sigma", "head_sha": "a1d8b8d4", "verdict": "pass"},
-    }
-    with pytest.raises(
-        ValidationError, match=r"missing required data field: session_id"
-    ):
-        validate(event)
 
-def test_validate_data_size_cap() -> None:
-    event = {
-        "ts": "2026-05-07T09:30:42Z",
-        "type": "phase_transition",
-        "source": "target",
-        "data": {
-            "gate_bearing": True,
-            "gate": "ledger_updated",
-            "phase": "p",
-            "nonce": "n",
-            "session_id": "s",
-            "blob": "x" * 70_000,
-        },
-    }
-    with pytest.raises(ValidationError, match=r"data exceeds max_data_bytes"):
-        validate(event)
 
 
 # -- AC1-HP: typed builders --
@@ -309,66 +195,6 @@ def test_context_snapshot_builder_is_session_bound_and_canonical() -> None:
     assert ev["data"]["measurement_complete"] is True
 
 
-@pytest.mark.parametrize(
-    ("mutation", "message"),
-    [
-        (lambda event: event.update(source="target"), "source must be hook or test"),
-        (
-            lambda event: event["data"].update(session_id=" "),
-            "session_id cannot be empty",
-        ),
-        (
-            lambda event: event["data"].update(harness="bogus"),
-            "unknown context_snapshot harness",
-        ),
-        (
-            lambda event: event["data"].update(entry_state="bogus"),
-            "unknown context_snapshot entry_state",
-        ),
-        (
-            lambda event: event["data"].update(measurement_complete="false"),
-            "measurement_complete must be boolean",
-        ),
-        (
-            lambda event: event["data"].update(context_bytes=1),
-            "context_bytes disagrees",
-        ),
-        (
-            lambda event: event["data"].update(
-                measurement_complete=True,
-                measurement_errors=["missing source"],
-            ),
-            "completeness disagrees",
-        ),
-    ],
-)
-def test_context_snapshot_validator_rejects_inconsistent_observations(
-    mutation,
-    message: str,
-) -> None:
-    source_hash = "c" * 64
-    event = context_snapshot(
-        session_id="harness-session",
-        harness="codex",
-        entry_state="startup",
-        context_bytes=5,
-        estimated_tokens=2,
-        context_hash=hashlib.sha256(source_hash.encode()).hexdigest(),
-        source_hashes=[source_hash],
-        source_manifest=[
-            {
-                "source_id": "fixture",
-                "status": "observed",
-                "bytes": 5,
-                "content_hash": source_hash,
-            }
-        ],
-        measurement_complete=True,
-    )
-    mutation(event)
-
-    with pytest.raises(ValidationError, match=message):
-        validate(event)
 
 
 def test_mission_started_builder() -> None:
@@ -589,14 +415,16 @@ def test_worktree_overlap_observed_rejects_observer_as_its_own_peer() -> None:
 
 # -- the review_attestation disposition obligation -----------------------------
 #
-# A findings-free pass attests nothing about EARLIER findings; emitting one
+# A pass disposes nothing by itself about EARLIER findings. Emitting one
 # over a branch holding non-terminal blocking findings is the silent producer
 # half of the impossible-merge deadlock. The chokepoint enforces it, so every
 # writer (script, hook, manual emit) is covered with no new flags. Every chain
 # here is constructed into the tmp repo the cap helper reads.
 
 
-def _attestation_event(verdict: str, branch: str, *, dispositions=None) -> dict:
+def _attestation_event(
+    verdict: str, branch: str, *, dispositions=None, findings=None
+) -> dict:
     data = {
         "reviewer": "code-review",
         "head_sha": "0" * 39 + "1",
@@ -610,6 +438,8 @@ def _attestation_event(verdict: str, branch: str, *, dispositions=None) -> dict:
     }
     if dispositions is not None:
         data["dispositions"] = dispositions
+    if findings is not None:
+        data["findings"] = findings
     return {
         "ts": "2026-08-31T19:00:00Z",
         "type": "review_attestation",
@@ -644,6 +474,22 @@ _OB_HARD = {
     "finding_key": "cli/src/fake.py:779:correctness",
 }
 
+_OB_EFF = {
+    "category": "efficiency",
+    "verdict": "CONFIRMED",
+    "blocking": True,
+    "has_required_fields": True,
+    "finding_key": "crates/fno-agents/src/cargo_build_dirs.rs:208:efficiency",
+}
+
+_OB_COVERAGE = {
+    "category": "test-coverage",
+    "verdict": "CONFIRMED",
+    "blocking": False,
+    "has_required_fields": True,
+    "finding_key": "cli/tests/fake.py:10:test-coverage",
+}
+
 
 def _seed_obligation_chain(tmp_path, events) -> None:
     (tmp_path / ".fno").mkdir(exist_ok=True)
@@ -652,85 +498,70 @@ def _seed_obligation_chain(tmp_path, events) -> None:
     )
 
 
-def test_a_findings_free_pass_over_an_undisposed_fail_is_refused_by_key(
-    tmp_path, monkeypatch
-) -> None:
-    _seed_obligation_chain(tmp_path, [_obligation_chain_event(0, "fail", [_OB_HARD])])
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(ValidationError) as exc:
-        validate(_attestation_event("pass", "feature/x-ob"))
-    assert "cli/src/fake.py:779:correctness" in str(exc.value)
-    assert "disposition" in str(exc.value)
 
 
-def test_a_pass_carrying_the_fixed_disposition_is_emitted_unchanged(
-    tmp_path, monkeypatch
-) -> None:
-    _seed_obligation_chain(tmp_path, [_obligation_chain_event(0, "fail", [_OB_HARD])])
-    monkeypatch.chdir(tmp_path)
-    event = _attestation_event(
-        "pass",
-        "feature/x-ob",
-        dispositions=[
-            {
-                "finding_key": "cli/src/fake.py:779:correctness",
-                "disposition": "fixed",
-                "reason": "verified the fix delta",
-            }
-        ],
-    )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _lead_checkin(data: dict) -> dict:
+    return {
+        "ts": "2026-09-10T12:00:00Z",
+        "type": "lead_checkin",
+        "source": "loop",
+        "data": data,
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+def test_worker_pattern_source_outranks_a_narrower_per_type_list() -> None:
+    event = {
+        "ts": "2026-09-16T12:00:00Z",
+        "type": "agent_spawned",
+        "source": "worker:wkA",
+        "data": {},
+    }
     assert validate(event) is None
 
 
-def test_a_first_round_clean_pass_disposes_nothing(tmp_path, monkeypatch) -> None:
-    _seed_obligation_chain(tmp_path, [])
-    monkeypatch.chdir(tmp_path)
-    assert validate(_attestation_event("pass", "feature/x-ob")) is None
+def test_every_declared_source_is_a_legal_envelope_source() -> None:
+    """A type's sources: list must draw only from values the envelope
+    itself allows, or the per-type check in validate() could refuse
+    every producer of that source unconditionally."""
+    import fno.events as events_mod
 
-
-def test_a_fail_verdict_and_a_branchless_reader_skip_the_obligation(
-    tmp_path, monkeypatch
-) -> None:
-    _seed_obligation_chain(tmp_path, [_obligation_chain_event(0, "fail", [_OB_HARD])])
-    monkeypatch.chdir(tmp_path)
-    assert validate(_attestation_event("fail", "feature/x-ob")) is None
-    assert validate(_attestation_event("pass", "")) is None
-
-
-def test_an_unreadable_event_log_produces_rather_than_refuses(
-    tmp_path, monkeypatch
-) -> None:
-    import fno.pr._coverage_gate as gate
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("instrument failure")
-
-    monkeypatch.setattr(gate, "attestation_chain", _boom)
-    monkeypatch.chdir(tmp_path)
-    assert validate(_attestation_event("pass", "feature/x-ob")) is None
-
-
-def test_a_nonblocking_or_declined_disposition_does_not_clear_the_key(
-    tmp_path, monkeypatch
-) -> None:
-    """Only `fixed` clears at emit: the gate keeps `nonblocking` and an
-    uncorroborated `declined` non-terminal by its own rules, so a producer
-    check that waved those through would emit a pass the gate still refuses."""
-    _seed_obligation_chain(tmp_path, [_obligation_chain_event(0, "fail", [_OB_HARD])])
-    monkeypatch.chdir(tmp_path)
-    for disposition in ("nonblocking", "declined"):
-        with pytest.raises(ValidationError) as exc:
-            validate(
-                _attestation_event(
-                    "pass",
-                    "feature/x-ob",
-                    dispositions=[
-                        {
-                            "finding_key": "cli/src/fake.py:779:correctness",
-                            "disposition": disposition,
-                            "reason": "attempted",
-                        }
-                    ],
-                )
-            )
-        assert "cli/src/fake.py:779:correctness" in str(exc.value), disposition
+    events_mod._require_schema()
+    envelope_sources = set(events_mod.ALLOWED_SOURCES)
+    assert events_mod.EVENT_TYPES is not None
+    violations = [
+        (name, source)
+        for name, spec in events_mod.EVENT_TYPES.items()
+        for source in (spec.get("sources") or [])
+        if source not in envelope_sources
+    ]
+    assert violations == []

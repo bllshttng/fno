@@ -21,22 +21,17 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None,
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
     import fno.paths as paths_mod
-    paths_mod._settings.cache_clear()
-    paths_mod.resolve_repo_root.cache_clear()
     yield
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
-    paths_mod.resolve_repo_root.cache_clear()
 
 
 def test_inbox_path_default_anchors_to_repo_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Obsidian on, no override, no legacy file -> canonical parking-lot.md."""
+    """Obsidian on, vault link present, no override -> canonical parking-lot.md."""
     from fno.paths_testing import use_tmpdir
     settings = use_tmpdir(monkeypatch, tmp_path)
+    (tmp_path / "internal").mkdir()
     settings.write_text(
         "schema_version: 1\n"
         "config:\n"
@@ -48,8 +43,6 @@ def test_inbox_path_default_anchors_to_repo_root(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == (tmp_path / "internal/fno/backlog/parking-lot.md").resolve()
@@ -69,6 +62,66 @@ def test_inbox_path_default_no_vault_uses_state_dir(
     from fno.paths import inbox_path
     result = inbox_path(project_root=tmp_path)
     assert result == (tmp_path / ".fno/backlog/parking-lot.md").resolve()
+
+
+def test_inbox_path_obsidian_on_without_internal_stays_in_fno(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Obsidian enabled globally, but this repo has no internal/ vault link.
+
+    The global flag is machine-level consent, not per-project: a foreign repo
+    touched by fno falls to .fno/backlog/parking-lot.md and never grows an
+    internal/ directory of its own.
+    """
+    from fno.paths_testing import use_tmpdir
+    settings = use_tmpdir(monkeypatch, tmp_path)
+    settings.write_text(
+        "schema_version: 1\n"
+        "config:\n"
+        f"  state_dir: {tmp_path}/.fno/\n"
+        "  obsidian:\n"
+        "    enabled: true\n"
+        f"    vault: {tmp_path}/vault\n",
+        encoding="utf-8",
+    )
+    import fno.paths as paths_mod
+
+    result = paths_mod.inbox_path(project_root=tmp_path)
+    assert result == (tmp_path / ".fno/backlog/parking-lot.md").resolve()
+    assert not (tmp_path / "internal").exists()
+
+
+def test_capture_add_without_internal_never_materializes_internal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: a parking-lot write in a repo without internal/ keeps it that way.
+
+    add_item mkdirs the resolved parent, so the resolver decides whether a
+    foreign repo grows internal/. Obsidian on globally, no vault link here.
+    """
+    from fno.paths_testing import use_tmpdir
+    settings = use_tmpdir(monkeypatch, tmp_path)
+    settings.write_text(
+        "schema_version: 1\n"
+        "config:\n"
+        f"  state_dir: {tmp_path}/.fno/\n"
+        "  obsidian:\n"
+        "    enabled: true\n"
+        f"    vault: {tmp_path}/vault\n",
+        encoding="utf-8",
+    )
+    import fno.paths as paths_mod
+    from fno.backlog.capture import add_item
+
+    add_item(
+        paths_mod.inbox_path(project_root=tmp_path),
+        title="follow up",
+        source="test",
+        why="the writer must not create internal/",
+    )
+
+    assert (tmp_path / ".fno/backlog/parking-lot.md").exists()
+    assert not (tmp_path / "internal").exists()
 
 
 def test_inbox_path_no_vault_prefers_existing_internal(
@@ -108,8 +161,6 @@ def test_inbox_path_honors_settings_override(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == custom.resolve()
@@ -133,8 +184,6 @@ def test_inbox_path_expands_project_template_var(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == (tmp_path / "myproj" / "inbox.md").resolve()
@@ -163,8 +212,6 @@ def test_inbox_path_resolves_through_symlink(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     canonical = tmp_path / "canonical_vault"
     canonical.mkdir()
@@ -194,7 +241,7 @@ def test_inbox_path_honors_post_merge_parking_lot_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """config.post_merge.parking_lot_path (the producer's per-project queue) drives
-    the capture-tier resolver, so add/list/tidy and /fno:pr merged all point
+    the capture-tier resolver, so add/list/tidy and /fno:ship pr merged all point
     at ONE file in every repo - not the fno-area default, which would make
     producer-written items invisible to the read commands (codex review, PR #434).
     """
@@ -213,8 +260,6 @@ def test_inbox_path_honors_post_merge_parking_lot_path(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == (tmp_path / "internal/etl/backlog/parking-lot.md").resolve()
@@ -240,8 +285,6 @@ def test_inbox_path_explicit_override_beats_post_merge(
     )
     import fno.paths as paths_mod
     from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
 
     result = paths_mod.inbox_path(project_root=tmp_path)
     assert result == custom.resolve()
@@ -268,9 +311,6 @@ def test_explicit_project_root_loads_that_projects_capture_config(
     import fno.paths as paths_mod
     from fno import config as config_mod
 
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
-    paths_mod.resolve_repo_root.cache_clear()
 
     result = paths_mod.inbox_path(project_root=sibling)
 

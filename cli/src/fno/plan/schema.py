@@ -42,7 +42,7 @@ PlanStatus = enum.Enum(  # type: ignore[misc]
     type=str,
 )
 
-#: The date the difficulty requirement shipped (x-baef). 1190 of the 1196
+#: The date the difficulty requirement shipped. 1190 of the 1196
 #: plans that existed on 2026-08-26 carry no ``difficulty``, and backfilling
 #: would fabricate 1190 estimates nobody made; plans created on or before
 #: this date pass without one. The boundary is strictly-after, not
@@ -168,6 +168,90 @@ def difficulty_gate_error(
     )
 
 
+#: The date the Execution Strategy requirement shipped. 268 of the
+#: 422 plans created in the fortnight before it carry no ``## Execution
+#: Strategy``, and 200 of the 232 flat quick-plans among them describe more
+#: than one numbered change, so backfilling would fabricate a wave topology
+#: nobody authored; plans created on or before this date pass without one.
+#: The boundary is strictly-after for the same reason
+#: :data:`DIFFICULTY_REQUIRED_AFTER` is: a plan created ON the gate date
+#: predates the gate reaching its author.
+#:
+#: Heed that constant's recorded trap here too. A strictly-after boundary
+#: makes every test fixture that stamps ``created`` at RUNTIME cross this gate
+#: the moment the clock does, on a commit nobody touched; the difficulty
+#: version of that fired at 2026-08-27T00:00Z and took smoke-rest red on every
+#: open PR, and a date computed at runtime leaves no literal to grep. Give a
+#: new fixture an Execution Strategy rather than back-dating ``created``,
+#: which exempts it forever and quietly stops exercising the post-gate read.
+WAVES_REQUIRED_AFTER = date(2026, 9, 2)
+
+#: The rungs at which a plan is meant to be executable, so the waves gate
+#: applies. ``idea`` and ``design`` sit below them on purpose: a /think doc is
+#: ``design`` until /blueprint appends the strategy, and
+#: ``scaffold_separate_plan`` mints an epic child ``idea`` with the section
+#: still to be filled. Firing on either would refuse the very documents whose
+#: job is to not have a strategy yet.
+_WAVES_GATED_STATUSES = frozenset({"ready", "in_progress", "in_review"})
+
+
+def waves_gate_error(
+    frontmatter: dict,
+    *,
+    has_execution_strategy: bool,
+    undatable_refuses: bool = True,
+) -> str | None:
+    """The date-keyed Execution Strategy refusal for raw frontmatter, or None.
+
+    Deliberately the same shape as :func:`difficulty_gate_error`, including
+    the ``undatable_refuses`` split: the MINTING lanes have no fallback dater
+    and refuse an undatable plan, while the AUTHORING scope passes False
+    because validate-plan.sh dates those plans itself from the filename.
+
+    ``has_execution_strategy`` is a body fact, so the caller reads it and
+    passes it in; this keeps one date parse and one refusal message without
+    the schema module learning to parse markdown.
+
+    A plan below ``ready`` is exempt whatever its date. The width the gate
+    exists to protect is only meaningful once a plan is executable, and the
+    two pre-execution rungs are precisely the documents that carry no strategy
+    by design.
+    """
+    status = frontmatter.get("status")
+    status = STATUS_ALIASES.get(status, status) if isinstance(status, str) else status
+    if not isinstance(status, str) or status.strip().lower() not in _WAVES_GATED_STATUSES:
+        return None
+    if has_execution_strategy:
+        return None
+    created = _parse_created(frontmatter.get("created"))
+    if "created" not in frontmatter and frontmatter:
+        if undatable_refuses:
+            return (
+                "cannot read created: absent from frontmatter; the Execution "
+                "Strategy gate needs a date. Set created: <YYYY-MM-DD> and, "
+                "for post-gate plans, an ## Execution Strategy section."
+            )
+        return None
+    if created is None:
+        if not frontmatter or not undatable_refuses:
+            return None
+        return (
+            f"cannot read created: {frontmatter.get('created')!r}; the Execution "
+            "Strategy gate needs a date. Set created: <YYYY-MM-DD> and, for "
+            "post-gate plans, an ## Execution Strategy section."
+        )
+    if created <= WAVES_REQUIRED_AFTER:
+        return None
+    return (
+        "## Execution Strategy is required for plans created after "
+        f"{WAVES_REQUIRED_AFTER.isoformat()}: a plan with no waves block "
+        "measures width 0, so `fno backlog join` cannot tell a genuinely "
+        "single-task plan from one that never declared its parallelism. "
+        "One numbered change becomes one task, its **Files:** line becomes "
+        "the task surface, and the tasks go in one wave with mode: parallel"
+    )
+
+
 class ConsolidationEntry(BaseModel):
     """One candidate id judged by blueprint's step 2d gate, with its reason."""
 
@@ -182,12 +266,17 @@ class ConsolidationEntry(BaseModel):
         # reader can check, which is the one thing this block exists to give.
         # Imported HERE, not at module scope: `fno.graph` costs 126ms of this
         # module's 219ms import, and every plan read would pay it for a key
-        # most plans carry once.
+        # most plans carry once. A legacy literal (a prefix with no separator
+        # once minted bare "<prefix><hex>" ids) also references: this is a
+        # binding check on a candidate the graph holds, not prose extraction,
+        # so the all-hex git-hash shape stays the one thing refused.
         from fno.graph._constants import is_wellformed_node_id
 
-        if not is_wellformed_node_id(v):
-            raise ValueError("is not a node id (expected <prefix>-<hex>, e.g. x-3bd3)")
-        return v
+        if is_wellformed_node_id(v):
+            return v
+        if re.fullmatch(r"(?i)(?![0-9a-f]+$)[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}", v):
+            return v
+        raise ValueError("is not a node id (expected <prefix>-<hex>, e.g. x-aaaa)")
 
 
 class DecisionAcknowledgment(BaseModel):
@@ -199,7 +288,7 @@ class DecisionAcknowledgment(BaseModel):
     @field_validator("decision_id")
     @classmethod
     def _decision_id_is_wellformed(cls, v: str) -> str:
-        from fno.decide import looks_like_decision_id
+        from fno.plan._decision_shape import looks_like_decision_id
 
         if not looks_like_decision_id(v):
             raise ValueError("is not a decision id (expected d-<hex>, e.g. d-a4b6e1c8)")
@@ -222,13 +311,20 @@ class ConsolidationBlock(BaseModel):
     between an `append` outcome and a plan file existing to carry it, and
     whether every one of the node's LIVE decisions is named in
     `decisions_acknowledged` - that check needs the live decision index, which
-    this model has no access to and does not attempt.
+    this model has no access to and does not attempt. A `rejected` entry names
+    a foreign node this plan rules out; `fno.plan.rulings.plan_rulings` is the
+    one scan that surfaces those rows to the ruled-out node's readers.
     """
 
     outcome: Literal["absorb", "append", "proceed_alone"]
     absorbed: list[ConsolidationEntry] = Field(default_factory=list)
     appended_to: list[ConsolidationEntry] = Field(default_factory=list)
     proceed_alone_against: list[ConsolidationEntry] = Field(default_factory=list)
+    # A node this plan rules OUT - stronger than a proceed_alone_against
+    # contrast, so it is the key `plan_rulings` scans for and the reversal
+    # verbs print back. Sits beside any outcome: an absorb plan can still
+    # reject a third node.
+    rejected: list[ConsolidationEntry] = Field(default_factory=list)
     decisions_acknowledged: list[DecisionAcknowledgment] = Field(default_factory=list)
     # Scalar OR list: one reversing command, or the several an absorb of
     # several nodes needs. The bash gate accepts both, and a model that
@@ -275,11 +371,12 @@ class PlanFrontmatter(BaseModel):
     distinct historical keys, and this model deliberately does not police them.
     """
 
-    # Canonical keys (x-f34f US7): `node`, `created`, `blocked_by`, `type` are
+    # Canonical keys (US7): `node`, `created`, `blocked_by`, `type` are
     # the single authority per axis. Their legacy synonyms (`graph_node_id`,
     # `created_at`, `depends_on`, `kind`) are collapsed by `fno do plan
-    # migrate-keys`; readers keep a one-release fallback (e.g. reconcile's
-    # _plan_link_id reads node -> claims -> graph_node_id). `deliverable_type`
+    # migrate-keys`; readers keep a one-release fallback (e.g. the reconcile
+    # sweep's plan_link_id in the Rust keeper reads node -> claims ->
+    # graph_node_id). `deliverable_type`
     # stays distinct from `type` (different axes, both read). `claims` is an
     # observed duplicate of `node`, dropped by the migration where identical.
     node: str
@@ -298,11 +395,16 @@ class PlanFrontmatter(BaseModel):
     priority: str | None = None
     blocks_everything: bool = False
     difficulty: str | None = None
-    # Who orchestrates the plan's remaining waves: a king reviews each
-    # dispatch (default), or target init fires join itself. Opt-in - king
-    # changes nothing, so every plan written before the key keeps its
-    # behavior.
-    orchestration: str = "king"
+    # Who hands out the plan's remaining waves: `manual` waits for a person or
+    # a lead session to run `fno backlog join` (default), or `auto`
+    # fires join at target init. Opt-in - `manual` changes nothing, so every
+    # plan written before the key keeps its behavior. Named for the verb it
+    # gates: `orchestration` already does four unrelated jobs in this repo, so
+    # a grep for the key returned mostly noise.
+    join: str = "manual"
+    # Whether the PR may declare an exclusion section at all. Absent means
+    # allowed; `forbidden` makes fno.plan.fidelity refuse a PR that does.
+    carveouts: str | None = None
     blocked_by: list[str] = []
     project: str | None = None
     executor: str | None = None
@@ -318,27 +420,38 @@ class PlanFrontmatter(BaseModel):
     consolidation: ConsolidationBlock | None = None
     updated: datetime | None = None
     # compiled-v1 marks a plan whose Acceptance Criteria Blueprint compiled and
-    # whose task acceptance references all resolve (x-f905). Absent on historical
+    # whose task acceptance references all resolve. Absent on historical
     # plans, which keep permissive legacy reads.
     acceptance_contract: Literal["compiled-v1"] | None = None
     completion: Literal["delivery"] | None = None
     shipped_at: datetime | None = None  # PR creation (implementation complete)
-    done_at: datetime | None = None  # PR merged (first-write-only; x-f34f)
+    done_at: datetime | None = None  # PR merged (first-write-only;)
     urls: list[str] = []
     session_ids: list[str] = []
     # >= 1 when present: graduate gates on `len(urls) >= expected`, so 0/negative
     # would graduate a plan with no URLs; the stamp/set-expected writers already
     # reject < 1, and this makes validate catch the same corrupt frontmatter.
     expected_url_count: int | None = Field(default=None, ge=1)
-    # Node-closure outcome probes (x-5d34), read by the three close verbs via
+    # Node-closure outcome probes, read by the three close verbs via
     # resolve_promise_evidence. Sibling to loop-check's `done_probes` (which
     # gates session termination); this gates node closure. Scalar or list, the
     # same permissive shape as `kill_criteria`, since the Rust runner parses the
     # raw frontmatter itself.
     close_probes: str | list[Any] | None = None
+    # Acceptance-evidence bindings: maps a compiled AC id to the probe
+    # index that measures it (`done_probes[n]` / `close_probes[n]`). Enforced by
+    # the finalize validator and the Rust probe runner, not here; this field
+    # only keeps the declaration from being dropped on frontmatter round-trips.
+    acceptance_evidence: dict | None = None
     dispatch_hold: DispatchHoldBlock | None = None
     company_work: CompanyWorkRefs | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_node_from_claims(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("claims") and not data.get("node"):
+            data["node"] = data["claims"]
+        return data
     @field_validator("created", mode="before")
     @classmethod
     def _created_must_be_dateable(cls, v: Any) -> Any:
@@ -382,16 +495,26 @@ class PlanFrontmatter(BaseModel):
             raise ValueError("difficulty must be one of: low, medium, high")
         return band
 
-    @field_validator("orchestration", mode="before")
+    @field_validator("join", mode="before")
     @classmethod
-    def _validate_orchestration(cls, v: Any) -> Any:
+    def _validate_join(cls, v: Any) -> Any:
         # Same shape as the band enum above: normalize, then refuse with a
         # message that names the field and its legal values.
         if v is None:
-            return "king"
+            return "manual"
         mode = str(v).strip().lower()
-        if mode not in {"king", "mechanical"}:
-            raise ValueError("orchestration must be one of: king, mechanical")
+        if mode not in {"manual", "auto"}:
+            raise ValueError("join must be one of: manual, auto")
+        return mode
+
+    @field_validator("carveouts", mode="before")
+    @classmethod
+    def _validate_carveouts(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        mode = str(v).strip().lower()
+        if mode not in {"allowed", "forbidden"}:
+            raise ValueError("carveouts must be one of: allowed, forbidden")
         return mode
 
     @model_validator(mode="after")

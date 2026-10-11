@@ -17,6 +17,7 @@ fixtures); the calendar emoji is written as a ``\\U`` escape so this source
 stays ASCII there.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from pathlib import Path
@@ -34,19 +35,11 @@ CAL = "\U0001F4C5"  # 📅
 def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
     monkeypatch.delenv("FNO_CONFIG", raising=False)
-    from fno import config as config_mod
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    import fno.paths as paths_mod
-    paths_mod._settings.cache_clear()
-    paths_mod.resolve_repo_root.cache_clear()
     yield
-    config_mod.load_settings.cache_clear()  # type: ignore[attr-defined]
-    paths_mod._settings.cache_clear()
-    paths_mod.resolve_repo_root.cache_clear()
 
 
 def _write_graph(path: Path, entries: list[dict]) -> None:
-    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    seed_graph(path, entries)
 
 
 def _header() -> str:
@@ -416,7 +409,9 @@ def test_tidy_normalized_fu_line_still_promotable(tmp_path: Path) -> None:
     assert "- [ ] fu-abc123 - promote me" in body  # normalized to hyphen
     assert any(i["id"] == "fu-abc123" for i in parse_items(body))  # legacy parser sees it
 
-    result = promote_item(inbox, "fu-abc123", graph_path=graph)  # legacy write path finds it
+    result = promote_item(
+        inbox, "fu-abc123", difficulty="medium", graph_path=graph
+    )  # legacy write path finds it
     assert result["status"] == "promoted"
     assert result["node_id"].startswith("ab-")
 

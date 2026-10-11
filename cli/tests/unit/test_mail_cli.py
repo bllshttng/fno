@@ -5,7 +5,7 @@ a durable envelope; `mail unread`/`ack` are the per-recipient cursor consume;
 `mail rebuild-render` regenerates the derived markdown from the log. The old
 `fno inbox` namespace (mail's alias for `mail unread`) was retired clean (no
 pointer, no shim). x-afa6 later minted a real `fno inbox` root for an
-unrelated purpose (approvals/notify/outstanding/the king board); mail's old
+unrelated purpose (approvals/notify/outstanding/the lead board); mail's old
 `unread` leaf never came back under it.
 """
 from __future__ import annotations
@@ -18,8 +18,8 @@ import pytest
 from typer.testing import CliRunner
 
 from fno.cli import app
-from fno.mail.envelope import FNO_MAIL_TRAILER
 from fno.paths_testing import use_tmpdir
+from tests.fixtures.graph_seed import seed_graph
 
 
 @pytest.fixture
@@ -47,50 +47,47 @@ def isolate_mailbox(tmp_path, monkeypatch):
 def mailbox(tmp_path, monkeypatch):
     """Co-isolate the md render (FNO_INBOX_ROOT), the bus log, and the roster under tmp."""
     isolate_mailbox(tmp_path, monkeypatch)
-    monkeypatch.setattr("fno.mail.envelope.fleet_has_crown", lambda: True)
     return tmp_path
 
 
 @pytest.fixture
 def ruling_graph(mailbox, monkeypatch):
     graph_path = mailbox / ".fno" / "graph.json"
-    graph_path.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-511a",
-                        "slug": "mailed-ruling",
-                        "title": "mailed ruling",
-                        "status": "ready",
-                        "type": "feature",
-                        "priority": "p2",
-                        "details": "Original node details.",
-                    }
-                ]
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    seed_graph(graph_path, [{
+        "id": "x-511a",
+        "slug": "mailed-ruling",
+        "title": "mailed ruling",
+        "status": "ready",
+        "type": "feature",
+        "priority": "p2",
+        "details": "Original node details.",
+    }])
     import fno.graph._constants as graph_constants
     import fno.graph.store as graph_store
 
-    monkeypatch.setattr(graph_constants, "GRAPH_JSON", graph_path)
+    # setitem, not setattr: GRAPH_JSON is served by module __getattr__, and a
+    # setattr's undo would bake the resolved path into the module for every
+    # later test in the process.
+    monkeypatch.setitem(vars(graph_constants), "GRAPH_JSON", graph_path)
     monkeypatch.setattr(graph_store, "GRAPH_JSON", graph_path)
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph_path)
+    # The native read-backs resolve the store through FNO_CONFIG's state_dir.
+    fno_dir = mailbox / ".fno"
+    (fno_dir / "config.toml").write_text(f'state_dir = "{fno_dir}"\n')
+    monkeypatch.setenv("FNO_CONFIG", str(fno_dir / "config.toml"))
     return graph_path
 
 
 def _graph_details(graph_path):
-    return json.loads(graph_path.read_text(encoding="utf-8"))["entries"][0]["details"]
+    from fno.graph.store import read_graph_strict
+
+    return read_graph_strict(graph_path)[0]["details"]
 
 
 def _hosted_dispatch(monkeypatch, before_transport=None):
     calls = []
 
-    def dispatch_send(**kwargs):
+    def dispatch_send(from_name="lead", **kwargs):
         if before_transport is not None:
             before_transport()
         calls.append(kwargs)
@@ -116,15 +113,33 @@ def test_named_send_ruling_appends_dated_node_block_before_transport(
         app,
         [
             "agents", "mail", "send", "worker-one", marker,
-            "--from-name", "king", "--ruling", "x-511a",
+            "--from-name", "lead", "--ruling", "x-511a",
         ],
     )
 
     assert sent.exit_code == 0, sent.output
-    assert sent.stdout == "msg-ruling1 delivered (hosted)\n"
+    import json as _json
+
+    receipt = _json.loads(sent.stdout)
+    assert set(receipt) == {"msg_id", "subject", "to", "status"}
+    assert receipt["msg_id"] == "msg-ruling1"
+    assert receipt["status"] == "delivered (hosted)"
     assert len(calls) == 1
-    fresh = runner.invoke(app, ["backlog", "get", "x-511a"])
-    assert fresh.exit_code == 0, fresh.output
+    import os as _os
+    import subprocess as _sp
+
+    from fno.rust_binary import find_dev_binary, resolve_binary
+
+    binary = find_dev_binary() or resolve_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    fresh = _sp.run(
+        [str(binary), "backlog", "get", "x-511a"],
+        capture_output=True,
+        text=True,
+        env={**_os.environ, "FNO_TRACKER_BACKEND": "graph"},
+    )
+    assert fresh.returncode == 0, fresh.stderr
     assert marker in fresh.stdout
     assert re.search(r"### Ruling \(\d{4}-\d{2}-\d{2}\)", fresh.stdout)
 
@@ -135,31 +150,20 @@ def test_named_send_ruling_uses_explicit_cwd_graph(
     foreign_repo = tmp_path / "foreign-répo"
     foreign_graph = foreign_repo / "state" / "graph.json"
     foreign_graph.parent.mkdir(parents=True)
-    foreign_graph.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "id": "x-511a",
-                        "slug": "foreign-mailed-ruling",
-                        "title": "foreign mailed ruling",
-                        "status": "ready",
-                        "type": "feature",
-                        "priority": "p2",
-                        "details": "Foreign node details.",
-                    }
-                ]
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    seed_graph(foreign_graph, [{
+        "id": "x-511a",
+        "slug": "foreign-mailed-ruling",
+        "title": "foreign mailed ruling",
+        "status": "ready",
+        "type": "feature",
+        "priority": "p2",
+        "details": "Foreign node details.",
+    }])
     foreign_settings = foreign_repo / ".fno" / "settings.yaml"
     foreign_settings.parent.mkdir(parents=True)
     foreign_settings.write_text(
-        "schema_version: 1\nconfig:\n  paths:\n    graph_json: "
-        + json.dumps(str(foreign_graph))
+        "schema_version: 1\nconfig:\n  state_dir: "
+        + json.dumps(str(foreign_graph.parent))
         + "\n",
         encoding="utf-8",
     )
@@ -190,7 +194,7 @@ def test_named_send_ruling_uses_explicit_cwd_graph(
         app,
         [
             "agents", "mail", "send", "worker-one", marker,
-            "--from-name", "king", "--cwd", str(nested_workdir),
+            "--from-name", "lead", "--cwd", str(nested_workdir),
             "--ruling", "x-511a",
         ],
     )
@@ -210,7 +214,7 @@ def test_send_ruling_unknown_node_refuses_before_mail(
         app,
         [
             "agents", "mail", "send", "worker-one",
-            "This ruling names no real node.", "--from-name", "king",
+            "This ruling names no real node.", "--from-name", "lead",
             "--ruling", "x-dead",
         ],
     )
@@ -263,6 +267,19 @@ def test_inbox_namespace_is_retired(runner, mailbox):
 # AC1-HP / AC2-HP: publish durable-first, cursor-consume, ack advances cursor
 # ---------------------------------------------------------------------------
 
+def test_machine_mail_lock_timeout_env_is_forwarded_to_agent_dispatch(
+    runner, mailbox, monkeypatch
+):
+    calls = _hosted_dispatch(monkeypatch)
+    sent = runner.invoke(
+        app,
+        ["agents", "mail", "send", "sess-worker", "short note"],
+        env={"_FNO_MACHINE_MAIL_LOCK_TIMEOUT": "5"},
+    )
+    assert sent.exit_code == 0, sent.output
+    assert calls[0]["lock_timeout"] == 5.0
+
+
 def test_send_then_unread_then_ack(runner, mailbox):
     sent = runner.invoke(
         app,
@@ -296,14 +313,17 @@ def _passing_mail_body(word_total: int) -> str:
         sentence_index += 1
         remaining -= size
     body = " ".join(sentences)
-    from fno import style
+    from fno import rust_binary
 
-    assert style.word_count(body) == word_total
-    assert style.check(body, surface="mail") == []
+    assert rust_binary.style_word_count(body) == word_total
+    err, receipt = rust_binary.style_receipt(body, "mail")
+    assert not err and not receipt.get("violations")
     return body
 
 
-def test_project_kind_send_refuses_the_second_79_word_body(runner, mailbox):
+def test_project_kind_send_delivers_repeated_bodies_without_a_ledger(runner, mailbox):
+    from fno import paths
+
     body = _passing_mail_body(79)
     args = [
         "mail", "send", "--to-project", "web", "--kind", "fyi",
@@ -315,18 +335,53 @@ def test_project_kind_send_refuses_the_second_79_word_body(runner, mailbox):
 
     assert first.exit_code == 0, first.output
     assert "queued (durable)" in first.stdout
-    assert second.exit_code == 1
-    assert "running=79 current=79 projected=158 cap=80 window=10m" in second.stderr
+    assert second.exit_code == 0, second.output
+    assert not (paths.bus_dir() / "word-budget").exists()
+
+
+def test_send_without_kind_reads_body_file(runner, mailbox):
+    """Rank 3: --body-file binds in EVERY mode, not only --kind.
+
+    The blank line is load-bearing: a wrapped second line is a rule-6
+    refusal, so multiline content ships as two paragraphs.
+    """
+    body_file = mailbox / "msg.md"
+    body_file.write_text('body with "quotes"\n\nand a newline\n', encoding="utf-8")
+    sent = runner.invoke(
+        app,
+        ["agents", "mail", "send", "--to-project", "web", "--from-name", "etl",
+         "--body-file", str(body_file)],
+    )
+    assert sent.exit_code == 0, sent.output
+
+    listing = runner.invoke(app, ["agents", "mail", "unread", "--name", "web", "--json"])
+    assert listing.exit_code == 0, listing.output
+    msgs = json.loads(listing.stdout.strip().splitlines()[-1])
+    assert msgs, "the file-fed body never landed"
+    assert 'body with "quotes"' in msgs[0]["body"]
+    assert "and a newline" in msgs[0]["body"]
+
+
+def test_send_body_and_body_file_refused(runner, mailbox):
+    body_file = mailbox / "msg.md"
+    body_file.write_text("from the file\n", encoding="utf-8")
+    sent = runner.invoke(
+        app,
+        ["agents", "mail", "send", "--to-project", "web", "--from-name", "etl",
+         "--body", "inline", "--body-file", str(body_file)],
+    )
+    assert sent.exit_code == 1
+    assert "not both" in sent.stderr
 
 
 @pytest.mark.parametrize("error_type", [OSError, RuntimeError])
-def test_project_kind_known_failure_releases_the_reservation(
+def test_project_kind_known_failure_writes_no_ledger(
     runner,
     mailbox,
     monkeypatch,
     error_type,
 ):
-    from fno.mail import budget
+    from fno import paths
 
     monkeypatch.setattr(
         "fno.inbox.store.post_inbox_message",
@@ -350,16 +405,12 @@ def test_project_kind_known_failure_releases_the_reservation(
     )
 
     assert isinstance(result.exception, error_type)
-    retry = budget.reserve(
-        sender="etl",
-        recipient="web",
-        words=79,
-        msg_id=f"msg-retry-{error_type.__name__}",
-    )
-    assert retry.running_before == 0
+    assert not (paths.bus_dir() / "word-budget").exists()
 
 
-def test_project_anycast_send_refuses_the_second_79_word_body(runner, mailbox):
+def test_project_anycast_send_delivers_repeated_bodies_without_a_ledger(runner, mailbox):
+    from fno import paths
+
     body = _passing_mail_body(79)
     args = [
         "mail", "send", "--to-project", "web", body,
@@ -370,12 +421,17 @@ def test_project_anycast_send_refuses_the_second_79_word_body(runner, mailbox):
     second = runner.invoke(app, args)
 
     assert first.exit_code == 0, first.output
-    assert "queued (durable) for project web" in first.stdout
-    assert second.exit_code == 1
-    assert "running=79 current=79 projected=158 cap=80 window=10m" in second.stderr
+    import json as _json
+
+    receipt = _json.loads(first.stdout.strip())
+    assert receipt["to"] == "web"
+    assert "queued (durable)" in receipt["status"]
+    assert second.exit_code == 0, second.output
+    assert not (paths.bus_dir() / "word-budget").exists()
 
 
-def test_thread_reply_refuses_the_second_79_word_body(runner, mailbox):
+def test_thread_reply_delivers_repeated_bodies_without_a_ledger(runner, mailbox):
+    from fno import paths
     from fno.inbox.store import write_new_thread
 
     inbound = write_new_thread(
@@ -394,8 +450,8 @@ def test_thread_reply_refuses_the_second_79_word_body(runner, mailbox):
     second = runner.invoke(app, args)
 
     assert first.exit_code == 0, first.output
-    assert second.exit_code == 1
-    assert "running=79 current=79 projected=158 cap=80 window=10m" in second.stderr
+    assert second.exit_code == 0, second.output
+    assert not (paths.bus_dir() / "word-budget").exists()
 
 
 def test_ack_refuses_hosted_audit_without_skipping_durable_mail(runner, mailbox):
@@ -477,7 +533,7 @@ def test_named_agent_heads_up_resolves_to_canonical_drain_handle(
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
     assert drained.exit_code == 0, drained.output
     assert [item["body"] for item in json.loads(drained.stdout)] == [
-        f"Migration is ready\n{FNO_MAIL_TRAILER}"
+        "Migration is ready"
     ]
 
 
@@ -660,7 +716,7 @@ def test_drain_self_reads_own_handle_and_acks(runner, mailbox, monkeypatch):
     res = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
     assert res.exit_code == 0, res.output
     payload = json.loads(res.stdout.strip().splitlines()[-1])
-    assert [m["body"] for m in payload] == [f"ack from K\n{FNO_MAIL_TRAILER}"]
+    assert [m["body"] for m in payload] == ["ack from K"]
     assert payload[0]["to"] == "019f48e1"
 
     # Ack advanced the cursor: a second drain sees nothing (not re-surfaced).
@@ -701,10 +757,7 @@ def test_legacy_addressed_mail_is_not_drained(runner, mailbox, monkeypatch):
     assert res.exit_code == 0, res.output
     bodies = [m["body"] for m in json.loads(res.stdout.strip().splitlines()[-1])]
     assert "retired form" not in bodies
-    assert set(bodies) == {
-        f"canonical\n{FNO_MAIL_TRAILER}",
-        f"legacy suffix\n{FNO_MAIL_TRAILER}",
-    }
+    assert set(bodies) == {"canonical", "legacy suffix"}
 
 
 def test_send_target_may_be_short_id_shaped(runner, mailbox):
@@ -799,7 +852,7 @@ def test_us7a_send_to_disk_discovered_codex_round_trips(runner, mailbox, monkeyp
     sent = runner.invoke(
         app, ["mail", "send", "019f48e1", "ack from K", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "019f48e1" in sent.output
     assert "queued (durable)" in sent.output
 
@@ -835,6 +888,71 @@ def test_us8_codex_live_inject_hosted_short_circuits_durable(
     assert drained.exit_code == 0, drained.output
     payload = json.loads(drained.stdout.strip().splitlines()[-1])
     assert payload == []
+
+
+def test_plain_send_delivers_header_and_body(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    # A plain peer send (no --kind) delivers the header line and then the
+    # body: no live turn arrives as the header alone. The bus row keeps the
+    # same body, so the id the header names resolves to it.
+    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
+    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
+    injected: list[str] = []
+
+    def _capture(recipient, text, **_k):
+        injected.append(text)
+        return True
+
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _capture)
+
+    sent = runner.invoke(
+        app,
+        ["mail", "send", "9a063cd3", "secret body words", "--from-name", "web"],
+    )
+    assert sent.exit_code == 0, sent.output
+    assert len(injected) == 1
+    # Without a subject the header's third field is the body's first sentence
+    # (AC10-HP). A body that is only that sentence still follows the header.
+    lines = injected[0].splitlines()
+    assert len(lines) == 2, injected[0]
+    header = lines[0]
+    assert header.startswith("`@web · fmail-")
+    assert lines[1] == "secret body words", injected[0]
+    msg_id = header.split(" · ")[1]
+
+    # The bus copy the id points at holds the full body.
+    from fno.bus.log import iter_messages
+
+    row = next(m for m in iter_messages() if m.id == msg_id)
+    assert "secret body words" in row.body
+
+
+def test_interrupted_live_send_keeps_the_stored_copy(
+    runner, mailbox, monkeypatch, tmp_path
+):
+    # Write first: the stored copy lands before the live attempt, so a sender
+    # killed between the two steps still leaves the mail `mail show` reads.
+    sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
+    _isolate_claude_roster(monkeypatch, tmp_path, session_id=sid)
+    typed: list[str] = []
+
+    def _interrupted(recipient, text, **_k):
+        typed.append(text)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_claude", _interrupted)
+    runner.invoke(
+        app, ["mail", "send", "9a063cd3", "kept body words", "--from-name", "web"]
+    )
+    assert len(typed) == 1
+    msg_id = typed[0].split(" · ")[1]
+
+    from fno.rust_binary import chats_verb
+
+    stored = chats_verb(["show", msg_id, "--all", "--json"], {})
+    assert stored["id"] == msg_id
+    assert "kept body words" in stored["body"]
 
 
 # ---------------------------------------------------------------------------
@@ -900,7 +1018,11 @@ def test_us7b_mux_pane_rung_delivers_live_when_socket_inject_misses(
     assert "delivered (hosted)" in sent.output
     assert "queued (durable)" not in sent.output
     assert len(calls) == 1
-    assert "ping" in calls[0][1]  # the wrapped <fno_mail> envelope, not raw text
+    # The live turn is the header line, then the body.
+    lines = calls[0][1].splitlines()
+    assert len(lines) == 2, calls[0][1]
+    assert lines[0].startswith("`@web · fmail-")
+    assert lines[1] == "ping"
 
     monkeypatch.setenv("CODEX_THREAD_ID", sid)
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
@@ -922,7 +1044,7 @@ def test_us7b_mux_pane_send_failure_falls_closed_to_durable(
     sent = runner.invoke(
         app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "queued (durable)" in sent.output
     assert len(calls) == 1
 
@@ -947,7 +1069,7 @@ def test_us7b_unrostered_session_skips_pane_rung_silently(
     sent = runner.invoke(
         app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "queued (durable)" in sent.output
     assert calls == []
     assert "no agent matching" not in sent.output
@@ -993,7 +1115,7 @@ def test_us7b_non_live_entry_never_pane_sends(
     sent = runner.invoke(
         app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "queued (durable)" in sent.output
     assert calls == []  # the stale pane was never written to
 
@@ -1033,6 +1155,11 @@ def test_us7b_rostered_but_paneless_entry_falls_to_durable(
 
     def _guard_run(args, *a, **kw):
         if isinstance(args, (list, tuple)) and "mux" in [str(x) for x in args]:
+            # The post-send recovery hint reads the LIVE pane list after the
+            # receipt; its own verb timeout bounds it. The delivery rung
+            # itself must still never reach the mux for a paneless row.
+            if args[:3] == ["fno", "mux", "pane"] and "ls" in [str(x) for x in args]:
+                return real_run(args, *a, **kw)
             pytest.fail(f"paneless entry must not shell out to mux: {args}")
         return real_run(args, *a, **kw)
 
@@ -1041,7 +1168,7 @@ def test_us7b_rostered_but_paneless_entry_falls_to_durable(
     sent = runner.invoke(
         app, ["mail", "send", "019f48e1", "ping", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "queued (durable)" in sent.output
 
     monkeypatch.setenv("CODEX_THREAD_ID", sid)
@@ -1095,7 +1222,7 @@ def test_us3_rostered_claude_inject_miss_falls_to_drainable_floor(
     sent = runner.invoke(
         app, ["mail", "send", "9a063cd3", "hi bg worker", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
     assert "9a063cd3" in sent.output
     assert "queued (durable)" in sent.output
 
@@ -1129,7 +1256,7 @@ def test_us3_rostered_claude_hosted_short_circuits_durable(
     assert payload == []
 
 
-def test_ac3_hp_envelope_carries_real_from_and_model(
+def test_ac3_hp_envelope_carries_real_from_and_the_model_rides_the_bus(
     runner, mailbox, monkeypatch, tmp_path
 ):
     recipient_sid = "9a063cd3-69d4-415a-ada5-649b0164189c"
@@ -1158,20 +1285,23 @@ def test_ac3_hp_envelope_carries_real_from_and_model(
 
     # No --from-name: from + model are auto-stamped from the invoking session.
     sent = runner.invoke(app, ["agents", "mail", "send", "9a063cd3", "hello"])
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", recipient_sid)
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
     body = json.loads(drained.stdout.strip().splitlines()[-1])[0]["body"]
-    assert 'from="abcd1234"' in body
-    assert 'model="claude-opus-4-8"' in body
-    # Pinned to the shared mapper, not spelled literally: the name lane once
-    # stamped a raw "claude" here while dispatch, the relay, and the Rust
-    # contract all said "claude-code", and no test noticed.
-    from fno.mail.envelope import harness_for_provider
+    # Full sender identity rides the header line; the model stays on the bus
+    # record, never in the delivered text.
+    assert body.splitlines()[0].startswith("`@abcd1234 · fmail-")
+    assert 'model=' not in body
+    from fno.bus.log import iter_messages
 
-    assert f'harness="{harness_for_provider("claude")}"' in body
-    assert 'harness="claude-code"' in body
+    row = next(
+        m for m in iter_messages()
+        if m.body.splitlines()[0].startswith("`@abcd1234 · fmail-")
+    )
+    assert row.from_model == "claude-opus-4-8"
+    assert row.from_harness == "claude"
 
 
 # ---------------------------------------------------------------------------
@@ -1203,7 +1333,7 @@ def test_mailbox_fixture_neutralizes_ambient_bus_dir(runner, monkeypatch, tmp_pa
     sent = runner.invoke(
         app, ["mail", "send", "9a063cd3", "hi bg worker", "--from-name", "web"]
     )
-    assert sent.exit_code == 0, sent.output
+    assert sent.exit_code == 14, sent.output
 
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", sid)
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
@@ -1222,7 +1352,9 @@ def test_project_send_no_peer_warns_deferred(runner, mailbox):
         app, ["mail", "send", "--to-project", "web", "--from-name", "etl", "quiet?"]
     )
     assert res.exit_code == 0, res.output
-    assert "queued (durable) for project web" in res.stdout
+    receipt = json.loads(res.stdout.strip())
+    assert receipt["to"] == "web"
+    assert "queued (durable)" in receipt["status"]
     assert "project inbox web has no live drain" in (res.stderr or "")
 
 
@@ -1330,3 +1462,4 @@ def test_live_discovered_ambient_self_queues_canonical_without_inject_or_mux(
     drained = runner.invoke(app, ["agents", "mail", "drain-self", "--json"])
     payload = json.loads(drained.stdout.strip().splitlines()[-1])
     assert payload and payload[0]["to"] == "019fb417"
+

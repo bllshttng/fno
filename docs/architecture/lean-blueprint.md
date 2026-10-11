@@ -1,5 +1,11 @@
 # Lean Blueprint: Single-Doc Architecture
 
+## Is this page for you?
+
+You design or review the plan format, or you wonder why `/blueprint` edited your design doc instead of creating a plan folder. This page owns the single-doc architecture and its measured redundancy case. Misreading it makes you look for a folder plan that new plans never write.
+
+Not for: how a plan gets executed wave by wave, or how the stop gate reads the world. Execution lives in the execute skill. Completion is [control-plane-loop.md](control-plane-loop.md).
+
 ## What it is
 
 `/blueprint` now mutates the upstream design doc in place rather than creating a separate folder plan (a `00-INDEX.md` + N phase files). When a developer runs `/think` and then `/blueprint <doc-path>`, the same markdown file gains execution metadata - waves, file bindings, kill_criteria - appended as new sections without restating the content that already exists. That single file is the canonical artifact for the feature from design through ship. The old folder-plan output is still supported for plans already in flight, but new plans use the single-doc format.
@@ -21,7 +27,7 @@ Each transition corresponds to a pipeline phase:
 | `design` | `/think` at doc creation time |
 | `ready` | `/blueprint` after appending execution sections |
 | `in_progress` | `/execute` or `/target` when execution starts |
-| `in_review` | `/pr create` on PR creation |
+| `in_review` | `/fno:ship pr create` on PR creation |
 | `done` | the merge, via the write-time projection |
 
 ## Section ownership
@@ -54,7 +60,7 @@ Any attempt to write outside this set exits with code 2 and names the offending 
 | kill_criteria | `/blueprint` |
 | Implementation Log | `/execute` or `/target` |
 | Review Verdicts | `/review sigma` |
-| Ship Record | `/pr create` and `/ship` |
+| Ship Record | `/fno:ship pr create` and `/ship` |
 
 For the full section-ownership reference including valid/invalid transition examples, atomic-mutation contract, and greenfield/brownfield auto-detect logic, see [skills/blueprint/references/single-doc-spec.md](../../skills/blueprint/references/single-doc-spec.md).
 
@@ -79,6 +85,16 @@ A plan finalized after this boundary is stamped `acceptance_contract: compiled-v
 Exit codes: 0 success, 1 plan not found, 2 contract violation (missing sections, task-id absent from Execution Strategy), 3 malformed content requiring human inspection.
 
 For operator's detection and dispatch logic, see [skills/execute/references/single-doc-shape.md](../../skills/execute/references/single-doc-shape.md).
+
+## Plan history
+
+In-place mutation needs something to version the file. Each `/blueprint` write is one commit in the plans dir's own git repo, made by `skills/blueprint/scripts/commit-plan.sh`. The subject is `blueprint(<node>): <cause>` and the body carries a `Node: <node>` trailer. So `git log -- <plan>` is the plan's history, and each diff says why it moved. The script commits the plan path only, so other staged work in that repo stays staged. A plans dir outside any git repo reports `unversioned` and keeps no history.
+
+Two reads say whether a plan still holds. `fno backlog freshness <node> --plan <path>` compares the node's premise, and the plan's cited files, against current `origin/main`. Premise verdicts read `shipped`, `partly_shipped`, `changed`, `holds` or `unmeasured`. Plan verdicts read `void`, `drifted`, `fresh` or `unmeasured`. Target init runs it and prints one line per leg. Each run records a `backlog_freshness_verdict` event, so the false-positive rate is measured before any verdict is ever allowed to block. The read is advisory and never blocks.
+
+The notes half of that read is the older `fno backlog notes stale <node> --plan <path>`, which freshness reuses. That verb reads the plan's last commit time, or its mtime with no commit. It compares that time with every note time on the node: legacy progress notes, the current state, and the note journal. It names its basis, because an mtime moves on any save. If notes are newer, init prints a `predates` line.
+
+Writes outside `/blueprint` are not committed: a `/think` design doc, `fno do plan stamp` at the ship gate, `fno do plan sync`, and hand edits in Obsidian. A ruling that lives only in mail is invisible to the stale read.
 
 ## Migration path
 

@@ -1,4 +1,4 @@
-"""Role-based per-spawn model routing for fno agents (x-d2fe).
+"""Role-based per-spawn model routing for fno agents.
 
 Auxiliary coordination work (backlog tidying, node orientation, memory
 consolidation) is routed to a *secondary* model provider (z.ai GLM, DeepSeek,
@@ -7,7 +7,7 @@ diff, the correctness verdict) stays on the primary Anthropic model,
 byte-for-byte as today.
 
 The ``build`` lane extends the same mechanism to *delivery* spawns (``/target
-bg`` + blueprint autolaunch). It is opt-in by config presence: unconfigured it
+bg`` + the ordered ``fno backlog advance`` drain). It is opt-in by config presence: unconfigured it
 routes nothing (fail-safe ``None``); writing ``model_routing.roles.build`` is
 the consent. ``build`` is not in :data:`DEFAULT_ROUTED_ROLES` but is named in
 :data:`KNOWN_LANE_ROLES` so ``fno config route ls`` renders it even before it is set.
@@ -68,6 +68,7 @@ from typing import (
 )
 
 from fno.env_file import read_var_from_env_file
+from fno.config._tiers import TIER_ALIASES
 
 if TYPE_CHECKING:
     from fno.config import ModelRoutingBlock, SettingsModel
@@ -86,15 +87,13 @@ DEFAULT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
 
 # Default secondary model for routed roles. glm-4.5-air is too weak for
 # reasoning-bearing work; a current flagship GLM does real work. Pin a cheaper
-# model per role via the roles map. Kept in lockstep with the schema default
-# (drift-guarded by test_config_defaults_match_module_constants).
+# model per role via the roles map.
 DEFAULT_SECONDARY_MODEL = "glm-5.3"
 
 # Cheaper model for the background (haiku) tier of the built-in zai provider.
 # Claude Code runs background tasks on haiku; routing the haiku tier to this
 # cheaper GLM keeps judgment-light background traffic cheap while opus/sonnet
-# stay on the role model. Kept in lockstep with the schema default
-# (drift-guarded by test_config_defaults_match_module_constants). glm-4.7 is
+# stay on the role model. glm-4.7 is
 # the vendor's recommended background model; glm-4.5-air left the coding-plan
 # supported set and now fails with a model-not-found error.
 DEFAULT_ZAI_HAIKU_MODEL = "glm-4.7"
@@ -103,8 +102,8 @@ DEFAULT_ZAI_HAIKU_MODEL = "glm-4.7"
 # compaction THRESHOLD, not a window selector: the [1m] variant already selects
 # the 1M context, Claude Code caps the threshold at the model window, and a
 # threshold of 1000000 (the old value) is identical to setting nothing, i.e. no
-# compaction before the ceiling. The king compact nudge fires at ~40%
-# (target.handoff.king_used_pct_trigger) so the agent prepares and compacts
+# compaction before the ceiling. The lead compact nudge fires at ~40%
+# (target.handoff.lead_used_pct_trigger) so the agent prepares and compacts
 # while it still has decision runway; this 80%
 # threshold is the BACKSTOP that catches a worker that ignored it, could not
 # act, or was mid-loop. 800k leaves ~200k runway for the compaction request
@@ -168,7 +167,7 @@ class BusinessRoleRoutingProjectionError(RouteCompositionError):
 
 
 #: The env key a bound route stamps so a RUNNING worker can name its own model
-#: provider. Before x-c703 the provider resolution died at the spawn boundary:
+#: provider. Before the provider resolution died at the spawn boundary:
 #: `.provider` was an attribute of the dict the parent held, and nothing carried
 #: it across the fork, so a worker could not tell whether it was billing a shared
 #: account. Route resolution for reviews reads this marker; an unstamped session
@@ -330,17 +329,10 @@ def resolve_spawn_route(
 # IS the consent). `_role_target` already resolves any config-present name, so
 # these need no resolution-path change; they exist so `fno config route ls` can render
 # a lane that has no config line yet (an unconfigured `build` row) instead of
-# hiding it. `build` is the sanctioned delivery lane for /target bg + blueprint
-# autolaunch; `pr-create` is the PR-creation worker (/pr create). Unconfigured
-# either fails safe to the primary Anthropic model - no hardcoded tier.
-KNOWN_LANE_ROLES = ("build", "pr-create")
-
-#: Claude tier aliases: the names Claude Code resolves through
-#: ``ANTHROPIC_DEFAULT_<TIER>_MODEL``. ``fable`` is one of them and is a live
-#: alias here (``fno agents spawn --model fable``); omitting it left the fable
-#: tier of a routed worker resolving at Anthropic while every other tier ran on
-#: the secondary provider.
-TIER_ALIASES = ("opus", "sonnet", "haiku", "fable")
+# hiding it. `build` is the sanctioned delivery lane for /target bg + the
+# ordered advance drain; PR creation runs inline in the invoking session and
+# dispatches no lane. Unconfigured fails safe to the primary Anthropic model.
+KNOWN_LANE_ROLES = ("build",)
 
 # Every tier Claude Code may request internally. Setting all of them to the
 # routed model keeps the entire worker (incl. background haiku) on the secondary
@@ -350,6 +342,29 @@ MODEL_ENV_KEYS = (
     "ANTHROPIC_MODEL",
     *(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL" for alias in TIER_ALIASES),
 )
+
+
+def tier_models_for(provider: Mapping[str, object]) -> dict[str, str]:
+    """The provider's effective per-tier model map (alias -> model id).
+
+    ``haiku_model`` folds in as the haiku entry and an explicit
+    ``tier_models`` entry wins over it, so ``tier_models.haiku`` and
+    ``haiku_model`` set together resolve deterministically, not by dict
+    order. Empty for a provider that declares nothing: every tier then
+    rides the spawn model.
+    """
+    tiers: dict[str, str] = {}
+    haiku_model = provider.get("haiku_model")
+    if haiku_model:
+        tiers["haiku"] = str(haiku_model)
+    declared = provider.get("tier_models")
+    if isinstance(declared, Mapping):
+        for alias, tier_model in declared.items():
+            key = str(alias).strip().lower()
+            value = str(tier_model or "").strip()
+            if key in TIER_ALIASES and value:
+                tiers[key] = value
+    return tiers
 
 
 class TierRemapConflict(RouteCompositionError):
@@ -449,7 +464,7 @@ def check_spawn_tier_remap(
     raise TierRemapConflict(remap_conflict_message(*found))
 
 
-# The inherited-env carrier (x-4709): a long-lived background daemon stamps the
+# The inherited-env carrier: a long-lived background daemon stamps the
 # environment of the shell that started it into every session it spawns. When
 # that shell held a foreign vendor's model exports with no base URL, every
 # child asks Anthropic's endpoint for a model it does not serve and the whole
@@ -572,10 +587,9 @@ def unrouted_model_clear_notice(cleared: Sequence[str]) -> str:
     return (
         "fno: cleared "
         + ", ".join(cleared)
-        + " from this child's env: an unrouted child carries no model claim, so "
-        "it runs on its account's own default rather than a model inherited "
-        "from the launching shell. Select one with --model or a "
-        "config.agents.profiles entry to route it."
+        + " from this child's env: a model the launching shell exported never "
+        "reaches a child. The child's model comes from its --model flag, else "
+        "its account's own default."
     )
 
 
@@ -972,21 +986,43 @@ def _route_for_target(
         )
         return None
 
+    # A bare tier alias is resolved by Claude Code against the endpoint it is
+    # pointed at, and a third-party endpoint has no "sonnet": the spawn would
+    # print a live receipt and die on its first turn. is_anthropic_model draws
+    # the same alias line for the AMBIENT-env conflict; here the endpoint is
+    # known, so the check is local. Refuse, never coerce: picking a model on
+    # the operator's behalf is how a spawn ends up billing somewhere nobody
+    # chose.
+    if (
+        model.strip().lower() in TIER_ALIASES
+        and _base_url_host(base_url) not in ("", ANTHROPIC_API_HOST)
+    ):
+        _emit(
+            notice,
+            f"model-routing: refusing model {model!r} for provider {pname!r}: a bare "
+            "tier alias resolves against the endpoint the worker is pointed at, and "
+            f"{base_url} is not Anthropic's; name a model id this provider serves",
+        )
+        return None
+
     route = {"ANTHROPIC_BASE_URL": base_url, "ANTHROPIC_AUTH_TOKEN": key}
+    # The blanket fill is load-bearing: an undeclared tier must be PRESENT and
+    # set to the spawn model, never absent, or Claude Code resolves that tier
+    # against its own default and a routed worker asks a third-party endpoint
+    # for an Anthropic model.
     for k in MODEL_ENV_KEYS:
         route[k] = model
-    # Item 1: route the background (haiku) tier to the provider's cheaper
-    # haiku_model (zai -> glm-4.7). Still the SAME secondary provider
-    # (base_url + token), so the whole worker stays off Anthropic; only the
-    # background model is cheaper. A provider with no haiku_model keeps the role
-    # model on the haiku tier (no regression, never an empty/invalid id).
-    haiku_model = provider.get("haiku_model")
-    if haiku_model:
-        route["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
+    # Item 1: layer the provider's per-tier map over the blanket fill,
+    # generalized from the haiku_model special case (zai -> glm-4.7). Still the
+    # SAME secondary provider (base_url + token), so the whole worker stays off
+    # Anthropic; only the named tiers move. A provider with no tier map and no
+    # haiku_model composes exactly as before (never an empty/invalid id).
+    for alias, tier_model in tier_models_for(provider).items():
+        route[f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"] = tier_model
     # Item 2: a [1m]-routed worker gets an auto-compact backstop. The [1m]
     # variant selects the 1M context; this threshold (capped at the model
     # window, and precedence over /autocompact/--autocompact/setting) is the
-    # backstop above the king nudge. Injected before extra_env so an explicit
+    # backstop above the lead nudge. Injected before extra_env so an explicit
     # extra_env value still wins.
     if model.endswith("[1m]"):
         route["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = ONE_M_AUTO_COMPACT_WINDOW
@@ -994,6 +1030,17 @@ def _route_for_target(
     # operator can differentiate tiers or tune the routed worker.
     for k, v in (getattr(block, "extra_env", None) or {}).items():
         route[str(k)] = str(v)
+    # Checked after extra_env so a hand pin that already differentiates the
+    # tiers silences it. Four identical /model rows read as "the config did
+    # not take"; this names the one lever that fixes it.
+    tier_values = {route[k] for k in MODEL_ENV_KEYS}
+    if len(tier_values) == 1:
+        _emit(
+            notice,
+            f"model-routing: every tier resolves to {next(iter(tier_values))}; /model "
+            "will offer no alternative; declare "
+            f"model_routing.providers.{pname}.tier_models to differentiate",
+        )
     return route
 
 
@@ -1038,7 +1085,7 @@ def materialize_route_settings(
     A ``claude --bg`` session's serving process is forked by the claude daemon
     with the DAEMON's env, so per-spawn ``ANTHROPIC_*`` route env is dropped
     before the first model request and the session wedges on the primary model
-    (x-6de8). A settings file is read by the session process itself, so it
+. A settings file is read by the session process itself, so it
     survives that fork where an env overlay cannot. Content-addressed and
     ``0600`` (it carries ``ANTHROPIC_AUTH_TOKEN``): identical routes reuse one
     file rather than accumulating per spawn.
@@ -1069,7 +1116,7 @@ def materialize_model_scrub_settings(dropped: Sequence[str]) -> str:
 
     ``bg_create``'s incoherent-model-env scrub mutates the spawn env, but a
     ``claude --bg`` session is forked by the claude daemon with the DAEMON's
-    own env (x-6de8) - the same reason :func:`materialize_route_settings`
+    own env - the same reason :func:`materialize_route_settings`
     exists. Without a route or account overlay there is no other reason to
     write a settings file, so the plain poisoned-inherited-env case (the
     shape this module exists to fix) reached only the short-lived front-end
@@ -1130,6 +1177,44 @@ def load_sandbox_write_policy(path: str) -> dict[str, object]:
     return block
 
 
+# Tools a worker on a non-Anthropic endpoint must not be offered. Artifact
+# publishes through Anthropic's own backend, so a routed worker could never use
+# it, and claude 2.1.265 gave its input_schema a pattern holding \p{Cc}. z.ai
+# refuses any tools pattern with a \p{...} escape and answers 400 [1210] with no
+# field name, which killed every fresh interactive routed worker on turn one.
+FOREIGN_ENDPOINT_DENY_TOOLS = ("Artifact",)
+
+ANTHROPIC_API_HOST = "api.anthropic.com"
+
+
+def _base_url_host(base_url: str) -> str:
+    """The lowercased host of ``base_url``, or "" when there is none.
+
+    A bare authority like ``api.anthropic.com/v1`` carries no scheme, and
+    urlsplit reads the whole thing as a path, so give it one first.
+    """
+    from urllib.parse import urlsplit
+
+    base = base_url.strip()
+    if not base:
+        return ""
+    if "//" not in base:
+        base = "//" + base
+    return (urlsplit(base).hostname or "").lower()
+
+
+def _foreign_endpoint_tool_denies(env: Mapping[str, str]) -> list[str]:
+    """Tool denies this route needs, empty for Anthropic's own endpoint.
+
+    The host is parsed and matched whole. A substring test would clear
+    ``api.anthropic.com.proxy.example`` and refuse ``API.ANTHROPIC.COM``.
+    """
+    host = _base_url_host(str(env.get("ANTHROPIC_BASE_URL") or ""))
+    if not host or host == ANTHROPIC_API_HOST:
+        return []
+    return list(FOREIGN_ENDPOINT_DENY_TOOLS)
+
+
 def _write_settings_env_file(
     env: Mapping[str, str],
     sandbox: "Optional[Mapping[str, object]]" = None,
@@ -1153,6 +1238,9 @@ def _write_settings_env_file(
     payload_obj: dict[str, object] = {"env": dict(env)}
     if sandbox:
         payload_obj["sandbox"] = dict(sandbox)
+    deny = _foreign_endpoint_tool_denies(env)
+    if deny:
+        payload_obj["permissions"] = {"deny": deny}
     payload = json.dumps(payload_obj, sort_keys=True)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
     # Route through fno.paths (config-driven ~/.fno) rather than a bare
@@ -1191,7 +1279,7 @@ def route_settings_path_for(
 ) -> Optional[str]:
     """The ``--settings`` path a spawn carrying these overlays launches with.
 
-    ONE place expressing the composed settings payload (x-5ed4, x-8552): the
+    ONE place expressing the composed settings payload : the
     auth/model scrub floor, the account overlay minus ``CLAUDE_CONFIG_DIR``,
     and the route written last so it wins every credential variable as one
     unit. An account composed with a route keeps the non-credential env its
@@ -1319,24 +1407,25 @@ def refresh_provider_default_tiers(
     *,
     settings: "Optional[SettingsModel]" = None,
 ) -> tuple[dict[str, str], Optional[str]]:
-    """Re-resolve a recorded route's provider-DEFAULT tier key, or say why not.
+    """Re-resolve a recorded route's provider-DEFAULT tier keys, or say why not.
 
     A recorded route-settings file pins two kinds of value with the same
     authority: what the operator CHOSE (endpoint, token, model) and what the
     provider registry defaulted to at launch (the haiku tier, a background
-    model the operator never named). Replayed verbatim on resume, a moved
-    default keeps serving the old tier forever - glm-4.5-air left the z.ai
-    coding-plan supported set, and every resume off a file recorded before
-    the change failed background calls with model-not-found while the main
-    model stayed healthy (x-5cc5).
+    model the operator never named, plus every ``tier_models`` entry declared
+    in config). Replayed verbatim on resume, a moved default keeps serving the
+    old tier forever - glm-4.5-air left the z.ai coding-plan supported set, and
+    every resume off a file recorded before the change failed background calls
+    with model-not-found while the main model stayed healthy.
 
     The operator's 2026-08-17 rule decides the split: the recorded file pins
     what the operator chose, not what the provider happened to default to
-    that week. So the haiku tier re-resolves against TODAY'S registry
-    (built-in defaults overlaid by config, the same map
-    :func:`effective_providers` renders), and every other key replays
+    that week. So every tier in the provider's effective tier map re-resolves
+    against TODAY'S registry (built-in defaults overlaid by config, the same
+    map :func:`effective_providers` renders), and every other key replays
     verbatim. An extra_env tier pin does not survive a resume - pin the
-    provider's ``haiku_model`` in config to make a tier durable.
+    provider's ``tier_models`` (or ``haiku_model``) in config to make a tier
+    durable.
 
     Returns ``(route, note)``: a copy of the route (the caller's mapping is
     never mutated) plus a disclosure note naming the provider, the old value
@@ -1356,21 +1445,20 @@ def refresh_provider_default_tiers(
             "replaying recorded tiers verbatim"
         )
     record = providers[pname]
-    todays = record.get("haiku_model")
-    recorded = refreshed.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-    if not todays or not recorded or str(todays) == recorded:
+    moved: list[str] = []
+    for alias, todays in tier_models_for(record).items():
+        key = f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL"
+        recorded = refreshed.get(key)
+        if not todays or not recorded or str(todays) == recorded:
+            continue
+        refreshed[key] = str(todays)
+        moved.append(f"{alias} {recorded} -> {todays}")
+    if not moved:
         return refreshed, None
-    refreshed["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = str(todays)
     return refreshed, (
-        f"provider {pname} haiku tier default moved {recorded} -> {todays}; "
-        "tier re-resolved, operator-chosen keys replay verbatim"
+        f"provider {pname} tier default moved {', '.join(moved)}; "
+        "tiers re-resolved, operator-chosen keys replay verbatim"
     )
-
-
-# Default codex wire protocol for a third-party OpenAI-compatible endpoint
-# (z.ai's paas/v4 speaks Chat Completions). Codex's own default is "responses"
-# (OpenAI's API); a routed third-party provider almost always wants "chat".
-DEFAULT_CODEX_WIRE_API = "chat"
 
 
 class CodexRoute(NamedTuple):
@@ -1383,30 +1471,22 @@ class CodexRoute(NamedTuple):
     spawn env; ``config_args`` is prepended to the codex argv as global flags.
 
     ``env`` also carries :data:`ROUTE_PROVIDER_ENV`, so a codex worker can name
-    its own model provider exactly as a claude-lane worker can.
+    its own model provider exactly as a claude-lane worker can. ``provider``
+    and ``model`` are the route IDENTITY the registry row records ;
+    every relaunch door re-resolves the endpoint from today's config in Rust
+    (``codex_route.rs``), so no endpoint or key is ever persisted.
     """
 
     env: dict[str, str]
     config_args: list[str]
-
-
-def _toml_literal(value: str) -> Optional[str]:
-    """Wrap ``value`` as a TOML literal string (single-quoted, no escapes), or
-    None if it can't be embedded safely. Rejects a single quote (would break the
-    literal string) AND any control char - notably NUL, which would otherwise
-    survive into the codex argv and make ``subprocess`` raise ``ValueError:
-    embedded null byte``, breaking resolve_codex_route's never-raise contract.
-    These are controlled config values we won't try to escape; bail fail-safe."""
-    if "'" in value or any(ord(c) < 0x20 for c in value):
-        return None
-    return f"'{value}'"
+    provider: str = ""
+    model: str = ""
 
 
 def resolve_codex_route(
     role: Optional[str],
     *,
     settings: "Optional[SettingsModel]" = None,
-    env: Optional[Mapping[str, str]] = None,
     notice: Optional[Callable[[str], object]] = None,
     business_lookup: Optional[BusinessRoleLookup] = None,
 ) -> Optional[CodexRoute]:
@@ -1415,11 +1495,19 @@ def resolve_codex_route(
 
     Mirrors :func:`resolve_route`'s fail-safe contract: a protected role, a
     disabled block, an unrouted role, an unconfigured provider, a NON-openai
-    provider (that belongs to the claude lane), a missing base_url/key, or a
-    value that can't be safely embedded in TOML all return ``None`` (with a
-    one-line notice where a misconfiguration is worth surfacing). The legacy
-    path never raises; an opted-in business lookup fails closed with the same
-    typed errors as the Claude lane.
+    provider (that belongs to the claude lane, silently), a missing
+    base_url/key, or a value that can't be safely embedded in TOML all return
+    ``None`` (with a one-line notice where a misconfiguration is worth
+    surfacing). The legacy path never raises; an opted-in business lookup fails
+    closed with the same typed errors as the Claude lane.
+
+    The provider half (record read, protocol check, key, TOML tokens) is owned
+    by Rust (`codex_route.rs`) through the spawn-overlay verb: ONE builder
+    serves spawn and every relaunch door, so the two cannot disagree. The key
+    resolves in the verb's process env, so tests pin it with ``monkeypatch
+    .setenv`` and a temp ``FNO_CONFIG``. The answer's ``refusal`` surfaces as a
+    notice; ``unrouted`` (the claude-lane case) stays silent, exactly as
+    before.
     """
     requested_role = (role or "").strip()
     name = _normalize(requested_role)
@@ -1435,11 +1523,6 @@ def resolve_codex_route(
         )
         return None
 
-    if env is None:
-        import os
-
-        env = os.environ
-
     block = _routing_block(settings)
     if not getattr(block, "enabled", True):
         return None
@@ -1449,85 +1532,40 @@ def resolve_codex_route(
         return None
     pname, model = target
 
-    provider = _resolve_provider(pname, block)
-    if provider is None:
+    import os
+
+    from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
+
+    try:
+        answer = spawn_overlay_call(
+            {"kind": "codex-route", "provider": pname, "model": model, "cwd": os.getcwd()}
+        )
+    except SpawnOverlayUnavailable as exc:
         _emit(
             notice,
-            f"model-routing (codex): provider {pname!r} for role {name!r} is "
-            f"not configured; using the default codex model",
+            f"model-routing (codex): route builder unavailable ({exc}); "
+            "using the default codex model",
         )
         return None
-
-    protocol = (provider.get("protocol") or "anthropic").lower()
-    if protocol != "openai":
+    refusal = answer.get("refusal")
+    if refusal:
+        _emit(notice, f"model-routing (codex): {refusal}")
+        return None
+    if answer.get("unrouted"):
         # An anthropic provider belongs to the claude lane, not here. Silent
         # None (not an error): a role shared across lanes just no-ops on codex.
         return None
-
-    base_url = provider.get("base_url") or ""
-    if not base_url:
-        _emit(notice, f"model-routing (codex): provider {pname!r} has no base_url")
-        return None
-
-    api_key_env = provider.get("api_key_env") or "OPENAI_API_KEY"
-    key = _resolve_key(provider, env)
-    if not key:
-        _emit(
-            notice,
-            f"model-routing (codex): no API key for provider {pname!r} "
-            f"(role {name!r}); using the default codex model",
-        )
-        return None
-
-    # The provider name becomes a TOML table key (model_providers.<pname>) and a
-    # config value; only a bareword identifier is safe in the -c argument.
-    import re
-
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", pname):
-        _emit(
-            notice,
-            f"model-routing (codex): provider name {pname!r} is not a safe codex "
-            f"provider id; using the default codex model",
-        )
-        return None
-
-    wire_api = provider.get("wire_api") or DEFAULT_CODEX_WIRE_API
-
-    # Build the inline model-provider config. Every embedded value is a TOML
-    # literal string; a value we can't embed safely aborts the route.
-    lits = {
-        "base_url": _toml_literal(base_url),
-        "env_key": _toml_literal(api_key_env),
-        "wire_api": _toml_literal(wire_api),
-        "provider": _toml_literal(pname),
-        "model": _toml_literal(model),
-    }
-    if any(v is None for v in lits.values()):
-        _emit(
-            notice,
-            f"model-routing (codex): provider {pname!r} has a value that can't "
-            f"be embedded in TOML; using the default codex model",
-        )
-        return None
-
-    provider_table = (
-        f"model_providers.{pname}={{ base_url = {lits['base_url']}, "
-        f"env_key = {lits['env_key']}, wire_api = {lits['wire_api']} }}"
-    )
-    config_args = [
-        "-c",
-        provider_table,
-        "-c",
-        f"model_provider={lits['provider']}",
-        "-c",
-        f"model={lits['model']}",
-    ]
+    config_args = answer.get("config_args") or []
+    env_pairs = answer.get("env") or []
+    route_env = {str(k): str(v) for k, v in env_pairs}
     # The same stamp the claude lane writes. Without it a routed codex worker
     # resolves provider "unknown" and ignores its account's subagent budget, so
     # a shared provider reached through codex still launches the full panel.
     return CodexRoute(
-        env={api_key_env: key, ROUTE_PROVIDER_ENV: pname},
-        config_args=config_args,
+        env=route_env,
+        config_args=list(config_args),
+        provider=str(answer.get("provider") or pname),
+        model=str(answer.get("model") or model),
     )
 
 
@@ -1719,7 +1757,7 @@ def effective_providers(
 AUTO_ASSIGNED_BY: dict[str, str] = {
     "post-merge": "pr_watch post-merge dispatch",
     "codex-verify": "codex verify lane",
-    "build": "/target bg + blueprint autolaunch",
+    "build": "/target bg + fno backlog advance",
 }
 
 # Why each protected name is guarded, rendered in the `assigned_by` column so a

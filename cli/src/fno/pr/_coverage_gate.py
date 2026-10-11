@@ -37,7 +37,7 @@ naming the probe that died.
 The one deliberate bypass used to be the ``coverage-override`` label alone: it
 answers COVERED with a note carrying ``OVERRIDE_NOTE_PREFIX``, so a caller can
 always tell a merge that was reviewed from a merge that was waived. Operator
-law joins it through ``fno.decide.current_law`` - one standing subject, one
+law joins it through the native decisions door's standing-law read - one
 head-scoped subject minted by the attended ``coverage-waive`` command - with
 the same prefix on its receipts and the same fail-closed reading of anything
 the decision store could not answer.
@@ -58,12 +58,6 @@ _LOG = logging.getLogger(__name__)
 COVERED = 0
 REFUSED = 3
 UNANSWERED = 4
-#: The fourth state (Locked Decision 4): the round budget is spent with
-#: blocking findings still non-terminal, so no further review can clear it.
-#: Distinct from REFUSED so a caller can tell "needs another round" from
-#: "cannot be cleared by reviewing" - and from UNANSWERED, which is an
-#: instrument failure, never a verdict.
-IMPOSSIBLE = 5
 
 #: The gate's own copy of the harmless-category allowlist (Locked Decision 6:
 #: two implementations of one rule, held equal by a shared corpus). The gate
@@ -167,16 +161,37 @@ def law_authority(subject: str) -> Tuple[str, str]:
     decision is missing or unreadable is malformed authority, not a clean no:
     that is ``unknown`` with the field named, the same rule that folds a
     damaged row.
+
+    Only rows with ``authority_source == "operator"`` are counted at all. A
+    waiver asserts a person at a terminal reviewed the diff, and
+    ``chat_attested`` rows cannot carry that fact: any harness-identified
+    agent session records the same value through the law door (a check that
+    also sits on the write path as
+    native decide door's waiver guard). Filtering before the count
+    means such a row is a clean no, never a waiver, and never a conflict that
+    muddies a real operator ruling into unknown.
     """
     try:
-        from fno.decide import list_decisions
+        from fno.rust_binary import call_front_json
 
-        _label, rows, damaged = list_decisions(subject, lane="law", state="live")
+        answer = call_front_json(
+            {
+                "mode": "decisions",
+                "argv": [subject, "--lane", "law", "--state", "live", "--json"],
+            }
+        )
+        rows = answer.get("decisions") or []
+        damaged = int(answer.get("damaged") or 0)
     except Exception as exc:  # noqa: BLE001 - a dead probe is unknown, never none
         return (
             "unknown",
             f"decision probe failed for {subject}: {type(exc).__name__}: {exc}",
         )
+    rows = [
+        row
+        for row in rows
+        if str(row.get("authority_source") or "") == "operator"
+    ]
     if damaged:
         noun = "row" if damaged == 1 else "rows"
         return "unknown", f"decision probe: {damaged} damaged {noun} for {subject}"
@@ -243,6 +258,24 @@ def _repo_slug(cwd: str) -> Optional[str]:
     return slug or None
 
 
+def _hard_keys(chain: list, named: list) -> list:
+    """The CONFIRMED correctness/security subset of the non-terminal finding
+    keys. The standing operator waiver never clears these below the cap; the
+    cap itself never reads this - at the configured rounds the budget
+    discharges every open finding, hard included. A truncated chain counts
+    every key hard: the gate cannot re-derive what it cannot read."""
+    if not named:
+        return []
+    if "(truncated remainder)" in named:
+        return list(named)
+    primitives: dict = {}
+    for event in chain:
+        for primitive in event["findings"] or []:
+            if isinstance(primitive, dict) and primitive.get("finding_key"):
+                primitives[primitive["finding_key"]] = primitive
+    return sorted(k for k in named if _hard_finding(primitives.get(k)))
+
+
 def unresolved_hard_findings(
     cwd: str, head: str, head_branch: str, cov: Optional[dict]
 ) -> list:
@@ -252,8 +285,8 @@ def unresolved_hard_findings(
     this list; a second severity table here would be a second place the two
     surfaces could disagree."""
     chain = attestation_chain(cwd, head_branch=head_branch, head=head)
-    _text, _note, _named, hard = disposition_refusal(chain, cov, cwd)
-    return hard
+    _text, _note, named = disposition_refusal(chain, cov, cwd)
+    return _hard_keys(chain, named)
 
 
 def run_coverage_waive(pr_number: int, reason: str, cwd: Optional[str] = None) -> int:
@@ -286,39 +319,45 @@ def run_coverage_waive(pr_number: int, reason: str, cwd: Optional[str] = None) -
         )
         return 4
     subject = scoped_waiver_subject(slug, pr_number, head)
-    from fno.decide import (
-        IndexWriteError,
-        RefusedAuthorityError,
-        UnattributedAuthorityError,
-        record_decision,
-    )
+    # The write rides the native decide door at operator authority: the
+    # attended terminal is the credential, and the door refuses everything
+    # else (exit 3) exactly as the deleted Python engine did.
+    import subprocess
 
-    try:
-        record_decision(
-            decision=WAIVER_DECISION,
-            subject=subject,
-            rationale=text,
-            authority_source="operator",
-        )
-    except (RefusedAuthorityError, UnattributedAuthorityError) as exc:
+    from fno.rust_binary import resolve_front_binary
+
+    binary = resolve_front_binary()
+    if binary is None:
+        sys.stderr.write("coverage-waive failed: the native fno binary was not found\n")
+        return 1
+    proc = subprocess.run(
+        [
+            str(binary),
+            "inbox",
+            "decide",
+            subject,
+            WAIVER_DECISION,
+            "--rationale",
+            text,
+            "--authority",
+            "operator",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 3:
         sys.stderr.write(
-            f"coverage-waive refused: {exc}. An operator waiver needs an "
-            "attended operator terminal; a session a harness identifies "
-            "records nothing.\n"
+            "coverage-waive refused: "
+            + proc.stderr.strip()
+            + " An operator waiver needs an attended operator terminal; a "
+            "session a harness identifies records nothing.\n"
         )
         return 3
-    except IndexWriteError as exc:
+    if proc.returncode != 0:
         sys.stderr.write(
-            f"coverage-waive failed: the decision is durable but not yet "
-            f"recoverable ({exc}); run `fno backlog decide-reindex`. Do not "
-            "re-run this command - that records the waiver twice. No gate can "
-            "read it yet.\n"
-        )
-        return 1
-    except Exception as exc:  # noqa: BLE001 - no receipt without a durable record
-        sys.stderr.write(
-            f"coverage-waive failed: decision write failed: "
-            f"{type(exc).__name__}: {exc}\n"
+            f"coverage-waive failed: the decide door refused the write "
+            f"(exit {proc.returncode}): {proc.stderr.strip()}; do not re-run "
+            "this command - a recorded waiver would double.\n"
         )
         return 1
     # Publish the waiver green NOW, so GitHub's ruleset sees the context the
@@ -467,99 +506,47 @@ def _repo_root(cwd: str) -> Path:
     return Path(_merge._repo_state_dir(cwd)).parent
 
 
-def _github_approval_satisfies(cwd: str) -> bool:
-    """The resolved flag, read through ``_reviews``' resolver rather than a
-    second copy of it: the reachable-paths gate names a config key carried in
-    two Python files as a twin, and this gate's whole subject is one rule with
-    one implementation. Passing the rev-parsed root keeps the sibling
-    resolvers here (``require_corroboration``, ``nonblocking_categories``)
-    reading the same checkout this one does."""
-    from fno.pr import _reviews
+def posture_refusal(cov: Optional[dict], *, recomputed: bool = False) -> Optional[str]:
+    """The refusal when the resolved review posture is unsatisfied or unknown.
 
-    root = _repo_root(cwd)
-    _log_config_receipt(root, "config.review.github_approval_satisfies")
-    return _reviews._resolved_github_approval_flag(str(root))
+    The verdict is the Rust producer's (`review_posture` on the coverage row);
+    this gate reads it and never reclassifies (AC7-ERR: an unsatisfied or
+    unknown posture refuses from the Rust verdict before any merge is called).
+    None when the row answers something else (the unknown-coverage and
+    no-lane paths have their own refusals) or the rung is satisfied.
 
-
-def rests_on_self_attestation_alone(
-    cov: dict, github_approval_satisfies: bool = False
-) -> bool:
-    """Whether a covered coverage row's whole count is the author's own
-    (self_attested) local attestation - the same predicate the Rust gate's
-    ``CoverageReport::rests_on_self_attestation_alone`` applies, read from the
-    serialized row. Prefers the recorded counts; derives from verdicts on
-    pre-field rows. Unmeasured authorship (no self_attested_count, no origins)
-    is NOT self-attestation alone: it is not proof of corroboration, but it is
-    not proof of its absence either.
-
-    ``github_approval_satisfies`` is the resolved config flag, and it reaches
-    the verdicts fallback through ``_reviews._human_approval_counts`` - the
-    same helper ``_derive_review_state`` and the Rust ``human_approval_counts``
-    apply. It was hardcoded to the flag-off branch here, which made this a
-    THIRD implementation of one counting rule: under the flag a non-author
-    GitHub approval corroborated on the other two paths and not on this one,
-    while the gate's own refusal advertises that approval as a remedy. The
-    default is False so a caller with no repo to resolve against (the
-    doctor's read-only display) keeps today's answer.
+    A covered row that NAMES no posture is a two-case read. The recompute
+    THIS gate read just ran and the row still carries no rung: the producer
+    binary predates the posture field, and the refusal names the upgrade,
+    because guessing a rung is how the dangerous cell (auto-merge beside no
+    review) reopens. A STORED row from before the field with no recompute
+    (head unchanged, nothing overtaken it) passes through as today - the
+    pre-posture corpus merges under its own evidence until a fresh producer
+    rewrites its row.
     """
-    reviewed = cov.get("reviewed_count")
-    self_attested = cov.get("self_attested_count")
-    if not isinstance(reviewed, int) or reviewed <= 0:
-        # The corroboration policy itself rewrites the rows it holds to
-        # covered=uncovered / reviewed_count 0 while PRESERVING the
-        # self-attestation counts, so a 0-count row with a recorded
-        # self-attestation is exactly the held row - the one population this
-        # predicate exists to name. A 0-count row with no self-attestation is
-        # merely uncovered, not self-attested-only.
-        return isinstance(self_attested, int) and self_attested > 0
-    if isinstance(self_attested, int):
-        return self_attested == reviewed
-    from fno.pr._reviews import _human_approval_counts
-
-    counted = [
-        v
-        for v in (cov.get("verdicts") or [])
-        if isinstance(v, dict)
-        and v.get("verdict") == "reviewed"
-        and _human_approval_counts(v, github_approval_satisfies)
-    ]
-    return bool(counted) and all(
-        v.get("producer") == "local_attestation"
-        and v.get("attestation_origin") == "self_attested"
-        for v in counted
-    )
-
-
-def _corroboration_refusal(cov: Optional[dict], cwd: str) -> Optional[str]:
-    """The refusal when ``config.review.require_corroboration`` is on and the
-    coverage row rests on the author's own attestation alone. None when the
-    policy is off, the row carries corroboration, or authorship is unmeasured
-    (an unmeasured row is not proof of corroboration, but it is not proof of
-    its absence either - fail open, as the Rust-side predicate does).
-    """
-    if not cov:
+    if not cov or cov.get("coverage") != "covered":
         return None
-    try:
-
-        from fno.config import load_settings_for_repo
-
-        root = _repo_root(cwd)
-        _log_config_receipt(root, "config.review.require_corroboration")
-        review = load_settings_for_repo(root).review
-        if not getattr(review, "require_corroboration", False):
+    posture = cov.get("review_posture")
+    if not isinstance(posture, dict):
+        if not recomputed:
             return None
-    except Exception:  # noqa: BLE001 - an unreadable config never tightens a gate
+        return (
+            "review posture unknown: a fresh coverage recompute resolved no "
+            "review.posture, so the ladder cannot answer what review the rung "
+            "demands. Remedy: refresh the fno-agents binary "
+            "(`fno doctor update`) and re-run the merge"
+        )
+    if posture.get("posture_satisfied") is True:
         return None
-
-    if not rests_on_self_attestation_alone(
-        cov, _github_approval_satisfies(cwd)
-    ):
-        return None
+    gaps = posture.get("posture_gaps")
+    gaps = (
+        "; ".join(str(g) for g in gaps)
+        if isinstance(gaps, list) and gaps
+        else "the rung's evidence is not at this head"
+    )
     return (
-        "coverage rests on the author's own attestation alone "
-        "(config.review.require_corroboration = true); corroboration satisfies "
-        "it two ways: a second session's head-pinned attestation, or a GitHub "
-        "App review"
+        f"review posture {posture.get('posture')!r} (rank "
+        f"{posture.get('rank')}) is unsatisfied: {gaps}"
     )
 
 
@@ -568,17 +555,17 @@ def _ordinary_verdict(
 ) -> Tuple[int, str, str, str, Optional[tuple]]:
     """The evidence-only verdict: ``(state, refusal, covered_head, note,
     waiver_inputs)``. Everything but the operator-law overlay lives here; the
-    public ``coverage_verdict`` applies that overlay to a refused or
-    impossible head. ``waiver_inputs`` is ``(head, hard_findings)`` on every
-    path the overlay may consult, None on the covered/unanswered early
-    returns that never need it.
+    public ``coverage_verdict`` applies that overlay to a refused head.
+    ``waiver_inputs`` is ``(head, hard_findings)`` on every path the overlay
+    may consult, None on the covered/unanswered early returns that never
+    need it.
     """
     # The second argument is a CWD, and it is threaded into every probe below.
     # Hand it a repo slug and the FIRST probe to notice is the head fetch,
     # which drops its reason and answers None, so the verb reports "pr head
     # fetch failed" - true of the probe, silent about the argument that broke
     # it, and exactly the wrong-subject sentence this gate learned to stop
-    # printing (x-51f7). Refuse at the door, before any probe has a chance to
+    # printing. Refuse at the door, before any probe has a chance to
     # misattribute it. UNANSWERED, not REFUSED: a gate that cannot read its
     # own inputs has not judged the PR.
     #
@@ -638,29 +625,34 @@ def _ordinary_verdict(
             return UNANSWERED, "", "", f"events read raised: {exc}", None
 
     covered, failed = covered_conjuncts(cov, head, code_review_required)
-    corroboration = _corroboration_refusal(cov, cwd)
+    # `recomputed` is the freshness proof: only a row the producer JUST wrote
+    # can prove the binary resolved no rung. A stored pre-posture row is
+    # legacy evidence, not a stale binary.
+    posture = posture_refusal(cov, recomputed=recompute_note == "recomputed")
 
     # Locked Decision 1: the pass condition is disposition-complete at the
     # head, not clean. The chain read needs the PR's head branch to scope
     # its older rounds; on a covered row a probe miss is an instrument
     # failure, answered UNANSWERED like the head fetch above rather than
     # silently narrowing the chain (an under-collected chain is a fail-open).
-    # On an uncovered row the miss keeps today's refusal: the chain there
-    # only ever WIDENS the answer to IMPOSSIBLE, and a guessed branch would
-    # fire it on the wrong scope.
+    # On an uncovered row the miss keeps today's refusal, and a guessed
+    # branch would fire the chain on the wrong scope.
     refs = _merge._pr_base_head_refs(pr_number, cwd)
     if covered and refs is None:
         return UNANSWERED, "", "", "pr head branch fetch failed", None
     chain = attestation_chain(
         cwd, head_branch=refs[1] if refs else "", head=head
     )
-    disposition_text, disposition_note, disposition_named, disposition_hard = (
-        disposition_refusal(chain, cov, cwd)
+    disposition_text, disposition_note, disposition_named = disposition_refusal(
+        chain, cov, cwd
     )
+    # The standing operator waiver never clears a CONFIRMED correctness or
+    # security finding, so the overlay's input carries the hard subset.
+    waiver_hard = _hard_keys(chain, disposition_named)
     # The budget counts BOTH evidence axes: a GitHub-App reviewer's rounds
     # leave no attestation row, so the chain alone reads zero on exactly the
     # lane that spins. The reviews read is paid only where it can change the
-    # answer (uncovered, or findings to file/decline); a healthy covered PR
+    # answer (uncovered, or findings still open); a healthy covered PR
     # with no open findings keeps the events-only count and skips the
     # paginated read. A read failure keeps the events-only answer.
     if disposition_named or disposition_text or not covered:
@@ -677,126 +669,31 @@ def _ordinary_verdict(
     # as one it measured.
     unread_note = f"reviews read unavailable: {reviews_unread}" if reviews_unread else ""
 
-    # Locked Decision 4's fourth state, before any covered/uncovered branch:
-    # the all-fails loop shape never produces a covered row - that is exactly
-    # why it spun - so the budget check must not live inside the covered arm.
-    # Fires only when a HARD finding (CONFIRMED correctness or security) is
-    # non-terminal AND the rounds are spent; either alone keeps its ordinary
-    # verdict.
-    filed_note = ""
-    cap_filed = False
-    if cap.impossible:
-        return (
-            IMPOSSIBLE,
-            _impossible_refusal(rounds, max_rounds, ", ".join(disposition_hard)),
-            "",
-            "",
-            (head, disposition_hard),
-        )
-    if disposition_named and not disposition_hard and rounds >= max_rounds:
-        # The `not disposition_hard` is load-bearing: reaching the cap with a
-        # hard finding while `cap.impossible` did not fire means the events
-        # axis still has rounds while the bot axis spent the budget, and the
-        # ordinary disposition refusal below is then the answer - a local
-        # attestation carrying a `fixed` disposition still clears it. A hard
-        # finding is never filed away by the cap.
-        # The operator's ruling on the cap: the PR merges with its remaining
-        # findings FILED as nodes, never dropped. The class gate is what makes
-        # this safe - nothing here is a confirmed correctness or security
-        # defect. A finding the gate cannot file is one it must not wave
-        # through, so a filing failure refuses.
-        try:
-            filed = file_findings_at_cap(disposition_named, pr_number, cwd)
-        except Exception as exc:  # noqa: BLE001 - never drop a finding silently
-            return (
-                REFUSED,
-                f"round cap reached ({rounds}/{max_rounds}) but filing the "
-                f"remaining finding(s) failed, so nothing was waived: {exc}",
-                "",
-                recompute_note,
-                (head, disposition_hard),
-            )
-        filed_note = (
-            f"{len(filed)} finding(s) filed at the round cap ({rounds}/{max_rounds}): "
-            + ", ".join(f"{k} -> {n}" for k, n in zip(disposition_named, filed))
-        )
-        disposition_text = ""
-        cap_filed = True
-
-    if covered and corroboration:
-        return REFUSED, corroboration, "", "; ".join(
-            x for x in (recompute_note, unread_note, filed_note) if x
-        ), (head, disposition_hard)
-    if covered:
-        if disposition_text:
-            # Rounds remain (the exhausted case returned above), so the
-            # refusal teaches the fix-delta remedy AND shows the budget the
-            # next round spends - AC7-HP's "how many rounds remain".
-            remaining = _rounds_remaining_note(rounds, max_rounds)
-            note = "; ".join(x for x in (recompute_note, unread_note, remaining) if x)
-            return REFUSED, disposition_text, "", note, (head, disposition_hard)
-        notes = [n for n in (recompute_note, unread_note, disposition_note, filed_note) if n]
-        return COVERED, "", (cov.get("head_sha") or "") if cov else "", "; ".join(notes), None
-    # x-aecc: a fail attestation answers this head, so an uncovered row in
-    # that shape is uncovered BECAUSE of the non-terminal findings. Name them
-    # (the disposition sentence carries each finding key) instead of falling
-    # through to the generic "0 reviewed" text - that text taught the loop to
-    # re-review, which is the loop this branch exists to end. Two limits
-    # (review finding 3): it never fires after the cap arm FILED the findings
-    # (that path must keep its own refusal and note, not return an emptied
-    # sentence), and it leaves the specialized conjuncts - no_local_pass,
-    # reviewer_refused, stale_head - to their own sized remedies below.
-    if (
-        failed == "uncovered"
-        and not cap_filed
-        and disposition_named
-        and any(e.get("verdict") != "pass" for e in chain)
-    ):
-        remaining = _rounds_remaining_note(rounds, max_rounds)
-        note = "; ".join(x for x in (recompute_note, unread_note, remaining) if x)
-        return REFUSED, disposition_text, "", note, (head, disposition_hard)
-
-    # The spent budget DISCHARGES the review obligation. It does not fail it.
-    #
-    # This arm used to refuse, and that was the inversion at the heart of the
-    # runaway-review problem. `config.review.max_rounds = 2` has to mean "this
-    # PR gets two rounds, and then review is DONE" - a budget you spend. It
-    # read as "after two rounds you are permanently unmergeable" instead,
-    # which is a guard nothing can pass: every remedy that could clear it
-    # names a review verb, and running one spends a round that is already
-    # spent. Measured across 25 recent merged PRs, seven blew past the cap and
-    # four reached double digits (12, 11, 10, 8 rounds) precisely because the
-    # cap never ended a review phase - it only refused afterward.
-    #
-    # The operator's ruling is already written twenty lines above: "the PR
-    # merges with its remaining findings FILED as nodes, never dropped". That
-    # ruling was only ever reachable through the `covered` branch, so it fired
-    # for a PR that had findings and never for a PR that had none. Having
-    # findings made a PR MORE mergeable than having none. This is where the
-    # ruling actually lands.
-    #
-    # What still blocks: a CONFIRMED correctness or security finding returns
-    # IMPOSSIBLE above and never reaches here, and a filing failure refuses
-    # there too. Those are the real safety, not this arm. Requiring an
-    # attestation past the cap buys no trust the budget does not: in this
-    # fleet the attestation is emitted by the same worker that wrote the code,
-    # so both axes are self-certified. External review and human approval are
-    # the trust boundary, and neither is weakened here.
-    #
+    # The configured round count is the whole review gate. Reaching the cap
+    # DISCHARGES the review obligation - it does not fail it, and no finding
+    # class, attestation origin, or posture overrides the budget. `2` means
+    # two rounds and then review is DONE: the PR merges on green CI, and
+    # whatever is still open stays in the PR conversation. Nothing below this
+    # arm runs at the cap.
+    # `>=`, not `>`. max_rounds is a MAXIMUM: 2 means two rounds, and the
+    # second one is the last.
     # The waiver is NAMED in the note, never silent, so a merge that happened
     # on a spent budget is legible afterward.
-    # `>=`, not `>`. max_rounds is a MAXIMUM: 2 means two rounds, and the
-    # second one is the last. The old `>` let a third round run before the
-    # budget tripped, so `max_rounds = 2` silently meant three reviews -
-    # a reading nobody would arrive at from the key's own name.
-    if rounds >= max_rounds:
-        # The waiver names what it waived. Past the cap this arm preempts the
-        # sized coverage refusals below - the required-reviewer attestation
-        # conjunct included - and that is deliberate: a conjunct that still
-        # refuses past the cap is unsatisfiable by construction, because the
-        # only way to satisfy it is a round the budget will not fund. Losing
-        # the FACT would be wrong though, so it rides the receipt as a note
-        # instead of a block.
+    # The row's own budget bit discharges too (d-0fa92eb9): the producer is
+    # the one counter, and a refusal past its spent budget would be
+    # unsatisfiable by construction. Its rounds_used lifts the printed
+    # count when the re-derivation landed under the cap.
+    row_spent = isinstance(cov, dict) and cov.get("rounds_exhausted") is True
+    if isinstance(cov, dict) and row_spent:
+        rounds = max(rounds, _merge._safe_int(cov.get("rounds_used")))
+    if rounds >= max_rounds or row_spent:
+        # The waiver names what it waived. Past the cap this arm preempts
+        # every sized refusal below - the posture and reviewer conjuncts
+        # included, and a CONFIRMED correctness or security finding with
+        # them: a conjunct that still refuses past the cap is unsatisfiable
+        # by construction, because the only way to satisfy it is a round the
+        # budget will not fund. Losing the FACT would be wrong though, so it
+        # rides the receipt as a note instead of a block.
         # `failed` is covered_conjuncts' own name for the conjunct that
         # broke: uncovered / no_local_pass / stale_head / reviewer_refused.
         # A configured code-review requirement is named ALONGSIDE it, never
@@ -813,30 +710,61 @@ def _ordinary_verdict(
         )
         waiver = (
             f"review budget discharged ({rounds}/{max_rounds} rounds): the "
-            "review phase is complete and the remainder is filed; the "
-            "operator lever is config.review.max_rounds"
+            "review phase is complete; open findings stay in the PR "
+            "conversation and the PR merges on green CI; the operator lever "
+            "is config.review.max_rounds"
             + (f" (waived at the cap: {unsatisfied})" if unsatisfied else "")
         )
         return (
             COVERED,
             "",
             head or "",
-            "; ".join(n for n in (recompute_note, unread_note, filed_note, waiver) if n),
+            "; ".join(n for n in (recompute_note, unread_note, waiver) if n),
             None,
         )
-    if failed == "uncovered" and corroboration:
-        # The policy-rewritten shape (0 counted, self-attestation preserved)
-        # fails the count conjunct, but the truer refusal names the policy and
-        # both remedies - "re-run your own review" can never satisfy it, and
-        # a worker told that will retry into budget. The other failures
-        # (stale head, missing local pass, reviewer refusal) keep their own
-        # refusals: those name a remedy that can actually work, and the
-        # corroboration question may dissolve once the head is re-attested.
-        # recompute_note plus the filed node ids when the cap arm fired on the
-        # way here (same receipt contract as the returns above and below).
-        return REFUSED, corroboration, "", "; ".join(
-            x for x in (recompute_note, unread_note, filed_note) if x
-        ), (head, disposition_hard)
+    # The Rust posture verdict, read below the cap only: generic coverage
+    # (any counted review) is not the rung the config demands, and a refusal
+    # here names the exact gap per component rather than a bare count
+    # (AC7-ERR). Scope: this tightens SATISFIED coverage only - at the cap
+    # the discharge above governs, because a budget ruling waives rounds
+    # while a posture names what satisfied review must already contain.
+    if covered and posture:
+        return REFUSED, posture, "", "; ".join(
+            x for x in (recompute_note, unread_note) if x
+        ), (head, waiver_hard)
+    if covered:
+        if disposition_text:
+            # Rounds remain (the discharge above returned otherwise), so the
+            # refusal teaches the fix-delta remedy AND shows the budget the
+            # next round spends - AC7-HP's "how many rounds remain".
+            remaining = _rounds_remaining_note(rounds, max_rounds)
+            note = "; ".join(x for x in (recompute_note, unread_note, remaining) if x)
+            return REFUSED, disposition_text, "", note, (head, waiver_hard)
+        notes = [
+            n
+            for n in (
+                recompute_note,
+                unread_note,
+                disposition_note,
+            )
+            if n
+        ]
+        return COVERED, "", (cov.get("head_sha") or "") if cov else "", "; ".join(notes), None
+    # a fail attestation answers this head, so an uncovered row in
+    # that shape is uncovered BECAUSE of the non-terminal findings. Name them
+    # (the disposition sentence carries each finding key) instead of falling
+    # through to the generic "0 reviewed" text - that text taught the loop to
+    # re-review, which is the loop this branch exists to end. It leaves the
+    # specialized conjuncts - no_local_pass, reviewer_refused, stale_head -
+    # to their own sized remedies below.
+    if (
+        failed == "uncovered"
+        and disposition_named
+        and any(e.get("verdict") != "pass" for e in chain)
+    ):
+        remaining = _rounds_remaining_note(rounds, max_rounds)
+        note = "; ".join(x for x in (recompute_note, unread_note, remaining) if x)
+        return REFUSED, disposition_text, "", note, (head, waiver_hard)
 
     # Same branch order run_merge has always used: the attestation refusal is
     # checked first, so a config requiring code-review with no row names the
@@ -896,12 +824,9 @@ def _ordinary_verdict(
         # The label is present but stayed shut; naming that first beats a
         # generic uncovered refusal the operator cannot act on.
         refusal = f"{override_refusal}; {refusal}"
-    # The cap arm may already have FILED findings on the way here (the row
-    # stayed uncovered on another conjunct): that side effect must ride the
-    # receipt, never vanish behind the refusal it did not soften.
     return REFUSED, refusal, "", "; ".join(
-        x for x in (recompute_note, unread_note, filed_note) if x
-    ), (head, disposition_hard)
+        x for x in (recompute_note, unread_note) if x
+    ), (head, waiver_hard)
 
 
 def _has_stale_verdict(cov, name: Optional[str] = None) -> bool:
@@ -963,7 +888,7 @@ def coverage_verdict(
     pr_number: int, cwd: str, *, recompute: bool
 ) -> Tuple[int, str, str, str]:
     """Return ``(state, refusal, covered_head, note)``: the ordinary verdict
-    with the operator-law overlay applied to a refused or impossible head.
+    with the operator-law overlay applied to a refused head.
 
     ``refusal`` is the guard's own sentence (the one ``_coverage_refused_reason``
     builds) and is empty unless ``state`` is REFUSED. ``covered_head`` is the
@@ -973,17 +898,18 @@ def coverage_verdict(
     OVERRIDE_NOTE_PREFIX, so a merge that landed on operator law and one that
     was reviewed cannot read the same.
 
-    The overlay is consulted ONLY where ordinary coverage refused or reported
-    impossible: an independently covered PR never pays the lookup and never
-    prints a waiver receipt. A waiver lookup that answers UNKNOWN authority
-    (conflict, damaged rows, a dead probe) is UNANSWERED with the probe named
-    - never a refusal built on a store that could not answer, and never
-    permission either.
+    The overlay is consulted ONLY where ordinary coverage refused: an
+    independently covered PR never pays the lookup and never prints a waiver
+    receipt, and a head discharged at the configured cap is covered, not
+    waived. A waiver lookup that answers UNKNOWN authority (conflict,
+    damaged rows, a dead probe) is UNANSWERED with the probe named - never a
+    refusal built on a store that could not answer, and never permission
+    either.
     """
     state, refusal, covered_head, note, waiver_inputs = _ordinary_verdict(
         pr_number, cwd, recompute=recompute
     )
-    if state not in (REFUSED, IMPOSSIBLE) or waiver_inputs is None:
+    if state != REFUSED or waiver_inputs is None:
         return state, refusal, covered_head, note
     head, hard = waiver_inputs
     waived, waiver_note, probe_note = operator_waiver_verdict(
@@ -1058,7 +984,7 @@ def attestation_chain(
     append-only log written by several processes), never fatal.
     """
     try:
-        from fno.pr._reviews import _coverage_logs
+        from fno.pr._reviews import _coverage_logs, journal_lines
 
         project_path, global_path, slug = _coverage_logs(cwd, None)
     except Exception:  # noqa: BLE001 - an unreadable log never tightens a gate
@@ -1076,50 +1002,55 @@ def attestation_chain(
         if path is None:
             continue
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                for raw in fh:
-                    if '"review_attestation"' not in raw:
+            for raw in journal_lines(path, ("review_attestation",)):
+                if '"review_attestation"' not in raw:
+                    continue
+                try:
+                    event = json.loads(raw)
+                except ValueError:
+                    continue
+                data = event.get("data")
+                if not isinstance(data, dict):
+                    continue
+                if scoped:
+                    if data.get("repo") != slug:
                         continue
-                    try:
-                        event = json.loads(raw)
-                    except ValueError:
-                        continue
-                    data = event.get("data")
-                    if not isinstance(data, dict):
-                        continue
-                    if scoped:
-                        if data.get("repo") != slug:
-                            continue
-                    # Dedup on the producer's invocation_id, falling back to
-                    # the whole payload only when the row predates the field.
-                    # The payload key is wrong across stores: the global
-                    # mirror stamps `repo` onto its copy and the project row
-                    # carries none, so one attestation produced two payload
-                    # keys and the chain counted every mirrored round twice -
-                    # which the no-refund budget turns into "one review reads
-                    # 2/2". The invocation_id is minted once by the producer
-                    # and lands identically on both rows.
-                    invocation_id = data.get("invocation_id")
-                    if isinstance(invocation_id, str) and invocation_id:
-                        key = f"invocation:{invocation_id}"
-                    else:
-                        key = json.dumps(data, sort_keys=True)
-                    if key in seen:
-                        continue
-                    if _in_scope(data):
-                        seen.add(key)
-                        chain.append(
-                            {
-                                "ts": event.get("ts", ""),
-                                "head_sha": data.get("head_sha", ""),
-                                "reviewed_base_sha": data.get("reviewed_base_sha", ""),
-                                "verdict": data.get("verdict", ""),
-                                "review_round": data.get("review_round"),
-                                "findings": data.get("findings"),
-                                "findings_truncated": data.get("findings_truncated") is True,
-                                "dispositions": data.get("dispositions"),
-                            }
-                        )
+                # Dedup the MIRROR, not the branch. invocation_id is
+                # minted once per branch review-hold (emit-attestation
+                # resolves it from the hold for the current branch), so
+                # every round on a branch reuses it and it separates
+                # nothing. The ts cannot separate either: most producers
+                # stamp it at second precision (40838 of 43711 events
+                # measured), so two rounds inside one second are real.
+                # What separates the mirror's copy from a distinct
+                # attestation is the payload: the copy differs from its
+                # original in exactly one key, `repo`, while two distinct
+                # rounds differ in verdict, findings, dispositions or
+                # head. One key for every row shape, no invocation-era
+                # fallback.
+                key = "{}|{}".format(
+                    event.get("ts", ""),
+                    json.dumps(
+                        {k: v for k, v in data.items() if k != "repo"},
+                        sort_keys=True,
+                    ),
+                )
+                if key in seen:
+                    continue
+                if _in_scope(data):
+                    seen.add(key)
+                    chain.append(
+                        {
+                            "ts": event.get("ts", ""),
+                            "head_sha": data.get("head_sha", ""),
+                            "reviewed_base_sha": data.get("reviewed_base_sha", ""),
+                            "verdict": data.get("verdict", ""),
+                            "review_round": data.get("review_round"),
+                            "findings": data.get("findings"),
+                            "findings_truncated": data.get("findings_truncated") is True,
+                            "dispositions": data.get("dispositions"),
+                        }
+                    )
         except OSError:
             continue
     chain.sort(key=lambda e: e["ts"])
@@ -1143,17 +1074,18 @@ def _resolved_categories(cwd: str) -> frozenset[str]:
         return GATE_NONBLOCKING_CATEGORIES
 
 
-#: The two categories the round cap can never file away. The class gate is
-#: what makes file-the-remainder safe: noise can be filed, a CONFIRMED
-#: correctness or security defect cannot. Mirrors ``HARD_CATEGORIES`` in the
-#: Rust gate.
+#: The two categories the standing operator waiver never clears. The cap
+#: itself never reads severity: at the configured rounds the budget
+#: discharges every open finding, this class included. Mirrors
+#: ``HARD_CATEGORIES`` in the Rust gate.
 HARD_CATEGORIES = frozenset({"correctness", "security"})
 
 
 def _hard_finding(primitive: Any) -> bool:
-    """A CONFIRMED correctness or security finding: the one shape the round
-    cap keeps IMPOSSIBLE for. Read from the same primitive fields the gate
-    re-derives blockingness from, never the producer's count."""
+    """A CONFIRMED correctness or security finding: the one shape the
+    standing operator waiver refuses to waive below the cap. Read from the
+    same primitive fields the gate re-derives blockingness from, never the
+    producer's count."""
     if not isinstance(primitive, dict):
         return True
     verdict = primitive.get("verdict")
@@ -1165,33 +1097,33 @@ def _hard_finding(primitive: Any) -> bool:
 
 def disposition_refusal(
     chain: list[dict], cov: Optional[dict], cwd: str = "."
-) -> Tuple[str, str, list, list]:
+) -> Tuple[str, str, list]:
     """The refusal when a blocking finding in the chain is non-terminal.
 
-    Returns ``(refusal, note, named, hard)``: the refusal sentence (empty
-    when everything terminal), the by-class note for a covered answer, the
-    sorted finding keys that are non-terminal or uncorroborated, and the
-    subset of those that are HARD (a CONFIRMED correctness or security
-    finding, or the truncated remainder). At the round cap the hard subset
-    is what keeps IMPOSSIBLE; the rest are filed as nodes and the PR merges.
-    Neither list carries the fix-delta remedy the REFUSED sentence teaches -
-    that remedy is exactly what an exhausted loop must stop being told.
+    Returns ``(refusal, note, named)``: the refusal sentence (empty when
+    everything terminal), the by-class note for a covered answer, and the
+    sorted finding keys that are non-terminal. Origin never gates: a
+    declined finding with a reason is terminal whoever declined it, and a
+    fixed disposition is terminal once a later round reviewed the fix delta
+    - the ``cov`` parameter is kept for call compatibility and is no longer
+    read. The gate's only remaining severity read is the standing operator
+    waiver's hard subset, which ``_hard_keys`` derives from these keys.
 
-    A finding is terminal when it is fixed (and the chain moved past the round
-    that raised it), non-blocking by the gate's own re-derivation, declined
-    WITH corroboration the author cannot mint alone, or waived by the
-    override label (which answers COVERED before this runs). A declined
-    blocking finding on the author's own signature alone is NOT terminal:
-    that is the whole difference between this gate and the exploit.
+    A finding is terminal when it is fixed (a later round reviewed a head
+    the finding's last raise did not sit on), non-blocking by the gate's own
+    re-derivation, or declined with a reason. Below the cap an open finding
+    refuses whatever its class; at the configured rounds the budget
+    discharges every open finding before this answer is read.
     """
     if not chain:
-        return "", "", [], []
+        return "", "", []
     allow = _resolved_categories(cwd)
     # Latest disposition per finding_key across the chain, plus the round
-    # each blocking finding was raised in (a fixed finding is terminal only
-    # when a LATER round reviewed the fix delta).
+    # and head each blocking finding was last raised in (a fixed finding is
+    # terminal only when a later round reviewed the fix delta).
     dispositions: dict[str, dict] = {}
     raised_in: dict[str, int] = {}
+    raised_head: dict[str, str] = {}
     findings_by_key: dict[str, dict] = {}
     truncated = False
     last_round = len(chain) - 1
@@ -1203,6 +1135,7 @@ def disposition_refusal(
                 key = primitive["finding_key"]
                 findings_by_key[key] = primitive
                 raised_in[key] = index
+                raised_head[key] = event["head_sha"]
         for entry in event["dispositions"] or []:
             if isinstance(entry, dict) and entry.get("finding_key"):
                 dispositions[entry["finding_key"]] = entry
@@ -1214,21 +1147,9 @@ def disposition_refusal(
             "than trust a count it cannot re-derive",
             "",
             ["(truncated remainder)"],
-            ["(truncated remainder)"],
         )
-
-    # Corroboration for declines: the coverage row's existing predicate, read
-    # independent of config.review.require_corroboration (Locked Decision 2 -
-    # a disposition pass can be gamed by declining, a clean review cannot).
-    corroborated = not (
-        cov is not None
-        and rests_on_self_attestation_alone(
-            cov, _github_approval_satisfies(cwd)
-        )
-    )
 
     nonterminal: list[str] = []
-    uncorroborated: list[str] = []
     for key, primitive in findings_by_key.items():
         if not _gate_finding_blocks(primitive, allow):
             continue  # non-blocking by class: no action needed to clear the gate
@@ -1236,47 +1157,36 @@ def disposition_refusal(
         if disposition is None:
             nonterminal.append(key)
         elif disposition.get("disposition") == "fixed":
-            # Terminal when the chain moved past the round that raised it:
-            # a later attestation reviewed the fix delta. Exact range
-            # coverage is the tiling conjunct the covered row carries.
-            if raised_in.get(key, last_round) >= last_round:
+            # Terminal when a later round reviewed the fix delta. The delta
+            # witness reads the rows AFTER the last raise, not the
+            # disposition entry: the disposition rides one event, so a
+            # last-wins copy of its head pinned the gate to a stale
+            # same-head dispose forever when the real fix's round
+            # re-emitted nothing.
+            later_heads = {
+                row["head_sha"]
+                for row in chain[raised_in.get(key, last_round) + 1 :]
+            }
+            if not (later_heads - {raised_head.get(key, "")}):
                 nonterminal.append(key)
         elif disposition.get("disposition") == "declined":
             reason = disposition.get("reason")
             if not isinstance(reason, str) or not reason.strip():
                 nonterminal.append(key)
-            elif not corroborated:
-                uncorroborated.append(key)
         # disposition nonblocking on a gate-blocking finding: the producer
         # claimed harmless where the gate re-derives blocking. The gate wins
         # (Locked Decision 6); it stays non-terminal.
         else:
             nonterminal.append(key)
 
-    hard = sorted(
-        key
-        for key in (*nonterminal, *uncorroborated)
-        if _hard_finding(findings_by_key.get(key))
-    )
     if nonterminal:
         keys = sorted(nonterminal)
         return (
             f"blocking finding(s) not terminal: {', '.join(keys)}; a blocking "
             "finding is cleared by fixing it and letting the next review cover "
-            "the fix delta, nothing else clears it on your own signature",
+            "the fix delta",
             "",
             keys,
-            hard,
-        )
-    if uncorroborated:
-        keys = sorted(uncorroborated)
-        return (
-            f"declined blocking finding(s) {', '.join(keys)} rest on the author's "
-            "own signature alone; corroboration satisfies it two ways: a second "
-            "session's head-pinned attestation, or a non-author GitHub approval",
-            "",
-            keys,
-            hard,
         )
     by_class = [
         key
@@ -1288,32 +1198,21 @@ def disposition_refusal(
         if by_class
         else ""
     )
-    return "", note, [], []
+    return "", note, []
 
 
-# --- The round budget and the fourth verdict --------------------------------
+# --- The round budget --------------------------------------------------------
 #
-# Locked Decision 4's termination clause: a review loop that declines its
-# blocking findings must terminate in a state whose remedy is NOT another
-# round. The budget is config.review.max_rounds (default 2, at least 1); the
-# round count is re-derived here from the same chain the disposition gate
-# reads, never trusted off the producer's row (Locked Decision 6).
+# The budget is config.review.max_rounds (default 2, at least 1); the round
+# count is re-derived here from the same chain the disposition gate reads,
+# never trusted off the producer's row (Locked Decision 6). Reaching the
+# budget is the gate's happy ending: the review obligation is satisfied and
+# the PR merges on green CI.
 
 #: The shipped default when config is unreadable or the key absent. Matches
 #: the Rust parse's own ``unwrap_or(2).max(1)`` so the two gates cannot
 #: disagree on the same unreadable config.
 DEFAULT_MAX_ROUNDS = 2
-
-#: The AC7-MARKER literals: the refusal must carry the word ``impossible``
-#: and name every truthful exit. Never "run the review verb at HEAD" - that is
-#: the instruction that caused the loop this state exists to end. Three exits,
-#: because the first two need a second GitHub account and the third is the one
-#: a single-account operator can actually run.
-IMPOSSIBLE_REMEDIES = (
-    "a non-author GitHub approval on the PR, a non-author coverage-override "
-    'label, or the attended `fno do pr coverage-waive <pr> --reason "..."` '
-    "command (the operator exit)"
-)
 
 
 def rounds_since_last_pass(
@@ -1322,7 +1221,7 @@ def rounds_since_last_pass(
 ) -> int:
     """The PR's review-round total, oldest-first.
 
-    The operator's ruling (x-2219, 2026-08-27) made this a PER-PR TOTAL:
+    The operator's ruling (2026-08-27) made this a PER-PR TOTAL:
     ``max_rounds`` counts rounds across the whole life of the PR, and a
     ``verdict: pass`` refunds nothing - it is one round like any verdict,
     and its coverage role lives in the coverage classify, never here. The
@@ -1388,23 +1287,18 @@ def rounds_since_last_pass(
 class CapVerdict(NamedTuple):
     """The round-cap verdict as data, never a refusal string.
 
-    One computation shared by the merge gate (``_ordinary_verdict``), the
-    status surface's ``ready`` conjunct and the attestation producer's
-    disposition obligation, so no caller restates the cap. A caller that
-    needs the sentence builds it from these fields; the fields are the
-    answer of record.
+    One computation shared by the merge gate (``_ordinary_verdict``) and the
+    attestation producer's disposition obligation, so no caller restates the
+    cap. A caller that needs the sentence builds it from these fields; the
+    fields are the answer of record.
     """
 
-    #: Rounds spent AND a HARD finding still non-terminal on the events
-    #: axis, the only axis whose rounds can carry a disposition.
-    impossible: bool
     #: max(events, reviews) when a reviews payload was supplied, else the
     #: events axis alone.
     rounds_used: int
     max_rounds: int
-    #: The CONFIRMED correctness/security finding keys keeping IMPOSSIBLE.
-    hard_keys: list
-    #: Every non-terminal or uncorroborated blocking finding key.
+    #: Every non-terminal blocking finding key. At the cap this is context,
+    #: not a blocker: the budget discharges it.
     nonterminal_keys: list
 
 
@@ -1439,23 +1333,16 @@ def _cap_on_chain(
     cwd: str,
     reviews: Optional[list[dict]] = None,
 ) -> CapVerdict:
-    """The cap policy over one chain: the ONE site the two axes split.
+    """The cap policy over one chain.
 
     ``rounds_used`` reports ``max(events, reviews)`` - a bot round IS a
-    round and the ordinary budget keeps counting it. The ``impossible``
-    conjunct reads the EVENTS axis alone: only an attestation can carry the
-    ``fixed`` disposition that clears a hard finding, so a chain with local
-    rounds left is never impossible, whatever the bot axis spent. Reading
-    the conjunct off the shared budget let bot rounds manufacture a state
-    whose named remedies are all operator levers while the unspent capacity
-    was local.
+    round and the budget keeps counting it. Reaching ``max_rounds`` on this
+    number is the review phase's finish line, not a refusal.
     """
-    _text, _note, named, hard = disposition_refusal(chain, cov, cwd)
+    _text, _note, named = disposition_refusal(chain, cov, cwd)
     max_rounds = resolved_max_rounds(cwd)
     rounds = rounds_since_last_pass(chain, reviews=reviews)
-    events_rounds = rounds_since_last_pass(chain)
-    impossible = bool(hard) and events_rounds >= max_rounds
-    return CapVerdict(impossible, rounds, max_rounds, hard, named)
+    return CapVerdict(rounds, max_rounds, named)
 
 
 def _pr_reviews(pr_number: int, cwd: str) -> Tuple[Optional[list[dict]], str]:
@@ -1495,7 +1382,7 @@ def _pr_reviews(pr_number: int, cwd: str) -> Tuple[Optional[list[dict]], str]:
             # The reason names its own subject. This used to be the fixed
             # sentence "repo slug unreadable", which is wrong whenever the slug
             # is the readable thing and the CWD is what does not exist - the
-            # exact case a caller hits by passing `owner/repo` here (x-51f7).
+            # exact case a caller hits by passing `owner/repo` here.
             return None, slug_reason or "repo slug unreadable"
         # The plain bounded runner, NOT _rest_runner. _rest_runner stamps
         # _quota.delegate_environment(), which strips the quota proxy from
@@ -1547,103 +1434,11 @@ def resolved_max_rounds(cwd: str) -> int:
         return DEFAULT_MAX_ROUNDS
 
 
-def file_findings_at_cap(keys: list[str], pr_number: int, cwd: str) -> list[str]:
-    """File each remaining finding as a backlog node at the round cap.
-
-    The operator's ruling on the cap: the PR merges with its remaining
-    findings FILED, never dropped. Idempotent on the finding key (a re-run of
-    the gate, or the merge verb after a status read, must not mint twice):
-    an existing node whose title carries the key is reused. Returns the node
-    ids in key order. Raises on any failure - a finding the gate cannot file
-    is a finding it must not wave through, so the caller refuses.
-    """
-    import re
-
-    from fno.pr._proc import run
-
-    ids: list[str] = []
-    for key in keys:
-        title = f"review finding filed at round cap: {key}"
-        found = run(["fno", "backlog", "find", title], cwd=cwd)
-        existing = None
-        if found.ok:
-            for line in found.stdout.splitlines():
-                if key in line:
-                    match = re.search(r"\b[a-z]+-[0-9a-f]{4,}\b", line)
-                    if match:
-                        existing = match.group(0)
-                        break
-        if existing:
-            ids.append(existing)
-            continue
-        made = run(
-            [
-                "fno",
-                "backlog",
-                "idea",
-                title,
-                "--type",
-                "bug",
-                # `fno backlog idea` refuses a non-interactive filing with no
-                # --difficulty, and this call has no tty. Without it every
-                # filing raised, so the cap's merge exit - file the remainder,
-                # then merge - was unreachable on every PR that reached the
-                # cap. `low` is correct by construction: a CONFIRMED
-                # correctness or security finding returns IMPOSSIBLE in
-                # `coverage_verdict` before the filing runs, so nothing hard
-                # ever reaches this line.
-                "--difficulty",
-                "low",
-                # --separate is load-bearing BECAUSE of --difficulty. The
-                # pre-mint fold gate keys on difficulty being set, and with a
-                # fold candidate present and no tty it prints the offer and
-                # exits 0 having minted NOTHING. Every finding filed at the cap
-                # shares a title prefix, so the second one on a PR is always a
-                # fold candidate for the first. Without this the caller reads
-                # ok, scrapes an unrelated id out of the printed wave command,
-                # reports the finding as filed, and merges over a finding that
-                # was silently dropped.
-                "--separate",
-                "--details",
-                (
-                    f"Filed by the review-coverage gate at the round cap on PR "
-                    f"{pr_number}. The finding was still non-terminal when the "
-                    "review budget was spent; it was not CONFIRMED correctness or "
-                    "security, so the PR merged and the finding lands here rather "
-                    "than being dropped."
-                ),
-            ],
-            cwd=cwd,
-        )
-        if not made.ok:
-            raise RuntimeError(
-                f"filing {key} failed: {(made.stderr or made.stdout).strip()}"
-            )
-        match = re.search(r"\b[a-z]+-[0-9a-f]{4,}\b", made.stdout)
-        if not match:
-            raise RuntimeError(f"filing {key} returned no node id: {made.stdout.strip()}")
-        ids.append(match.group(0))
-    return ids
-
-
-def _impossible_refusal(
-    rounds: int, max_rounds: int, disposition_refusal_text: str
-) -> str:
-    """The IMPOSSIBLE sentence: rounds spent, findings non-terminal, both
-    remedies, and no instruction that asks for another review."""
-    return (
-        f"review coverage is impossible to satisfy by further review: {rounds} "
-        f"review rounds used (max {max_rounds}) with blocking finding(s) still "
-        f"non-terminal ({disposition_refusal_text}); this cannot be cleared by "
-        f"re-reviewing - the acts that clear it are {IMPOSSIBLE_REMEDIES}"
-    )
-
-
 def _rounds_remaining_note(rounds: int, max_rounds: int) -> str:
     """The REFUSED-side note AC7-HP demands: the budget a worker can see
-    before the next round reports impossible. Zero remaining is still worth
-    saying - the next round is the one that trips, and a worker who cannot
-    see the budget cannot choose to stop."""
+    before the cap trips. Zero remaining is still worth saying - the next
+    round is the one that spends the budget, and a worker who cannot see the
+    budget cannot choose to stop."""
     # One less than the raw difference: at rounds = max_rounds - 1 the NEXT
     # round is the last the budget funds, so zero remain after it.
     remaining = max_rounds - rounds - 1
@@ -1655,7 +1450,7 @@ def _rounds_remaining_note(rounds: int, max_rounds: int) -> str:
     plural = "" if remaining == 1 else "s"
     return (
         f"{rounds}/{max_rounds} review rounds used; {remaining} round{plural} "
-        "remain before the gate reports impossible"
+        f"remain before the cap discharges the review phase"
     )
 
 
@@ -1664,18 +1459,20 @@ def run_coverage_check(
 ) -> int:
     """The verb body: print the refusal, return the state as an exit code.
 
-    Exit 0 covered, 3 refused (the guard's sentence on stderr), 4 unanswered
-    (the note naming the dead probe), 5 impossible (rounds spent with
-    blocking findings non-terminal; the sentence names the two remedies, on
-    stderr like every refusal). Callers that cannot import ``fno`` - a
+    Exit 0 covered (reviewed, discharged at the configured cap, waived, or
+    no lane), 3 refused (the guard's sentence on stderr), 4 unanswered (the
+    note naming the dead probe). Callers that cannot import ``fno`` - a
     stdlib-only hook - read the first stderr line and the exit code.
     """
     cwd = cwd or os.getcwd()
     state, refusal, _covered_head, note = coverage_verdict(
         pr_number, cwd, recompute=recompute
     )
-    if state in (REFUSED, IMPOSSIBLE):
+    if state == REFUSED:
         sys.stderr.write(f"{refusal_line(refusal, note)}\n")
     elif state == UNANSWERED:
         sys.stderr.write(f"{note}\n")
+    elif state == COVERED and note.startswith(OVERRIDE_NOTE_PREFIX):
+        # Waived-covered receipt: merge_gates.rs parses it off stdout, so a waived ready never reads as reviewed.
+        sys.stdout.write(f"{note}\n")
     return state

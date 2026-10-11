@@ -10,13 +10,17 @@ Read-only, so it emits nothing; the conftest per-module pin sets
 FNO_EVENTS_PATH to a per-test tmp journal regardless.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+
+_RECENT_CREATED = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
 
 
 def _node(node_id: str, **overrides) -> dict:
@@ -24,7 +28,7 @@ def _node(node_id: str, **overrides) -> dict:
         "id": node_id,
         "parent": None,
         "slug": node_id.replace("-", "") + "-slug",
-        "title": f"title {node_id}",
+        "title": "seed title",
         "type": "feature",
         "project": "fno",
         "cwd": None,
@@ -34,9 +38,12 @@ def _node(node_id: str, **overrides) -> dict:
         "pr_number": None,
         "pr_url": None,
         "status": "ready",
-        "created_at": "2026-01-01T00:00:00+00:00",
+        "plan_path": "plans/x.md",
+        "created_at": _RECENT_CREATED,
     }
     base.update(overrides)
+    if base["status"] == "done":
+        base.setdefault("completed_at", "2026-08-01T00:00:00+00:00")
     return base
 
 
@@ -55,7 +62,7 @@ def graph_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
 
     def _write(entries):
-        g.write_text(json.dumps({"entries": entries}) + "\n")
+        seed_graph(g, json.dumps({"entries": entries}) + "\n")
 
     return tmp_path, _write
 
@@ -67,9 +74,12 @@ def _invoke(args):
 
 
 def _write_events(cwd: Path, events: list[dict]) -> None:
+    from fno.events.store_client import emit_envelope
+
     p = cwd / ".fno" / "events.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("".join(json.dumps(e) + "\n" for e in events))
+    for i, e in enumerate(events):
+        emit_envelope({"ts": f"2026-01-01T00:00:{i:02d}Z", "source": "test", **e}, p)
 
 
 # -- table: id / project / status / PR (Success Definition 4) --
@@ -149,10 +159,10 @@ def test_deferred_child_shows_streak(graph_env):
         _node("x-c3", parent="x-epic", status="deferred", cwd=str(tmp_path)),
     ])
     _write_events(tmp_path, [
-        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "hook",
-         "data": {"node_id": "x-c3"}},
-        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "hook",
-         "data": {"node_id": "x-c3"}},
+        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "loop",
+         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 1, "exit_code": 1}},
+        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "loop",
+         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 2, "exit_code": 1}},
     ])
     r = _invoke(["backlog", "epic", "status", "x-epic"])
     assert r.exit_code == 0, r.output
@@ -170,10 +180,10 @@ def test_streak_dedups_mirrored_events(graph_env, monkeypatch):
         _node("x-c3", parent="x-epic", status="deferred", cwd=str(tmp_path)),
     ])
     fails = [
-        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "hook",
-         "data": {"node_id": "x-c3"}},
-        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "hook",
-         "data": {"node_id": "x-c3"}},
+        {"ts": "2026-07-18T09:00:00Z", "type": "node_failed", "source": "loop",
+         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 1, "exit_code": 1}},
+        {"ts": "2026-07-18T10:00:00Z", "type": "node_failed", "source": "loop",
+         "data": {"session_id": "s", "unit_id": "x-c3", "iteration": 2, "exit_code": 1}},
     ]
     # Same envelopes in the project journal AND the global mirror.
     _write_events(tmp_path, fails)
@@ -199,19 +209,28 @@ def test_inherited_json_flag_before_leaf(graph_env):
     assert payload["epic"] == "x-epic"
 
 
-def test_null_ts_event_does_not_crash(graph_env):
-    """An explicit ``{"ts": null}`` envelope must not crash the ts-sort."""
+def test_null_ts_event_does_not_crash(graph_env, monkeypatch):
+    """An explicit ``{"ts": null}`` envelope must not crash the ts-sort.
+
+    Legacy raw shape only: the store refuses a ts-less commit, so the native
+    reader goes offline and the seeded journal bytes are what the fold sees.
+    """
     tmp_path, write = graph_env
     write([
         _node("x-epic", type="epic"),
         _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
     ])
-    _write_events(tmp_path, [
+    # The store refuses a ts-less commit, so feed the fold directly: the
+    # tolerance under test lives in the ts-sort, not in any writer.
+    rows = [
         {"ts": None, "type": "advance_skipped", "source": "backlog",
          "data": {"reason": "walker-live", "node_id": "x-c2"}},
         {"ts": "2026-07-18T10:00:00Z", "type": "advance_failed", "source": "backlog",
          "data": {"error": "boom", "node_id": "x-c2"}},
-    ])
+    ]
+    monkeypatch.setattr(
+        "fno.events.store_client.query_rows", lambda target, types=None: rows
+    )
     r = _invoke(["backlog", "epic", "status", "x-epic"])
     assert r.exit_code == 0, r.output
     assert "boom" in r.output
@@ -271,12 +290,10 @@ def test_live_worker_shown(graph_env):
         _node("x-c2", parent="x-epic", status="ready", cwd=str(tmp_path)),
     ])
     from fno.claims.core import acquire_claim, release_claim
-    from fno.claims.io import claims_root_for
 
     key = "node:x-c2"
-    root = claims_root_for(key)
     holder = "target-session:abc123"
-    acquire_claim(key=key, holder=holder, pid=os.getpid(), root=root)
+    acquire_claim(key=key, holder=holder, pid=os.getpid())
     try:
         r = _invoke(["backlog", "epic", "status", "x-epic"])
         assert r.exit_code == 0, r.output
@@ -284,9 +301,9 @@ def test_live_worker_shown(graph_env):
         # a claimed ready child is working, not idle -> no receipt lookup for it
         assert "no receipt found" not in r.output
     finally:
-        # Claims live at the session-global root ($HOME redirect), which
-        # persists across tests - release so the claim never leaks forward.
-        release_claim(key, holder, root=root)
+        # The claim persists across tests (global store) - release so it
+        # never leaks forward.
+        release_claim(key, holder)
 
 
 # -- JSON shape --
@@ -383,7 +400,12 @@ def test_verify_merges_resolves_a_flagged_row_to_merged_unstamped(
         returncode = 0
         stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-08-25T00:00:00Z"})
 
-    monkeypatch.setattr(sp, "run", lambda *a, **k: _P())
+    real_run = sp.run
+
+    def run(argv, *args, **kwargs):
+        return _P() if argv[0] == "gh" else real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(sp, "run", run)
 
     r = _invoke(["backlog", "epic", "status", "x-epic", "--verify-merges"])
     assert r.exit_code == 0, r.output
@@ -404,10 +426,14 @@ def test_a_failed_probe_leaves_the_row_flagged(graph_env, monkeypatch):
         _node("x-c1", parent="x-epic", status="done", pr_number=1178, cwd=str(tmp_path)),
     ])
 
-    def _boom(*a, **k):
-        raise OSError("gh: command not found")
+    real_run = sp.run
 
-    monkeypatch.setattr(sp, "run", _boom)
+    def run(argv, *args, **kwargs):
+        if argv[0] == "gh":
+            raise OSError("gh: command not found")
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(sp, "run", run)
 
     r = _invoke(["backlog", "epic", "status", "x-epic", "--verify-merges"])
     assert r.exit_code == 0, r.output

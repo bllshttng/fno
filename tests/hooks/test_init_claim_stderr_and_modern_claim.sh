@@ -54,17 +54,33 @@ make_repo() {
   (cd "$_dir" && git init -q && mkdir -p .fno home/.fno) || fail "repo setup failed in $_dir"
   printf '# isolated\n' > "${_dir}/.fno/config.toml"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
+  # State-path stub: pins init's manifest location to the scenario space dir.
+  mkdir -p "${_dir}/bin" "${_dir}/space"
+  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod 755 "${_dir}/bin/fno-agents"
 }
 
 graph_node_id_of() {  # $1 = state file
   grep '^graph_node_id:' "$1" | sed 's/^graph_node_id:[[:space:]]*//' | tr -d '\r'
 }
 
-# Node claims land in the GLOBAL root ($HOME/.fno/claims/), url-encoded as
-# node%3A<id>.lock -- not the project .fno/claims/. Match the id substring so
-# the encoding is not hard-coded. A hit means a phantom claim was acquired.
+# Node claims land in the GLOBAL root's claim table ($HOME/.fno graph.db), not
+# the project. Any state but "free" means a phantom claim was acquired. An
+# unreadable table fails the test: a read error must never pass as "free".
 node_claim_exists() {  # $1 = HOME dir, $2 = node id
-  ls "$1/.fno/claims/" 2>/dev/null | grep -qi "node.*${2}"
+  local state
+  state="$(FNO_CLAIMS_ROOT="$1" uv run --project "$REPO_ROOT/cli" python -c '
+import sys
+from pathlib import Path
+from fno.claims.core import claim_status
+print(claim_status("node:" + sys.argv[2], root=Path(sys.argv[1])).get("state") or "free")
+' "$1" "$2" 2>/dev/null)" || fail "claim status unreadable under $1"
+  [[ -n "$state" ]] || fail "claim status empty under $1"
+  [[ "$state" != "free" ]]
+}
+
+seed_graph() {
+  uv run --project "$REPO_ROOT/cli" python "$REPO_ROOT/cli/tests/fixtures/graph_seed.py" "$1"
 }
 
 # ── (a) legacy fails, modern wins => node id + captured stderr ────────
@@ -73,19 +89,23 @@ log "(a): legacy-claim failure + modern-claim win => graph_node_id=node, stderr 
 make_repo TMP_A
 _ALL_TMPS+=("$TMP_A")
 # A claimable node (session_id null => _CURRENT_CLAIM empty => legacy path taken).
-cat > "${TMP_A}/home/.fno/graph.json" <<'JSON'
+seed_graph "${TMP_A}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-11000a","title":"legacy-fail modern-win test node","session_id":null}]}
 JSON
 
 (cd "$TMP_A" && \
   HOME="${TMP_A}/home" \
+  PATH="${TMP_A}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_A}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="tst-11000a" \
   TARGET_LOCATION_OK="main-acknowledged" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(a): init exited non-zero"
 
-STATE_A="${TMP_A}/.fno/target-state.md"
+STATE_A="${TMP_A}/space/target-state.md"
 [[ -f "$STATE_A" ]] || fail "(a): target-state.md was not created"
 
 GNID_A="$(graph_node_id_of "$STATE_A")"
@@ -110,13 +130,17 @@ rm -f "${TMP_B}/home/.fno/graph.json"
 
 (cd "$TMP_B" && \
   HOME="${TMP_B}/home" \
+  PATH="${TMP_B}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_B}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="ab-1100b0b0" \
   TARGET_LOCATION_OK="main-acknowledged" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(b): init exited non-zero"
 
-STATE_B="${TMP_B}/.fno/target-state.md"
+STATE_B="${TMP_B}/space/target-state.md"
 [[ -f "$STATE_B" ]] || fail "(b): target-state.md was not created"
 
 GNID_B="$(graph_node_id_of "$STATE_B")"
@@ -143,19 +167,23 @@ _ALL_TMPS+=("$TMP_C")
 # Graph exists but does NOT contain the requested ab-id. The guard's single arm
 # greps for the id and misses, so the node never resolves: graph_node_id stays
 # null (no successor for a bogus node) AND no phantom claim is acquired (x-8e98).
-cat > "${TMP_C}/home/.fno/graph.json" <<'JSON'
+seed_graph "${TMP_C}/home/.fno/graph.json" <<'JSON'
 {"entries":[{"id":"tst-other0","title":"some other node","session_id":null}]}
 JSON
 
 (cd "$TMP_C" && \
   HOME="${TMP_C}/home" \
+  PATH="${TMP_C}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_C}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
   TARGET_INPUT="ab-deadbeef" \
   TARGET_LOCATION_OK="main-acknowledged" \
   bash "$INIT" >/dev/null 2>&1) \
   || fail "(c): init exited non-zero"
 
-STATE_C="${TMP_C}/.fno/target-state.md"
+STATE_C="${TMP_C}/space/target-state.md"
 [[ -f "$STATE_C" ]] || fail "(c): target-state.md was not created"
 GNID_C="$(graph_node_id_of "$STATE_C")"
 [[ "$GNID_C" == "null" ]] \
@@ -168,38 +196,121 @@ if node_claim_exists "${TMP_C}/home" "ab-deadbeef"; then
 fi
 pass "(c): no phantom claim acquired for an ab-id absent from an existing graph"
 
-# ── (d) config-relocated graph (config.paths.graph_json) resolves ab-id ────
-# The guard greps _GRAPH_FILE, which honors GRAPH_JSON_PATH (config.sh's stub)
-# instead of a hard-coded $HOME/.fno/graph.json. A real ab-id living only in a
-# relocated graph must still resolve (codex P2 on PR #536, x-8e98).
-log "(d): config.paths.graph_json relocation resolves a real ab-id"
+# ── (e) AC4-HP: spawn-handover pre-claim, env UNSET, name proven => fallback ──
+# The spawner's launch-window claim is the only claim on the node, but
+# FNO_NODE_CLAIM_HOLDER does not always reach the worker. init used to pass no
+# --handover-from and the ordinary acquire refused its own beneficiary
+# (measured live 2026-09-09: rc=1 against spawn-handover:<this session's own
+# worker>). The disk fallback supplies the holder VALUE, and the worker-name
+# env supplies the PROOF it is this session's own.
+log "(e): spawn-handover claim + env unset + own name => init acquires via the disk fallback"
 
-make_repo TMP_D
-_ALL_TMPS+=("$TMP_D")
-mkdir -p "${TMP_D}/relocated"
-cat > "${TMP_D}/home/.fno/config.toml" <<EOF
-[paths]
-graph_json = "${TMP_D}/relocated/graph.json"
-EOF
-cat > "${TMP_D}/relocated/graph.json" <<'JSON'
-{"entries":[{"id":"ab-1100b0b0","title":"real node in a relocated graph","session_id":null}]}
+make_repo TMP_E
+_ALL_TMPS+=("$TMP_E")
+seed_graph "${TMP_E}/home/.fno/graph.json" <<'JSON'
+{"entries":[{"id":"tst-ca7471","title":"handover fallback test node","session_id":null}]}
 JSON
-printf '{"entries":[]}\n' > "${TMP_D}/home/.fno/graph.json"
 
-(cd "$TMP_D" && \
-  HOME="${TMP_D}/home" \
-  FNO_GLOBAL_SETTINGS_PATH="${TMP_D}/home/.fno/config.toml" \
+HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim acquire "node:tst-ca7471" \
+  --holder "spawn-handover:t-ho-worker" --ttl 15m --pid-unavailable \
+  --reason "test stage" >/dev/null 2>&1 \
+  || fail "(e): staging the spawn-handover claim failed"
+
+(cd "$TMP_E" && \
+  HOME="${TMP_E}/home" \
+  PATH="${TMP_E}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_E}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
+  FNO_WORKER_NAME="t-ho-worker" \
   TARGET_START=1 \
-  TARGET_INPUT="ab-1100b0b0" \
+  TARGET_INPUT="tst-ca7471" \
   TARGET_LOCATION_OK="main-acknowledged" \
   bash "$INIT" >/dev/null 2>&1) \
-  || fail "(d): init exited non-zero"
+  || fail "(e): init exited non-zero"
 
-STATE_D="${TMP_D}/.fno/target-state.md"
-[[ -f "$STATE_D" ]] || fail "(d): target-state.md was not created"
-GNID_D="$(graph_node_id_of "$STATE_D")"
-[[ "$GNID_D" == "ab-1100b0b0" ]] \
-  || fail "(d): expected graph_node_id 'ab-1100b0b0' from the relocated graph, got '${GNID_D}'"
-pass "(d): ab-id in a config-relocated graph resolves (not hard-coded to \$HOME/.fno)"
+_HOLDER_E="$(HOME="${TMP_E}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim status "node:tst-ca7471" --json 2>/dev/null \
+  | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[[ "$_HOLDER_E" == target-session:* ]] \
+  || fail "(e): claim holder is '${_HOLDER_E}', expected the init acquire to land via the handover fallback"
+pass "(e): init acquire took over the launch-window claim (holder=${_HOLDER_E})"
+
+_LOCKED_BY_E="$(HOME="${TMP_E}/home" uv run --project "${REPO_ROOT}/cli" python -c 'import sys; from pathlib import Path; from fno.graph.store import read_graph_strict; print(read_graph_strict(Path(sys.argv[1]))[0].get("locked_by") or "")' "${TMP_E}/home/.fno/graph.json" 2>/dev/null || true)"
+[[ -n "$_LOCKED_BY_E" ]] \
+  || fail "(e): locked_by is empty; the stamp never ran (AC4-HP)"
+pass "(e): locked_by stamped (${_LOCKED_BY_E})"
+
+# ── (g) a BYSTANDER's init never takes a launch-window claim minted for
+# another worker: the disk holder is published to every reader, so the value
+# alone is not proof. The name proven here names a DIFFERENT worker.
+log "(g): spawn-handover claim naming another worker + own name proven => no takeover"
+
+make_repo TMP_G
+_ALL_TMPS+=("$TMP_G")
+seed_graph "${TMP_G}/home/.fno/graph.json" <<'JSON'
+{"entries":[{"id":"tst-feed42","title":"bystander control node","session_id":null}]}
+JSON
+
+HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim acquire "node:tst-feed42" \
+  --holder "spawn-handover:someone-elses-worker" --ttl 15m --pid-unavailable \
+  --reason "bystander stage" >/dev/null 2>&1 \
+  || fail "(g): staging the foreign launch-window claim failed"
+
+(cd "$TMP_G" && \
+  HOME="${TMP_G}/home" \
+  PATH="${TMP_G}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_G}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
+  FNO_WORKER_NAME="this-worker" \
+  TARGET_START=1 \
+  TARGET_INPUT="tst-feed42" \
+  TARGET_LOCATION_OK="main-acknowledged" \
+  bash "$INIT" >/dev/null 2>&1) \
+  || fail "(g): init exited non-zero"
+
+_HOLDER_G="$(HOME="${TMP_G}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim status "node:tst-feed42" --json 2>/dev/null \
+  | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[[ "$_HOLDER_G" == "spawn-handover:someone-elses-worker" ]] \
+  || fail "(g): claim holder changed to '${_HOLDER_G}'; a bystander must never take a live claim minted for another worker"
+pass "(g): foreign launch-window claim untouched (holder=${_HOLDER_G})"
+
+# ── (f) control: a NON-handover holder on disk is never taken over ──
+log "(f): non-handover claim + env unset => ordinary acquire still refuses (no takeover)"
+
+make_repo TMP_F
+_ALL_TMPS+=("$TMP_F")
+seed_graph "${TMP_F}/home/.fno/graph.json" <<'JSON'
+{"entries":[{"id":"tst-c0ffee","title":"no-takeover control node","session_id":null}]}
+JSON
+
+HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim acquire "node:tst-c0ffee" \
+  --holder "target-session:resident" --ttl 2h --pid-unavailable \
+  --reason "control stage" >/dev/null 2>&1 \
+  || fail "(f): staging the resident claim failed"
+
+(cd "$TMP_F" && \
+  HOME="${TMP_F}/home" \
+  PATH="${TMP_F}/bin:$PATH" \
+  FNO_TEST_SPACE="${TMP_F}/space" \
+  FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  FNO_TARGET_INIT_GATED=1 \
+  TARGET_START=1 \
+  TARGET_INPUT="tst-c0ffee" \
+  TARGET_LOCATION_OK="main-acknowledged" \
+  bash "$INIT" >/dev/null 2>&1) \
+  || fail "(f): init exited non-zero"
+
+_HOLDER_F="$(HOME="${TMP_F}/home" FNO_BOOTSTRAP_WHEEL="${REPO_ROOT}/cli" \
+  fno agents claim status "node:tst-c0ffee" --json 2>/dev/null \
+  | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+[[ "$_HOLDER_F" == "target-session:resident" ]] \
+  || fail "(f): claim holder changed to '${_HOLDER_F}'; a published non-handover holder must never be taken over"
+pass "(f): resident non-handover claim untouched (holder=${_HOLDER_F})"
 
 log "All init-claim scenarios passed"

@@ -5,6 +5,12 @@ status: accepted
 
 # Backlog Board Ordering (swimlanes + curated rank + WIP cap)
 
+## Is this page for you?
+
+You ask why one card sits above another, or why the HTML and Kanban boards disagree with your terminal. This page owns the ordering function every board and the work selector share. Misreading it costs a wasted edit: you straighten the rendered board file and the next mutation renders your change away.
+
+Not for: the verbs that create, update, rank, or close a node. That is [../backlog-usage.md](../backlog-usage.md). It also does not answer why `advance` did not dispatch a card. Dispatch ordering is the loop's, not the board's.
+
 ## Overview
 
 Both backlog boards - `graph.md` (Obsidian Kanban) and `fno backlog view` (the self-contained HTML board) - and the work selector consume one ordering function. The HTML renderer also owns the roadmap and public-backlog card markup. Those projections share its escaping and field policy instead of authoring cards separately.
@@ -21,30 +27,33 @@ That placement is load-bearing: **a renderer exception must never abort a backlo
 `_intake.make_selection_sort_key` returns this logical key for unranked work:
 
 ```
-[project lane] -> rank band -> live-epic child tier -> in-progress live epic -> live epic priority -> epic created_at -> child priority -> orphan-last -> created_at
+[project lane] -> rank band -> live-epic child tier -> in-progress live epic -> live epic priority -> epic created_at -> child priority -> fan-out -> importance -> orphan-last -> created_at
+```
+
+For a live-epic child the leading rank band is the **epic's own** band. The child's rank band sits between the epic `created_at` term and child priority:
+
+```
+[project lane] -> epic rank band -> child tier -> in-progress live epic -> live epic priority -> epic created_at -> child rank band -> child priority -> fan-out -> importance -> orphan-last -> created_at
 ```
 
 The optional project-lane prefix is present only when `swimlane=True`.
 Named projects sort alphabetically and `(unscoped)` sorts last, preserving contiguous board swimlanes without teaching global selection an alphabetical project preference.
 
-`_rank_band(entry)` returns `(0, float(rank))` for a finite, non-bool number and `(1, 0.0)` otherwise.
-Ranked cards precede unranked cards, ascending by rank, and NaN, infinity, booleans, and overflowing integers degrade to unranked so the key remains a total order.
+`_rank_band(entry)` returns `(0, float(rank))` for a finite, non-bool number and `(1, 0.0)` otherwise. Ranked cards precede unranked cards, ascending by rank, and NaN, infinity, booleans, and overflowing integers degrade to unranked so the key remains a total order. A ranked epic floats its whole group. A ranked child reorders only its own position inside that group. It can never pull its epic ahead of another epic or a loose node.
 
 An epic contributes its tier, in-progress signal, priority, and grouping timestamp only while it is a real `type: epic` row that is not completed, done, superseded, or deferred.
 Its in-progress signal includes a child with persisted completion/session state or a live lockfile claim, and each consumer binds one claim snapshot into both ordering and column routing.
 Terminal field markers (`completed_at`, `superseded_by`, and `deferred_at`) also win over a stale persisted `ready` status.
 A child of a missing, malformed, or terminal parent is a loose-node equivalent and sorts on its own priority.
 
-Rank remains scoped per `(column, project)` lane: "web's #1 in Now" is independent of "etl's #1 in Now".
+Rank remains scoped per `(column, project)` lane: "web's #1 in Now" is independent of "etl's #1 in Now". A node with a live epic parent ranks within that epic instead. Its peers and anchors are its live-epic siblings across the whole graph. The `--within-epic` flag spells that scope out loud. The flag is refused for a node with no live epic parent, and an anchor outside the epic is rejected. Loose nodes and epic containers keep the lane scope.
 Rank never changes a node's column.
 `render._kanban_column` remains the sole column authority, while the renderer supplies an effective priority that may promote a child to its live epic's higher priority but never demote a child already above its epic.
 `render.make_kanban_column(entries)` binds that projection together with the in-progress-epic and live-claim overlays so renderers, rank lane validation, and WIP counts delegate the same whole-graph context to `_kanban_column`.
 
 ## Board order == work order
 
-Board order and work order share the whole decision suffix rather than only the rank term.
-The Obsidian board, HTML master board, HTML project boards, public roadmap, `fno backlog next`, `fno backlog ready`, `/megawalk`, and the active-backlog daemon all call `make_selection_sort_key`.
-No renderer carries an independent priority/created-at fallback that can drift from the walker.
+Board order and work order share the whole decision suffix rather than only the rank term. The Obsidian board, HTML master board, HTML project boards, public roadmap, `fno backlog next`, `fno backlog ready`, and the active-backlog daemon all call `make_selection_sort_key`. No renderer carries an independent priority/created-at fallback that can drift from the walker.
 
 The project prefix is an explicit display exception.
 Default `fno backlog next` is project-scoped, so its order matches that project's board lane.
@@ -52,10 +61,11 @@ Default `fno backlog next` is project-scoped, so its order matches that project'
 
 Consequences:
 
-- **`rank` changes what runs next.** `fno backlog rank <id> --top` floats a card to the top of its swimlane on the board and makes the walker or daemon pick it first.
-  An explicit rank overrides the epics-first heuristic, so a ranked loose node beats an in-progress epic's children.
-- **Priority is still the lever for unranked work.** Among unranked nodes, the shared suffix keeps the epics-first, live-epic priority, child priority, orphan-last, and creation-time terms.
-  `fno backlog reprioritize <id> p0` remains the way to promote an unranked node, and reprioritizing a live epic can promote its lower-priority children into the same board column without rewriting those children.
+- **`rank` is the operator's pin.** `fno backlog rank` refuses a session carrying a harness stamp. It names the two votes an agent has instead: `fno backlog encounter <id> --evidence` and `fno backlog update <id> --priority`. `--operator` is the escape hatch for an operator inside an agent shell. The fence exists because `--top` writes `min(rank) - 1`. Every writer undercut the last. With four callers on that lever, the order was arrival order, and importance was never computed.
+- **`rank` changes the order, not what dispatches.** `fno backlog rank <id> --top` floats a card to the top of its swimlane on the board. A walker or daemon that drains an active mission scope then picks it first. Rank alone never dispatches the node: a top-ranked node outside every active mission scope stays undispatched. An explicit rank on a loose node overrides the epics-first heuristic. A ranked loose node beats an in-progress epic's children. A rank on a live-epic child is parent-scoped. It reorders the child inside its epic group only. The epic's own position decides the group's turn. Inside the group, the drain takes the children in the curated order.
+- **`--top` means top of its scope, and the receipt says which.** A pinned child is not the project's next node. Measured 2026-09-07: a `--top` on an epic child wrote `-169.0`, the minimum among that epic's children. The node stood eighth across the project, behind six pins at `-186` to `-177`. `fno backlog next --project fno` returned a different node. The receipt now reads `--top of epic <id>` or `--top of lane <col>/<project>`. It says what the pin orders, so a group-local pin cannot read as a fleet-wide one.
+- **Priority still leads unranked work.** Among unranked nodes, the shared suffix keeps the epics-first and priority terms. Live-epic priority and child priority follow, then fan-out, importance, orphan-last, and creation-time. `fno backlog reprioritize <id> p0` remains the way to promote an unranked node. Reprioritizing a live epic can promote its lower-priority children into the same board column without rewriting those children.
+- **Importance is a projection, below every decision term.** `demand.importance_score` weighs a node's encounters against the priority it was filed at. It adds a capped age term. It is computed at sort time and never stored. It is zero for a node nobody voted on, so a graph with no encounters sorts as it did before. It sits after priority and fan-out on purpose. A measurement must not outrank a judgement, and an operator's pin outranks both.
 - **Rank is per-`(column, project)` lane.** Selection is project-scoped by default (`fno backlog next [--project P]`), so rank orders within the project's ready set and matches the board's swimlane rank.
   It never reorders across projects, and `fno backlog update` does not clear `rank`.
   A moved node keeps its rank in the new lane's ranked band; run `fno backlog rank <id> --clear` to rejoin the unranked flow.
@@ -75,20 +85,12 @@ the `CANONICAL_FIELD_ORDER` entry, canonicalize would drop the field.
 
 Mirrors `reprioritize`; writes through `locked_mutate_graph`. Exactly one of:
 
-- `--top` / `--bottom`: below / above the lane's ranked band (`0.0` if the lane
-  has no ranked cards yet).
-- `--before <anchor>` / `--after <anchor>`: float midpoint next to a **ranked**
-  anchor in the same lane. The anchor must already be ranked (the band model
-  puts all ranked cards ahead of all unranked, so you position relative to other
-  ranked cards; seed the first with `--top`).
+- `--top` / `--bottom`: below / above the scope's ranked band. When the scope has no ranked cards yet, the band starts at `0.0`.
+- `--before <anchor>` / `--after <anchor>`: float midpoint next to a **ranked** anchor in the same scope. The anchor must already be ranked, because the band model puts all ranked cards ahead of all unranked. Position it relative to other ranked cards. Seed the first with `--top`.
 - `--clear`: `rank = null`.
+- `--operator`: write the pin from a session that carries a harness stamp. Without it, every write action above is refused for such a session, `--clear` included.
 
-The verb resolves the target id through `_find_node` (which fuzzy-resolves
-partial ids like) and compares on the **resolved** id for both
-peer-exclusion and the self-anchor guard. Rejections - cross-lane anchor
-(names both lanes), unranked anchor (actionable hint), self-anchor, non-existent
-node, wrong flag count - all print to stderr and exit non-zero, and the mutator
-raises *before* the locked write so no partial rank is ever persisted.
+When the node has a live epic parent, the scope is that epic. Peers and anchors are the epic's children across the whole graph. The `--within-epic` flag is the explicit spelling. Otherwise the scope is the `(column, project)` lane. The verb resolves the target id through `_find_node`, which fuzzy-resolves partial ids. It compares on the **resolved** id for both peer-exclusion and the self-anchor guard. Rejections all print to stderr and exit non-zero. They cover a cross-scope anchor (both scopes named), an unranked anchor (actionable hint), a self-anchor, a non-existent node, and a wrong flag count. An explicit `--within-epic` without a live epic parent is also refused. The mutator raises *before* the locked write, so no partial rank is ever persisted.
 
 ## HTML board: the canonical dashboard
 
@@ -100,7 +102,7 @@ raises *before* the locked write so no partial rank is ever persisted.
 
 `render_html._load_wip_caps()` reads `config.kanban.wip_caps` directly from the
 **global** settings file (`_global_settings_path()`), the same rationale as
-`_load_obsidian_vault` (graph.html is a global artifact; reading via the
+`_load_obsidian_vault` (the board pages are global artifacts; reading via the
 project-local-first loader would let a project's settings shadow the global
 config on auto-render). It is fully defensive because it runs inside
 `locked_mutate_graph`:
@@ -117,7 +119,7 @@ tracked as a follow-up, not built here.
 
 ## Locked decisions
 
-1. Rank is per-`(column, project)` lane, not per-column.
+1. Rank is per-`(column, project)` lane, not per-column. A live-epic child's rank is scoped within its epic. It orders the child inside the group only. Loose nodes and epic containers keep the lane scope.
 2. WIP count/cap is HTML-board-only; md headings stay clean.
 3. `fno backlog rank` is the ranking surface (no fzf drag-reorder).
 4. `rank` is a nullable float, ordered ahead of the unranked shared-order suffix within a lane.

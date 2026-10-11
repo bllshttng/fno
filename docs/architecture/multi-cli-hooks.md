@@ -5,6 +5,12 @@ status: accepted
 
 # Multi-CLI Hook Integration
 
+## Is this page for you?
+
+You port a footnote skill or hook to a second CLI, or you debug why a Stop hook fires on claude and not on codex. This page owns the per-CLI hook mapping and its porting cost. Misreading it ships a hook contract one harness silently ignores.
+
+Not for: which CLIs footnote supports at all. That is [../HARNESSES.md](../HARNESSES.md).
+
 ## Overview
 
 footnote' stop hook (target loop) and session-start hooks support Claude Code, Gemini CLI, and Codex CLI as lifecycle enhancers. The static per-provider capability matrix that previously declared hook/subagent/custom-agent/parallel-dispatch support was removed (multi-CLI adapters superseded by hooks); provider behavior is now hook-driven. The hooks layer handles session hydration, stop-gate enforcement, and accounting directly.
@@ -196,13 +202,15 @@ An earlier skill-pipeline project uses install-time transformation (a 4,479-line
 
 **SessionStart output contract (current).** Claude Code, Gemini CLI, and Codex CLI have all converged on the same SessionStart hook output: `{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "..."}}` (camelCase). Verified against Gemini's hook reference and Codex's `SessionStartHookSpecificOutputWire` schema. `session-start.sh` emits this shape for all three. The earlier non-Claude `additional_context` (snake_case) branch was stale. It is retained only for Cursor/generic. Claude Code wires the individual SessionStart sub-hooks via the plugin manifest. Gemini and Codex wire this single `session-start.sh` wrapper into user-level config (`~/.gemini/settings.json` and `~/.codex/config.toml`) via `fno config setup cli-hooks`. `fno config setup wizard` offers that as a default-No capstone. Codex additionally requires the user to trust the hook before it runs.
 
+**One runner for the fno producers.** Claude and Codex register `hooks/context-run.sh <group>` instead of one entry per producer. The groups live in `hooks/context-hooks.json`. `fno-agents context-run` starts every producer of the group at once and joins their directive text into the output contract above. It appends one `context_snapshot` per invocation with per-producer byte accounting. A producer that fails or hangs past its bound is recorded `unreadable` without changing the others' output.
+
 ### Why `transcript_path` guard is platform-aware
 
 Gemini/Codex provide the last assistant message directly in hook input — they may not provide `transcript_path` at all. Making the guard Claude-only prevents the hook from exiting early on platforms that don't need transcripts.
 
 ### agy (Antigravity CLI): a native `Stop`-hook adapter, not a fork
 
-agy is its own lane. Its hooks use Claude-shaped event names (`PreToolUse`/`PostToolUse`/`Stop`/...) but a Gemini-family wire format, so `target-stop-hook.sh` is NOT reused verbatim. Instead `hooks/agy-target-stop-hook.sh` is a thin translator over the SAME `fno-agents loop-check` authority (the OpenCode model, different surface). The deltas the adapter bridges:
+agy is its own lane. Its hooks use Claude-shaped event names (`PreToolUse`/`PostToolUse`/`Stop`/...) but a Gemini-family wire format, so `target-stop-hook.sh` is NOT reused verbatim. Instead `hooks/footnote-agy-target-stop-hook.sh` is a thin translator over the SAME `fno-agents loop-check` authority (the OpenCode model, different surface). The deltas the adapter bridges:
 
 | Aspect | Claude Code `Stop` | agy `Stop` |
 |--------|--------------------|------------|
@@ -220,6 +228,24 @@ Because agy's transcript would be skipped by loop-check's `role=="assistant"` fi
 `fno config setup` registers the adapter in agy's `hooks.json` (`~/.gemini/config/hooks.json`, the global customization dir) under the `footnote` namespace key, referencing the plugin-shipped adapter path. A CLI-only install with no `hooks/` degrades to a manual finish.
 
 The remaining build-time unknown is agy's exact `transcript.jsonl` line schema; the synthesizer handles the documented-likely shapes and skips anything it can't parse (safe: no promise detected → keep working). A captured sample will tighten the filter.
+
+Per-command guards stay on the claude/codex/opencode doors. The git-protection pr-create closure guard reaches claude, codex and opencode. Codex reads the shared hook manifest. opencode reads `tool.execute.before`. agy now has a PreToolUse adapter: agy 1.2.7's hooks.json takes matcher-grouped `PreToolUse` entries (`{"matcher": "*", "hooks": [...]}`, camelCase payload `{"toolCall": {"name", "args"}, "conversationId", "workspacePaths", ...}` on stdin, `{"decision": "deny"|"allow"|"ask"|"force_ask", "reason"}` on stdout), so `hooks/agy-lead-guard.sh` registers under `footnote.PreToolUse` and `fno-agents hook lead-guard --wire agy` translates the payload and prints the decision shape. Measured from the binary's embedded hook contract; agy auth was down during the blueprint's live fire, so the file tools' exact arg keys are promoted defensively (see `agy_to_claude` in lead_guard.rs).
+
+### OpenCode: outcome parity through the plugin seams, not a hook manifest
+
+OpenCode has no `hooks.json`. Its plugin surface exposes the same outcomes as seam callbacks. `.opencode/plugins/fno.ts` (repo-local dogfood) and the installed `footnote.js` bridge map each claude/codex hook door to the callback that produces it. The mapping is by outcome, not by hook count:
+
+| Outcome | Claude / codex door | OpenCode seam |
+|---------|--------------------|---------------|
+| State-file protection (5 scripts) | `PreToolUse` command hooks | `tool.execute.before`, deny honored by throwing |
+| Claim heartbeat | `PostToolUse` command hook | `tool.execute.after` |
+| Compaction context (canon-doc pointer) | `PreCompact` command hook | `experimental.session.compacting` |
+| Completion loop | `Stop` command hook | `session.idle` event + `fno-agents loop-check` |
+| Edit integrity (parse, last line, test count, stale patch targets) | `PostToolUse` command hook | none; scripts/ci/check-edit-integrity.sh and the preflight leg cover it |
+
+The pre-tool seam translates OpenCode's `{tool, sessionID, callID}` plus `output.args` into the claude-shaped `{tool_name, tool_input, cwd, session_id}` payload the five shared scripts already read from stdin, and honors `permissionDecision: "deny"`. The abort channel is an exception: the hook signature returns void and offers no decision field, so a deny throws and the tool never runs. The same scripts read the same payload shape, and the fail-open posture carries over. A script that is missing, times out, or answers without a decision is reported once and the tool proceeds. A protection gap must never become a silent block. The heartbeat and compact arms feed the same scripts the same stdin shapes they already parse. `autocontinue` is left at OpenCode's default (enabled): the synthetic continue turn is what the claude flow relies on too.
+
+Two loop mechanics are OpenCode-specific. The bridge resolves the target manifest through `fno-agents state path target-state` instead of assuming the legacy in-repo `.fno/target-state.md`. That verb prints the space-resolved path. The bridge passes the idle event's own session id to `loop-check --harness opencode --harness-session <id>`. The gate then refuses a session its target is not bound to before any continuation. Gates are serialized per session. An idle for a running session becomes a pending recheck, never a dropped event. Different sessions never block each other.
 
 ## Hook Script Retirement (one-release tombstones)
 

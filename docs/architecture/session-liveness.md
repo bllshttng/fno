@@ -10,11 +10,19 @@ It reads claim liveness and loop-check recency to answer whether a session owns 
 
 Neither family substitutes for the other: a session can be alive without a current claim, and a claim can remain visible while its worker is not producing transcript activity.
 
+## Wait and graph-lock decisions
+
+`fno-agents wait --state done` treats a live Claude hook report of `done` as a candidate, not completion. Before wait returns success, the existing family-1 transcript probe must also report `done`. Working, watching, your-move, stalled, unknown, malformed, and failed probes keep waiting until timeout. Pane exit remains authoritative. Non-Claude rows do not pay for the Claude probe.
+
+Graph entries use top-level `locked_at` for the graph lock mirror. At the read seam, legacy top-level `claimed_at` copies to `locked_at`. The next locked mutation removes legacy `claimed_at`. Nested claim records and `sessions[*].claimed_at` retain their meaning. Timestamp age and unreadable values are diagnostics only. They never clear `locked_by` or `session_id`. The claim lifecycle clears those fields after it confirms release or reap. It then rechecks the exact node claim path, so a new owner wins the race.
+
 ## Worktree-local activity advisory
 
 The SessionStart peer note uses a worktree-local observation cache, not a third truth family.
 The existing PostToolUse heartbeat touches `<absolute-git-dir>/fno/live/<session_id>` at most every 30 seconds before any target-manifest or claim-holder gate, so a hand-started session contributes activity even when it owns no target claim.
 Git gives each linked worktree its own administrative directory, which keeps this cache local even on the registered Claude WorktreeCreate path that can share the checkout's whole `.fno` directory.
+
+The same hook keeps its pre-init spawn-handover throttle at `<absolute-git-dir>/fno/claim-handover-heartbeat.stamp`, because a linked worktree has no checkout `.fno` to hold it.
 The shared `hooks/helpers/worktree-live-peers.sh` reader emits a note only when another session's stamp is less than 120 seconds old; self-only and stale handoff stamps are silent.
 Claude reaches the reader through `hooks/worktree-peers-session-start.sh`, while Codex reaches the same helper through its existing `hooks/session-start.sh` wrapper because the two harness manifests do not share a SessionStart carrier.
 
@@ -83,6 +91,24 @@ Only positive evidence of an *unfinished* mission relaxes the skip, and the cand
 Claim state is deliberately not the authority here: claims are PID-anchored, so a finished worker and an abandoned one both read `suspect`/`stale`, and design-pass workers hold no node claim at all.
 Which node a worker is on resolves from its manifest first, since the runtime wrote it and a worker name is only a convention; the exception is a `think-` named worker, which writes no manifest but runs with `--cwd` on the node's canonical root, where an unrelated `/target` session's manifest can sit.
 Every probe failure (unreadable graph, unresolvable node, node-less thread) returns `None` and keeps the family-1 verdict, so the gate can only ever relax a `done`, never manufacture one.
+
+## Identity stores
+
+A session's identity has more than one answerer, and they disagree (a 2026-09-08 audit measured six stores answering the question with one unlocated). This section names every store the resolvers consult, with the exact reader.
+
+| Store | Reader | What it answers |
+|---|---|---|
+| `~/.claude/projects/<proj>/<uuid>.jsonl` | `_reachable_from_transcripts` (`cli/src/fno/agents/discover.py:2239`), directory from `default_projects_dir()` (`:125`) | Every claude session that ever ran under this HOME. The broadest source, no recency cutoff: staleness is what makes a session asleep rather than absent. |
+| `~/.fno/agents/registry.json` | `_reachable_from_registry` (`discover.py:2301`) via `fno.agents.registry.load_registry` | fno-adopted rows for every provider, including dead-pid and exited ones. |
+| `~/.claude/daemon/roster.json` | `_reachable_from_roster` (`discover.py:2353`), directory from `FNO_CLAUDE_DAEMON_DIR` | The claude daemon's own worker roster, including exited stamps. |
+| `node.sessions[]` in `~/.fno/graph.json` | `_reachable_from_graph` (`discover.py:2407`) via `fno.graph.load.load_graph` | The weakest source: a session proven to have existed for some phase of some node. |
+| Harness native stores (codex, opencode) | `_reachable_from_harness_stores` (`discover.py:2470`) via `fno.agents.store_fallback.complete_store_hits` | Codex threads and opencode storage the fno registry never adopted. |
+
+`resolve_reachable` (`discover.py:2486`) merges all five, keyed on `(harness, session_identity_key(sid))`. The first source to claim a key supplies its `source` label, later sources only fill a missing cwd. An ambiguity refusal lists every candidate uuid with the store that supplied it, on stderr since 2026-09-08. The refusal is diagnosable from its own transcript.
+
+`discover_live_sessions` (`discover.py:2606`) is the listing counterpart. It unions pid-file sidecars (`~/.claude/sessions`, from `default_sessions_dir()` at `discover.py:122`), the same transcript stores, daemon rosters, and the registry, then attaches family-1 truth per candidate. It answers "who is alive", never "does this token exist": the liveness gate deliberately drops asleep sessions, which is why the token resolvers also consult the durable stores.
+
+The 2026-09-05 incident this section closes: `fno agents mail send` refused session `01a06886-9405-74a1-8afd-5b67baf89604` as ambiguous while 0 of the registry's rows carried the id. A one-token refusal naming two candidates can only arise across sources. Two distinct identity keys matched one token, and the unlocated "sixth store" was `~/.claude/projects`, already the transcripts row above. The attribution line turns the next such refusal from a mystery into a reading.
 
 ## Mail boundary
 

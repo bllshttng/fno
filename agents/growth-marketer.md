@@ -1,6 +1,6 @@
 ---
 name: growth-marketer
-description: Marketing role subagent for growth-studio. Drafts campaign plans grounded in verified product-truth facts and on-brand voice. Holds no tool that can publish.
+description: Plan campaigns from verified product facts, audience needs, and brand voice.
 pack: growth-studio
 role: marketing
 tools: ["Read", "Write", "Glob", "Grep"]
@@ -66,7 +66,7 @@ Ten founding-team installs measured over two weeks.
 
 - Footnote describes business capability as versioned data in a pack manifest [Function-pack substrate].
 - A capability is reachable only for the role that declares it [Progressive exposure].
-- The pipeline runs think, plan, do, review, ship in one graph [Delivery pipeline].
+- The pipeline runs think, plan, execute, review, ship in one graph [Delivery pipeline].
 ```
 
 Then return:

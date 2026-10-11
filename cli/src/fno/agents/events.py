@@ -24,6 +24,7 @@ Phase 5 (MCP channel + streaming) additions are grouped at the bottom.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from dataclasses import asdict
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from fno import paths
+from fno.agents.naming import AgentNameError, parse_dispatch_agent_name
 
 if TYPE_CHECKING:
     from fno.agents.context import EventContext
@@ -55,13 +57,51 @@ def emit(kind: str, *, path: Optional[Path] = None, **data: Any) -> None:
         **data: Arbitrary keyword fields that flatten into the JSON object
             alongside ``ts`` and ``kind``.
     """
+    if kind == "agent_removed":
+        data = dict(data)
+        data.setdefault("harness", data.get("provider") or "unknown")
+        data.setdefault("registry_changed", bool(data.get("registry_changed", False)))
+        data.setdefault("actor", "operator")
+        data.setdefault(
+            "reason",
+            data.get("teardown_error") or data.get("error") or "rm-request",
+        )
+        data.setdefault(
+            "request_id",
+            f"agent-rm:{data.get('name') or 'unknown'}",
+        )
+        touched = data.get("worktree_touched")
+        if not isinstance(touched, bool):
+            touched = bool(data.get("worktree_receipt"))
+        data["worktree_touched"] = touched
+        data.setdefault("worktree_outcome", "removed" if touched else "not-touched")
+        data.setdefault("reclaimed_bytes", 0)
+
     target = path if path is not None else (paths.state_dir() / "events.jsonl")
     # Put ts and kind LAST so a stray data={"ts": ..., "kind": ...} kwarg
     # cannot overwrite the canonical fields. The dict's order-preserving
     # right-to-left merge gives the mandatory fields final say.
-    record = {**data, "ts": _utc_now_iso(), "kind": kind}
-    records = [record]
+    ts = _utc_now_iso()
+    record = {**data, "ts": ts, "kind": kind}
     diagnostic = " ".join(str(value) for value in data.values())
+    # The store commit is the write boundary. The envelope carries the
+    # canonical fields (type/source/data) for SQL-side readers; the legacy
+    # top-level keys (kind + flattened kwargs) ride along because committed
+    # rows round-trip them verbatim, which keeps every kind-keyed reader on
+    # the shared history working through the same rows.
+    records = [
+        {
+            **record,
+            "type": kind,
+            # The envelope source is the channel identity ('agents'): a
+            # caller-supplied ``source`` kwarg is a legacy top-level field
+            # (e.g. register_session's --source resume), not a declared
+            # envelope source, and stamping it there refuses every such row
+            # at the judge. The legacy value still rides in ``data``.
+            "source": "agents",
+            "data": dict(data),
+        }
+    ]
     if kind != "provider_rate_limited" and "429" in diagnostic and "1313" in diagnostic:
         records.append(
             {
@@ -70,41 +110,24 @@ def emit(kind: str, *, path: Optional[Path] = None, **data: Any) -> None:
                 "observed_at": record["ts"],
                 "ts": _utc_now_iso(),
                 "kind": "provider_rate_limited",
+                "type": "provider_rate_limited",
+                "source": "agents",
+                "data": {
+                    "provider": data.get("route_provider") or data.get("provider") or "unknown",
+                    "account": data.get("account") or data.get("account_id"),
+                },
             }
         )
-    line = "".join(
-        json.dumps(item, sort_keys=False, separators=(",", ":")) + "\n"
-        for item in records
-    )
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        # 'a' mode is atomic for single writes <= PIPE_BUF (4096 on
-        # macOS / Linux); a single JSONL record is well under that, so
-        # concurrent emit() calls interleave at line boundaries.
-        with open(target, "a", encoding="utf-8") as fh:
-            fh.write(line)
-    except OSError as exc:
-        print(
-            f"fno agents: warning: events.emit({kind!r}) to {target}: {exc}",
-            file=sys.stderr,
-        )
+    from fno.events.store_client import EventStoreUnavailable, emit_envelope
 
-
-def emit_provider_rate_limited(
-    *,
-    provider: str,
-    account: Optional[str],
-    observed_at: Optional[str] = None,
-    path: Optional[Path] = None,
-) -> None:
-    """Record a provider Fair Usage rate-limit observation."""
-    emit(
-        "provider_rate_limited",
-        path=path,
-        provider=provider,
-        account=account,
-        observed_at=observed_at or _utc_now_iso(),
-    )
+    for item in records:
+        try:
+            emit_envelope(item, target)
+        except (EventStoreUnavailable, OSError) as exc:
+            print(
+                f"fno agents: warning: events.emit({kind!r}) to {target}: {exc}",
+                file=sys.stderr,
+            )
 
 
 def emit_with_context(
@@ -174,7 +197,7 @@ def emit_identity_resolution(owned: Any, *, path: Optional[Path] = None) -> None
 
 
 # ---------------------------------------------------------------------
-# Spawn-lifecycle births (x-8cd5 Wave 6): deaths already land in the daemon's
+# Spawn-lifecycle births (Wave 6): deaths already land in the daemon's
 # agent-lifecycle log (~/.fno/agents/events.jsonl) — agent_orphan_reaped,
 # agent_row_reaped, agent_stopped, agent_removed. A birth that lands anywhere
 # else splits the lineage tree across two files, so it is unreconstructible:
@@ -189,6 +212,8 @@ def emit_identity_resolution(owned: Any, *, path: Optional[Path] = None) -> None
 # line.
 KIND_AGENT_SPAWNED = "agent_spawned"
 KIND_AGENT_SPAWN_FAILED = "agent_spawn_failed"
+# durable accepted record, pre-launch; correlated by spawn_id.
+KIND_AGENT_SPAWN_ACCEPTED = "agent_spawn_accepted"
 
 
 def daemon_lifecycle_log() -> Path:
@@ -199,7 +224,7 @@ def daemon_lifecycle_log() -> Path:
 def _emit_daemon_envelope(
     kind: str, data: dict[str, Any], *, source: str = "python"
 ) -> None:
-    """Write one record in the daemon's unified envelope (x-2901) to the daemon
+    """Write one record in the daemon's unified envelope to the daemon
     lifecycle log.
 
     The Rust daemon nests the payload under ``data`` and stamps the kind as
@@ -216,13 +241,11 @@ def _emit_daemon_envelope(
         "source": source,
         "data": data,
     }
-    line = json.dumps(record, separators=(",", ":")) + "\n"
     try:
-        target = daemon_lifecycle_log()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "a", encoding="utf-8") as fh:
-            fh.write(line)
-    except OSError as exc:
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(record, daemon_lifecycle_log())
+    except Exception as exc:  # noqa: BLE001 - a failed log write must not break spawn
         print(f"fno agents: warning: daemon envelope {kind}: {exc}", file=sys.stderr)
 
 
@@ -235,6 +258,7 @@ def emit_spawned(
     spawned_by_session: Optional[str] = None,
     spawned_by_harness: Optional[str] = None,
     spawned_by_cwd: Optional[str] = None,
+    lineage_reason: Optional[str] = None,
     harness_session_id: Optional[str] = None,
     cwd: Optional[str] = None,
     model: Optional[str] = None,
@@ -259,6 +283,8 @@ def emit_spawned(
         "spawned_by_session": spawned_by_session,
         "spawned_by_harness": spawned_by_harness,
         "spawned_by_cwd": spawned_by_cwd,
+        # a birth names its parent or why it could not.
+        "lineage_reason": lineage_reason,
     }
     if pid is not None:
         data["pid"] = pid
@@ -292,8 +318,31 @@ def emit_spawn_failed(
     )
 
 
+def emit_spawn_accepted(
+    *,
+    spawn_id: str,
+    name: str,
+    origin: dict,
+    owner: dict,
+    substrate: Optional[str] = None,
+    harness: Optional[str] = None,
+) -> None:
+    # pre-launch accepted record; settled by birth/failure, same id.
+    _emit_daemon_envelope(
+        KIND_AGENT_SPAWN_ACCEPTED,
+        {
+            "spawn_id": spawn_id,
+            "name": name,
+            "origin": origin,
+            "owner": owner,
+            "substrate": substrate,
+            "harness": harness,
+        },
+    )
+
+
 # ---------------------------------------------------------------------
-# Classified session-id transitions (x-dfe7). Written to the SAME daemon
+# Classified session-id transitions. Written to the SAME daemon
 # lifecycle log births and deaths use, so a succession is joinable with the
 # predecessor's eventual `agent_row_reaped` from one file - the lineage event
 # must exist before any reap can erase the row it names.
@@ -338,12 +387,201 @@ def emit_session_transition(
     _emit_daemon_envelope(kind, data)
 
 
+# Merge-triggered cleanup: the merge mints the reap order itself; the
+# ritual reuses the same helper, one request-id formula for both.
+KIND_MERGE_CLEANUP_REQUESTED = "merge_cleanup_requested"
+KIND_MERGE_CLEANUP_SKIPPED = "merge_cleanup_skipped"
+
+# Taken verbatim from the ritual's archive leg so the two legs cannot drift.
+MERGE_CLEANUP_SKIP_REASONS = (
+    "gh-unavailable",
+    "unparseable-pr-json",
+    "not-merged",
+    "no-branch",
+    "emit-failed",
+)
+
+
+def merge_cleanup_request_id(project: Any, pr: int, branch: str) -> str:
+    """The daemon's fold key for one exact merge: project, PR and branch.
+
+    Worktree and node ids left the key: the two mint sites know different
+    amounts about them (the merge mint can bind [], the ritual recovers), so
+    keying on them split one merge into two requests that never folded.
+    """
+    identity = "|".join([str(project), str(pr), branch])
+    return "merge-cleanup-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+
+
+def scan_pr_nodes(entries, pr: int, slug: Optional[str]) -> list[str]:
+    """Graph-derived node ids whose pr_url matches this PR's repo.
+
+    Repo-scoped because pr_number is unique only within a repo (cross-project
+    graph): a foreign repo sharing the number is excluded. A url-less or
+    non-string pr_url is skipped, never fatal (a corrupt entry cannot drop the
+    legitimate nodes after it). Pure so the ACs test it directly.
+    """
+    if not slug:
+        return []
+    needle = f"/{slug.lower()}/pull/"
+    out: list[str] = []
+    for e in entries or []:
+        if not isinstance(e, dict) or e.get("pr_number") != pr:
+            continue
+        url = e.get("pr_url")
+        if not isinstance(url, str) or needle not in url.lower():
+            continue
+        nid = e.get("id")
+        if nid and nid not in out:
+            out.append(nid)
+    return out
+
+
+def pr_node_ids(pr: int, slug: Optional[str]) -> list[str]:
+    """Node ids this PR shipped, read from the sidecar store (repo-scoped).
+
+    The one answerer of "which nodes did this PR ship?" for both mint sites;
+    an unreadable store degrades to no recovery.
+    """
+    if not slug:
+        return []
+    try:
+        from fno.tracker import sidecar as sidecar_store
+
+        rows = [
+            {"id": nid, "pr_number": sc.pr_number, "pr_url": sc.pr_url}
+            for nid, sc in sidecar_store.load_all().items()
+        ]
+    except Exception:  # noqa: BLE001 - unreadable store degrades to no recovery
+        return []
+    return scan_pr_nodes(rows, pr, slug)
+
+
+def rows_for_cleanup(worktree: Optional[str], node_ids, *, runner=None) -> list[str]:
+    """Row names whose cwd IS the merged worktree or whose name targets one
+    of the closed nodes (``target-<node>-*``). Best-effort: any failure
+    reads as no candidates (the daemon's registry scan is the second net).
+    """
+    try:
+        if runner is not None:
+            r = runner(["agents", "list", "--json"])
+        else:
+            from fno._subprocess_util import fno_py_cmd
+            from fno.pr._proc import run
+
+            r = run([*fno_py_cmd(), "agents", "list", "--json"])
+    except Exception:  # noqa: BLE001 - a failed candidate read proposes nothing
+        return []
+    if not r.ok:
+        return []
+    try:
+        payload = json.loads(r.stdout or "{}")
+    except json.JSONDecodeError:
+        return []
+    rows = payload if isinstance(payload, list) else payload.get("agents") or []
+    ids = {str(node) for node in node_ids}
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "")
+        if worktree is not None and row.get("cwd") == worktree:
+            out.append(name)
+            continue
+        try:
+            parsed = parse_dispatch_agent_name(name)
+        except AgentNameError:
+            # Stale/missing binary: this row falls back to the legacy prefix
+            # leg, keeping the best-effort contract (never no candidates).
+            parsed = None
+        if (parsed is not None and parsed.node in ids) or any(
+            name.startswith(f"target-{node}-") for node in ids
+        ):
+            out.append(name)
+    return out
+
+
+def emit_merge_cleanup_requested(
+    *,
+    repo: str,
+    project: str,
+    pr: int,
+    branch: str,
+    worktree: Optional[str],
+    node_ids,
+    session_id: Optional[str],
+    harness: Optional[str],
+    merged_at: Optional[str] = None,
+    candidate_row_names,
+    repo_slug: Optional[str] = None,
+) -> str:
+    """Mint the durable reap order in the daemon lifecycle log; ``merged_at``
+    anchors the grace clock (``None`` stamps now). Returns the request id.
+
+    A caller that bound no node ids passes ``repo_slug`` (the PR's
+    ``owner/repo``) so the mint recovers them from the sidecar store itself,
+    the way the ritual's mint always has."""
+    ids = [str(node) for node in node_ids]
+    if not ids and repo_slug:
+        ids = pr_node_ids(pr, repo_slug)
+    request_id = merge_cleanup_request_id(project, pr, branch)
+    _emit_daemon_envelope(
+        KIND_MERGE_CLEANUP_REQUESTED,
+        {
+            "request_id": request_id,
+            "repo": repo,
+            "project": str(project),
+            "pr": int(pr),
+            "branch": branch,
+            "worktree": worktree,
+            "node_ids": sorted(ids),
+            "candidate_row_names": list(candidate_row_names),
+            "merged_at": merged_at or _utc_now_iso(),
+            "session_id": session_id,
+            "harness": harness,
+        },
+    )
+    return request_id
+
+
+def emit_merge_cleanup_skipped(
+    *,
+    repo: str,
+    project: str,
+    pr: int,
+    reason: str,
+    branch: Optional[str] = None,
+    detail: str = "",
+    session_id: Optional[str] = None,
+    harness: Optional[str] = None,
+) -> None:
+    """Say that a merge minted no cleanup request, and which precondition was
+    unmet. ``reason`` is a closed set, so an unclassifiable row is refused."""
+    if reason not in MERGE_CLEANUP_SKIP_REASONS:
+        raise ValueError(
+            f"unknown merge cleanup skip reason: {reason!r}; "
+            f"expected one of {', '.join(MERGE_CLEANUP_SKIP_REASONS)}"
+        )
+    _emit_daemon_envelope(
+        KIND_MERGE_CLEANUP_SKIPPED,
+        {
+            "repo": repo,
+            "project": str(project),
+            "pr": int(pr),
+            "reason": reason,
+            "branch": branch,
+            "detail": detail,
+            "session_id": session_id,
+            "harness": harness,
+        },
+    )
+
+
 # ---------------------------------------------------------------------
 # Phase 5 — MCP channel + streaming event kinds
 # ---------------------------------------------------------------------
 
 # MCP channel lifecycle.
-KIND_MCP_CHANNEL_REGISTERED = "mcp_channel_registered"
 KIND_MCP_CHANNEL_UNREACHABLE = "mcp_channel_unreachable"
 KIND_MCP_CHANNEL_DEMOTED_TO_SOCKET = "mcp_channel_demoted_to_socket"
 KIND_MCP_CHANNEL_ENVELOPE_DRIFT = "mcp_channel_envelope_drift"

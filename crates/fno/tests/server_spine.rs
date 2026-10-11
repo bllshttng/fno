@@ -3,6 +3,8 @@
 //! anywhere) and attaches raw `UnixStream` fake clients speaking the wire
 //! protocol via the sync codec.
 
+mod common;
+
 use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
@@ -37,10 +39,30 @@ impl Drop for Scratch {
     }
 }
 
-/// A server child that is always killed on test exit.
+/// A child process that is always killed on test exit.
 struct Server(Child);
 
 impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct CpuLoad(Child);
+
+impl CpuLoad {
+    fn start() -> Self {
+        let child = Command::new("yes")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start CPU load");
+        Self(child)
+    }
+}
+
+impl Drop for CpuLoad {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
@@ -98,6 +120,10 @@ fn server_command(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Command {
     for (key, value) in env {
         cmd.env(key, value);
     }
+    // Same contract as common::isolate_command: a verb that delegates to the
+    // Python CLI resolves its native event-store writer through FNO_BIN, and
+    // PATH carries no `fno` on a CI runner.
+    cmd.env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
     cmd
 }
 
@@ -202,6 +228,7 @@ fn wait_for_raw_frame(
             | Ok(ServerMsg::OpenLink { .. })
             | Ok(ServerMsg::SearchResult { .. })
             | Ok(ServerMsg::LinkHover { .. })
+            | Ok(ServerMsg::PaneInputResult(_))
             | Ok(ServerMsg::PeekBody { .. })
             | Ok(ServerMsg::PaneFocused { .. })
             | Ok(ServerMsg::TabList { .. })
@@ -214,7 +241,16 @@ fn wait_for_raw_frame(
             | Ok(ServerMsg::TabClosed { .. })
             // (v60, x-7b5e) Bulk restore answers a one-shot control
             // connection, never the spine's attached client.
-            | Ok(ServerMsg::WorkspaceRestored { .. }) => {}
+            | Ok(ServerMsg::WorkspaceRestored { .. })
+            // (v71) Prune reload: same one-shot control connection shape.
+            | Ok(ServerMsg::SquadReloaded { .. })
+            // (v75) Exact-session retirement: same one-shot control shape.
+            | Ok(ServerMsg::SessionRetired { .. })
+            // (v78) Server stats: same one-shot control shape.
+            | Ok(ServerMsg::ServerStats { .. })
+            | Ok(ServerMsg::AgentRowsReceipt { .. })
+            // (v83) Launcher progress: asserted by the launcher suites.
+            | Ok(ServerMsg::AgentLaunch(_)) => {}
             Ok(ServerMsg::Bye { reason }) => panic!("unexpected Bye: {reason}"),
             Err(fno::proto::ProtoError::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
@@ -231,7 +267,15 @@ fn send(stream: &mut UnixStream, msg: &ClientMsg) {
 #[test]
 fn server_spine_child_spawn_emfile_keeps_typed_ceiling_diagnostic() {
     let scratch = Scratch::new("child-emfile");
-    let mut command = server_command(&scratch.sock(), "/bin/sh", &[]);
+    // Admission is off because the test's subject is the pty spawn ceiling,
+    // not the gate: the 64-fd cap exhausts the census's own descriptors on
+    // Linux, and the gate's fail-closed refusal would mask the typed error
+    // this test exists to hold.
+    let mut command = server_command(
+        &scratch.sock(),
+        "/bin/sh",
+        &[("FNO_PROCESS_ADMISSION", "off")],
+    );
     cap_child_nofile(&mut command, 64, true);
     let _server = Server(command.spawn().unwrap());
     let _probe = connect_with_retry(&scratch.sock());
@@ -282,18 +326,205 @@ fn server_spine_losing_contender_emits_no_raise_receipt() {
 }
 
 #[test]
-fn server_spine_echo_roundtrips_via_fake_client() {
+fn server_spine_echo_roundtrips_and_owner_lifecycle() {
     // AC2-HP: keystrokes reach the PTY and the output renders, no TTY needed.
     let scratch = Scratch::new("echo");
-    let _server = spawn_server(&scratch.sock(), "/bin/sh");
+    let mut owner = Server(Command::new("sleep").arg("30").spawn().unwrap());
+    let owner_birth = fno::proto::pid_start_time(owner.0.id()).unwrap();
+    let mut server = spawn_server_with_env(
+        &scratch.sock(),
+        "/bin/sh",
+        &[
+            ("FNO_OWNER_PID", &owner.0.id().to_string()),
+            ("FNO_OWNER_BIRTH", &owner_birth.to_string()),
+            ("FNO_OWNER_SESSION", "owner-test-session"),
+            ("FNO_IDLE_EXIT_GRACE_MS", "60000"),
+        ],
+    );
     let mut stream = attach(&scratch.sock(), 24, 80);
     // First frame = full resync of the current screen.
     wait_for_frame(&mut stream, 10, |_| true);
+    let owner_sidecar = fno::proto::owner_sidecar_path(&scratch.sock());
+    assert!(
+        owner_sidecar.is_file(),
+        "owner lease is persisted beside the socket"
+    );
     send(&mut stream, &ClientMsg::Input(b"echo he\"ll\"o\r".to_vec()));
     // The typed line contains the quotes; only the OUTPUT is bare "hello".
     wait_for_frame(&mut stream, 10, |text| {
-        text.lines().any(|l| l.trim() == "hello")
+        common::screen_has_line(text, "hello")
     });
+    owner.0.kill().unwrap();
+    owner.0.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if server.0.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "server outlived its dead owner");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !owner_sidecar.exists(),
+        "server teardown removes the owner lease"
+    );
+
+    let mut idle_owner = Server(Command::new("sleep").arg("30").spawn().unwrap());
+    let idle_birth = fno::proto::pid_start_time(idle_owner.0.id()).unwrap();
+    let idle_pid = idle_owner.0.id().to_string();
+    let idle_birth = idle_birth.to_string();
+    let idle_env = [
+        ("FNO_OWNER_PID", idle_pid.as_str()),
+        ("FNO_OWNER_BIRTH", idle_birth.as_str()),
+        ("FNO_OWNER_SESSION", "idle-owner-session"),
+        ("FNO_IDLE_EXIT_GRACE_MS", "5000"),
+    ];
+    let mut idle_command = server_command(&scratch.sock(), "/bin/sh", &idle_env);
+    idle_command.env_remove("FNO_E2E");
+    let mut idle_server = Server(idle_command.spawn().unwrap());
+    let mut idle_stream = attach(&scratch.sock(), 24, 80);
+    wait_for_frame(&mut idle_stream, 10, |_| true);
+    send(
+        &mut idle_stream,
+        &ClientMsg::Input(b"while true; do echo idle-owner-output; sleep 0.1; done\r".to_vec()),
+    );
+    wait_for_frame(&mut idle_stream, 10, |text| {
+        common::screen_has_line(text, "idle-owner-output")
+    });
+    send(&mut idle_stream, &ClientMsg::Detach);
+    drop(idle_stream);
+    let idle_deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if idle_server.0.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < idle_deadline,
+            "sandbox server used pane output to extend its empty-client lifetime"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        idle_owner.0.try_wait().unwrap().is_none(),
+        "idle exit was caused by the owner"
+    );
+}
+
+fn spine_event_rows(events_path: &Path) -> Vec<serde_json::Value> {
+    // The daemon rows commit into the store beside the journal; the raw
+    // file is legacy bytes the writer no longer touches.
+    fno::event_store::query_events(events_path, &fno::event_store::EventQuery::default())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|row| serde_json::from_str(&row.line).ok())
+        .collect()
+}
+
+/// The rows commit from the server's journal writer thread, after the echo
+/// has already rendered, so a reader waits for the rows it expects.
+fn spine_wait_rows(
+    events_path: &Path,
+    ready: impl Fn(&[serde_json::Value]) -> bool,
+) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = spine_event_rows(events_path);
+        if ready(&rows) || Instant::now() >= deadline {
+            return rows;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn server_spine_human_touch_keystroke_echo_latency_under_cpu_load() {
+    let scratch = Scratch::new("human-touch-latency");
+    let _server = spawn_server(&scratch.sock(), "/bin/sh");
+    let mut stream = attach(&scratch.sock(), 24, 80);
+    wait_for_frame(&mut stream, 10, |_| true);
+    let _load = CpuLoad::start();
+
+    // A second writer holds the store lock for 3s: a commit on the core loop
+    // would stall the echo for that long.
+    let events_path = scratch.0.join("iso-agents").join("events.jsonl");
+    let store = fno::event_store::store_path(&events_path);
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let conn = rusqlite::Connection::open(&store).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE;")
+            .unwrap();
+        locked_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        conn.execute_batch("COMMIT;").unwrap();
+    });
+    locked_rx.recv().unwrap();
+
+    let started = Instant::now();
+    send(
+        &mut stream,
+        &ClientMsg::Input(b"echo 'latency-marker'\r".to_vec()),
+    );
+    wait_for_frame(&mut stream, 10, |text| {
+        common::screen_has_line(text, "latency-marker")
+    });
+    let latency = started.elapsed();
+    assert!(
+        latency < Duration::from_secs(2),
+        "keystroke-to-echo took {latency:?} under CPU load with the store locked"
+    );
+
+    holder.join().unwrap();
+    let rows = spine_wait_rows(&events_path, |rows| {
+        rows.iter().any(|row| row["type"] == "human_touch")
+    });
+    let touch = rows
+        .iter()
+        .find(|row| row["type"] == "human_touch")
+        .expect("the first human key in the burst writes human_touch");
+    assert_eq!(touch["source"], "daemon");
+    assert_eq!(touch["data"]["source"], "inject");
+    assert!(touch["data"].get("graph_node_id").is_some());
+}
+
+#[test]
+fn server_spine_touch_kill_switch_preserves_operator_witnesses() {
+    let scratch = Scratch::new("touch-kill-switch");
+    let _server = spawn_server_with_env(&scratch.sock(), "/bin/sh", &[("FNO_TOUCH_EMIT", "0")]);
+    let mut stream = attach(&scratch.sock(), 24, 80);
+    wait_for_frame(&mut stream, 10, |_| true);
+    send(
+        &mut stream,
+        &ClientMsg::Input(b"echo witness-switch".to_vec()),
+    );
+    wait_for_frame(&mut stream, 10, |text| text.contains("witness-switch"));
+    send(&mut stream, &ClientMsg::Input(b"\r".to_vec()));
+    wait_for_frame(&mut stream, 10, |text| {
+        common::screen_has_line(text, "witness-switch")
+    });
+
+    let events_path = scratch.0.join("iso-agents").join("events.jsonl");
+    let rows = spine_wait_rows(&events_path, |rows| {
+        ["operator_typing", "operator_submit"]
+            .iter()
+            .all(|kind| rows.iter().any(|row| row["type"] == *kind))
+    });
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["type"] == "operator_typing")
+            .count(),
+        1
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["type"] == "operator_submit")
+            .count(),
+        1
+    );
+    assert!(
+        rows.iter().all(|row| row["type"] != "human_touch"),
+        "FNO_TOUCH_EMIT=0 suppresses only human_touch"
+    );
 }
 
 #[test]
@@ -305,7 +536,7 @@ fn server_spine_unspawnable_shell_falls_back_to_sh() {
     wait_for_frame(&mut stream, 10, |_| true);
     send(&mut stream, &ClientMsg::Input(b"echo fell-back\r".to_vec()));
     wait_for_frame(&mut stream, 10, |text| {
-        text.lines().any(|l| l.trim() == "fell-back")
+        common::screen_has_line(text, "fell-back")
     });
 }
 
@@ -429,7 +660,11 @@ fn server_spine_output_flood_stays_responsive() {
     // test deterministic on a machine fast enough that our reader only ever
     // sees the final frame (frames are droppable; we cannot force one).
     wait_for_frame(&mut stream, 15, |text| {
-        text.lines().filter(|l| l.trim() == "y").count() >= 5 || text.contains("FLOOD-DONE")
+        text.lines()
+            .filter(|l| common::strip_prompts(l) == "y")
+            .count()
+            >= 5
+            || text.contains("FLOOD-DONE")
     });
     // The typed line carries quotes so only the OUTPUT is bare, and the
     // match is contains-based: input landing during the pipeline teardown
@@ -462,7 +697,7 @@ fn server_spine_bad_client_dropped_peers_keep_streaming() {
     // The pane keeps working for B.
     send(&mut b, &ClientMsg::Input(b"echo b-survives\r".to_vec()));
     wait_for_frame(&mut b, 10, |text| {
-        text.lines().any(|l| l.trim() == "b-survives")
+        common::screen_has_line(text, "b-survives")
     });
 }
 

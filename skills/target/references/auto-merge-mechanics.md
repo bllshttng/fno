@@ -27,7 +27,7 @@ See [ship-phase.md](ship-phase.md) for the full exit-42 dispatch loop. State upd
 
 After `external_review_passed: true` (or skipped), if `auto_merge_approved: true`:
 
-Docs are advisory (control-plane step 6, ab-f8e5f214): there is no docs pre-gate on auto-merge. `fno do target init` no longer writes a docs-completion field, so nothing reads one. Docs run before ship so they ride in the same PR, but a missing docs pass never blocks the merge.
+Docs are advisory (control-plane step 6): there is no docs pre-gate on auto-merge. `fno do target init` no longer writes a docs-completion field, so nothing reads one. Docs run before ship so they ride in the same PR, but a missing docs pass never blocks the merge.
 
 ```bash
 PR_NUMBER=$(sed -n 's/^pr_number:[[:space:]]*//p' .fno/target-state.md | xargs)
@@ -44,7 +44,7 @@ State update rules per outcome:
 | `failed` | Append `{pr: $PR_NUMBER, reason: ...}` to `merge_failed` (NOT a target failure - PR exists) |
 | `skipped` | No state change (auto-merge disabled, or finalize already armed GitHub's queue) |
 
-No `queued` outcome exists (x-9d11): the merge verb executes with in-process checks enforcement. GitHub's native auto-merge queue is armed by `fno-agents finalize` alone.
+No `queued` outcome exists : the merge verb executes with in-process checks enforcement. GitHub's native auto-merge queue is armed by `fno-agents finalize` alone.
 
 A `failed` outcome does NOT block the promise. The PR was created successfully; merge failure is post-hoc.
 
@@ -59,7 +59,7 @@ When deciding whether to auto-merge, resolve in this order (first match wins):
 5. **Global `~/.fno/config.toml`** - `config.auto_merge.enabled`
 6. **Default** - false
 
-`init-target-state.sh` implements this chain and is the only place it lives. The resolved value is recorded in `target-state.md` as `auto_merge_approved`. `fno do pr merge` and `fno-agents finalize` resolve the same posture from it. A refusal (`false`) outranks every grant. A grant also needs the live `auto_merge.enabled` switch. Or it needs its own `auto_merge_source: env-target-auto-merge` stamp. That stamp is the operator's `TARGET_AUTO_MERGE=1` grant, folded at init. The git-protection hook guards raw `gh pr merge` on the same posture. An operator disarm mid-flight therefore still withholds everywhere. `TARGET_AUTO_MERGE` is read at init only. Runs carrying a mesh identity (`FNO_AGENT_SELF`) or an unattended marker scrub it. An interactive session the operator launched carries neither marker and sits inside the operator's trust boundary. That is the documented way the grant reaches a run. The stamp keeps every grant auditable. Exporting it on a merge command line grants nothing.
+`init-target-state.sh` implements this chain and is the only place it lives. The resolved value is recorded in `target-state.md` as `auto_merge_approved`. `fno do pr merge` and `fno-agents finalize` resolve the same posture from it. A refusal (`false`) outranks every grant. A grant also needs the live `auto_merge.enabled` switch. Or it needs its own `auto_merge_source: env-target-auto-merge` stamp. That stamp is the superuser's `TARGET_AUTO_MERGE=1` grant, folded at init. The git-protection hook guards raw `gh pr merge` on the same posture. A superuser disarm mid-flight therefore still withholds everywhere. `TARGET_AUTO_MERGE` is read at init only. Runs carrying a mesh identity (`FNO_AGENT_SELF`) or an unattended marker scrub it. An interactive session the user launched carries neither marker and sits inside the user's trust boundary. That is the documented way the grant reaches a run. The stamp keeps every grant auditable. Exporting it on a merge command line grants nothing.
 
 **Arming happens at the gate, not at PR creation.** `worker/ship.py` used to arm GitHub's native auto-merge the moment the PR existed, gated only on this field. That pre-authorized a merge before anything had been verified: once `--auto` is set GitHub owns the timing and fires as soon as its own branch protections pass, so a reviewer posting a blocking finding after CI greens loses the race. `fno-agents finalize` arms it instead, on the `DonePRGreen` terminal only, so the merge authorizes a state loop-check just verified (PR up, CI green, no unaddressed blocking finding). A reviewer that has not posted yet gets the whole CI duration before the merge is armed at all.
 

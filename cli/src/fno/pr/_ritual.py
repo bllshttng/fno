@@ -1,6 +1,6 @@
-"""fno do pr ritual - the mechanical core of the post-merge ritual (x-bbde).
+"""fno do pr ritual - the mechanical core of the post-merge ritual.
 
-One idempotent verb runs the ~90% of ``skills/pr/references/merged.md`` that is
+One idempotent verb runs the ~90% of ``skills/ship/references/merged.md`` that is
 pure CLI orchestration. Per leg it shells the existing fno verb, captures the
 exit code, and prints one receipt line::
 
@@ -13,24 +13,24 @@ Decision 9).
 
 Why a verb, not the skill: the ritual wore a full LLM session for a ~117k-token
 birth payload to run a sequence of fno verbs, and its bash snippets carried a
-proven zsh/ugrep silent-misfire class (x-f47f: ``${VAR:+...}`` word-splitting,
+proven zsh/ugrep silent-misfire class (: ``${VAR:+...}`` word-splitting,
 empty-alternation grep). Python builds each argv explicitly, so that whole
 portability class is structurally gone and every leg's failure is loud - there
 is no ``|| true`` anywhere (Locked Decision 5).
 
 Absorbed bugs, each verified in this PR's tests:
 
-- x-c4ff - only real verbs are called (``skill-diff reconcile``, ``pr
+- - only real verbs are called (``skill-diff reconcile``, ``pr
   sync-canonical`` both exist); no dangling references survive.
-- x-fb99 - ``parking_lot_path`` is resolved against the CANONICAL root, never a
+- - ``parking_lot_path`` is resolved against the CANONICAL root, never a
   worktree cwd that may carry a stale override.
-- x-adf9 - canonical-sync pipes are closed + timeouted (see
-  ``_sync_canonical._default_shell_runner``) so a trailing ``fno agents restart``
+- - canonical-sync pipes are closed + timeouted by the native verb
+  (``crates/fno-agents/src/sync_canonical.rs``) so a trailing ``fno agents restart``
   detached daemon cannot hold the pipe and wedge the ritual.
-- x-0d66 - the advance leg runs bounded with streamed progress lines instead of
+- x-aaaa - the advance leg runs bounded with streamed progress lines instead of
   hanging silent for minutes.
 
-The detector/dispatch cutover is the separate blocked child x-a35a; this verb
+The detector/dispatch cutover is the separate blocked child ; this verb
 honors the existing dedup apparatus (markers + claims) unchanged.
 """
 from __future__ import annotations
@@ -39,30 +39,30 @@ import json
 import os
 import re
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 import typer
 
-from fno._subprocess_util import fno_py_cmd
+from fno._subprocess_util import fno_cmd, fno_py_cmd
+from fno.agents.naming import mint_or_none
+from fno.agents.events import (
+    emit_merge_cleanup_requested,
+    pr_node_ids,
+    rows_for_cleanup,
+)
 from fno.config import load_settings_for_repo
+from fno.paths import agents_home_dir
 from fno.pr._proc import Result, ToolMissing, run as _run
 
-# Cross-runner mutex (Step 0.5): a global TTL claim so an attended `/fno:pr
+# Cross-runner mutex (Step 0.5): a global TTL claim so an attended `/fno:ship pr
 # merged` and an auto-dispatched worker cannot run the destructive middle
 # concurrently. 15m bounds a run that finishes in 1-3 min; the TTL is the
 # crash backstop.
 _CLAIM_TTL = "15m"
-# Reap order: minted only by this ritual against a gh-confirmed MERGED state,
-# consumed by the daemon's periodic worktree sweep (which runs its pass with
-# --apply while any order stands). 24h is the claim TTL ceiling AND the sweep
-# interval, so an order pairs the merge proof with at most one sweep window; a
-# tree still protected at that sweep waits for the next merge's order rather
-# than a timer's authority. "7d"-style day units are rejected TTL syntax
-# (verified: only m/h/s parse, and the ms range caps at one day).
-_REAP_ORDER_TTL = "24h"
-# x-0d66: bound the advance leg. advance dispatches successors inline and can
+# x-aaaa: bound the advance leg. advance dispatches successors inline and can
 # spend minutes with no output; a bounded run with progress lines surfaces
 # partial-dispatch state instead of wedging the ritual. Killing mid-dispatch is
 # safe: advance's `dispatch:<id>` reservations are TTL claims that survive the
@@ -128,8 +128,8 @@ def _canonical_root(cwd: Path) -> Optional[Path]:
 
     A lane worktree can carry a per-worktree ``parking_lot_path`` override and a
     real ``internal/`` dir; resolving config + paths against it would strand the
-    durable parking-lot write in a file archive-worktree.sh deletes (x-fb99,
-    x-071c). ``--git-common-dir`` points at the shared ``.git`` whose parent IS
+    durable parking-lot write in a file archive-worktree.sh deletes (
+). ``--git-common-dir`` points at the shared ``.git`` whose parent IS
     canonical; it may be relative, so resolve before taking the parent.
     """
     gcd = _git_text(["rev-parse", "--git-common-dir"], cwd)
@@ -151,7 +151,7 @@ def _worktree_root(cwd: Path) -> Path:
 
 # Anchored so a lookalike host or a github.com path segment cannot match: the
 # scheme and user@ are optional, then `github.com` must be the host (optionally
-# :port), then : or / . This is the exact semantics of the bash scan it replaces
+#:port), then: or / . This is the exact semantics of the bash scan it replaces
 # (AC9b resolves every GitHub remote form; AC9c rejects every lookalike).
 _ORIGIN_SLUG_RE = re.compile(
     r"^(?:[a-z][a-z0-9+.-]*://)?"
@@ -179,30 +179,6 @@ def _parse_origin_slug(url: str) -> Optional[str]:
         return None
     owner, repo = rest.split("/")
     return rest if owner and repo else None
-
-
-def _scan_nodes(entries, pr: int, slug: Optional[str]) -> list[str]:
-    """Graph-derived node ids whose pr_url matches this PR's repo.
-
-    Repo-scoped because pr_number is unique only within a repo (cross-project
-    graph): a foreign repo sharing the number is excluded. A url-less or
-    non-string pr_url is skipped, never fatal (a corrupt entry cannot drop the
-    legitimate nodes after it). Pure so the harness ACs test it directly.
-    """
-    if not slug:
-        return []
-    needle = f"/{slug.lower()}/pull/"
-    out: list[str] = []
-    for e in entries or []:
-        if not isinstance(e, dict) or e.get("pr_number") != pr:
-            continue
-        url = e.get("pr_url")
-        if not isinstance(url, str) or needle not in url.lower():
-            continue
-        nid = e.get("id")
-        if nid and nid not in out:
-            out.append(nid)
-    return out
 
 
 def _session_holder() -> str:
@@ -280,7 +256,7 @@ class Ritual:
         settings = load_settings_for_repo(canon) if canon else None
         # SettingsModel exposes post_merge/project directly - there is no
         # `.config` wrapper attribute, so the old `getattr(settings, "config")`
-        # was always None and the config leg failed on every run (x-bbde verb
+        # was always None and the config leg failed on every run (verb
         # shipped non-functional). The model IS the config root.
         cfg = settings
         pm = getattr(cfg, "post_merge", None) if cfg else None
@@ -315,9 +291,11 @@ class Ritual:
     # -- seams -------------------------------------------------------------
 
     def _sh(self, argv: list[str], *, cwd: Optional[Path] = None,
-            timeout: float = _LEG_TIMEOUT_S) -> Result:
+            timeout: float = _LEG_TIMEOUT_S, detached: bool = False) -> Result:
         """Shell an fno verb via the PATH-robust fno-py prefix."""
-        return self.runner([*fno_py_cmd(), *argv], cwd=str(cwd or self.canon), timeout=timeout)
+        kw = {"start_new_session": True} if detached else {}
+        return self.runner([*fno_py_cmd(), *argv], cwd=str(cwd or self.canon),
+                           timeout=timeout, **kw)
 
     def _gh(self, argv: list[str], *, timeout: float = 30.0) -> Result:
         return self.runner(["gh", *argv], cwd=str(self.canon or self.cwd), timeout=timeout)
@@ -332,17 +310,30 @@ class Ritual:
         rec = Receipt(step, status, detail)
         self.ctx.receipts.append(rec)
         typer.echo(rec.line())
+        if step == "archive":
+            from fno.agents.events import _emit_daemon_envelope
+
+            _emit_daemon_envelope(
+                "post_merge_archive",
+                {
+                    "pr": self.ctx.pr,
+                    "project": self.ctx.project,
+                    "outcome": status,
+                    "detail": detail,
+                },
+            )
 
     def _leg(self, step: str, argv: list[str], *, cwd: Optional[Path] = None,
-             timeout: float = _LEG_TIMEOUT_S) -> Result:
+             timeout: float = _LEG_TIMEOUT_S,
+             detached: bool = False) -> Result:
         """Run one best-effort leg; map exit code to ok/failed, never raise.
 
-        A non-zero exit is the load-bearing signal (x-f47f): the receipt names
+        A non-zero exit is the load-bearing signal : the receipt names
         the leg and the verb exits non-zero, so a failed leg is never readable
         as a no-op.
         """
         try:
-            r = self._sh(argv, cwd=cwd, timeout=timeout)
+            r = self._sh(argv, cwd=cwd, timeout=timeout, detached=detached)
         except subprocess.TimeoutExpired:
             self._emit(step, _FAILED, "timeout")
             return Result(124, "", "timeout")
@@ -392,8 +383,8 @@ class Ritual:
 
     def leg_stamp(self) -> None:
         """Step 2: close the merged node(s), reconcile plan status, stamp ship."""
-        # --pr-number (x-59a6): bind every node this PR's exact Backlog-Closure
-        # trailer names to the PR BEFORE the drift scan the rest of reconcile
+        # --pr-number: bind every node this PR's exact closure line
+        # names to the PR BEFORE the drift scan the rest of reconcile
         # already ran unconditionally - a PR naming several nodes (only one of
         # which ever got individually stamped at creation) now closes all of
         # them here, not just the primary. --repo is passed explicitly when
@@ -401,7 +392,8 @@ class Ritual:
         # mismatched; reconcile's own repo scoping still fails closed on a
         # bare-number match when this resolution comes up empty (never left
         # to cwd inference to guess).
-        argv = ["backlog", "reconcile", "--pr-number", str(self.ctx.pr), "--json"]
+        # The native door, not fno-py: the mux owns `fno backlog` outright.
+        argv = [*fno_cmd(), "backlog", "reconcile", "--pr-number", str(self.ctx.pr), "--json"]
         from fno.graph._reconcile import resolve_current_repo_slug
 
         repo = resolve_current_repo_slug(str(self.canon))
@@ -415,7 +407,17 @@ class Ritual:
                 err=True,
             )
         try:
-            r = self._sh(argv)
+            # Above reconcile's 240s close-probe budget, same as the merge.
+            # The argv already carries the mux prefix; _sh would prepend
+            # fno-py in front of it.
+            from fno.pr._merge import POST_MERGE_RECONCILE_TIMEOUT_S
+
+            r = self.runner(
+                argv,
+                cwd=str(self.canon),
+                timeout=POST_MERGE_RECONCILE_TIMEOUT_S,
+                start_new_session=True,
+            )
         except subprocess.TimeoutExpired:
             self._emit("reconcile", _FAILED, "timeout")
             return
@@ -428,23 +430,41 @@ class Ritual:
                 closed = [c.get("node_id") for c in (obj.get("closed") or [])
                           if isinstance(c, dict) and c.get("node_id")]
                 self.ctx.node_ids.extend(closed)
-                held = [h.get("node_id") for h in (obj.get("promise_unmet") or [])
+                unmet_rows = obj.get("promise_unmet") or []
+                unknown_rows = obj.get("promise_unknown") or []
+                held = [h.get("node_id") for h in unmet_rows + unknown_rows
                         if isinstance(h, dict) and h.get("node_id")]
                 errs = len(obj.get("contained_errors") or [])
                 sync_obj = obj.get("sync_catchup") or {}
                 sync_outcome = sync_obj.get("outcome") if isinstance(sync_obj, dict) else None
                 closure_refused = obj.get("closure_refused")
-                if held:
+                if obj.get("held"):
+                    # A held sweep (one-in-flight gate): another reconcile was
+                    # still running, so this one stood down without scanning.
+                    # The merged nodes close on that pass or the next; DEFERRED
+                    # keeps the work visibly owed rather than reading as the
+                    # no-drift fall-through below.
+                    self._emit(
+                        "reconcile",
+                        _DEFERRED,
+                        "held, a sweep was already in flight "
+                        f"(requests={obj.get('requests')}, holder={obj.get('holder')})",
+                    )
+                elif held:
                     # Held open, not clean: the PR merged but the promise gate
-                    # refused the close (x-40be). status=ok detail=closed=0
+                    # did not clear the close. status=ok detail=closed=0
                     # covered "held seven nodes open"; deferred keeps the work
-                    # visibly owed and names who holds it.
+                    # visibly owed and names who holds it. The two causes are
+                    # counted apart: an unmet promise owes the operator work, an
+                    # unknown is a read outage a later sweep clears by itself,
+                    # and one merged count reads the second as the first.
                     ids = ", ".join(str(h) for h in held[:5])
                     more = f" +{len(held) - 5}" if len(held) > 5 else ""
                     self._emit(
                         "reconcile",
                         _DEFERRED,
-                        f"closed={len(closed)} held_open={len(held)}: {ids}{more}",
+                        f"closed={len(closed)} held_open={len(held)} "
+                        f"(unmet={len(unmet_rows)} unknown={len(unknown_rows)}): {ids}{more}",
                     )
                 elif closure_refused:
                     # The trailer-claimed nodes (if any) never got bound - a
@@ -494,9 +514,10 @@ class Ritual:
         self._leg("retro", argv)
 
     def leg_advance(self) -> None:
-        """Step 3b: merge-triggered next dispatch, bounded + progress (x-0d66)."""
-        argv = ["backlog", "advance", "-J", "--verbose"]
-        # x-59a6: no --closed here. `leg_stamp`'s reconcile call already ran
+        """Step 3b: merge-triggered next dispatch, bounded + progress."""
+        # --source ac: the merge continuation origin rides the name.
+        argv = ["backlog", "advance", "-J", "--verbose", "--source", "ac"]
+        # no --closed here. `leg_stamp`'s reconcile call already ran
         # `_advance`/`advance_dependents` per CLOSED RECORD for every node this
         # PR's trailer bound, not only the first - `--closed` takes a SINGLE
         # id, so passing `self.ctx.node_ids[0]` on a multi-node PR would key
@@ -508,55 +529,61 @@ class Ritual:
         self._stream("advance", argv, _ADVANCE_TIMEOUT_S)
 
     def leg_skill_diff(self) -> None:
-        """Step 3c: close the skill-diff loop. x-c4ff: the real verb exists."""
+        """Step 3c: close the skill-diff loop. : the real verb exists."""
         self._leg(
             "skill-diff",
             ["doctor", "skill-diff", "reconcile", "--pr-number", str(self.ctx.pr)],
         )
 
     def leg_sync_canonical(self) -> None:
-        """Step 3d: x-adf9 fix lives in _sync_canonical._default_shell_runner."""
+        """Step 3d: the guard chain lives in the native verb (sync_canonical.rs)."""
         if not getattr(self.ctx.pm, "sync_command", None):
             self._emit("sync-canonical", _SKIPPED, "not configured")
             return
+        # detached: a sync in its own session survives the slice kill upstream.
         self._leg("sync-canonical", ["do", "pr", "sync-canonical", "--pr-number", str(self.ctx.pr)],
-                  timeout=900.0)
+                  timeout=900.0, detached=True)
 
-    def _merged_state(self) -> tuple[Optional[str], Optional[str]]:
-        """(state, headRefName) from ONE gh call, or (None, None) if unreadable.
+    def _merged_state(self) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """(state, headRefName, mergedAt) from ONE gh call, or Nones if unreadable.
 
         Memoized: two legs ask, and one PR view per ritual is enough. The state
         can only travel toward MERGED during a run, so a cached OPEN refuses
         more, never less.
 
-        `state` is the whole point. This call already existed and read only the
-        branch, so an OPEN PR resolved a branch, found its worktree, and handed
-        it to the archive script - whose own checks (clean, pushed, no live
-        session) a worker who finished and now waits on review passes cleanly.
+        `state` is the whole point. This call already existed and reads the
+        branch needed by the daemon cleanup request; an OPEN PR must not mint
+        that request or defer tree removal.
 
         The merge is not self-evident on every trigger. The pr-watch daemon
         fires on a gh-backed `state == MERGED`, but `fno do pr merged <n>` reaches
         `_resolve_pr`, which returns a caller-supplied number unchecked. On that
         path the merge is an ARGUMENT, so the guard belongs here at the leg,
         where a removal actually happens, not at resolve.
+
+        mergedAt travels to the cleanup mint: both mint sites key one request
+        id, the journal keeps the LAST event per id, and the reaper's grace
+        window anchors on merged_at - so a later mint that stamped now would
+        push the reap a full grace window past the real merge.
         """
         if self._merge_state is None:
             self._merge_state = self._merged_state_read()
         return self._merge_state
 
-    def _merged_state_read(self) -> tuple[Optional[str], Optional[str]]:
+    def _merged_state_read(self) -> tuple[Optional[str], Optional[str], Optional[str]]:
         try:
             meta = self._gh(["pr", "view", str(self.ctx.pr),
-                             "--json", "state,headRefName"])
+                             "--json", "state,headRefName,mergedAt"])
         except (ToolMissing, subprocess.SubprocessError):
-            return (None, None)
+            return (None, None, None)
         if not meta.ok:
-            return (None, None)
+            return (None, None, None)
         try:
             obj = json.loads(meta.stdout or "{}")
         except json.JSONDecodeError:
-            return (None, None)
-        return (obj.get("state") or None, obj.get("headRefName") or None)
+            return (None, None, None)
+        return (obj.get("state") or None, obj.get("headRefName") or None,
+                obj.get("mergedAt") or None)
 
     def _refuse_unless_merged(self, step: str) -> bool:
         """True when gh confirms MERGED. Emits the refusal itself otherwise.
@@ -564,46 +591,48 @@ class Ritual:
         Fails CLOSED: an unreadable state refuses too. "I could not check"
         must never spend the same as "I checked and it is merged".
         """
-        state, _ = self._merged_state()
+        state, _, _ = self._merged_state()
         if state == "MERGED":
             return True
         detail = f"not-merged (state={state})" if state else "merge-state unreadable"
         self._emit(step, _SKIPPED, detail)
         return False
 
-    def _register_reap_order(self, why: str) -> str:
-        """Mint the durable reap order a deferred archive owes (a TTL claim).
-
-        The daemon's periodic worktree sweep consumes standing orders: while
-        any live order exists it runs its pass with ``--apply``. Removal stays
-        merge-triggered - only this ritual, against a gh-confirmed MERGED
-        state, mints orders - and the sweep's own guards (reapable, live
-        claim, rooted processes) still decide tree by tree, so a tree that is
-        still in use stays put and the order simply expires.
+    def _register_cleanup_request(
+        self, branch: str, worktree: Optional[str], why: str
+    ) -> str:
+        """Persist one merge-triggered cleanup request before deferring: the
+        shared helper `fno do pr merge` also mints, one fold key for both.
         """
-        key = f"reap:pr-{self.ctx.pr}"
-        try:
-            r = self.runner(
-                [*fno_py_cmd(), "agents", "claim", "acquire", key,
-                 "--holder", f"postmerge:reap:pr-{self.ctx.pr}",
-                 "--ttl", _REAP_ORDER_TTL,
-                 "--reason", "post-merge reap order",
-                 "--metadata", json.dumps({"pr": self.ctx.pr,
-                                           "project": self.ctx.project})],
-                timeout=15.0,
-            )
-        except (ToolMissing, subprocess.SubprocessError) as exc:
-            return f"reap-order-unwritten ({exc})"
-        if r.returncode == 0:
-            return f"reap-order {key} standing ({why})"
-        if r.returncode == 1:
-            # Already held: a prior ritual for this PR already ordered it.
-            return f"reap-order {key} already standing ({why})"
-        return f"reap-order-unwritten (exit={r.returncode}, {why})"
+        if not self.ctx.node_ids:
+            # Dominant path: the ship gate already closed the node, so
+            # reconcile's .closed[] was empty. Recover it HERE, before the
+            # envelope and its request id key on it - leg_reap_rows runs the
+            # same recovery several legs later, too late for this mint.
+            self.ctx.node_ids = self._recover_node_for_pr()
+        request_id = emit_merge_cleanup_requested(
+            repo=str(self.canon) if self.canon else "",
+            project=self.ctx.project,
+            pr=self.ctx.pr,
+            branch=branch,
+            worktree=worktree,
+            node_ids=[str(node) for node in self.ctx.node_ids],
+            session_id=None,
+            harness=None,
+            merged_at=self._merged_state()[2],
+            # x-bbbb: always emit the exact candidates - a PR whose worktree
+            # path is gone still carries name-matched rows for the reaper.
+            candidate_row_names=rows_for_cleanup(
+                worktree, self.ctx.node_ids, runner=self._sh
+            ),
+        )
+        # Minting makes the next idle tick the request's first payment window.
+        (agents_home_dir() / "worktree-sweep.stamp").unlink(missing_ok=True)
+        return f"cleanup-requested request_id={request_id}; {why}"
 
     def leg_archive(self) -> None:
-        """Step 4: best-effort worktree archive; defer when run from inside it."""
-        state, branch = self._merged_state()
+        """Step 4: mint the daemon cleanup request after a confirmed merge."""
+        state, branch, _merged_at = self._merged_state()
         if state is None:
             self._emit("archive", _SKIPPED, "gh-unavailable")
             return
@@ -613,61 +642,13 @@ class Ritual:
         if not branch:
             self._emit("archive", _SKIPPED, "no-branch")
             return
-        wt = self._find_worktree(branch)
-        if not wt:
-            self._emit("archive", _SKIPPED, f"no worktree for {branch}")
-            return
-        if Path(wt).resolve() == self.cwd.resolve():
-            # Never self-remove. This is the DOMINANT path, because the worker
-            # that merged its own PR is standing in its own worktree - which is
-            # why the freshest merged worktrees were the ones that survived.
-            # `deferred` says the work is still owed; `skipped` plus a command
-            # in the detail line read as done and nobody ever ran it. The
-            # order makes "later" a fact in the world: the daemon's sweep pays
-            # this debt instead of a human remembering to.
-            self._emit("archive", _DEFERRED,
-                       f"sweep-will-reap; {self._register_reap_order('self-worktree')}")
-            return
-        script = self.canon / "scripts" / "setup" / "archive-worktree.sh"
-        if not script.exists():
-            self._emit("archive", _SKIPPED, "archive-worktree.sh missing")
-            return
-        try:
-            # env(1) prefixes the caller into the removal event the script
-            # emits; the runner has no env parameter by design (test seams).
-            r = self.runner(["env", "FNO_WT_REMOVE_CALLER=post-merge ritual",
-                             "bash", str(script), str(wt), "--yes"],
-                            cwd=str(self.canon), timeout=120.0)
-        except subprocess.TimeoutExpired:
-            self._emit("archive", _FAILED, "timeout")
-            return
-        except (ToolMissing, subprocess.SubprocessError) as exc:
-            self._emit("archive", _FAILED, f"spawn-error: {exc}")
-            return
-        if r.ok:
-            self._emit("archive", _OK, "archived")
-            return
-        # A guarded refusal (live session in the tree, salvage, confirmation)
-        # leaves the tree in place: the work is still owed, so the order
-        # stands for the sweep to retry once the guard's cause is gone.
-        self._emit("archive", _FAILED,
-                   f"exit={r.returncode} (worktree left in place); "
-                   f"{self._register_reap_order('archive-refused')}")
-
-    def _find_worktree(self, branch: str) -> Optional[str]:
-        out = _git_text(["worktree", "list", "--porcelain"], self.canon)
-        canonical = str(self.canon.resolve())
-        for block in out.split("\n\n"):
-            path = ""
-            for line in block.splitlines():
-                if line.startswith("worktree "):
-                    path = line[len("worktree "):]
-            if not path or path == canonical:
-                continue
-            hb = _git_text(["rev-parse", "--abbrev-ref", "HEAD"], Path(path))
-            if hb == branch:
-                return path
-        return None
+        order = self._register_cleanup_request(branch, None, "merged-pr")
+        order_written = "cleanup-requested" in order and "reap-order-unwritten" not in order
+        self._emit(
+            "archive",
+            _DEFERRED if order_written else _FAILED,
+            f"{order}; daemon resolves the tree from {branch}",
+        )
 
     # -- judgment ----------------------------------------------------------
 
@@ -744,17 +725,33 @@ class Ritual:
     def _spawn_judgment(self, deferred: int, files: int, lines: int) -> bool:
         """ONE headless one-shot carrying only the two judgment steps.
 
-        ``agents spawn`` takes ONE positional - the MESSAGE - and the agent name
-        rides ``--name``; a second positional is refused ("takes one positional;
-        the agent name moved to --name"). So the prompt is the sole positional
-        and ``judgment-pr-<n>`` is passed via ``--name``. (Before the axis
-        redesign the grammar was ``[name] [message]`` and the two were swapped
-        positionals; a stale two-positional call fails closed here, which is
-        exactly how the redesign's refusal caught this leg.) The headless worker
-        reads a diff and updates the backlog, which routinely exceeds a minute,
-        so it gets spawn's own ``--timeout`` and the outer bound matches it
-        rather than killing the worker early.
+        The prompt is the sole positional; ``pm-r-<node>-pr-<n>`` rides
+        ``--name`` (x-bbbb; the old ``judgment-pr-<n>`` carried neither source
+        nor node). A merged PR with no recovered node binding refuses the
+        spawn rather than substituting the PR number as a fake node. The
+        worker reads a diff and updates the backlog - routinely over a minute -
+        so spawn's own ``--timeout`` bounds it.
         """
+        node_ids = [str(node) for node in self.ctx.node_ids if str(node)]
+        if not node_ids:
+            # The PR merged but binds no graph node: spawning a judgment under
+            # a fabricated identity would orphan its own provenance.
+            print(
+                f"post-merge judgment: skipped, PR {self.ctx.pr} binds no node; "
+                "no pm-r worker spawned ",
+                file=sys.stderr,
+            )
+            return False
+        name = mint_or_none("pm", "r", node_ids[0], qualifier=f"pr-{self.ctx.pr}")
+        if name is None:
+            # A stale/missing binary must fail this leg, not abort the ritual
+            # legs after it (run() has no per-leg guard).
+            print(
+                "post-merge judgment: skipped, worker name unmintable; "
+                "no pm-r worker spawned",
+                file=sys.stderr,
+            )
+            return False
         prompt = self._judgment_prompt(deferred, files, lines)
         argv = [*fno_py_cmd(), "agents", "spawn", "--substrate", "headless",
                 "--timeout", str(int(_JUDGMENT_TIMEOUT_S)),
@@ -771,7 +768,7 @@ class Ritual:
             argv += ["--harness", "claude", "--model", model]
         # Behind `--` (fno's own click parser honors it, verified both
         # directions): a leading-flag seed must be the prompt positional.
-        argv += ["--name", f"judgment-pr-{self.ctx.pr}", "--", prompt]
+        argv += ["--name", name, "--", prompt]
         try:
             r = self.runner(argv, timeout=_JUDGMENT_TIMEOUT_S + 60.0)
         except (ToolMissing, subprocess.SubprocessError):
@@ -845,25 +842,12 @@ class Ritual:
         """Sidecar-derived node id(s) for this PR when reconcile closed nothing.
 
         The dominant path closes + stamps the node at the ship gate, so
-        ``backlog reconcile`` no-ops and ``.closed[]`` is empty. Recover the
-        PR's node from the sidecar store (repo-scoped; PR links are
-        footnote-owned ship evidence, so the scan works on any tracker
-        backend) so the row reap still finds it - the replaced bash Step 2 did
-        this scan inline (codex P2).
+        ``backlog reconcile`` no-ops and ``.closed[]`` is empty. The shared
+        helper (the merge mint recovers through it too) scans the sidecar
+        store repo-scoped; PR links are footnote-owned ship evidence, so the
+        scan works on any tracker backend.
         """
-        slug = self._resolve_origin_slug()
-        if not slug:
-            return []
-        try:
-            from fno.tracker import sidecar as sidecar_store
-
-            rows = [
-                {"id": nid, "pr_number": sc.pr_number, "pr_url": sc.pr_url}
-                for nid, sc in sidecar_store.load_all().items()
-            ]
-        except Exception:  # noqa: BLE001 - unreadable store degrades to no recovery
-            return []
-        return _scan_nodes(rows, self.ctx.pr, slug)
+        return pr_node_ids(self.ctx.pr, self._resolve_origin_slug())
 
     def leg_reap_rows(self) -> None:
         """Step 8a: reap the merged node's lingering build-worker rows."""
@@ -887,15 +871,15 @@ class Ritual:
             self._emit("reap-rows", _OK, "no lingering rows")
             return
         if not reap_on:
-            cmds = "; ".join(f"fno agents stop {n} && fno agents rm {n}" for n in rows)
+            cmds = "; ".join(f"fno agents rm {n}" for n in rows)
             self._emit("reap-rows", _OK,
                        f"{len(rows)} row(s) linger; self_reap off - clear: {cmds}")
             return
-        # STOP before RM - `agents rm` on a live agent orphans its supervisor.
+        # rm alone (law d-81c6da7e): the daemon's rm ends a live row's
+        # process itself, so the reap leg runs no stop.
         removed = 0
         for name in rows:
             try:
-                self.runner([*fno_py_cmd(), "agents", "stop", name], timeout=30.0)
                 r = self.runner([*fno_py_cmd(), "agents", "rm", name], timeout=30.0)
                 if r.ok:
                     removed += 1
@@ -904,7 +888,11 @@ class Ritual:
         self._emit("reap-rows", _OK, f"reaped {removed}/{len(rows)}")
 
     def _dead_target_rows(self) -> list[str]:
-        ids = {str(n) for n in self.ctx.node_ids}
+        """Non-live rows for the nodes this ritual closed, by canonical parse
+ with the legacy ``target-<node>-`` fallback. Delegates to
+        rows_for_cleanup, then keeps only non-live rows."""
+        ids = [str(n) for n in self.ctx.node_ids]
+        candidates = set(rows_for_cleanup(None, ids, runner=self._sh))
         try:
             r = self._sh(["agents", "list", "--json"])
         except (ToolMissing, subprocess.SubprocessError):
@@ -920,22 +908,19 @@ class Ritual:
             if not isinstance(a, dict):
                 continue
             name = a.get("name") or ""
-            if not name.startswith("target-"):
+            if name not in candidates:
                 continue
             if a.get("status") == "live":
-                continue
-            # target-<node>-<slug>: reap only rows for nodes this ritual closed.
-            if not any(name.startswith(f"target-{nid}-") for nid in ids):
                 continue
             out.append(name)
         return out
 
-    # -- streaming leg (x-0d66) -------------------------------------------
+    # -- streaming leg -------------------------------------------
 
     def _stream(self, step: str, argv: list[str], timeout: float) -> None:
         """Run a verb, echoing each stdout line as progress; bounded by timeout.
 
-        The bound is enforced DURING the read (x-0d66), not just on ``wait()``:
+        The bound is enforced DURING the read, not just on ``wait()``:
         a hung verb with no output never closes its pipe, so a blocking read loop
         would wedge before ``wait`` ever ran. ``select`` with the remaining
         deadline lets us re-check the bound every tick and kill a silent hang.
@@ -1003,7 +988,7 @@ class Ritual:
         from fno.config import autonomy_master_enabled
 
         if not autonomy_master_enabled(self.canon):
-            # x-aaaf wave 3: the master panic switch outranks post_merge.enabled
+            # wave 3: the master panic switch outranks post_merge.enabled
             # too - checked separately so the receipt names WHICH one fired.
             self._emit("config", _SKIPPED, "autonomy.enabled is false; ritual disabled")
             return 0

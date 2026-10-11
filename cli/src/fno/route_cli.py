@@ -19,6 +19,7 @@ file lock; accepted).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shlex
@@ -254,26 +255,26 @@ def routing_init_cmd(
 
     The sample documents the ``[routing]`` block shape; nothing is enabled until
     you uncomment and edit rows. Idempotent: a config already carrying the
-    sample marker is left untouched. The sample lives INSIDE the package
-    (``fno/routing_sample.toml``) so an installed wheel finds it exactly like a
-    checkout does - the events-schema precedent.
+    sample marker is left untouched. The sample ships in its own data package
+    (``fno_routing_sample``) so an installed wheel finds it like a checkout does.
     """
     import fcntl
     from pathlib import Path
 
     from fno.config.writer import _target_path
 
-    sample = Path(__file__).resolve().parent / "routing_sample.toml"
-    if not sample.is_file():
-        typer.echo(f"error: sample not found at {sample}", err=True)
-        raise typer.Exit(1)
+    # The sample ships beside the package (a wheel-packaged data package, not
+    # inside fno/: the Python tree is budget-capped and the sample is pure data).
+    from importlib.resources import files as _res_files
+
+    sample_text = _res_files("fno_routing_sample").joinpath("routing_sample.toml").read_text(encoding="utf-8")
     target = _target_path("project" if local else "global", None)
     if target.is_symlink():
         target = Path(os.path.realpath(target))
     marker = "# SAMPLE routing inventory"
     commented = "\n".join(
         ("# " + line.rstrip()) if line.strip() else "#" for line in
-        sample.read_text(encoding="utf-8").splitlines()
+        sample_text.splitlines()
     )
     # The SAME exclusive lock discipline config.writer._locked_update uses
     # (sidecar <config>.lock + flock), held across the read and the append, so
@@ -311,71 +312,113 @@ def inventory_cmd(
 ) -> None:
     """What can this installation reach: every declared routing row.
 
-    One row per declared model with its resolved band (row band, else a
-    snapshot-derived percentile, else unbanded) and a reachability verdict:
-    ``ok`` (a known harness can invoke it), ``not-installed`` (the named
-    harness is not one fno can drive; the row refuses BY NAME on stderr rather
-    than silently vanishing from routing), ``unbanded`` (never a grid
-    candidate), or ``incomplete`` (no --model value). An empty inventory says
-    so: a virgin install routes nothing from the grid.
+    One row per declared model with its resolved band and a reachability
+    verdict: ``ok`` | ``not-installed`` (refused BY NAME, never dropped) |
+    ``unbanded`` (a candidate at every band) | ``incomplete`` (no --model).
+    Then a ``slots`` section: each verb's lanes, live capacity, would_take.
     """
     from fno.agents.harnesses import READABLE_PROVIDERS
-    from fno.route_resolve import resolve_inventory
+    from fno.route_resolve import (
+        resolve_inventory,
+        slot_states,
+        slot_verbs,
+    )
+    from fno.route_slot_client import RouteSlotUnavailable, route_slot_call
 
     inv = resolve_inventory()
+    slots = [slot_states(verb) for verb in slot_verbs()]
     rows: list[dict[str, str]] = []
     refusals: list[str] = []
     if not inv.rows:
         note = "no inventory declared (config.routing.models is empty); the grid records no-inventory-declared"
         if json_output:
-            typer.echo(json.dumps({"objective": inv.objective, "models": [], "note": note}, indent=2))
+            typer.echo(json.dumps(
+                {"objective": inv.objective, "models": [], "note": note, "slots": slots},
+                indent=2,
+            ))
         else:
             typer.echo(note)
+            _echo_slots(slots)
         return
-    for name in sorted(inv.rows):
-        row = inv.rows[name]
-        if not row.harness or not row.model:
-            verdict = "incomplete"
-        elif row.harness not in READABLE_PROVIDERS:
-            verdict = "not-installed"
-            refusals.append(f"{name}: harness {row.harness!r} is not installed (known: {', '.join(READABLE_PROVIDERS)})")
-        elif not row.band:
-            verdict = "unbanded"
-        else:
-            verdict = "ok"
-        pct = "" if row.percentile is None else f"{row.percentile:g}"
-        rows.append({
-            "name": name,
-            "harness": row.harness,
-            "model": row.model,
-            "band": row.band or "unbanded",
-            "percentile": pct,
-            "effort": row.effort,
-            "verdict": verdict,
+    try:
+        answer = route_slot_call({
+            "mode": "inventory",
+            "inventory": {
+                "rows": [dataclasses.asdict(r) for r in inv.rows.values()],
+            },
+            "known_harnesses": list(READABLE_PROVIDERS),
         })
+    except RouteSlotUnavailable as exc:
+        answer = {"refusals": [f"route-slot-unavailable ({exc})"]}
+    rows, refusals, drift = (answer.get(k) or [] for k in ("rows", "refusals", "drift"))
     if json_output:
         typer.echo(json.dumps({
             "objective": inv.objective,
             "prefer_harness": inv.prefer_harness,
             "models": rows,
+            "slots": slots,
+            "fingerprint": next((s["fingerprint"] for s in slots if s.get("fingerprint")), ""),
+            "policy": _routing_policy_safe(),
+            "drift": drift,
         }, indent=2))
     else:
         typer.echo(f"objective={inv.objective}"
                    + (f" prefer_harness={inv.prefer_harness}" if inv.prefer_harness else ""))
-        cols = ("name", "harness", "model", "band", "percentile", "effort", "verdict")
+        cols = ("name", "harness", "model", "band", "percentile", "effort", "window", "verdict")
+        # .get: a route-slot binary older than the window column answers rows
+        # without the key; a blank cell beats a KeyError on the whole table.
         widths = {
-            c: max(len(c), *(len(r[c]) for r in rows)) if rows else len(c)
+            c: max(len(c), *(len(r.get(c, "")) for r in rows)) if rows else len(c)
             for c in cols
         }
 
         def _fmt(r: dict[str, str]) -> str:
-            return "  ".join(r[c].ljust(widths[c]) for c in cols).rstrip()
+            return "  ".join(r.get(c, "").ljust(widths[c]) for c in cols).rstrip()
 
         typer.echo(_fmt({c: c.upper() for c in cols}))
         for r in rows:
             typer.echo(_fmt(r))
+        _echo_slots(slots)
+        for line in drift:
+            typer.echo(line)
     for line in refusals:
         typer.echo(f"refused: {line}", err=True)
+
+
+def _routing_policy_safe() -> dict:
+    from fno.route_slot_client import RouteSlotUnavailable, route_slot_call
+
+    try:
+        return route_slot_call({"mode": "policy"})
+    except RouteSlotUnavailable:  # noqa: BLE001 - an unreachable verb answers unknown
+        return {"enforce_inventory": False, "operator_access": "unknown"}
+
+
+def _echo_slots(slots: list[dict]) -> None:
+    """Print the per-verb slot readout under the row table."""
+    typer.echo("slots: preview (simulated; no launch)")
+    for slot in slots:
+        if not slot.get("lanes"):
+            typer.echo(f"  {slot['verb']}: {slot['would_take']}")
+            continue
+        lane_text = ", ".join(
+            f"{lane['rung'].rsplit('.', 1)[-1]} {lane['name']} capacity={lane['state']}"
+            + (f" identity={lane['identity']}" if lane.get("identity") else "")
+            for lane in slot["lanes"]
+        )
+        line = f"  {slot['verb']}: {lane_text}"
+        if slot.get("on_exhausted"):
+            line += f"; on_exhausted={slot['on_exhausted']}"
+        line += f"; would take {slot['would_take']}"
+        line += f"; routing={slot.get('routing', 'unarmed')}"
+        if slot.get("work_kind"):
+            line += f"; work={slot['work_kind']}"
+        if slot.get("operator_access"):
+            line += f"; access={slot['operator_access']}"
+        typer.echo(line)
+        for reason in slot.get("skipped") or []:
+            typer.echo(f"    {reason}")
+
 
 
 @route_app.command("env")
@@ -457,7 +500,7 @@ def env_cmd(
         sys.stdout.write(f"export {k}={shlex.quote(route[k])}\n")
 
 
-# ---- route-settings overlay files (x-5cc5): what exists, what references it ----
+# ---- route-settings overlay files: what exists, what references it ----
 #
 # The spawn path writes one content-addressed overlay per distinct route under
 # state_dir()/route-settings. The names are digests, so the only way to answer
@@ -490,10 +533,10 @@ def settings_ls_cmd(
     """List every recorded route-settings overlay.
 
     One row per file: digest name, provider (stamp/base_url match against
-    today's registry), model, haiku tier, a STALE marker naming old -> new
-    when the tier differs from today's provider default, age, and whether a
-    registry row still references it. Never prints file contents: the
-    overlays carry live auth tokens.
+    today's registry), model, haiku tier, the provider's declared tier map, a
+    STALE marker naming old -> new when a declared tier differs from today's
+    provider default, age, and whether a registry row still references it.
+    Never prints file contents: the overlays carry live auth tokens.
     """
     import time
 
@@ -502,6 +545,7 @@ def settings_ls_cmd(
         effective_providers,
         provider_name_for_route,
         read_route_settings,
+        tier_models_for,
     )
     from fno.config import load_settings
 
@@ -542,12 +586,15 @@ def settings_ls_cmd(
         except Exception:  # noqa: BLE001 - one bad file degrades its row, not the listing
             route = None
         pname = provider_name_for_route(route or {}, settings=settings) if route else None
-        stale = ""
-        if route and pname:
-            todays = effective_providers(settings.model_routing)[pname].get("haiku_model")
-            recorded = route.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
-            if todays and recorded and str(todays) != recorded:
-                stale = f"{recorded} -> {todays}"
+        record = effective_providers(settings.model_routing)[pname] if pname else None
+        tiers = tier_models_for(record) if record else {}
+        stale_parts = []
+        if route and record:
+            for alias, todays in tiers.items():
+                recorded = route.get(f"ANTHROPIC_DEFAULT_{alias.upper()}_MODEL")
+                if todays and recorded and str(todays) != str(recorded):
+                    stale_parts.append(f"{alias} {recorded} -> {todays}")
+        stale = "; ".join(stale_parts)
         referenced = (
             "?" if referenced_paths is None else ("yes" if str(path) in referenced_paths else "no")
         )
@@ -556,6 +603,9 @@ def settings_ls_cmd(
             "provider": pname or "-",
             "model": (route or {}).get("ANTHROPIC_MODEL", "-"),
             "haiku": (route or {}).get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "-"),
+            "tiers": (
+                ",".join(f"{a}={m}" for a, m in sorted(tiers.items())) if tiers else "-"
+            ),
             "stale": stale or "-",
             "age_days": round(age, 1),
             "referenced": referenced,
@@ -571,12 +621,13 @@ def settings_ls_cmd(
     if json_output:
         typer.echo(json.dumps({"rows": rows, "pruned": pruned}, indent=2))
         return
-    cols = ("file", "provider", "model", "haiku", "stale", "age_days", "referenced")
+    cols = ("file", "provider", "model", "haiku", "tiers", "stale", "age_days", "referenced")
     header = {
         "file": "FILE",
         "provider": "PROVIDER",
         "model": "MODEL",
         "haiku": "HAIKU",
+        "tiers": "TIERS",
         "stale": "STALE",
         "age_days": "AGE-D",
         "referenced": "REF",

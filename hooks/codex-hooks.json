@@ -1,5 +1,5 @@
 {
-  "description": "Codex plugin hooks for footnote context injection, safety gates, and target loops",
+  "description": "Codex plugin hooks for footnote context injection, safety gates, and target loops. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide keep their own budgets; docs/hooks-fail-open.md owns the list.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,8 +7,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${PLUGIN_ROOT}/hooks/graph-write-protect.sh",
-            "statusMessage": "checking fno do state surfaces"
+            "command": "bash ${PLUGIN_ROOT}/hooks/write-gate.sh",
+            "statusMessage": "checking protected write surfaces"
           }
         ]
       },
@@ -37,13 +37,37 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${PLUGIN_ROOT}/hooks/git-protection.py",
-            "statusMessage": "checking git guardrails"
-          },
+            "command": "bash ${PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh",
+            "statusMessage": "checking Bash tool guards"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
           {
             "type": "command",
-            "command": "python3 ${PLUGIN_ROOT}/hooks/bg-process-guard.py",
-            "statusMessage": "checking for unbounded background processes"
+            "command": "${PLUGIN_ROOT}/hooks/law-stage-inject.sh",
+            "timeout": 4
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${PLUGIN_ROOT}/hooks/lead-delegation-guard.sh",
+            "statusMessage": "checking role delegation"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/session-state.sh codex PreToolUse"
           }
         ]
       }
@@ -54,15 +78,32 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/hooks/inside-leg-report.sh working"
+            "command": "${PLUGIN_ROOT}/hooks/session-state.sh codex UserPromptSubmit"
           },
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh"
+            "command": "${PLUGIN_ROOT}/hooks/born-with-why-offer-inject.sh",
+            "timeout": 8
           },
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/hooks/inject-mail-notify.sh"
+            "command": "${PLUGIN_ROOT}/hooks/inject-mail-notify.sh",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/inject-announce.sh prompt",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/prompt-outstanding.sh",
+            "timeout": 4
+          },
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/law-stage-inject.sh",
+            "timeout": 4
           }
         ]
       }
@@ -84,7 +125,7 @@
           },
           {
             "type": "command",
-            "command": "${PLUGIN_ROOT}/hooks/inside-leg-report.sh done"
+            "command": "${PLUGIN_ROOT}/hooks/session-state.sh codex Stop"
           },
           {
             "type": "command",
@@ -94,6 +135,33 @@
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${PLUGIN_ROOT}/hooks/format-on-edit.sh",
+            "statusMessage": "formatting the edited file"
+          },
+          {
+            "type": "command",
+            "command": "bash ${PLUGIN_ROOT}/hooks/edit-integrity.sh",
+            "statusMessage": "checking the edited file",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${PLUGIN_ROOT}/hooks/refusal-streak-record.sh",
+            "statusMessage": "recording the refusal streak",
+            "timeout": 4
+          }
+        ]
+      },
       {
         "matcher": "",
         "hooks": [
@@ -147,11 +215,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-observe-hook.sh --source-id target-postcompact-reinject --expected target-postcompact-reinject,king-postcompact-reinject --entry post_compact -- ${PLUGIN_ROOT}/hooks/target-postcompact-reinject.sh"
+            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-run.sh codex-post-compact",
+            "timeout": 50
           },
           {
             "type": "command",
-            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-observe-hook.sh --source-id king-postcompact-reinject --expected target-postcompact-reinject,king-postcompact-reinject --entry post_compact -- ${PLUGIN_ROOT}/hooks/king-postcompact-reinject.sh"
+            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/inject-announce.sh compact",
+            "timeout": 4
           }
         ]
       }
@@ -162,11 +232,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/session-start.sh"
+            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-run.sh codex-session-start"
           },
           {
             "type": "command",
             "command": "${PLUGIN_ROOT}/hooks/codex-app-server-nudge-session-start.sh"
+          },
+          {
+            "type": "command",
+            "command": "${PLUGIN_ROOT}/hooks/operator-capture-nudge.sh"
           }
         ]
       },
@@ -175,7 +249,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-observe-hook.sh --source-id inject-fno-agent-whoami --expected inject-fno-agent-whoami -- ${PLUGIN_ROOT}/hooks/inject-fno-agent-whoami.sh"
+            "command": "env FNO_PLATFORM=codex ${PLUGIN_ROOT}/hooks/context-run.sh codex-whoami"
           }
         ]
       }

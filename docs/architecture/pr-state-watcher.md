@@ -2,7 +2,9 @@
 
 footnote automates the **merge** side of a PR's life from inside a session (`reconcile` -> `advance` on SessionStart), but the **review** side is manual and the only out-of-session merge automation was a per-repo launchd watcher that had to be installed once per repository. A `/target` session emits `MISSION COMPLETE` at PR-open + CI-green and terminates; once it dies, nothing watches the PR for a late review, and a GitHub web-button merge produces no local event at all.
 
-The PR-state watcher is **one global launchd daemon** that watches every footnote PR for both terminal events - a new review and a web merge - and fires the right action in that PR's repository: the review poll fires the headless `/fno:pr check` skill, and a newly-observed merge runs the mechanical `fno do pr ritual <pr> --autonomous` verb (directly as a subprocess, or warm-injected into the live origin session). It replaces the install-once-per-repo model with a single watcher that follows the backlog graph, so a newly-created PR in any repo is covered with zero per-repo setup.
+The PR-state watcher is **one global launchd daemon** that watches every footnote PR for two terminal events: a new review, and a web merge. It fires the right action in that PR's repository. The review poll fires the headless `/fno:ship pr check` skill. A newly-observed merge runs the mechanical `fno do pr ritual <pr> --autonomous` verb, directly as a subprocess or warm-injected into the live origin session.
+
+The watcher replaces the install-once-per-repo model with a single watcher that follows the backlog graph. A newly-created PR in any repo is covered with zero per-repo setup.
 
 It is the **sole** post-merge detector. `fno backlog reconcile` no longer dispatches a ritual: it closes merged nodes, stamps plans, and advances dependents, but the merge-to-ritual handoff is the watcher's alone.
 
@@ -28,17 +30,29 @@ The implementation is a Python package (`cli/src/fno/pr_watch/`) split along a p
 4. **Decide** (at most one action per PR per tick), in precedence order:
    - merged and not yet dispatched, and the post-merge readiness oracle passes -> run `fno do pr ritual <n> --autonomous`. The route is warm-inject into a live origin, else the cold subprocess. The verb owns its own conditional headless judgment leg. The watcher adds no model layer of its own and creates no background thread.
    - closed-without-merge, or open past the max-age window -> park (poll it no further).
-   - a configured reviewer posted activity newer than the watermark -> fire `/fno:pr check`.
+   - a configured reviewer posted activity newer than the watermark -> fire `/fno:ship pr check`.
    - otherwise no-op.
-5. Advance the watermark **only after a clean dispatch**. A headless `claude --print` that exits 0 but reports `is_error: true` is a failure. The watermark is left unadvanced and retried next tick. Retries are bounded to three before the PR is parked with a notification.
+5. Advance the watermark **only after a clean dispatch**. A headless `claude --print` that exits 0 but reports `is_error: true` is a failure. The watermark is left unadvanced and retried next tick. Retries are bounded to three before the PR is parked with a notification. A grant execution that a canonical guard holds consumes no retry budget - the guard is a state to wait out, not a watcher defect.
 
-The daemon never merges, closes, comments on, or mutates a PR or a graph node - it only reads state and fires skills. Decisions emit canonical events (`pr_watch_dispatched`, `pr_watch_skipped`, `pr_watch_dispatch_failed`, `pr_watch_parked`) plus a per-tick heartbeat (`pr_watch_tick`) to the global event log under `~/.fno/`, so a quiet-but-alive watcher is distinguishable from a dead one.
+The tick's heal phase (armed via `config.auto_heal.enabled`) runs the same drive loop detached. That loop can now rebase a PR whose base drifted. A conflicting PR, or the one holding the `merge-slot:<base>` claim, gets `fno do pr push` from its own worktree. The push is fetch, rebase onto `origin/main`, preflight, push once, capped at six rebases per run. When `require_fresh_ci` holds a merge naming `fno do pr rebase <n>`, the next heal tick runs the equivalent push instead of leaving the hold to a human. That is the actor behind the stale-base remedy. The two actions and their receipt rows are documented in [pr-heal](pr-heal.md).
+
+With that one exception below, the daemon never merges, closes, comments on, or mutates a PR or graph node. It only reads state and fires skills. Decisions emit canonical events (`pr_watch_dispatched`, `pr_watch_skipped`, `pr_watch_dispatch_failed`, `pr_watch_parked`, `merge_grant_execution`) plus a per-tick heartbeat (`pr_watch_tick`) to the global event log under `~/.fno/`. A quiet-but-alive watcher stays distinguishable from a dead one. Every heartbeat carries a `merge_scan` receipt with integer `scanned` (rich reads completed), including zero. A completed scan that saw nothing still proves the scan ran. The durable-grant verdict and execution counts moved to the `pr_watch_merge` row the merge phase stamps at its own end.
+
+## Durable-grant execution
+
+The spawner records a dispatch's merge decision on the worker's own append-only `phase: do` graph row. The `merge_grant` receipt carries `approved`, `source`, `recorded_by` and `recorded_at`. A worker can never mint or rewrite one. A `--no-merge` dispatch records an explicit `approved=false`.
+
+One owner reads that record for status, merge, and the watcher. The owner is the Rust verdict in `crates/fno-agents/src/merge_grant.rs`, reached through the `authorized-merge` verb's `grant-verdict` and `grant-queue` ops. `fno/pr/_merge_grant.py` is the transport. A verdict grants on nothing but a positive receipt. Absence, malformed data, and ambiguous PR-to-node links refuse. A live or unreadable node claim refuses. A live config that no longer says `enabled=true, grant=dispatch` refuses.
+
+Each tick the merge phase asks `grant-queue` for the granted PRs. It executes each under its per-PR lock. It emits `merge_grant_execution` `reserved` naming the actor, the PR, the node, and the grant session. Then it calls canonical `run_merge` with `authority="durable_grant"`. Every ordinary guard runs identically: plan hold, in-flight review, incarnation fence, stub manifest, review coverage, review posture, CI green. The watcher can never merge a PR that an interactive merge refuses. The core's verdict lands as `executed`, `held` (retryable, no failure budget consumed), or `failed` (retry-bounded, then parked). Held and failed rows carry the core's printed `reason`.
+
+The coupling is enforced on both ends: arming `auto_merge.grant = dispatch` through `fno config set` activates the watcher (one-way - revoking the grant never unloads it, and `autonomy.enabled = false` blocks the activation), and `fno doctor` reports `observer_unavailable` when a standing grant has no live watcher to execute it. `fno do pr status` carries the same answer in its `merge_execution` projection.
 
 ### Headless fire (review poll)
 
-The review poll fires `claude --print --output-format json --dangerously-skip-permissions "/fno:pr check <n>"`, run with `cwd` set to the PR's repo, default model Haiku. The plist carries `PATH` (captured at install time) + `HOME` in `EnvironmentVariables`; authentication rides the macOS keychain OAuth, so no API key is injected, and `--bare` is never used.
+The review poll fires `claude --print --output-format json --dangerously-skip-permissions "/fno:ship pr check <n>"`, run with `cwd` set to the PR's repo, default model Haiku. The plist carries `PATH` (captured at install time) + `HOME` in `EnvironmentVariables`. Authentication rides the macOS keychain OAuth, so no API key is injected, and `--bare` is never used.
 
-A merge is not a headless claude fire. It runs the mechanical `fno do pr ritual <n> --autonomous` verb as a bounded `fno-py` subprocess from the repo's canonical root (warm-injected as the identical command when the origin session is live). The verb owns the ritual's mechanical legs and its own conditional headless judgment one-shot, so the watcher never wraps the ritual in a `/fno:pr merged` LLM session or spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting - attribution and correlation only; route selection never reads it.
+A merge is not a headless claude fire. When the origin session is live, the mechanical `fno do pr ritual <n> --autonomous` verb is warm-injected there. Otherwise it runs as a bounded `fno-py` subprocess from the repo's canonical root. The verb owns the ritual's mechanical legs and its own conditional headless judgment one-shot. The watcher never wraps the ritual in a `/fno:ship pr merged` LLM session, and it never spawns a `--substrate bg` worker. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) before acting. That receipt is attribution and correlation only, and route selection never reads it.
 
 ## Install is reviewed and gated
 

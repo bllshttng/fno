@@ -5,9 +5,9 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Callable, Mapping, Optional
-
-from fno.harness_names import KNOWN_HARNESSES
+from pathlib import Path
+from functools import lru_cache
+from typing import Any, Callable, Mapping, Optional
 
 
 # --- FNO_AGENT_HARNESS env resolution (with pre-cutover compat window) -------
@@ -26,7 +26,7 @@ FNO_HARNESS_SESSION_ID = "FNO_HARNESS_SESSION_ID"
 #: ``headless``. A session cannot ask which substrate it runs on, so the spawner
 #: has to say. Every other candidate signal is a proxy that lies. All three
 #: substrates set ``FNO_AGENT_SELF``, so reading its presence as "no operator is
-#: watching" mis-stamps the interactive pane default (x-be78), and a tty check
+#: watching" mis-stamps the interactive pane default, and a tty check
 #: answers about the subprocess rather than about the harness.
 #:
 #: Absent means "no spawn path stamped this": an operator's own shell, or a
@@ -103,8 +103,15 @@ def harness_from_env(env: "Mapping[str, str]", *, warn: bool = True) -> "Optiona
     return legacy or None
 
 
-# Highest precedence first. Callers that need ambiguity detection may inspect
-# the same marker facts without duplicating names or harness mappings.
+# Highest precedence first. Within ONE harness family the order is a
+# durability rule, not an arbitrary position: CODEX_THREAD_ID is the durable
+# codex conversation identity and outranks the legacy CODEX_SESSION_ID. Two
+# markers of one family carrying the SAME value are one session with two
+# names and resolve normally; carrying DIFFERENT values is a disagreement,
+# and the family degrades to unresolved rather than pick by position - the
+# id under test could belong to either session. Callers that need
+# ambiguity detection may inspect the same marker facts without duplicating
+# names or harness mappings.
 HARNESS_SESSION_MARKERS: tuple[tuple[str, str], ...] = (
     ("CODEX_THREAD_ID", "codex"),
     ("CLAUDE_CODE_SESSION_ID", "claude"),
@@ -165,7 +172,7 @@ SELF_SET_HARNESS_MARKERS: tuple[tuple[str, str], ...] = (
 # resolves (or stamps) the live run's identity instead of its own.
 #
 # The five CODEX_* names below are the rest of a live codex session's identity
-# env, measured 2026-08-21 (node x-b57a): a poisoned claude session carrying
+# env, measured 2026-08-21 (node): a poisoned claude session carrying
 # them could not self-compact until all seven codex names were stripped, and
 # the list held only the two the resolver consults. They are identity-only -
 # CODEX_HOME is routing/config and deliberately NOT here - and stay out of
@@ -197,6 +204,7 @@ AMBIENT_IDENTITY_ENV: tuple[str, ...] = (
     # The substrate stamp is identity, not routing: it says where THIS session
     # runs. A child that inherits it reports its parent's substrate for life.
     FNO_AGENT_SUBSTRATE,
+    "FNO_NODE_REASON",
 )
 
 
@@ -228,10 +236,10 @@ def env_marks_unattended(env: "Mapping[str, str]") -> bool:
     unattended when a spawn stamped it and that spawn's substrate is not one an
     operator can answer a prompt on. This used to read ``FNO_AGENT_SELF``
     presence, which every substrate sets, so a pane worker with an operator
-    watching stamped ``attended: false`` (x-be78).
+    watching stamped ``attended: false``.
 
     An UNKNOWN substrate on a spawned worker reads unattended. That is the
-    pre-x-be78 answer, kept deliberately as the fallback: it fails toward
+    pre-change answer, kept deliberately as the fallback: it fails toward
     skipping a blocking prompt rather than toward hanging on one, and a spawn
     path that has not learned to stamp is exactly where that matters.
     """
@@ -251,7 +259,7 @@ def env_marks_unattended(env: "Mapping[str, str]") -> bool:
 # Name -> harness family for every scrubbed identity name, so a refusal can
 # name the strip set for one whole foreign family: the resolver markers alone
 # are two of codex's seven, and a strip line built from two of seven did
-# nothing (x-b57a). Family here labels which harness a name belongs to, not
+# nothing. Family here labels which harness a name belongs to, not
 # which harness resolves - TARGET_SESSION_ID belongs to fno itself.
 AMBIENT_IDENTITY_FAMILY: dict[str, str] = {
     FNO_HARNESS_NAME: "fno",
@@ -368,9 +376,9 @@ def ambient_identity_strip_flags(
         value = (environ.get(name) or "").strip()
         # A foreign-family value that names the keep-family session is a
         # companion pointer AT this session, not lineage FROM a foreign one
-        # (x-a0cd): the claude-side codex plugin exports
+        # the claude-side codex plugin exports
         # CODEX_COMPANION_TRANSCRIPT_PATH naming THIS session's transcript, and
-        # x-38c6's full-value equality missed it because the PATH embeds the id
+        # full-value equality missed it because the PATH embeds the id
         # as a substring. Any path or pointer for this session embeds this
         # session's id, so the substring test is the general form; a value
         # embedding a DIFFERENT session's id stays foreign evidence.
@@ -417,6 +425,42 @@ def session_identity_key(session_id: str) -> str:
     UUID-family ids are case-insensitive. OpenCode's ``ses_`` ids are not.
     """
     return session_id if session_id.startswith("ses_") else session_id.lower()
+
+
+# Full-id shapes that name exactly one harness. A claude id is a UUIDv4; a
+# codex id is the time-prefixed UUIDv7; an opencode id is ``ses_``-prefixed.
+# Legacy and caller-minted ids (``20260823T...``, fno-minted uuid4s for grok
+# and pi threads) name no harness and are never refused on shape.
+_FULL_ID_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-([0-9a-f])[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_FULL_ID_OPENCODE_RE = re.compile(r"^ses_[A-Za-z0-9]+$")
+
+#: Harnesses whose session-id shapes are definitively known. A shape mismatch
+#: is only provable between members of this set; grok/pi threads carry
+#: fno-minted UUIDv4s under their own harness, so a v4 shape alone cannot
+#: convict them of being claude.
+SHAPE_KNOWN_HARNESSES = frozenset({"claude", "codex", "opencode"})
+
+
+def harness_of_session_id(session_id: str) -> Optional[str]:
+    """The harness an id's own shape names, or None when the shape is silent.
+
+    The version nibble is the first hex of the third group: 4 is claude's
+    UUIDv4, 7 is codex's time-prefixed UUIDv7.
+    """
+    sid = (session_id or "").strip()
+    if _FULL_ID_OPENCODE_RE.match(sid):
+        return "opencode"
+    m = _FULL_ID_UUID_RE.match(sid)
+    if m:
+        version = m.group(1).lower()
+        if version == "4":
+            return "claude"
+        if version == "7":
+            return "codex"
+    return None
 
 
 def canonical_handle(session_id: str) -> str:
@@ -512,31 +556,28 @@ def is_unsafe_short_address(token: str, harness: Optional[str]) -> bool:
     return bool(_HEAD8_RE.match(token.strip()))
 
 
-# The retired harness-prefixed address. Kept ONLY so the send path can recognize
-# one and refuse it with a message naming the fix, and so `fno doctor` can still
-# report mail queued to one before the flip as the dead letter it is. Never an
-# accepted address, never generated.
-#
-# Built from the harness map rather than a literal list: a hardcoded copy silently
-# stops covering a harness the moment one is added, which is the same drift that
-# produced the two-conventions mess this address change exists to end.
+# The retired harness-prefixed address. Kept ONLY so the send path can
+# recognize one and refuse it with a message naming the fix, and so `fno
+# doctor` can still report pre-flip mail as the dead letter it is. Never an
+# accepted address, never generated. Read from the roster door lazily
+# (module __getattr__, lru_cache): an eager build paid a subprocess per import.
+@lru_cache(maxsize=1)
 def _legacy_handle_re() -> "re.Pattern[str]":
+    # In-function: a module-level from-import resolves the attr (the subprocess) at import.
+    from fno.harness_names import KNOWN_HARNESSES
+
     return re.compile(rf"^(?:{'|'.join(KNOWN_HARNESSES)})-[0-9a-fA-F]{{6,}}$")
 
 
-# Built eagerly from the canonical harness-name list (fno.harness_names) rather
-# than the capability table: this module is platform-layer and must not reach
-# into the runtime for the name set (x-cec8). The name list is the source of
-# truth and the capability table asserts against it, so a new harness is covered
-# here the moment it lands there - the same anti-drift property the old
-# derivation (names read FROM fno.agents.harness_map) had, with the dependency
-# direction inverted so no fno.agents import is needed at all.
-LEGACY_HANDLE_RE = _legacy_handle_re()
+def __getattr__(name: str) -> Any:
+    if name == "LEGACY_HANDLE_RE":
+        return _legacy_handle_re()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def sync_harness_aliases(data: dict, legacy_session_keys: Mapping[str, str]) -> dict:
     """Two-way sync of ``harness_session_id`` with a store's legacy per-harness
-    session-id key. The ONE source of the sync rule (x-ec59): the target manifest
+    session-id key. The ONE source of the sync rule : the target manifest
     shim (``schemas/target.py``) and the agent-registry row coercion both call it,
     so canonical<->legacy resolution can never drift between the two.
 
@@ -632,12 +673,24 @@ def _vendor_identity(
 ) -> HarnessIdentity:
     families: list[str] = []
     winner: Optional[HarnessIdentity] = None
+    family_value_keys: dict[str, str] = {}
+    conflicted = False
     for _marker, harness, session_id in markers:
         if harness not in families:
             families.append(harness)
-        if winner is None:
-            winner = HarnessIdentity(session_id=session_id, harness=harness)
-    if len(families) > 1:
+        value_key = session_identity_key(session_id)
+        seen = family_value_keys.get(harness)
+        if seen is None:
+            family_value_keys[harness] = value_key
+            if winner is None:
+                winner = HarnessIdentity(session_id=session_id, harness=harness)
+        elif seen != value_key:
+            # Two ids of one family disagree (the durability order in
+            # HARNESS_SESSION_MARKERS names the durable one, but without proof
+            # picking it would be position-picking): unresolved, never
+            # table-first.
+            conflicted = True
+    if len(families) > 1 or conflicted:
         return HarnessIdentity(session_id=None, harness=None)
     return winner or HarnessIdentity(session_id=None, harness=None)
 
@@ -686,7 +739,7 @@ def resolve_harness_identity(
     ``(None, None)`` so no caller can launder the foreign marker into this
     session's identity. This is the same disposition
     :func:`fno.dispatch_flags.infer_invoking_harness` gives the same
-    environment; the two must not diverge (x-b57a).
+    environment; the two must not diverge.
 
     Byte-identical to :func:`resolve_owned_identity`'s ``single`` disposition
     whenever exactly one family is present (the dominant case).
@@ -725,6 +778,9 @@ class OwnedHarnessIdentity:
                      even the harness is proven, both are ``None``. Never guesses
                      by precedence.
     * ``empty``    - no marker present.
+    * ``spawn_record`` - the session id came from the cwd-keyed agents-registry
+                     spawn record (a codex thread worker), set only when the
+                     walk returned no session id and the harnesses agree.
 
     ``markers_present`` carries every marker seen (with its value) and
     ``rejected`` the ids a live row already owns, so an ambiguous resolve can be
@@ -767,7 +823,10 @@ def resolve_owned_identity(
     consulting the collider, in both branches; collision then rejects ids a
     live row owns when proof is absent or negative (the owner is named); a
     marker the prover actively contradicts is excluded; among the rest, the
-    sole surviving family wins or the result degrades to ``None``.
+    sole surviving family wins or the result degrades to ``None``. The
+    canonical branch joins that elimination when its prover is silent and
+    nothing contends: a stamp-resolved identity nobody else owns is the
+    same answer the marker loop gives, not a refusal.
     """
     environ = os.environ if env is None else env
     markers = present_harness_markers(environ)
@@ -778,35 +837,46 @@ def resolve_owned_identity(
     if canonical_disposition == "contradiction":
         return OwnedHarnessIdentity(None, None, present, "contradiction")
     if canonical_disposition == "canonical":
-        if not identity.session_id or not identity.harness:
+        if not identity.harness:
             return OwnedHarnessIdentity(None, None, present, "ambiguous")
-        verdict = prove(identity.harness, identity.session_id) if prove else None
-        if verdict is True:
-            # PROOF is self, same as the marker loop below: a live row holding
-            # this id is the session's own row (spawn mints the stamp and the
-            # row in one act), not a foreign owner, so a proven marker is never
-            # decided by collision (x-6d6c).
-            return OwnedHarnessIdentity(
-                identity.session_id, identity.harness, present, "canonical"
-            )
-        owner = collide(identity.harness, identity.session_id) if collide else None
-        if owner:
-            canonical_rejected = (
-                {
-                    "harness": identity.harness,
-                    "session_id": identity.session_id,
-                    "reason": "owned_by_live_row",
-                    "owner": owner,
-                },
-            )
-            return OwnedHarnessIdentity(
-                None, None, present, "ambiguous", canonical_rejected
-            )
-        if verdict is not True:
-            return OwnedHarnessIdentity(None, None, present, "ambiguous")
-        return OwnedHarnessIdentity(
-            identity.session_id, identity.harness, present, "canonical"
-        )
+        if identity.session_id is None:
+            # Proven family, no id: settle by proof below if we can.
+            if prove is None or not present:
+                return OwnedHarnessIdentity(None, None, present, "ambiguous")
+        else:
+            verdict = prove(identity.harness, identity.session_id) if prove else None
+            if verdict is True:
+                # PROOF is self, same as the marker loop below: a live row holding
+                # this id is the session's own row (spawn mints the stamp and the
+                # row in one act), not a foreign owner, so a proven marker is never
+                # decided by collision.
+                return OwnedHarnessIdentity(
+                    identity.session_id, identity.harness, present, "canonical"
+                )
+            if verdict is None and present:
+                # A silent prover is not a refusal: fall through to the marker
+                # loop below, which collides once per distinct id and answers by
+                # the same single-family elimination resolve_harness_identity
+                # gives the dominant case (- the hard ambiguous here
+                # refused every pane-spawned worker). A contested id is rejected
+                # there, so a stamped id a live stranger owns still refuses,
+                # named.
+                pass
+            else:
+                owner = collide(identity.harness, identity.session_id) if collide else None
+                if owner:
+                    canonical_rejected = (
+                        {
+                            "harness": identity.harness,
+                            "session_id": identity.session_id,
+                            "reason": "owned_by_live_row",
+                            "owner": owner,
+                        },
+                    )
+                    return OwnedHarnessIdentity(
+                        None, None, present, "ambiguous", canonical_rejected
+                    )
+                return OwnedHarnessIdentity(None, None, present, "ambiguous")
     if not markers:
         return OwnedHarnessIdentity(None, None, (), "empty")
     distinct = {harness for _, harness, _ in markers}
@@ -815,6 +885,17 @@ def resolve_owned_identity(
     proven: list[tuple[str, str, str]] = []
     contradicted = False
     unresolved: list[tuple[str, str, str]] = []
+    collide_memo: dict[tuple[str, str], Optional[str]] = {}
+
+    def collide_once(harness: str, value: str) -> Optional[str]:
+        # Same-value dups (codex thread id + legacy session id carrying one id)
+        # must collide ONCE per distinct id: the callback reloads the registry
+        # on every call.
+        key = (harness, session_identity_key(value))
+        if key not in collide_memo:
+            collide_memo[key] = collide(harness, value) if collide is not None else None
+        return collide_memo[key]
+
     for marker, harness, value in markers:
         verdict = prove(harness, value) if prove is not None else None
         if verdict is True:
@@ -822,7 +903,7 @@ def resolve_owned_identity(
             # not a foreign owner, so a proven marker is never decided by collision.
             proven.append((marker, harness, value))
             continue
-        owner = collide(harness, value) if collide is not None else None
+        owner = collide_once(harness, value)
         if owner:
             # Observability only: records the owner for the event. Collision never
             # stamps a fallback here - without proof it can reject the session's
@@ -857,9 +938,20 @@ def resolve_owned_identity(
                 value, family, present, "single" if len(distinct) == 1 else "proven", rejected_t
             )
         # Proven family but multiple DISTINCT ids: proof is harness-level, not
-        # id-level, so the specific id is unknown. Keep the proven harness (do
-        # not mislabel a proven-codex session as claude) and null the id, rather
-        # than pick by precedence and risk an inherited same-family stranger.
+        # id-level, so keep the proven harness and null the id rather than pick
+        # by precedence. One measured exception: codex sets CODEX_SESSION_ID to
+        # the ROOT session and CODEX_THREAD_ID per thread, so the thread id
+        # names this process.
+        if family == "codex":
+            thread_rows = [p for p in proven if p[0] == "CODEX_THREAD_ID"]
+            if thread_rows:
+                return OwnedHarnessIdentity(
+                    thread_rows[0][2],
+                    family,
+                    present,
+                    "single" if len(distinct) == 1 else "proven",
+                    rejected_t,
+                )
         return OwnedHarnessIdentity(None, family, present, "ambiguous", rejected_t)
     if len(proven_by_family) > 1:
         return OwnedHarnessIdentity(None, None, present, "ambiguous", rejected_t)
@@ -871,6 +963,12 @@ def resolve_owned_identity(
         # dominant case). A collision or an active contradiction makes the
         # remaining unproven marker suspect (a same-family sibling could be
         # foreign), so those degrade below rather than stamp by elimination.
+        family_value_keys = {session_identity_key(value) for _m, _h, value in unresolved}
+        if len(family_value_keys) > 1:
+            # The family's markers disagree on the id: unresolved,
+            # never table-first - without proof either marker could be the
+            # stranger's.
+            return OwnedHarnessIdentity(None, None, present, "ambiguous", rejected_t)
         _marker, harness, value = unresolved[0]
         return OwnedHarnessIdentity(value, harness, present, "single", rejected_t)
     # Multi-family with no proof, or a single family the prover contradicted:
@@ -1033,11 +1131,17 @@ def resolve_attester_identity(
     marker_name: Optional[str] = None
     session_id = ""
     families: list[str] = []
+    family_value_keys: dict[str, str] = {}
     for marker, family in HARNESS_SESSION_MARKERS:
         value = (environ.get(marker) or "").strip()
         if value:
             if family not in families:
                 families.append(family)
+            seen = family_value_keys.get(family)
+            if seen is None:
+                family_value_keys[family] = session_identity_key(value)
+            elif seen != session_identity_key(value):
+                family_value_keys[family] = "conflicted"
             if marker_name is None:
                 marker_name, session_id = marker, value
     if len(families) > 1 or marker_name is None:
@@ -1050,6 +1154,9 @@ def resolve_attester_identity(
     try:
         proc: "Optional[psutil.Process]" = psutil.Process(os.getppid())
     except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+        if family_value_keys.get(families[0]) == "conflicted":
+            # Unreadable ancestry cannot break a family disagreement either.
+            return ("", "env_only")
         return (session_id, "env_only")
     depth = 0
     while proc is not None and depth < _MAX_ANCESTRY_DEPTH:
@@ -1058,7 +1165,7 @@ def resolve_attester_identity(
         # preserves an argv0 rename), never the whole argv: an `env
         # CLAUDE_CODE_SESSION_ID=<forged>` wrapper or a shell assignment
         # carries the MARKER SPELLING in its argv, and the marker contains
-        # the family token - matching the full argv would crown that wrapper
+        # the family token - matching the full argv would role that wrapper
         # the deciding family carrier and stamp the forgery `process`
         # (reproduced live in review round 2). Unreadable -> not family,
         # which can only degrade the witness, never forge one.
@@ -1091,10 +1198,13 @@ def resolve_attester_identity(
         except psutil.Error:
             break
         depth += 1
-    return (
-        session_id,
-        _attester_witness(marker_name, session_id, chain, carrier_is_family),
-    )
+    witness = _attester_witness(marker_name, session_id, chain, carrier_is_family)
+    if witness != "process" and family_value_keys.get(families[0]) == "conflicted":
+        # The winning family carried two DIFFERENT ids and nothing proves
+        # which names this session: unresolved, never the table-first value
+        #. A process witness on the durable marker resolves it.
+        return ("", "env_only")
+    return (session_id, witness)
 
 
 def current_session_id(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
@@ -1133,3 +1243,58 @@ def current_session_ids(env: Optional[Mapping[str, str]] = None) -> set[str]:
     if canonical.disposition == "complete" and canonical.session_id:
         ids.add(canonical.session_id)
     return ids
+
+
+# --- The agents-registry spawn record as an identity source --------
+#: Row statuses under which a session still owns its identity (a held
+#: harness_session_id is provably not another acquiring session's).
+#: Declared here so the registry and the reader cannot drift.
+OWNERSHIP_LIVE_STATUSES = frozenset(
+    {"spawning", "ready", "idle", "busy", "live", "restarting"}
+)
+
+
+def live_thread_row_for_cwd(
+    cwd: str, registry_path: Optional[Path] = None
+) -> Optional[tuple[str, str]]:
+    """The ``(harness, session_id)`` of the ONE live codex row holding ``cwd``.
+
+    A codex worker's process walk lands on the shared daemon (thread workers
+    share its pid; a remote pane's tool shell runs under it), so the
+    spawn record - written before the worker's first turn, keyed by the cwd
+    fno named at spawn - is what names the session. Exactly one
+    ownership-live ``thread`` or ``pane`` row with a non-empty harness and
+    session id answers; zero and two-plus matches return None, as does an
+    unreadable or absent registry (raise nothing).
+    """
+    if not cwd:
+        return None
+    try:
+        from fno.registry_door import read_registry_document
+
+        raw = read_registry_document(registry_path)[0]
+        rows = raw.get("agents") if isinstance(raw, dict) else None
+        if not isinstance(rows, list):
+            return None
+        wanted = os.path.realpath(cwd)
+        matches: list[tuple[str, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("status") not in OWNERSHIP_LIVE_STATUSES:
+                continue
+            if row.get("substrate") not in ("thread", "pane"):
+                continue
+            harness = row.get("harness")
+            session_id = row.get("harness_session_id")
+            if not harness or not session_id:
+                continue
+            row_cwd = row.get("cwd")
+            if not row_cwd or os.path.realpath(str(row_cwd)) != wanted:
+                continue
+            matches.append((str(harness), str(session_id)))
+    except Exception:  # noqa: BLE001 - identity must degrade, never crash
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return None

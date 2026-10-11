@@ -3,7 +3,7 @@
 - Calls `gh pr list --head <branch>` first to detect an existing PR.
 - If found, updates artifact with existing PR number (no duplicate).
 - If not found, calls `gh pr create`.
-- Does NOT arm auto-merge: that moved to `fno-agents finalize` (x-1951).
+- Does NOT arm auto-merge: that moved to `fno-agents finalize`.
 - Writes .fno/artifacts/ship-{session_id}.md.
 - Emits fno doctor event emit --type pr_created/pr_exists.
 - Sets state field artifact_shipped=true (via fno do state set).
@@ -117,7 +117,7 @@ def ship(
     state = _read_state(state_path)
     session_id = state.get("session_id", "unknown-session")
 
-    # Incarnation fence (x-eea5 followup): a losing incarnation - one whose
+    # Incarnation fence (followup): a losing incarnation - one whose
     # session:<uuid> single-writer claim another incarnation holds - must not
     # create a PR. Same read-only, fail-closed semantics as fno do pr merge. Runs
     # before any gh/git call so a fenced incarnation publishes nothing.
@@ -196,7 +196,7 @@ def ship(
     else:
         # Stale-base guard: a branch cut from a stale local HEAD ships a PR full
         # of phantom deletions. Refuse before gh pr create (the same check the
-        # /pr create router runs; bypass FNO_PR_BASE_OK=stale-acknowledged).
+        # /fno:ship pr create router runs; bypass FNO_PR_BASE_OK=stale-acknowledged).
         from fno.pr._preflight import check_stale_base
 
         base_code, base_msg = check_stale_base(base=f"origin/{base_branch}")
@@ -231,6 +231,9 @@ def ship(
             body, branch, extra_ids=[manifest_node] if manifest_node else None
         )
         # Create new PR
+        from fno.pr._preflight import check_duplicate_pr
+        if dup := check_duplicate_pr(os.getcwd(), f"origin/{base_branch}", title):
+            return {"action": "error", "error": dup, "branch": branch}
         create_result = subprocess.run(
             [
                 "gh", "pr", "create",
@@ -251,7 +254,7 @@ def ship(
         pr_number = _extract_pr_number(pr_url)
         action = "pr_created"
 
-    # Step 2.5: stamp the backlog node <-> PR link (x-a166). Without this the
+    # Step 2.5: stamp the backlog node <-> PR link. Without this the
     # node's pr_number stays null through the whole PR review window, so the
     # _has_unmerged_open_pr selection guard and `fno backlog reconcile` cannot
     # see the in-flight/merged PR - leaving only the 2h PID claim to guard the
@@ -264,7 +267,6 @@ def ship(
     pr_action = action
     if node_id and pr_number:
         repo_root = os.getcwd()
-        owner = state.get("target_claim_holder")
         # The MANIFEST id leads and the branch is only a fallback, so pass it.
         # Without --node this resolves the node from `git branch --show-current`
         # alone: a branch not carrying the id binds nothing, and a reused or
@@ -273,8 +275,6 @@ def ship(
             "fno", "do", "pr", "bind-created", "--url", pr_url,
             "--repo", repo_root, "--node", node_id,
         ]
-        if isinstance(owner, str) and owner.strip():
-            bind_args.extend(["--owner", owner.strip()])
         repair_command = " ".join(bind_args)
         stamp = subprocess.run(
             bind_args,

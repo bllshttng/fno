@@ -1,6 +1,6 @@
 """Typed, immutable, versioned resume receipts + live-authority revalidation.
 
-The two invariants this module exists to enforce (x-c3a2):
+The two invariants this module exists to enforce :
 
 1. A receipt is EVIDENCE, not AUTHORITY. ``write_receipt`` records a snapshot;
    it never grants the right to act. ``revalidate`` is the gate: it compares a
@@ -26,7 +26,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
@@ -54,7 +53,6 @@ _SUPERSEDED_KINDS = frozenset(
     }
 )
 
-_NODE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$", re.IGNORECASE)
 
 
 class MalformedReceiptError(ValueError):
@@ -121,6 +119,9 @@ class ResumeReceipt:
     # PR create, comment, or merge.
     idempotency_keys: tuple[str, ...] = ()
     content_sha: str = ""
+    # Task-context execution binding when written under one; None = explicitly
+    # UNBOUND (ordinary legacy behavior). Corrupt bindings refuse natively.
+    task_context: Optional[dict[str, Any]] = None
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -160,11 +161,10 @@ def _short_sha(sha: str) -> str:
 
 
 def _canonical_payload(receipt_dict: dict[str, Any]) -> str:
-    """Stable serialization for the content_sha integrity tag.
-
-    Excludes content_sha itself (circular) and sorts keys so two writers
-    producing the same receipt compute the same sha."""
-    d = {k: v for k, v in receipt_dict.items() if k != "content_sha"}
+    """Stable serialization for the content_sha integrity tag: excludes
+    content_sha itself (circular), drops None values (an absent optional field
+    must not change a legacy receipt's digest), sorts keys."""
+    d = {k: v for k, v in receipt_dict.items() if k != "content_sha" and v is not None}
     return json.dumps(d, sort_keys=True, separators=(",", ":"))
 
 
@@ -188,6 +188,7 @@ def build_receipt(
     claims: Sequence[dict[str, Any]] = (),
     watchers: Sequence[str] = (),
     idempotency_keys: Sequence[str] = (),
+    task_context: Optional[dict[str, Any]] = None,
 ) -> ResumeReceipt:
     """Assemble a receipt and compute its content_sha.
 
@@ -219,6 +220,7 @@ def build_receipt(
         claims=tuple(claims),
         watchers=tuple(watchers),
         idempotency_keys=tuple(idempotency_keys),
+        task_context=task_context,
     )
     content_sha = hashlib.sha256(
         _canonical_payload(receipt.to_dict()).encode("utf-8")
@@ -327,6 +329,7 @@ def _receipt_from_dict(d: Any, *, origin: str = "<receipt>") -> ResumeReceipt:
             watchers=_str_tuple(d.get("watchers"), "watchers", origin),
             idempotency_keys=_str_tuple(d.get("idempotency_keys"), "idempotency_keys", origin),
             content_sha=_opt_str(d, "content_sha") or "",
+            task_context=_opt_obj(d, "task_context", origin),
         )
     except MalformedReceiptError:
         raise
@@ -362,6 +365,13 @@ def _req_int(d: Any, key: str, origin: str) -> int:
 def _opt_str(d: Any, key: str) -> Optional[str]:
     v = d.get(key) if isinstance(d, dict) else None
     return v if isinstance(v, str) else None
+
+
+def _opt_obj(d: Any, key: str, origin: str) -> Optional[dict[str, Any]]:
+    v = d.get(key) if isinstance(d, dict) else None
+    if v is not None and not isinstance(v, dict):
+        raise MalformedReceiptError(f"{origin}: field {key!r} must be an object when present")
+    return v if isinstance(v, dict) else None
 
 
 def _str_tuple(v: Any, key: str, origin: str) -> tuple[str, ...]:
@@ -623,7 +633,10 @@ def read_node_events(paths: Sequence[Path]) -> list[dict[str, Any]]:
 
     Thin wrapper over the reducer's coverage-aware reader so the receipt's
     event view is identical to the scoreboard's (same dedup, same paths). The
-    caller filters to the node before passing to revalidate.
+    caller filters to the node before passing to revalidate. Each journal's
+    ``.ephemeral`` sibling is read too: the claim lifecycle kinds below are
+    ephemeral-class and have lived there since retention routing,
+    and the coverage reader dedups and tolerates the missing file.
     """
     kinds = {
         "delegated",
@@ -636,4 +649,7 @@ def read_node_events(paths: Sequence[Path]) -> list[dict[str, Any]]:
         "claim_stale_reclaimed",
         "claim_released",
     }
-    return read_jsonl_events_with_coverage([Path(p) for p in paths], kinds)["events"]
+    from fno.paths import journal_and_ephemeral_sibling
+
+    journals = [j for p in paths for j in journal_and_ephemeral_sibling(Path(p))]
+    return read_jsonl_events_with_coverage(journals, kinds)["events"]

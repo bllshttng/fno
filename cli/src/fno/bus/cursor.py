@@ -134,6 +134,7 @@ def scan_unread(
     *,
     warn: bool = True,
     exclude_from: Optional[set[str]] = None,
+    messages: Optional[list[Envelope]] = None,
 ) -> list[Envelope]:
     """Return messages addressed to ``name`` after its cursor, oldest -> newest.
 
@@ -154,15 +155,15 @@ def scan_unread(
     from fno.bus.log import withdrawn_ids
 
     cursor = read_cursor(name)
-    msgs = list(iter_messages(warn=warn))
+    msgs = list(iter_messages(warn=warn)) if messages is None else messages
     excl = exclude_from or set()
     # A withdrawn message is never delivered, and neither is its tombstone.
     # Applied here because this is the choke point for seven readers (drain-self,
-    # held-job, `mail unread`, notify-self, the nudge, `agent ask`, doctor); the
-    # two that read `iter_messages` directly - the sender's own unclaimed nag and
-    # the relay - filter separately and are tested separately. A filter on one of
-    # three paths would leave the nag firing on a message the sender retracted,
-    # which is the symptom withdrawal exists to end.
+    # held-job, `mail unread`, the turn-boundary delivery, the nudge, `agent ask`,
+    # doctor); the two that read `iter_messages` directly - the sender's own
+    # unclaimed nag and the relay - filter separately and are tested separately.
+    # A filter on one of three paths would leave the nag firing on a message the
+    # sender retracted, which is the symptom withdrawal exists to end.
     retracted = withdrawn_ids(msgs)
 
     def _mine(m: Envelope) -> bool:

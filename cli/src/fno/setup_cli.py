@@ -27,40 +27,6 @@ def setup_main(ctx: typer.Context) -> None:
         raise typer.Exit(0)
 
 
-@app.command("codex-plugin")
-def codex_plugin_cmd(
-    channel: str = typer.Option(
-        ...,
-        "--channel",
-        help="Select the release or dev Footnote plugin channel.",
-    ),
-    refresh: bool = typer.Option(
-        False,
-        "--refresh",
-        help="Remove and re-add the selected plugin even at the same version.",
-    ),
-) -> None:
-    """Converge Codex onto one Footnote plugin channel."""
-    from fno.setup.codex_plugin import CodexPluginError, converge
-
-    posture = (
-        "codex: hook approval may be needed; a new Codex session is required "
-        "after mutation."
-    )
-    try:
-        result = converge(channel=channel, refresh=refresh)
-    except CodexPluginError as exc:
-        typer.echo(f"codex-plugin error: {exc.stage}: {exc.detail}", err=True)
-        typer.echo(posture, err=True)
-        raise typer.Exit(1) from exc
-    typer.echo(
-        "codex-plugin verified: "
-        f"channel={result.channel} action={result.action} "
-        f"id={result.plugin_id} version={result.version}"
-    )
-    typer.echo(posture)
-
-
 @app.command("cli-hooks")
 def cli_hooks_cmd(
     codex: bool = typer.Option(True, "--codex/--no-codex", help="Install the Codex hook."),
@@ -370,150 +336,6 @@ def plan_cmd(
     typer.echo(json.dumps(raw, indent=2))
 
 
-# ---------------------------------------------------------------------------
-# CLI-native interactive setup wizard
-# ---------------------------------------------------------------------------
-
-# Keys whose natural home is the project file, not the per-user global one. The
-# wizard asks "global or this project?" for these and routes the write
-# accordingly; everything else is global (the config model is global-first).
-PROJECT_SCOPED_KEYS = (
-    "post_merge.parking_lot_path",
-    "project.id",
-    # vision describes THIS codebase; writing it global bleeds one repo's vision
-    # into every other repo's resolved config.
-    "project.vision",
-)
-
-
-def _wizard_default_str(default: object) -> str:
-    """Render a model default as the string shown in (and accepted from) the
-    prompt. Lists become comma-separated (the ``set`` coercer re-parses them);
-    None becomes empty (an Enter on a None-default field skips it).
-    """
-    if default is None:
-        return ""
-    if isinstance(default, bool):
-        return "true" if default else "false"
-    if isinstance(default, list):
-        return ",".join(str(x) for x in default)
-    if isinstance(default, dict):
-        import json
-
-        return json.dumps(default)
-    return str(default)
-
-
-def run_wizard(
-    repo_root: Path,
-    fields: list,
-    *,
-    prompt_fn: Callable[[str, str], Optional[str]],
-    scope_fn: Callable[[str], str],
-    echo_fn: Callable[[str], None] = lambda _m: None,
-) -> dict:
-    """Interactive-agnostic core of ``fno config setup wizard``.
-
-    For each field (from ``schema_gen.wizard_plan``) prompt for a value and
-    write it through the validated ``set_config_value`` path. Defaults come from
-    the model (the wizard never reads ``load_settings``, so the ``@lru_cache`` on
-    it is irrelevant - no stale-cache pitfall). A rejected value (exit 2)
-    re-prompts rather than aborting (AC4-ERR). Project-scoped keys ask scope via
-    ``scope_fn`` and route to the project file (AC4-EDGE). Each write echoes the
-    scope + path actually written (AC4-UI). Returning None from ``prompt_fn``
-    (a Ctrl-C) stops the wizard, leaving every already-written key persisted and
-    nothing partial for the in-flight key (AC4-FR).
-
-    ``prompt_fn(question, default) -> str | None`` (None == cancel the wizard);
-    ``scope_fn(key) -> "global" | "project"`` (asked only for project keys);
-    returns ``{"written": [keys], "cancelled": bool}``.
-    """
-    from fno.config.writer import ConfigSetError, set_config_value
-
-    def _block_of(dotted: str) -> str:
-        return ".".join(dotted.split(".")[:-1])
-
-    def _scope_for(key: str) -> tuple[str, Optional[Path]]:
-        scope = scope_fn(key) if key in PROJECT_SCOPED_KEYS else "global"
-        return scope, (repo_root if scope == "project" else None)
-
-    written: list[str] = []
-    # (key, value, scope, repo, field) for fields whose write was rejected while
-    # a later sibling in the same block was still unwritten (a likely cross-field
-    # dependency). Retried after the rest of the block lands.
-    deferred: list[tuple[str, str, str, Optional[Path], dict]] = []
-
-    for i, field in enumerate(fields):
-        key = field["path"]
-        default = field.get("default")
-        question = field.get("question") or key
-        default_str = _wizard_default_str(default)
-        scope, repo = _scope_for(key)
-
-        # A rejection (exit 2) is a bad VALUE (re-prompt, e.g. a reserved
-        # id_prefix) unless a sibling in the same block is still AHEAD in the
-        # plan - then it is likely a cross-field dependency (e.g. obsidian.enabled
-        # before .vault), so defer and retry once the block lands. Computed
-        # positionally so a genuine error on a block's LAST field re-prompts
-        # rather than being deferred-then-skipped.
-        has_later_sibling = any(
-            _block_of(f["path"]) == _block_of(key) for f in fields[i + 1:]
-        )
-
-        while True:
-            value = prompt_fn(question, default_str)
-            if value is None:
-                echo_fn("wizard cancelled; keys written so far are saved.")
-                return {"written": written, "cancelled": True}
-            value = value.strip()
-            # An optional (None-default) field left blank is skipped, not written.
-            if value == "" and default is None:
-                break
-            try:
-                res = set_config_value(key, value, scope=scope, repo_root=repo)
-            except ConfigSetError as exc:
-                if exc.exit_code == 2:
-                    if has_later_sibling:
-                        deferred.append((key, value, scope, repo, field))
-                        echo_fn(f"  deferring {key} (may depend on a later field)")
-                        break
-                    echo_fn(f"  rejected: {exc}")
-                    continue  # AC4-ERR: re-prompt, never abort
-                echo_fn(f"  cannot write {key}: {exc}")
-                break
-            echo_fn(f"  set {key} = {res.value} ({res.scope}: {res.path})")
-            written.append(key)
-            break
-
-    # Retry deferred fields now that their siblings are persisted. A field that
-    # STILL fails was a genuine bad value, not a dependency, so re-prompt it
-    # (never silently skip).
-    for key, value, scope, repo, field in deferred:
-        default = field.get("default")
-        question = field.get("question") or key
-        while True:
-            try:
-                res = set_config_value(key, value, scope=scope, repo_root=repo)
-            except ConfigSetError as exc:
-                if exc.exit_code == 2:
-                    echo_fn(f"  rejected: {exc}")
-                    value = prompt_fn(question, _wizard_default_str(default))
-                    if value is None:
-                        echo_fn("wizard cancelled; keys written so far are saved.")
-                        return {"written": written, "cancelled": True}
-                    value = value.strip()
-                    if value == "" and default is None:
-                        break  # left blank -> skip the optional field
-                    continue
-                echo_fn(f"  cannot write {key}: {exc}")
-                break
-            echo_fn(f"  set {key} = {res.value} ({res.scope}: {res.path})")
-            written.append(key)
-            break
-
-    return {"written": written, "cancelled": False}
-
-
 def offer_recommended_rules(
     *,
     confirm_fn: Callable[[str], bool],
@@ -563,7 +385,7 @@ def offer_prompt_provenance(
     shell_snippet_path: Optional[Path] = None,
     shell_rc: Optional[Path] = None,
 ) -> dict:
-    """Opt-in offer to render fno pane provenance in the user's prompt (x-84a8).
+    """Opt-in offer to render fno pane provenance in the user's prompt.
 
     Two renderers, each prompted separately (default No), so the feature never
     assumes starship: a starship custom module AND a portable bash/zsh ``$PS1``
@@ -615,127 +437,18 @@ def offer_prompt_provenance(
 
 
 @app.command("wizard")
-def wizard_cmd(
-    advanced: bool = typer.Option(
-        False, "--advanced", help="Also surface the 'advanced' tier, not just 'always'."
-    ),
-) -> None:
-    """Interactive terminal setup wizard (the CLI twin of /fno:setup).
+def wizard_cmd() -> None:
+    """Retired: the one setup verb is ``fno config setup run``.
 
-    Walks the schema-derived question plan (``always`` fields by default,
-    ``--advanced`` adds the rest), prompting for each and writing it through the
-    validated config writer - so setup works headless / CLI-only without an
-    agent. Project-scoped keys ask whether to write global or just this project.
+    Both layers (global and project) run from one step table there; the
+    terminal wizard this command used to drive is deleted. ``--yes`` (or a
+    non-TTY stdin, or an agent session env) takes every recommended default
+    without prompting; ``/fno:setup`` asks the same steps in chat.
     """
-    import json
-
-    from fno.config import schema_gen
-    from fno.config_cli import _repo_root
-
-    fields = json.loads(schema_gen.wizard_plan())["fields"]
-    if not advanced:
-        fields = [f for f in fields if f.get("tier") == "always"]
-
-    typer.echo("fno config setup wizard - press Enter to accept each default.\n")
-
-    def prompt_fn(message: str, default: str) -> Optional[str]:
-        try:
-            return typer.prompt(message, default=default)
-        except typer.Abort:
-            return None
-
-    def scope_fn(key: str) -> str:
-        # These keys are project-specific, so default the prompt to "this
-        # project" (Enter keeps it local, not global).
-        try:
-            local = typer.confirm(
-                f"Write {key} to THIS project only? (No = global)", default=True
-            )
-        except typer.Abort:
-            return "project"
-        return "project" if local else "global"
-
-    result = run_wizard(
-        _repo_root(),
-        fields,
-        prompt_fn=prompt_fn,
-        scope_fn=scope_fn,
-        echo_fn=typer.echo,
-    )
-    n = len(result["written"])
-    if result.get("cancelled"):
-        typer.echo(f"\nwizard cancelled after writing {n} key(s).")
-        raise typer.Exit(0)
-
     typer.echo(
-        f"\nwizard complete: {n} key(s) written. "
-        "`fno config doctor` checks your paths. `fno doctor --blockers` checks this machine. "
-        "See what runs without you: `fno agents autonomy status`."
+        "fno config setup wizard is retired: run `fno config setup run` "
+        "(add --yes for the no-prompt path, or use /fno:setup in chat)."
     )
-
-    # Optional capstone: install footnote's recommended claude-code rules into
-    # ~/.claude/rules/ (opt-in, default No). Never overwrites a real user file.
-    def rules_confirm_fn(message: str) -> bool:
-        try:
-            return typer.confirm(message, default=False)
-        except typer.Abort:
-            return False
-
-    offer_recommended_rules(confirm_fn=rules_confirm_fn, echo_fn=typer.echo)
-
-    # Optional capstone: render fno pane provenance in the prompt (x-84a8) via
-    # a starship module and/or a portable bash/zsh segment. Opt-in, default No;
-    # only appends on explicit yes. Engine-neutral - starship is not assumed.
-    offer_prompt_provenance(confirm_fn=rules_confirm_fn, echo_fn=typer.echo)
-
-    typer.echo("\nUser-level CLI hooks:")
-    offer_cli_hooks(confirm_fn=rules_confirm_fn)
-
-    # Optional capstone: append a marker-fenced footnote guidance block to the
-    # host's AGENTS.md/CLAUDE.md so codex/gemini (and humans) read it natively.
-    # Opt-in, default No; a first-time decline is durable, so setup never re-nags.
-    from fno.setup.managed_block import offer_managed_block
-
-    typer.echo("\nHost AGENTS.md/CLAUDE.md footnote block:")
-    offer_managed_block(
-        _repo_root(), confirm_fn=rules_confirm_fn, echo_fn=typer.echo
-    )
-
-    # Optional capstone: wire the /fno:* slash commands into the agent CLIs on
-    # PATH. A CLI-only install has the binary but not the slash commands; this
-    # lets that user opt into the agent door without hunting the docs.
-    from fno.setup.integration import run_cli_integration
-
-    typer.echo("\nAgent CLI integration - add the /fno:* commands to your CLI:")
-
-    def select_fn(options: list[dict[str, object]]) -> list[str]:
-        # No native multi-select primitive in a plain terminal, so degrade to a
-        # per-CLI yes/no over the not-yet-installed rows (already-installed ones
-        # were echoed and are skipped). Ctrl-C stops asking, installs nothing more.
-        chosen: list[str] = []
-        for opt in options:
-            if opt["installed"]:
-                continue
-            try:
-                if typer.confirm(f"  Wire up {opt['label']}?", default=False):
-                    chosen.append(str(opt["cli"]))
-            except typer.Abort:
-                break
-        return chosen
-
-    try:
-        run_cli_integration(select_fn=select_fn, echo_fn=typer.echo)
-    except KeyboardInterrupt:
-        # A Ctrl-C mid-install (e.g. during a clone) should exit cleanly, not
-        # dump a traceback.
-        typer.echo("\nintegration cancelled.")
-        raise typer.Exit(1)
-
-    # Machine check, last: the wizard configures preferences, `fno doctor`
-    # knows the machine. Run it in process so a stale-install user gets a
-    # real answer, not the deployed binary's (x-75dc).
-    report_machine_blockers(echo_fn=typer.echo)
-
     raise typer.Exit(0)
 
 
@@ -751,7 +464,7 @@ def migrate_paths_cmd(
 
 @app.command("migrate-config")
 def migrate_config_cmd() -> None:
-    """Convert legacy settings.yaml -> flat config.toml (x-8526 hard cut).
+    """Convert legacy settings.yaml -> flat config.toml (hard cut).
 
     Walks the settings candidate chain (worktree, canonical, global), writes an
     equivalent flat config.toml sibling for each settings.yaml, and deletes the
@@ -888,7 +601,7 @@ def scaffold_post_merge(
 def post_merge_cmd() -> None:
     """Scaffold config.post_merge.parking_lot_path (+ project.id) for this repo.
 
-    Prompts for the repo-relative parking-lot path the /fno:pr merged ritual
+    Prompts for the repo-relative parking-lot path the /fno:ship pr merged ritual
     writes to. Suggested-but-editable; the value is never silently derived.
     """
     from fno.config_cli import _repo_root

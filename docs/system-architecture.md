@@ -42,15 +42,15 @@ footnote is structured as a layered plugin with six architectural layers:
 ```mermaid
 graph TB
     subgraph "Entry Points"
-        CMD["/target, /blueprint, /execute, /execute waves, /fix investigate, /fix, /review sigma, /think, /think what-if"]
+        CMD["/target, /blueprint, /execute, /execute waves, /fix investigate, /fix, /review, /think, /think what-if"]
     end
 
-    subgraph "Skills Layer (25 skills)"
+    subgraph "Skills Layer (24 skills)"
         direction TB
-        WF["Workflow Skills<br/>target, plan, execute, operator,<br/>megawalk"]
+        WF["Workflow Skills<br/>target, plan, execute, operator"]
         DS["Design Skills<br/>think, what-if, audit"]
         EX["Execution Skills<br/>tdd, fix, debug, speculate"]
-        RV["Review Skills<br/>sigma-review, create-pr,<br/>check-pr"]
+        RV["Review Skills<br/>review, create-pr,<br/>check-pr"]
         UT["Utility Skills<br/>setup, codemap,<br/>ship-docs,<br/>git-worktrees"]
     end
 
@@ -72,7 +72,7 @@ graph TB
     subgraph "Scripts Layer"
         VAL["Validation<br/>validate-plan.sh<br/>validate-test-first.sh<br/>validate-roadmap.sh<br/>scan-antipatterns.sh"]
         ORC["Orchestration<br/>orchestrator.py<br/>run-target-loop.sh"]
-        MET["Metrics<br/>cost-tracker.sh<br/>register-task.py"]
+        MET["Metrics<br/>register-task.py"]
     end
 
     CMD --> WF
@@ -109,9 +109,9 @@ sequenceDiagram
     participant P as /blueprint
     participant O as /execute waves or /execute
     participant A as Agents (target/archer)
-    participant CR as /review sigma
+    participant CR as /review
     participant GV as goal-verifier
-    participant PR as /pr create
+    participant PR as /fno:ship pr create
     participant SH as Stop Hook
 
     U->>R: "build auth feature"
@@ -352,7 +352,7 @@ The plugin is loaded via the `.claude-plugin/plugin.json` manifest:
 {
   "name": "footnote",
   "version": "1.0.0",
-  "description": "Autonomous development workflow: think -> plan -> do -> review -> ship.",
+  "description": "Autonomous development workflow: think -> plan -> execute -> review -> ship.",
   "author": {"name": "Jason Noah Choi"},
   "keywords": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
 }
@@ -467,7 +467,7 @@ The `target-adapters.yaml` maps each pipeline phase to provider-specific impleme
 | think | fno:think | (default) | (default) | (default) |
 | plan | fno:blueprint | (default) | (default) | (default) |
 | execute | fno:operator | native_subagents | custom_agents | sequential_fallback |
-| review | fno:sigma-review | code-reviewer | reviewer | in_session |
+| review | fno:review | (inline lane) | reviewer | in_session |
 | verify | goal-verifier | goal-verifier | verifier | in_session |
 | ship | fno:create-pr | (default) | (default) | (default) |
 
@@ -564,7 +564,7 @@ Some skills use `context: fork` in their frontmatter to run in an isolated subpr
 
 | Skill | Model | Rationale |
 |-------|-------|-----------|
-| `/pr create` | Haiku | Mechanical task - read commits, generate PR description |
+| `/fno:ship pr create` | Haiku | Mechanical task - read commits, generate PR description |
 
 Forked skills:
 - Run in a separate process
@@ -589,11 +589,10 @@ footnote/                               # Flat root (plugin.json at .claude-plug
         plan/SKILL.md                    # Implementation planning
         do/SKILL.md                      # Lightweight executor
         operator/SKILL.md               # Heavy orchestrator
-        sigma-review/SKILL.md            # Multi-agent review
+        review/SKILL.md                  # The owned review lane
         codemap/SKILL.md               # AST structural analysis
-        megawalk/SKILL.md            # Multi-session orchestration
         ...
-    agents/                              # 12 agents
+    agents/                              # 17 agents
         archer.md                       # TDD task executor (Sonnet)
         code-reviewer.md                # Code review (Opus)
         goal-verifier.md               # Goal verification (Sonnet)

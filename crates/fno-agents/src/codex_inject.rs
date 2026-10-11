@@ -1,5 +1,5 @@
 //! `mail-inject --harness codex`: LIVE delivery into a running codex session
-//! over the codex app-server daemon socket (US8, node x-d899). The codex sibling
+//! over the codex app-server daemon socket (US8, node). The codex sibling
 //! of [`crate::mail_inject`]'s claude `control.sock` path. Python's send path
 //! (`_mail_inject_codex`) runs this as a subprocess and falls back to the durable
 //! bus ONLY when it reports not-delivered (live-inject-first).
@@ -69,6 +69,7 @@ pub fn codex_app_server_socket_path() -> PathBuf {
 /// positive liveness signal.
 pub struct CodexDaemonAdapter {
     provider_state_path: PathBuf,
+    provider_state_fallback_path: Option<PathBuf>,
     state_path: PathBuf,
     lock_path: PathBuf,
     socket_path: PathBuf,
@@ -82,10 +83,22 @@ impl CodexDaemonAdapter {
             .unwrap_or_else(|| PathBuf::from("fno-harness-daemon.json"));
         Self {
             provider_state_path,
+            provider_state_fallback_path: None,
             state_path,
             lock_path,
             socket_path,
         }
+    }
+
+    fn with_provider_state_fallback(
+        provider_state_path: PathBuf,
+        fallback_path: PathBuf,
+        lock_path: PathBuf,
+        socket_path: PathBuf,
+    ) -> Self {
+        let mut adapter = Self::new(provider_state_path, lock_path, socket_path);
+        adapter.provider_state_fallback_path = Some(fallback_path);
+        adapter
     }
 
     pub fn from_environment() -> Self {
@@ -93,8 +106,10 @@ impl CodexDaemonAdapter {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
             .unwrap_or_else(|| PathBuf::from(".codex"));
-        Self::new(
-            home.join("app-server-daemon").join("app-server.pid"),
+        let daemon_dir = home.join("app-server-daemon");
+        Self::with_provider_state_fallback(
+            daemon_dir.join("daemon.pid"),
+            daemon_dir.join("app-server.pid"),
             home.join("app-server-daemon")
                 .join("fno-harness-daemon.lock"),
             home.join("app-server-control")
@@ -102,9 +117,38 @@ impl CodexDaemonAdapter {
         )
     }
 
+    /// The managed daemon's (pid, start token) from the provider-owned
+    /// state file. `None` = the state is absent or unreadable: readiness
+    /// degrades to unknown, never to a guessed pid.
+    pub fn provider_pid_start(&self) -> Option<(u32, u64)> {
+        let state = self.provider_state().ok()?;
+        Some((state.pid?, state.process_start_time?))
+    }
+
+    /// The control socket path this adapter resolves.
+    pub fn control_socket(&self) -> PathBuf {
+        self.socket_path.clone()
+    }
+
+    /// Socket-level reachability plus the initialize handshake: the
+    /// process/socket/initialize predicate, without the state wrapper.
+    pub fn socket_up(&self) -> bool {
+        self.socket_path.exists() && probe_codex_app_server(&self.socket_path)
+    }
+
     fn provider_state(&self) -> Result<crate::harness_daemon::DaemonState, String> {
-        let raw = std::fs::read_to_string(&self.provider_state_path)
-            .map_err(|error| format!("read Codex daemon state: {error}"))?;
+        let raw = match std::fs::read_to_string(&self.provider_state_path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(fallback) = &self.provider_state_fallback_path else {
+                    return Err(format!("read Codex daemon state: {error}"));
+                };
+                std::fs::read_to_string(fallback).map_err(|fallback_error| {
+                    format!("read Codex daemon state: {fallback_error}")
+                })?
+            }
+            Err(error) => return Err(format!("read Codex daemon state: {error}")),
+        };
         <Self as crate::harness_daemon::HarnessDaemonAdapter>::parse_state(self, &raw)
     }
 }
@@ -230,10 +274,11 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
 /// Ensure the Codex app-server daemon before a client-side spawn or attach.
 ///
 /// Returns the whole [`crate::harness_daemon::EnsureResult`] rather than the
-/// receipt alone because the daemon's PID is the thread lane's identity: a
-/// codex thread worker's app-server IS this process, and the registry row
-/// records that pid so the ownership claim is readable without a process
-/// walk.
+/// receipt alone because the daemon's PID anchors the thread lane: a codex
+/// thread worker's app-server IS this process. The registry row records
+/// `pid: None` for a thread worker (one always-alive shared pid on every row
+/// broke liveness); ownership is provable from the control socket and
+/// `thread/loaded/list`.
 pub fn ensure_codex_daemon() -> Result<crate::harness_daemon::EnsureResult, String> {
     crate::harness_daemon::ensure_harness_daemon(&CodexDaemonAdapter::from_environment())
         .map_err(|error| error.to_string())
@@ -347,6 +392,51 @@ async fn codex_initialize_handshake(socket_path: &Path) -> Result<(), &'static s
     connect_app_server(socket_path).await.map(|_| ())
 }
 
+/// Read the initialize response's serverInfo (the server's own name +
+/// version user-agent) WITHOUT retaining the connection: a second
+/// initialize on the same connection is a protocol error, so this helper
+/// owns its whole lifecycle. `None` = the daemon never answered. This is
+/// the live-version reader the readiness verdict needs - the handshake
+/// used to discard exactly this response.
+pub fn initialize_server_info() -> Option<serde_json::Value> {
+    let socket_path = CodexDaemonAdapter::from_environment().control_socket();
+    // Same guard as `probe_codex_app_server`: block_on from inside a running
+    // runtime panics, and the census reads this from the async daemon loop.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(move || initialize_server_info_inner(&socket_path))
+            .join()
+            .ok()
+            .flatten();
+    }
+    initialize_server_info_inner(&socket_path)
+}
+
+fn initialize_server_info_inner(socket_path: &Path) -> Option<serde_json::Value> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    runtime.block_on(async {
+        let conn = UnixStream::connect(&socket_path).await.ok()?;
+        let ws = tokio_tungstenite::client_async("ws://localhost/rpc", conn)
+            .await
+            .ok()?
+            .0;
+        let (mut sink, mut stream) = ws.split();
+        use futures_util::SinkExt;
+        sink.send(Message::Text(initialize_request_json().into()))
+            .await
+            .ok()?;
+        let response = read_until_id(&mut stream, &serde_json::json!("init"))
+            .await
+            .ok()?;
+        drop(sink);
+        drop(stream);
+        let frame: serde_json::Value = serde_json::from_str(&response).ok()?;
+        frame.pointer("/result/serverInfo").cloned()
+    })
+}
+
 /// The `initialize` request frame. Local socket needs no auth/pairing — just the
 /// handshake. `id` is the string `"init"` (matched on the response). Note the
 /// absence of a `"jsonrpc":"2.0"` field: the codex app-server carries bare
@@ -369,24 +459,44 @@ pub fn initialized_notification_json() -> String {
 }
 
 /// The `turn/start` request injecting `text` into `thread_id` as a text input
-/// item. `id` is `1` (matched on the response). `text` is injected verbatim —
-/// the `<fno_mail>` envelope is rendered caller-side (Python), so this is a dumb
-/// transport, mirroring [`crate::mail_inject`].
-pub fn turn_start_request_json(thread_id: &str, text: &str) -> String {
+/// item, carrying an optional per-turn `sandboxPolicy`. `None` builds the bare
+/// frame. `text` is injected verbatim — the `<fno_mail>` envelope is rendered
+/// caller-side (Python), so this is a dumb transport, mirroring
+/// [`crate::mail_inject`]. The policy, when present, is always the thread's own
+/// resolved posture with only the roots widened - never a hand-built object,
+/// which would replace every sibling field with the server's defaults.
+pub fn turn_start_request_json_with_policy(
+    id: u64,
+    thread_id: &str,
+    text: &str,
+    sandbox_policy: Option<&serde_json::Value>,
+) -> String {
+    let mut params = serde_json::json!({
+        "threadId": thread_id,
+        "input": [{"type": "text", "text": text}],
+    });
+    if let Some(policy) = sandbox_policy {
+        params["sandboxPolicy"] = policy.clone();
+    }
+    serde_json::json!({"id": id, "method": "turn/start", "params": params}).to_string()
+}
+
+/// The minimal `thread/resume` probe: reads the posture the server resolved
+/// for a LOADED thread (`result.sandbox`) without spawning anything. Measured
+/// 2026-09-14 on codex 0.154.0: the reply carries `sandbox` and the thread's
+/// rollout does not grow.
+pub fn thread_resume_probe_json(id: u64, thread_id: &str) -> String {
     serde_json::json!({
-        "id": 1,
-        "method": "turn/start",
-        "params": {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": text}]
-        }
+        "id": id,
+        "method": "thread/resume",
+        "params": {"threadId": thread_id, "excludeTurns": true}
     })
     .to_string()
 }
 
 /// `review/start` target: what the codex reviewer diffs against. Mirrors the
 /// app-server protocol's `ReviewTarget` enum (verified live against the daemon,
-/// node x-c24d): a structured target beats a typed `/review <prose>`, which only
+/// node): a structured target beats a typed `/review <prose>`, which only
 /// yields `{type:custom, instructions}` with no computed merge base.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReviewTarget {
@@ -417,7 +527,7 @@ impl ReviewTarget {
 
 /// `review/start` delivery: `inline` runs the review on the worker's own thread
 /// (its current cwd), `detached` forks a new thread that inherits the session's
-/// ORIGINAL cwd - the cwd trap (node x-c24d). Default inline.
+/// ORIGINAL cwd - the cwd trap (node). Default inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewDelivery {
     Inline,
@@ -614,6 +724,7 @@ fn review_start_audit_fields(
     )
 }
 
+#[cfg(test)]
 fn review_start_audit_fields_with_origin(
     thread_id: &str,
     target_raw: &str,
@@ -623,6 +734,30 @@ fn review_start_audit_fields_with_origin(
     audit_target_cwd: Option<&str>,
     failure_reason: Option<&str>,
     audit_origin: Option<&str>,
+) -> serde_json::Map<String, serde_json::Value> {
+    review_start_audit_fields_with_origin_and_self(
+        thread_id,
+        target_raw,
+        delivery,
+        audit_payload,
+        audit_sender,
+        audit_target_cwd,
+        failure_reason,
+        audit_origin,
+        false,
+    )
+}
+
+fn review_start_audit_fields_with_origin_and_self(
+    thread_id: &str,
+    target_raw: &str,
+    delivery: ReviewDelivery,
+    audit_payload: Option<&str>,
+    audit_sender: Option<&str>,
+    audit_target_cwd: Option<&str>,
+    failure_reason: Option<&str>,
+    audit_origin: Option<&str>,
+    self_send: bool,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut fields = serde_json::Map::new();
     fields.insert("target_session".into(), thread_id.into());
@@ -642,6 +777,15 @@ fn review_start_audit_fields_with_origin(
     fields.insert("harness".into(), "codex".into());
     fields.insert("lane".into(), "codex-review-start".into());
     fields.insert("confirmed".into(), failure_reason.is_none().into());
+    let payload = fields
+        .get("payload")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let verb = payload
+        .strip_prefix('/')
+        .and_then(|_| payload.split_whitespace().next());
+    fields.insert("verb".into(), verb.map(str::to_string).into());
+    fields.insert("self_send".into(), self_send.into());
     if let Some(sender) = audit_sender {
         fields.insert("sender".into(), sender.into());
     }
@@ -659,7 +803,7 @@ fn review_start_audit_fields_with_origin(
 }
 
 fn fit_review_start_audit_fields(fields: &mut serde_json::Map<String, serde_json::Value>) {
-    if review_start_audit_payload_len(fields) <= crate::events::MAX_EVENT_PAYLOAD_BYTES {
+    if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
         return;
     }
     for key in [
@@ -671,7 +815,7 @@ fn fit_review_start_audit_fields(fields: &mut serde_json::Map<String, serde_json
         "target_session",
     ] {
         shrink_review_start_audit_field(fields, key);
-        if review_start_audit_payload_len(fields) <= crate::events::MAX_EVENT_PAYLOAD_BYTES {
+        if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
             return;
         }
     }
@@ -699,7 +843,7 @@ fn shrink_review_start_audit_field(
     while low < high {
         let middle = (low + high + 1) / 2;
         fields.insert(key.to_string(), value[..boundaries[middle]].into());
-        if review_start_audit_payload_len(fields) <= crate::events::MAX_EVENT_PAYLOAD_BYTES {
+        if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
             low = middle;
         } else {
             high = middle - 1;
@@ -813,7 +957,7 @@ fn review_invocation_event_fields(
         .collect();
     let initiator = match audit_origin {
         Some("operator") => "operator",
-        Some("peer") => "king",
+        Some("peer") => "lead",
         Some("scheduler" | "recovery") => "daemon",
         _ => "unknown",
     };
@@ -858,7 +1002,7 @@ fn emit_review_invocation_event(
         .ok()
         .filter(|path| !path.is_empty())
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| crate::paths::worktree_repo_root(&cwd).join(".fno/events.jsonl"));
+        .unwrap_or_else(|| crate::paths::events_path(&cwd));
     let fields = review_invocation_event_fields(
         invocation_id,
         thread_id,
@@ -940,6 +1084,7 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
     let mut audit_sender: Option<String> = None;
     let mut audit_target_cwd: Option<String> = None;
     let mut audit_origin: Option<String> = None;
+    let mut audit_self_send = false;
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -977,6 +1122,9 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
             "--audit-origin" => {
                 audit_origin = it.next().cloned();
             }
+            "--audit-self-send" => audit_self_send = true,
+            // stdout is only the delivery JSON; the flag is accepted for parity.
+            "--json" | "-J" => {}
             other => {
                 eprintln!("review-start: unknown flag: {other}");
                 return 2;
@@ -1038,7 +1186,7 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
     // marker in the recipient thread, so it needs the same ledger record the
     // mail-inject lane writes -- a guard on one of two reachable paths is
     // decorative. Best-effort; a write failure never changes the exit code.
-    let fields = review_start_audit_fields_with_origin(
+    let fields = review_start_audit_fields_with_origin_and_self(
         &thread_id,
         &target_raw,
         delivery,
@@ -1047,6 +1195,7 @@ pub async fn run_review_start(rest: &[String]) -> i32 {
         audit_target_cwd.as_deref(),
         failure_reason.as_deref(),
         audit_origin.as_deref(),
+        audit_self_send,
     );
     let _ = crate::events::EventEmitter::new(
         crate::paths::AgentsHome::from_env().events_jsonl(),
@@ -1151,6 +1300,17 @@ pub fn parse_loaded_list_response(
     Ok((ids, next_cursor))
 }
 
+/// The runtime `status.type` a `thread/read` answer carries: `notLoaded`,
+/// `idle`, `systemError`, or `active`. `None` = the answer named no status,
+/// which the upgrade transaction treats as unreadable.
+pub fn parse_thread_read_status(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()?
+        .pointer("/result/thread/status/type")
+        .and_then(|status| status.as_str())
+        .map(str::to_string)
+}
+
 pub fn parse_thread_read_cwd(raw: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
     v.pointer("/result/thread/cwd")
@@ -1209,9 +1369,82 @@ pub fn classify_turn_start_response(raw: &str) -> Result<(), ReviewStartError> {
 /// signal whose `Reason` value is the `mail-inject` JSON `reason` token. No
 /// daemon listening -> `Err("no-daemon")`; a wedged socket -> `Err("io-error")`
 /// after [`HANDSHAKE_TIMEOUT`].
+const CODEX_NATIVE_COMMAND_REFUSAL: &str =
+    "native-command: use fno mux command <selector> --text <verb> --proof <compact|goal-active|screen>";
+
+fn codex_native_command_refusal(text: &str) -> Result<Option<&'static str>, String> {
+    let Some(verb) = text.trim().split_whitespace().next() else {
+        return Ok(None);
+    };
+    if !verb.starts_with('/') && !verb.starts_with('$') {
+        return Ok(None);
+    }
+    let contract = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|error| format!("capability contract unreadable: {error}"))?;
+    let capabilities = contract
+        .capabilities("codex")
+        .map_err(|error| format!("Codex capability row unreadable: {error}"))?;
+    let native = capabilities
+        .native_verbs
+        .iter()
+        .any(|candidate| candidate == verb);
+    let review = capabilities
+        .review_verbs
+        .iter()
+        .any(|candidate| candidate == verb);
+    Ok((native && !review).then_some(CODEX_NATIVE_COMMAND_REFUSAL))
+}
+
 pub async fn deliver_via_codex_daemon(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    deliver(thread_id, text, None).await
+}
+
+/// Sync form of [`deliver_via_codex_daemon`] for the daemon's blocking arms
+/// (the codex-watch waker). Same try-current guard as [`thread_loaded`].
+pub fn deliver_via_codex_daemon_sync(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let (id, body) = (thread_id.to_string(), text.to_string());
+        return std::thread::spawn(move || deliver_sync_inner(&id, &body))
+            .join()
+            .unwrap_or_else(|_| Err(ReviewStartError::Reason("io-error")));
+    }
+    deliver_sync_inner(thread_id, text)
+}
+
+fn deliver_sync_inner(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(deliver_via_codex_daemon(thread_id, text)),
+        Err(_) => Err(ReviewStartError::Reason("io-error")),
+    }
+}
+
+/// A bounded pane's seed turn: the spawner holds the cwd the TUI launched
+/// with, so the widening runs without a `thread/read` round trip and lands on
+/// the TUI's first turn, which no fno turn/start would otherwise reach.
+pub async fn deliver_seed_via_codex_daemon(
+    thread_id: &str,
+    text: &str,
+    cwd: &Path,
+) -> Result<(), ReviewStartError> {
+    deliver(thread_id, text, Some(cwd)).await
+}
+
+async fn deliver(
+    thread_id: &str,
+    text: &str,
+    cwd_hint: Option<&Path>,
+) -> Result<(), ReviewStartError> {
+    match codex_native_command_refusal(text).map_err(|error| {
+        ReviewStartError::Server(format!("native-command policy unreadable: {error}"))
+    })? {
+        Some(reason) => return Err(ReviewStartError::Reason(reason)),
+        None => {}
+    }
     let sock = codex_app_server_socket_path();
-    match tokio::time::timeout(HANDSHAKE_TIMEOUT, inject(&sock, thread_id, text)).await {
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, inject(&sock, thread_id, text, cwd_hint)).await {
         Ok(r) => r,
         Err(_) => Err(ReviewStartError::Reason("io-error")),
     }
@@ -1225,29 +1458,624 @@ pub async fn discover_loaded_threads() -> Result<Vec<LoadedThread>, &'static str
     }
 }
 
-pub async fn run_loaded_thread_discovery() -> i32 {
-    let output = match discover_loaded_threads().await {
-        Ok(threads) => serde_json::json!({"available": true, "threads": threads}),
-        Err(reason) => serde_json::json!({"available": false, "reason": reason}),
-    };
-    println!("{output}");
-    0
+/// The inject-routability predicate (the mail live-inject adoption check):
+/// `thread_id` loads on the app-server this environment names. `Ok(false)` is
+/// a DEFINITIVE answer from an up daemon (unload the watch); every `Err` is
+/// "the daemon could not answer", never a verdict. Sync wrapper so the
+/// loop-check stop path and the daemon's blocking arms can call it; a caller
+/// already inside a tokio runtime gets a helper thread, mirroring
+/// [`initialize_server_info`]'s block_on guard.
+pub fn thread_loaded(thread_id: &str) -> Result<bool, &'static str> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let id = thread_id.to_string();
+        return std::thread::spawn(move || thread_loaded_inner(&id))
+            .join()
+            .map_err(|_| "io-error")?;
+    }
+    thread_loaded_inner(thread_id)
 }
 
-/// The connect + initialize handshake + `turn/start` round-trip. Split out so
-/// [`deliver_via_codex_daemon`] can wrap it in a total timeout.
-async fn inject(sock: &Path, thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+fn thread_loaded_inner(thread_id: &str) -> Result<bool, &'static str> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "io-error")?;
+    runtime.block_on(async {
+        discover_loaded_threads()
+            .await
+            .map(|threads| threads.iter().any(|t| t.session_id == thread_id))
+    })
+}
+
+/// Sync form of [`discover_loaded_threads`] for the daemon's blocking arms:
+/// the full loaded-roster set in one socket read. Same try-current guard as
+/// [`thread_loaded`].
+pub fn loaded_thread_ids() -> Result<std::collections::HashSet<String>, &'static str> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(loaded_thread_ids_inner)
+            .join()
+            .map_err(|_| "io-error")?;
+    }
+    loaded_thread_ids_inner()
+}
+
+fn loaded_thread_ids_inner() -> Result<std::collections::HashSet<String>, &'static str> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "io-error")?;
+    runtime.block_on(async {
+        discover_loaded_threads()
+            .await
+            .map(|threads| threads.into_iter().map(|t| t.session_id).collect())
+    })
+}
+
+/// The `codex_loaded` payload block: what the retired hidden
+/// `codex-loaded-threads` verb printed, as a value. `Ok` -> `{"available":
+/// true, "threads": [...]}`; every `Err` -> `{"available": false, "reason":
+/// <reason>}`, so "the daemon could not answer" stays distinct from "zero
+/// threads". Rides `list --json --harness codex` instead of a verb root.
+pub fn loaded_threads_block(result: Result<Vec<LoadedThread>, &'static str>) -> serde_json::Value {
+    match result {
+        Ok(threads) => serde_json::json!({ "available": true, "threads": threads }),
+        Err(reason) => serde_json::json!({ "available": false, "reason": reason }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Project assignment. Codex never derives a thread's project from its
+// cwd: a thread carries an explicit projectId and a project carries an ARRAY
+// of root paths, and Desktop writes the assignment only for worktrees it
+// created itself under CODEX_HOME/worktrees. Every other spawn falls back to
+// a cwd-keyed bucket the UI labels with the folder basename - which for fno
+// worktrees is the node id (measured 2026-09-01: 3054 threads, 0 assigned).
+// Two lanes assign. The interactive thread lane puts projectId straight on
+// `thread/start`; the headless lane has no argv flag and calls
+// `thread/metadata/update` after its rollout binds, through the hidden
+// `codex-assign-project` verb below.
+// ---------------------------------------------------------------------------
+
+const PROJECT_PAGE_SIZE: u32 = 100;
+const MAX_PROJECT_PAGES: usize = 64;
+
+/// The inline pre-spawn resolve must cost less than a spawn is worth: the
+/// standalone `codex-assign-project` verb may take the full
+/// [`HANDSHAKE_TIMEOUT`], but `ensure_project_for_cwd` runs BEFORE thread/start
+/// on every interactive spawn, so a wedged app-server costs a spawn this much,
+/// not ten seconds. One list round-trip on a unix socket is milliseconds; this
+/// bound exists for the pathological case.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `project/list` page request. Response shape (app-server-protocol
+/// `ProjectListResponse`): `{data: [Project], nextCursor}`.
+pub fn project_list_request_json(id: u64, limit: u32, cursor: Option<&str>) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/list",
+        "params": {"limit": limit, "cursor": cursor}
+    })
+    .to_string()
+}
+
+/// `project/create`. The idempotency key is REQUIRED (`ProjectCreateParams`)
+/// and codex persists it, so one repo must always send one key: a repeated
+/// create answers with the first project instead of a twin.
+pub fn project_create_request_json(
+    id: u64,
+    name: &str,
+    root: &Path,
+    idempotency_key: &str,
+) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/create",
+        "params": {
+            "name": name,
+            "roots": [{"path": root}],
+            "idempotencyKey": idempotency_key,
+        }
+    })
+    .to_string()
+}
+
+/// `project/update` carrying a whole replacement roots array (the protocol has
+/// no append verb, so the caller extends the list it listed).
+/// `project/update` carrying a whole replacement roots array (the protocol has
+/// no append verb, so the caller extends the list it listed).
+pub fn project_update_roots_request_json(id: u64, project_id: &str, roots: &[PathBuf]) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/update",
+        "params": {
+            "projectId": project_id,
+            "roots": roots.iter().map(|root| json!({"path": root})).collect::<Vec<_>>(),
+        }
+    })
+    .to_string()
+}
+
+/// `project/read`, the fresh-roots read that must precede a roots update:
+/// `project/update` replaces the array rather than appending, so extending
+/// from a page the list returned moments ago would drop anything written
+/// between that page and the update.
+pub fn project_read_request_json(id: u64, project_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/read",
+        "params": {"projectId": project_id}
+    })
+    .to_string()
+}
+
+/// `thread/metadata/update`: the headless lane's assignment carrier. An empty
+/// projectId is the protocol's explicit CLEAR; this builder always assigns.
+pub fn thread_metadata_update_request_json(id: u64, thread_id: &str, project_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "thread/metadata/update",
+        "params": {"threadId": thread_id, "projectId": project_id}
+    })
+    .to_string()
+}
+
+/// One `project/list` row, narrowed to what the resolver matches on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    pub roots: Vec<PathBuf>,
+}
+
+/// Parse one `project/list` page into `(rows, next_cursor)`.
+pub fn parse_project_page(
+    raw: &str,
+) -> Result<(Vec<ProjectSummary>, Option<String>), &'static str> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| "rpc-error")?;
+    if v.get("error").is_some() {
+        return Err("rpc-error");
+    }
+    let data = v
+        .pointer("/result/data")
+        .and_then(|d| d.as_array())
+        .ok_or("rpc-error")?;
+    let mut projects = Vec::with_capacity(data.len());
+    for item in data {
+        let id = item
+            .get("id")
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty())
+            .ok_or("rpc-error")?;
+        let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        let roots = item
+            .get("roots")
+            .and_then(|roots| roots.as_array())
+            .map(|roots| {
+                roots
+                    .iter()
+                    .filter_map(|root| root.get("path").and_then(|p| p.as_str()))
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        projects.push(ProjectSummary {
+            id: id.to_string(),
+            name: name.to_string(),
+            roots,
+        });
+    }
+    let next_cursor = match v.pointer("/result/nextCursor") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(value.as_str().ok_or("rpc-error")?.to_string()),
+    };
+    let next_cursor = next_cursor.filter(|cursor| !cursor.is_empty());
+    Ok((projects, next_cursor))
+}
+
+/// The project whose roots contain `repo_root`. Both sides canonicalize, so a
+/// symlinked repo or a `/var`-vs-`/private/var` spelling difference still
+/// matches.
+pub fn parse_project_id_for_root(raw: &str, repo_root: &Path) -> Option<String> {
+    let wanted = std::fs::canonicalize(repo_root).ok()?;
+    let (projects, _) = parse_project_page(raw).ok()?;
+    projects
+        .into_iter()
+        .find(|project| {
+            project
+                .roots
+                .iter()
+                .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == wanted))
+        })
+        .map(|project| project.id)
+}
+
+/// The `project.id` from a `project/create` or `project/update` response.
+pub fn parse_created_project_id(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()?
+        .pointer("/result/project/id")
+        .and_then(|id| id.as_str())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// The roots array from a `project/read` response.
+pub fn parse_project_roots(raw: &str) -> Option<Vec<PathBuf>> {
+    let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    Some(
+        v.pointer("/result/project/roots")?
+            .as_array()?
+            .iter()
+            .filter_map(|root| root.get("path").and_then(|p| p.as_str()))
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+/// One repo, one key, forever: the key derives from the canonical root, so
+/// every spawn for a repo sends the same create and codex answers with the
+/// first project every time.
+fn project_idempotency_key(repo_root: &Path) -> String {
+    format!("fno:{}", repo_root.display())
+}
+
+/// Resolve (or create) the codex project whose roots contain `repo_root`.
+/// Three steps, first hit wins: a root match returns as-is; a project already
+/// named after the repo directory gains the root; otherwise one is created.
+///
+/// Fail open at every step - an absent socket, a refused handshake, a rejected
+/// write all return None and the caller spawns unchanged, the rule
+/// `codex_git_writable_args` states. Even though this lane now WRITES, a
+/// project we cannot resolve must never break a spawn.
+pub async fn ensure_project_for_root(repo_root: &Path) -> Option<String> {
+    let repo_root = std::fs::canonicalize(repo_root).ok()?;
+    let (mut sink, mut stream) = connect_app_server(&codex_app_server_socket_path())
+        .await
+        .ok()?;
+
+    let mut projects: Vec<ProjectSummary> = Vec::new();
+    let mut seen_cursors = HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut request_id = 2_u64;
+    let mut complete = false;
+    for _ in 0..MAX_PROJECT_PAGES {
+        sink.send(Message::Text(
+            project_list_request_json(request_id, PROJECT_PAGE_SIZE, cursor.as_deref()).into(),
+        ))
+        .await
+        .ok()?;
+        let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+            .await
+            .ok()?;
+        let (page, next_cursor) = parse_project_page(&raw).ok()?;
+        projects.extend(page);
+        request_id += 1;
+        match next_cursor {
+            None => {
+                complete = true;
+                break;
+            }
+            Some(next) if seen_cursors.insert(next.clone()) => cursor = Some(next),
+            Some(_) => return None,
+        }
+    }
+    if !complete {
+        // The listing never finished: creating now could mint a twin of a
+        // project a later page would have matched. Fail open instead.
+        return None;
+    }
+
+    if let Some(existing) = projects.iter().find(|project| {
+        project
+            .roots
+            .iter()
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == repo_root))
+    }) {
+        return Some(existing.id.clone());
+    }
+    let dir_name = repo_root.file_name()?.to_string_lossy().into_owned();
+    if let Some(named) = projects.iter().find(|project| project.name == dir_name) {
+        // Re-read the roots fresh: the list can be pages old, and the update
+        // below REPLACES the array - extending from a stale read would drop a
+        // root written since. A failed re-read falls back to the listed roots.
+        let mut roots = {
+            sink.send(Message::Text(
+                project_read_request_json(request_id, &named.id).into(),
+            ))
+            .await
+            .ok()?;
+            let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+                .await
+                .ok()?;
+            request_id += 1;
+            parse_project_roots(&raw).unwrap_or_else(|| named.roots.clone())
+        };
+        if roots
+            .iter()
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == repo_root))
+        {
+            // A concurrent writer already attached this repo: done, no write.
+            return Some(named.id.clone());
+        }
+        roots.push(repo_root.clone());
+        sink.send(Message::Text(
+            project_update_roots_request_json(request_id, &named.id, &roots).into(),
+        ))
+        .await
+        .ok()?;
+        let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+            .await
+            .ok()?;
+        return parse_created_project_id(&raw);
+    }
+    sink.send(Message::Text(
+        project_create_request_json(
+            request_id,
+            &dir_name,
+            &repo_root,
+            &project_idempotency_key(&repo_root),
+        )
+        .into(),
+    ))
+    .await
+    .ok()?;
+    let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+        .await
+        .ok()?;
+    parse_created_project_id(&raw)
+}
+
+/// [`ensure_project_for_root`] for a worker cwd: a linked worktree resolves to
+/// its repo through the git COMMON dir, whose parent is the canonical root.
+/// None outside a repo. Bounded by [`RESOLVE_TIMEOUT`] as a whole, because this
+/// sits inline before thread/start on every interactive spawn.
+pub async fn ensure_project_for_cwd(cwd: &Path) -> Option<String> {
+    let common = crate::provider::git_common_dir(cwd)?;
+    let repo_root = Path::new(&common).parent()?;
+    tokio::time::timeout(RESOLVE_TIMEOUT, ensure_project_for_root(repo_root))
+        .await
+        .ok()?
+}
+
+/// Assign a bound thread to `project_id` over `thread/metadata/update`. The
+/// headless lane calls this AFTER its session binds - a thread with no rollout
+/// yet answers "no rollout found", which is why the call cannot precede the
+/// bind. An unknown project and every transport failure fold into None; the
+/// spawn is already complete and nothing upstream reacts to this.
+pub async fn assign_thread_to_project(thread_id: &str, project_id: &str) -> Option<()> {
+    let (mut sink, mut stream) = connect_app_server(&codex_app_server_socket_path())
+        .await
+        .ok()?;
+    sink.send(Message::Text(
+        thread_metadata_update_request_json(2, thread_id, project_id).into(),
+    ))
+    .await
+    .ok()?;
+    let raw = read_until_id(&mut stream, &serde_json::json!(2))
+        .await
+        .ok()?;
+    let accepted = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("error")
+        .is_none();
+    accepted.then_some(())
+}
+
+/// The hidden `fno-agents codex-assign-project` verb: resolve or
+/// create the repo's project for `--cwd`, and when `--thread-id` is given,
+/// assign that bound thread to it. This is how the HEADLESS lane reaches the
+/// resolver - the Python codex create path captures the thread id from
+/// `thread.started` and shells this binary fire-and-forget. Same `matches!`
+/// treatment as `review-start` so it stays out of CLIENT_VERB_USAGE /
+/// RUST_CLIENT_VERBS and the routable-verb parity guard. Prints one JSON line;
+/// exits 0 on a resolved project, 1 when resolution failed.
+pub async fn run_codex_assign_project(rest: &[String]) -> i32 {
+    let mut cwd: Option<PathBuf> = None;
+    let mut thread_id: Option<String> = None;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--cwd" => cwd = it.next().map(PathBuf::from),
+            "--thread-id" => thread_id = it.next().cloned(),
+            other => {
+                eprintln!("codex-assign-project: unknown flag: {other}");
+                return 2;
+            }
+        }
+    }
+    let Some(cwd) = cwd else {
+        eprintln!("codex-assign-project: --cwd is required");
+        return 2;
+    };
+    let outcome = async {
+        let project_id = ensure_project_for_cwd(&cwd).await?;
+        let assigned = match thread_id.as_deref() {
+            Some(thread_id) => assign_thread_to_project(thread_id, &project_id)
+                .await
+                .is_some(),
+            None => false,
+        };
+        Some((project_id, assigned))
+    };
+    match outcome.await {
+        Some((project_id, assigned)) => {
+            println!(
+                "{}",
+                json!({"available": true, "projectId": project_id, "assigned": assigned})
+            );
+            0
+        }
+        None => {
+            println!(
+                "{}",
+                json!({"available": false, "reason": "project-unresolved"})
+            );
+            1
+        }
+    }
+}
+
+/// Wire ids for the three request frames, in send order. `read_until_id`
+/// matches ids, so each read waits for its own frame; a skipped stage leaves a
+/// gap, which bare JSON-RPC allows.
+const THREAD_READ_ID: u64 = 1;
+const THREAD_RESUME_ID: u64 = 2;
+const TURN_START_ID: u64 = 3;
+
+/// One send + wait-for-its-own-id round-trip.
+async fn round_trip(
+    sink: &mut AppServerSink,
+    stream: &mut AppServerStream,
+    id: u64,
+    frame: String,
+) -> Result<String, &'static str> {
+    sink.send(Message::Text(frame.into()))
+        .await
+        .map_err(|_| "io-error")?;
+    read_until_id(stream, &serde_json::json!(id)).await
+}
+
+/// Whether `thread_id`'s registry row records a full-access posture. A `None`
+/// home (tests, stray callers), an unreadable registry, and a row miss all
+/// read `false`, so every miss keeps today's probe frame. The read is
+/// offloaded: `load_registry` takes the registry flock, and a blocking wait
+/// does not belong on the async delivery path.
+async fn recorded_posture_is_full_access(thread_id: &str) -> bool {
+    let thread_id = thread_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+            return false;
+        };
+        let Ok(registry) = crate::state::load_registry(&home.registry_json()) else {
+            return false;
+        };
+        registry
+            .find_name_or_full_session_id(&thread_id)
+            .is_some_and(crate::codex_posture::entry_posture_is_full_access)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// The connect + initialize handshake + the posture read + `turn/start`.
+/// Split out so [`deliver_via_codex_daemon`] can wrap it in a total timeout.
+///
+/// The writable-roots grant rides the TURN, never a client `-c` flag:
+/// `thread/read` names the thread's cwd, `thread/resume` reads the posture the
+/// server resolved, and only a `workspaceWrite` posture widens the roots -
+/// this lane never narrows a thread. A failed read is NOT a delivery failure:
+/// the turn still goes out, policy-less. Measured 2026-09-14 on codex 0.154.0:
+/// resume on a loaded thread answers Ok carrying `sandbox`, and the rollout
+/// does not grow. A registry row recording full access re-asserts it instead:
+/// the turn carries `{"type":"dangerFullAccess"}` and the probe is skipped,
+/// so an out-of-band narrowing is healed by the next delivered turn.
+async fn inject(
+    sock: &Path,
+    thread_id: &str,
+    text: &str,
+    cwd_hint: Option<&Path>,
+) -> Result<(), ReviewStartError> {
+    let reassert = recorded_posture_is_full_access(thread_id).await;
     let (mut sink, mut stream) = connect_app_server(sock)
         .await
         .map_err(ReviewStartError::Reason)?;
 
+    let mut policy = None;
+    if reassert {
+        policy = Some(json!({"type": "dangerFullAccess"}));
+    } else {
+        // A seed turn brings the spawner's own cwd: a fresh no-turn thread is
+        // where thread/read is least certain, and the spawner knows the cwd
+        // it launched the TUI with.
+        let cwd = match cwd_hint {
+            Some(hint) => hint.to_string_lossy().into_owned(),
+            None => match round_trip(
+                &mut sink,
+                &mut stream,
+                THREAD_READ_ID,
+                thread_read_request_json(THREAD_READ_ID, thread_id),
+            )
+            .await
+            {
+                Ok(raw) => parse_thread_read_cwd(&raw).unwrap_or_default(),
+                Err(_) => String::new(),
+            },
+        };
+        if !cwd.is_empty() {
+            let roots = crate::provider::codex_writable_roots(Path::new(&cwd));
+            if !roots.is_empty() {
+                if let Ok(raw) = round_trip(
+                    &mut sink,
+                    &mut stream,
+                    THREAD_RESUME_ID,
+                    thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
+                )
+                .await
+                {
+                    if let Some(sandbox) = crate::codex_thread::parse_resolved_sandbox(&raw) {
+                        // This lane never narrows: only a resolved workspaceWrite
+                        // posture is widened. A dangerFullAccess or readOnly
+                        // posture goes policy-less, which leaves the thread on
+                        // whatever the server already had.
+                        if sandbox.get("type").and_then(serde_json::Value::as_str)
+                            == Some("workspaceWrite")
+                        {
+                            policy = Some(crate::codex_thread::sandbox_policy_with_roots(
+                                &sandbox, &roots,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match start_turn(&mut sink, &mut stream, thread_id, text, policy.as_ref()).await {
+        Err(ReviewStartError::Reason("thread-not-loaded")) => {
+            // Only an explicit rejection permits replay; an unacked turn may
+            // already be running. Resume metadata avoids the history frame cap.
+            let raw = round_trip(
+                &mut sink,
+                &mut stream,
+                THREAD_RESUME_ID,
+                thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
+            )
+            .await
+            .map_err(ReviewStartError::Reason)?;
+            let (confirmed, _) = crate::codex_thread::parse_thread_start_response(&raw).map_err(
+                |error| match error {
+                    crate::codex_thread::ThreadStartError::Server(message) => {
+                        ReviewStartError::Server(message)
+                    }
+                    _ => ReviewStartError::Reason("unexpected-response"),
+                },
+            )?;
+            if confirmed != thread_id {
+                return Err(ReviewStartError::Reason("thread-resume-mismatch"));
+            }
+            start_turn(&mut sink, &mut stream, thread_id, text, policy.as_ref()).await
+        }
+        result => result,
+    }
+}
+
+async fn start_turn(
+    sink: &mut AppServerSink,
+    stream: &mut AppServerStream,
+    thread_id: &str,
+    text: &str,
+    policy: Option<&serde_json::Value>,
+) -> Result<(), ReviewStartError> {
     sink.send(Message::Text(
-        turn_start_request_json(thread_id, text).into(),
+        turn_start_request_json_with_policy(TURN_START_ID, thread_id, text, policy).into(),
     ))
     .await
     .map_err(|_| ReviewStartError::Reason("io-error"))?;
-    let resp = read_until_id(&mut stream, &serde_json::json!(1)).await?;
-    classify_turn_start_response(&resp)
+    // Once sent, a missing acknowledgment never authorizes another turn.
+    let raw = read_until_id(stream, &json!(TURN_START_ID))
+        .await
+        .map_err(|_| ReviewStartError::Reason("turn-start-unacked"))?;
+    classify_turn_start_response(&raw)
 }
 
 async fn discover(sock: &Path) -> Result<Vec<LoadedThread>, &'static str> {
@@ -1306,7 +2134,10 @@ async fn discover(sock: &Path) -> Result<Vec<LoadedThread>, &'static str> {
 /// Read Text frames until one whose `id` equals `want`, returning its raw text.
 /// Skips notifications (no `id`) and frames for other ids; ignores non-Text
 /// frames. Bounded by [`MAX_FRAMES`]; a read error / closed stream is `"io-error"`.
-async fn read_until_id<S>(stream: &mut S, want: &serde_json::Value) -> Result<String, &'static str>
+pub(crate) async fn read_until_id<S>(
+    stream: &mut S,
+    want: &serde_json::Value,
+) -> Result<String, &'static str>
 where
     S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
@@ -1320,6 +2151,9 @@ where
                 }
             }
             Some(Ok(_)) => {} // non-Text frame (ping/binary/close-less); skip
+            Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
+                return Err("app-server-response-over-cap");
+            }
             Some(Err(_)) | None => return Err("io-error"),
         }
     }
@@ -1353,6 +2187,33 @@ mod tests {
         serde_json::from_str(&raw).unwrap()
     }
 
+    #[tokio::test]
+    async fn mail_inject_refuses_declared_codex_native_commands_before_connecting() {
+        let result = deliver_via_codex_daemon("thread-1", "/compact").await;
+        assert_eq!(
+            result,
+            Err(ReviewStartError::Reason(CODEX_NATIVE_COMMAND_REFUSAL))
+        );
+        assert_eq!(
+            codex_native_command_refusal("/goal status"),
+            Ok(Some(CODEX_NATIVE_COMMAND_REFUSAL))
+        );
+    }
+
+    #[test]
+    fn codex_review_verbs_are_not_classified_as_native_non_review_commands() {
+        assert_eq!(codex_native_command_refusal("/review"), Ok(None));
+        assert_eq!(codex_native_command_refusal("/code-review"), Ok(None));
+    }
+
+    #[test]
+    fn codex_native_command_gate_leaves_ordinary_text_alone() {
+        assert_eq!(
+            codex_native_command_refusal("continue the review"),
+            Ok(None)
+        );
+    }
+
     #[test]
     fn initialize_request_is_bare_jsonrpc_with_string_id() {
         let v: serde_json::Value = serde_json::from_str(&initialize_request_json()).unwrap();
@@ -1372,13 +2233,34 @@ mod tests {
 
     #[test]
     fn turn_start_carries_thread_id_and_text_item() {
-        let v: serde_json::Value =
-            serde_json::from_str(&turn_start_request_json("THREAD-9", "hello MARKER")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&turn_start_request_json_with_policy(
+            1,
+            "THREAD-9",
+            "hello MARKER",
+            None,
+        ))
+        .unwrap();
         assert_eq!(v["id"], 1);
         assert_eq!(v["method"], "turn/start");
         assert_eq!(v["params"]["threadId"], "THREAD-9");
         assert_eq!(v["params"]["input"][0]["type"], "text");
         assert_eq!(v["params"]["input"][0]["text"], "hello MARKER");
+    }
+
+    #[test]
+    fn turn_start_policy_is_all_or_nothing() {
+        // A Some policy rides whole; None builds the bare frame. There is no
+        // hand-built fallback: a policy guessed without the thread's resolved
+        // posture could replace sibling fields with server defaults.
+        let bare: serde_json::Value =
+            serde_json::from_str(&turn_start_request_json_with_policy(3, "T", "x", None)).unwrap();
+        assert!(bare["params"].get("sandboxPolicy").is_none());
+        let policy = serde_json::json!({"type": "workspaceWrite", "writableRoots": ["/r"]});
+        let carried: serde_json::Value = serde_json::from_str(
+            &turn_start_request_json_with_policy(3, "T", "x", Some(&policy)),
+        )
+        .unwrap();
+        assert_eq!(carried["params"]["sandboxPolicy"]["writableRoots"][0], "/r");
     }
 
     #[test]
@@ -1494,7 +2376,23 @@ mod tests {
         assert_eq!(fields["harness"], "codex");
         assert_eq!(fields["lane"], "codex-review-start");
         assert_eq!(fields["confirmed"], true);
+        assert_eq!(fields["verb"], "/review");
+        assert_eq!(fields["self_send"], false);
         assert!(!fields.contains_key("reason"));
+
+        let self_fields = review_start_audit_fields_with_origin_and_self(
+            "thread-1",
+            "uncommittedChanges",
+            ReviewDelivery::Inline,
+            Some("/compact"),
+            Some("thread-1"),
+            Some("/repo"),
+            None,
+            None,
+            true,
+        );
+        assert_eq!(self_fields["verb"], "/compact");
+        assert_eq!(self_fields["self_send"], true);
     }
 
     #[test]
@@ -1530,7 +2428,7 @@ mod tests {
         assert_eq!(fields["level"], "medium");
         assert_eq!(fields["level_source"], "explicit");
         assert_eq!(fields["flags"], serde_json::json!(["--comment"]));
-        assert_eq!(fields["initiator"], "king");
+        assert_eq!(fields["initiator"], "lead");
         assert_eq!(fields["submit_key"], "none");
         assert_eq!(
             fields["receipt"],
@@ -1543,7 +2441,7 @@ mod tests {
             &crate::events::EventEmitter::new(temp.path().join("events.jsonl"), "daemon"),
             fields,
         );
-        let raw = std::fs::read_to_string(temp.path().join("events.jsonl")).unwrap();
+        let raw = crate::events::committed_journal_text(&temp.path().join("events.jsonl"));
         let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(event["type"], "review_invocation");
         assert_eq!(
@@ -1556,7 +2454,7 @@ mod tests {
     fn review_start_audit_truncates_long_reason_without_losing_event() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("events.jsonl");
-        let long_reason = "x".repeat(340);
+        let long_reason = "x".repeat(crate::events_limits::max_data_bytes());
         let fields = review_start_audit_fields(
             "thread-1",
             "baseBranch:origin/main",
@@ -1569,7 +2467,7 @@ mod tests {
         crate::events::EventEmitter::new(&path, "daemon")
             .emit_fields("agent_raw_inject", fields)
             .unwrap();
-        let raw = std::fs::read_to_string(path).unwrap();
+        let raw = crate::events::committed_journal_text(&path);
         let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(event["type"], "agent_raw_inject");
         assert_eq!(event["data"]["target_session"], "thread-1");
@@ -1584,7 +2482,7 @@ mod tests {
     fn review_start_audit_budgets_all_variable_fields() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("events.jsonl");
-        let large = "x".repeat(512);
+        let large = "x".repeat(crate::events_limits::max_data_bytes() + 1);
         let fields = review_start_audit_fields_with_origin(
             &large,
             "baseBranch:origin/main",
@@ -1598,7 +2496,7 @@ mod tests {
         crate::events::EventEmitter::new(&path, "daemon")
             .emit_fields("agent_raw_inject", fields)
             .unwrap();
-        let raw = std::fs::read_to_string(path).unwrap();
+        let raw = crate::events::committed_journal_text(&path);
         let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(event["type"], "agent_raw_inject");
         assert_eq!(event["data"]["payload_truncated"], true);
@@ -1634,6 +2532,15 @@ mod tests {
             result.unwrap_err(),
             ReviewStartError::Reason("not-confirmed")
         );
+    }
+
+    /// Parse layer only: with -J and --session missing, the refusal names the
+    /// missing argument, and the flag itself never reaches delivery.
+    #[tokio::test]
+    async fn review_start_accepts_the_json_flag_at_the_parse_layer() {
+        assert_eq!(run_review_start(&["-J".to_string()]).await, 2);
+        assert_eq!(run_review_start(&["--json".to_string()]).await, 2);
+        assert_eq!(run_review_start(&["--bogus".to_string()]).await, 2);
     }
 
     #[test]
@@ -1828,7 +2735,7 @@ mod tests {
         assert_eq!(classify_turn_start_response(raw), Ok(()));
     }
 
-    /// AC8 (x-296f defect 2): a daemon that REFUSES `initialize` must not read
+    /// AC8 (defect 2): a daemon that REFUSES `initialize` must not read
     /// healthy. The id-matched frame is not automatically a successful
     /// handshake: protocol or version skew answers with an `error` on the same
     /// id, and the discarded response let `probe_codex_app_server` report
@@ -1838,9 +2745,7 @@ mod tests {
     /// unhealthy against the same socket.
     #[tokio::test]
     async fn an_initialize_error_frame_reads_unhealthy_naming_the_refusal() {
-        let _guard = crate::PATH_TEST_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = crate::path_test_guard();
         let daemon = crate::codex_fake_daemon::FakeDaemon::start(
             crate::codex_fake_daemon::Behavior::quick().with_refused_initialize(),
         );
@@ -1897,7 +2802,7 @@ mod tests {
             Err(ReviewStartError::Reason("no-daemon"))
         );
         assert_eq!(
-            inject(&socket, "t", "hi").await,
+            inject(&socket, "t", "hi", None).await,
             Err(ReviewStartError::Reason("no-daemon"))
         );
         assert_eq!(discover(&socket).await, Err("no-daemon"));
@@ -2002,6 +2907,22 @@ mod tests {
     }
 
     #[test]
+    fn codex_daemon_state_reads_legacy_provider_file_when_current_file_is_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("daemon.pid");
+        let legacy = temp.path().join("app-server.pid");
+        std::fs::write(&legacy, r#"{"pid":123,"processStartTime":456}"#).unwrap();
+        let adapter = CodexDaemonAdapter::with_provider_state_fallback(
+            current,
+            legacy,
+            temp.path().join("fno.lock"),
+            temp.path().join("codex.sock"),
+        );
+
+        assert_eq!(adapter.provider_pid_start(), Some((123, 456)));
+    }
+
+    #[test]
     fn codex_daemon_state_accepts_provider_date_string() {
         let adapter = CodexDaemonAdapter::new(
             PathBuf::from("/tmp/codex.pid"),
@@ -2069,5 +2990,496 @@ mod tests {
         let missing =
             std::env::temp_dir().join(format!("missing-codex-probe-{}", std::process::id()));
         assert!(!probe_codex_app_server(&missing));
+    }
+
+    // --- project assignment -------------------------------------
+
+    /// Positive-control the matcher on the exact shape a real page carries.
+    #[test]
+    fn parse_project_page_reads_rows_and_cursor() {
+        let raw = r#"{"id":2,"result":{"data":[
+            {"id":"proj-a","name":"footnote","roots":[{"path":"/repo/a"}],"position":0},
+            {"id":"proj-b","name":"other","roots":[]}
+        ],"nextCursor":null}}"#;
+        let (projects, cursor) = parse_project_page(raw).unwrap();
+        assert_eq!(cursor, None);
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].id, "proj-a");
+        assert_eq!(projects[0].name, "footnote");
+        assert_eq!(projects[0].roots, vec![PathBuf::from("/repo/a")]);
+        assert!(projects[1].roots.is_empty());
+    }
+
+    #[test]
+    fn parse_project_page_refuses_error_frames() {
+        assert_eq!(
+            parse_project_page(r#"{"id":2,"error":{"message":"x"}}"#),
+            Err("rpc-error")
+        );
+        assert_eq!(parse_project_page("not-json"), Err("rpc-error"));
+    }
+
+    /// The matcher canonicalizes BOTH sides: the listed root may spell the repo
+    /// through a different prefix (macOS /var vs /private/var) and still match
+    /// a cwd handed over uncanonicalized.
+    #[test]
+    fn parse_project_id_for_root_matches_across_path_spellings() {
+        let temp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(temp.path()).unwrap();
+        let raw = format!(
+            r#"{{"id":2,"result":{{"data":[{{"id":"proj-a","name":"x","roots":[{{"path":"{}"}}]}}],"nextCursor":null}}}}"#,
+            canonical.display()
+        );
+        assert_eq!(
+            parse_project_id_for_root(&raw, temp.path()).as_deref(),
+            Some("proj-a")
+        );
+        // A repo whose root no listed project carries matches nothing.
+        assert_eq!(
+            parse_project_id_for_root(raw.as_str(), temp.path().join("nope").as_path()),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_created_project_id_reads_the_created_project() {
+        assert_eq!(
+            parse_created_project_id(r#"{"id":3,"result":{"project":{"id":"proj-new"}}}"#),
+            Some("proj-new".to_string())
+        );
+        assert_eq!(parse_created_project_id(r#"{"id":3,"result":{}}"#), None);
+    }
+
+    /// Builder shapes are pinned: the idempotency key and the roots array are
+    /// what make a retried create return the first project instead of a twin.
+    #[test]
+    fn project_request_builders_pin_the_wire_shapes() {
+        let list: serde_json::Value =
+            serde_json::from_str(&project_list_request_json(2, 100, None)).unwrap();
+        assert_eq!(list["method"], "project/list");
+        assert_eq!(list["params"]["limit"], 100);
+        let create: serde_json::Value = serde_json::from_str(&project_create_request_json(
+            3,
+            "footnote",
+            Path::new("/repo"),
+            "fno:/repo",
+        ))
+        .unwrap();
+        assert_eq!(create["method"], "project/create");
+        assert_eq!(create["params"]["idempotencyKey"], "fno:/repo");
+        assert_eq!(create["params"]["roots"][0]["path"], "/repo");
+        let update: serde_json::Value = serde_json::from_str(&project_update_roots_request_json(
+            4,
+            "proj-a",
+            &[PathBuf::from("/repo/a"), PathBuf::from("/repo")],
+        ))
+        .unwrap();
+        assert_eq!(update["method"], "project/update");
+        assert_eq!(update["params"]["projectId"], "proj-a");
+        assert_eq!(update["params"]["roots"].as_array().unwrap().len(), 2);
+        let assign: serde_json::Value = serde_json::from_str(&thread_metadata_update_request_json(
+            5, "thread-1", "proj-a",
+        ))
+        .unwrap();
+        assert_eq!(assign["method"], "thread/metadata/update");
+        assert_eq!(assign["params"]["threadId"], "thread-1");
+        assert_eq!(assign["params"]["projectId"], "proj-a");
+        let read: serde_json::Value =
+            serde_json::from_str(&project_read_request_json(6, "proj-a")).unwrap();
+        assert_eq!(read["method"], "project/read");
+        assert_eq!(read["params"]["projectId"], "proj-a");
+        let roots =
+            parse_project_roots(r#"{"id":6,"result":{"project":{"roots":[{"path":"/repo"}]}}}"#)
+                .unwrap();
+        assert_eq!(roots, vec![PathBuf::from("/repo")]);
+    }
+
+    /// Root match: the resolver answers with the existing id and creates
+    /// nothing. Positive controls: the list actually ran, and the create never
+    /// fired.
+    #[tokio::test]
+    async fn resolver_returns_the_matching_project_and_creates_nothing() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_projects(vec![json!({
+                "id": "proj-a", "name": "somewhere-else",
+                "roots": [{"path": root.display().to_string()}]
+            })]),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-a"));
+        assert!(
+            daemon.first_params("project/list").is_some(),
+            "the listing must have run"
+        );
+        assert!(
+            daemon.first_params("project/create").is_none(),
+            "a root match must not create"
+        );
+    }
+
+    /// A project already named after the repo directory gains the root instead
+    /// of a second project with the same label.
+    #[tokio::test]
+    async fn resolver_extends_a_same_named_project_instead_of_creating_a_twin() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let dir_name = temp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_projects(vec![json!({
+                "id": "proj-b", "name": dir_name, "roots": [{"path": "/elsewhere"}]
+            })]),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-b"));
+        let update = daemon.first_params("project/update");
+        assert!(
+            update.is_some(),
+            "a same-named project must be extended, not duplicated"
+        );
+        assert_eq!(update.unwrap()["projectId"], "proj-b");
+    }
+
+    /// Neither root nor name matches: create, carrying the derived idempotency
+    /// key, and return the created id.
+    #[tokio::test]
+    async fn resolver_creates_when_nothing_matches() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick(),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-created-fno"));
+        let create = daemon.first_params("project/create").expect("create ran");
+        assert_eq!(
+            create["idempotencyKey"],
+            format!(
+                "fno:{}",
+                std::fs::canonicalize(temp.path()).unwrap().display()
+            )
+        );
+        assert_eq!(
+            create["roots"][0]["path"],
+            std::fs::canonicalize(temp.path())
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    /// Outside a repo there is no root to ensure, and the resolver answers
+    /// None without touching the socket.
+    #[tokio::test]
+    async fn resolver_for_cwd_answers_none_outside_a_repo() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        // No daemon: reaching the socket would hang past the guard, so a hit
+        // here would only come from the git step resolve_allow_missing arm.
+        let id = ensure_project_for_cwd(temp.path()).await;
+        assert_eq!(id, None);
+    }
+
+    /// The full turn path: a workspaceWrite posture yields a `turn/start`
+    /// whose `sandboxPolicy.writableRoots` carries the granted roots on top of
+    /// the posture's own.
+    #[tokio::test]
+    async fn deliver_carries_the_writable_roots_grant_on_the_turn() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let _add_dirs =
+            crate::claims::EnvVarGuard::set("FNO_WORKER_ADD_DIRS", "/tmp/fno-t13-a:/tmp/fno-t13-b");
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello GRANT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon
+            .first_params("turn/start")
+            .expect("turn/start must have run");
+        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t13-own".to_string()),
+            "the posture's own roots ride: {roots:?}"
+        );
+        assert!(
+            roots.contains(&"/tmp/fno-t13-a".to_string()),
+            "the state dirs ride: {roots:?}"
+        );
+    }
+
+    /// A `dangerFullAccess` posture sends NO policy: this lane never narrows
+    /// a thread.
+    #[tokio::test]
+    async fn deliver_sends_no_policy_for_a_danger_full_access_posture() {
+        let _guard = crate::path_test_guard();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick()
+                .with_thread_sandbox(json!({"type": "dangerFullAccess"})),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello").await;
+        assert!(result.is_ok());
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        assert!(turn.get("sandboxPolicy").is_none());
+    }
+
+    /// The seed path: the spawner's cwd hint replaces the `thread/read` round
+    /// trip, and the widened turn/start still carries the env dirs on top of
+    /// the posture's own roots.
+    #[tokio::test]
+    async fn seed_delivery_carries_the_roots_and_skips_thread_read() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let _add_dirs =
+            crate::claims::EnvVarGuard::set("FNO_WORKER_ADD_DIRS", "/tmp/fno-t14-a:/tmp/fno-t14-b");
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t14-own"]
+            })),
+        );
+        let result =
+            deliver_seed_via_codex_daemon("thread-t", "hello SEED", Path::new("/tmp/fno-t14-cwd"))
+                .await;
+        assert!(result.is_ok(), "seed delivery must succeed: {result:?}");
+        let turn = daemon
+            .first_params("turn/start")
+            .expect("seed turn/start must have run");
+        let roots: Vec<String> = turn["sandboxPolicy"]["writableRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t14-own".to_string()),
+            "the posture's own roots ride: {roots:?}"
+        );
+        assert!(
+            roots.contains(&"/tmp/fno-t14-a".to_string())
+                && roots.contains(&"/tmp/fno-t14-b".to_string()),
+            "the state dirs ride: {roots:?}"
+        );
+        assert!(
+            daemon.received().iter().all(|frame| frame
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                != Some("thread/read")),
+            "a cwd hint must skip the thread/read round trip"
+        );
+    }
+
+    /// A seed to a `dangerFullAccess` thread goes out policy-less: the seed
+    /// lane, like the mail lane, never narrows a thread.
+    #[tokio::test]
+    async fn seed_delivery_sends_no_policy_for_a_danger_full_access_posture() {
+        let _guard = crate::path_test_guard();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick()
+                .with_thread_sandbox(json!({"type": "dangerFullAccess"})),
+        );
+        let result =
+            deliver_seed_via_codex_daemon("thread-t", "hello", Path::new("/tmp/fno-t14-cwd")).await;
+        assert!(result.is_ok());
+        let turn = daemon.first_params("turn/start").expect("seed ran");
+        assert!(turn.get("sandboxPolicy").is_none());
+    }
+
+    /// An ack loss after the turn/start went out reads as
+    /// `turn-start-unacked`, the token the seed lane treats as in-flight so a
+    /// typed fallback cannot double-seed a thread that is already running.
+    #[tokio::test]
+    async fn seed_delivery_names_an_unacked_turn_start() {
+        let _guard = crate::path_test_guard();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_unacked_turn_start(),
+        );
+        let result =
+            deliver_seed_via_codex_daemon("thread-t", "hello", Path::new("/tmp/fno-t14-cwd")).await;
+        assert_eq!(
+            result,
+            Err(ReviewStartError::Reason("turn-start-unacked")),
+            "an ack loss must be named, not read as io-error"
+        );
+        assert_eq!(
+            daemon
+                .received()
+                .iter()
+                .filter(|f| f["method"] == "turn/start")
+                .count(),
+            1
+        );
+    }
+
+    /// A registry row recording full access re-asserts it: the turn carries
+    /// `{"type":"dangerFullAccess"}` and no `thread/resume` probe runs, even
+    /// when the live posture reads workspaceWrite.
+    #[tokio::test]
+    async fn deliver_reasserts_a_recorded_full_access_posture_without_the_probe() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(temp.path()).registry_json(),
+            |registry| {
+                let mut entry = crate::state::RegistryEntry::default();
+                entry.name = "t-yolo".to_string();
+                entry.cwd = "/repo".to_string();
+                entry.harness = Some("codex".to_string());
+                entry.harness_session_id = Some("thread-t".to_string());
+                entry.sandbox_posture = Some("danger-full-access".to_string());
+                registry.entries.push(entry);
+            },
+        )
+        .unwrap();
+        let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", temp.path());
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello REASSERT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        assert_eq!(turn["sandboxPolicy"], json!({"type": "dangerFullAccess"}));
+        assert!(
+            daemon.received().iter().all(|frame| {
+                frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
+            }),
+            "no resume probe may run when the row records full access"
+        );
+    }
+
+    /// Cold threads with oversized history load before the accepted turn.
+    #[tokio::test]
+    async fn deliver_sends_no_policy_when_the_posture_is_missing() {
+        let _guard = crate::path_test_guard();
+        for (refuses, returned_id) in [
+            (false, "thread-t"),
+            (true, "thread-t"),
+            (false, "other-thread"),
+        ] {
+            let daemon =
+                crate::codex_fake_daemon::FakeDaemon::start(crate::codex_fake_daemon::Behavior {
+                    thread_cwd: String::new(),
+                    cold_thread: true,
+                    resume_history_bytes: 17 * 1024 * 1024,
+                    fail_thread_resume: refuses,
+                    thread_id: returned_id.to_string(),
+                    ..crate::codex_fake_daemon::Behavior::quick()
+                });
+            let result = deliver_via_codex_daemon("thread-t", "hello").await;
+            if refuses {
+                assert!(
+                    matches!(result, Err(ReviewStartError::Server(ref reason)) if reason == "thread/resume refused")
+                );
+            } else if returned_id != "thread-t" {
+                assert_eq!(
+                    result,
+                    Err(ReviewStartError::Reason("thread-resume-mismatch"))
+                );
+            } else {
+                assert!(result.is_ok(), "{result:?}");
+            }
+            let resume = daemon
+                .first_params("thread/resume")
+                .expect("cold thread resumes");
+            assert_eq!(resume["excludeTurns"], true);
+            let turns = daemon
+                .received()
+                .into_iter()
+                .filter(|f| f["method"] == "turn/start")
+                .count();
+            assert_eq!(
+                turns,
+                if refuses || returned_id != "thread-t" {
+                    1
+                } else {
+                    2
+                }
+            );
+            let turn = daemon.first_params("turn/start").expect("turn ran");
+            assert!(turn.get("sandboxPolicy").is_none());
+        }
+        let mut stream =
+            futures_util::stream::iter([Err(tokio_tungstenite::tungstenite::Error::Capacity(
+                tokio_tungstenite::tungstenite::error::CapacityError::MessageTooLong {
+                    size: 17 * 1024 * 1024,
+                    max_size: 16 * 1024 * 1024,
+                },
+            ))]);
+        assert_eq!(
+            read_until_id(&mut stream, &json!(THREAD_RESUME_ID)).await,
+            Err("app-server-response-over-cap")
+        );
+    }
+
+    /// A refused `thread/resume` is not a delivery failure: the turn still
+    /// goes out, policy-less.
+    #[tokio::test]
+    async fn deliver_still_sends_the_turn_when_the_resume_probe_refuses() {
+        let _guard = crate::path_test_guard();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick()
+                .with_thread_sandbox(json!({"type": "workspaceWrite", "writableRoots": []}))
+                .with_failing_thread_resume(),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello RESILIENT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon
+            .first_params("turn/start")
+            .expect("the turn must still have run");
+        assert_eq!(turn["input"][0]["text"], "hello RESILIENT");
+        assert!(turn.get("sandboxPolicy").is_none());
+    }
+
+    /// The block keeps the retired verb's exact payload shape.
+    #[test]
+    fn loaded_threads_block_ok_carries_the_thread_rows() {
+        let block = loaded_threads_block(Ok(vec![
+            LoadedThread {
+                session_id: "019f4d0c-full".into(),
+                cwd: "/repo".into(),
+            },
+            LoadedThread {
+                session_id: "019f4d0d-full".into(),
+                cwd: "/other".into(),
+            },
+        ]));
+        assert_eq!(block["available"], true);
+        assert_eq!(block["threads"][0]["session_id"], "019f4d0c-full");
+        assert_eq!(block["threads"][0]["cwd"], "/repo");
+        assert_eq!(block["threads"][1]["session_id"], "019f4d0d-full");
+    }
+
+    /// An unreachable daemon reads as `available: false` with a reason, never
+    /// as zero threads.
+    #[test]
+    fn loaded_threads_block_err_names_the_reason() {
+        let block = loaded_threads_block(Err("no-daemon"));
+        assert_eq!(block["available"], false);
+        assert_eq!(block["reason"], "no-daemon");
+        assert!(block.get("threads").is_none());
     }
 }

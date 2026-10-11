@@ -1,4 +1,4 @@
-//! The needs-me-queue events-fold leg (x-feec): a bounded, fail-open shell-out
+//! The needs-me-queue events-fold leg : a bounded, fail-open shell-out
 //! to `fno-agents needs --json`, mirroring [`crate::digest_overlay`]'s idiom.
 //!
 //! The client owns the live badge leg (blocked/done-unseen rows from the
@@ -14,8 +14,17 @@ use std::time::Duration;
 /// queue to its live badge leg with a visible notice, never blocks the UI.
 const SHELLOUT_TIMEOUT: Duration = Duration::from_millis(800);
 
+/// The questions leg's bound. The bell renders the index fold at once and
+/// applies this read whenever it lands, so the projection is a background
+/// refresh, never a deadline the UI waits under (the 800ms cap turned a
+/// loaded machine into "questions unavailable" with ten questions open).
+const QUESTIONS_TIMEOUT: Duration = Duration::from_secs(30);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(45);
+const ANSWER_TIMEOUT_MESSAGE: &str =
+    "timed out after 45s; the answer may have landed - rerun it, a rerun resumes";
+
 /// One event-derived need, as emitted by `fno-agents needs --json`. The `live`
-/// bit is the claim-liveness stamp (x-feec 1.4): the client renders an item
+/// bit is the claim-liveness stamp (1.4): the client renders an item
 /// that joins no roster row only when it is `live`, so a dead session's stale
 /// stop never nags.
 #[derive(Debug, Clone, Deserialize)]
@@ -52,36 +61,140 @@ struct MineResponse {
     mine: Vec<MineItem>,
 }
 
-/// One open operator question, as emitted by `fno inbox outstanding --json`'s
-/// `questions` array (x-7979's record: asker/options/blocks/liveness, already
-/// rank-ordered). Richer than the bare `operator_question` event the events
-/// leg carries - this is what the overlay renders and answers; the events leg
-/// still carries a plain `NeedKind::Question` badge for the roster.
-#[derive(Debug, Clone, Deserialize)]
-pub struct QuestionItem {
-    pub id: String,
+/// One option of a [`QuestionItem`], mirroring the projection's ItemOption.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionOption {
+    pub n: u32,
+    pub text: String,
     #[serde(default)]
-    pub question: String,
+    pub next: Option<String>,
     #[serde(default)]
-    pub ask: Option<String>,
+    pub pros: Vec<String>,
     #[serde(default)]
-    pub asker: Option<String>,
+    pub cons: Vec<String>,
+}
+
+/// One context field of a [`QuestionItem`], mirroring the projection's
+/// Recommendation.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionRecommendation {
+    pub option: u32,
     #[serde(default)]
-    pub node: Option<String>,
+    pub why: String,
     #[serde(default)]
-    pub options: Vec<String>,
-    /// `None` = liveness unresolved (render as normal); `Some(false)` = the
-    /// asker no longer resolves (render STALE - the answer still records,
-    /// but reaches no live session); `Some(true)` = live.
+    pub downside: Option<String>,
+}
+
+/// One asker of a [`QuestionItem`], mirroring the projection's Asker.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionAsker {
+    pub handle: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub harness: Option<String>,
     #[serde(default)]
     pub live: Option<bool>,
     #[serde(default)]
-    pub rank: Option<u32>,
+    pub reach: Option<String>,
+}
+
+/// One open or answered operator question, mirroring the projection item
+/// `fno-agents needs --items --json` prints. This is what the overlay and the
+/// notifications panel render and answer. All fields but `id` are
+/// optional or defaulted, so a projection field added later never breaks an
+/// older client. The settled bit folds node-closed questions into Answered.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub asker: Option<QuestionAsker>,
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub missing: Vec<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub settled: bool,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default)]
+    pub blocked_because: Option<String>,
+    #[serde(default)]
+    pub options_rationale: Option<String>,
+    #[serde(default)]
+    pub recommendation: Option<QuestionRecommendation>,
+    #[serde(default)]
+    pub unknowns: Option<String>,
+    #[serde(default)]
+    pub reversible: Option<String>,
+    #[serde(default)]
+    pub cost_if_wrong: Option<String>,
+    #[serde(default)]
+    pub meanwhile: Option<String>,
+    #[serde(default)]
+    pub class: Option<String>,
+}
+
+/// One recently answered item beside the open list, from the payload's
+/// top-level `answered` array.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AnsweredItem {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub asker: Option<String>,
+    #[serde(default)]
+    pub answer: String,
+    #[serde(default)]
+    pub rung: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub at: String,
+}
+
+/// The questions fold shape: open-or-answered items plus the recently
+/// answered rows, one shape for the overlay and the sideline block.
+#[derive(Debug, Clone, Default)]
+pub struct QuestionsFold {
+    pub items: Vec<QuestionItem>,
+    pub answered: Vec<AnsweredItem>,
+    pub as_of: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct QuestionsResponse {
-    questions: Vec<QuestionItem>,
+    items: Vec<QuestionItem>,
+    #[serde(default)]
+    answered: Vec<AnsweredItem>,
+    #[serde(default)]
+    as_of: Option<u64>,
+}
+
+/// Which items of the projection payload this fold keeps: real questions and
+/// pins in an open or answered state (mine rows are the user lane, not a
+/// question for the user).
+fn keep_question(item: &QuestionItem) -> bool {
+    matches!(item.kind.as_str(), "question" | "pin")
+        && matches!(item.state.as_str(), "open" | "answered")
 }
 
 /// Both independent overlay reads. Each leg carries its own failure so one
@@ -89,7 +202,7 @@ struct QuestionsResponse {
 pub struct FoldOutcome {
     pub needs: Option<Vec<FoldItem>>,
     pub mine: Option<Vec<MineItem>>,
-    pub questions: Option<Vec<QuestionItem>>,
+    pub questions: Result<QuestionsFold, String>,
 }
 
 /// Fold the needs-me events leg over the `since_epoch` window. `None` on any
@@ -136,26 +249,61 @@ pub async fn mine_now() -> Option<Vec<MineItem>> {
     parse_mine(&output.stdout)
 }
 
-/// Fold open operator questions through `fno inbox outstanding --json` - the
-/// SAME store `fno outstanding ask`/`clear` write, already rank-ordered and
-/// liveness-resolved (a 50ms budget, well inside this leg's own timeout).
-/// Same bounded/fail-open shape as the other legs.
-pub async fn questions_now() -> Option<Vec<QuestionItem>> {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+/// Fold open questions through the Rust projection verb - bounded by
+/// [`QUESTIONS_TIMEOUT`], with the store's cursor fast path (a store-sized
+/// read measured 4.99 s before it). A failure carries a reason: the bell
+/// names it over the last good fold instead of blanking the board.
+pub async fn questions_now() -> Result<QuestionsFold, String> {
+    let mut command =
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
     command
-        .args(["inbox", "outstanding", "--json"])
+        .args(["needs", "--items", "--json"])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
-    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
-        .await
-        .ok()?
-        .ok()?;
+    let output = match tokio::time::timeout(QUESTIONS_TIMEOUT, fut).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => {
+            return Err(format!(
+                "timed out after {}ms",
+                QUESTIONS_TIMEOUT.as_millis()
+            ))
+        }
+    };
     if !output.status.success() {
-        return None;
+        return Err(questions_reason(&output.stdout).unwrap_or_else(|| {
+            match output.status.code() {
+                Some(code) => format!("needs --items exited {code}"),
+                None => "needs --items was killed by a signal".to_string(),
+            }
+        }));
     }
-    parse_questions(&output.stdout)
+    parse_questions(&output.stdout).ok_or_else(|| "unreadable output".to_string())
+}
+
+/// The first unreadable source the payload names. A failed projection still
+/// prints its payload with exit 1, so the reason rides in `sources`.
+fn questions_reason(stdout: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    let sources = v.get("sources")?.as_array()?;
+    let bad = sources
+        .iter()
+        .find(|s| s.get("readable") == Some(&serde_json::Value::Bool(false)))?;
+    let store = bad
+        .get("store")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("source");
+    let error = bad
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if error.is_empty() {
+        Some(store.to_string())
+    } else {
+        Some(format!("{store}: {error}"))
+    }
 }
 
 /// Run all three bounded reads concurrently under the client's one
@@ -213,9 +361,9 @@ pub async fn mine_mutate(mutation: MineMutation) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
-    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
+    let output = tokio::time::timeout(WRITE_TIMEOUT, fut)
         .await
-        .map_err(|_| "timed out".to_string())?
+        .map_err(|_| "timed out after 45s; the change may have landed - rerun it".to_string())?
         .map_err(|e| e.to_string())?;
     if output.status.success() {
         Ok(())
@@ -241,46 +389,133 @@ fn parse_mine(stdout: &[u8]) -> Option<Vec<MineItem>> {
         .map(|response| response.mine)
 }
 
-fn parse_questions(stdout: &[u8]) -> Option<Vec<QuestionItem>> {
+fn parse_questions(stdout: &[u8]) -> Option<QuestionsFold> {
     serde_json::from_slice::<QuestionsResponse>(stdout)
         .ok()
-        .map(|response| response.questions)
+        .map(|response| QuestionsFold {
+            items: response.items.into_iter().filter(keep_question).collect(),
+            answered: response.answered,
+            as_of: response.as_of,
+        })
 }
 
-/// Answer or withdraw one open question through the installed/current `fno`
-/// binary - `fno inbox outstanding clear <id> --answer "..."`, the same verb
-/// `outstanding`'s own CLI help names. Bounded, single writer: the client
-/// never records the decision itself. `Ok(())` on a clean exit; `Err(message)`
-/// on a timeout, spawn failure, or a nonzero exit (stderr captured) - the
-/// operator sees WHY a write failed, never a silent no-op.
-pub async fn answer_question(question_id: &str, answer: &str) -> Result<(), String> {
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+/// The pick the overlay sends through the door: an option number (1-based),
+/// free-text words, a pin's done, or a hand-off to the team over the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerPick {
+    Option(u32),
+    Words(String),
+    Done,
+    Delegate,
+}
+
+/// Answer one open question through the door - `fno-agents needs
+/// --answer <id> ... --sink mux`, the one writer of a mux answer. Bounded,
+/// single writer: the client never records the decision itself. `Ok(receipt)`
+/// returns the door's JSON receipt; `Err(message)` on a timeout, spawn
+/// failure, or a nonzero exit (stderr captured) - the operator sees WHY a
+/// write failed, never a silent no-op.
+pub async fn answer(item_id: &str, pick: AnswerPick) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["needs".into(), "--answer".into(), item_id.to_string()];
+    match pick {
+        AnswerPick::Option(n) => {
+            args.push("--option".into());
+            args.push(n.to_string());
+        }
+        AnswerPick::Words(text) => {
+            args.push("--words".into());
+            args.push(text);
+        }
+        AnswerPick::Done => {
+            args.push("--done".into());
+        }
+        AnswerPick::Delegate => {
+            args.push("--delegate".into());
+        }
+    }
+    args.push("--sink".into());
+    args.push("mux".into());
+    run_door(args)
+        .await
+        .map(|_| "recorded, delivering".to_string())
+        .map_err(|(_, msg)| msg)
+}
+
+/// Withdraw open questions with no answer through the door - `fno-agents
+/// needs --archive <id>... --sink mux`. The same bounded shape as
+/// [`answer`]; `Ok` reads the door's receipt as "archived N". A partial
+/// archive (some ids refused) is still `Ok`, the refusal appended, so the
+/// view refolds over the questions that did close.
+pub async fn archive(ids: Vec<String>) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["needs".into()];
+    for id in ids {
+        args.push("--archive".into());
+        args.push(id);
+    }
+    args.push("--sink".into());
+    args.push("mux".into());
+    let archived = |stdout: &str| {
+        serde_json::from_str::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|v| v.get("archived").and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
+    };
+    match run_door(args).await {
+        Ok(stdout) => Ok(format!("archived {}", archived(&stdout))),
+        Err((stdout, msg)) => match archived(&stdout) {
+            0 => Err(msg),
+            n => Ok(format!("archived {n}; {msg}")),
+        },
+    }
+}
+
+/// Close every still-open question whose node or blocked node has finished.
+/// The daemon-side fold owns the graph read and writes `node-closed` rows;
+/// this client only reports its receipt.
+pub async fn clear_settled() -> Result<String, String> {
+    let result = |stdout: &str| {
+        serde_json::from_str::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|v| v.get("cleared")?.as_array().map(|rows| rows.len()))
+            .unwrap_or(0)
+    };
+    match run_door(vec!["needs".into(), "--clear-settled".into()]).await {
+        Ok(stdout) => Ok(format!("cleared {} settled questions", result(&stdout))),
+        Err((stdout, error)) => match result(&stdout) {
+            0 => Err(error),
+            n => Ok(format!("cleared {n} settled questions; {error}")),
+        },
+    }
+}
+
+/// One bounded door call: stdout on success; on a timeout, a spawn
+/// failure, or a nonzero exit, whatever stdout the door printed and the
+/// reason (stderr, else the exit).
+async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
+    let mut command =
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
     command
-        .args([
-            "inbox",
-            "outstanding",
-            "clear",
-            question_id,
-            "--answer",
-            answer,
-        ])
+        .args(&args)
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
-    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
+    let output = tokio::time::timeout(WRITE_TIMEOUT, fut)
         .await
-        .map_err(|_| "timed out".to_string())?
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| (String::new(), ANSWER_TIMEOUT_MESSAGE.to_string()))?
+        .map_err(|e| (String::new(), e.to_string()))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if output.status.success() {
-        Ok(())
+        Ok(stdout)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(if stderr.is_empty() {
-            format!("exit {}", output.status)
-        } else {
-            stderr
-        })
+        Err((
+            stdout,
+            if stderr.is_empty() {
+                format!("exit {}", output.status)
+            } else {
+                stderr
+            },
+        ))
     }
 }
 
@@ -319,13 +554,13 @@ mod tests {
 
     #[test]
     fn parses_required_mine_json() {
-        let json = br#"{"mine":[{"n":1,"text":"ship tonight","done":false,"node":null},{"n":2,"text":"cut verbs","done":true,"node":"x-c1b9"}]}"#;
+        let json = br#"{"mine":[{"n":1,"text":"ship tonight","done":false,"node":null},{"n":2,"text":"cut verbs","done":true,"node":"x-aaaa"}]}"#;
         let items = parse_mine(json).expect("valid mine response parses");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].n, 1);
         assert_eq!(items[0].text, "ship tonight");
         assert!(!items[0].done);
-        assert_eq!(items[1].node.as_deref(), Some("x-c1b9"));
+        assert_eq!(items[1].node.as_deref(), Some("x-aaaa"));
     }
 
     #[test]
@@ -335,19 +570,31 @@ mod tests {
 
     #[test]
     fn parses_required_questions_json() {
-        let json = br#"{"questions":[{"id":"q-1","question":"which auth?","ask":"pick one","asker":"fno-peer","node":null,"options":["oauth","apikey"],"live":true,"rank":1},{"id":"q-2","question":"free text one","ask":null,"asker":null,"node":null,"options":[],"live":false,"rank":2}]}"#;
-        let items = parse_questions(json).expect("valid questions response parses");
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].id, "q-1");
-        assert_eq!(items[0].ask.as_deref(), Some("pick one"));
-        assert_eq!(items[0].options, vec!["oauth", "apikey"]);
-        assert_eq!(items[0].live, Some(true));
-        assert_eq!(items[1].live, Some(false));
-        assert_eq!(items[1].ask, None);
+        // AC4-HP: the projection payload with items and the answered array.
+        let json = br#"{"as_of":1000,"items":[
+            {"id":"q-1","kind":"question","title":"which auth?","state":"open","ready":false,"missing":["unknowns"],"priority":"normal","created_at":"2026-09-26T05:00:00Z","options":[{"n":1,"text":"oauth"},{"n":2,"text":"apikey"}],"asker":{"handle":"w1","live":true}},
+            {"id":"m-1","kind":"mine","title":"ship tonight","state":"open","ready":true,"missing":[],"priority":"normal","created_at":"","options":[]},
+            {"id":"q-2","kind":"pin","title":"publish the crate","state":"open","ready":false,"missing":["node"],"priority":"high","created_at":"","options":[]}
+        ],"answered":[{"id":"q-0","title":"old one","asker":"w9","answer":"narrow","rung":"mail","outcome":"landed","at":"2026-09-26T04:00:00Z"}]}"#;
+        let fold = parse_questions(json).expect("valid projection payload parses");
+        assert_eq!(fold.items.len(), 2, "mine rows are not questions");
+        assert_eq!(fold.items[0].id, "q-1");
+        assert_eq!(fold.items[0].options[0].text, "oauth");
+        assert_eq!(fold.items[0].asker.as_ref().unwrap().live, Some(true));
+        assert_eq!(fold.items[0].missing, vec!["unknowns"]);
+        assert_eq!(fold.answered.len(), 1);
+        assert_eq!(fold.answered[0].rung.as_deref(), Some("mail"));
     }
 
     #[test]
     fn torn_questions_json_fails_quiet() {
-        assert!(parse_questions(br#"{"questions":[{"id":"q-1""#).is_none());
+        assert!(parse_questions(br#"{"items":[{"id":"q-1""#).is_none());
+    }
+
+    #[test]
+    fn write_wait_and_timeout_receipt_match_the_clear_bound() {
+        assert_eq!(WRITE_TIMEOUT, Duration::from_secs(45));
+        assert!(ANSWER_TIMEOUT_MESSAGE.contains("the answer may have landed"));
+        assert!(ANSWER_TIMEOUT_MESSAGE.contains("a rerun resumes"));
     }
 }

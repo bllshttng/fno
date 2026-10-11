@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from fno.agents import dispatch, format as fmt
+from fno.harness_identity import session_identity_key
 from fno.mail import hold as hold_mod
 
 HANDLE = "abcd1234"
@@ -19,8 +20,15 @@ HANDLE = "abcd1234"
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
-    """Point the clock directory at a tmp state root, not the real ~/.fno."""
+    """Point the clock directory at a tmp state root, not the real ~/.fno.
+
+    FNO_HOME aims the Rust writer (arm/clear shell the mail-hold verb) at
+    the same root the Python readers use; without it the arm writes
+    the machine's state while read() checks the tmp one.
+    """
     monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
+    monkeypatch.setenv("FNO_HOME", str(tmp_path))
+    monkeypatch.setenv("FNO_STATE_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -39,15 +47,56 @@ def _msg(msg_id, sender, body, ts="2026-08-20T10:00:00Z"):
     return SimpleNamespace(id=msg_id, from_=sender, body=body, ts=ts)
 
 
+def _seed(hold: hold_mod.Hold) -> hold_mod.Hold:
+    """Write a clock file directly: the transport only arms and clears, and
+    several tests need states it cannot express (a lapsed clock, a
+    conversation-sourced one). Same bytes the old writer wrote."""
+    import json
+
+    fields = {
+        "until": hold.until.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.until else None,
+        "window_s": hold.window_s,
+        "clock_kind": hold.clock_kind,
+        "ceiling": hold.ceiling.strftime("%Y-%m-%dT%H:%M:%SZ") if hold.ceiling else None,
+    }
+    if hold.source:
+        fields["source"] = hold.source
+    path = hold_mod.hold_path(hold.handle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(fields) + "\n", encoding="utf-8")
+    return hold
+
+
 def _expire(handle):
     """Age a live timed hold past its deadline without deleting its clock."""
-    return hold_mod._write(
+    return _seed(
         hold_mod.Hold(
             handle=handle,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),
             window_s=300,
         )
     )
+
+
+def _stub_gate(monkeypatch, verdict: str):
+    """Stub the Rust gate subprocess to answer ``verdict``; returns the calls."""
+    import json
+
+    calls: list = []
+
+    def _fake_run(argv, input="", capture_output=True, text=True, timeout=10, **_kw):
+        calls.append((argv, input))
+        # The Rust gate's control pass, mirrored: a body whose first line
+        # opens with the directive delivers with pass=control.
+        effective = verdict
+        if input.strip().lower().startswith("control:"):
+            effective = "deliver"
+        out = json.dumps({"verdict": effective, "pass": None, "receipt": None, "until": None})
+        return SimpleNamespace(stdout=out + "\n", returncode=0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", _fake_run)
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
+    return calls
 
 
 # --- Task 1: the hold and its clock -----------------------------------------
@@ -62,6 +111,30 @@ def test_arm_writes_a_readable_clock_and_clear_removes_it():
     assert read_back is not None
     assert read_back.until is not None
     assert hold_mod.remaining_label(HANDLE).endswith("m")
+
+    # The conversation-sourced clock is the machine's own hold; the column
+    # must not read it as a hold the user set on purpose.
+    auto = hold_mod.Hold(
+        handle=HANDLE,
+        until=armed.until,
+        window_s=armed.window_s,
+        clock_kind=armed.clock_kind,
+        ceiling=armed.ceiling,
+        source=hold_mod.CONVERSATION_SOURCE,
+    )
+    _seed(auto)
+    assert hold_mod.read(HANDLE).source == hold_mod.CONVERSATION_SOURCE
+    assert hold_mod.dnd_label(HANDLE).endswith(" (auto)")
+    bare = hold_mod.Hold(
+        handle=HANDLE,
+        until=armed.until,
+        window_s=armed.window_s,
+        clock_kind=armed.clock_kind,
+        ceiling=armed.ceiling,
+    )
+    _seed(bare)
+    assert hold_mod.dnd_label(HANDLE) == hold_mod.remaining_label(HANDLE)
+    assert not hold_mod.dnd_label(HANDLE).endswith(" (auto)")
 
     hold_mod.clear(HANDLE)
     assert hold_mod.read(HANDLE) is None
@@ -78,44 +151,13 @@ def test_wall_clock_arm_has_fixed_deadline_and_no_idle_ceiling(monkeypatch):
     assert armed.window_s == 480
 
 
-def test_wall_clock_activity_preserves_the_original_deadline(monkeypatch):
-    start = datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(hold_mod, "_now", lambda: start)
-    armed = hold_mod.arm_wall(HANDLE, 8)
-    later = start + timedelta(minutes=1)
-    monkeypatch.setattr(hold_mod, "_now", lambda: later)
-
-    active = hold_mod.extend(HANDLE)
-
-    assert active is not None
-    assert active.clock_kind == "wall"
-    assert active.until == armed.until
-
-
-def test_idle_activity_clamps_at_the_absolute_ceiling(monkeypatch):
-    start = datetime(2026, 8, 25, 20, 0, tzinfo=timezone.utc)
-    hold_mod._write(
-        hold_mod.Hold(
-            handle=HANDLE,
-            until=start + timedelta(minutes=1),
-            window_s=480,
-            clock_kind="idle",
-            ceiling=start + timedelta(minutes=2),
-        )
-    )
-    monkeypatch.setattr(hold_mod, "_now", lambda: start)
-
-    active = hold_mod.extend(HANDLE)
-
-    assert active is not None
-    assert active.until == start + timedelta(minutes=2)
-    assert active.ceiling == start + timedelta(minutes=2)
-
-
 def test_a_permanent_policy_renders_as_held_with_no_countdown():
     hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.read(HANDLE).until is None
-    assert hold_mod.remaining_label(HANDLE) == "held"
+    # The permanent marker is the ABSENCE of a clock file plus the registry
+    # flag; read() answers None for a cleared file, and the column's "held"
+    # comes from dnd_label's fallback, not from a clock file.
+    assert hold_mod.read(HANDLE) is None
+    assert hold_mod.dnd_label(HANDLE) == "held"
 
 
 # --- Task 2: auto-expire, on BOTH branches of the gate ----------------------
@@ -142,7 +184,7 @@ def test_a_live_hold_does_not_lapse_and_an_expired_one_does():
     hold_mod.arm(HANDLE, 5)
     assert hold_mod.lapsed(HANDLE) is False
 
-    hold_mod._write(
+    _seed(
         hold_mod.Hold(
             handle=HANDLE,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),
@@ -155,8 +197,8 @@ def test_a_live_hold_does_not_lapse_and_an_expired_one_does():
 def test_a_corrupt_clock_reads_as_no_clock_and_keeps_holding():
     """An unreadable clock is not evidence the hold ended, so the flag stands.
 
-    The hold then lifts at the recipient's next turn boundary (notify-self
-    tidies it) or on `fno agents mail hold --off`. A stall, and a bounded one.
+    The hold then lifts on `fno agents mail hold --off`. A stall, and a
+    bounded one.
     """
     hold_mod.arm(HANDLE, 5)
     hold_mod.hold_path(HANDLE).write_text("{not json", encoding="utf-8")
@@ -164,123 +206,130 @@ def test_a_corrupt_clock_reads_as_no_clock_and_keeps_holding():
     assert hold_mod.lapsed(HANDLE) is False
 
 
-def test_gate_entry_branch_refuses_a_live_hold_and_lifts_an_expired_one():
-    """The branch a caller holding an AgentEntry takes (dispatch.py:576, :5741, :6773).
-
-    It returns before ``load_registry`` is ever called, so a self-heal wired
-    only into the registry loop below would be decorative here.
+def test_gate_maps_a_stubbed_hold_verdict_to_the_refusal(monkeypatch):
+    """The gate body lives in Rust (mail_hold.rs ``gate``); Python maps the
+    verdict. The entry branch returns before ``load_registry``; the body rides
+    the gate so the control pass can see it.
     """
-    hold_mod.arm(HANDLE, 5)
+    calls = _stub_gate(monkeypatch, "hold")
+    assert dispatch._delivery_policy_refusal(_entry()) == dispatch.BUS_ONLY_POLICY
+    assert dispatch._delivery_policy_refusal(_entry(), "control: stop") is None
+    assert calls[-1][1] == "control: stop"
+
+
+def test_gate_maps_deliver_to_none_and_fails_closed_on_a_broken_gate(monkeypatch):
+    """A failed or unreadable gate never lifts a hold it could not read: a
+    stamped row fails closed to BUS_ONLY_POLICY, while an unstamped token
+    keeps failing open toward live delivery.
+    """
+    monkeypatch.setattr(dispatch, "load_registry", lambda: [_entry()])
+    _stub_gate(monkeypatch, "deliver")
+    assert dispatch._delivery_policy_refusal(_entry()) is None
+    assert dispatch._delivery_policy_refusal(HANDLE) is None
+
+    def _boom(*_a, **_kw):
+        raise OSError("gate down")
+
+    monkeypatch.setattr(dispatch.subprocess, "run", _boom)
     assert dispatch._delivery_policy_refusal(_entry()) == dispatch.BUS_ONLY_POLICY
 
-    _expire(HANDLE)
-    assert dispatch._delivery_policy_refusal(_entry()) is None
 
-
-def test_gate_token_branch_refuses_a_live_hold_and_lifts_an_expired_one(monkeypatch):
-    """The other branch: a caller holding only an id/handle token."""
-    monkeypatch.setattr(dispatch, "load_registry", lambda: [_entry()])
-
-    hold_mod.arm(HANDLE, 5)
-    assert dispatch._delivery_policy_refusal(HANDLE) == dispatch.BUS_ONLY_POLICY
-
-    _expire(HANDLE)
-    assert dispatch._delivery_policy_refusal(HANDLE) is None
-
-
-def test_the_gate_finds_a_clock_filed_under_the_canonical_handle(monkeypatch):
-    """The key every WRITER uses, on a row where it is none of the other three.
-
-    A codex row's short_id is a daemon worker key and its harness_session_id is
-    the full id, so neither is the first-eight the clock sits under. Reading
-    only those three looked correct on claude, where the handle IS the short_id,
-    and left a codex hold unexpirable.
+def test_the_raw_door_parks_through_the_gate_and_relays_the_receipt(monkeypatch):
+    """With ``park=True`` the raw door's gate call carries ``--park-on-hold``
+    and the parked receipt rides back in place of the refusal; without it the
+    same held row answers the plain refusal.
     """
-    codex = SimpleNamespace(
-        name="worker-migration",
-        short_id="daemon-worker-key",
-        harness_session_id="abcd1234-0b3f-4c5a-9e88-2ad4f0c81b97",
-        delivery_policy="bus-only",
+    import json
+
+    calls: list = []
+
+    def _fake_run(argv, input="", capture_output=True, text=True, timeout=10, **_kw):
+        calls.append((list(argv), input))
+        if "--park-on-hold" in argv:
+            out = {
+                "verdict": "parked",
+                "pass": None,
+                "receipt": f"held: {input} runs on {HANDLE} when the hold ends",
+                "until": None,
+            }
+        else:
+            out = {"verdict": "hold", "pass": None, "receipt": None, "until": None}
+        return SimpleNamespace(stdout=json.dumps(out) + "\n", returncode=0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", _fake_run)
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
+    assert (
+        dispatch._delivery_policy_refusal(_entry(), "/compact", park=True)
+        == f"held: /compact runs on {HANDLE} when the hold ends"
     )
-    monkeypatch.setattr(dispatch, "load_registry", lambda: [codex])
-
-    hold_mod.arm(HANDLE, 5)  # HANDLE is that session id's first eight
-    assert dispatch._delivery_policy_refusal(codex) == dispatch.BUS_ONLY_POLICY
-
-    _expire(HANDLE)
-    assert dispatch._delivery_policy_refusal(codex) is None
+    assert any("--park-on-hold" in argv for argv, _ in calls)
+    assert dispatch._delivery_policy_refusal(_entry(), "/compact") == dispatch.BUS_ONLY_POLICY
+    monkeypatch.setattr(dispatch, "load_registry", lambda: [])
     assert dispatch._delivery_policy_refusal(HANDLE) is None
+
+
+def test_gate_fails_closed_when_the_binary_is_missing(monkeypatch):
+    """No gate binary on a stamped row: the refusal stands (fail closed)."""
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
+    assert dispatch._delivery_policy_refusal(_entry()) == dispatch.BUS_ONLY_POLICY
+    monkeypatch.setattr(dispatch, "load_registry", lambda: [])
+    assert dispatch._delivery_policy_refusal(HANDLE) is None
+
+
+def test_two_same_window_codex_rows_never_share_one_clock(monkeypatch):
+    """Writers key the full session identity key.
+
+    Codex UUIDv7 ids opened in one 65.536-second window share their first
+    eight, so two same-window sessions used to share one clock file: one
+    release deleted the shared clock while only the first matching row's
+    policy cleared, leaving the sibling stamped bus-only with no clock, which
+    never lapses.
+    """
+    sid_a = "0198a3f2-77e3-7000-8000-000000000001"
+    sid_b = "0198a3f2-77e3-7000-8000-000000000002"
+    row_a = SimpleNamespace(
+        name="alpha", short_id="", harness_session_id=sid_a, delivery_policy="bus-only"
+    )
+    row_b = SimpleNamespace(
+        name="beta", short_id="", harness_session_id=sid_b, delivery_policy="bus-only"
+    )
+
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
+    hold_mod.arm(session_identity_key(sid_a), 5)
+
+    assert hold_mod.read_any(row_a) is not None
+    assert hold_mod.read_any(row_b) is None
+    # The sibling's clock cannot satisfy its row either way: B is stamped
+    # with no clock of its own, and that must read as refusing, not as held
+    # on A's clock.
+    assert dispatch._delivery_policy_refusal(row_b) == dispatch.BUS_ONLY_POLICY
 
 
 def test_gate_leaves_a_clockless_bus_only_row_refusing_on_both_branches(monkeypatch):
-    """The x-e21e guarantee, unchanged for every row busy mode never touched."""
-    monkeypatch.setattr(dispatch, "load_registry", lambda: [_entry()])
+    """The clockless-hold guarantee, unchanged for every row busy mode
+    never touched.
 
-    assert dispatch._delivery_policy_refusal(_entry()) == dispatch.BUS_ONLY_POLICY
+    The row keeps the production shape: its registry name is its label, not
+    its handle, so the token branch must reach it through the address sweep
+    (the canonical handle here), not through the name.
+    """
+    row = _entry(name="quill")
+    monkeypatch.setattr(dispatch, "load_registry", lambda: [row])
+    _stub_gate(monkeypatch, "hold")
+
+    assert dispatch._delivery_policy_refusal(row) == dispatch.BUS_ONLY_POLICY
     assert dispatch._delivery_policy_refusal(HANDLE) == dispatch.BUS_ONLY_POLICY
 
 
-def test_extend_pushes_a_live_hold_out_and_refuses_everything_else():
-    hold_mod.arm(HANDLE, 5)
-    first = hold_mod.read(HANDLE).until
-    extended = hold_mod.extend(HANDLE)
-    assert extended is not None and extended.until >= first
-
-    hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.extend(HANDLE) is None
-
-    hold_mod.clear(HANDLE)
-    assert hold_mod.extend(HANDLE) is None
+# --- Release rendering -----------------------------------------------------
 
 
-def test_tidy_lapsed_clears_a_timed_hold_but_never_a_permanent_policy(monkeypatch):
-    cleared = []
-    monkeypatch.setattr(
-        hold_mod,
-        "set_policy",
-        # Returns True: this stub stands in for a write that SUCCEEDED, and
-        # tidy_lapsed now reports the write rather than the attempt.
-        lambda handle, policy: (cleared.append((handle, policy)), True)[1],
-    )
-
-    hold_mod.arm_permanent(HANDLE)
-    assert hold_mod.tidy_lapsed(HANDLE) is False
-    assert hold_mod.read(HANDLE) is not None
-
-    hold_mod._write(
-        hold_mod.Hold(
-            handle=HANDLE,
-            until=datetime.now(timezone.utc) - timedelta(seconds=1),
-            window_s=60,
-        )
-    )
-    assert hold_mod.tidy_lapsed(HANDLE) is True
-    assert hold_mod.read(HANDLE) is None
-    assert cleared == [(HANDLE, None)]
-
-
-# --- Task 4: dedupe ---------------------------------------------------------
-
-
-def test_five_identical_bodies_render_once_and_still_carry_all_five_ids():
+def test_five_identical_held_messages_keep_their_own_headers():
     messages = [_msg(f"msg-{i}", "worker", "same report") for i in range(5)]
-    survivors = hold_mod.dedupe(messages)
-
-    assert len(survivors) == 1
-    _representative, count, ids = survivors[0]
-    assert count == 5
-    assert ids == [f"msg-{i}" for i in range(5)]
-
-    digest = hold_mod.render_digest(HANDLE, survivors, held_for_s=600)
-    assert "(x5 identical, deduped)" in digest
-    assert digest.count("same report") == 1
-
-
-def test_same_body_from_two_senders_is_not_deduped():
-    survivors = hold_mod.dedupe(
-        [_msg("a", "one", "ping"), _msg("b", "two", "ping")]
-    )
-    assert len(survivors) == 2
+    digest = hold_mod.render_digest(messages, held_for_s=600)
+    assert digest.count("`@worker · msg-") == 5
+    assert digest.count("same report") == 5
+    assert "(x5 identical, deduped)" not in digest
 
 
 # --- Task 3: the release ----------------------------------------------------
@@ -290,7 +339,12 @@ def _capture_release(monkeypatch, messages, delivered=True):
     emitted = []
     advanced = []
     monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
-    monkeypatch.setattr("fno.bus.cursor.scan_unread", lambda *a, **k: messages)
+    # release() drains every mailbox form the row owns; only the canonical
+    # form carries mail in these tests.
+    monkeypatch.setattr(
+        "fno.bus.cursor.scan_unread",
+        lambda name, **k: messages if name == HANDLE else [],
+    )
     monkeypatch.setattr(
         "fno.bus.cursor.advance_cursor", lambda name, mid: advanced.append(mid)
     )
@@ -313,23 +367,30 @@ def test_release_delivers_the_digest_and_consumes_every_held_id(monkeypatch):
 
     assert result["outcome"] == "delivered"
     assert result["held_count"] == 3
-    assert result["deduped_count"] == 2
+    assert result["deduped_count"] == 0
     assert advanced == ["msg-0", "msg-1", "msg-2"]
-    assert emitted == [
-        (
-            "mail_hold_released",
-            {
-                "handle": HANDLE,
-                "clock": "no expiry",
-                "held_count": 3,
-                "deduped_count": 2,
-                "held_for_s": 300,
-                "outcome": "delivered",
-                "miss_reason": None,
-                "policy_cleared": True,
-            },
-        )
+    assert [
+        (kind, data.get("msg_id") if kind == "agent_mail_drained" else None)
+        for kind, data in emitted
+    ] == [
+        ("agent_mail_drained", "msg-0"),
+        ("agent_mail_drained", "msg-1"),
+        ("agent_mail_drained", "msg-2"),
+        ("mail_hold_released", None),
     ]
+    assert emitted[-1] == (
+        "mail_hold_released",
+        {
+            "handle": HANDLE,
+            "clock": "no expiry",
+            "held_count": 3,
+            "deduped_count": 0,
+            "held_for_s": 300,
+            "outcome": "delivered",
+            "miss_reason": None,
+            "policy_cleared": True,
+        },
+    )
 
 
 def test_release_fires_its_marker_even_when_nothing_was_held(monkeypatch):
@@ -350,7 +411,7 @@ def test_a_failed_policy_write_keeps_the_clock_so_the_hold_stays_recoverable(mon
 
     Clearing the clock regardless left a bus-only row with no clock, and that
     never lapses, so a hold that failed to lift became permanent with no
-    automatic path back: `tidy_lapsed` needs a clock it no longer has.
+    automatic path back.
     """
     _expire(HANDLE)
     monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: False)
@@ -361,8 +422,8 @@ def test_a_failed_policy_write_keeps_the_clock_so_the_hold_stays_recoverable(mon
 
     clock = hold_mod.read(HANDLE)
     assert clock is not None, "a failed policy write must keep the clock"
-    # Still lapsed, so the gate lets mail through and the next turn boundary
-    # retries the tidy.
+    # Still lapsed, so the gate lets mail through, and the next turn
+    # boundary's Rust tidy lifts the row.
     assert hold_mod.lapsed(HANDLE) is True
 
 
@@ -405,7 +466,10 @@ def test_the_release_delivers_through_the_lane_dispatcher(monkeypatch):
     seen = {}
     monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
     monkeypatch.setattr(hold_mod, "resolve_entry", lambda handle: _entry())
-    monkeypatch.setattr("fno.bus.cursor.scan_unread", lambda *a, **k: [_msg("m", "w", "b")])
+    monkeypatch.setattr(
+        "fno.bus.cursor.scan_unread",
+        lambda *a, **k: [_msg("fmail-000000000001", "w", "b")],
+    )
     monkeypatch.setattr("fno.bus.cursor.advance_cursor", lambda *a, **k: True)
     monkeypatch.setattr("fno.agents.events.emit", lambda *a, **k: None)
 
@@ -425,11 +489,151 @@ def test_the_release_delivers_through_the_lane_dispatcher(monkeypatch):
     assert seen["from_name"] == "fno-mail-hold"
 
 
+def test_the_drain_delivers_a_multi_line_digest_on_the_live_lane(monkeypatch):
+    """C17 evidence (x-9008, role ruling d-9187ccf6).
+
+    The role's held-mail drain lost three messages when the raw door
+    refused the multi-line digest with "an unframed payload must be a
+    single line". That refusal's premise died with C17: the Rust typing
+    layer flattens every payload into ONE submitted line (pinned by
+    ``multi_line_unwrapped_types_flattened_after_c17`` in mail_inject.rs),
+    so the drain hands the digest to the live lane unchanged and it
+    delivers.
+    """
+    seen: dict = {}
+
+    def _fake_deliver(entry, body, from_name, **kwargs):
+        seen["body"] = body
+        seen["from_name"] = from_name
+        return True
+
+    messages = [_msg("fmail-000000000002", "peer", "line one\nline two\nline three")]
+    monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
+    monkeypatch.setattr(hold_mod, "resolve_entry", lambda handle: _entry())
+    monkeypatch.setattr("fno.bus.cursor.scan_unread", lambda *a, **k: messages)
+    monkeypatch.setattr("fno.bus.cursor.advance_cursor", lambda *a, **k: True)
+    monkeypatch.setattr("fno.agents.events.emit", lambda *a, **k: None)
+    monkeypatch.setattr("fno.agents.dispatch._deliver_live", _fake_deliver)
+
+    result = hold_mod.release(HANDLE, held_for_s=300)
+
+    assert result["outcome"] == "delivered"
+    body = seen["body"]
+    assert "\n" in body, "the digest is genuinely multi-line"
+    assert "line two" in body, "the held body rides the digest intact"
+    assert seen["from_name"] == "fno-mail-hold"
+
+
+def test_release_delivers_held_release_frame_without_synthetic_sender(monkeypatch, tmp_path):
+    """The held-release frame keeps its real per-message headers."""
+    from fno.bus.cursor import scan_unread
+    from fno.bus.log import Envelope, append
+
+    home = tmp_path / "home"
+    state = tmp_path / "state"
+    bus = tmp_path / "bus"
+    for root in (home, state, bus):
+        root.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FNO_HOME", str(home / ".fno"))
+    monkeypatch.setenv("FNO_AGENTS_HOME", str(state / "agents"))
+    monkeypatch.setenv("FNO_STATE_DIR", str(state))
+    monkeypatch.setenv("FNO_BUS_DIR", str(bus))
+    monkeypatch.setattr("fno.paths.state_dir", lambda: state)
+    monkeypatch.setattr("fno.paths.bus_dir", lambda: bus)
+    monkeypatch.setattr(
+        "fno.paths.agents_registry_path", lambda: state / "agents" / "registry.json"
+    )
+
+    entry = SimpleNamespace(
+        name=HANDLE,
+        harness="claude",
+        short_id=HANDLE,
+        harness_session_id=f"{HANDLE}-full",
+        mcp_channel_id=None,
+        delivery_policy=None,
+        mux=None,
+        messaging_socket_path=None,
+    )
+    monkeypatch.setattr(hold_mod, "set_policy", lambda *_a, **_kw: True)
+    monkeypatch.setattr(hold_mod, "resolve_entry", lambda _handle: entry)
+    monkeypatch.setattr(dispatch, "_delivery_policy_refusal", lambda *_a, **_kw: None)
+    monkeypatch.setattr(dispatch, "_switchboard_identity", lambda *_a, **_kw: None)
+    monkeypatch.setattr(dispatch, "_switchboard_exchange", lambda *_a, **_kw: False)
+    monkeypatch.setattr("fno.agents.events.emit", lambda *_a, **_kw: None)
+
+    original = Envelope.new(
+        id="fmail-123456789abc",
+        thread="fmail-123456789abc",
+        from_="worker",
+        to=HANDLE,
+        kind="send",
+        body=(
+            '<fno_mail from="worker-session" harness="codex" id="fmail-123456789abc">'
+            "the held report"
+            "</fno_mail>"
+        ),
+        ts="2026-09-27T12:00:00Z",
+    )
+    append(original)
+
+    rendered: list[dict] = []
+
+    def fake_render(payload):
+        rendered.append(payload)
+        if payload["mode"] == "held-release":
+            return payload["body"]
+        return (
+            f'<fno_mail from="{payload["from"]}" '
+            f'harness="{payload["harness"]}">'
+            f'{payload["body"]}</fno_mail>'
+        )
+
+    monkeypatch.setattr("fno.mail.envelope._render_in_rust", fake_render)
+    injected: list[str] = []
+
+    def fake_inject(_recipient, text, *, reason_out=None, **_kwargs):
+        injected.append(text)
+        is_release = (
+            text.startswith("1 held messages · sent ")
+            and (
+                "`@worker · fmail-123456789abc · the held report`" in text
+                or "`worker · fmail-123456789abc · the held report`" in text
+            )
+            and "<fno_mail" not in text
+        )
+        if not is_release and reason_out is not None:
+            reason_out.append("invalid-held-release-frame")
+        return is_release
+
+    monkeypatch.setattr(dispatch, "_mail_inject_claude", fake_inject)
+
+    result = hold_mod.release(HANDLE, held_for_s=60)
+
+    assert result["outcome"] == "delivered", result.get("miss_reason")
+    assert result["miss_reason"] is None
+    assert len(rendered) == 1
+    assert rendered[0]["mode"] == "held-release"
+    assert "the held report" in rendered[0]["body"]
+    assert "<fno_mail" not in rendered[0]["body"]
+    assert len(injected) == 1
+    assert injected[0].startswith("1 held messages · sent ")
+    assert (
+        "`@worker · fmail-123456789abc · the held report`" in injected[0]
+        or "`worker · fmail-123456789abc · the held report`" in injected[0]
+    )
+    assert "<fno_mail" not in injected[0]
+    assert scan_unread(HANDLE) == []
+
+
 def test_a_release_with_no_registry_row_names_that_as_the_miss(monkeypatch):
     """`inject-missed` alone cannot separate a dead lane from an absent row."""
     monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
     monkeypatch.setattr(hold_mod, "resolve_entry", lambda handle: None)
-    monkeypatch.setattr("fno.bus.cursor.scan_unread", lambda *a, **k: [_msg("m", "w", "b")])
+    monkeypatch.setattr(
+        "fno.bus.cursor.scan_unread",
+        lambda *a, **k: [_msg("fmail-000000000003", "w", "b")],
+    )
     advanced = []
     monkeypatch.setattr(
         "fno.bus.cursor.advance_cursor", lambda name, mid: advanced.append(mid)
@@ -454,27 +658,75 @@ def test_a_missed_inject_leaves_the_mail_on_the_bus(monkeypatch):
     assert emitted[0][1]["outcome"] == "inject-missed"
 
 
+def test_release_by_the_clock_key_still_drains_the_canonical_mailbox(monkeypatch):
+    """Durable mail is filed under the canonical first-eight (the name lane's
+    recipient) while the clock sits under the full identity key: the release
+    the clock triggers must scan the row's mailbox forms, not the clock key.
+    """
+    sid = "0198a3f2-77e3-7000-8000-000000000009"
+    _emitted, advanced = _capture_release(monkeypatch, [])
+    monkeypatch.setattr(
+        hold_mod,
+        "resolve_entry",
+        lambda handle: SimpleNamespace(
+            name="worker", short_id="", harness_session_id=sid, delivery_policy=None
+        ),
+    )
+    monkeypatch.setattr(
+        "fno.bus.cursor.scan_unread",
+        lambda name, **k: [_msg("fmail-000000000004", "w", "b")]
+        if name == "0198a3f2"
+        else [],
+    )
+
+    result = hold_mod.release(session_identity_key(sid), held_for_s=10)
+
+    assert result["outcome"] == "delivered"
+    assert result["held_count"] == 1
+    assert advanced == ["fmail-000000000004"]
+
+
 # --- Task 5: the bounce -----------------------------------------------------
 
 
-def test_bounce_reason_names_the_recipient_and_when_it_lands():
-    hold_mod.arm(HANDLE, 5)
+def test_bounce_reason_returns_the_gate_receipt(monkeypatch):
+    """The receipt body lives in the Rust gate (C16); Python returns its
+    ``receipt`` field verbatim, and its None too."""
+    import json
+
+    def _fake_run(argv, **_kw):
+        out = json.dumps(
+            {
+                "verdict": "hold",
+                "pass": None,
+                "receipt": "held until about 21:04: worker is in do-not-disturb; "
+                "delivers itself then",
+                "until": None,
+            }
+        )
+        return SimpleNamespace(stdout=out, returncode=0)
+
+    monkeypatch.setattr(hold_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
+
     reason = hold_mod.bounce_reason(HANDLE)
 
     assert reason is not None
-    assert HANDLE in reason
     assert "do-not-disturb" in reason
-    assert "quiet minutes" in reason
-    assert "lifts in" in reason
+    assert reason.startswith("held until about 21:04")
 
 
-def test_wall_bounce_reason_names_the_wall_clock():
-    hold_mod.arm_wall(HANDLE, 5)
+def test_bounce_reason_none_keeps_the_callers_text(monkeypatch):
+    import json
 
-    reason = hold_mod.bounce_reason(HANDLE)
+    def _fake_run(argv, **_kw):
+        out = json.dumps({"verdict": "hold", "pass": None, "receipt": None, "until": None})
+        return SimpleNamespace(stdout=out, returncode=0)
 
-    assert reason is not None
-    assert "wall clock" in reason
+    monkeypatch.setattr(hold_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
+
+    assert hold_mod.bounce_reason(HANDLE) is None
 
 
 def test_cli_rejects_minutes_and_for_together(monkeypatch):
@@ -514,13 +766,47 @@ def test_cli_for_arms_wall_clock_and_names_it_in_the_receipt(monkeypatch, capsys
         "fno.agents.registry.register_existing_session", lambda **_kwargs: None
     )
     monkeypatch.setattr(hold_mod, "arm_wall", lambda handle, minutes: armed)
-    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: None)
 
     mail_cli.cmd_hold(minutes=None, for_minutes=8, off=False, status=False)
 
     output = capsys.readouterr().out
     assert "wall clock" in output
     assert "fixed deadline 20:08:00 UTC" in output
+
+    # The status leg reads the record, not the gate: the gate's own-pass
+    # answers deliverable for the session's own hold, which once made
+    # --status report "no hold" while the check-in read bus-only. The clock
+    # is seeded directly and the verb renders the line.
+    monkeypatch.setattr(
+        hold_mod, "resolve_entry", lambda _h: SimpleNamespace(delivery_policy="bus-only")
+    )
+    _seed(
+        hold_mod.Hold(
+            handle=HANDLE,
+            until=datetime.now(timezone.utc) + timedelta(minutes=8),
+            window_s=480,
+            clock_kind="wall",
+            source=hold_mod.CONVERSATION_SOURCE,
+        )
+    )
+    mail_cli.cmd_hold(minutes=None, for_minutes=None, off=False, status=True)
+    output = capsys.readouterr().out
+    assert "machine-armed while you talk" in output
+    assert "lifts about 2 min after your answer" in output
+
+    # A manual stamp keeps the old shape.
+    _seed(
+        hold_mod.Hold(
+            handle=HANDLE,
+            until=datetime.now(timezone.utc) + timedelta(minutes=8),
+            window_s=480,
+            clock_kind="wall",
+        )
+    )
+    mail_cli.cmd_hold(minutes=None, for_minutes=None, off=False, status=True)
+    output = capsys.readouterr().out
+    assert "lifts in" in output
+    assert "machine-armed" not in output
 
 
 def test_bounce_reason_is_silent_for_a_permanent_policy_and_for_no_hold():
@@ -610,18 +896,6 @@ def test_an_unreadable_clock_renders_a_question_mark_not_an_empty_cell(monkeypat
     assert fmt._dnd_label(_full_entry()) == "?"
 
 
-def test_tidy_lapsed_reports_the_write_not_the_attempt(monkeypatch):
-    """Returning True over a policy write that no-opped is the same defect."""
-    _expire(HANDLE)
-    monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: False)
-
-    assert hold_mod.tidy_lapsed(HANDLE) is False
-
-    _expire(HANDLE)
-    monkeypatch.setattr(hold_mod, "set_policy", lambda *a, **k: True)
-    assert hold_mod.tidy_lapsed(HANDLE) is True
-
-
 def test_a_bus_only_row_with_no_clock_reads_held_not_blank():
     """The pre-busy-mode row: flag set by hand, no clock, mail genuinely held.
 
@@ -634,16 +908,69 @@ def test_a_bus_only_row_with_no_clock_reads_held_not_blank():
     assert row["dnd"] == "held"
 
 
-def test_the_dnd_column_and_the_delivery_gate_never_disagree():
-    """Whatever the column says, the gate must agree mail is or is not moving."""
+def test_the_dnd_column_and_the_delivery_gate_never_disagree(monkeypatch):
+    """Whatever the column says, the gate must agree mail is or is not moving.
+
+    The stub answers from the SAME Python clock state the column reads, so the
+    parity contract itself is what runs; the gate's own clock logic is tested
+    in Rust.
+    """
+    import json
+
+    real_run = hold_mod.subprocess.run
+
+    def _fake_run(argv, **_kw):
+        if "--session" not in argv:
+            # A mail-hold read/write the port routed through the door: serve
+            # the real clock state (the seeds write it, the column and the
+            # gate mirror both read it back) instead of answering "no clock"
+            # for every case, which would agree vacuously.
+            return real_run(argv, capture_output=True, text=True, timeout=10)
+        token = argv[argv.index("--session") + 1]
+        clock = hold_mod.read_any(token)
+        # Mirror the Rust gate: only a LAPSED timed clock delivers; no clock,
+        # a permanent (until: null) clock, and a live clock all hold.
+        lapsed = (
+            clock is not None
+            and clock.until is not None
+            and clock.until <= hold_mod._now()
+        )
+        verdict = "deliver" if lapsed else "hold"
+        out = json.dumps({"verdict": verdict, "pass": None, "receipt": None, "until": None})
+        return SimpleNamespace(stdout=out, returncode=0)
+
+    monkeypatch.setattr(dispatch.subprocess, "run", _fake_run)
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: "/bin/true")
+    # The entry branch passes the harness session id to the gate, so the
+    # clocks here sit under that same key; the column's addresses() sweep
+    # finds it either way.
+    full = _entry().harness_session_id
+    # The clockful states seed directly: inside this test every subprocess
+    # ride is the stub, so a transport arm would no-op and each case would
+    # degenerate to "no clock" while its name still said otherwise.
     cases = [
         ("no clock", lambda: None),
-        ("permanent", lambda: hold_mod.arm_permanent(HANDLE)),
-        ("live timed", lambda: hold_mod.arm(HANDLE, 5)),
-        ("lapsed timed", lambda: _expire(HANDLE)),
+        (
+            "permanent",
+            lambda: _seed(hold_mod.Hold(handle=full, until=None, window_s=None)),
+        ),
+        (
+            "live timed",
+            lambda: _seed(
+                hold_mod.Hold(
+                    handle=full,
+                    until=datetime.now(timezone.utc) + timedelta(minutes=5),
+                    window_s=300,
+                    clock_kind="idle",
+                    ceiling=datetime.now(timezone.utc) + timedelta(minutes=10),
+                )
+            ),
+        ),
+        ("lapsed timed", lambda: _expire(full)),
     ]
     for name, arrange in cases:
         hold_mod.clear(HANDLE)
+        hold_mod.clear(full)
         arrange()
         held_per_column = fmt.serialize_entry(_full_entry(), live_status=None)["dnd"]
         held_per_gate = (
@@ -653,7 +980,7 @@ def test_the_dnd_column_and_the_delivery_gate_never_disagree():
 
 
 def test_a_lapsed_hold_renders_no_dnd_because_mail_flows_again():
-    hold_mod._write(
+    _seed(
         hold_mod.Hold(
             handle=HANDLE,
             until=datetime.now(timezone.utc) - timedelta(seconds=1),
@@ -662,23 +989,6 @@ def test_a_lapsed_hold_renders_no_dnd_because_mail_flows_again():
     )
     row = fmt.serialize_entry(_full_entry(), live_status=None)
     assert row["dnd"] is None
-
-
-def test_the_table_renders_a_dnd_column():
-    rows = [
-        {
-            "name": HANDLE,
-            "address": HANDLE,
-            "harness": "claude",
-            "status": "live",
-            "dnd": "~4m",
-            "cwd": "/tmp",
-        }
-    ]
-    table = fmt.render_table(rows, terminal_width=200)
-
-    assert "DND" in table.splitlines()[0]
-    assert "~4m" in table
 
 
 def _full_entry(**over):

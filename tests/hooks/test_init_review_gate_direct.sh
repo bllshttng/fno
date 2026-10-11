@@ -79,6 +79,10 @@ fi
 exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
+  # State-path stub: pins init's manifest location to the scenario space dir.
+  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
+  chmod +x "${_dir}/bin/fno-agents"
+  mkdir -p "${_dir}/space"
 }
 
 # Usage: run_init <dir> [extra env assignments...]
@@ -89,6 +93,7 @@ run_init() {
   (cd "$_dir" && env \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
+    FNO_TEST_SPACE="${_dir}/space" \
     TARGET_START=1 \
     TARGET_INPUT="review gate probe" \
     "$@" \
@@ -107,7 +112,7 @@ _RC=$?
 [[ "$_RC" -eq 2 ]] || fail "AC1-HP: expected exit 2, got $_RC (err: $(cat "$TMP_REFUSE/err.log"))"
 pass "AC1-HP: script propagated exit 2"
 
-[[ ! -f "$TMP_REFUSE/.fno/target-state.md" ]] \
+[[ ! -f "$TMP_REFUSE/space/target-state.md" ]] \
   || fail "AC1-HP: manifest written despite refusal - a refused run left state behind"
 pass "AC1-HP: no manifest written"
 
@@ -129,7 +134,7 @@ _RC=$?
 [[ "$_RC" -eq 0 ]] || fail "AC4-ERR: a broken gate blocked bootstrap (exit $_RC; err: $(cat "$TMP_BROKEN/err.log"))"
 pass "AC4-ERR: script exited 0"
 
-[[ -f "$TMP_BROKEN/.fno/target-state.md" ]] \
+[[ -f "$TMP_BROKEN/space/target-state.md" ]] \
   || fail "AC4-ERR: manifest not written - a broken gate must fail open"
 pass "AC4-ERR: manifest written"
 
@@ -152,7 +157,7 @@ _RC=$?
   || fail "AC4-ERR: a stale fno (Click exit 2) was treated as a refusal (exit $_RC) - bootstrap bricked"
 pass "AC4-ERR: stale-CLI exit 2 did not refuse"
 
-[[ -f "$TMP_STALE/.fno/target-state.md" ]] \
+[[ -f "$TMP_STALE/space/target-state.md" ]] \
   || fail "AC4-ERR: manifest not written on a stale CLI"
 pass "AC4-ERR: manifest written on a stale CLI"
 
@@ -167,10 +172,15 @@ _ALL_TMPS+=("$TMP_NOFNO")
 rm -f "${TMP_NOFNO}/bin/fno"
 
 # Keep git/python on PATH but drop the stub dir; a PATH with no `fno` anywhere
-# is the real shape of the documented "if fno is unavailable" fallback.
+# is the real shape of the documented "if fno is unavailable" fallback. The
+# fno-agents mint double rides a second dir: the run-id mint must answer even
+# here, or init refuses before the gate leg this case exercises.
 _CLEAN_PATH="$(cd "$TMP_NOFNO" && command -v git | xargs dirname)"
+mkdir -p "${TMP_NOFNO}/agents-bin"
+cp "$SCRIPT_DIR/../../tests/helpers/fno-agents-state-path-stub.sh" "${TMP_NOFNO}/agents-bin/fno-agents"
+chmod 755 "${TMP_NOFNO}/agents-bin/fno-agents"
 (cd "$TMP_NOFNO" && env \
-  PATH="${_CLEAN_PATH}:/usr/bin:/bin" \
+  PATH="${TMP_NOFNO}/agents-bin:${_CLEAN_PATH}:/usr/bin:/bin" \
   HOME="${TMP_NOFNO}/home" \
   TARGET_START=1 \
   TARGET_INPUT="review gate probe" \

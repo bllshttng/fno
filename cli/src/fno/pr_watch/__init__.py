@@ -21,7 +21,7 @@ still works.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 from fno.pr_watch._discover import PrObservation
 
@@ -34,8 +34,8 @@ class Decision:
     """The watcher's verdict for one PR at one point in time.
 
     ``kind`` is the action to take:
-    - ``"merge"``  -- fire /fno:pr merged headlessly for this PR.
-    - ``"review"`` -- fire /fno:pr check headlessly (new reviewer activity).
+    - ``"merge"``  -- fire /fno:ship pr merged headlessly for this PR.
+    - ``"review"`` -- fire /fno:ship pr check headlessly (new reviewer activity).
     - ``"noop"``   -- no action needed; update the watermark timestamp only.
     - ``"park"``   -- the PR is closed or stale; remove it from the polling
                       set (task 1.2 will implement the parking-lot write).
@@ -52,19 +52,6 @@ class Decision:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _iso_to_date_str(ts: Optional[str]) -> Optional[str]:
-    """Return the date portion of an ISO-8601 string (first 10 chars).
-
-    Used to compute day-level age without pulling in datetime parsing. For UTC
-    timestamps the first 10 chars are always YYYY-MM-DD, so a lexical
-    subtraction of total days is not needed -- we compare epoch day counts
-    approximated from the date string.
-    """
-    if not ts:
-        return None
-    return ts[:10]
-
 
 def _days_between(a_iso: str, b_iso: str) -> int:
     """Approximate number of days between two ISO-8601 timestamps.

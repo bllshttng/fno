@@ -1,7 +1,11 @@
 ---
 name: triage
-description: "Propose and apply optimal ordering for pending specs on the graph backlog. LLM proposes, human approves. Use when: 'triage the backlog', 'what should I work on next', 'reorder my specs', 'find duplicates in graph'."
+description: Order backlog work by priority, dependency, and duplication for user approval.
 argument-hint: "[deep] [all] [each] [dry-run] [--project NAME] [--roadmap-id ID]"
+metadata:
+  requires:
+    harness:
+      - subagent_dispatch
 ---
 
 # Triage
@@ -220,15 +224,10 @@ translate positional words into the equivalent flag:
 
    It aggregates by Copeland score (wins minus losses), tolerating the
    occasional contradictory or cyclic verdict, and emits a best-first `order`.
-   Apply that order to the board so board position matches work order: seed the
-   top item with `fno backlog rank <first-id> --top`, then chain each remaining
-   id after its predecessor with `fno backlog rank <id> --after <previous-id>`.
-   Do NOT call `--top` for every id in a forward pass: `--top` inserts before
-   the current front of the lane, so iterating best-first would reverse the
-   order (the last id processed would land first). Feed the ranking into the
-   `priority_changes` rationale too. For a small backlog the one-shot proposal
-   above is cheaper and fine; reserve the pairwise pass for when the node count
-   makes it worthwhile.
+
+   Fold that order into the proposal as `priority_changes` entries, banding the best-first order across `p1..p3`. It then reaches the graph only through step 5's approved `apply`. p0 is not yours to hand out. It needs `--blocks-everything` and means the fleet is down. Never through `fno backlog rank`, which is the user's pin and refuses an agent session. Never through `fno backlog update` here either: a rank applied before the approval boundary is the arrival-order failure a careful comparative judgement once serialised through min-minus-one writes. Feed the ranking into the `priority_changes` rationale too.
+
+   For a small backlog the one-shot proposal above is cheaper and fine. When the node count makes it worthwhile, reserve the pairwise pass for that.
 
 3. **Validate.** Run:
 
@@ -357,7 +356,7 @@ hygiene without human attention, use the deterministic check:
 Exit code 4 indicates a threshold breach (idea pile, stale-ready,
 failure-prone, or collisions). Configurable via
 `config.health_monitor` in config.toml; full schema in
-[CLAUDE.md > Backlog Health Monitoring](../../CLAUDE.md#backlog-health-monitoring-2026-04-27-plan-ab-571c072b).
+the `config.health_monitor` schema notes in the maintainers' setup guide.
 The monitor is pull-based (poll every interval) and never auto-mutates
 the graph; breaches notify and the human (or a follow-up `/triage`)
 decides what to do.
@@ -369,10 +368,10 @@ decides what to do.
 ## References
 
 - `fno backlog triage` (canonical) — the v2 CLI sub-app; source in
-  `cli/src/fno/graph/triage.py`
+  the native `fno backlog triage` door
 - `scripts/triage.py` — compatibility shim that forwards to the v2 CLI
   (or falls back to the in-repo module when `fno` is not on PATH)
 - `cli/src/fno/graph/store.py` — `locked_mutate_graph()` entry point
-- `~/.fno/graph.md` — the kanban view that reflects applied changes
+- `~/.fno/pages/graph.md` — the kanban view that reflects applied changes
 - `cli/src/fno/health_monitor.py` — threshold evaluation,
   notification dispatch, history append/read, trend summary

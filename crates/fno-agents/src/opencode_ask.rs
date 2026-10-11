@@ -1,17 +1,18 @@
-//! Client interceptor for the `ask` verb on an opencode target (x-51f6), plus
+//! Client interceptor for the `ask` verb on an opencode target, plus
 //! the headless one-shot dispatch (`dispatch_opencode_once`).
 //!
-//! opencode is hosted two ways: an interactive PTY pane (the `ask` resume path,
-//! which stays refused - no stateful client-side resume in v1) and a headless
+//! opencode is hosted two ways: a serve thread (the `ask` resume path) and an
+//! interactive PTY pane (which stays refused - no stateful client-side resume)
+//! plus a headless
 //! one-shot `opencode run --dangerously-skip-permissions "<prompt>"` (this module's `dispatch_opencode_once`,
 //! substrate `headless`). The one-shot is STATELESS like agy: plain-text stdout,
 //! no session id minted here, no registry row, no `--continue` resume from this
 //! path. It reuses the shared `subprocess_ask` primitives (stdin `/dev/null`,
 //! watchdog, process-group SIGINT) rather than duplicating agy's error taxonomy.
 //!
-//! `ask` (resume-by-name) still refuses: it names the real limitation instead of
-//! falling through to `bin/client.rs`'s `unresolvable_ask_exit` "provider is
-//! required for new agent" text (wrong - the agent exists - and a dead end).
+//! `ask` (resume-by-name) routes serve rows through the shared attach writer;
+//! other opencode rows still receive the explicit refusal instead of falling
+//! through to `bin/client.rs`'s generic "provider is required" text.
 //! Mirrors [`crate::agy_ask::maybe_run_agy_ask`]'s shape.
 
 /// The refusal text. A pointer that stops at `--text <prompt>` is a remedy that
@@ -28,8 +29,9 @@ const ASK_REFUSAL: &str = "fno-agents: opencode has no stateful 'ask' resume \
     once the payload is large enough to render as a pasted block) or the prompt \
     sits there unsent.";
 
-/// Returns `None` for a non-opencode target (fall through to the next
-/// provider's ask hook), or `Some(2)` after printing the refusal.
+/// Returns `None` for a non-opencode target, or a client exit code for an
+/// opencode target. Serve rows receive a read-back reply; other shapes keep the
+/// historical refusal.
 pub fn maybe_run_opencode_ask(
     home: &crate::paths::AgentsHome,
     params: &serde_json::Value,
@@ -47,10 +49,36 @@ pub fn maybe_run_opencode_ask(
             return Some(12);
         }
     };
-    let existing_provider = registry.find(name).map(|e| e.harness_name());
+    let existing = registry.find_name_or_full_session_id(name);
+    let existing_provider = existing.map(|e| e.harness_name());
     let resolved = existing_provider.or(provider_param);
     if resolved != Some("opencode") {
         return None; // not an opencode target; fall through
+    }
+    if existing.is_some_and(|entry| {
+        entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
+    }) {
+        let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        let from_name = params
+            .get("from_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("fno");
+        let model = params.get("model").and_then(|v| v.as_str());
+        let timeout = params
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(Duration::from_secs(600));
+        let outcome = crate::opencode_serve::ask_registered_session(
+            home, name, message, from_name, model, timeout,
+        );
+        if !outcome.stderr.is_empty() {
+            eprint!("{}", outcome.stderr);
+        }
+        if !outcome.stdout.is_empty() {
+            print!("{}", outcome.stdout);
+        }
+        return Some(outcome.exit_code);
     }
     eprintln!("{ASK_REFUSAL}");
     Some(2)
@@ -195,6 +223,20 @@ pub(crate) fn apply_opencode_variant_at(
     result
 }
 
+/// The one opencode prompt envelope: a footnote verb seed (`/fno:verb
+/// ...`, either sigil) is a command dispatch, not a conversational message, so
+/// it rides WITHOUT the `[from:]` envelope (`opencode run --command`; an
+/// envelope would demote it to prose no-op). A prose message keeps the
+/// orgesy envelope.
+pub fn opencode_envelope(effective_message: &str, from_name: &str) -> String {
+    let first = effective_message.split_whitespace().next().unwrap_or("");
+    if crate::provider::parse_verb_token(first).is_some() {
+        effective_message.to_string()
+    } else {
+        format!("[from: {from_name}]\n\n{effective_message}")
+    }
+}
+
 /// `opencode run --dangerously-skip-permissions [--model <m>] <tail>` - the
 /// headless one-shot argv (matches `OpencodeProvider::create_argv`). The bypass
 /// flag auto-approves permissions so an unattended worker never wedges on an
@@ -202,8 +244,8 @@ pub(crate) fn apply_opencode_variant_at(
 /// docs' `--auto` is stale - the shipped binary renamed it). The trailing argv
 /// is built by `opencode_run_tail`: a footnote slash command rides `--command`
 /// (opencode expands the plugin command), a prose prompt stays the message
-/// positional (x-de43 / codex P1).
-fn build_opencode_argv(prompt: &str, model: Option<&str>) -> Vec<String> {
+/// positional (/ codex P1).
+fn build_opencode_argv(prompt: &str, model: Option<&str>, harness_args: &[String]) -> Vec<String> {
     let mut argv = vec![
         "opencode".to_string(),
         "run".to_string(),
@@ -213,6 +255,9 @@ fn build_opencode_argv(prompt: &str, model: Option<&str>) -> Vec<String> {
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
+    // Fenced tokens ride before the prompt tail so opencode's own parser
+    // reads them as flags.
+    argv.extend(harness_args.iter().cloned());
     argv.extend(crate::provider::opencode_run_tail(prompt));
     argv
 }
@@ -264,6 +309,8 @@ fn run_opencode(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.current_dir(cwd);
+    // opencode resolves its project from $PWD, not the process cwd.
+    cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), "opencode", None);
     // Own process group so SIGTERM/SIGKILL/SIGINT reach opencode's subshells.
     unsafe {
@@ -358,6 +405,7 @@ pub fn dispatch_opencode_once(
     timeout: Option<Duration>,
     model: Option<&str>,
     effort: Option<&str>,
+    harness_args: &[String],
 ) -> AskOutcome {
     use crate::claude_ask::{emit_event, py_repr, validate_spawn_inputs};
 
@@ -397,16 +445,11 @@ pub fn dispatch_opencode_once(
 
     // spawn allows an empty initial message; default to "hello" (Python parity -
     // only the empty string, not whitespace).
-    let effective_message = if message.is_empty() { "hello" } else { message };
-    // A footnote slash command (`/fno:verb ...`) is a command dispatch, not a
-    // conversational message: send it WITHOUT the `[from:]` envelope so it rides
-    // `opencode run --command` (an envelope would demote it to prose no-op). A
-    // prose message keeps the courtesy envelope (x-de43).
-    let full_prompt = if effective_message.starts_with('/') {
-        effective_message.to_string()
-    } else {
-        format!("[from: {}]\n\n{}", from_name, effective_message)
-    };
+    let effective_message = crate::provider::render_verb_seed(
+        if message.is_empty() { "hello" } else { message },
+        "opencode",
+    );
+    let full_prompt = opencode_envelope(&effective_message, from_name);
     if let Some(effort) = effort {
         let selected_model = model
             .filter(|model| !model.is_empty())
@@ -415,7 +458,7 @@ pub fn dispatch_opencode_once(
             return AskOutcome::err(error, 2);
         }
     }
-    let argv = build_opencode_argv(&full_prompt, model);
+    let argv = build_opencode_argv(&full_prompt, model, harness_args);
     let log_path = derive_log_path(home, name);
     if let Some(parent) = log_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -481,7 +524,7 @@ mod tests {
                 "created_at": "2026-01-01T00:00:00Z",
             }],
         });
-        std::fs::write(home.registry_json(), body.to_string()).unwrap();
+        crate::registry_store::seed_raw(&home.registry_json(), body.to_string());
     }
 
     fn write_empty_registry(home: &crate::paths::AgentsHome) {
@@ -490,7 +533,7 @@ mod tests {
             "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
             "agents": [],
         });
-        std::fs::write(home.registry_json(), body.to_string()).unwrap();
+        crate::registry_store::seed_raw(&home.registry_json(), body.to_string());
     }
 
     #[test]
@@ -526,7 +569,7 @@ mod tests {
     fn argv_is_headless_run_bypass_with_prompt_last() {
         // Matches OpencodeProvider::create_argv (confirmed vs opencode v1.14.50).
         assert_eq!(
-            build_opencode_argv("do X", None),
+            build_opencode_argv("do X", None, &[]),
             vec![
                 "opencode",
                 "run",
@@ -540,13 +583,13 @@ mod tests {
     #[test]
     fn argv_routes_footnote_slash_command_via_command_flag() {
         // A rendered `/fno:verb` rides `--command` so opencode expands the plugin
-        // command instead of running it as prose (x-de43 / codex P1). A
+        // command instead of running it as prose (/ codex P1). A
         // LEADING-DASH args tail rides as separate WORDS behind a `--`
         // separator (a single "--no-merge x" element would read as an unknown
-        // flag to the CLI's argv parser, x-9d11 round 7); any other args keep
+        // flag to the CLI's argv parser, round 7); any other args keep
         // the one-positional shape (round 11).
         assert_eq!(
-            build_opencode_argv("/fno:target --no-merge x-abcd", None),
+            build_opencode_argv("/fno:target --no-merge x-aaaa", None, &[]),
             vec![
                 "opencode",
                 "run",
@@ -555,13 +598,13 @@ mod tests {
                 "fno:target",
                 "--",
                 "--no-merge",
-                "x-abcd"
+                "x-aaaa"
             ]
         );
         // No leading dash: no separator, one positional - multiword free-text
         // args reach the command exactly as before the separator existed.
         assert_eq!(
-            build_opencode_argv("/fno:blueprint my multi word idea", None),
+            build_opencode_argv("/fno:blueprint my multi word idea", None, &[]),
             vec![
                 "opencode",
                 "run",
@@ -576,7 +619,7 @@ mod tests {
     #[test]
     fn argv_threads_model_before_prompt() {
         assert_eq!(
-            build_opencode_argv("m", Some("anthropic/claude-x")),
+            build_opencode_argv("m", Some("anthropic/claude-x"), &[]),
             vec![
                 "opencode",
                 "run",

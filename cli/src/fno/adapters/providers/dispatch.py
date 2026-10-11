@@ -1,10 +1,10 @@
 """dispatch_env and resolve_env_value for provider rotation substrate.
 
-Phase 03 of the provider rotation substrate (ab-256f6b6e).
+Phase 03 of the provider rotation substrate.
 
 Pure functions: no global state, no caching, concurrency-safe by design.
 
-Phase 02b of provider rotation failover (ab-9728b70b) adds
+Phase 02b of provider rotation failover adds
 ``spawn_with_provider_snapshot``: read the active provider snapshot once
 under a shared lock and inject it into a child subprocess's env so the
 subprocess and its descendants see a stable provider for their lifetime,
@@ -142,6 +142,17 @@ def _env_for_api_key(
     return resolved
 
 
+def _refuse_identity_mismatch(
+    record: ProviderRecord, root: Path, by_id: dict[str, ProviderRecord]
+) -> None:
+    """The same refusal ``resolve_account_overlay`` makes, from the same binding."""
+    from fno.adapters.providers.binding import MISMATCH, resolve_account_binding
+
+    got = resolve_account_binding(record, root=root, by_id=by_id)
+    if got.status == MISMATCH:
+        raise ProviderUnavailableError(got.receipt)
+
+
 def dispatch_env(
     provider_id: str,
     repo_root: Path | None = None,
@@ -149,8 +160,10 @@ def dispatch_env(
 ) -> dict[str, str]:
     """Return the subprocess env dict for invoking provider_id's CLI.
 
-    Pure function. Does not mutate any global state. Reads settings.yaml
-    via load_providers(), looks up the record, and computes the env.
+    Reads settings.yaml via load_providers(), looks up the record, and computes
+    the env. For a claude record with a bound principal it also asks the binding
+    who the credential root serves, which costs one profile call and a cache
+    write. No account record is mutated.
 
     Raises:
         ProviderNotFoundError: if provider_id not in config.records
@@ -170,11 +183,12 @@ def dispatch_env(
 
     record = by_id[provider_id]
 
-    # A config-dir account (x-d012) lives in its OWN dir, not the shared managed
+    # A config-dir account lives in its OWN dir, not the shared managed
     # slot. Honor it regardless of auth, else a managed record carrying config_dir
     # would fall through to the `managed -> {}` arm below and dispatch on the
     # ambient default account (silent mis-bill).
     if record.config_dir is not None:
+        _refuse_identity_mismatch(record, root, by_id)
         return {"CLAUDE_CONFIG_DIR": str(record.config_dir)}
 
     if record.auth == "oauth_dir":
@@ -189,6 +203,8 @@ def dispatch_env(
         # A managed account materializes into the shared default slot
         # (~/.claude for claude, ~/.codex for codex), so dispatch adds no
         # CLAUDE_CONFIG_DIR/HOME override - the CLI reads the slot directly.
+        # So the slot itself has to be asked who it serves.
+        _refuse_identity_mismatch(record, root, by_id)
         return {}
 
     # api_key path
@@ -201,7 +217,7 @@ def dispatch_env(
 
 
 # ---------------------------------------------------------------------------
-# Phase 02b of provider rotation failover (ab-9728b70b).
+# Phase 02b of provider rotation failover.
 # ---------------------------------------------------------------------------
 
 FNO_PROVIDER_ENV_KEYS = (

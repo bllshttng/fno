@@ -2,6 +2,12 @@
 
 After self-merging a PR, the same 3-step ritual used to get hand-pasted into a session, with only the per-project path/name/cwd swapped: (1) close + stamp the backlog node, (2) write prose follow-up todos to that project's vault `inbox.md`, (3) triage anything worth doing now into the backlog. The `/fno:post-merge` skill collapses that paste into one verb whose paths resolve from settings, never from the invocation.
 
+## Is this page for you?
+
+You merged a PR and ask what closes the node, files the prose follow-ups, and triages the rest. This page owns the automatic ritual and the two gaps it closes. Misreading it leaves a merged PR with an open node and follow-ups nobody wrote down.
+
+Not for: the merge itself and its gates. That is [control-plane-loop.md](control-plane-loop.md). The node lifecycle verbs are in [../backlog-usage.md](../backlog-usage.md).
+
 Extends the retro / auto-triage feature ([retro-auto-triage.md](retro-auto-triage.md)), which filed graph nodes mechanically but never wrote the per-project prose `inbox.md` (the LLM-judgment step).
 
 ## Two gaps this closes
@@ -9,7 +15,7 @@ Extends the retro / auto-triage feature ([retro-auto-triage.md](retro-auto-triag
 The existing machinery covered ~70% of the ritual but left two gaps:
 
 1. **Prose todos were 100% manual.** `fno backlog reconcile` *explicitly* never writes inbox lines. `fno backlog retro run` files graph nodes, not the per-project vault markdown at `internal/<area>/backlog/inbox.md`. Writing those prose next-steps requires reading the merged diff and applying judgment, so it stayed a re-pasted prompt.
-2. **No trigger fires at merge.** `reconcile` runs on the *next* footnote session in the repo or a megawalk iteration; a GitHub web-button self-merge produces no local event at all. (Phase 2 below; deferred.)
+2. **No trigger fires at merge.** `reconcile` runs on the *next* footnote session in the repo or in the post-merge ritual. A GitHub web-button self-merge produces no local event at all. (Phase 2 below. Deferred.)
 
 > **Two different "inbox"es.** This skill writes the per-project **vault markdown** `internal/<area>/backlog/inbox.md` (a human reading queue). That is NOT the cross-project message bus `fno agents mail` (`config.paths.inbox_dir`, thread-per-file). The vault-area name does not equal the project name (`example-pipeline -> internal/etl`, `acme-web -> internal/web`), which is exactly why the path must be explicit config and is never derived.
 
@@ -43,7 +49,7 @@ config:
 
 ### Idempotency
 
-Each prose section starts with an HTML-comment marker, spelled post-merge:pr-<N> inside comment brackets, just above the section. `skills/pr/scripts/inbox-has-pr.sh` greps for it. The grep is fno-free, so it is deterministic across CLI versions. Exit 0 means "already written, skip". This marker guard is the *sole* idempotency barrier for the judgment half. `fno backlog reconcile` and `fno backlog retro run` are independently idempotent. `fno backlog idea` is not (it appends a fresh node every call), so Step 5 must never run once Step 4 short-circuits.
+Each prose section starts with an HTML-comment marker, spelled post-merge:pr-<N> inside comment brackets, just above the section. `skills/ship/scripts/inbox-has-pr.sh` greps for it. The grep is fno-free, so it is deterministic across CLI versions. Exit 0 means "already written, skip". This marker guard is the *sole* idempotency barrier for the judgment half. `fno backlog reconcile` and `fno backlog retro run` are independently idempotent. `fno backlog idea` is not (it appends a fresh node every call), so Step 5 must never run once Step 4 short-circuits.
 
 ### No new mutation primitives
 
@@ -53,7 +59,7 @@ The skill reuses `fno backlog reconcile`, `fno backlog retro run`, and `fno back
 
 The trigger shipped as **one global launchd daemon**, not the per-repo watcher sketched below: the [PR-state watcher](pr-state-watcher.md) polls the backlog graph (not per-repo `gh pr list`) on an interval and is the **sole** post-merge detector. `fno backlog reconcile` no longer dispatches a ritual.
 
-The ritual itself is no longer fired as a headless `/fno:pr merged` (or `/fno:post-merge`) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` verb (`cli/src/fno/pr/_ritual.py`), which pr-watch runs directly as a bounded subprocess from the merged PR's canonical root (or warm-injects the identical command into the live origin session). The verb owns its own conditional headless judgment leg, so no post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution; it is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
+The ritual itself is no longer fired as a headless `/fno:ship pr merged` (or `/fno:post-merge`) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` verb (`cli/src/fno/pr/_ritual.py`). pr-watch runs it directly as a bounded subprocess from the merged PR's canonical root, or warm-injects the identical command into the live origin session. The verb owns its own conditional headless judgment leg. No post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution. It is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 A GitHub Action cannot host this: the ritual needs local state (`~/.fno/graph.json`, the Obsidian vault, the repo working copy), and `/schedule` cloud agents lack the local creds. Polling locally is required.
 
@@ -63,8 +69,8 @@ The original per-repo-launchd sketch this section replaced is retained only as d
 
 | Path | Role |
 |---|---|
-| `skills/pr/references/merged.md` | the skill |
-| `skills/pr/scripts/inbox-has-pr.sh` | fno-free idempotency guard (marker grep) |
+| `skills/ship/references/merged.md` | the skill |
+| `skills/ship/scripts/inbox-has-pr.sh` | fno-free idempotency guard (marker grep) |
 | `cli/src/fno/config/__init__.py` | `PostMergeBlock` (parking_lot_path, enabled) + validator |
 | `cli/tests/unit/test_config_post_merge.py` | schema + `fno config get` resolution tests |
 | `cli/tests/unit/test_post_merge_inbox_idempotency.py` | idempotency-guard tests |

@@ -16,54 +16,26 @@ def test_doctor_lists_direct_actions() -> None:
     assert isinstance(command, click.Group)
     context = click.Context(command, info_name="doctor")
     assert set(command.list_commands(context)) == {
+        "bash-census",
         "bundle",
         "codemap",
         "evals",
         "event",
         "footprint",
         "harness",
+        "harness-matrix",
+        "intel",
         "lanes",
         "lint",
         "observer",
         "plugin-file",
+        "reclaim",
         "route",
+        "scratch",
         "skill-diff",
         "test",
         "update",
     }
-
-
-def test_bare_doctor_matches_the_pre_group_command(
-    monkeypatch,
-) -> None:
-    from fno import doctor
-    from fno.cli import app
-
-    monkeypatch.setattr(
-        doctor,
-        "build_report",
-        lambda source: {"rust_binary": None, "status": "fresh"},
-    )
-    monkeypatch.setattr(doctor, "_blockers", lambda result: [])
-    monkeypatch.setattr(doctor, "_resolve_source", lambda source: None)
-    monkeypatch.setattr(doctor, "_cargo_bin_present", lambda: False)
-    monkeypatch.setattr(
-        doctor,
-        "_emit_human",
-        lambda result, source, rust, *, err, cargo_present: typer.echo(
-            "doctor-output", err=err
-        ),
-    )
-    monkeypatch.setattr(doctor, "_preamble_budget_line", lambda source: None)
-
-    legacy = typer.Typer(add_completion=False)
-    legacy.command("doctor")(doctor.doctor_command)
-    before = runner.invoke(legacy, [])
-    after = runner.invoke(app, ["doctor"])
-
-    assert after.exit_code == before.exit_code == 0
-    assert after.stdout_bytes == before.stdout_bytes
-    assert after.stderr_bytes == before.stderr_bytes
 
 
 def test_nested_doctor_actions_resolve() -> None:
@@ -103,13 +75,44 @@ def test_old_doctor_fold_spellings_forward_and_teach() -> None:
         assert f"fno {old} is now fno {destination}" in (result.stderr or "")
 
 
-def test_restored_test_and_update_resolve_at_doctor_as_silent_aliases() -> None:
-    """`fno test` / `fno update` are canonical (2026-08-22 operator ruling),
-    so doctor keeps the nested spellings as silent aliases - registered,
-    quiet, no teaching line."""
+def test_harness_and_harness_matrix_leaves_delegate_to_the_binary(
+    monkeypatch,
+) -> None:
+    """Both leaves keep their spellings and exec the fno-agents door: the
+    reader and renderer live in the crate."""
+    import fno.agents.rust_runtime as rust_runtime
     from fno.cli import app
 
-    for argv in (["doctor", "test", "--help"], ["doctor", "update", "--help"]):
+    seen: list[list[str]] = []
+
+    def fake_route(args, *, binary, env_pin=None, _exec=None, _resolve=None, _stderr=None):
+        seen.append(list(args))
+
+    monkeypatch.setattr(rust_runtime, "route_to_rust", fake_route)
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda: __import__("pathlib").Path("/usr/bin/true")
+    )
+    result = runner.invoke(app, ["doctor", "harness", "codex", "--live"])
+    assert result.exit_code == 0, result.output
+    assert seen[-1][0] == "harness-probe" and seen[-1][1] == "rubric", seen[-1]
+
+    result = runner.invoke(app, ["doctor", "harness-matrix", "--write"])
+    assert result.exit_code == 0, result.output
+    assert seen[-1] == ["harness-matrix", "--write"], seen[-1]
+
+
+def test_harness_and_harness_matrix_refuse_without_the_binary(
+    monkeypatch,
+) -> None:
+    """No binary, no fallback: the leaf refuses with the named reason and
+    exit 127, the same shape `fno doctor scratch` has."""
+    from fno.cli import app
+
+    monkeypatch.setattr("fno.rust_binary.resolve_installed_binary", lambda: None)
+    for argv in (
+        ["doctor", "harness", "codex"],
+        ["doctor", "harness-matrix"],
+    ):
         result = runner.invoke(app, argv)
-        assert result.exit_code == 0, (argv, result.output)
-        assert "is now" not in (result.stderr or ""), argv
+        assert result.exit_code == 127, (argv, result.output, result.stderr)
+        assert "fno-agents" in (result.output + (result.stderr or "")), argv

@@ -1,4 +1,4 @@
-"""Can this session's configured reviewers actually run, here (node x-cdc7)?
+"""Can this session's configured reviewers actually run, here (node)?
 
 `config.review.reviewers` names a gate that only a head-pinned
 `review_attestation` clears. Whether anything in THIS session can produce that
@@ -28,6 +28,8 @@ from typing import Literal, Mapping, Optional
 
 from fno.config import (
     _coerce_affirmative,
+    MIN_AUTOMERGE_RANK,
+    ResolvedReviewPosture,
     resolvable_reviewers,
     ReviewerDescriptor,
 )
@@ -36,6 +38,7 @@ from fno.harness_identity import (
     resolve_harness_identity,
     spawned_substrate,
 )
+from fno.user import display_name
 
 # Harnesses that can dispatch subagents at all, for a REGISTRY reviewer that
 # declares `requires: subagent-dispatch`. No built-in uses the value anymore
@@ -216,7 +219,7 @@ def detect_session(
     for the key, which is a larger change than this node.
     """
     environ = os.environ if env is None else env
-    # READ-ONLY (x-20f1 LD5): branches to name this harness's review verb.
+    # READ-ONLY (LD5): branches to name this harness's review verb.
     harness = resolve_harness_identity(environ).harness or "unknown"
 
     if unattended_configured is None:
@@ -279,21 +282,25 @@ def _skill_id(descriptor: ReviewerDescriptor, name: str) -> str:
     return head[0].lstrip("/") if head and head[0].strip("/") else name
 
 
-def _resolve_skill(name: str, session: SessionCapability) -> tuple[Status, str]:
-    """`requires: skill` - is the named skill resolvable on this harness?
+def resolve_skill_presence(
+    name: str,
+    harness: str,
+    *,
+    context: str = "config.review.reviewers",
+) -> tuple[Status, str]:
+    """Is the named skill resolvable on `harness`? One probe, two callers.
 
-    Three outcomes, all onto the existing Status enum: found -> satisfiable,
-    absent with at least one root readable -> unavailable (init refuses, naming
-    the roots searched), and anything we cannot answer -> unverifiable, which is
-    already non-blocking precisely so a bad root guess degrades rather than
-    bricking a run.
+    Shared by the reviewer gate and the dispatch verb registry; `context`
+    names the config surface in the unavailable reason. Three outcomes:
+    found -> satisfiable, absent with one root readable -> unavailable,
+    unanswerable -> unverifiable (degrades rather than bricking a run).
     """
     proceed = "Proceeding - if the gate does go unmet, run the skill by hand"
-    if session.harness != "claude":
+    if harness != "claude":
         return (
             "unverifiable",
             f"needs a resolvable skill; footnote only knows Claude's skill roots "
-            f"and this is {session.describe()}. {proceed}",
+            f"and this is harness={harness}. {proceed}",
         )
     if ":" in name:
         return (
@@ -326,8 +333,13 @@ def _resolve_skill(name: str, session: SessionCapability) -> tuple[Status, str]:
         "unavailable",
         f"skill {name!r} resolves in none of the roots searched "
         f"({', '.join(searched)}); install it there or change "
-        f"config.review.reviewers",
+        f"{context}",
     )
+
+
+def _resolve_skill(name: str, session: SessionCapability) -> tuple[Status, str]:
+    """`requires: skill`, resolved for THIS session's harness."""
+    return resolve_skill_presence(name, session.harness)
 
 
 def _resolve_one(
@@ -385,7 +397,7 @@ def _resolve_one(
 
     if descriptor.requires == "operator":
         if session.attended:
-            return verdict("satisfiable", f"ask the operator to run `{descriptor.invocation}`")
+            return verdict("satisfiable", f"ask {display_name()} to run `{descriptor.invocation}`")
         return verdict(
             "needs-operator",
             f"kind={descriptor.kind}, never autonomously satisfiable; this run is "
@@ -453,19 +465,6 @@ def resolve_reviewers(
     return out
 
 
-@dataclass(frozen=True)
-class PreShipReviewPlan:
-    """What the target spine does at its pre-ship review step.
-
-    The single codified answer the skill prose and docs defer to, so the skip
-    direction cannot drift on one surface while the others keep the old one.
-    A prose edit that re-inverts the default flips this contract red.
-    """
-
-    kind: Literal["native", "skip"]
-    reason: str
-
-
 def harness_can_self_review(harness: Optional[str]) -> bool:
     """Whether this harness can run the review this machinery recommends.
 
@@ -511,7 +510,9 @@ def level_for_diff(changed_files: int, diff_lines: int) -> str:
     return "max"
 
 
-def self_review_invocation(harness: Optional[str], level: Optional[str] = "medium") -> str:
+def self_review_invocation(
+    harness: Optional[str], level: Optional[str] = "medium", comment: bool = True
+) -> str:
     """The recommended self-review invocation: the fno lane, every harness.
 
     `/fno:review <level>`, read from the `code-review` descriptor's scalar
@@ -525,14 +526,16 @@ def self_review_invocation(harness: Optional[str], level: Optional[str] = "mediu
     telling a worker how to clear a head-pinned gate, and a fix pass moves
     HEAD, which voids the attestation the round just earned.
 
-    `--comment` IS appended, and the distinction is the reason above rather
-    than a preference. `--fix` writes to the tree; `--comment` writes to the
-    PR, moves no commit, and so cannot void the attestation the round earns.
-    Without it a machinery-issued review keeps its findings in the transcript,
-    which is the same defect x-c446 fixed one layer down: a review that ran
-    and left no durable record reads exactly like a review that never ran.
-    Measured at the time: all 18 machinery uses of `--comment` attached to
-    native verbs, none to this lane.
+    `--comment` IS appended by default, and the distinction is the reason
+    above rather than a preference. `--fix` writes to the tree; `--comment`
+    writes to the PR, moves no commit, and so cannot void the attestation the
+    round earns. Without it a machinery-issued review keeps its findings in
+    the transcript, which is the same defect fixed one layer down: a
+    review that ran and left no durable record reads exactly like a review
+    that never ran. Measured at the time: all 18 machinery uses of
+    `--comment` attached to native verbs, none to this lane. The `comment`
+    keyword drops it for the pre-push branch form, where the PR the flag
+    writes to does not exist yet; the ledger is that round's durable record.
 
     What it buys is bounded, and the bound is worth stating. The router
     resolves the target from the first non-flag token, so
@@ -577,8 +580,12 @@ def self_review_invocation(harness: Optional[str], level: Optional[str] = "mediu
         spelled = base
     # Flag order follows the router grammar: [level] [--comment] [--fix]
     # [target]. `render_self_review_invocation` appends the target after this,
-    # so the flag must sit here rather than at the end.
-    return f"{spelled} <level> --comment" if level is None else f"{spelled} {level} --comment"
+    # so the flag must sit here rather than at the end. A pre-push branch
+    # target drops the flag: there is no PR for it to write to.
+    flag = " --comment" if comment else ""
+    if level is None:
+        return f"{spelled} <level>{flag}"
+    return f"{spelled} {level}{flag}"
 
 
 def _git_out(cwd: Path, *args: str) -> Optional[str]:
@@ -604,7 +611,7 @@ def diff_review_level(project_root: Optional[Path]) -> Optional[str]:
     None means no measurable diff yet (init, or no merge base): the caller then
     leaves the `<level>` placeholder in the invocation rather than guessing a
     level the diff has not earned. Advisory only; never raises. Moved here from
-    `fno.target.orient._diff_review_level` (x-dae5) so the renderer below and
+    `fno.target.orient._diff_review_level` so the renderer below and
     the orienter share ONE sizing path."""
     if project_root is None:
         return None
@@ -641,32 +648,49 @@ def render_self_review_invocation(
     project_root: Optional[Path] = None,
     *,
     pr_number: Optional[int] = None,
+    branch: Optional[str] = None,
     head_sha: Optional[str] = None,
     base_branch: Optional[str] = None,
 ) -> str:
-    """Render the native review request, optionally pinned to one PR head.
+    """Render the inline fno review request, pinned to one PR head or local branch.
 
-    The render every refusal site names (x-dae5): a worker held at the stop
+    The render every refusal site names : a worker held at the stop
     gate reads THIS string, not a `<level>` placeholder it has no renderer for.
     Sizing always goes through `diff_review_level` (-> `level_for_diff`),
     never the builder's `medium` default - the standing instruction is to size
     from the diff. With no measurable diff the level is None and the
     placeholder stays: an honest unsized render beats a fabricated one.
-    Harness falls back to the ambient session when not given. When PR identity
-    is supplied, all three fields are required and the exact PR, HEAD, and
-    origin base are rendered into the one-line payload. Never infer a missing
-    target from the ambient cwd."""
+    Harness falls back to the ambient session when not given. Two explicit
+    targets exist and are mutually exclusive: a PR (all of pr_number,
+    head_sha, and base_branch required; the post-push form) or a local branch
+    (branch, head_sha, and base_branch required; the pre-push default form).
+    The exact target, HEAD, and origin base are rendered into the one-line
+    payload. Never infer a missing target from the ambient cwd."""
     try:
         h = harness or detect_session().harness
-        rendered = self_review_invocation(h, level=diff_review_level(project_root))
-        target_fields = (pr_number, head_sha, base_branch)
-        if any(value is not None for value in target_fields):
-            if not all(value is not None for value in target_fields):
+        level = diff_review_level(project_root)
+        if branch is not None and pr_number is not None:
+            raise ValueError(
+                "explicit self-review target takes pr_number or branch, not both"
+            )
+        # A branch target has no PR for --comment to write to; the lane would
+        # print "flag ignored" on every default run, so the pre-push payload
+        # never carries it.
+        with_comment = branch is None
+        rendered = self_review_invocation(h, level=level, comment=with_comment)
+        if branch is not None or any(
+            value is not None for value in (pr_number, head_sha, base_branch)
+        ):
+            if branch is None and not all(
+                value is not None for value in (pr_number, head_sha, base_branch)
+            ):
                 raise ValueError(
                     "explicit self-review target requires pr_number, head_sha, and base_branch"
                 )
-            if pr_number is None or pr_number <= 0:
-                raise ValueError("explicit self-review target requires a positive PR number")
+            if branch is not None and (head_sha is None or base_branch is None):
+                raise ValueError(
+                    "explicit self-review target requires branch, head_sha, and base_branch"
+                )
             if not re.fullmatch(r"[0-9a-fA-F]{7,64}", str(head_sha or "")):
                 raise ValueError("explicit self-review target requires a commit SHA")
             base = str(base_branch or "").strip()
@@ -674,36 +698,44 @@ def render_self_review_invocation(
                 base = base[len("origin/") :]
             if not base or any(char.isspace() for char in base) or base.startswith("-"):
                 raise ValueError("explicit self-review target requires a branch name")
-            # Target slot first: the bare PR number is the first non-flag
-            # token after the level, so a strict reader resolves the target to
-            # the PR. HEAD and base ride behind it as trailing context; the
-            # earlier "HEAD <sha> of PR <n>" order made a strict reader see a
-            # branch target and silently ignore --comment.
-            rendered = f"{rendered} {pr_number} HEAD {head_sha} against origin/{base}"
+            # Target slot first: the bare PR number or branch name is the first
+            # non-flag token after the level, so a strict reader resolves the
+            # target to it. HEAD and base ride behind it as trailing context;
+            # the earlier "HEAD <sha> of PR <n>" order made a strict reader see
+            # a branch target and silently ignore --comment.
+            if branch is not None:
+                name = str(branch).strip()
+                if not name or any(char.isspace() for char in name) or name.startswith("-"):
+                    raise ValueError("explicit self-review target requires a branch name")
+                rendered = f"{rendered} {name} HEAD {head_sha} against origin/{base}"
+            else:
+                if pr_number is None or pr_number <= 0:
+                    raise ValueError("explicit self-review target requires a positive PR number")
+                rendered = f"{rendered} {pr_number} HEAD {head_sha} against origin/{base}"
         return rendered
     except Exception:  # noqa: BLE001 - advisory text; the gate stays the gate
-        if any(value is not None for value in (pr_number, head_sha, base_branch)):
+        if any(value is not None for value in (pr_number, branch, head_sha, base_branch)):
             raise
         return self_review_invocation(harness, level=None)
 
 
-def preship_review_plan(reviewers: list[str]) -> PreShipReviewPlan:
-    """Decide the target spine's pre-ship review step from `config.review.reviewers`.
+def automerge_floor_refusal(resolved: "ResolvedReviewPosture") -> Optional[str]:
+    """The refusal when a merge grant arms below the posture floor, or None.
 
-    The plan is always the same review: the fno lane on the final pushed HEAD,
-    requested through `fno do target request-self-review --pr` once the PR
-    exists, never downgraded to advisory prose. There is no sigma branch to
-    consult anymore: a config still naming sigma is refused at init by the
-    retired descriptor, so it cannot reach this decision. `reviewers` is read
-    for shape only - a registered harness-skill reviewer keeps its own
-    invocation contract at the ship step regardless of this plan.
+    One wording, every merge-grant surface (the merge verb's manifest arm, the
+    durable-grant resolver, and the finalize arming gate): the rung that
+    failed, the rung the floor requires, and the exact remedy. Routing the
+    merge to a human is NOT a remedy - an unconstrained human merge is rung 1,
+    and the floor's whole point is that code always gets some review.
     """
-    names = {str(r).strip().lstrip("/") for r in reviewers}
-    return PreShipReviewPlan(
-        "native",
-        f"run fno do target request-self-review --pr on the final pushed HEAD; "
-        f"the fno lane (/fno:review) is the review producer on every harness "
-        f"(reviewers resolved: {sorted(names) or ['none']})",
+    if not resolved.automerge_blocked:
+        return None
+    return (
+        f"auto-merge refused: review.posture is {resolved.value!r} "
+        f"(rank {resolved.rank}), below the merge floor "
+        f"self_review (rank {MIN_AUTOMERGE_RANK}). A merge needs at least one "
+        f"real final-head code review. Remedy: set a real review posture, "
+        f"e.g. `fno config set review.posture self_review --local`."
     )
 
 
@@ -856,7 +888,7 @@ def refusal_message(
     return "\n".join(lines)
 
 
-# ── github_apps axis (x-b167 section 6) ──────────────────────────────────────
+# ── github_apps axis (section 6) ──────────────────────────────────────
 #
 # `config.review.reviewers` (above) refuses in two seconds when the LOCAL
 # attestation gate cannot be satisfied here. The `github_apps` gate had no
@@ -871,7 +903,7 @@ def refusal_message(
 # and the `_OPTIONAL_BOTS` tuple (cli/src/fno/pr/_reviews.py): the review Apps
 # footnote recognizes. A recognized login is `satisfiable` at init even before
 # it has acted on a fresh repo, because footnote knows it is a real bot (and for
-# the nudgeable ones, knows how to reach it). NOTE (x-b167): this is the third
+# the nudgeable ones, knows how to reach it). NOTE: this is the third
 # copy of the bot-login set across two languages; folding all three behind one
 # parity-checked source is a follow-up the plan explicitly deferred.
 _KNOWN_REVIEW_APP_LOGINS: frozenset[str] = frozenset(
@@ -946,7 +978,7 @@ def _app_ever_acted(login: str, cwd: Optional[str] = None) -> Optional[bool]:
         #
         # Proving absence under substring semantics means enumerating the
         # repository's participants, which is unbounded; until something does
-        # that, unverifiable is the honest answer (x-4a60).
+        # that, unverifiable is the honest answer.
         return None
     try:
         return int(total.strip()) > 0

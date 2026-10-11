@@ -29,7 +29,7 @@ class FakeRun:
         self,
         *,
         default: str = "main",
-        base: str = "feature/bg-crown",
+        base: str = "feature/bg-role",
         merged_pr: str = "",
         merged_head: str = LANDED,
         base_tip: str = LANDED,
@@ -41,6 +41,7 @@ class FakeRun:
         base_fetch_fails: bool = False,
         base_still_on_remote: bool = False,
         git_missing: bool = False,
+        pr_head: str = "abc123dddddddddddddddddddddddddddddd",
     ) -> None:
         self.default = default
         self.base = base
@@ -55,6 +56,7 @@ class FakeRun:
         self.base_fetch_fails = base_fetch_fails
         self.base_still_on_remote = base_still_on_remote
         self.git_missing = git_missing
+        self.pr_head = pr_head
         self.calls: list[list[str]] = []
 
     def __call__(self, cmd, *, cwd=None, env=None, input_text=None, timeout=None):
@@ -78,11 +80,19 @@ class FakeRun:
             ):
                 if self.base_fails:
                     return Result(1, "", "gh: api error")
-                return Result(0, json.dumps({"base": {"ref": self.base}}), "")
+                return Result(
+                    0,
+                    json.dumps({"base": {"ref": self.base}, "head": {"sha": self.pr_head}}),
+                    "",
+                )
             if cmd[1] == "api" and "pulls?state=all" in endpoint:
                 if self.base_fails:
                     return Result(1, "", "gh: api error")
-                return Result(0, json.dumps([{"base": {"ref": self.base}}]), "")
+                return Result(
+                    0,
+                    json.dumps([{"base": {"ref": self.base}, "head": {"sha": self.pr_head}}]),
+                    "",
+                )
             if cmd[1] == "api" and "pulls?state=closed" in endpoint:
                 if self.list_fails:
                     return Result(1, "", "gh: api error")
@@ -138,17 +148,23 @@ def patch_run(monkeypatch):
     return _apply
 
 
-def test_base_is_default_branch_is_ok_without_probing(patch_run):
-    """The common case short-circuits: no PR list, no fetch, no merge-base."""
-    fake = patch_run(FakeRun(base="main"))
-    verdict, _ = _base_lineage.lineage_verdict(805, "/repo")
-    assert verdict == "ok"
-    assert not any(c[1:3] == ["pr", "list"] for c in fake.calls)
-    assert not any(c[0] == "git" and c[1] != "remote" for c in fake.calls)
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"contained": True}, {"contained": False}, {"fetch_fails": True}],
+)
+def test_default_base_passes_whether_or_not_the_head_has_the_tip(patch_run, kwargs):
+    """A base that IS the default branch never fails on how far behind the head is.
+
+    A catch-up demand made busy-main PRs chase the tip forever, and every
+    catch-up push cancelled their CI. A real conflict is GitHub's refusal.
+    """
+    patch_run(FakeRun(base="main", **kwargs))
+    got, _ = _base_lineage.lineage_verdict(805, "/repo")
+    assert got == "ok"
 
 
 def test_merged_pr_on_unmoved_base_refuses(patch_run):
-    """The specimen: PR #789 merged feature/bg-crown, whose tip had not moved."""
+    """The specimen: PR #789 merged feature/bg-role, whose tip had not moved."""
     patch_run(FakeRun(merged_pr="789", merged_head=LANDED, base_tip=LANDED, contained=True))
     verdict, why = _base_lineage.lineage_verdict(800, "/repo")
     assert verdict == "stale"
@@ -214,7 +230,7 @@ def test_lineage_github_reads_never_use_graphql(patch_run):
 
 
 def test_branch_name_selector_keeps_rest_lineage_support(patch_run):
-    fake = patch_run(FakeRun(base="main"))
+    fake = patch_run(FakeRun(base="main", contained=True))
     verdict, _ = _base_lineage.lineage_verdict("feature/stack", "/repo")
     assert verdict == "ok"
     assert any("pulls?state=all" in call[-1] for call in fake.calls if call[0] == "gh")

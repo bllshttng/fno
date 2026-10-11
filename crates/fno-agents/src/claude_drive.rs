@@ -1,10 +1,10 @@
 //! Transcript-location + detach-sentinel primitives shared by the live-inject
 //! transport (`crates/fno-agents/src/mail_inject.rs`).
 //!
-//! G1 substrate (epic x-07c1, node x-26df). This file originally also carried
+//! G1 substrate (epic, node). This file originally also carried
 //! the drive primitive itself (`control.sock op:'reply' {short,text,auth}`,
 //! confirmed by a new assistant transcript turn) -- superseded, and removed as
-//! dead code, by node x-1904: the live transport is the bracketed-paste +
+//! dead code, by node : the live transport is the bracketed-paste +
 //! wire-level-CR inject in `mail_inject.rs` (`inject_with_submit` /
 //! `confirm_content_after`), which confirms by CONTENT rather than by
 //! assistant-turn role, and whose `<fno_mail>` envelope is rendered
@@ -61,6 +61,9 @@ pub fn claude_projects_dir() -> PathBuf {
     if let Some(v) = std::env::var_os(PROJECTS_DIR_ENV) {
         return PathBuf::from(v);
     }
+    if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        return PathBuf::from(v).join("projects");
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
@@ -81,11 +84,16 @@ fn is_session_uuid(s: &str) -> bool {
 /// Mirrors `doctor.py`: the filename is the uuid, so we never need the lossy
 /// cwd-encoding. Returns `None` for a malformed uuid or when no transcript exists.
 pub fn find_transcript(session_uuid: &str) -> Option<PathBuf> {
+    find_transcript_in(&claude_projects_dir(), session_uuid)
+}
+
+/// Same discovery under an explicit projects base, for callers that resolve
+/// the root themselves (tests, or the cap actor's injected scan).
+pub fn find_transcript_in(base: &Path, session_uuid: &str) -> Option<PathBuf> {
     if !is_session_uuid(session_uuid) {
         return None;
     }
-    let base = claude_projects_dir();
-    let entries = std::fs::read_dir(&base).ok()?;
+    let entries = std::fs::read_dir(base).ok()?;
     for entry in entries.flatten() {
         let candidate = entry.path().join(format!("{session_uuid}.jsonl"));
         if candidate.exists() {

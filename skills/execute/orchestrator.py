@@ -15,7 +15,6 @@ import re
 import os
 import json
 import subprocess
-from enum import Enum
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Collection, List, Literal, Optional, Dict, Set
@@ -33,14 +32,8 @@ _CLI_SRC = _SKILLS_DIR.parents[1] / "cli" / "src"
 if str(_CLI_SRC) not in sys.path:
     sys.path.insert(0, str(_CLI_SRC))
 
+from fno import dispatch_flags, harness_names  # noqa: E402  (path set above)
 
-# ---------------------------------------------------------------------------
-# Impeccable executor constants
-# ---------------------------------------------------------------------------
-
-IMPECCABLE_DEFAULT_MAX_ITERATIONS: int = 8
-IMPECCABLE_DEFAULT_CRITIQUE_TARGET: int = 35
-IMPECCABLE_DEFAULT_CRITIQUE_FLOOR: int = 25
 
 # PRODUCT.md validation thresholds (mirrors /impeccable's loader contract)
 PRODUCT_MD_MIN_CHARS: int = 200
@@ -60,7 +53,7 @@ _PRODUCT_MD_SEARCH_PATHS = (
 
 
 # ---------------------------------------------------------------------------
-# Company topology projection (x-7741)
+# Company topology projection
 # ---------------------------------------------------------------------------
 # The router projects a resolved company topology onto a work order through
 # fno.company.execution.project_execution, which carries the shape alongside the
@@ -68,7 +61,7 @@ _PRODUCT_MD_SEARCH_PATHS = (
 # required evidence. There is no second router: topology changes execution
 # shape only, so the same WorkOrderRef and delivery requirements pass through
 # direct, loop, squad, and pipeline unchanged. Company work is not yet flowing
-# through this router (x-edf5 is the first consumer); this is the seam.
+# through this router (is the first consumer); this is the seam.
 
 
 def apply_company_topology(resolution, work_order, authority_ceiling, approval_floor, required_evidence_ids):
@@ -157,66 +150,6 @@ def check_product_md_for_dispatch(
     return False
 
 
-# ---------------------------------------------------------------------------
-# Impeccable stage loop - full-loop iteration ceiling (decision 5c)
-# ---------------------------------------------------------------------------
-
-class ImpeccableVerdict(Enum):
-    """Two-tier verdict for the /impeccable stage loop (decision 5a from brief)."""
-    SUCCESS = "SUCCESS"
-    DONE_WITH_CONCERNS = "DONE_WITH_CONCERNS"
-    FAILED = "FAILED"
-
-
-@dataclass
-class ImpeccableStageLoop:
-    """Tracks the shared iteration budget for a full /impeccable stage loop.
-
-    The max_iterations budget applies to the ENTIRE stage loop (craft -> critique ->
-    polish -> harden -> audit -> ...), not per-stage. A single iterations_used counter
-    increments on every stage invocation. When iterations_used >= max_iterations,
-    the ceiling is reached and the loop must exit with the two-tier verdict.
-
-    This is the canonical model per decision 5c of the frontend-executor-pipeline-
-    awareness brief: "the operator's iteration ceiling applies to the full stage loop,
-    not per-stage; the budget is total, not multiplied across stages."
-    """
-
-    max_iterations: int = IMPECCABLE_DEFAULT_MAX_ITERATIONS
-    critique_target: int = IMPECCABLE_DEFAULT_CRITIQUE_TARGET
-    critique_floor: int = IMPECCABLE_DEFAULT_CRITIQUE_FLOOR
-    iterations_used: int = field(default=0, init=False)
-
-    @property
-    def ceiling_reached(self) -> bool:
-        """Return True when the shared budget is exhausted."""
-        return self.iterations_used >= self.max_iterations
-
-    def can_dispatch(self) -> bool:
-        """Return True when the next stage invocation is within budget."""
-        return self.iterations_used < self.max_iterations
-
-    def record_stage(self, stage: str) -> None:  # noqa: ARG002
-        """Record one stage invocation against the shared budget."""
-        self.iterations_used += 1
-
-    def compute_verdict(self, final_score: int) -> ImpeccableVerdict:
-        """Compute the two-tier exit verdict from the final critique score.
-
-        Score >= critique_target  -> SUCCESS
-        Score <  critique_floor   -> FAILED
-        Otherwise (band)          -> DONE_WITH_CONCERNS
-
-        Per decision 5a: the ceiling exit is NOT a hard FAILED reflex; the
-        score determines which tier applies.
-        """
-        if final_score >= self.critique_target:
-            return ImpeccableVerdict.SUCCESS
-        if final_score < self.critique_floor:
-            return ImpeccableVerdict.FAILED
-        return ImpeccableVerdict.DONE_WITH_CONCERNS
-
-
 def _parse_scalar(value: str):
     value = value.strip()
     if value in ("true", "false"):
@@ -231,51 +164,35 @@ def _parse_scalar(value: str):
     return value.strip('"').strip("'")
 
 
-# The --harness/--provider value names the invoking HARNESS (which CLI binary
-# runs the work), not the model vendor. These are the values detect_provider()
-# can return and that an explicit argument may name.
-_KNOWN_HARNESSES = ("claude", "codex", "gemini")
-
-
-def detect_provider(env: Optional[dict] = None) -> str:
-    """Sniff the invoking harness from environment variables.
-
-    Compatibility FALLBACK only. Prefer an explicit ``--harness``/``--provider``
-    argument via :func:`resolve_invoking_harness`, which surfaces this sniff as
-    a fallback source so a Codex session that has not exported
-    ``CODEX_PLUGIN_ROOT`` cannot silently redirect its waves to Claude
-    subagents. Returns a harness (``claude`` | ``codex`` | ``gemini``), not a
-    model vendor.
-    """
-    environ = os.environ if env is None else env
-    if environ.get("CODEX_PLUGIN_ROOT"):
-        return "codex"
-    if environ.get("GEMINI_PROJECT_DIR"):
-        return "gemini"
-    return "claude"
-
-
 def resolve_invoking_harness(
     explicit: Optional[str] = None,
     env: Optional[dict] = None,
 ) -> tuple[str, str]:
-    """Resolve the invoking harness, explicit-first, env-sniff as a surfaced fallback.
+    """Resolve the invoking harness from the canonical roster and identity.
 
-    Returns ``(harness, source)`` where ``source`` is ``"explicit"`` or
-    ``"env-fallback"``. An explicit value wins and is validated against the
-    known harnesses; the env sniff runs only when no explicit value was given,
-    and its result is reported as a fallback rather than reading as a deliberate
-    choice. The value is a harness, never a model vendor.
+    Returns ``(harness, source)`` where ``source`` is ``"explicit"``,
+    ``"env-marker"`` or ``"env-default"``. An explicit value wins and is
+    validated against :data:`fno.harness_names.KNOWN_HARNESSES` (the L0 roster
+    every other caller shares); with no explicit value the ambient identity is
+    resolved through :func:`fno.dispatch_flags.infer_invoking_harness`, which
+    maps ``CODEX_THREAD_ID`` to codex and ``OPENCODE_SESSION_ID`` to opencode
+    and answers None when markers disagree. ``"env-default"`` (claude) is
+    distinguishable from ``"env-marker"``, so a caller that requires a
+    positively identified harness can refuse on the difference. The value is a
+    harness, never a model vendor.
     """
     if explicit is not None and explicit.strip():
         h = explicit.strip().lower()
-        if h not in _KNOWN_HARNESSES:
+        if h not in harness_names.KNOWN_HARNESSES:
             raise ValueError(
                 f"unknown harness {explicit!r}; expected one of "
-                f"{', '.join(_KNOWN_HARNESSES)}"
+                f"{', '.join(harness_names.KNOWN_HARNESSES)}"
             )
         return h, "explicit"
-    return detect_provider(env=env), "env-fallback"
+    inferred = dispatch_flags.infer_invoking_harness(env)
+    if inferred:
+        return inferred, "env-marker"
+    return "claude", "env-default"
 
 
 def load_project_constraints() -> List[str]:
@@ -536,10 +453,21 @@ def apply_partition_edges(strategy: ExecutionStrategy, plan_path: str) -> None:
     A declared list is kept and extended, never replaced. A task with no
     declared entry keeps its previous-wave inheritance as the base, so a
     derived edge can never float a task ahead of an incomplete earlier wave.
+
+    Runs for EVERY wave, not only parallel ones. The partition used to be
+    gated on ``mode == "parallel"``, which made two tasks in one `sequential`
+    wave that edit the same file read as simultaneously ready - so the label
+    named `sequential` scheduled MORE in parallel than the one named
+    `parallel`. 396 of 430 waves in a fortnight are sequential, so the
+    partition ran on roughly 8% of waves and the over-report was the norm:
+    join could hand a joiner a task colliding with the one the holder is
+    running.
+
+    ``mode`` keeps its real meaning, which is intra-wave subagent fan-out
+    inside one worker, and stops doubling as a scheduling switch it was never
+    named for.
     """
     for wave in strategy.waves:
-        if wave.mode != "parallel":
-            continue
         for task_id, blockers in partition_edges(plan_path, wave, strategy.task_surfaces).items():
             if task_id in strategy.blocked_by:
                 base = set(strategy.blocked_by[task_id])
@@ -905,7 +833,7 @@ class TaskResult:
 # The execution-agent return-contract status enum (AGENTS.md "Return Contract").
 # A status outside this set is REJECTED, never coerced: the parse layer fails
 # CLOSED so a model that appends prose or invents a status yields no false
-# success (ab-1394e797: "text output-format conventions fail open; schema
+# success (: "text output-format conventions fail open; schema
 # validation happens at the tool-call layer").
 VALID_STATUSES = ("SUCCESS", "DONE_WITH_CONCERNS", "FAILED", "BLOCKED")
 
@@ -1010,7 +938,7 @@ def parse_structured_result(output: str) -> Optional[TaskResult]:
 def parse_task_result(output: str) -> Optional[TaskResult]:
     """Parse an execution agent's structured return, schema-first and fail-closed.
 
-    Resolution order (ab-1394e797 - schema over the RESULT: stdout grammar):
+    Resolution order (- schema over the RESULT: stdout grammar):
 
     1. A schema-enforced structured block (```json or ``<result>``) is preferred,
        the claude dispatch path. It is validated against the contract; a
@@ -1078,7 +1006,7 @@ ClassifiedKind = Literal[
     "no_output",
 ]
 
-# Runtime-observed worker terminal vocabulary (x-1862): the process-level half
+# Runtime-observed worker terminal vocabulary: the process-level half
 # of a worker return, independent of anything the worker wrote about itself.
 # The dispatcher encodes process death as an exit code (a signal death arrives
 # as 128+N); ``runtime_terminal_from_exit_code`` is the producer-side mapping
@@ -1115,7 +1043,7 @@ def classify_worker_return(
 ) -> tuple[Optional[str], Optional[ClassifiedKind]]:
     """Validate a worker return against the canonical contract and classify it.
 
-    Two independent inputs, kept separate on purpose (x-1862): ``output`` is
+    Two independent inputs, kept separate on purpose : ``output`` is
     the worker's self-report (the CLAIM); ``runtime_terminal`` is what the
     runtime OBSERVED about the process (``"completed"``, ``"error"``,
     ``"signal"`` for a 128+N death, ``"context_limit"``, ``"refusal"``). A
@@ -1155,13 +1083,15 @@ def emit_status_event(
     outcome: str = "",
     data: Optional[Dict] = None,
 ) -> bool:
-    """Emit an x-dbaf status-breakpoint event by shelling ``fno doctor event emit``.
+    """Emit an status-breakpoint event by shelling ``fno doctor event emit``.
 
     Non-fatal by contract: any failure logs one stderr note and returns False;
     it never raises, so a boundary emit can never fail the task or the run.
     Skills shell to the installed CLI (never import repo code), matching
     resolve-executor.sh. Work coordinates fall back to the manifest inside the
-    emit CLI when the flags are empty.
+    emit CLI when the flags are empty. The source is always ``target``: this
+    function runs in the orchestrator's own process after it parses an
+    executor's result, never inside the executor's process.
     """
     argv = [
         "fno",
@@ -1172,6 +1102,8 @@ def emit_status_event(
         event_type,
         "-d",
         json.dumps(data or {}),
+        "--source",
+        "target",
     ]
     for flag, val in (("--run", run), ("--node", node), ("--task", task), ("--outcome", outcome)):
         if val:
@@ -1189,7 +1121,7 @@ def _shell_fno_result(argv: List[str], what: str) -> Optional[subprocess.Complet
     """
     # 15s bounds an append-only event emit. The task-claim settle is a full
     # graph mutation behind the fleet-wide flock (recompute, JSON write,
-    # sha256 sidecar, whole-board render), and a SIGKILL mid-settle strands a
+    # whole-board render), and a SIGKILL mid-settle strands a
     # pid-anchored claim that never goes stale, so the row reads peer-held for
     # the rest of the run. Give a settle the longer bound.
     timeout = 120 if "task" in argv[:4] else 15
@@ -1285,7 +1217,7 @@ _GIVEBACK_OUTCOMES = ("FAILED", "BLOCKED")
 
 
 def release_task_claim_at_boundary(node: str, task: str, outcome: str) -> bool:
-    """Settle the task claim at a task boundary (x-09d7 group 3).
+    """Settle the task claim at a task boundary (group 3).
 
     ``done`` after a terminal outcome, ``pending`` (the holder-only give-back)
     after ``blocked``/``FAILED``, so the next ready worker can pick the task
@@ -1799,7 +1731,7 @@ if __name__ == "__main__":
             data=b_data,
         )
         # The boundary every outcome already passes through is also the one
-        # place the task claim taken at dispatch gets settled (x-09d7 g3):
+        # place the task claim taken at dispatch gets settled (g3):
         # done releases it, blocked/FAILED gives it back to pending. The event
         # TYPE is gated, not just trusted: a typo'd type carrying --task must
         # not reach the give-back and release a live worker's claim. The node
@@ -1851,7 +1783,7 @@ if __name__ == "__main__":
     # the env sniff; the sniff stays as a surfaced fallback so an absent
     # CODEX_PLUGIN_ROOT cannot silently redirect a Codex session to Claude.
     # `provider` here is the EXPLICIT arg (None when no flag); each downstream
-    # resolver re-runs resolve_invoking_harness so the explicit/env-fallback
+    # resolver re-runs resolve_invoking_harness so the explicit/env-marker
     # source is surfaced correctly rather than collapsed to "explicit".
     provider: Optional[str] = None
     for flag in ("--harness", "--provider"):

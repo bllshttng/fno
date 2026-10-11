@@ -1,5 +1,5 @@
 <!-- style-exception: mechanical verb rename preserves pre-existing prose -->
-> **SUPERSEDED (2026-06-05, ab-d0337fbc):** the gate boolean transition matrix in this file (Completion Gates section) was deleted by the control-plane collapse wedge. The acceptance criteria gate before /execute waves remains active. Kept for historical context; see docs/architecture/control-plane-loop.md.
+> **SUPERSEDED (2026-06-05):** the gate boolean transition matrix in this file (Completion Gates section) was deleted by the control-plane collapse wedge. The acceptance criteria gate before /execute waves remains active. Kept for historical context; see docs/architecture/control-plane-loop.md.
 
 # Phase Transition Guards
 
@@ -17,8 +17,8 @@ Before `/execute waves`, verify plan has testable acceptance criteria (BDD Given
 The pipeline runs in a fixed order. Do not skip phases unless the corresponding skip flag (`no_docs`, `no_external`, etc.) is set in the manifest. The skip flags are immutable after init - check the manifest read by `fno do target init`, do not decide to skip phases based on your judgment mid-run.
 
 Key ordering rules that survive the control-plane collapse:
-- Run docs BEFORE /pr create so docs ride in the same PR (avoid a follow-up PR).
-- Run browser testing BEFORE /pr create (same reason).
+- Run docs BEFORE /fno:ship pr create so docs ride in the same PR (avoid a follow-up PR).
+- Run browser testing BEFORE /fno:ship pr create (same reason).
 - Do not run auto-merge until external review is satisfied (or `no_external` is set).
 
 These are workflow rules, not gate checks. The loop-check verb verifies the outcome (PR + CI + review); you ensure the pipeline ran in the right order.

@@ -1,12 +1,10 @@
 ---
 name: frontend-executor
-description: Full /impeccable pipeline executor. Synthesizes the shape brief from the /think design doc + per-task AC list, selects /impeccable stages per task content, runs production-readiness passes (craft/polish/critique/harden/audit/layout), classifies findings, and returns a two-tier verdict with deferred_findings for operator to parse.
+description: Run frontend readiness passes, classify findings, and report deferred risks.
 model: sonnet
 color: magenta
 tools: ["Read", "Write", "Edit", "Grep", "Glob", "Bash", "Skill"]
 disallowedTools: ["Task", "WebSearch", "WebFetch", "NotebookEdit"]
-skills:
-  - impeccable
 ---
 
 <!-- style-exception: mechanical verb rename preserves pre-existing prose -->
@@ -81,7 +79,7 @@ Helpers to read these from the flat config.toml without a full parser (match
 
 ```bash
 THRESHOLD=$(awk -F= '/^[[:space:]]*critique_(threshold|target)[[:space:]]*=/{gsub(/[^0-9]/,"",$2); print $2; exit}' .fno/config.toml 2>/dev/null)
-THRESHOLD=${THRESHOLD:-35}   # accepts critique_target (canonical, matches orchestrator.py) or critique_threshold (legacy alias)
+THRESHOLD=${THRESHOLD:-35}   # accepts critique_target (canonical) or critique_threshold (legacy alias)
 
 FLOOR=$(awk -F= '/^[[:space:]]*critique_floor[[:space:]]*=/{gsub(/[^0-9]/,"",$2); print $2; exit}' .fno/config.toml 2>/dev/null)
 FLOOR=${FLOOR:-25}

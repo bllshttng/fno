@@ -1,11 +1,12 @@
 ---
 name: think
-description: "Investigate a question against primary sources - repo source code, specs, first-party APIs - and write cited findings to one Markdown file. Use when: 'research this', 'think through this', 'how does this break' (what-if), 'several lenses on this' (panel), 'what owns this' (class). Prefix `bg` or `subagent` to run it off the main thread."
+description: Investigate a question against source evidence and write cited findings to one document.
 argument-hint: "[bg|subagent] [what-if|panel|class] <question | node-id>"
-requires:
-  binaries:
-    - "fno >= 0.1"
-    - "git >= 2.0"
+metadata:
+  requires:
+    binaries:
+      - "fno >= 0.1"
+      - "git >= 2.0"
 ---
 
 # Think
@@ -31,7 +32,7 @@ Read the argument left to right: an optional substrate token, an optional brief 
 
 1. **Ground.** Run `fno do think inspect "<question>" --json` and read the whole receipt. It reports source status, never a verdict. An unavailable search is not "nothing found". A stale schema is not "no DB change". Inspect what it cites before deciding relevance.
 2. **Investigate primary sources** - source code, specs, first-party APIs - never a secondary write-up of them. Follow every claim back to the source that owns it. Every claim you write carries a `file:line` or a URL. A claim you cannot trace is written down as untraced.
-3. **Write one Markdown file** at the path `fno do plan path --slug "<slug>" [--node <id>]` prints, citing each claim's source. List only sources you actually read.
+3. **Write one Markdown file** at the path `fno do plan path --slug "<slug>" [--node <id>]` prints, citing each claim's source. Run the verb from the node's project root. `fno backlog get <node>` prints that root as `cwd`. From a foreign session cwd the doc lands in the session's own plans dir, outside git. List only sources you actually read.
 
 Print the file path and stop. Turning findings into a plan is `/fno:blueprint <path>`.
 

@@ -1,4 +1,4 @@
-"""Per-spawn account overlay resolution (x-d012).
+"""Per-spawn account overlay resolution.
 
 `fno agents spawn --account <id>` pins one worker to one claude account
 *without* touching the daemon-wide active `~/.claude` slot. This module resolves
@@ -32,7 +32,7 @@ and a lane-1/2 config dir that is missing or holds no login (preflight before
 spawn - no zombie worker).
 
 Explicit operator intent ONLY: this never participates in dispatch defaults,
-failover, or exhaustion auto-switch (x-d6be lock).
+failover, or exhaustion auto-switch (lock).
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ SCRUB_AUTH_VARS = (
     # account inherits its parent's environment, and without this it would
     # report the parent's provider while billing its own - and be handed that
     # provider's subagent budget for a review its own account can afford
-    # (x-c703). Set-or-clear, never inherit.
+    #. Set-or-clear, never inherit.
     "FNO_ROUTE_PROVIDER",
     # Reused, not restated: the routed-model set is the same set a route
     # composes, so a new Claude tier lands in both at once.
@@ -110,14 +110,14 @@ SECRET_ROUTE_VARS = (
 # home, where nothing looks. The worker still starts, so the strand is silent.
 STATE_ROOT_ENV_KEYS = frozenset({"HOME"})
 
-# The roots that a pin can hold still. Both are read env-first by the runtime
+# The roots that a pin can hold still. All are read env-first by the runtime
 # that owns them, so setting them alongside a HOME override keeps footnote's
 # state where it was while the harness credential follows the override.
-_STATE_ROOT_PINS = ("FNO_AGENTS_HOME", "FNO_CLAIMS_ROOT")
+_STATE_ROOT_PINS = ("FNO_AGENTS_HOME", "FNO_CLAIMS_ROOT", "FNO_STATE_DIR")
 
 
 def seal_state_root(env: Mapping[str, str]) -> dict[str, str]:
-    """Pin the two state roots that have an env carrier, around a moved HOME.
+    """Pin the state roots that have an env carrier, around a moved HOME.
 
     For the seam that has no argv carrier and MUST forward a HOME override,
     because the env is the only channel to the launched harness. Prefer
@@ -126,20 +126,18 @@ def seal_state_root(env: Mapping[str, str]) -> dict[str, str]:
     exec'd, so no footnote process ever sees the override at all.
 
     A no-op unless the mapping actually moves HOME. When it does, pin
-    ``FNO_AGENTS_HOME`` and ``FNO_CLAIMS_ROOT`` to the roots THIS process
-    resolves, so the child's registry row and its claim stay findable. A value
-    already in the mapping wins, so an inherited pin propagates unchanged and a
+    ``FNO_AGENTS_HOME``, ``FNO_CLAIMS_ROOT`` and ``FNO_STATE_DIR`` to the roots
+    THIS process resolves, so the child's registry row, its claim, its locks
+    and its graph all stay findable. A value already in the mapping wins, so a
     caller that meant to redirect a root is not second-guessed.
 
-    **This is a partial seal, and the remainder is the honest part.** Only those
-    two roots read an env var. ``fno.paths.locks_dir`` is deliberately
-    ``$HOME``-only, and ``state_dir`` (graph.json, the ledger, the briefs) has
-    no override at all, so both still follow the moved HOME. Measured under a
-    sealed env: ``agents_home_dir`` resolves the real root while ``locks_dir``
-    and ``graph_json`` resolve under the account's home. A worker that runs
-    ``fno backlog done`` under a forwarded HOME therefore still writes its graph
-    where nothing looks. Closing that needs a state_dir env carrier, which does
-    not exist yet - prefer the argv carrier over this seal wherever there is one.
+    The remaining honest limit: the ``FNO_HOME``-anchored sidecars and any
+    root without a carrier still follow the moved HOME; the three pins cover
+    the registry, the claims tree, the locks and the config state root.
+    A pin is only as good as the child binary: the sealing side confirms the
+    carrier with the binary's ``state-root`` door and refuses a stale binary
+    rather than let its reads strand under the moved HOME. Prefer the argv
+    carrier over this seal wherever a launch has one.
 
     Never mutates the input.
     """
@@ -154,6 +152,7 @@ def seal_state_root(env: Mapping[str, str]) -> dict[str, str]:
 
     current: dict[str, str] = {
         "FNO_AGENTS_HOME": str(paths.agents_home_dir()),
+        "FNO_STATE_DIR": str(paths.state_dir()),
     }
     claims_root = os.environ.get("FNO_CLAIMS_ROOT") or os.environ.get("HOME")
     if claims_root:
@@ -179,7 +178,7 @@ class CredentialDecision:
 
     Facts fno owns, never claims about what claude honored: composition is
     decided before the process starts, so the composed environment is a fact,
-    but only claude knows which credential it sent (the x-74ea boundary).
+    but only claude knows which credential it sent (the boundary).
     """
 
     profile: Optional[str]  # account id whose CLAUDE_CONFIG_DIR is set
@@ -268,7 +267,7 @@ def compose_worker_credentials(
 ) -> "tuple[dict[str, str], CredentialDecision]":
     """Apply the scrub/account/route precedence once and report the outcome.
 
-    THE composition rule, stated here and nowhere else (x-8552): scrub every
+    THE composition rule, stated here and nowhere else : scrub every
     ``SCRUB_AUTH_VARS`` entry from the inherited environment, layer the account
     overlay (profile + its own login), layer the route overlay last so it wins
     ``ANTHROPIC_BASE_URL``/``ANTHROPIC_AUTH_TOKEN`` and every model tier as one
@@ -335,6 +334,19 @@ def _login_present(config_dir: Path) -> bool:
     return out.returncode == 0 and bool(out.stdout.strip())
 
 
+def _refuse_identity_mismatch(record, providers_root: Path, by_id: dict) -> None:
+    """Refuse a pin whose credential root provably serves a different account.
+
+    Only a POSITIVE mismatch refuses. An unreachable profile endpoint must not
+    ground the fleet.
+    """
+    from fno.adapters.providers.binding import MISMATCH, resolve_account_binding
+
+    got = resolve_account_binding(record, root=providers_root, by_id=by_id)
+    if got.status == MISMATCH:
+        raise AccountResolutionError(got.receipt)
+
+
 def resolve_account_overlay(
     account_id: str,
     *,
@@ -380,6 +392,8 @@ def resolve_account_overlay(
                 f"account {account_id!r} config_dir {cfg} holds no claude login "
                 f"(run: CLAUDE_CONFIG_DIR={cfg} claude /login)"
             )
+        # A login being PRESENT says nothing about whose login it is.
+        _refuse_identity_mismatch(record, providers_root, by_id)
         return AccountOverlay(
             account_id, {"CLAUDE_CONFIG_DIR": str(cfg)}, "config-dir"
         )
@@ -418,6 +432,9 @@ def resolve_account_overlay(
             # CLAUDE_CONFIG_DIR (e.g. exported from a prior alt-account session)
             # leak through and silently bill the wrong account. Managed claude
             # accounts materialize into ~/.claude by definition.
+            # An out-of-band `claude /login` leaves the stamp wrong AND
+            # untainted, so the binding asks the slot who it actually serves.
+            _refuse_identity_mismatch(record, providers_root, by_id)
             slot = str(Path.home() / ".claude")
             return AccountOverlay(
                 account_id, {"CLAUDE_CONFIG_DIR": slot}, "managed-active"

@@ -32,6 +32,16 @@ case "$1 $2" in
   "agents spawn-guard")
     [[ -n "${STUB_VERDICT:-}" ]] && printf '%s\n' "$STUB_VERDICT"
     exit "${STUB_VERDICT_RC:-0}" ;;
+  "agents capabilities")
+    [[ "${STUB_CAPABILITIES_FAIL:-0}" == "1" ]] && exit 1
+    case "${3:-}" in
+      claude) printf '%s\n' '{"resume_strategy":{"forms":{"interactive_attach":{"tokens":["claude","attach","{short_id}"]}}}}' ;;
+      codex) printf '%s\n' '{"resume_strategy":{"forms":{"interactive_attach":{"tokens":["codex","resume","{session_id}"]}}}}' ;;
+      agy) printf '%s\n' '{"keeper":{},"resume_strategy":{"forms":{"interactive_attach":{"tokens":[]}}}}' ;;
+      opencode) printf '%s\n' '{"resume_strategy":{"forms":{"interactive_attach":{"tokens":[]}}}}' ;;
+      *) exit 1 ;;
+    esac
+    exit 0 ;;
   "agents list")
     echo '{"agents":[]}'; exit 0 ;;
   "agents spawn"|"agents host")
@@ -42,7 +52,7 @@ case "$1 $2" in
         [[ "$previous" == "--node" ]] && node="$argument"
         previous="$argument"
       done
-      echo "node dispatch refused: node=$node verdict=already-running reason=$STUB_CLI_GUARD_REASON; no worker launched" >&2
+      echo "node dispatch refused: node=$node verdict=already-running reason=$STUB_CLI_GUARD_REASON${STUB_CLI_GUARD_WORKER:+ worker=$STUB_CLI_GUARD_WORKER}${STUB_CLI_GUARD_EXTRA:+ $STUB_CLI_GUARD_EXTRA}; no worker launched" >&2
       exit 2
     fi
     echo "LAUNCH: $*" >> "$STUB_LOG"
@@ -54,6 +64,26 @@ case "$1 $2" in
     # (spawn.sh accepts a pane receipt only when every identity field matches).
     if [[ "${STUB_MUX:-0}" == "1" ]]; then
       echo "{\"name\":\"${STUB_MUX_NAME-x}\",\"short_id\":\"${STUB_MUX_SHORT_ID-}\",\"session_id\":\"${STUB_MUX_SESSION_ID-}\",\"harness\":\"${STUB_MUX_PROVIDER-claude}\",\"status\":\"${STUB_MUX_STATUS-live}\",\"mux_session\":\"${STUB_MUX_SESSION-main}\",\"pane_id\":${STUB_PANE_ID-1}}"; exit 0
+    fi
+    if [[ "${STUB_CODEX_THREAD:-0}" == "1" ]]; then
+      thread_session="${STUB_THREAD_SESSION_ID-019f0000-0000-7000-8000-000000000001}"
+      if [[ "${STUB_THREAD_SHORT_ONLY:-0}" == "1" ]]; then
+        echo "{\"name\":\"codex-thread\",\"short_id\":\"$thread_session\",\"harness\":\"codex\",\"status\":\"live\"}"; exit 0
+      fi
+      echo "{\"name\":\"codex-thread\",\"short_id\":\"\",\"session_id\":\"$thread_session\",\"harness_session_id\":\"$thread_session\",\"harness\":\"codex\",\"status\":\"live\"}"; exit 0
+    fi
+    if [[ "${STUB_KEEPER_THREAD:-0}" == "1" ]]; then
+      thread_session="${STUB_THREAD_SESSION_ID-019f0000-0000-7000-8000-000000000002}"
+      echo "{\"name\":\"agy-thread\",\"short_id\":\"$thread_session\",\"harness\":\"agy\",\"status\":\"live\"}"; exit 0
+    fi
+    if [[ "${STUB_OPENCODE_THREAD:-0}" == "1" ]]; then
+      if [[ "${STUB_OPENCODE_TORN:-0}" == "1" ]]; then
+        echo '{"name":"opencode-thread","short_id":"deadbeef","harness":"opencode","status":"live"}'; exit 0
+      fi
+      if [[ "${STUB_OPENCODE_SHORT_ONLY:-0}" == "1" ]]; then
+        echo '{"name":"opencode-thread","short_id":"ses_dispatchtest1","harness":"opencode","status":"live"}'; exit 0
+      fi
+      echo '{"name":"opencode-thread","short_id":"ses_dispatchtest1","session_id":"ses_dispatchtest1","harness":"opencode","status":"live"}'; exit 0
     fi
     echo "{\"name\":\"x\",\"short_id\":\"${STUB_SHORT_ID-deadbeef}\",\"harness\":\"claude\",\"status\":\"live\"}"; exit 0 ;;
   "claim release")
@@ -72,6 +102,21 @@ run() {
 calllog() { cat "$TMP/calls.log" 2>/dev/null; }
 
 NODE="x-7777"
+
+# --- codex code without -Y -> shell wrapper delegates to the shared seam -----
+out="$(run --name codex-code-no-yolo --provider codex --payload-mode passthrough \
+  --message '$fno:target x-816b')"
+ok 'codex code without -Y -> launched by wrapper' "$(field "$out")" 'launched'
+no  'codex wrapper does not print seam refusal' "$out" 'Pass -Y'
+has 'codex wrapper delegated to spawn seam' "$(calllog)" 'agents spawn'
+ok 'codex refusal is not duplicated in shell' "$(grep -c 'Codex code payloads require' "$SPAWN" || true)" '0'
+
+# --- codex permission-mode yolo -> equivalent unsandboxed launch ------------
+out="$(run --name codex-code-permission-yolo --provider codex \
+  --permission-mode yolo --payload-mode passthrough --message '$fno:target x-816b')"
+ok 'codex permission-mode yolo -> launched' "$(field "$out")" 'launched'
+no  'codex permission-mode yolo did not refuse' "$out" 'Pass -Y/--yolo'
+has 'codex permission-mode yolo spawned' "$(calllog)" 'agents spawn'
 
 # --- dispatchable -> proceeds to spawn, honest launched receipt --------------
 out="$(STUB_VERDICT='{"verdict":"dispatchable","reservation_key":"dispatch:'"$NODE"'","reservation_holder":"dispatch-skill:1"}' \
@@ -136,6 +181,44 @@ ok  'post-spawn unproven-claim exits 0' "$rc" '0'
 has 'post-spawn unproven-claim names the untested condition' "$out" 'no worker has reached target init'
 no  'post-spawn unproven-claim does NOT assert a live worker' "$out" 'live worker holds node'
 
+# --- worker-row: the row on the node is the occupant, not the claim ----------
+# The receipt must name the worker and the peek/stop way out, never a claim
+# holder: an operator followed that text to a claim `fno agents claim status`
+# read as UNCLAIMED, and releasing it frees nothing.
+out="$(STUB_VERDICT='{"verdict":"already-running","reason":"worker-row","worker":"lead-a792-control","truth_status":"unknown"}' \
+  run --name w2w --provider claude --message '/target x' --node "$NODE")"
+ok  'worker-row -> already-running' "$(field "$out")" 'already-running'
+has 'worker-row names the worker row' "$out" 'worker row lead-a792-control'
+has 'worker-row names the peek-and-stop way out' "$out" 'stop it if its run is finished'
+no  'worker-row does NOT print is-held-by' "$out" 'is held by'
+no  'worker-row did NOT spawn' "$(calllog)" 'agents spawn --harness'
+
+# --- worker-row on the POST-SPAWN refusal, the path a real dispatch takes -----
+out="$(STUB_VERDICT='{"verdict":"dispatchable"}' STUB_CLI_GUARD_REASON=worker-row STUB_CLI_GUARD_WORKER=lead-a792-control \
+  run --name w2wp --provider claude --message '/target x' --node "$NODE")"; rc=$?
+ok  'post-spawn worker-row -> already-running' "$(field "$out")" 'already-running'
+ok  'post-spawn worker-row exits 0' "$rc" '0'
+has 'post-spawn worker-row names the worker row' "$out" 'worker row lead-a792-control'
+has 'post-spawn worker-row names the peek-and-stop way out' "$out" 'stop it if its run is finished'
+no  'post-spawn worker-row does NOT print is-held-by' "$out" 'is held by'
+
+# --- an UNMEASURED row says so, on both paths --------------------------------
+# The overlay admits a row whose liveness it could not measure. A receipt that
+# reads the same for a measured and an unmeasured row asserts more than anything
+# observed, and the two paths must not disagree about one row.
+out="$(STUB_VERDICT='{"verdict":"already-running","reason":"worker-row","worker":"w1 (unmeasurable: no harness session id)","worker_unmeasured":true}' \
+  run --name w2u --provider claude --message '/target x' --node "$NODE")"
+ok  'unmeasured worker-row -> already-running' "$(field "$out")" 'already-running'
+has 'unmeasured worker-row names the missing measurement' "$out" 'liveness never measured'
+has 'unmeasured worker-row sends the reader to the claim too' "$out" 'claim status'
+
+out="$(STUB_VERDICT='{"verdict":"dispatchable"}' STUB_CLI_GUARD_REASON=worker-row STUB_CLI_GUARD_WORKER=w1 \
+  STUB_CLI_GUARD_EXTRA='worker_unmeasured=true' \
+  run --name w2up --provider claude --message '/target x' --node "$NODE")"; rc=$?
+ok  'post-spawn unmeasured worker-row -> already-running' "$(field "$out")" 'already-running'
+ok  'post-spawn unmeasured worker-row exits 0' "$rc" '0'
+has 'post-spawn unmeasured worker-row names the missing measurement' "$out" 'liveness never measured'
+
 # --- every guard reason has an arm in BOTH consumers -------------------------
 # One Python producer, two shell consumers, and neither case statement carries a
 # default: an unhandled reason falls through to a failure handler and turns a
@@ -154,7 +237,7 @@ no  'post-spawn unproven-claim does NOT assert a live worker' "$out" 'live worke
 # mentioned in neither path of a consumer. It does NOT catch a brand-new reason
 # nobody adds to this list, and it does not prove the arm it found does the
 # right thing - the behavioral tests above do that for `unproven-claim`.
-_GUARD_REASONS='live-claim unproven-claim suspect-claim reservation-held duplicate-claim auto-deferred defer-failed'
+_GUARD_REASONS='live-claim unproven-claim worker-row suspect-claim reservation-held duplicate-claim auto-deferred defer-failed'
 _SPAWN_SH_LOCAL="$(dirname "${BASH_SOURCE[0]}")/../scripts/spawn.sh"
 _CLI_PY="$(dirname "${BASH_SOURCE[0]}")/../../../cli/src/fno/agents/cli.py"
 _DISPATCH_SH="$(dirname "${BASH_SOURCE[0]}")/../../target/scripts/dispatch-node.sh"
@@ -238,14 +321,54 @@ out="$(STUB_VERDICT="$DISP" STUB_SHORT_ID='junk\ndeadbeef' \
   run --name spawn-torn --provider claude --message '/target x' --node "$NODE")"
 ok 'pane torn short_id -> failed'  "$(field "$out")" 'failed'
 
-# AC1-EDGE: the bg lane keeps the strict 8-hex rule. A real 8-hex validates...
+# AC1-EDGE: the thread lane keeps the strict 8-hex rule. A real 8-hex validates...
 out="$(STUB_VERDICT="$DISP" STUB_SHORT_ID='b92eec14' \
-  run --name spawn-bg --provider claude --message '/target x' --node "$NODE" --substrate bg)"
-ok 'bg 8-hex -> launched'          "$(field "$out")" 'launched'
-# ...but a name-slug on the bg lane is still rejected (that lane really returns hex).
+  run --name spawn-thread --provider claude --message '/target x' --node "$NODE" --substrate thread)"
+ok 'thread 8-hex -> launched'      "$(field "$out")" 'launched'
+# ...but a name-slug on the thread lane is still rejected (that lane returns hex).
 out="$(STUB_VERDICT="$DISP" STUB_SHORT_ID='spawngoa' \
-  run --name spawn-bg2 --provider claude --message '/target x' --node "$NODE" --substrate bg)"
-ok 'bg slug -> failed'             "$(field "$out")" 'failed'
+  run --name spawn-thread2 --provider claude --message '/target x' --node "$NODE" --substrate thread)"
+ok 'thread slug -> failed'          "$(field "$out")" 'failed'
+
+# AC2-THREAD: Codex thread receipts have no short_id; the full session identity
+# is the receipt handle and must be surfaced for logs/registry lookup.
+CODEX_THREAD_SESSION='019f0000-0000-7000-8000-000000000001'
+out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
+  run --name codex-thread --provider codex --yolo --message 'Implement x' --substrate thread)"
+ok   'codex thread full session -> launched' "$(field "$out")" 'launched'
+has  'codex thread full session surfaced'     "$out" "short_id=$CODEX_THREAD_SESSION"
+has  'codex thread logs use full session'    "$out" "fno agents logs $CODEX_THREAD_SESSION"
+out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SHORT_ONLY=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
+  run --name codex-thread-short --provider codex --yolo --node "$NODE" --message 'Implement x' --substrate thread)"
+ok   'codex short-only session -> launched'   "$(field "$out")" 'launched'
+has  'codex short-only session surfaced'      "$out" "short_id=$CODEX_THREAD_SESSION"
+
+KEEPER_THREAD_SESSION='019f0000-0000-7000-8000-000000000002'
+out="$(STUB_VERDICT="$DISP" STUB_KEEPER_THREAD=1 STUB_THREAD_SESSION_ID="$KEEPER_THREAD_SESSION" \
+  run --name agy-thread --provider agy --message 'Implement x' --substrate thread)"
+ok   'agy keeper full session -> launched' "$(field "$out")" 'launched'
+has  'agy keeper full session surfaced'    "$out" "short_id=$KEEPER_THREAD_SESSION"
+
+out="$(STUB_VERDICT="$DISP" STUB_OPENCODE_THREAD=1 \
+  run --name opencode-thread --provider opencode --message 'Implement x' --substrate thread)"
+ok   'opencode ses session -> launched' "$(field "$out")" 'launched'
+has  'opencode ses session surfaced'    "$out" 'short_id=ses_dispatchtest1'
+out="$(STUB_VERDICT="$DISP" STUB_OPENCODE_THREAD=1 STUB_OPENCODE_SHORT_ONLY=1 \
+  run --name opencode-thread-short --provider opencode --node "$NODE" --message 'Implement x' --substrate thread)"
+ok   'opencode short-only session -> launched' "$(field "$out")" 'launched'
+has  'opencode short-only session surfaced'    "$out" 'short_id=ses_dispatchtest1'
+out="$(STUB_VERDICT="$DISP" STUB_OPENCODE_THREAD=1 STUB_OPENCODE_TORN=1 \
+  run --name opencode-thread-torn --provider opencode --message 'Implement x' --substrate thread)"
+ok   'opencode torn short_id -> failed'  "$(field "$out")" 'failed'
+
+out="$(STUB_VERDICT="$DISP" STUB_CAPABILITIES_FAIL=1 \
+  run --name thread-capabilities-fail --provider codex --yolo --message 'Implement x' --substrate thread)"
+ok 'capability read failure -> failed' "$(field "$out")" 'failed'
+no 'capability read failure did not spawn' "$(calllog)" 'agents spawn --harness'
+out="$(FNO_AGENTS_RUNTIME=rust STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 \
+  run --name thread-rust-runtime --provider codex --yolo --message 'Implement x' --substrate thread)"
+ok 'rust runtime capability read -> launched' "$(field "$out")" 'launched'
+has 'rust runtime capability read spawned' "$(calllog)" 'agents spawn --harness'
 
 # --- pane worker observability hint (PR #341 delta) --------------------------
 # A matched mux-pane receipt launches (main's verified-identity path), but a pane
@@ -255,7 +378,7 @@ ok 'bg slug -> failed'             "$(field "$out")" 'failed'
 # AC-HP: pane launch -> launched, pane coords + mux-attach hint, NOT `agents logs`.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name paneW --provider codex --message 'Implement x')"
+  run --name paneW --provider codex --yolo --message 'Implement x')"
 ok  'pane launch -> launched'        "$(field "$out")" 'launched'
 has 'pane coords surfaced'           "$out" 'pane="main:1"'
 has 'pane hint is mux attach'        "$out" 'fno mux attach main'
@@ -263,42 +386,42 @@ no  'pane hint is NOT agents logs'   "$out" 'fno agents logs'
 
 # AC2-CON: a created Codex pane without a thread ID is pending, not launched.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneP STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \
-  STUB_MUX_SESSION=main run --name paneP --provider codex --message 'Implement x')"
+  STUB_MUX_SESSION=main run --name paneP --provider codex --yolo --message 'Implement x')"
 ok  'pane pending -> pending'         "$(field "$out")" 'pending'
 has 'pane pending coords surfaced'    "$out" 'pane="main:1"'
 no  'pane pending is not launched'    "$out" 'result=launched'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneI STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=live \
-  STUB_MUX_SESSION=main run --name paneI --provider codex --message 'Implement x')"
+  STUB_MUX_SESSION=main run --name paneI --provider codex --yolo --message 'Implement x')"
 ok  'pane idless live -> failed'       "$(field "$out")" 'failed'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneB STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=live \
   STUB_MUX_SESSION=main STUB_MUX_SHORT_ID=deadbeef \
-  run --name paneB --provider codex --message 'Implement x')"
+  run --name paneB --provider codex --yolo --message 'Implement x')"
 ok  'pane live partial identity -> failed' "$(field "$out")" 'failed'
 
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneT STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \
   STUB_MUX_SESSION=main STUB_MUX_SHORT_ID=deadbeef \
-  run --name paneT --provider codex --message 'Implement x')"
+  run --name paneT --provider codex --yolo --message 'Implement x')"
 ok  'pane pending torn identity -> failed' "$(field "$out")" 'failed'
 
 # AC-EDGE: a session name with a space -> ref quoted so it can't split the line.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneS STUB_MUX_PROVIDER=codex STUB_MUX_SESSION='work 1' \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name paneS --provider codex --message 'Implement x')"
+  run --name paneS --provider codex --yolo --message 'Implement x')"
 ok  'pane spaced session -> launched' "$(field "$out")" 'launched'
 has 'pane spaced ref quoted'          "$out" 'pane="work 1:1"'
 
 # AC-ERR: identity mismatch (receipt name != launch name) -> failed, no fake handle.
 out="$(STUB_MUX=1 STUB_MUX_NAME=someone-else STUB_MUX_PROVIDER=codex \
-  run --name paneM --provider codex --message 'Implement x')"
+  run --name paneM --provider codex --yolo --message 'Implement x')"
 ok 'pane identity mismatch -> failed' "$(field "$out")" 'failed'
 
 # Regression: a long requested name must not replace the Codex thread handle.
 LONGNAME='spawn-x-7624-dedup-check-before-target-disp'
 out="$(STUB_MUX=1 STUB_MUX_NAME="$LONGNAME" STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
   STUB_MUX_SHORT_ID=019fb024 STUB_MUX_SESSION_ID=019fb024-2327-75f3-8b80-06e9d5ade05f \
-  run --name "$LONGNAME" --provider codex --message 'Implement x')"
+  run --name "$LONGNAME" --provider codex --yolo --message 'Implement x')"
 ok  'pane long name -> launched'      "$(field "$out")" 'launched'
 has 'pane long name short_id'         "$out" 'short_id=019fb024'
 

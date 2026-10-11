@@ -57,6 +57,8 @@ _FENCE_RE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
 #: category says.
 _CONFIRMED = "confirmed"
 
+AUTOFIX_CLASSES: tuple[str, ...] = ("gated_auto", "manual", "advisory")
+
 
 class FindingsNormalizeError(ValueError):
     """The payload is not a shape ``normalize`` can read at all.
@@ -77,6 +79,8 @@ class FindingRecord:
     line: Optional[Any] = None
     summary: Optional[str] = None
     failure_scenario: Optional[str] = None
+    autofix_class: Optional[str] = None
+    owner: Optional[str] = None
     #: The payload carried none of the recognizable field names, or was not
     #: an object at all. Unreadable is not harmless: it blocks.
     unmappable: bool = False
@@ -107,6 +111,8 @@ def _record(item: Any) -> FindingRecord:
         line=item.get("line"),
         summary=_clean(item.get("summary")),
         failure_scenario=_clean(item.get("failure_scenario")),
+        autofix_class=rc if (rc := (_clean(item.get("autofix_class")) or "").lower()) in AUTOFIX_CLASSES else None,
+        owner=_clean(item.get("owner")),
     )
     if all(
         record.__dict__[name] is None
@@ -304,12 +310,12 @@ class FindingPrimitive:
     #:
     #: Without it a blocking finding's entire human payload is
     #: ``file:line:category``, and the gate that blocks on it carries nothing
-    #: a reader can act on. That makes the ``fixed`` disposition unreachable:
-    #: clearing a blocking finding means fixing it, fixing it means knowing
-    #: what it says, and the only remaining disposition is ``declined``, which
-    #: needs corroboration a solo author cannot mint. The record already
+    #: a reader can act on. Clearing a blocking finding means fixing it, and
+    #: fixing it means knowing what the finding says. The record already
     #: carried the text; only this primitive dropped it.
     summary: Optional[str] = None
+    autofix_class: Optional[str] = None
+    owner: Optional[str] = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -319,6 +325,8 @@ class FindingPrimitive:
             "has_required_fields": self.has_required_fields,
             "finding_key": self.finding_key,
             "summary": self.summary,
+            "autofix_class": self.autofix_class,
+            "owner": self.owner,
         }
 
 
@@ -364,6 +372,8 @@ def summarize(
                 has_required_fields=_has_required_fields(record),
                 finding_key=finding_key(record),
                 summary=_bounded_summary(record.summary),
+                autofix_class=record.autofix_class,
+                owner=record.owner,
             )
         )
         if verdict == BLOCKING:

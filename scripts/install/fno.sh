@@ -1,5 +1,5 @@
 #!/bin/sh
-# fno.sh - the no-prerequisite install channel for fno (ab-f49b54c1).
+# fno.sh - the no-prerequisite install channel for fno.
 #
 # Served at https://fno.sh and run as:
 #
@@ -11,15 +11,15 @@
 #   1. ensure uv is present (chain to Astral's installer when absent, reuse an
 #      existing uv when present, resolve uv at its known path despite the piped-
 #      script PATH gap),
-#   2. `uv tool install fno` (the published PyPI platform wheel: the Python CLI
-#      plus the three fno-agents* binaries, bundled),
+#   2. `uv tool install fno` (the published PyPI platform wheel: the `fno`
+#      front door, the Python CLI, and the fno-agents* binaries, bundled),
 #   3. verify the installed package is THIS project's before declaring success,
 #   4. print success + the version verified, and when uv's tool bin is not yet
 #      on PATH, run `uv tool update-shell` to add it to the right shell profile
 #      (idempotent; opt out with FNO_NO_MODIFY_PATH to get a manual hint only).
 #
 # This is the shell entry to the same bootstrap core the cargo channel
-# (ab-4040eee8) uses via a Rust shim: ensure uv -> uv tool install fno ->
+# uses via a Rust shim: ensure uv -> uv tool install fno ->
 # verify-ours -> done. One mechanism, two entries.
 #
 # POSIX sh ONLY (runs unmodified under dash and macOS /bin/sh): no bashisms, no
@@ -36,6 +36,15 @@
 #   FNO_NO_MODIFY_PATH set to any non-empty value to skip the `uv tool update-shell`
 #                      profile edit and print a manual PATH hint instead (for people
 #                      who manage their own dotfiles)
+#   FNO_NO_WIRE        set to any non-empty value to skip the plugin wiring step
+#                      (every agent CLI on PATH gets the fno plugin otherwise;
+#                      `fno config setup wizard` still chooses by hand)
+#
+# The channel is read from the TREE this script sits in: the nightly
+# tag stamps a dev version into .claude-plugin/plugin.json, so an install run
+# from inside a nightly tree pairs the nightly wheel with the nightly skills
+# and hooks instead of the stable PyPI package. Served standalone at fno.sh
+# there is no tree and the stable channel applies exactly as before.
 set -eu
 
 # --- output helpers --------------------------------------------------------
@@ -67,6 +76,47 @@ fetch_pipe_cmd() {
 	else
 		die "neither curl nor wget is available to fetch the uv installer; install one (or install uv from https://docs.astral.sh/uv/) and re-run."
 	fi
+}
+
+# --- plugin channel detection -----------------------------------------------
+# plugin_channel and friends come from scripts/release/plugin-version.sh, the
+# same helper .claude-plugin/postinstall.sh sources. Sourced only when it sits
+# beside this script (an in-tree run); the served fno.sh copy needs nothing.
+# $0 under `curl | sh` is the shell name, so the paths below never resolve and
+# the stable channel stands - the served script keeps its old behavior.
+FNO_RELEASE_REPO="${FNO_RELEASE_REPO:-bllshttng/footnote}"
+FNO_DECLARED_VERSION=
+FNO_CHANNEL=stable
+detect_channel() {
+	_dir=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || return 0
+	[ -f "$_dir/../release/plugin-version.sh" ] || return 0
+	# shellcheck disable=SC1090,SC1091
+	. "$_dir/../release/plugin-version.sh"
+	[ -f "$_dir/../../.claude-plugin/plugin.json" ] || return 0
+	FNO_DECLARED_VERSION=$(sed -n -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$_dir/../../.claude-plugin/plugin.json" | head -n 1)
+	[ -n "$FNO_DECLARED_VERSION" ] || { FNO_DECLARED_VERSION=; return 0; }
+	FNO_CHANNEL=$(plugin_channel "$FNO_DECLARED_VERSION")
+}
+
+# The nightly release's wheel asset for this platform, when one exists; sets
+# FNO_WHEEL_URL. The postinstall twin (nightly_wheel_url in
+# .claude-plugin/postinstall.sh) parses the same release JSON with python3;
+# this script's only prerequisite is curl or wget, so the extraction is
+# sed+grep on the pretty-printed browser_download_url lines.
+FNO_WHEEL_URL=
+nightly_wheel_url() {
+	_plat=$(plugin_wheel_platform "$(uname -s)" "$(uname -m)")
+	[ -n "$_plat" ] || return 1
+	fetch_pipe_cmd
+	# shellcheck disable=SC2086
+	_json=$($FNO_FETCH_TO_STDOUT "https://api.github.com/repos/${FNO_RELEASE_REPO}/releases/tags/nightly" 2>/dev/null) || return 1
+	# shellcheck disable=SC2086
+	_url=$(printf '%s\n' "$_json" \
+		| sed -n -E 's/.*"(https[^"]*\.whl)".*/\1/p' \
+		| grep -E -- "$_plat" \
+		| head -n 1)
+	[ -n "$_url" ] || return 1
+	FNO_WHEEL_URL=$_url
 }
 
 # --- uv discovery + install ------------------------------------------------
@@ -224,6 +274,23 @@ resolve_source() {
 				die "FNO_VERSION='$FNO_VERSION' must start with a digit (e.g. 1.2.3)." ;;
 		esac
 	fi
+	# The tree's channel decides: a nightly tree installs this
+	# platform's wheel from the nightly GitHub release (no registry holds a
+	# nightly), an rc tree pins the candidate (a plain by-name install skips
+	# pre-releases), stable keeps the by-name package. The explicit knobs above
+	# still win. A nightly with no readable wheel dies - never a silent
+	# downgrade to the stable PyPI package.
+	if [ "$FNO_CHANNEL" = nightly ]; then
+		if nightly_wheel_url; then
+			FNO_SOURCE=$FNO_WHEEL_URL
+			return 0
+		fi
+		die "this tree is the nightly channel (${FNO_DECLARED_VERSION:-version unreadable}) but the nightly GitHub release has no installable wheel for this platform (unsupported platform, rate limit, or offline). Install per the nightly release notes: FNO_INSTALL_WHEEL=<wheel url> sh fno.sh"
+	fi
+	if [ "$FNO_CHANNEL" = rc ]; then
+		FNO_SOURCE="fno==$(plugin_pep_normalize "$FNO_DECLARED_VERSION")"
+		return 0
+	fi
 	FNO_SOURCE=fno
 }
 
@@ -367,20 +434,109 @@ fno_real_within() {
 	done
 }
 
+# --- front-door receipt (AC2-HP/AC2-EDGE) ---------------------------
+# Name the actual front-door path and PROVE both command families answer
+# through it: `mux ls` is native Rust (no Python), `--version` forwards to
+# fno-py (the adopt arm of the bootstrapper runs offline - the wheel is
+# already provisioned here). A missing or shadowed front door is a NAMED
+# incomplete install with the supported repair, never a success inferred from
+# uv's exit code. Runs from report_success on every completion path, so the
+# already-installed arm reports the front-door state too.
+frontdoor_receipt() {
+	# FNO_REAL is <tool dir>/fno/bin/fno-py (set by resolve_real before every
+	# report), so the front door sits beside it in the same venv bin.
+	_mux="$(dirname "$FNO_REAL")/fno"
+	[ -x "$_mux" ] || _mux="$FNO_TOOL_BIN/fno"
+	if [ ! -x "$_mux" ]; then
+		say "INCOMPLETE install: no 'fno' front door (looked for $_mux). The Python CLI works as 'fno-py'."
+		say "repair: install a release wheel that carries the front door, or run 'cargo install fno'."
+		return 1
+	fi
+	say "fno front door: $_mux"
+	if _out=$("$_mux" mux ls 2>&1); then
+		say "fno mux answers (mux ls rc=0)."
+	else
+		say "INCOMPLETE install: 'fno mux ls' failed at $_mux: $(printf '%s' "$_out" | head -n 1)"
+		return 1
+	fi
+	if _out=$("$_mux" --version 2>&1); then
+		say "fno --version forwarded to the Python CLI ($_out)."
+	else
+		say "INCOMPLETE install: 'fno --version' did not forward at $_mux: $(printf '%s' "$_out" | head -n 1)"
+		return 1
+	fi
+	return 0
+}
+
+# The post-install shim sweep: repair any fno* shim in the tool bin
+# that dangles or resolves into a temp dir; fail loud when unrepairable.
+shim_sweep() {
+	[ -n "$FNO_TOOL_BIN" ] || FNO_TOOL_BIN="${HOME:-}/.local/bin"
+	# An installed fno predating the sweep module has nothing to sweep; the
+	# wheel that ships the module always sweeps.
+	"$FNO_VENV_PY" -c "import fno.setup.shim_check" 2>/dev/null || return 0
+	"$FNO_VENV_PY" -m fno.setup.shim_check --repair --bin-dir "$FNO_TOOL_BIN" && return 0
+	say "INCOMPLETE install: fno shims in $FNO_TOOL_BIN dangle or point into a temp dir and could not be relinked to the durable copy. Inspect: $FNO_VENV_PY -m fno.setup.shim_check --bin-dir $FNO_TOOL_BIN"
+	return 1
+}
+
+# --- plugin auto-wire (detect-and-wire) -------------------------------------
+# The CLI just verified; hand the plugin wiring to the front door's
+# detect-and-wire verb: every agent CLI on PATH gets the fno plugin without
+# asking, and the verb names every outcome (installed, kept, manual, failed)
+# so nothing is silent. The wizard stays for anyone who wants to choose.
+# FNO_NO_WIRE skips the step for people who manage their own harness configs.
+# Best-effort: the verb exits 0 and names every outcome, and even a hard
+# refusal (an older front door that still forwards this unknown verb to the
+# Python CLI, which errors) is non-fatal - the CLI is already installed.
+wire_harnesses() {
+	[ -n "${FNO_NO_WIRE:-}" ] && return 0
+	_mux="$(dirname "$FNO_REAL")/fno"
+	[ -x "$_mux" ] || _mux="$FNO_TOOL_BIN/fno"
+	[ -x "$_mux" ] || return 0
+	say "wiring the fno plugin into detected agent CLIs (set FNO_NO_WIRE to skip this)..."
+	if ! "$_mux" config setup auto-wire >&2; then
+		say "plugin wiring did not finish; run 'fno config setup wizard' to wire by hand."
+	fi
+}
+
+# The one run-once setup (config + wiring), best effort: the CLI install
+# already succeeded, and the verb stops at its own done markers. FNO_YES or
+# a non-TTY stdin (curl | sh) takes the recommended defaults; the JSON
+# report prints so the run is never silent. FNO_NO_WIRE carries through:
+# the opt-out that skips plugin wiring skips the setup pass too, because
+# its harness-wiring step is the same work.
+run_setup_once() {
+	[ -n "${FNO_NO_WIRE:-}" ] && return 0
+	_mux="$(dirname "$FNO_REAL")/fno"
+	[ -x "$_mux" ] || _mux="$FNO_TOOL_BIN/fno"
+	[ -x "$_mux" ] || return 0
+	_yes=""
+	[ -n "${FNO_YES:-}" ] && _yes="--yes"
+	if _out=$("$_mux" config setup run --once $_yes --json 2>&1); then
+		printf '%s\n' "$_out"
+	fi
+}
+
 # --- success report --------------------------------------------------------
 # Report the verified version (AC5-UI) and, when uv's tool bin is not on PATH,
-# make a later `fno-py`/`fno-agents` call resolvable rather than a bare 127 (AC3-UI).
+# make a later `fno`/`fno-py` call resolvable rather than a bare 127 (AC3-UI).
 report_success() {
 	# A blank version must not print as one: the version is the one fact this
 	# line exists to carry (the twin of verified_receipt in bootstrap.rs).
 	[ -n "$FNO_VERIFIED_VERSION" ] || FNO_VERIFIED_VERSION="(version unreadable)"
 	say "verified fno $FNO_VERIFIED_VERSION (this project's package)."
+	shim_sweep
+	# The advertised command is `fno`; its receipt proves the mux and the
+	# Python forwarding rather than trusting uv's exit (AC2-HP/EDGE).
+	frontdoor_receipt
 	# Check the DIRECTORY against PATH, not `have fno`: a pre-existing fno earlier
 	# on PATH would otherwise suppress the fix, yet `fno` would run that other
 	# binary instead of the one just verified here (codex P2).
 	case ":${PATH:-}:" in
 		*":$FNO_TOOL_BIN:"*)
-			say "done. run 'fno-py --help' for the CLI (the 'fno' mux front door is a separate binary; see the cargo channel)."
+			wire_harnesses
+			say "done. run 'fno --help' for the CLI."
 			return 0
 			;;
 	esac
@@ -394,26 +550,38 @@ report_success() {
 		say "installed, but $FNO_TOOL_BIN is not on your PATH yet (FNO_NO_MODIFY_PATH set)."
 		say "add it for this and future shells, e.g.:"
 		say "    export PATH=\"$FNO_TOOL_BIN:\$PATH\""
+		wire_harnesses
 		say "done. run 'fno-py --help' once $FNO_TOOL_BIN is on PATH."
 		return 0
 	fi
 	# Degrade to the manual hint if this uv predates `tool update-shell` or the
 	# profile edit fails for any reason - never leave the user with no PATH fix.
-	if "$FNO_UV" tool update-shell >/dev/null 2>&1; then
+	# The failure is named, not swallowed: uv exits 2 both with SHELL unset and
+	# on an already-edited profile, and an unnamed rc explains neither.
+	if _us_out=$("$FNO_UV" tool update-shell 2>&1); then
 		_shell_name=$(basename "${SHELL:-sh}")
 		say "added $FNO_TOOL_BIN to your $_shell_name profile (via 'uv tool update-shell')."
 		say "restart your shell, or run this to use fno now:"
 		say "    export PATH=\"$FNO_TOOL_BIN:\$PATH\""
 	else
-		say "installed, but $FNO_TOOL_BIN is not on your PATH yet."
+		say "installed, but $FNO_TOOL_BIN is not on your PATH yet (uv tool update-shell failed: $(printf '%s' "${_us_out:-}" | head -n 1))."
 		say "add it for this and future shells, e.g.:"
 		say "    export PATH=\"$FNO_TOOL_BIN:\$PATH\""
 	fi
+	wire_harnesses
 	say "done. run 'fno --help' to get started."
 }
 
 # --- main ------------------------------------------------------------------
 main() {
+	# `--yes` (or FNO_YES=1): hand the run-once setup the same answer, so an
+	# agent install never prompts. `sh -s -- --yes` is the pipe form.
+	for _arg in "$@"; do
+		case "$_arg" in
+			--yes) FNO_YES=1 ;;
+		esac
+	done
+
 	# footnote is not supported on native Windows yet (the agent runtime uses
 	# POSIX flock + Unix-domain sockets; a named-pipe port is a separate spec).
 	# Catch MSYS/MinGW/Cygwin shells early with a clear message instead of a
@@ -424,7 +592,14 @@ main() {
 			;;
 	esac
 
+	detect_channel
 	resolve_source
+	# Name the channel before the slow provision: a nightly or rc run must say
+	# why it is not touching the stable PyPI package (AC7-UI's installer twin).
+	case "$FNO_CHANNEL" in
+		nightly) say "channel nightly (${FNO_DECLARED_VERSION}): installing this platform's wheel from the nightly GitHub release." ;;
+		rc) say "channel rc: pinning the candidate $FNO_SOURCE from PyPI." ;;
+	esac
 
 	# Honor FNO_INSTALL_DIR by handing it to uv as the tool-bin location.
 	if [ -n "${FNO_INSTALL_DIR:-}" ]; then
@@ -452,18 +627,28 @@ main() {
 			fi
 			if [ -z "$_skip_adopt" ]; then
 				if verify_ours_within; then
-					say "fno is already installed and verified - nothing to do."
-					report_success
-					return 0
-				fi
-				# Only a VERIFIABLE stranger is refused (the Rust adopt arm's
-				# invariant: a complete foreign answer is never
-				# --force-installed over). An instrument failure - torn
-				# metadata, a missing venv python - falls through on purpose:
-				# the force install below is this script's repair path for a
-				# broken-but-ours install, and refusing here would leave a
-				# half-removed install with no automated repair.
-				if [ -n "$FNO_VERIFY_STABLE" ]; then
+					# A tree channel only adopts an install of its own version:
+					# stable 0.4.0 on disk under a 0.4.1-dev tree is
+					# the exact mismatch this run exists to repair. Stable keeps
+					# the plain no-op.
+					if [ "$FNO_CHANNEL" = stable ] || plugin_version_matches "$FNO_VERIFIED_VERSION" "$FNO_DECLARED_VERSION"; then
+						say "fno is already installed and verified - nothing to do."
+						report_success
+						run_setup_once
+						return 0
+					fi
+					say "installed fno ${FNO_VERIFIED_VERSION:-<unreadable>} is not this tree's ${FNO_CHANNEL} ${FNO_DECLARED_VERSION}; replacing it."
+				elif [ -n "$FNO_VERIFY_STABLE" ]; then
+					# Only a VERIFIABLE stranger is refused (the Rust adopt arm's
+					# invariant: a complete foreign answer is never
+					# --force-installed over). An instrument failure - torn
+					# metadata, a missing venv python - falls through on purpose:
+					# the force install below is this script's repair path for a
+					# broken-but-ours install, and refusing here would leave a
+					# half-removed install with no automated repair. The check
+					# guards a FAILED verify only: a successful verify leaves
+					# FNO_VERIFY_STABLE=1, and the version-mismatch repair above
+					# must reach the install, not this refusal.
 					die "the installed fno is not this project's package ($FNO_VERIFY_REASON); refusing to install over a foreign fno."
 				fi
 			fi
@@ -506,6 +691,7 @@ Install it manually to see uv's own error: \`uv tool install --force fno\`"
 	# never report success for a package that is not ours (AC5-ERR).
 	verify_ours_within || die "the installed fno is not this project's package ($FNO_VERIFY_REASON); refusing to report success for a foreign fno."
 	report_success
+	run_setup_once
 }
 
 main "$@"

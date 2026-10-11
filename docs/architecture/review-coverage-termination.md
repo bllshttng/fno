@@ -4,29 +4,27 @@ The loop in one number: 32 review objects and zero approvals on a single pull re
 
 ## The pass condition
 
-When the attestation chain's reviewed ranges tile `merge_base..head` AND every finding in that chain is terminal, the head is covered. One of four things makes a finding terminal. The four are listed below.
+The head is covered when the attestation chain's reviewed ranges tile `merge_base..head` AND every finding in that chain is terminal, OR the configured rounds are spent. One of three things makes a finding terminal. The three are listed below.
 
 1. **fixed**, and a later round reviewed the fix delta,
 2. **non-blocking by class**, re-derived by the gate from the finding's own primitives (never the producer's count),
-3. **declined with corroboration** the author cannot mint alone (a second session's head-pinned attestation, or a non-author GitHub approval),
-4. **waived** before this predicate runs: by a non-author `coverage-override` label, or by operator law (the next section).
+3. **declined with a recorded reason**, whoever recorded it, or **waived** before this predicate runs: by a non-author `coverage-override` label, or by operator law (the next section).
 
-A declined blocking finding on the author's own signature alone is not terminal. That is the whole difference between this gate and the decline exploit: receive a review, decline every finding, attest, done. The disposition pass carries its own corroboration requirement independent of `config.review.require_corroboration`, because a clean review cannot be gamed by declining and a disposition pass can.
+Origin never gates. The author's own decline with a recorded reason is terminal exactly as a second session's is. The operator ruling is plain: a review is a review, two at most, and the recorded reason is the audit trail the event log already carries.
 
-## The four verdict states
+A rebase rewrites every sha on the branch, and keyed to sha alone no chain can survive one. When no range tiles the walk, the producer asks `review_freshness` whether an in-scope attestation's pinned head still is this head. The proof is content identity: the three-dot code-diff hash, with the base divided out on both sides. Only a whole-range verdict grants the carry: `fresh`, `carried_base_sync`, `carried_docs_only`, `carried_subset`, or `carried_interdiff` at zero lines. `carried_interdiff` above zero still counts as a review, and still grants no tile: a tile asserts every shipping line was read. The row names each carry as `{head, freshness}` in `range_tiling.carried`. The sha-path loss stays in `dropped` beside it.
 
-`fno do pr coverage-check` (and the merge guard behind it) answers one of four states:
+## The three verdict states
+
+`fno do pr coverage-check` (and the merge guard behind it) answers one of three states:
 
 | Exit | State | Meaning |
 |------|-------|---------|
-| 0 | COVERED | The chain tiles and every finding is terminal. |
+| 0 | COVERED | The chain tiles and every finding is terminal, or the configured rounds are spent. |
 | 3 | REFUSED | A named conjunct failed. The refusal names what would clear it and how many rounds remain. |
 | 4 | UNANSWERED | An instrument failed (head fetch, branch probe, events read). Never a verdict. |
-| 5 | IMPOSSIBLE | The round budget is spent and a HARD finding is still non-terminal. Re-reviewing cannot clear it. |
 
-A hard finding is a CONFIRMED correctness or security finding, or a truncated remainder the gate cannot inspect. Only those reach IMPOSSIBLE. Every other finding still open at the cap is FILED as a backlog node and the PR merges. That is the operator's ruling on the round cap. The class gate from the finding classifier is what makes it safe. Noise can be filed away, a confirmed correctness bug cannot.
-
-IMPOSSIBLE names the three acts that can clear it: a non-author GitHub approval on the PR, a non-author `coverage-override` label, or the attended `fno do pr coverage-waive` command. It never asks for another review. `fno do pr merge` refuses on it with its own receipt name. `fno do pr status` renders `review_coverage_impossible` as a blocker distinct from `review_coverage_uncovered`. The git-protection hook denies a bare `gh pr merge` on exit 5 exactly as on exit 3.
+There is no exit 5. The IMPOSSIBLE state is deleted: a spent budget is a satisfied obligation, never a locked gate. At the cap the review phase is complete, open findings stay in the PR conversation, and the PR merges on green CI. The operator lever is `config.review.max_rounds`.
 
 ## The operator-law exit
 
@@ -57,9 +55,15 @@ The Python gate and the Rust stop gate read the same law. The Rust side shells t
 
 ## The round budget
 
-`config.review.max_rounds` (default 2, at least 1) budgets the review rounds across the whole life of a PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is one round like any other and refunds nothing, though it still satisfies coverage on its own terms. CI failures, lint failures and rebases are not rounds. A PR merges after one to three reviews and never waits for a round to come back clean.
+The round is the attestation law's unit (`d-608344c1`, 2026-09-03). Coverage holds when the ledger has, at the current head, one round with zero findings or two rounds with every finding disposed. A head within the interdiff carry of an attested head (`review.carry_interdiff_lines`, default 100) counts as that head. A round is keyed by HEAD. Two verdicts at one unchanged head are one round. A GitHub App review beside a local attestation at one commit is also one round: the counter is one shared set of heads across both evidence axes, not two axis counters reconciled by a max. A cap whose size depends on how a reviewer batches its output is not a cap.
 
-At the cap the gate stops asking for reviews. A hard finding answers IMPOSSIBLE. Everything else is filed as a node and the merge proceeds, with the filed keys and their node ids on the merge receipt. One review stays the floor, so an unreviewed PR is still uncovered. A finding the gate cannot FILE is one it must not wave through, so a filing failure refuses instead.
+`config.review.max_rounds` (default 2, at least 1) budgets those rounds across the whole life of a PR. A pass is one round like any other and refunds nothing, though it still satisfies coverage on its own terms. CI failures, lint failures and rebases are not rounds. A rebase or fix commit that moves the head by fewer than `review.carry_interdiff_lines` lines carries the prior round's attestation instead of costing a new one. At the threshold or over, or when either patch read fails, the carry dies and a fresh round is owed. A PR merges after one to three reviews and never waits for a round to come back clean.
+
+At the cap the gate stops asking for reviews. The budget discharges the review obligation: open findings stay in the PR conversation and the PR merges on green CI, hard findings included. One review stays the floor, so an unreviewed PR is still uncovered. The old vent that filed a capped finding as a backlog node is deleted; findings live in the PR conversation where the reviewer wrote them.
+
+## When the reviewer never answered: the lost state
+
+A dispatch that was sent and never answered used to read as "never asked": the gate waited on a verdict that would not come. The settle sweep (`fno do review invocations settle`, also run by `fno doctor` and the stop hook) closes that. After `review.invocation_ttl_minutes` (default 15) with no answering attestation, one `review_attestation` row lands with `verdict: fail` and `output_contract: lost`, the invocation id carried in `data`. Coverage at the head reads `uncovered (lost)` - a named refusal the loop's existing uncovered-recovery can act on - instead of an absence with three explanations. The sweep is idempotent by a positive answered marker, so re-running it adds nothing.
 
 ## What this gate claims, and what it does not
 
@@ -69,7 +73,7 @@ At the cap the gate stops asking for reviews. A hard finding answers IMPOSSIBLE.
 
 **GitHub's refusal is per identity, not per human.** The non-author approval guard asserts the approving login differs from the PR author. GitHub refuses an author's approval of their own PR server-side. A second account with its own token can still self-approve. The guard is a belt on braces, not a proof of personhood.
 
-**Filing is not fixing.** A finding filed at the cap is a finding that shipped. The node is the receipt, not the repair, and nothing schedules it. What the cap buys is termination with a written record. What it costs is a merge that lands with known open findings. Only the hard classes are exempt.
+**A discharged budget ships open findings.** At the cap the PR merges with findings still open. They stay in the PR conversation, in the event log, and on the coverage row (`passed_count` names how many rounds concluded pass). What the cap buys is termination. What it costs is a merge that lands with a written record of what stayed open.
 
 **The decline exploit is auditable, not closed.** This is the plan's own statement and it belongs here, where a stranger reads it. A motivated author with producer control can manufacture a pass. What they cannot do is do it quietly. Every disposition, every category, every round is an event. The merge receipt names what cleared the gate. A gate that oversells itself is worse than no gate, because it is the doc that trains the waive.
 
@@ -77,6 +81,8 @@ At the cap the gate stops asking for reviews. A hard finding answers IMPOSSIBLE.
 
 - The producer-side classifier: `cli/src/fno/review/findings.py`.
 - The gate-side re-derivation and the four states: `cli/src/fno/pr/_coverage_gate.py`.
+- The freshness predicate and its interdiff-carry arm: `crates/fno-agents/src/review_freshness.rs`.
 - The Rust gate twin (tiling, dispositions, rounds, human approvals): `crates/fno-agents/src/loopcheck.rs`.
+- The settle sweep: `cli/src/fno/review/invocation.py`.
 - The event schema (finding records, range tiling, round fields): `cli/src/fno/events/schema.yaml`.
 - The review lanes this composes with: [review-lanes.md](review-lanes.md).

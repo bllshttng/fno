@@ -5,6 +5,14 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _reset_once_per_process_notice(monkeypatch):
+    """Keep one-shot rm notices isolated when xdist changes test grouping."""
+    from fno.agents import rm_notice
+
+    monkeypatch.delenv(rm_notice.NOTICE_SHOWN_ENV, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _collapse_pane_binding_window(monkeypatch):
     """Collapse the pane binding window so no test pays its wall-clock.
 
@@ -76,24 +84,6 @@ def _force_python_runtime(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_codex_cli_version(monkeypatch):
-    """Never let a test's codex-argv build reach the real ``codex --version``.
-
-    ``_codex_cli_version`` shells out with a bare ``subprocess.run`` (not the
-    guarded ``_codex._subprocess_popen`` seam ``_block_live_provider_exec``
-    covers), and it is ``functools.lru_cache``-memoized per process - so an
-    unstubbed first call would both exec whatever real ``codex`` happens to be
-    on the developer's PATH and then pin that version's answer for the rest
-    of the pytest run, making --dangerously-bypass-hook-trust presence
-    host-dependent. Pin to a known-supporting version; a test that needs a
-    different answer overrides this per-test (monkeypatch order: test wins).
-    """
-    from fno.agents import mux_spawn
-
-    monkeypatch.setattr(mux_spawn, "_codex_cli_version", lambda: (0, 148, 0))
-
-
-@pytest.fixture(autouse=True)
 def _isolate_spawn_uuid_capture(monkeypatch):
     """Keep spawn-time full-UUID resolution instant + host-independent.
 
@@ -102,84 +92,60 @@ def _isolate_spawn_uuid_capture(monkeypatch):
     on the bounded window) and stubs the underlying registry reader to ``None``
     (no read of the developer's real ``~/.claude/sessions``), so a claude spawn
     leaves ``claude_session_uuid`` unresolved without slowing or host-coupling
-    the suite. Tests that exercise resolution override these per-test
-    (monkeypatch order: the test-local setattr wins).
+    the suite. The spawn seed check reads claude's real job state the same
+    way, so it is stubbed to verified. Tests that exercise resolution override
+    these per-test (monkeypatch order: the test-local setattr wins).
     """
-    from fno.agents.harnesses import claude
+    from fno.agents.harnesses import _claude_session_registry, claude
 
     monkeypatch.setattr(claude, "_SPAWN_UUID_RETRY_BACKOFF_SEC", 0.0)
     monkeypatch.setattr(claude, "resolve_session_uuid", lambda short_id: None)
+    monkeypatch.setattr(_claude_session_registry, "seed_unverified_reason", lambda *a, **k: None)
+    # The revival liveness gate (the fno-agents binary's revive-proof op)
+    # polls real claude roots for a transcript; the fake-claude journeys
+    # write none, so the suite auto-passes it. The patch must land on the
+    # CALL SITE's binding: harnesses/claude.py imports the name directly, so
+    # patching the registry module's own attribute would never be seen.
+    # Tests that exercise the gate (test_revival_liveness.py) re-arm it by
+    # restoring the real function on THIS binding and faking
+    # `_revive_proof_verdict` on the registry module; faking the verdict
+    # alone cannot reach the neutered call site.
+    monkeypatch.setattr(claude, "revive_proof_or_refuse", lambda *a, **k: None)
+
+
+FAKE_CHILD_PID = 4242
 
 
 @pytest.fixture(autouse=True)
-def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
-    """Guard the claude/codex subprocess seams so a test that reaches the
-    Python dispatch path cannot exec a *real* provider binary and spawn a live
-    session (e.g. an immortal ``claude --bg``).
+def _pin_fake_child_pid_probe(monkeypatch):
+    """Keep FakeRunner's fixture child pid reading as gone on any host.
 
-    ``_force_python_runtime`` only keeps dispatch in-process; it does nothing
-    about the provider subprocess underneath. The agents suite has repeatedly
-    leaked live ``claude --bg`` sessions when a test drove ``dispatch_ask``
-    without isolating PATH - the ambient real ``claude`` got exec'd and left a
-    resident bg session that piles up and can be resumed later (ab-c1bf3552,
-    generalizing PR #415, which fixed two such tests one at a time).
-
-    The discriminator is *which* binary runs, not whether a subprocess runs at
-    all: the safe pattern installs a fake claude/codex on a tmp-isolated
-    PATH (``install_fake_*`` + ``monkeypatch.setenv("PATH", bin_dir)``) and lets
-    the real seam exec the fake. This wrapper resolves the command's executable
-    and raises only when it points at a binary OUTSIDE the pytest tmp tree (i.e.
-    a real install). Tests that stub the seam with a Python callable replace this
-    wrapper outright (monkeypatch order: test wins), so they are unaffected;
-    out-of-process e2e/parity tests spawn a fresh interpreter and never reach
-    this in-process patch.
+    ``FakeRunner`` (test_spawn_pane.py) reports ``child_pid: 4242``, and
+    ``_reap_spawned_pane`` guards the pane kill with
+    ``spawn_gate._process_start_time`` on that pid - a real read of the host
+    process table. When an unrelated live process holds pid 4242 (pids recycle
+    constantly on a busy linux runner), the before and after reads match and
+    the reap reports the worker survived teardown, failing tests that have
+    nothing to do with that host. Pin the one fixture pid to gone and delegate
+    every other pid to the real probe; a test that exercises the probe itself
+    patches it per-test and wins (monkeypatch order: test wins). The constant
+    and this docstring are the cross-reference that keeps FakeRunner's pid
+    and FAKE_CHILD_PID the same number.
     """
-    # Real-provider smoke tests (@pytest.mark.smoke, e.g.
-    # test_codex_integration_smoke, run nightly
-    # by provider-smoke.yml) intentionally exec the real binary; never guard
-    # those (codex P2 review). Per-PR CI excludes `-m smoke`, so this only
-    # matters for the nightly real-provider run.
-    if request.node.get_closest_marker("smoke"):
-        return
+    from fno.agents import spawn_gate
 
-    import shutil
-    from pathlib import Path
+    real = spawn_gate._process_start_time
+    monkeypatch.setattr(
+        spawn_gate,
+        "_process_start_time",
+        lambda pid, *args, **kwargs: (
+            None if pid == FAKE_CHILD_PID else real(pid, *args, **kwargs)
+        ),
+    )
 
-    from fno.agents.harnesses import claude as _claude
-    from fno.agents.harnesses import codex as _codex
 
-    # Use pytest's session basetemp (which honors a custom --basetemp) rather
-    # than tempfile.gettempdir(), so the "is this a tmp-isolated fake?" check
-    # stays correct under a non-default temp root.
-    tmp_root = str(tmp_path_factory.getbasetemp().resolve())
-    provider_bins = {"claude", "codex"}
-
-    def _is_real_provider_exec(cmd) -> bool:
-        argv0 = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
-        argv0 = str(argv0)
-        if Path(argv0).name not in provider_bins:
-            return False
-        resolved = argv0 if Path(argv0).is_absolute() else (shutil.which(argv0) or "")
-        if not resolved:
-            # bare provider name with no fake on PATH: would resolve to the
-            # ambient real binary (or fail), never an isolated fake -> block.
-            return True
-        return not str(Path(resolved).resolve()).startswith(tmp_root)
-
-    def _guard(orig):
-        def wrapper(cmd, *args, **kwargs):
-            if _is_real_provider_exec(cmd):
-                name = cmd[0] if isinstance(cmd, (list, tuple)) and cmd else cmd
-                raise AssertionError(
-                    f"live provider exec blocked under pytest: a test reached a real "
-                    f"provider binary ({name!r}). Install a fake on a tmp-isolated PATH "
-                    "(install_fake_claude/codex + monkeypatch.setenv PATH), stub "
-                    "the seam (_subprocess_run/_subprocess_popen), or assert routing "
-                    "without executing dispatch."
-                )
-            return orig(cmd, *args, **kwargs)
-
-        return wrapper
-
-    monkeypatch.setattr(_claude, "_subprocess_run", _guard(_claude._subprocess_run))
-    monkeypatch.setattr(_codex, "_subprocess_popen", _guard(_codex._subprocess_popen))
+# The provider-exec guard lives in the ROOT cli/tests/conftest.py
+# (_block_live_provider_exec) so every cli test is covered, not just this
+# directory. x-ec81: the agents-only copy left 36 test files outside
+# cli/tests/agents/ reaching a spawn seam unguarded, and test_spawn_guard.py
+# leaked three live claude daemons. Do not re-add a copy here.

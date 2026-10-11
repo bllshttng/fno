@@ -15,25 +15,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import Optional
-
-
-class LegacyKind(str, Enum):
-    QUESTION = "question"
-    ANSWER = "answer"
-    HEADS_UP = "heads-up"
-    NOTIFICATION = "notification"
-    LESSON = "lesson"
-    COMPLETE = "complete"
-    FYI = "fyi"
-
-
-class LegacyStatus(str, Enum):
-    UNREAD = "unread"
-    READ = "read"
-    ANSWERED = "answered"
 
 
 @dataclass
@@ -49,7 +32,6 @@ class LegacyMessage:
     body: str
 
 
-_SEP = " · "
 _HEADER_RE = re.compile(
     r"^## (msg-[0-9a-zA-Z]{1,}) · (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · from:(\S+) · kind:(\S+)(.*)?$"
 )

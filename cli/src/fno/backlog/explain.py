@@ -1,195 +1,49 @@
-"""Why this node and not that one: the selection cascade, made answerable.
+"""Why this node and not that one: the selection, made answerable.
 
-`fno backlog next` narrows the open graph through a fixed sequence of filters
-and then sorts what survives. Every drop was silent. An operator asking why a
-ready node never launched had no instrument, and the 2026-09-01 orchestration
-audit had to reconstruct the answer by reading source.
-
-The cascade lives HERE and `cmd_next._pick_ready` consumes it, rather than the
-explanation reimplementing the same ten filters beside the selector. A parallel
-implementation is a second selector that lies the moment either one moves, and
-an explanation that disagrees with the selection is worse than none.
-
-A filter narrows a LIST, not a row. That is not indirection for its own sake:
-`filter_by_project` resolves the project by DETECTING it from the candidates it
-is handed, so it cannot be expressed as a per-row predicate without changing
-what it does.
+`fno backlog advance --explain` narrates the selection the native leg makes:
+survivors in selection order plus per-node drops, read straight out of the
+keeper's ``ready`` reply (``backlog_ready::select``). The narrowing cascade
+itself lives in one place, the Rust leg; this module renders its answer
+instead of recomputing it, so an explanation cannot disagree with a
+selection.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, Optional
+from dataclasses import dataclass
+from typing import Optional
+
+from fno.graph.store import ready as store_ready
+from fno.graph._intake import repo_root
 
 
-@dataclass(frozen=True)
-class SelectionFilter:
-    """One narrowing step, with the sentence an operator needs when it bites."""
+# The cascade's shipped filter order, for stable drop-count rendering.
+FILTER_ORDER: "list[str]" = [
+    "roadmap",
+    "mission",
+    "parent-scope",
+    "project",
+    "live-claim",
+    "unmerged-open-pr",
+    "container",
+    "batched",
+    "selection-guard",
+]
 
-    #: Stable identifier, printed by `advance --explain` and safe to grep for.
-    name: str
-    #: Why a node dropped here, in terms of what the operator can do about it.
-    why: str
-    narrow: Callable[[list[dict]], list[dict]]
-
-
-@dataclass
-class CascadeResult:
-    """What survived, what each filter took, and where each node fell out."""
-
-    survivors: list[dict] = field(default_factory=list)
-    #: filter name -> how many candidates it removed, in cascade order.
-    drops: list[tuple[str, int]] = field(default_factory=list)
-    #: node id -> the name of the first filter that removed it. A node absent
-    #: from this map and from `survivors` was never a candidate at all.
-    dropped_by: dict[str, str] = field(default_factory=dict)
-
-    def reason_for(self, node_id: str) -> Optional[str]:
-        """The filter that dropped ``node_id``, or None if it survived."""
-        return self.dropped_by.get(node_id)
-
-
-def run_cascade(candidates: list[dict], filters: list[SelectionFilter]) -> CascadeResult:
-    """Apply ``filters`` in order, recording what each one took.
-
-    Attribution is to the FIRST filter that removes a node. A node dropped by
-    the project filter may also be a container and also be batched; naming all
-    three would bury the one an operator has to act on.
-    """
-    result = CascadeResult()
-    current = list(candidates)
-    for f in filters:
-        before = {e.get("id") for e in current if e.get("id")}
-        current = f.narrow(current)
-        after = {e.get("id") for e in current if e.get("id")}
-        gone = before - after
-        result.drops.append((f.name, len(gone)))
-        for node_id in gone:
-            if node_id:
-                result.dropped_by.setdefault(node_id, f.name)
-    result.survivors = current
-    return result
-
-
-def build_selection_filters(
-    entries: list[dict],
-    *,
-    roadmap_id: Optional[str],
-    mission: Optional[str],
-    parent_target_id: Optional[str],
-    project_filter: Optional[str],
-    all_: bool,
-    claimed: "set[str] | frozenset[str]",
-    container_ids: "set[str] | frozenset[str]",
-) -> list[SelectionFilter]:
-    """The cascade `fno backlog next` runs, in its exact shipped order.
-
-    ``claimed`` and ``container_ids`` are passed in rather than computed here
-    because the caller already holds them under its graph lock; recomputing
-    would read a different instant than the selection it is explaining.
-    """
-    from datetime import datetime, timezone
-
-    from fno.graph._intake import descendants_of, filter_by_project
-
-    fs: list[SelectionFilter] = []
-
-    if roadmap_id:
-        fs.append(
-            SelectionFilter(
-                "roadmap",
-                f"not on roadmap {roadmap_id}",
-                lambda c: [e for e in c if e.get("roadmap_id") == roadmap_id],
-            )
-        )
-    if mission:
-        fs.append(
-            SelectionFilter(
-                "mission",
-                f"not in mission {mission}",
-                lambda c: [e for e in c if e.get("mission_id") == mission],
-            )
-        )
-    if parent_target_id is not None:
-        scope = descendants_of(entries, parent_target_id)
-        fs.append(
-            SelectionFilter(
-                "parent-scope",
-                f"not a descendant of {parent_target_id}",
-                lambda c: [e for e in c if e.get("id") in scope],
-            )
-        )
-
-    fs.append(
-        SelectionFilter(
-            "project",
-            "belongs to another project (pass --all to widen, or --project)",
-            lambda c: filter_by_project(c, project_filter, all_),
-        )
-    )
-
-    if claimed:
-        fs.append(
-            SelectionFilter(
-                "live-claim",
-                "a live session already holds node:<id>; check `fno agents claim status`",
-                lambda c: [e for e in c if e.get("id") not in claimed],
-            )
-        )
-
-    def _drop_open_pr(c: list[dict]) -> list[dict]:
-        from fno.graph.cli import _has_unmerged_open_pr
-
-        return [e for e in c if e.get("status") != "ready" or not _has_unmerged_open_pr(e)]
-
-    fs.append(
-        SelectionFilter(
-            "unmerged-open-pr",
-            "already carries a PR that has not merged; the work is in review, not waiting",
-            _drop_open_pr,
-        )
-    )
-
-    fs.append(
-        SelectionFilter(
-            "container",
-            "an epic is never built directly; its work lives in its children",
-            lambda c: [e for e in c if e.get("id") not in container_ids],
-        )
-    )
-
-    def _drop_batched(c: list[dict]) -> list[dict]:
-        from fno.graph.cli import _is_batched_member
-
-        return [e for e in c if not _is_batched_member(e)]
-
-    fs.append(
-        SelectionFilter(
-            "batched",
-            "committed to an open batch; it ships via the batch PR",
-            _drop_batched,
-        )
-    )
-
-    def _drop_guarded(c: list[dict]) -> list[dict]:
-        from fno.backlog.advance import _guard_staleness_days, selection_guards
-
-        guard_now = datetime.now(timezone.utc)
-        guard_stale = _guard_staleness_days()
-        guard_by_id = {e.get("id"): e for e in entries if e.get("id")}
-        return [
-            e
-            for e in c
-            if not selection_guards(e, guard_by_id, guard_now, staleness_days=guard_stale)
-        ]
-
-    fs.append(
-        SelectionFilter(
-            "selection-guard",
-            "under a dead ancestor, or ready and untouched past the staleness window",
-            _drop_guarded,
-        )
-    )
-    return fs
+# Why a node dropped, in terms of what the operator can do about it. The
+# selection-guard row is rendered with the drop's inner reason
+# (dead-ancestor:<id>, stale-quarantine, design-stage, idea-stage,
+# contained:<id>, or the dispatch-hold guard reason) when one is attached.
+FILTER_WHY: "dict[str, str]" = {
+    "roadmap": "not on the requested roadmap",
+    "mission": "not in the requested mission",
+    "parent-scope": "not a descendant of the requested epic",
+    "project": "belongs to another project (pass --all to widen, or --project)",
+    "live-claim": "a live session already holds node:<id>; check `fno agents claim status`",
+    "unmerged-open-pr": "already carries a PR that has not merged; the work is in review, not waiting",
+    "container": "an epic is never built directly; its work lives in its children",
+    "batched": "committed to an open batch; it ships via the batch PR",
+    "selection-guard": "under a dead ancestor, contained elsewhere, undesigned, or stale past the quarantine window",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -256,23 +110,28 @@ def _unreadable(name: str, exc: BaseException, *, key: Optional[str] = None) -> 
     return Gate(name, None, None, f"unreadable: {exc}", key=key)
 
 
-def gates_for(node: Optional[dict], grid_harness: Optional[str] = None) -> list[Gate]:
+def gates_for(
+    node: Optional[dict],
+    grid_harness: Optional[str] = None,
+    probe: Optional[dict] = None,
+) -> list[Gate]:
     """Every gate advance would consult for ``node``, each measured.
 
     Calls the measurement functions only - never ``preflight_gate``, which
     acquires the spawn mutex and a worker slot. An explain that queued behind
     the real gate would change the fleet it is describing.
 
-    ``grid_harness`` is the harness the capacity grid picked, so the provider
-    lane reported is the one the spawn would actually be counted against rather
-    than the config default the grid was about to override.
+    ``grid_harness`` is the harness the capacity grid picked, kept for the
+    claim rows' context; the provider-lane rows now cover EVERY lane, read
+    from the ONE gate's probe answer, so no report can recount a provider
+    differently from the refusal.
+
+    ``probe`` is a probe answer a caller already sampled for this report (one
+    footprint read per build); leave it None to read fresh.
+
+    The walker-claim and node-claim rows stay here: they are advance-owned
+    claims, not gate axes.
     """
-    from fno.agents.spawn_gate import (
-        ProviderCountUnavailable,
-        census,
-        provider_lanes_cap,
-        provider_live_count,
-    )
     from fno.backlog import advance as adv
 
     out: list[Gate] = []
@@ -308,199 +167,48 @@ def gates_for(node: Optional[dict], grid_harness: Optional[str] = None) -> list[
         except Exception as exc:  # noqa: BLE001
             out.append(_unreadable("node-claim", exc))
 
-    # Per-project occupancy is now context, not a cap: the epic advance's
-    # width derives from spawn-gate headroom (the fleet and provider rows
-    # above), and a configured parallel.max_lanes is deprecated and ignored.
-    try:
-        by_project = adv._live_workers_by_project()
-        proj = (node or {}).get("project") or "-"
-        occupied = by_project.get(proj, 0)
-        out.append(
-            Gate(
-                "project-lane",
-                f"{occupied} ({proj})",
-                "ignored",
-                "pass",
-                key="parallel.max_lanes",
-                note="deprecated and ignored (the deletion ruling); width is spawn-gate headroom",
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        out.append(_unreadable("project-lane", exc, key="parallel.max_lanes"))
+    # Per-project occupancy row DELETED with the dead lane counter.
 
-    # Provider lanes: the cap that was actually binding on 2026-09-01.
-    provider = _resolved_vendor(node, grid_harness)
-    if provider is None and node is None:
-        # No subject to resolve a vendor from (the epic explain with an empty
-        # fill): the binding configured provider is the one whose cap explains
-        # a width of 0. Without this row the report shows width 0 and no gate
-        # naming why. Fails open to no row, never to a fake pass.
-        from fno.backlog import advance as adv
-
-        try:
-            provider = adv._binding_provider()
-        except Exception:  # noqa: BLE001 - an unreadable read names no provider
-            provider = None
-    if provider:
-        try:
-            from fno.config import load_settings, provider_limits_table
-
-            limits = dict(provider_limits_table(load_settings().agents))
-            cap = provider_lanes_cap(limits.get(provider))
-        except Exception as exc:  # noqa: BLE001
-            out.append(_unreadable("provider-lane", exc))
-        else:
+    # The measurement rows (provider lanes, fleet rows, RAM floor, CPU share,
+    # load backstop) come from the ONE gate's probe answer; this report no
+    # longer measures the machine itself, so a preview and the real spawn can
+    # never disagree about a reading.
+    answer = probe if probe is not None else probe_capacity()
+    rows = answer.get("rows") if isinstance(answer, dict) else None
+    if isinstance(rows, list):
+        for row in rows:
             try:
-                count = provider_live_count(provider)
-            except ProviderCountUnavailable as exc:
-                out.append(
-                    _unreadable(
-                        "provider-lane", exc, key=f"agents.provider_limits.{provider}.lanes"
-                    )
-                )
-            else:
-                full = cap is not None and count >= cap
-                out.append(
-                    Gate(
-                        "provider-lane",
-                        f"{count} ({provider})",
-                        str(cap) if cap is not None else "uncapped",
-                        "refuse" if full else "pass",
-                        key=f"agents.provider_limits.{provider}.lanes",
-                    )
-                )
-
-    try:
-        c = census()
-        cap = int(_max_live())
-        out.append(
-            Gate(
-                "fleet-rows",
-                str(c.slot_count),
-                str(cap),
-                "refuse" if c.slot_count >= cap else "pass",
-                key="agents.max_live",
-                note="x-3f84: rows are not what the machine spends; see the machine gates",
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        out.append(_unreadable("fleet-rows", exc, key="agents.max_live"))
-
-    out.extend(_machine_gates())
+                out.append(Gate(**row))
+            except TypeError as exc:  # noqa: BLE001 - a malformed row is a
+                # display fault, never a report-killing one
+                out.append(_unreadable(str(row.get("name", "gate")) if isinstance(row, dict) else "gate", exc))
     return out
 
 
-def _max_live() -> int:
-    from fno.config import load_settings
+def probe_capacity() -> dict:
+    """Module-local alias so the readouts and the docs name one door: the
+    spawn gate's own read-only probe."""
+    from fno.agents.spawn_gate import probe_capacity as _probe
 
-    return int(load_settings().agents.max_live)
-
-
-def _machine_gates() -> list[Gate]:
-    """RAM and load, read the way the gate reads them (never probing to refuse)."""
-    from fno.agents.spawn_gate import available_ram_gb
-
-    out: list[Gate] = []
-    try:
-        from fno.config import load_settings
-
-        agents_cfg = load_settings().agents
-        floor = float(agents_cfg.min_free_gb)
-        per_cpu = float(agents_cfg.max_load_per_cpu)
-    except Exception as exc:  # noqa: BLE001
-        return [_unreadable("machine", exc)]
-
-    try:
-        avail = available_ram_gb()
-    except Exception as exc:  # noqa: BLE001
-        out.append(_unreadable("ram-floor", exc, key="agents.min_free_gb"))
-    else:
-        if avail is None:
-            out.append(
-                Gate("ram-floor", None, f"{floor:.1f}GB", "skipped: RAM unreadable",
-                     key="agents.min_free_gb")
-            )
-        else:
-            out.append(
-                Gate(
-                    "ram-floor",
-                    f"{avail:.1f}GB",
-                    f"{floor:.1f}GB",
-                    "refuse" if avail < floor else "pass",
-                    key="agents.min_free_gb",
-                )
-            )
-
-    try:
-        import os
-
-        load1 = os.getloadavg()[0]
-        cpus = os.cpu_count() or 1
-        trigger = per_cpu * cpus
-        out.append(
-            Gate(
-                "load-trigger",
-                f"{load1:.1f}",
-                f"{trigger:.1f} ({per_cpu:g} x {cpus} cpu)",
-                # Over the trigger the gate does NOT refuse; it asks footprint
-                # whose CPU this is. Calling that "refuse" here would be a
-                # second instrument disagreeing with the first (x-7c0f).
-                "over trigger; attribution decides" if load1 > trigger else "pass",
-                key="agents.max_load_per_cpu",
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        out.append(_unreadable("load-trigger", exc, key="agents.max_load_per_cpu"))
-    return out
-
-
-def _resolved_vendor(node: Optional[dict], grid_harness: Optional[str] = None) -> Optional[str]:
-    """The VENDOR whose lane cap a spawn for ``node`` would be counted against.
-
-    Five axes, never confused: harness, provider (vendor), model, effort,
-    account. `agents.provider_limits` is keyed by VENDOR (`zai`), while a node's
-    own `provider` field and `config.dispatch.harness` carry the HARNESS
-    (`codex`), and `effective_active()` returns an ACCOUNT record (`makers`).
-    An early draft of this function reported `provider-lane 0 (makers)` - an
-    account name checked against a vendor-keyed table, so it could only ever
-    read 0. That is the axis-inference trap by name.
-
-    Resolved through `resolve_lane_vendor`, the shipped harness-to-vendor
-    mapping, rather than a second table here: two tables disagree.
-    """
-    if node is None:
-        return None
-    from fno.agents.spawn_defaults import resolve_lane_vendor
-
-    harness = grid_harness or (node.get("provider") or "").strip() or None
-    if harness is None:
-        try:
-            from fno.dispatch_flags import resolve_dispatch_harness
-
-            harness = resolve_dispatch_harness(None)[0]
-        except Exception:  # noqa: BLE001 - an unresolved harness reports absent
-            return None
-    try:
-        return resolve_lane_vendor([], harness=harness)
-    except Exception:  # noqa: BLE001
-        return None
+    return _probe()
 
 
 def routing_for(node: Optional[dict]) -> dict:
-    """What the capacity grid resolves for ``node``, and from which inputs.
+    """What the slot resolver picks for ``node``, and from which inputs.
 
-    The chain is RECOVERED, not constructed: `route_resolve.resolve_grid`
+    The chain is RECOVERED, not constructed: `route_resolve.resolve_slot`
     already returns ``(candidate, chain)`` whose last element is its terminal
-    reason, and `advance._grid_lane_for` throws it away as ``_chain``. The
-    strings are the existing receipt vocabulary and are surfaced verbatim -
-    reformatting them would fork it.
+    reason. The strings are the existing receipt vocabulary and are surfaced
+    verbatim - reformatting them would fork it. The slot is the node's
+    effective verb, derived through the same wrapper the dispatch grid pick
+    uses, so the narration cannot name a slot the dispatcher would not walk.
     """
     if node is None:
-        return {"chain": [], "candidate": None, "inputs": {}}
+        return {"chain": [], "candidate": None, "inputs": {}, "routing": "unarmed", "skipped": []}
     from fno import route_resolve
 
-    # An unplanned node bills the planning tier at the spawn seam, so the floor
-    # is applied here too or the two dispatch doors price one node differently.
+    # An unplanned node bills planning at the spawn seam; the preview
+    # reports the same floor.
     role = None if (node.get("plan_path") or "").strip() else "planning"
     inputs = {
         "difficulty": node.get("difficulty"),
@@ -508,23 +216,44 @@ def routing_for(node: Optional[dict]) -> dict:
         "role": role,
         "plan_path": node.get("plan_path") or None,
     }
+    # The slot comes from the verb, never a literal: one derivation shared
+    # with the dispatch seam, and the same normalization on the canonical
+    # verb, so a blueprint-verb node walks agents.profiles.blueprint here.
     try:
-        inventory = route_resolve.resolve_inventory()
-        capacity = dict(route_resolve.runtime_capacity(inventory=inventory))
-        candidate, chain = route_resolve.resolve_grid(
-            node.get("difficulty"),
-            node.get("priority"),
-            capacity,
+        from fno.agents.node_dispatch import node_effective_verb
+
+        verb = node_effective_verb(node)
+    except Exception as exc:  # noqa: BLE001 - an unanswerable verb is reported
+        return {
+            "chain": [f"verb unresolved: {exc}"], "candidate": None, "inputs": inputs,
+            "routing": "unarmed", "skipped": [],
+        }
+    profile_verb = ((verb or "target").strip().lstrip("/")) or "target"
+    try:
+        # Display, never a probe: the summary rides the verb's answer now.
+        meta: dict = {}
+        candidate, chain, verdict = route_resolve.resolve_slot(
+            profile_verb,
+            node,
+            None,
             role=role,
-            inventory=inventory,
+            meta=meta,
         )
     except Exception as exc:  # noqa: BLE001 - an unreadable grid is reported
-        return {"chain": [f"grid unreadable: {exc}"], "candidate": None, "inputs": inputs}
-    inputs["capacity"] = {
-        harness: (state.get("state") if isinstance(state, dict) else state)
-        for harness, state in capacity.items()
+        return {
+            "chain": [f"grid unreadable: {exc}"], "candidate": None, "inputs": inputs,
+            "routing": "unarmed", "skipped": [],
+        }
+    inputs["capacity"] = meta.get("capacity") or {}
+    # The verdict reads the same terminal the spawn seam refuses on: a policy
+    # refusal is held, capacity is held, and neither is "exhausted dispatch".
+    return {
+        "chain": list(chain),
+        "candidate": candidate,
+        "inputs": inputs,
+        "routing": verdict,
+        "skipped": [s for s in chain if s.startswith("slot skip ")],
     }
-    return {"chain": list(chain), "candidate": candidate, "inputs": inputs}
 
 
 def build_report(
@@ -548,44 +277,27 @@ def build_report(
     _refuse_tracker_owned_on_external_backend("advance")
 
     from fno.backlog import advance as adv
-    from fno.graph._intake import make_selection_sort_key
-    from fno.graph.cli import _container_ids, _require_live_claimed_node_ids
-    from fno.graph.ladder import is_cold_dispatchable
-    from fno.graph.store import read_graph
+    from fno.graph.api import wire_rows
     from fno.paths import graph_json
 
-    entries = read_graph(graph_json())
-    claimed = _require_live_claimed_node_ids("backlog explain")
-    container_ids = _container_ids(entries)
+    # One call into the native leg. The narration reads the reply's drops;
+    # nothing here re-derives a filter.
+    result = store_ready(project=project, all=project is None, repo_root=repo_root())
+    survivors = result["rows"]
+    drops = result["drops"]
+    drop_by_id = {d["id"]: d for d in drops if isinstance(d, dict) and d.get("id")}
 
-    # The same admission predicate `_pick_ready` opens with, and the same
-    # default `allowed` set the autonomous paths use (bare `next`).
-    candidates = [
-        e
-        for e in entries
-        if (e.get("status") == "ready" or is_cold_dispatchable(e))
-        and not e.get("completed_at")
-    ]
-    pool = len(candidates)
-
-    filters = build_selection_filters(
-        entries,
-        roadmap_id=None,
-        mission=None,
-        parent_target_id=None,
-        project_filter=project,
-        all_=project is None,
-        claimed=claimed,
-        container_ids=container_ids,
-    )
-    cascade = run_cascade(candidates, filters)
-    survivors = sorted(
-        cascade.survivors, key=make_selection_sort_key(entries, live_claimed=claimed)
-    )
+    pool = len(survivors) + len(drops)
+    counts: dict = {}
+    for d in drops:
+        name = d.get("filter") or "unknown"
+        counts[name] = counts.get(name, 0) + 1
+    drop_rows = [{"filter": name, "dropped": counts.get(name, 0)} for name in FILTER_ORDER]
 
     winner = survivors[0] if survivors else None
     subject_id = node_id or (winner or {}).get("id")
-    by_id = {e.get("id"): e for e in entries if e.get("id")}
+    # The total fold: an explain answers for every row, even a typed-drop.
+    by_id = {e.get("id"): e for e in wire_rows(path=graph_json()) if e.get("id")}
     subject = by_id.get(subject_id) if subject_id else None
 
     asked: dict = {}
@@ -593,10 +305,12 @@ def build_report(
         rank = next(
             (i for i, e in enumerate(survivors) if e.get("id") == node_id), None
         )
+        dropped = drop_by_id.get(node_id)
         asked = {
             "id": node_id,
             "known": node_id in by_id,
-            "dropped_by": cascade.reason_for(node_id),
+            "dropped_by": (dropped or {}).get("filter"),
+            "drop_reason": (dropped or {}).get("reason"),
             "rank": rank,
             # A node in neither place was never a candidate: not `ready`, or
             # already carrying completed_at. Reported as its own answer rather
@@ -604,11 +318,11 @@ def build_report(
             "never_a_candidate": (
                 node_id in by_id
                 and rank is None
-                and cascade.reason_for(node_id) is None
+                and dropped is None
             ),
         }
         if asked["never_a_candidate"]:
-            asked["status"] = by_id[node_id].get("status")
+            asked["status"] = by_id[node_id].get("persisted_status")
 
     routing = routing_for(subject)
     armed, rank_source = adv._auto_continue_resolve()
@@ -616,7 +330,7 @@ def build_report(
     return {
         "selection": {
             "pool": pool,
-            "drops": [{"filter": n, "dropped": d} for n, d in cascade.drops],
+            "drops": drop_rows,
             "survivors": len(survivors),
             "head": [
                 {
@@ -629,7 +343,7 @@ def build_report(
                 }
                 for e in survivors[:top]
             ],
-            "why": {f.name: f.why for f in filters},
+            "why": dict(FILTER_WHY),
         },
         "asked": asked,
         # Routing first: the grid picks the harness, and the harness decides
@@ -683,13 +397,31 @@ def render_report(report: dict) -> str:
         if not asked["known"]:
             out.append(f"ASKED  {asked['id']}: no such node")
         elif asked["dropped_by"]:
-            why = sel["why"].get(asked["dropped_by"], "")
-            out.append(f"ASKED  {asked['id']}: dropped by {asked['dropped_by']} - {why}")
+            # A selection-guard drop narrates its inner reason
+            # (dead-ancestor:<id>, stale-quarantine, ...) over the static why.
+            reason = asked.get("drop_reason")
+            if asked["dropped_by"] == "selection-guard" and reason:
+                out.append(f"ASKED  {asked['id']}: dropped by {reason}")
+            else:
+                why = sel["why"].get(asked["dropped_by"], "")
+                out.append(f"ASKED  {asked['id']}: dropped by {asked['dropped_by']} - {why}")
         elif asked.get("never_a_candidate"):
-            out.append(
-                f"ASKED  {asked['id']}: never a candidate "
-                f"(status {asked.get('status')}, not ready and not cold-dispatchable)"
-            )
+            if asked.get("status") == "in_review":
+                # The PR is the work: no status change is wanted, the driver
+                # adopts the open PR through target init (worktree ensure
+                # continues origin/feature/<node>). Both command spellings:
+                # codex reserves / for harness commands.
+                out.append(
+                    f"ASKED  {asked['id']}: never a candidate (in_review: its open PR is "
+                    f"the work; dispatch /fno:target {asked['id']} (codex: $fno:target "
+                    f"{asked['id']}), whose init adopts the PR on feature/<node>; "
+                    "undriven ones list under undriven_pr on fno inbox board)"
+                )
+            else:
+                out.append(
+                    f"ASKED  {asked['id']}: never a candidate "
+                    f"(status {asked.get('status')}, not ready and not cold-dispatchable)"
+                )
         else:
             out.append(f"ASKED  {asked['id']}: eligible, ranked {asked['rank'] + 1}")
 
@@ -742,17 +474,9 @@ def _render_gates_routing_decision(report: dict, out: list) -> None:
         if candidate
         else "  -> grid declined; the spawn falls back to caller defaults"
     )
-
-
-# The canonical lane-fill filter names, in report order. The names come from
-# advance.lane_fill_filter_name's mapping over the classifier's tokens; this
-# list only fixes the ORDER the report prints them in, plus the catch-alls.
-_LANE_FILL_FILTER_ORDER = (
-    "live-lane",
-    "live-lane-domain",
-    "in-flight-collision",
-    "unevaluated",
-)
+    out.append(f"  routing={routing.get('routing', 'unarmed')}")
+    for reason in routing.get("skipped") or []:
+        out.append(f"  {reason}")
 
 
 def build_lane_fill_report(
@@ -762,110 +486,112 @@ def build_lane_fill_report(
     node_id: Optional[str] = None,
     top: int = 5,
     max_dispatch: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> dict:
-    """``--explain --epic``: the fill the daemon's cascade would make, as a READ.
+    """``--explain --epic``: the fan-out the daemon's drain would make, as a READ.
 
     The daemon's only walk is ``active_backlog`` shelling ``advance --epic``,
-    which reaches ``select_lane_fill`` - a SECOND selector beside ``next``, with
-    its own drops. Reporting the ``next`` cascade for an epic question is the
-    second-selector lie this function exists to prevent, so this runs (a
-    preview of) the fill itself and aggregates its drops by name.
+    whose fan-out runs ``_ready_leaf_children`` through the converge gates.
+    This preview used to call the wheel's lane-fill selector instead, which
+    reaches ``fno backlog ready --mission <epic>`` - a ``mission_id`` field 0 of
+    2320 graph nodes carry - so it reported an empty mission for every epic
+. It now classifies the SAME children through the SAME pre-spawn
+    gates the drain runs (``_converge_gate`` plus the epic fan-out's own
+    no-project / unmapped-project / lane-cap, priced per child by
+    ``_lane_cap_verdict``), so it cannot describe a selection the drain would
+    not make. ``provider``/``model`` forward the dispatch pins raw (the
+    explain branch returns before the CLI validates them).
 
-    One implementation, not two: every drop is classified by the fill's own
-    ``_classify_lane_candidate`` - the single per-candidate truth the live
-    selector and the shadow report already share - so this report cannot
-    describe a selection the selector would not make. Counts reflect the seed
-    state (live lanes and in-flight work at read time), not the fill's own
-    growing state mid-loop; the fill preview carries the authoritative
-    ``stop`` / ``excluded`` / picks.
-
-    Never dispatches, never claims a slot (``claim=False``), never emits.
+    Never dispatches, never claims, never emits.
     """
-    # Same guard as build_report: the census attributes the fill's graph-side
+    # Same guard as build_report: the census attributes the preview's graph-side
     # reads to this function, so the tracker-owned refusal lives here too.
     from fno.graph.cli import _refuse_tracker_owned_on_external_backend
 
     _refuse_tracker_owned_on_external_backend("advance")
 
     from fno.backlog import advance as adv
-    from fno.claims.lanes import active_lane_count
+    from fno.graph._intake import project_root_from_settings
 
-    max_lanes = adv._spawn_headroom()
-    fill_report: dict = {}
-    selected = adv.select_lane_fill(
-        max_lanes, project, mission=epic, claim=False, report=fill_report
-    )
-    ready = adv._ready_nodes(project, epic)
+    budget = adv._spawn_budget_or_degraded(provider)
+    ready = adv._ready_leaf_children(epic)
 
-    # The preview holds no slot, so it can never trip the fill's own cap-full
-    # stop; the cap is read directly instead. Lanes already held by live peers
-    # consume the width, and a pick beyond the remaining headroom is exactly
-    # the drop ``lane-slot`` names in the live path.
-    slot_note: Optional[str] = None
-    try:
-        headroom = max(0, max_lanes - active_lane_count())
-    except Exception as exc:  # noqa: BLE001 - report the unreadable cap, never a fake zero
-        headroom = max_lanes
-        slot_note = f"lane-slot count unreadable: {str(exc)[:120]}"
-    cap_denied = 0
-    if len(selected) > headroom:
-        cap_denied = len(selected) - headroom
-        selected = selected[:headroom]
-        fill_report["stop"] = "cap-full"
-        fill_report["excluded"] = list(fill_report.get("excluded", []))
-
-    # Seed the classifier exactly like the fill does (fail-open to empty), so
-    # the recount sees the same world the fill's first pick saw.
-    try:
-        used_domains = adv._live_lane_domains()
-    except Exception:  # noqa: BLE001 - annotation-only seed; fail open like the fill
-        used_domains = set()
-    try:
-        inflight = adv._live_worked_entries()
-    except Exception:  # noqa: BLE001 - fail open like the fill's collision gate
-        inflight = []
-
+    # Classify every child through the fan-out's gates, in the drain's order.
     counts: dict[str, int] = {}
     reasons_by_id: dict[str, str] = {}
-    for entry in ready:
-        reason = adv._classify_lane_candidate(
-            entry, used_domains=used_domains, inflight=inflight
-        )
+    excluded: list[dict] = []
+    selected: list[dict] = []
+    filled = 0
+    for child in ready:
+        reason: Optional[str]
+        lane: Optional[str] = None
+        proj = child.get("project")
+        if not proj:
+            reason = "no-project"
+        else:
+            root = project_root_from_settings(proj)
+            if not root:
+                reason = "unmapped-project"
+            else:
+                # The drain checks the cap BEFORE the converge gates
+                # (advance_epic), so the preview must name the same drop first.
+                refused, lane, _headroom = adv._lane_cap_verdict(
+                    child, budget, total=filled, model=model, provider=provider
+                )
+                if refused:
+                    reason = "lane-cap"
+                else:
+                    reason = adv._converge_gate(child, root)
         if reason is not None:
-            reasons_by_id[entry["id"]] = reason
-            name = adv.lane_fill_filter_name(reason)
-            counts[name] = counts.get(name, 0) + 1
-    if cap_denied:
-        counts["lane-slot"] = cap_denied
+            reasons_by_id[child["id"]] = reason
+            counts[reason] = counts.get(reason, 0) + 1
+            row: dict = {"id": child["id"], "reason": reason}
+            if reason == "lane-cap":
+                row["lane"] = lane
+            excluded.append(row)
+        else:
+            selected.append(child)
+            filled += 1
+            if lane is not None:
+                budget.dispatched_by_vendor[lane] = (
+                    budget.dispatched_by_vendor.get(lane, 0) + 1
+                )
 
     # The live run's overall --max binds after the spawn-gate width does, so a
     # dry run that ignored it would promise more dispatches than the run makes.
+    stop: Optional[str] = "cap-full" if counts.get("lane-cap") else None
     if max_dispatch is not None and len(selected) > max_dispatch:
+        denied = selected[max_dispatch:]
         selected = selected[:max_dispatch]
-        fill_report["stop"] = "max-dispatch"
+        counts["max-dispatch"] = len(denied)
+        for child in denied:
+            # Recorded for `asked` too, or a max-denied node would report
+            # never_a_candidate instead of the filter that dropped it.
+            reasons_by_id[child["id"]] = "max-dispatch"
+        excluded.extend({"id": c["id"], "reason": "max-dispatch"} for c in denied)
+        stop = "max-dispatch"
 
-    ordered_names = list(_LANE_FILL_FILTER_ORDER) + [
-        n for n in counts if n not in _LANE_FILL_FILTER_ORDER
-    ]
-    if slot_note is not None:
-        ordered_names.append("lane-slot-unreadable")
+    probe_answer = probe_capacity()
+
+    ordered_names = [
+        "no-project",
+        "unmapped-project",
+        "walker-live",
+        "lane-cap",
+        "max-dispatch",
+    ] + [n for n in counts if n not in (
+        "no-project", "unmapped-project", "walker-live", "lane-cap", "max-dispatch"
+    )]
     drops = [{"filter": n, "dropped": counts.get(n, 0)} for n in ordered_names]
 
     selected_ids = [e["id"] for e in selected]
     asked: dict = {}
     if node_id:
-        excluded_row = next(
-            (r for r in fill_report.get("excluded", []) if r.get("id") == node_id), None
-        )
         rank = next((i for i, nid in enumerate(selected_ids) if nid == node_id), None)
         reason = reasons_by_id.get(node_id)
-        dropped = reason or (excluded_row or {}).get("reason")
-        if dropped:
-            asked = {
-                "id": node_id,
-                "dropped_by": dropped,
-                "rank": None,
-            }
+        if reason:
+            asked = {"id": node_id, "dropped_by": reason, "rank": None}
         elif rank is not None:
             asked = {"id": node_id, "dropped_by": None, "rank": rank}
         else:
@@ -884,7 +610,7 @@ def build_lane_fill_report(
         "mode": "lane-fill",
         "epic": epic,
         "selection": {
-            "width": max_lanes,
+            "width": budget.fleet,
             "pool": len(ready),
             "drops": drops,
             "would_fill": [
@@ -897,14 +623,15 @@ def build_lane_fill_report(
                 }
                 for e in selected[:top]
             ],
-            "stop": fill_report.get("stop"),
-            "excluded": fill_report.get("excluded", []),
-            "slot_note": slot_note,
+            "stop": stop,
+            "excluded": excluded,
         },
         "asked": asked,
         "gates": [
             g.as_dict()
-            for g in gates_for(subject, (routing.get("candidate") or {}).get("harness"))
+            for g in gates_for(
+                subject, (routing.get("candidate") or {}).get("harness"), probe=probe_answer
+            )
         ],
         "routing": routing,
         "decision": {
@@ -937,7 +664,8 @@ def render_lane_fill_report(report: dict) -> str:
         out.append(f"  {sel['slot_note']}")
     out.append(f"  stop: {sel['stop']}")
     for row in sel["excluded"]:
-        out.append(f"    excluded {row.get('id')}: {row.get('reason')}")
+        lane = f" (lane {row['lane']})" if row.get("lane") else ""
+        out.append(f"    excluded {row.get('id')}: {row.get('reason')}{lane}")
     if sel["would_fill"]:
         out.append("  would fill:")
         for i, e in enumerate(sel["would_fill"]):

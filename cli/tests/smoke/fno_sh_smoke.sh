@@ -9,9 +9,12 @@
 #      FNO_INSTALL_WHEEL - the local wheel, since by-name PyPI is the launch
 #      gate, Open Q3) and reports success (AC1-HP/AC6-HP).
 #   2. The verify-ours identity verdict is logged before success (AC5-UI).
-#   3. All three fno-agents* binaries land on the uv tool bin (US3/AC3-HP):
-#      proof that `uv tool install` surfaces the wheel's shared_scripts on PATH.
-#   4. The provisioned `fno --version` runs from the tool bin (AC3-ERR: no 127).
+#   3. All four Rust binaries land on the uv tool bin (US3/AC3-HP): the `fno`
+#      front door plus the fno-agents* triad - proof that `uv tool install`
+#      surfaces the wheel's shared_scripts on PATH.
+#   4. The provisioned `fno --version` runs from the tool bin (AC3-ERR: no 127),
+#      `fno mux ls` answers natively, and the receipt names the front door with
+#      mux + Python-forwarding proof (x-538e AC2-HP).
 #   5. A second run is a clean no-op - no re-provision (US4/AC4-HP).
 #   6. The uv-tool-bin-not-on-PATH hint is surfaced (AC3-UI).
 #
@@ -70,6 +73,11 @@ mkdir -p "$UV_TOOLS" "$UV_BIN" "$CACHE" "$WORK" "$BASE_TMP/home"
 # path is the launch gate). HOME pristine so nothing resolves back to a real
 # install. cwd is repo-less (AC6-EDGE).
 cd "$WORK" || { echo "FAIL[env] cd to $WORK failed"; exit 1; }
+# The curl|sh channel inherits the caller's SHELL; uv's `tool update-shell`
+# refuses without one ("the current shell could not be determined", rc=2).
+# Pin the shell the real channel always provides, so check 3b exercises the
+# uv profile-edit path instead of accidentally testing the manual fallback.
+export SHELL="${SHELL:-/bin/bash}"
 export UV_TOOL_DIR="$UV_TOOLS" UV_TOOL_BIN_DIR="$UV_BIN" \
        XDG_CACHE_HOME="$CACHE" HOME="$BASE_TMP/home" \
        FNO_INSTALL_WHEEL="$WHEEL"
@@ -78,6 +86,7 @@ run_capture() { OUT="$("$@" 2>&1)"; RC=$?; }
 
 # --- check 1: first-run provision succeeds (AC1-HP / AC6-HP) ---
 run_capture sh "$INSTALLER"
+PROVISION_OUT="$OUT"
 if [ "$RC" -eq 0 ]; then
   pass "provision" "fno.sh provisioned the wheel (rc=0)"
 else
@@ -106,8 +115,16 @@ fi
 # on a uv too old for `tool update-shell`, so on such a uv the assertion would
 # false-fail though the installer behaved correctly (the fallback is exercised).
 if uv tool update-shell --help >/dev/null 2>&1; then
-  if printf '%s' "$OUT" | grep -qi 'update-shell'; then
+  # Two honest passes: uv edited the profile (the success line), or uv
+  # refused and the installer named why. The Linux runner images ship pwsh,
+  # which uv's update-shell cannot edit and refuses the whole edit over
+  # ("updating PowerShell is currently unsupported", run 36459620721), so a
+  # runner can never produce the success arm. Each arm asserts its own
+  # marker; a bare tool-name grep would pass on the failure line alone.
+  if printf '%s' "$OUT" | grep -qi "added .*profile.*via 'uv tool update-shell'"; then
     pass "path-update-shell" "default path ran 'uv tool update-shell' to fix PATH"
+  elif printf '%s' "$OUT" | grep -qi "uv tool update-shell failed: error:"; then
+    pass "path-update-shell" "uv could not edit the profile here; the installer named why and surfaced the manual hint"
   else
     miss "path-update-shell" "default path did not report a 'uv tool update-shell' profile edit"
   fi
@@ -115,25 +132,53 @@ else
   pass "path-update-shell" "skipped (installed uv predates 'tool update-shell'; installer's manual-hint fallback path is exercised instead)"
 fi
 
-# --- check 4: all three binaries on the uv tool bin (US3 / AC3-HP / AC6-UI) ---
-for b in fno-agents fno-agents-daemon fno-agents-worker; do
+# --- check 4: all four Rust binaries on the uv tool bin (US3/AC3-HP/AC6-UI) ---
+for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
   if [ -x "$UV_BIN/$b" ]; then pass "binary:$b" "present on the uv tool bin"
   else miss "binary:$b" "absent (uv tool install must surface the wheel's shared_scripts)"; fi
 done
 
-# --- check 5: the provisioned fno-py --version runs (AC3-ERR: no 127) ---
-# The console script is `fno-py` (the Rust mux binary owns `fno`); fno.sh installs
-# the Python CLI, so the tool bin carries `fno-py`, not `fno`.
-FNO_BIN="$UV_BIN/fno-py"
-if [ -x "$FNO_BIN" ]; then
-  run_capture "$FNO_BIN" --version
+# --- check 5: the advertised fno command works end to end (x-538e AC2-HP) ---
+# `fno` is the Rust front door the wheel now ships; `mux ls` proves the native
+# mux and `--version` proves the Python forwarding (the bootstrapper adopts the
+# provisioned wheel offline). fno-py stays the component name beside it.
+FNO_DOOR="$UV_BIN/fno"
+if [ -x "$FNO_DOOR" ]; then
+  run_capture "$FNO_DOOR" mux ls
+  if [ "$RC" -eq 0 ]; then
+    pass "mux" "fno mux ls answers natively (rc=0)"
+  else
+    miss "mux" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
+  fi
+  run_capture "$FNO_DOOR" --version
   if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qE 'fno[[:space:]]+[0-9]+\.[0-9]+'; then
     pass "version" "fno --version runs from the tool bin (rc=0)"
   else
     miss "version" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
   fi
 else
-  miss "version" "fno not found on the tool bin at $FNO_BIN"
+  miss "mux" "fno front door not found on the tool bin at $FNO_DOOR"
+  miss "version" "no front door to forward"
+fi
+
+# --- check 5b: the Python component still answers under its own name ---
+FNO_BIN="$UV_BIN/fno-py"
+if [ -x "$FNO_BIN" ]; then
+  run_capture "$FNO_BIN" --version
+  if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qE 'fno[[:space:]]+[0-9]+\.[0-9]+'; then
+    pass "py-component" "fno-py --version runs from the tool bin (rc=0)"
+  else
+    miss "py-component" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
+  fi
+else
+  miss "py-component" "fno-py not found on the tool bin at $FNO_BIN"
+fi
+
+# --- check 5c: the receipt named the front door with its proof (AC2-HP) ---
+if printf '%s' "$PROVISION_OUT" | grep -q 'fno front door:'; then
+  pass "receipt" "install receipt named the front door path + forwarding proof"
+else
+  miss "receipt" "no 'fno front door:' line in the install receipt"
 fi
 
 # --- check 6: re-run is a clean no-op, no re-provision (US4 / AC4-HP) ---
@@ -150,5 +195,13 @@ else
 fi
 
 echo "---"
-if [ "$fail" -ne 0 ]; then echo "fno.sh smoke: FAILED"; exit 1; fi
+if [ "$fail" -ne 0 ]; then
+  # A failed check prints only its own line. Dump the installer's full
+  # captured output so the next diagnosis reads the real error instead of
+  # guessing from check names.
+  echo "--- installer output (provision run):"
+  printf '%s\n' "$PROVISION_OUT"
+  echo "fno.sh smoke: FAILED"
+  exit 1
+fi
 echo "fno.sh smoke: all checks passed"

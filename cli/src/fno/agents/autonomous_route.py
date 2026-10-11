@@ -1,10 +1,10 @@
 """One quota-aware route decision, shared by every autonomous launcher.
 
 Before this module the two autonomous target launchers disagreed: ``backlog
-advance`` could walk the active combo and land on another harness, while
-``fno agents dispatch`` could only defer or decline-to-defer on the Claude account
-pool. So the all-accounts-walled case terminated in a wait of up to a week
-while an idle Codex subscription sat there.
+advance`` could walk the active combo and land on another harness, while the
+retired ``agents dispatch`` verb (d-496680aa) could only defer or
+decline-to-defer on the Claude account pool. So the all-accounts-walled case
+terminated in a wait of up to a week while an idle Codex subscription sat there.
 
 :func:`select_autonomous_route` is the single seam. It returns one of four
 actions and, for ``cutover``, the complete destination tuple (record, harness,
@@ -23,7 +23,13 @@ import dataclasses
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["AutonomousRoute", "launch_is_pinned", "select_autonomous_route"]
+__all__ = [
+    "AutonomousRoute",
+    "ConfiguredOutageRoute",
+    "configured_outage_routes",
+    "launch_is_pinned",
+    "select_autonomous_route",
+]
 
 
 def launch_is_pinned(
@@ -33,14 +39,15 @@ def launch_is_pinned(
     model: Optional[str] = None,
     account: Optional[str] = None,
     node_cwd: Optional[str] = None,
-    honors_config_harness: bool = True,
 ) -> bool:
     """True when this launch carries explicit intent quota policy must not move.
 
-    One implementation for both autonomous launchers, so they cannot drift on
-    what counts as a pin. Precedence is explicit invocation pin > node pin >
-    configured dispatch harness > quota policy, and each of those outranks an
-    automatic cutover.
+    Precedence is explicit invocation pin > node pin > configured dispatch
+    harness > quota policy, and each of those outranks an automatic cutover.
+    Since there is ONE launcher (`fno agents spawn`), so every caller
+    reads the configured harness the same way and no launcher needs an opt-out
+    from this rung any more - the hardcoded-harness dispatcher that forced the
+    ``honors_config_harness`` escape hatch is gone with the collapse.
 
     The model pin matters as much as the provider one: a cutover swaps the
     harness, so forwarding a claude-only model to codex launches a worker that
@@ -53,12 +60,6 @@ def launch_is_pinned(
         str(node.get(k) or "").strip() for k in ("provider", "model", "harness")
     ):
         return True
-    if not honors_config_harness:
-        # A launcher that hardcodes its harness does not honor this setting, so
-        # letting it pin would suppress a cutover to protect a choice the launch
-        # never makes. Only a launcher that actually reads the setting may pin on
-        # it.
-        return False
     try:
         from fno.config import load_settings, load_settings_for_repo
         from fno.dispatch_flags import configured_dispatch_harness
@@ -104,6 +105,63 @@ class AutonomousRoute:
     defer_fallback: bool = False
 
 
+@dataclasses.dataclass(frozen=True)
+class ConfiguredOutageRoute:
+    """One fully explicit account/model route in configured policy order."""
+
+    record_id: str
+    harness: str
+    provider: str
+    model: str
+    account_env: dict[str, str]
+    route_env: dict[str, str]
+
+
+def configured_outage_routes(
+    node_cwd: str,
+    *,
+    ordered_record_ids: list[str] | None = None,
+) -> list[ConfiguredOutageRoute]:
+    """Return configured combo records with every launch axis explicit."""
+    from fno.adapters.providers.dispatch import dispatch_env
+    from fno.adapters.providers.loader import load_combos, load_providers
+    from fno.agents.dispatch_target import resolve_dispatch_target
+
+    root = Path(node_cwd)
+    config = load_providers(repo_root=root)
+    if ordered_record_ids is None:
+        target = resolve_dispatch_target(
+            "provider-outage-handoff", repo_root=root, env={}
+        )
+        if target.provider_id:
+            ordered_record_ids = [target.provider_id]
+        elif target.combo_name:
+            combo = load_combos(repo_root=root).get(target.combo_name)
+            ordered_record_ids = list(combo.providers) if combo is not None else []
+        else:
+            ordered_record_ids = [config.active] if config.active else []
+
+    routes: list[ConfiguredOutageRoute] = []
+    for record_id in ordered_record_ids:
+        record = config.by_id.get(record_id)
+        if record is None or not all((
+            record.id,
+            record.harness,
+            record.route_provider_id,
+            record.model_name,
+        )):
+            continue
+        routes.append(ConfiguredOutageRoute(
+            record_id=record.id,
+            harness=record.harness,
+            provider=str(record.route_provider_id),
+            model=str(record.model_name),
+            account_env=dispatch_env(record.id, repo_root=root),
+            route_env={},
+        ))
+    return routes
+
+
 def _cutover_low_after_minutes(node_cwd: Optional[str]) -> int:
     try:
         from fno.config import load_settings, load_settings_for_repo
@@ -139,7 +197,7 @@ def _select_destination(
     spawn``, so it passes ``record_id`` as ``--dispatch-account`` and lets the
     front door re-resolve the overlay at the launch boundary; putting it on that
     wrapper's own env would move footnote's state root, because a non-claude
-    record's overlay is a HOME override (x-c33e).
+    record's overlay is a HOME override.
     """
     try:
         from fno.config import load_settings, load_settings_for_repo
@@ -293,9 +351,12 @@ def select_autonomous_route(
         # account is walled while a sibling account has headroom is the stall
         # this whole path exists to delete. A pinned launch skips it - picking is
         # a reroute, and a pin forbids reroutes, not defers. This lives HERE and
-        # not in one caller because the two launchers must reach the same
-        # verdict; when only `fno agents dispatch` had it, identical fixtures deferred
-        # on one path and launched on the other.
+        # not in a caller because the picking incident (2026-08, recorded in the
+        # dual-implementation inventory) happened when only ONE caller had the
+        # check: identical fixtures deferred under `backlog advance` and
+        # launched under the retired dispatch verb. That launcher is gone
+        # (- everything dispatches through `fno agents spawn` now), and
+        # this function stays the single seam every remaining caller reads.
         if not pinned and _healthy_alternate_exists(node_cwd):
             return AutonomousRoute(
                 "stay", "alternate-account-available",

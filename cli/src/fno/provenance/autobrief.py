@@ -1,10 +1,10 @@
-"""Auto-brief resolution for backlog dispatch (x-d1f4).
+"""Auto-brief resolution for backlog dispatch.
 
 ``resolve_dispatch_brief(node)`` is the single entry point the advance-layer
 dispatch call sites use in place of a bare ``node.get("dispatch_brief")``. It is
 a first-non-empty-rung priority chain:
 
-  1. ``node.dispatch_brief``  - operator-authored, verbatim. Over the 8 KB env
+  1. ``node.dispatch_brief``  - superuser-authored, verbatim. Over the 8 KB env
      budget it stays fail-closed DOWNSTREAM (harness_map raises), so it is
      returned unclamped here.
   2. sidecar brief            - ``has_brief`` + ``briefs_dir()/{id}.md``, the
@@ -26,12 +26,13 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from fno.agents.harness_map import _BRIEF_MAX_BYTES
 from fno.provenance.resolver import ResolvedTranscript, resolve_transcript
 
-# The env budget a brief must fit (mirrors harness_map._BRIEF_MAX_BYTES). Auto
-# rungs clamp to it on a UTF-8 byte boundary; the explicit rung is left to the
-# downstream fail-closed gate so operator input is never silently truncated.
-_BRIEF_MAX_BYTES = 8192
+# The env budget is harness_map._BRIEF_MAX_BYTES, imported (one constant, three
+# readers: spawn gate, write-time warn, auto-rung clamp). Auto rungs clamp to it
+# on a UTF-8 byte boundary; the explicit rung is left to the downstream
+# fail-closed gate so operator input is never silently truncated.
 # Details get first claim on the budget; the transcript tail fills what remains.
 _DETAILS_MAX_BYTES = 6144
 # Rough envelope-header reservation when estimating tail headroom; the final
@@ -190,6 +191,9 @@ def _envelope(node: dict, tag: str, details_block: str, tail_block: str) -> str:
     title = node.get("title")
     if isinstance(title, str) and title.strip():
         body.append(f"title: {title.strip()}")
+    reading = node.get("_reading")
+    if isinstance(reading, str) and reading:
+        body.append(reading)
     if details_block:
         body.append("details:")
         body.append(details_block)
@@ -201,7 +205,7 @@ def _envelope(node: dict, tag: str, details_block: str, tail_block: str) -> str:
 
 def _initiator_handle(node: dict) -> Optional[str]:
     """The reply-to mail handle: the live dispatching session's ambient identity
-    (a court king dispatching its wave outranks the historical filer), else the
+    (a team lead dispatching its wave outranks the historical filer), else the
     node's ``source_session_id`` provenance, else None."""
     live = (os.environ.get("FNO_AGENT_SELF") or "").strip()
     if live:
@@ -274,17 +278,22 @@ def _extract_pairs(
         if path is None:
             return []
         if rt.kind == "opencode-db":
-            return _opencode_pairs(path, sid)
-        if rt.harness == "codex":
-            return _codex_pairs(path)
-        return _claude_pairs(path)
+            pairs = _opencode_pairs(path, sid)
+        elif rt.harness == "codex":
+            pairs = _codex_pairs(path)
+        else:
+            pairs = _claude_pairs(path)
     except Exception:
         return []
+    # One batched classify per read: delivered mail never counts as a pair.
+    from fno.mail.envelope import mail_shape
+
+    shapes = mail_shape([text for _, text, _ in pairs])
+    return [p for p, s in zip(pairs, shapes) if s["framing"] == "bare"]
 
 
 def _claude_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
     from fno.agents import read
-    from fno.mail.envelope import contains_fno_mail_tag
 
     pairs: list[tuple[str, str, Optional[float]]] = []
     for line in read._read_jsonl_tail(path, _TAIL_RECORDS_READ):
@@ -295,14 +304,13 @@ def _claude_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
         if not isinstance(msg, dict) or msg.get("role") not in ("user", "assistant"):
             continue
         text = _text_from_content(msg.get("content"))
-        if text and not contains_fno_mail_tag(text):
+        if text:
             pairs.append((msg["role"], text, _parse_ts(rec.get("timestamp"))))
     return pairs
 
 
 def _codex_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
     from fno.agents import read
-    from fno.mail.envelope import contains_fno_mail_tag
 
     pairs: list[tuple[str, str, Optional[float]]] = []
     for line in read._read_jsonl_tail(path, _TAIL_RECORDS_READ):
@@ -315,7 +323,7 @@ def _codex_pairs(path: Path) -> list[tuple[str, str, Optional[float]]]:
         if payload.get("role") not in ("user", "assistant"):
             continue
         text = _text_from_content(payload.get("content"))
-        if text and not contains_fno_mail_tag(text):
+        if text:
             pairs.append((payload["role"], text, _parse_ts(rec.get("timestamp"))))
     return pairs
 
@@ -324,7 +332,6 @@ def _opencode_pairs(
     db_path: Path, session_id: str
 ) -> list[tuple[str, str, Optional[float]]]:
     from fno.agents import discover
-    from fno.mail.envelope import contains_fno_mail_tag
 
     rows = discover.opencode_query(
         db_path,
@@ -340,7 +347,7 @@ def _opencode_pairs(
         if role not in ("user", "assistant") or not isinstance(text, str):
             continue
         text = text.strip()
-        if not text or contains_fno_mail_tag(text):
+        if not text:
             continue
         ts = (ts_ms / 1000.0) if isinstance(ts_ms, (int, float)) else None
         pairs.append((role, text, ts))

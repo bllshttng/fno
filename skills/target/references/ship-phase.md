@@ -65,7 +65,7 @@ if [[ "$pf_required" == "true" && -x scripts/ci/preflight.sh ]]; then
 fi
 ```
 
-- Stock config: no local preflight runs before a push. The focused checks are fmt for Rust changes and the blast-radius tests. `fno doctor lint style` remains a voluntary hand-run verb. CI is the gate. Six concurrent full preflights at load 415 with zero completions set this default.
+- Stock config: no local preflight runs before a push. The focused checks are fmt for Rust changes, `bash scripts/ci/check-file-budget.sh` where the repo ships it, and the blast-radius tests. Run the budget check after each commit that grows code. The number then arrives while a cut is still cheap. `fno doctor lint style` remains a voluntary hand-run verb. CI is the gate. Six concurrent full preflights at load 415 with zero completions set this default.
 - **A project that set `preflight.required = true`:** run `scripts/ci/preflight.sh` (full) before the first push and the settle-green push. Between fix-loop commits (external-review fixes, iteration pushes) run `scripts/ci/preflight.sh --retry-failed`. It re-checks only the legs that failed last time. The legs are smoke, fmt, cargo test, and the leak guard, recorded per leg in `.fno/preflight-last-failed-legs.txt`. Then run one **full** pass before the push you expect to go green. A subset green is not a full green. The runner labels it, and a retry with no usable record runs every leg and earns FULL.
 - The receipt preflight mints is **review-entry evidence, not merge eligibility**. `fno do pr evidence-check` needs it to open the PR only on a project that opted in. Hosted CI on the PR head plus the configured reviewers decide the merge. Nothing local gates the merge. It survives a rebase (`fno do pr evidence-check --allow-rebase-equivalent`, matching verbatim patch ids) but not a code change. It never rescues a failed or pending receipt for HEAD itself.
 - The guard is `-x scripts/ci/preflight.sh`, a relative existence check. It no-ops in any repo that does not ship the script. The self-containment lint forbids repo-root-anchored script refs, and the relative form is portable.
@@ -73,9 +73,9 @@ fi
 
 See the repo-root `docs/preflight.md` for the full convention.
 
-## Link PR→node (right after /pr create, before any merge)
+## Link PR→node (right after /fno:ship pr create, before any merge)
 
-The moment `/pr create` returns the new PR number/URL - for EVERY ship run,
+The moment `/fno:ship pr create` returns the new PR number/URL - for EVERY ship run,
 including `no-merge` - link it to the backlog node so the selection guard
 (`_has_unmerged_open_pr`, `cli/src/fno/graph/cli.py:68`) sees the node is in
 flight. Without this, a `no-merge` worker opens the PR, exits, its PID-based
@@ -86,7 +86,7 @@ This link is the linchpin of the promise-to-merge window: `pr-watch` discovery,
 `fno backlog reconcile`, and merge-triggered auto-continue all find the PR via
 `node.pr_number`. A dropped link blinds the whole chain for exactly that window,
 so the step is **verified, not fire-and-forget**: write, read back, retry once,
-and **refuse to promise** if it still did not stick (x-e106). Do this BEFORE the
+and **refuse to promise** if it still did not stick. Do this BEFORE the
 optional rebase/merge step below, so the link lands even when no merge happens:
 
 ```bash

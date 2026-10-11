@@ -19,6 +19,7 @@ Acceptance criteria (operator-locked):
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -36,6 +37,17 @@ from fno.agents.registry import (
     load_registry,
     write_registry,
 )
+
+
+@pytest.fixture(autouse=True)
+def _graphless_seed_resolver(monkeypatch):
+    """The seed-word gate fails open on an unreadable graph; pin that here so
+    the plumbing tests' fake node words never depend on the ambient store."""
+
+    def _unreadable(path=None, **_):
+        raise ValueError("graph store unreadable")
+
+    monkeypatch.setattr("fno.graph.load.load_graph", _unreadable)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +106,11 @@ def _write_existing_entry(name: str, provider: str, session_id: str) -> None:
 def workdir(tmp_path, monkeypatch):
     """Isolated fno home with codex marked available on PATH."""
     use_tmpdir(monkeypatch, tmp_path)
+    # Pin the repo root and stand inside the sandbox: the spawn default-move
+    # compares caller cwd to the canonical root, and the receipt is only
+    # byte-stable when every resolution branch short-circuits to tmp.
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "codex").write_text("#!/bin/sh\necho fake\n", encoding="utf-8")
@@ -107,6 +124,9 @@ def workdir_claude(tmp_path, monkeypatch):
     """Isolated fno home with claude marked available on PATH."""
     from tests.agents._fake_claude import install_fake_claude
     use_tmpdir(monkeypatch, tmp_path)
+    # Same pin as workdir: keep the default-move resolver inside the sandbox.
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     bin_dir = tmp_path / "bin"
     install_fake_claude(bin_dir)
     monkeypatch.setenv("PATH", str(bin_dir))
@@ -157,20 +177,28 @@ def test_spawn_once_codex_happy_path(workdir, fake_codex_create_once, monkeypatc
 
 
 def test_spawn_once_codex_normalizes_direct_plugin_command(
-    workdir, fake_codex_create_once
+    workdir, fake_codex_create_once, loop_admission_ready
 ) -> None:
-    """The Python headless fallback is a direct-spawn choke point too."""
+    """The Python headless fallback is a direct-spawn choke point too.
+
+    The payload stays prose: a node-id payload now trips the
+    payload-named-node guard (no readable row, by design), which this file's
+    normalization subject does not touch.
+    """
     from fno.agents.cli import agents_app
 
     result = _make_runner().invoke(
         agents_app,
-        ["spawn", "--name", "tmp-skill", "-H", "codex", "--once", "/fno:target x-81ad"],
+        [
+            "spawn", "--name", "tmp-skill", "-H", "codex", "--once",
+            "/fno:target normalize the direct plugin command",
+        ],
         catch_exceptions=False,
     )
 
     assert result.exit_code == 0, result.output
     prompt = fake_codex_create_once.call_args.kwargs["prompt"]
-    assert prompt.startswith("$fno:target x-81ad\n\n")
+    assert prompt.startswith("$fno:target normalize the direct plugin command\n\n")
     assert prompt.count("<fno_relay_compression>") == 1
 
 
@@ -314,7 +342,7 @@ def test_spawn_claude_plain(workdir_claude) -> None:
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "myagent-c", "-H", "claude", "hello", "--substrate", "bg"],
+        ["spawn", "--name", "myagent-c", "-H", "claude", "hello", "--substrate", "thread"],
         catch_exceptions=False,
     )
 
@@ -360,14 +388,30 @@ def test_spawn_claude_command_receipt_names_effective_message(workdir_claude) ->
         agents_app,
         [
             "spawn", "--name", "command-c", "-H", "claude",
-            "/fno:pr check 7", "--substrate", "bg",
+            "/fno:ship pr check 7", "--substrate", "thread",
         ],
         catch_exceptions=False,
     )
 
     assert result.exit_code == 0, result.output
     receipt = json.loads(_receipt_line(result.output))
-    assert receipt["effective_message"] == "/fno:pr check 7"
+    assert receipt["effective_message"] == "/fno:ship pr check 7"
+
+
+def test_spawn_refuses_a_payload_whose_verb_the_shell_ate(workdir) -> None:
+    """zsh turns a double-quoted `$fno:target x-1` into `arget x-1`. The spawn
+    refuses it before launching anything, instead of seeding a worker with prose."""
+    from fno.agents.cli import agents_app
+
+    result = _make_runner().invoke(
+        agents_app,
+        ["spawn", "--name", "eaten-c", "-H", "codex", "arget x-1", "--substrate", "thread"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "Single-quote the payload: '$fno:target ...'" in result.output
+    assert not any(e.name == "eaten-c" for e in load_registry())
 
 
 def test_spawn_claude_receipt_surfaces_moved_cwd(workdir_claude, monkeypatch) -> None:
@@ -384,7 +428,7 @@ def test_spawn_claude_receipt_surfaces_moved_cwd(workdir_claude, monkeypatch) ->
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "moved-c", "-H", "claude", "hello", "--substrate", "bg"],
+        ["spawn", "--name", "moved-c", "-H", "claude", "hello", "--substrate", "thread"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
@@ -410,7 +454,7 @@ def test_spawn_claude_receipt_cwd_json_encoded(workdir_claude, monkeypatch) -> N
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "bs-c", "-H", "claude", "hello", "--substrate", "bg"],
+        ["spawn", "--name", "bs-c", "-H", "claude", "hello", "--substrate", "thread"],
         catch_exceptions=False,
     )
     assert result.exit_code == 0, result.output
@@ -446,20 +490,36 @@ def test_spawn_claude_once_uses_headless(workdir_claude) -> None:
 
 
 def test_spawn_codex_plain_no_once_requires_runtime(workdir, monkeypatch) -> None:
-    """Codex thread spawn reports the missing Rust runtime distinctly."""
+    """Codex thread spawn refuses on a missing runtime before any dispatch.
+
+    The gate is a binary verb now: with no fno-agents on the machine the gate
+    transport cannot even be asked, and the spawn refuses fail-closed at the
+    gate (87, gate_unavailable) instead of reaching the lane's own exit-13
+    check. 13 remains the lane's own code for a readable gate whose worker
+    binary is missing.
+    """
+    from fno import rust_binary
     from fno.agents.cli import agents_app
+
+    # A smoke run preserves a real fno-agents for the claim door and may leave
+    # it reachable; this test pins the missing-runtime refusal, so force the
+    # fallback by stubbing both resolvers.
+    monkeypatch.setattr(rust_binary, "resolve_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: None)
+    monkeypatch.setattr(rust_binary, "find_dev_binary", lambda: None)
 
     runner = _make_runner()
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "ptagent", "-H", "codex", "hello", "--substrate", "bg"],
+        ["spawn", "--name", "ptagent", "-H", "codex", "hello", "--substrate", "thread"],
     )
 
-    assert result.exit_code == 13, (
-        f"expected exit 13 for plain codex spawn in Python fallback, got {result.exit_code}\n"
+    assert result.exit_code == 87, (
+        f"expected exit 87 for a codex spawn with no runtime at all, got {result.exit_code}\n"
         f"output: {result.output}"
     )
-    assert "fno-agents runtime" in result.output
+    assert "gate_unavailable" in result.output
+    assert "fno-agents" in result.output
 
 
 def test_spawn_unknown_provider_exits_2(workdir, monkeypatch, tmp_path) -> None:
@@ -517,38 +577,324 @@ def test_spawn_thread_refusal_names_axis_and_actual_accept_set(workdir) -> None:
     assert "agy" not in result.output
 
     # A DECLARED pane-only harness keeps the accept-set message (x-8f7f).
+    # agy joined SPAWN_HARNESSES in x-d145, so the declared pane-only name
+    # asserted here is gemini: it carries a capability row (so it passes the
+    # undeclared arm above) and stays out of the tuple.
     declared = _make_runner().invoke(
         agents_app,
         [
-            "spawn", "--name", "fooagent2", "--harness", "pi",
+            "spawn", "--name", "fooagent2", "--harness", "gemini",
             "--substrate", "thread", "hello",
         ],
     )
     assert declared.exit_code == 2
     assert (
-        "unknown harness 'pi' on the thread substrate (--harness names the "
+        "unknown harness 'gemini' on the thread substrate (--harness names the "
         f"CLI BINARY); accepted here: {', '.join(SPAWN_HARNESSES)}."
     ) in declared.output
-    assert "agy and gemini launch on --substrate pane only." in declared.output
+    # The pane sentence derives from the tuple now, so it names the refused
+    # harness and can never contradict the accept list beside it.
+    assert "gemini has no measured thread lane yet; use --substrate pane." in declared.output
 
 
 def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     from fno.agents import dispatch
 
+    from fno import harness_names
+
     dispatch._check_spawn_harness("opencode")
+    # Patch the ONE tuple the message builder reads. dispatch's own import is a
+    # second binding of the same names, and patching it would prove nothing
+    # about where the rendered text comes from.
     monkeypatch.setattr(
-        dispatch, "SPAWN_HARNESSES", (*dispatch.SPAWN_HARNESSES, "future")
+        harness_names, "SPAWN_HARNESSES", (*harness_names.SPAWN_HARNESSES, "future")
     )
 
     with pytest.raises(dispatch.DispatchAskError) as caught:
         # A DECLARED harness outside SPAWN_HARNESSES renders the accept set;
         # an undeclared name takes the undeclared arm instead, so the set is
-        # asserted through a declared pane-only harness (pi).
-        dispatch._check_spawn_harness("pi")
+        # asserted through a declared pane-only harness (gemini; pi joined the
+        # set in x-43bd and agy in x-d145).
+        dispatch._check_spawn_harness("gemini")
 
-    expected = ", ".join((*dispatch.SPAWN_HARNESSES,))
+    expected = ", ".join(harness_names.SPAWN_HARNESSES)
     assert f"accepted here: {expected}" in str(caught.value)
     assert expected.endswith("future"), "the monkeypatched name must be rendered"
+    # The pane sentence derives too: it names the refused harness, never a
+    # hardcoded roster that the tuple can outgrow.
+    assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
+
+
+def test_thread_refusal_is_one_message_across_both_seams(monkeypatch) -> None:
+    """The spawn seam and the dispatch-lanes seam raise the SAME text.
+
+    Two files used to render the accept set from the tuple and then hardcode
+    the same pane-only sentence beside it, so one could name a harness the
+    other had since admitted - and did.
+    """
+    from typer.testing import CliRunner
+
+    from fno.agents import dispatch
+    from fno.backlog import advance
+    from fno.graph import cli as graph_cli
+
+    with pytest.raises(dispatch.DispatchAskError) as caught:
+        dispatch._check_spawn_harness("gemini")
+
+    monkeypatch.setattr(advance, "dispatch_lanes", lambda *a, **k: [])
+    lanes = CliRunner().invoke(
+        graph_cli.cli, ["dispatch-lanes", "--harness", "gemini", "--max", "1"]
+    )
+
+    assert lanes.exit_code == 2
+    for line in str(caught.value).splitlines():
+        assert line in lanes.output
+
+
+def test_spawn_pi_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:
+    """x-43bd arm 1: the seam is substrate-aware. pi passes on thread (its
+    keeper lane is journey-proven) and refuses on headless, naming the
+    `unmeasured` stance - not the old `unknown harness` contradiction."""
+    from fno.agents import dispatch
+
+    # Positive marker: the accepted name RETURNS rather than raising.
+    dispatch._check_spawn_harness("pi", headless=False)
+    dispatch._check_spawn_harness("pi")
+
+    with pytest.raises(dispatch.DispatchAskError) as caught:
+        dispatch._check_spawn_harness("pi", headless=True)
+    message = str(caught.value)
+    assert "unmeasured" in message
+    assert "headless" in message
+    assert "unattended journey" in message
+    assert "unknown harness" not in message
+
+
+def test_spawn_pi_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) -> None:
+    """`dispatch_spawn -H pi --substrate thread` reaches `_lane_b_thread_spawn`
+    and returns its session id - the refusal text `unknown harness 'pi' on the
+    thread substrate` never renders (x-43bd AC). The seed rides the keeper
+    paste, keyed to the MINTED id and pi's own composer-ready marker."""
+    from fno.agents import dispatch
+
+    calls: list[dict] = []
+    seeds: list[dict] = []
+
+    def _fake_lane_b(*, name, harness, cwd, lock_timeout, **_extra):
+        calls.append({"name": name, "harness": harness, "cwd": cwd})
+        return {
+            "name": name,
+            "harness": harness,
+            "session_id": "minted-pi-thread-id",
+            "keeper_socket": "/tmp/does-not-matter.sock",
+            "keeper_pid": 1,
+            "child_pid": 2,
+            "argv": ["pi"],
+        }
+
+    def _fake_seed(*, name, session_id, sock, message, ready_marker):
+        seeds.append(
+            {
+                "name": name,
+                "session_id": session_id,
+                "sock": str(sock),
+                "message": message,
+                "ready_marker": ready_marker,
+            }
+        )
+
+    monkeypatch.setattr(dispatch, "_lane_b_thread_spawn", _fake_lane_b)
+    monkeypatch.setattr(dispatch, "_keeper_seed_submit", _fake_seed)
+
+    result = dispatch.dispatch_spawn(
+        name="wkpi",
+        message="hello",
+        harness="pi",
+        cwd=workdir,
+    )
+
+    assert result.kind == "created"
+    assert result.provider == "pi"
+    assert result.short_id == "minted-pi-thread-id"
+    assert calls == [
+        {"name": "wkpi", "harness": "pi", "cwd": workdir}
+    ], "the pi branch must drive the keeper lane exactly once"
+    # One seed, keyed to the minted id, pasted against pi's own ready marker.
+    # The message arrives with the ambient relay-compression envelope appended,
+    # so it is asserted by its start, never by equality.
+    assert len(seeds) == 1, f"exactly one seed paste, got {seeds!r}"
+    seed = seeds[0]
+    assert seed["name"] == "wkpi"
+    assert seed["session_id"] == "minted-pi-thread-id"
+    assert seed["sock"] == "/tmp/does-not-matter.sock"
+    assert seed["message"].startswith("hello")
+    assert seed["ready_marker"] == b"(sub)"
+
+
+def test_spawn_agy_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:
+    """agy passes on thread (its keeper lane is journey-proven) and refuses on
+    headless. The refusal cannot come from the seam here: agy's
+    state_root_grant records the write-access MECHANISM per lane
+    (--add-dir on all three), never whether a lane has been run, so the
+    unmeasured-stance check passes for headless too. dispatch_spawn states it
+    instead, and the message must name the lane rather than call agy
+    pane-only."""
+    from fno.agents import dispatch
+
+    # Positive marker: the accepted name RETURNS rather than raising.
+    dispatch._check_spawn_harness("agy", headless=False)
+    dispatch._check_spawn_harness("agy")
+
+
+def test_spawn_agy_headless_refuses_by_name(workdir, monkeypatch) -> None:
+    from fno.agents import dispatch
+
+    monkeypatch.setattr(
+        dispatch,
+        "_lane_b_thread_spawn",
+        lambda **kw: pytest.fail("headless must never reach the keeper lane"),
+    )
+    with pytest.raises(dispatch.DispatchAskError) as caught:
+        dispatch.dispatch_spawn(
+            name="wkagyh", message="hello", harness="agy", cwd=workdir, headless=True
+        )
+    message = str(caught.value)
+    assert "unmeasured" in message
+    assert "--substrate thread" in message
+    assert "no measured thread lane" not in message, (
+        "the merged measurement disproved that sentence for agy"
+    )
+
+
+def test_a_keeper_lane_demotes_the_permission_axis_it_does_not_carry(
+    tmp_path, monkeypatch
+) -> None:
+    """The permission axis is an axis like any other. pi's keeper lane takes
+    no permission mode, so the resolver demotes the spawn to the pane loudly
+    instead of dropping the axis in silence."""
+    import typer
+    from typer.testing import CliRunner
+
+    from fno.agents import cli as agents_cli
+    from fno.agents.keeper_thread import LAUNCH_AXES, keeper_arm
+    from fno.agents.mux_spawn import dispatch_spawn_bounded_pane as _pane_dispatch
+    from fno.paths_testing import use_tmpdir
+
+    assert ("--permission-mode", "permission_mode") in LAUNCH_AXES
+    assert "permission_mode" not in keeper_arm("pi")["carries"]
+    for harness in ("cursor-agent", "grok", "agy"):
+        assert "permission_mode" in keeper_arm(harness)["carries"], harness
+
+    use_tmpdir(monkeypatch, tmp_path)
+    monkeypatch.setenv("FNO_AGENTS_RUNTIME", "python")
+    sent: dict = {}
+
+    def recorder(**kwargs):
+        sent.update(kwargs)
+        raise typer.Exit(code=0)
+
+    monkeypatch.setattr("fno.agents.mux_spawn.dispatch_spawn_bounded_pane", recorder)
+    del _pane_dispatch
+
+    result = CliRunner().invoke(
+        agents_cli.agents_app,
+        [
+            "spawn", "hello", "--name", "wkpiperm", "-H", "pi",
+            "--permission-mode", "yolo",
+        ],
+    )
+    assert sent.get("provider") == "pi", (
+        f"expected a pane dispatch, got exit {result.exit_code}\noutput: {result.output}"
+    )
+    assert "no carrier for --permission-mode" in result.output, result.output
+
+
+def test_spawn_agy_thread_branch_drives_the_keeper_lane(workdir, monkeypatch) -> None:
+    """`dispatch_spawn -H agy --substrate thread` reaches
+    `_lane_b_thread_spawn` and returns its minted conversation id - the
+    refusal text `unknown harness 'agy' on the thread substrate` never
+    renders. The seed rides the keeper paste, keyed to that id and agy's own
+    composer-ready marker."""
+    from fno.agents import dispatch
+
+    calls: list[dict] = []
+    seeds: list[dict] = []
+
+    def _fake_lane_b(**kwargs):
+        calls.append(kwargs)
+        return {
+            "name": kwargs["name"],
+            "harness": kwargs["harness"],
+            "session_id": "c5661b28-bcba-4690-8b2e-4a4a88541e8c",
+            "keeper_socket": "/tmp/does-not-matter.sock",
+            "keeper_pid": 1,
+            "child_pid": 2,
+            "argv": ["agy"],
+        }
+
+    def _fake_seed(*, name, session_id, sock, message, ready_marker, clear_modal):
+        seeds.append(
+            {
+                "session_id": session_id,
+                "message": message,
+                "marker": ready_marker,
+                "modal": clear_modal,
+            }
+        )
+
+    monkeypatch.setattr(dispatch, "_lane_b_thread_spawn", _fake_lane_b)
+    monkeypatch.setattr(dispatch, "_keeper_seed_submit", _fake_seed)
+
+    result = dispatch.dispatch_spawn(
+        name="wkagy", message="hello", harness="agy", cwd=workdir, model="gemini-3-pro"
+    )
+
+    assert result.kind == "created"
+    assert result.provider == "agy"
+    assert result.short_id == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
+    assert len(calls) == 1, "the agy branch must drive the keeper lane exactly once"
+    assert calls[0]["harness"] == "agy"
+    assert calls[0]["model"] == "gemini-3-pro", "the model axis rides the lane"
+    assert len(seeds) == 1, f"exactly one seed paste, got {seeds!r}"
+    assert seeds[0]["session_id"] == "c5661b28-bcba-4690-8b2e-4a4a88541e8c"
+    assert seeds[0]["message"].startswith("hello")
+    assert seeds[0]["marker"] == b"? for shortcuts"
+    # A keeper has nobody to answer agy's folder-trust modal, and a TUI behind
+    # one runs nothing while holding a live row, so the seed carries the answer.
+    assert seeds[0]["modal"] is not None
+    pattern, keys = seeds[0]["modal"]
+    assert re.search(pattern, "Do you trust the contents of this project?", re.I)
+    assert keys == b"\r"
+
+
+def test_spawn_seam_refuses_an_absent_stance(monkeypatch) -> None:
+    """A future SPAWN_HARNESSES member whose row records no stance for the
+    requested substrate is refused beside the \"unmeasured\" one: silence
+    would let it inherit a pass from the lanes that did run."""
+    import fno.agents.harness_map as harness_map
+    from fno.agents import dispatch
+
+    monkeypatch.setattr(
+        dispatch,
+        "SPAWN_HARNESSES",
+        (*dispatch.SPAWN_HARNESSES, "future"),
+    )
+    real_caps = harness_map.capabilities_or_undeclared
+
+    def caps_without_stance(harness):
+        caps = dict(real_caps("claude"))
+        caps["state_root_grant"] = {"pane": "unsandboxed", "thread": "unsandboxed"}
+        return caps
+
+    monkeypatch.setattr(
+        harness_map, "capabilities_or_undeclared", caps_without_stance
+    )
+    dispatch._check_spawn_harness("future", headless=False)
+    with pytest.raises(dispatch.DispatchAskError) as caught:
+        dispatch._check_spawn_harness("future", headless=True)
+    message = str(caught.value)
+    assert "absent or unmeasured" in message
+    assert "headless" in message
 
 
 def test_route_on_an_undeclared_harness_refuses_cleanly(
@@ -652,6 +998,15 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
         return "ses_deleg1"
 
     monkeypatch.setattr(dispatch_mod, "_opencode_serve_spawn", _fake_serve)
+    monkeypatch.setattr(
+        "fno.graph.store.read_nodes_by_ids",
+        lambda path, tokens: {"entries": [{"id": "x-abcd", "slug": "serve", "dispatch_verb": "/target", "difficulty": "low"}], "missing": []},
+    )
+    # The composed node seed is target-family; this machine may lack the
+    # opencode loop extension. The gate has its own test file.
+    monkeypatch.setattr(
+        "fno.agents.harness_map.check_loop_participation", lambda *a, **k: None
+    )
 
     runner = _make_runner()
     result = runner.invoke(
@@ -663,11 +1018,13 @@ def test_spawn_opencode_bg_delegates_to_serve_lane(workdir, monkeypatch) -> None
             "-H",
             "opencode",
             "--substrate",
-            "bg",
+            "thread",
             "--node",
             "x-abcd",
             "--cwd",
             str(workdir),
+            "--session-phase",
+            "do",
             "run the node",
         ],
     )
@@ -699,7 +1056,7 @@ def test_spawn_opencode_bg_once_refused(workdir) -> None:
             "-H",
             "opencode",
             "--substrate",
-            "bg",
+            "thread",
             "--once",
             "--cwd",
             str(workdir),
@@ -713,10 +1070,22 @@ def test_spawn_opencode_bg_once_refused(workdir) -> None:
     assert "headless" in result.output
 
 
-def test_spawn_opencode_bg_role_refused(workdir) -> None:
-    """--role has no carrier on the serve row, so it is refused loudly rather
-    than silently dropped."""
+def test_spawn_opencode_bg_role_demotes_to_pane(workdir, monkeypatch) -> None:
+    """--role has no carrier on the serve row, so the resolver demotes the
+    spawn to the pane loudly instead of refusing on the substrate."""
+    import typer
+
     from fno.agents.cli import agents_app
+    from fno.agents.mux_spawn import dispatch_spawn_bounded_pane as _pane_dispatch
+
+    sent: dict = {}
+
+    def recorder(**kwargs):
+        sent.update(kwargs)
+        raise typer.Exit(code=0)
+
+    monkeypatch.setattr("fno.agents.mux_spawn.dispatch_spawn_bounded_pane", recorder)
+    del _pane_dispatch
 
     runner = _make_runner()
     result = runner.invoke(
@@ -728,7 +1097,7 @@ def test_spawn_opencode_bg_role_refused(workdir) -> None:
             "-H",
             "opencode",
             "--substrate",
-            "bg",
+            "thread",
             "--role",
             "archer",
             "--cwd",
@@ -737,9 +1106,10 @@ def test_spawn_opencode_bg_role_refused(workdir) -> None:
         ],
     )
 
-    assert result.exit_code == 2, (
-        f"expected exit 2, got {result.exit_code}\noutput: {result.output}"
+    assert sent.get("provider") == "opencode", (
+        f"expected a pane dispatch, got exit {result.exit_code}\noutput: {result.output}"
     )
+    assert "no carrier for --role" in result.output, result.output
     assert "--role" in result.output
 
 
@@ -758,7 +1128,7 @@ def test_spawn_opencode_bg_resume_refused(workdir) -> None:
             "-H",
             "opencode",
             "--substrate",
-            "bg",
+            "thread",
             "--resume",
             "ses_old123",
             "--cwd",
@@ -792,3 +1162,43 @@ def test_opencode_serve_spawn_without_binary_exits_13(workdir, monkeypatch) -> N
     assert exc_info.value.exit_code == 13
     assert "--substrate pane" in str(exc_info.value)
     assert dispatch_mod._opencode_serve_spawn is _opencode_serve_spawn
+
+
+def test_keeper_lane_child_env_never_inherits_the_spawn_trigger(
+    workdir, monkeypatch
+) -> None:
+    """The keeper lane captures the spawn cause BEFORE its env snapshot: a
+    machine dispatch routed through a keeper thread must leave no
+    FNO_SPAWN_TRIGGER in the worker's ambient env, or the worker's own ask
+    events mislabel as dispatcher and its own spawns inherit the cause."""
+    from fno.agents import dispatch
+
+    monkeypatch.setattr(dispatch, "_lane_b_worker_binary", lambda: Path("/fake/worker"))
+    monkeypatch.setattr(dispatch, "_mint_thread_session_id", lambda *a, **k: "minted-1")
+    monkeypatch.setattr(
+        "fno.agents.harness_map.render_session_argv", lambda *a, **k: ["pi"]
+    )
+    monkeypatch.setattr(dispatch, "complete_launch_argv", lambda *a, **k: ["pi"])
+
+    captured: dict = {}
+
+    class _Boom(Exception):
+        pass
+
+    real_popen = dispatch.subprocess.Popen
+
+    def _fake_popen(*args, **kwargs):
+        if "env" not in kwargs:  # the registry door, not the keeper launch
+            return real_popen(*args, **kwargs)
+        captured["env"] = kwargs["env"]
+        raise _Boom("stop before the keeper starts")
+
+    monkeypatch.setattr(dispatch.subprocess, "Popen", _fake_popen)
+    monkeypatch.setenv("FNO_SPAWN_TRIGGER", "dispatch:ac")
+
+    with pytest.raises(_Boom):
+        dispatch._lane_b_thread_spawn(
+            name="probe-trigger", harness="pi", cwd=str(workdir), lock_timeout=1.0
+        )
+
+    assert "FNO_SPAWN_TRIGGER" not in captured["env"]

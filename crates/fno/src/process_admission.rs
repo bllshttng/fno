@@ -1,3 +1,11 @@
+//! Process admission: the machine-load gate for fno's own spawns.
+//!
+//! The default is admit: nothing blocks a human's own fno start, and no
+//! spawn fno makes for any internal purpose is ever measured or held. The
+//! only caller a gate may slow is a new agent or harness launch that an
+//! agent asked for, and only through that entry's explicit opt-in
+//! ([`admit_agent_spawn`]).
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -85,8 +93,27 @@ impl MaxPanes {
 /// headroom.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Census {
-    Complete { count: ProcessCount },
-    Unavailable { reason: String },
+    Complete {
+        count: ProcessCount,
+    },
+    Unavailable {
+        reason: String,
+    },
+    /// No reading is owed because no source exists: this build carries no
+    /// snapshot arm, or this host has no /proc directory. A fact about the
+    /// world, so a retry cannot change it. Admit and let the caller's own
+    /// error speak: the spawn below names the real limit.
+    NoSource {
+        reason: String,
+    },
+    /// This process holds no descriptor left to read the table with
+    /// (EMFILE, ENFILE). Also a fact, but distinct from an absent source:
+    /// the host has a census, this process just cannot open one more file.
+    /// A process in that state cannot spawn a child either, so admit and
+    /// let the spawn below name the limit it actually hit.
+    DescriptorsExhausted {
+        reason: String,
+    },
 }
 
 impl Census {
@@ -101,6 +128,18 @@ impl Census {
             reason: reason.into(),
         }
     }
+
+    pub fn no_source(reason: impl Into<String>) -> Self {
+        Self::NoSource {
+            reason: reason.into(),
+        }
+    }
+
+    pub fn descriptors_exhausted(reason: impl Into<String>) -> Self {
+        Self::DescriptorsExhausted {
+            reason: reason.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +148,8 @@ pub enum AdmissionReason {
     MeasurementUnavailable,
     LockUnavailable,
     EnvOverrideInvalid,
+    /// The machine arm's runaway brake holds: the box itself is failing.
+    MachineRunaway,
 }
 
 /// The result of one pre-spawn decision.
@@ -186,11 +227,12 @@ impl AdmissionPermit {
             return Ok(());
         }
         let path = admission_marker_path()?;
-        let start = crate::proto::pid_start_time(pid).ok_or_else(|| {
-            io::Error::other(format!(
-                "process start time unavailable for child pid {pid}"
-            ))
-        })?;
+        // An unrecorded child undercounts the census by one. A killed child
+        // is a lost spawn, and every caller kills on Err. The smaller harm
+        // wins, so an unreadable start time skips the marker.
+        let Some(start) = marker_start_time(pid, crate::proto::pid_start_time) else {
+            return Ok(());
+        };
         let mut markers = OpenOptions::new().create(true).append(true).open(&path)?;
         #[cfg(unix)]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
@@ -224,9 +266,10 @@ impl AdmissionDecision {
             AdmissionReason::MeasurementUnavailable => "measurement-unavailable",
             AdmissionReason::LockUnavailable => "lock-unavailable",
             AdmissionReason::EnvOverrideInvalid => "env-override-invalid",
+            AdmissionReason::MachineRunaway => "machine-runaway",
         };
         Some(format!(
-            "process admission refused: count={count} ceiling={ceiling} scope={} reason={reason}{BYPASS_HINT}",
+            "process admission refused: count={count} ceiling={ceiling} scope={} reason={reason}",
             scope.as_str(),
         ))
     }
@@ -256,6 +299,12 @@ pub fn decide_processes(census: &Census, ceiling: MaxProcesses) -> AdmissionDeci
             scope: Scope::Fleet,
             reason: AdmissionReason::MeasurementUnavailable,
         },
+        // No source and descriptors-exhausted are not headroom and not a
+        // refusal: the facts behind them (no snapshot arm, no /proc, no
+        // descriptor) cannot change by re-reading, and a process in either
+        // state fails its own spawn one layer down with a message naming
+        // the real limit.
+        Census::NoSource { .. } | Census::DescriptorsExhausted { .. } => AdmissionDecision::Admit,
     }
 }
 
@@ -274,28 +323,174 @@ pub fn decide_panes(count: PaneCount, ceiling: MaxPanes) -> AdmissionDecision {
 
 pub const DEFAULT_MAX_PROCESSES: usize = 400;
 pub const DEFAULT_PANE_GROUP_MAX: usize = 4;
-/// The recovery hint every refusal carries, shared with the e2e assertions so
-/// the string can only drift in one place.
-pub const BYPASS_HINT: &str = "; set FNO_PROCESS_ADMISSION=off to bypass this gate for recovery; the value is inherited by children spawned from that shell";
 const LOCK_FILE: &str = "fno-process-admission.lock";
 const CHILD_MARKERS_FILE: &str = "fno-process-admission.children";
 const ADMISSION_SWITCH: &str = "FNO_PROCESS_ADMISSION";
 
+/// The accepted spellings. An invalid value refuses the spawn, so this is
+/// the one switch in the codebase whose vocabulary an operator meets while
+/// already wedged; it accepts the obvious synonyms rather than failing
+/// closed on a plausible one. The arrays are the parser and
+/// `ADMISSION_ACCEPTED` is what the operator reads, so a test holds the two
+/// together rather than a comment asking that they be kept in step.
+const ADMISSION_OFF: [&str; 4] = ["off", "false", "0", "no"];
+const ADMISSION_ON: [&str; 4] = ["on", "true", "1", "yes"];
+/// Shared with the e2e assertions so the accepted set an operator is shown
+/// can only drift in one place.
+pub const ADMISSION_ACCEPTED: &str = "on|true|1|yes and off|false|0|no";
+
+/// True when the switch says the gate is disabled.
+fn parse_admission_switch(value: &str) -> Result<bool, String> {
+    // Trimming first: a templated env file loves to append a newline or a
+    // trailing space, and a switch that refuses on whitespace is a switch
+    // that strands a wedged fleet over invisible bytes.
+    let trimmed = value.trim();
+    if ADMISSION_OFF
+        .iter()
+        .any(|accepted| trimmed.eq_ignore_ascii_case(accepted))
+    {
+        return Ok(true);
+    }
+    if ADMISSION_ON
+        .iter()
+        .any(|accepted| trimmed.eq_ignore_ascii_case(accepted))
+    {
+        return Ok(false);
+    }
+    Err(format!(
+        "{ADMISSION_SWITCH}={value:?} is invalid; accepted values are {ADMISSION_ACCEPTED}"
+    ))
+}
+
 fn admission_disabled() -> Result<bool, String> {
     match std::env::var(ADMISSION_SWITCH) {
-        // Trimming first: a templated env file loves to append a newline or a
-        // trailing space, and a switch that refuses on whitespace is a switch
-        // that strands a wedged fleet over invisible bytes.
-        Ok(value) if value.trim().eq_ignore_ascii_case("off") => Ok(true),
-        Ok(value) if value.trim().eq_ignore_ascii_case("on") => Ok(false),
-        Ok(value) => Err(format!(
-            "{ADMISSION_SWITCH}={value:?} is invalid; accepted values are on|off"
-        )),
+        Ok(value) => parse_admission_switch(&value),
         Err(std::env::VarError::NotPresent) => Ok(false),
         Err(std::env::VarError::NotUnicode(_)) => Err(format!(
-            "{ADMISSION_SWITCH} is not valid UTF-8; accepted values are on|off"
+            "{ADMISSION_SWITCH} is not valid UTF-8; accepted values are {ADMISSION_ACCEPTED}"
         )),
     }
+}
+
+/// Where admission looks for the machine arm's runaway brake. Resolves the
+/// same table row the fno-agents writer does, so reader and writer follow
+/// the migrated file together; `FNO_MACHINE_BRAKE` overrides the full path.
+fn brake_file_path() -> Option<std::path::PathBuf> {
+    if let Some(v) = std::env::var_os("FNO_MACHINE_BRAKE").filter(|v| !v.is_empty()) {
+        return Some(std::path::PathBuf::from(v));
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(crate::state_layout::place(
+        &std::path::PathBuf::from(home).join(".fno"),
+        "machine-brake.json",
+    ))
+}
+
+/// The machine arm's runaway brake, honored at admission: an unexpired brake
+/// refuses every agent spawn and names the group that caused it. A missing,
+/// unreadable, or expired file is ignored - the brake is arm-authored and
+/// self-expiring, and the attributed-process ceiling stays the hard gate.
+/// Answers the brake's `until_epoch` and its file body.
+fn runaway_brake() -> Option<(u64, serde_json::Value)> {
+    let text = std::fs::read_to_string(brake_file_path()?).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let until = value.get("until_epoch")?.as_u64()?;
+    (unix_now()? < until).then_some((until, value))
+}
+
+fn unix_now() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
+}
+
+/// The hold line for an armed brake. It reads the process table, so only a
+/// refusal or a first warning pays for it.
+fn describe_brake(until: u64, value: &serde_json::Value) -> String {
+    let left = until.saturating_sub(unix_now().unwrap_or(until));
+    let reason = value
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unspecified");
+    let group = match value.get("group") {
+        None | Some(serde_json::Value::Null) => "unmeasured".to_string(),
+        Some(group) => {
+            let ppid = group
+                .get("ppid")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            // The arm wrote the fleet/outside split it measured; an older
+            // brake without the fields names only the group.
+            let split = value
+                .get("fleet_cores")
+                .and_then(serde_json::Value::as_f64)
+                .zip(
+                    value
+                        .get("machine_cores")
+                        .and_then(serde_json::Value::as_f64),
+                )
+                .map(|(fleet, machine)| {
+                    format!(" (fleet {fleet:.1} of {machine:.1} machine cores)")
+                })
+                .unwrap_or_default();
+            format!(
+                "{} x{} (ppid {ppid}){split}",
+                group
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("?"),
+                group
+                    .get("count")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+            )
+        }
+    };
+    format!("machine runaway brake holds ({left}s left): {reason}; largest group {group}")
+}
+
+/// True when this process carries a worker identity. Only an agent-origin
+/// caller of the agent-spawn entry can be held: the arm attributes load
+/// before it arms the brake, so a refusal there means fno's own fan-out,
+/// never the user's tap or their mux server.
+fn agent_origin() -> bool {
+    std::env::var_os("FNO_AGENT_SELF")
+        .filter(|name| !name.is_empty())
+        .is_some()
+}
+
+/// The server's start: a server an agent spawned inherits its worker
+/// identity and a background QoS policy, so the agent-spawn gate would hold
+/// the user's taps and the server would run demoted. Stripping the identity
+/// and clearing the inherited policy keeps fno's most important process out
+/// of both traps. A no-op on Linux.
+pub fn claim_server_priority() {
+    std::env::remove_var("FNO_AGENT_SELF");
+    #[cfg(target_os = "macos")]
+    unsafe {
+        // PRIO_DARWIN_PROCESS 0,0 clears an inherited background policy on
+        // the calling process; permitted without root for self.
+        libc::setpriority(libc::PRIO_DARWIN_PROCESS, 0, 0);
+    }
+}
+
+/// The brake check behind the agent-spawn door's opt-in. The brake is a
+/// world fact the arm measured, so it outranks the census read that
+/// follows it.
+fn brake_check(scope: Scope, ceiling: usize) -> Result<(), AdmissionFailure> {
+    let Some((until, value)) = runaway_brake() else {
+        return Ok(());
+    };
+    Err(AdmissionFailure {
+        decision: AdmissionDecision::Refuse {
+            count: None,
+            ceiling,
+            scope,
+            reason: AdmissionReason::MachineRunaway,
+        },
+        detail: describe_brake(until, &value),
+    })
 }
 
 fn override_failure(scope: Scope, ceiling: usize, detail: String) -> AdmissionFailure {
@@ -354,9 +549,55 @@ pub fn configured_pane_group_max(requested: Option<usize>) -> usize {
         .unwrap_or(DEFAULT_PANE_GROUP_MAX)
 }
 
-/// Acquire the machine-global admission lock, measure the relevant process
-/// tree, and return a permit that must remain alive through the spawn syscall.
+/// The one receipt the gate writes when it stops measuring. The reason is a
+/// fact about the world, the spawn below reports its own limit, and an
+/// operator reading a log can tell a descriptor famine from a full fleet.
+fn write_not_measuring_receipt(reason: &str) {
+    eprintln!("{}", not_measuring_line(reason));
+}
+
+/// The receipt line, split from the write so a test can assert its bytes.
+fn not_measuring_line(reason: &str) -> String {
+    format!("process admission is not measuring: {reason}; admitting, the spawn below reports its own limit")
+}
+
+/// The reason a census that ADMITS still owes the receipt: both terminal
+/// outcomes stop the gate from measuring, and a gate that stops measuring
+/// and says nothing is the failure class this receipt exists to end. A
+/// Complete census measured, and an Unavailable census refuses with its own
+/// evidence, so neither prints here.
+fn census_receipt_reason(census: &Census) -> Option<&str> {
+    match census {
+        Census::NoSource { reason } | Census::DescriptorsExhausted { reason } => Some(reason),
+        Census::Complete { .. } | Census::Unavailable { .. } => None,
+    }
+}
+
+/// The default door: every spawn fno makes for an internal purpose admits.
+/// No brake read, no census, no ceiling: a gate that never measures can
+/// never hold an internal call, and an unreadable process table can never
+/// decide anything. The permit still records children, so the agent-spawn
+/// door's census reads the truth.
 pub fn admit_fleet() -> Result<AdmissionPermit, AdmissionFailure> {
+    Ok(AdmissionPermit {
+        _lock: None,
+        scope: Scope::Fleet,
+        count: 0,
+        ceiling: DEFAULT_MAX_PROCESSES,
+        #[cfg(test)]
+        track_children: true,
+    })
+}
+
+/// The agent-spawn door, and the only one that may hold a spawn: an agent
+/// asking for a new agent or harness launch (`fno agents spawn` and the
+/// dispatch paths). The brake, the census and the ceiling are this entry's
+/// opt-in, and only a caller carrying `FNO_AGENT_SELF` is held; the same
+/// verb typed at a human's shell admits through the default.
+pub fn admit_agent_spawn() -> Result<AdmissionPermit, AdmissionFailure> {
+    if !agent_origin() {
+        return admit_fleet();
+    }
     match admission_disabled() {
         Ok(true) => return bypass_permit(Scope::Fleet, DEFAULT_MAX_PROCESSES),
         Ok(false) => {}
@@ -368,6 +609,7 @@ pub fn admit_fleet() -> Result<AdmissionPermit, AdmissionFailure> {
             ))
         }
     }
+    brake_check(Scope::Fleet, DEFAULT_MAX_PROCESSES)?;
     let (ceiling, config_error) = match configured_max_processes() {
         Ok(value) => (value, None),
         Err(error) => (MaxProcesses::new(DEFAULT_MAX_PROCESSES), Some(error)),
@@ -387,63 +629,97 @@ pub fn admit_fleet() -> Result<AdmissionPermit, AdmissionFailure> {
     if std::env::var_os("FNO_MUX_NATIVE_TEST_ADMISSION").is_none() {
         return Ok(test_permit(Scope::Fleet, 0, ceiling.get()));
     }
-    let lock = acquire_lock().map_err(|detail| AdmissionFailure {
-        decision: AdmissionDecision::Refuse {
-            count: None,
-            ceiling: ceiling.get(),
-            scope: Scope::Fleet,
-            reason: AdmissionReason::LockUnavailable,
-        },
-        detail,
-    })?;
+    let lock = match acquire_lock(true) {
+        Ok(lock) => Some(lock),
+        // A fact, not a race: with no descriptor left, the census behind the
+        // lock would fail the same way. Admit, and let the spawn below name
+        // its own limit.
+        Err(AcquireFailure::DescriptorsExhausted(reason)) => {
+            write_not_measuring_receipt(&reason);
+            return Ok(AdmissionPermit {
+                _lock: None,
+                scope: Scope::Fleet,
+                count: 0,
+                ceiling: ceiling.get(),
+                #[cfg(test)]
+                track_children: true,
+            });
+        }
+        Err(AcquireFailure::Other(detail)) => {
+            return Err(AdmissionFailure {
+                decision: AdmissionDecision::Refuse {
+                    count: None,
+                    ceiling: ceiling.get(),
+                    scope: Scope::Fleet,
+                    reason: AdmissionReason::LockUnavailable,
+                },
+                detail,
+            })
+        }
+    };
     let census = process_census();
     let decision = decide_processes(&census, ceiling);
     match decision {
-        AdmissionDecision::Admit => Ok(AdmissionPermit {
-            _lock: Some(lock),
-            scope: Scope::Fleet,
-            count: census.count().expect("admitted census has a count"),
-            ceiling: ceiling.get(),
-            #[cfg(test)]
-            track_children: true,
-        }),
+        AdmissionDecision::Admit => {
+            if let Some(reason) = census_receipt_reason(&census) {
+                write_not_measuring_receipt(reason);
+            }
+            Ok(AdmissionPermit {
+                _lock: lock,
+                scope: Scope::Fleet,
+                count: census.count().unwrap_or(0),
+                ceiling: ceiling.get(),
+                #[cfg(test)]
+                track_children: true,
+            })
+        }
         decision => Err(AdmissionFailure {
             decision,
-            detail: census.reason().unwrap_or_default().to_string(),
+            detail: census.reason().map(enrich_fd_ceiling).unwrap_or_default(),
         }),
     }
 }
 
-/// Acquire the same machine lock for a pane-tab decision. The pane count is
-/// read from the serialized server state before a PTY is opened or a child is
-/// created.
+/// When the census died to descriptor exhaustion, the refusal is the
+/// open-file ceiling, not a broken measurement: the same wall the pty spawn
+/// names, so the operator reads one diagnostic wherever the wall surfaces.
+/// The count equals the limit exactly when allocation was refused with
+/// EMFILE, so the rendered numbers are true.
+fn enrich_fd_ceiling(detail: &str) -> String {
+    let exhausted = detail.contains("os error 24")
+        || detail.contains("os error 23")
+        || detail.contains("Too many open files");
+    if !exhausted {
+        return detail.to_string();
+    }
+    let limit = crate::pty::nofile_limit();
+    format!(
+        "{detail}; failed to spawn pty child: this mux server is at its open-file \
+         ceiling ({limit} of {limit} fds in use). Raise it with setrlimit(RLIMIT_NOFILE) at \
+         server start, or restart the server to reclaim descriptors (this kills live panes)"
+    )
+}
+
+/// The pane-tab layout cap. Machine admission is the agent-spawn door's
+/// opt-in, so this decision reads no process table: the pane count arrives
+/// from the serialized server state, and the cap is a layout rule that
+/// binds every caller.
 pub fn admit_tab(
     pane_count: usize,
     requested_cap: Option<usize>,
 ) -> Result<AdmissionPermit, AdmissionFailure> {
-    match admission_disabled() {
-        Ok(true) => return bypass_permit(Scope::Tab, DEFAULT_PANE_GROUP_MAX),
-        Ok(false) => {}
-        Err(detail) => return Err(override_failure(Scope::Tab, DEFAULT_PANE_GROUP_MAX, detail)),
+    if matches!(admission_disabled(), Ok(true)) {
+        return bypass_permit(Scope::Tab, DEFAULT_PANE_GROUP_MAX);
     }
     let ceiling = MaxPanes::new(configured_pane_group_max(requested_cap));
     #[cfg(test)]
     if std::env::var_os("FNO_MUX_NATIVE_TEST_ADMISSION").is_none() {
         return Ok(test_permit(Scope::Tab, pane_count, ceiling.get()));
     }
-    let lock = acquire_lock().map_err(|detail| AdmissionFailure {
-        decision: AdmissionDecision::Refuse {
-            count: None,
-            ceiling: ceiling.get(),
-            scope: Scope::Tab,
-            reason: AdmissionReason::LockUnavailable,
-        },
-        detail,
-    })?;
     let decision = decide_panes(PaneCount::new(pane_count), ceiling);
     match decision {
         AdmissionDecision::Admit => Ok(AdmissionPermit {
-            _lock: Some(lock),
+            _lock: None,
             scope: Scope::Tab,
             count: pane_count,
             ceiling: ceiling.get(),
@@ -455,78 +731,6 @@ pub fn admit_tab(
             detail: String::new(),
         }),
     }
-}
-
-/// One permit for a pane launch. Fleet admission is evaluated first, then the
-/// target-tab cap, while one machine lock covers both measurements and the
-/// eventual child-creation syscall.
-pub fn admit_pane(
-    pane_count: usize,
-    requested_cap: Option<usize>,
-) -> Result<AdmissionPermit, AdmissionFailure> {
-    match admission_disabled() {
-        Ok(true) => return bypass_permit(Scope::Fleet, DEFAULT_MAX_PROCESSES),
-        Ok(false) => {}
-        Err(detail) => {
-            return Err(override_failure(
-                Scope::Fleet,
-                DEFAULT_MAX_PROCESSES,
-                detail,
-            ))
-        }
-    }
-    let (fleet_ceiling, config_error) = match configured_max_processes() {
-        Ok(value) => (value, None),
-        Err(error) => (MaxProcesses::new(DEFAULT_MAX_PROCESSES), Some(error)),
-    };
-    let tab_ceiling = MaxPanes::new(configured_pane_group_max(requested_cap));
-    if let Some(detail) = config_error {
-        return Err(AdmissionFailure {
-            decision: AdmissionDecision::Refuse {
-                count: None,
-                ceiling: fleet_ceiling.get(),
-                scope: Scope::Fleet,
-                reason: AdmissionReason::MeasurementUnavailable,
-            },
-            detail,
-        });
-    }
-    #[cfg(test)]
-    if std::env::var_os("FNO_MUX_NATIVE_TEST_ADMISSION").is_none() {
-        return Ok(test_permit(Scope::Fleet, 0, fleet_ceiling.get()));
-    }
-    let lock = acquire_lock().map_err(|detail| AdmissionFailure {
-        decision: AdmissionDecision::Refuse {
-            count: None,
-            ceiling: fleet_ceiling.get(),
-            scope: Scope::Fleet,
-            reason: AdmissionReason::LockUnavailable,
-        },
-        detail,
-    })?;
-    let fleet = process_census();
-    let fleet_decision = decide_processes(&fleet, fleet_ceiling);
-    if !matches!(fleet_decision, AdmissionDecision::Admit) {
-        return Err(AdmissionFailure {
-            decision: fleet_decision,
-            detail: fleet.reason().unwrap_or_default().to_string(),
-        });
-    }
-    let tab = decide_panes(PaneCount::new(pane_count), tab_ceiling);
-    if !matches!(tab, AdmissionDecision::Admit) {
-        return Err(AdmissionFailure {
-            decision: tab,
-            detail: String::new(),
-        });
-    }
-    Ok(AdmissionPermit {
-        _lock: Some(lock),
-        scope: Scope::Fleet,
-        count: fleet.count().expect("admitted census has a count"),
-        ceiling: fleet_ceiling.get(),
-        #[cfg(test)]
-        track_children: true,
-    })
 }
 
 #[cfg(test)]
@@ -553,7 +757,13 @@ pub fn std_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Comman
 }
 
 pub fn std_spawn(command: &mut std::process::Command) -> io::Result<std::process::Child> {
-    let permit = admit_fleet().map_err(admission_io_error)?;
+    spawn_permitted(command, admit_fleet().map_err(admission_io_error)?)
+}
+
+fn spawn_permitted(
+    command: &mut std::process::Command,
+    permit: AdmissionPermit,
+) -> io::Result<std::process::Child> {
     let track_child = !is_root_program(command.get_program());
     let mut child = command.spawn()?;
     if track_child {
@@ -653,31 +863,72 @@ pub async fn tokio_status(
     child.wait().await
 }
 
-fn acquire_lock() -> Result<File, String> {
-    let path = admission_lock_path().map_err(|e| format!("cannot prepare admission state: {e}"))?;
+/// Why the admission lock could not be taken. `DescriptorsExhausted` is the
+/// famine door: with no descriptor left to open the lock with, the census
+/// behind the lock would fail the same way, so the caller admits instead of
+/// refusing. Everything else keeps the lock-unavailable refusal.
+enum AcquireFailure {
+    DescriptorsExhausted(String),
+    Other(String),
+}
+
+/// True when an open error means this process has no descriptor left to read
+/// the process table with. A fact about this process, not a race, so it
+/// never earns a retry.
+fn no_descriptor_left(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EMFILE) | Some(libc::ENFILE)
+    )
+}
+
+/// `wait: false` takes the lock only if it is free right now, and answers
+/// `Other` when an agent holds it: a human never queues behind a spawn.
+fn acquire_lock(wait: bool) -> Result<File, AcquireFailure> {
+    let path = admission_lock_path()
+        .map_err(|e| AcquireFailure::Other(format!("cannot prepare admission state: {e}")))?;
     let file = OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
         .open(&path)
-        .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
+        .map_err(|error| {
+            if no_descriptor_left(&error) {
+                AcquireFailure::DescriptorsExhausted(format!(
+                    "descriptors-exhausted (cannot open {}: {})",
+                    path.display(),
+                    error
+                ))
+            } else {
+                AcquireFailure::Other(format!("cannot open {}: {}", path.display(), error))
+            }
+        })?;
     #[cfg(unix)]
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("cannot secure {}: {e}", path.display()))?;
+        .map_err(|e| AcquireFailure::Other(format!("cannot secure {}: {e}", path.display())))?;
     #[cfg(unix)]
     {
         let fd = std::os::unix::io::AsRawFd::as_raw_fd(&file);
         loop {
             // SAFETY: `fd` is an open file descriptor owned by `file`; the
-            // blocking exclusive lock serializes census plus spawn.
-            let rc = unsafe { libc::flock(fd, libc::LOCK_EX) };
+            // exclusive lock serializes census plus spawn.
+            let op = if wait {
+                libc::LOCK_EX
+            } else {
+                libc::LOCK_EX | libc::LOCK_NB
+            };
+            let rc = unsafe { libc::flock(fd, op) };
             if rc == 0 {
                 break;
             }
             let error = io::Error::last_os_error();
             if error.kind() != io::ErrorKind::Interrupted {
-                return Err(format!("cannot lock {}: {error}", path.display()));
+                return Err(AcquireFailure::Other(format!(
+                    "cannot lock {}: {}",
+                    path.display(),
+                    error
+                )));
             }
         }
     }
@@ -734,39 +985,160 @@ impl Census {
     fn count(&self) -> Option<usize> {
         match self {
             Self::Complete { count } => Some(count.get()),
-            Self::Unavailable { .. } => None,
+            Self::Unavailable { .. }
+            | Self::NoSource { .. }
+            | Self::DescriptorsExhausted { .. } => None,
         }
     }
 
     fn reason(&self) -> Option<&str> {
         match self {
             Self::Complete { .. } => None,
-            Self::Unavailable { reason } => Some(reason),
+            Self::Unavailable { reason }
+            | Self::NoSource { reason }
+            | Self::DescriptorsExhausted { reason } => Some(reason),
         }
     }
 }
 
-fn process_census() -> Census {
-    let result = snapshot_processes().and_then(|rows| {
-        let attributed = attributed_pids(&rows)?;
-        let markers = marker_count(&rows, &attributed)?;
-        Ok(attributed.len() + markers)
-    });
-    match result {
-        Ok(count) => Census::complete(count),
-        Err(reason) => Census::unavailable(reason),
+/// Why a reading did not produce a count. `NoSource` and
+/// `DescriptorsExhausted` are facts about the world; `Unread` is a read that
+/// failed and may yet succeed.
+#[derive(Debug)]
+enum CensusFailure {
+    NoSource(String),
+    DescriptorsExhausted(String),
+    Unread(String),
+}
+
+/// Classify one /proc-directory read error. `NotFound` names the mount, not
+/// a pid; EMFILE/ENFILE mean this process has no descriptor left to read
+/// with. Both are facts, so neither earns a retry. Every other error is a
+/// read failure and holds.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn classify_proc_dir_error(error: &io::Error) -> CensusFailure {
+    if no_descriptor_left(error) {
+        CensusFailure::DescriptorsExhausted(format!(
+            "descriptors-exhausted (cannot read /proc: {error})"
+        ))
+    } else if error.kind() == io::ErrorKind::NotFound {
+        CensusFailure::NoSource(format!(
+            "no /proc directory on this host (cannot read /proc: {error})"
+        ))
+    } else {
+        CensusFailure::Unread(format!("/proc unavailable: {error}"))
     }
 }
 
-fn marker_count(rows: &[ProcessRow], attributed: &HashSet<u32>) -> Result<usize, String> {
-    let path =
-        admission_marker_path().map_err(|e| format!("child marker state unavailable: {e}"))?;
+/// A short read of the process table is a race, not a state: the snapshot and
+/// the per-pid read are separate syscalls, so a pid can die between them. Read
+/// again before the whole machine is refused over one row.
+const CENSUS_ATTEMPTS: u32 = 4;
+const CENSUS_WAIT: std::time::Duration = std::time::Duration::from_millis(25);
+
+fn process_census() -> Census {
+    // The machine-global admission lock is already held here, so the hold
+    // below serializes every other spawn for up to 75ms. Bounded on
+    // purpose. If that cost ever shows up, move the wait above acquire_lock.
+    census_with(read_process_count, CENSUS_ATTEMPTS, CENSUS_WAIT)
+}
+
+fn read_process_count() -> Result<usize, CensusFailure> {
+    let rows = snapshot_processes()?;
+    let attributed = attributed_pids(&rows).map_err(CensusFailure::Unread)?;
+    let markers = marker_count(&rows, &attributed)?;
+    Ok(attributed.len() + markers)
+}
+
+fn census_with(
+    mut read: impl FnMut() -> Result<usize, CensusFailure>,
+    attempts: u32,
+    wait: std::time::Duration,
+) -> Census {
+    let started = std::time::Instant::now();
+    let mut last = String::new();
+    for attempt in 1..=attempts {
+        match read() {
+            Ok(count) => return Census::complete(count),
+            // A fact about the world. Re-reading cannot change it, so stop.
+            Err(CensusFailure::NoSource(reason)) => return Census::no_source(reason),
+            Err(CensusFailure::DescriptorsExhausted(reason)) => {
+                return Census::descriptors_exhausted(reason)
+            }
+            Err(CensusFailure::Unread(reason)) => last = reason,
+        }
+        if attempt < attempts {
+            std::thread::sleep(wait);
+        }
+    }
+    Census::unavailable(format!(
+        "census unread after {attempts} reads over {}ms: {last}",
+        started.elapsed().as_millis()
+    ))
+}
+
+/// Count the live children the ledger records, and rewrite the ledger to
+/// just those. An `Err` here collapses the whole census to
+/// `Census::Unavailable`, which refuses every spawn on the machine, so it is
+/// reserved for a failure to read state AT ALL: no marker path, an
+/// unreadable ledger file, no process root names. A single entry that is
+/// dead, unreadable or unparseable counts as nothing and is pruned.
+fn marker_count(rows: &[ProcessRow], attributed: &HashSet<u32>) -> Result<usize, CensusFailure> {
+    marker_count_with(rows, attributed, crate::proto::pid_start_time)
+}
+
+/// Classify one child-marker-ledger error. The ledger read and rewrite open
+/// descriptors like any other census door, so EMFILE/ENFILE there is the
+/// same famine the census doors admit on. Every other error is a read
+/// failure and holds.
+fn classify_ledger_error(error: &io::Error) -> CensusFailure {
+    if no_descriptor_left(error) {
+        CensusFailure::DescriptorsExhausted(format!(
+            "descriptors-exhausted (child marker ledger: {error})"
+        ))
+    } else {
+        CensusFailure::Unread(format!("child marker ledger unavailable: {error}"))
+    }
+}
+
+/// The bounded start-time read both the ledger census and `record_child`
+/// depend on. A just-spawned or just-exited child can briefly report alive
+/// before macOS exposes its start time, so retry a little; positive death
+/// evidence ends the wait early. `None` means the pid contributes nothing:
+/// on macOS `pid_start_time` and `pid_is_zombie` share one `proc_pidinfo`
+/// call, so a defunct process reads as no-start-time AND not-a-zombie, and
+/// `kill(pid, 0)` answers EPERM rather than ESRCH for a process that is not
+/// ours. Unreadable is the only honest verdict, and it is never fatal.
+fn marker_start_time(pid: u32, read: fn(u32) -> Option<u64>) -> Option<u64> {
+    for attempt in 0..=5 {
+        if let Some(start) = read(pid) {
+            return Some(start);
+        }
+        if crate::proto::pid_confirmed_dead(pid as libc::pid_t)
+            || crate::proto::pid_is_zombie(pid as libc::pid_t)
+        {
+            return None;
+        }
+        if attempt < 5 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    None
+}
+
+fn marker_count_with(
+    rows: &[ProcessRow],
+    attributed: &HashSet<u32>,
+    read_start: fn(u32) -> Option<u64>,
+) -> Result<usize, CensusFailure> {
+    let path = admission_marker_path()
+        .map_err(|e| CensusFailure::Unread(format!("child marker state unavailable: {e}")))?;
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
-        Err(error) => return Err(format!("child marker ledger unavailable: {error}")),
+        Err(error) => return Err(classify_ledger_error(&error)),
     };
-    let roots = process_root_names()?;
+    let roots = process_root_names().map_err(CensusFailure::Unread)?;
     let names: HashMap<u32, &str> = rows
         .iter()
         .map(|row| (row.pid, row.name.as_str()))
@@ -775,16 +1147,17 @@ fn marker_count(rows: &[ProcessRow], attributed: &HashSet<u32>) -> Result<usize,
     let mut seen = HashSet::new();
     let mut unattributed_live = 0;
     for line in raw.lines().filter(|line| !line.trim().is_empty()) {
-        let (pid, recorded_start) = line
-            .trim()
-            .split_once(':')
-            .ok_or_else(|| "malformed child marker ledger: missing start time".to_string())?;
-        let pid = pid
-            .parse::<u32>()
-            .map_err(|error| format!("malformed child marker ledger: {error}"))?;
-        let recorded_start = recorded_start
-            .parse::<u64>()
-            .map_err(|error| format!("malformed child marker ledger: {error}"))?;
+        // The ledger is appended to by concurrent spawns, so a torn line is
+        // possible. It names no pid anyone can verify, so it counts as
+        // nothing and is pruned below. Refusing every spawn on the machine
+        // over one unparseable line is never the smaller harm.
+        let Some((pid, recorded_start)) = line.trim().split_once(':') else {
+            continue;
+        };
+        let (Ok(pid), Ok(recorded_start)) = (pid.parse::<u32>(), recorded_start.parse::<u64>())
+        else {
+            continue;
+        };
         if !seen.insert(pid) {
             continue;
         }
@@ -793,33 +1166,12 @@ fn marker_count(rows: &[ProcessRow], attributed: &HashSet<u32>) -> Result<usize,
         {
             continue;
         }
-        let mut observed_start = None;
-        for attempt in 0..=5 {
-            observed_start = crate::proto::pid_start_time(pid);
-            if observed_start.is_some() {
-                break;
-            }
-            // A just-spawned or just-exited child can briefly report alive
-            // before macOS exposes its start time. Keep the bound tiny and
-            // require positive death evidence or a later readable start time.
-            if crate::proto::pid_confirmed_dead(pid as libc::pid_t)
-                || crate::proto::pid_is_zombie(pid as libc::pid_t)
-            {
-                break;
-            }
-            if attempt < 5 {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-        }
-        let Some(observed_start) = observed_start else {
-            if crate::proto::pid_confirmed_dead(pid as libc::pid_t)
-                || crate::proto::pid_is_zombie(pid as libc::pid_t)
-            {
-                continue;
-            }
-            return Err(format!(
-                "process start time unavailable for marker pid={pid}"
-            ));
+        // A pid whose start time will not resolve can never be matched
+        // against its recorded one, so it can never be confirmed as this
+        // child. Dropping it is the correct census, not a degradation, and
+        // leaving it out of `live` prunes it from the ledger below.
+        let Some(observed_start) = marker_start_time(pid, read_start) else {
+            continue;
         };
         if observed_start != recorded_start {
             continue;
@@ -839,7 +1191,7 @@ fn marker_count(rows: &[ProcessRow], attributed: &HashSet<u32>) -> Result<usize,
         let _ = std::fs::remove_file(&path);
     } else if body != raw.trim_end() {
         std::fs::write(&path, format!("{body}\n"))
-            .map_err(|error| format!("child marker ledger update failed: {error}"))?;
+            .map_err(|error| classify_ledger_error(&error))?;
     }
     Ok(unattributed_live)
 }
@@ -851,8 +1203,10 @@ fn attributed_pids(rows: &[ProcessRow]) -> Result<HashSet<u32>, String> {
     let mut attributed = HashSet::new();
     for row in rows {
         // The mux/client/test executable is the admission observer, not a
-        // worker slot. Count its descendants, including zombies, so a fresh
-        // server can admit two children under a ceiling of two.
+        // worker slot. Count its descendants, so a fresh server can admit
+        // two children under a ceiling of two. A row the reader cannot name
+        // is not counted, and on macOS proc_name answers nothing for a
+        // defunct pid, so a zombie is not counted on that platform.
         let is_attributed =
             row.pid != current_pid && reaches_root(row, &by_pid, &roots, current_pid)?;
         if is_attributed {
@@ -902,7 +1256,7 @@ fn reaches_root(
     }
 }
 
-fn snapshot_processes() -> Result<Vec<ProcessRow>, String> {
+fn snapshot_processes() -> Result<Vec<ProcessRow>, CensusFailure> {
     #[cfg(target_os = "macos")]
     {
         return snapshot_macos();
@@ -912,30 +1266,42 @@ fn snapshot_processes() -> Result<Vec<ProcessRow>, String> {
         return snapshot_linux();
     }
     #[allow(unreachable_code)]
-    Err("native process snapshot unavailable on this platform".into())
+    Err(CensusFailure::NoSource(
+        "native process snapshot unavailable on this platform".into(),
+    ))
+}
+
+/// Does `pid` have a child of its own in the process table? `None` when
+/// the snapshot is unavailable: the stand-in prune treats unknown as "has
+/// a child" and never prunes on a fact it cannot see.
+pub fn pid_has_child(pid: u32) -> Option<bool> {
+    let rows = snapshot_processes().ok()?;
+    Some(rows.iter().any(|row| row.ppid == pid))
 }
 
 #[cfg(target_os = "macos")]
-fn snapshot_macos() -> Result<Vec<ProcessRow>, String> {
+fn snapshot_macos() -> Result<Vec<ProcessRow>, CensusFailure> {
     let needed = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if needed <= 0 {
-        return Err(format!(
+        return Err(CensusFailure::Unread(format!(
             "proc_listallpids failed: {}",
             io::Error::last_os_error()
-        ));
+        )));
     }
     let mut pids = vec![0 as libc::pid_t; needed as usize];
     let bytes = i32::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
-        .map_err(|_| "process snapshot is too large".to_string())?;
+        .map_err(|_| CensusFailure::Unread("process snapshot is too large".into()))?;
     let found = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
     if found < 0 {
-        return Err(format!(
+        return Err(CensusFailure::Unread(format!(
             "proc_listallpids failed: {}",
             io::Error::last_os_error()
-        ));
+        )));
     }
     if found as usize > pids.len() {
-        return Err("process snapshot changed while being read".into());
+        return Err(CensusFailure::Unread(
+            "process snapshot changed while being read".into(),
+        ));
     }
     let mut rows = Vec::with_capacity(found as usize);
     for pid in pids.into_iter().take(found as usize).filter(|pid| *pid > 0) {
@@ -962,13 +1328,24 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, String> {
                 i32::try_from(size).expect("proc_bsdinfo fits in c_int"),
             )
         };
-        if got == 0 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            // proc_listallpids is a point-in-time list. A process that exits
-            // between that list and proc_pidinfo is no longer live capacity,
-            // not an incomplete measurement.
-            continue;
-        }
         if got != i32::try_from(size).expect("proc_bsdinfo fits in c_int") {
+            // kill(2) inside the death probe below overwrites errno, so read
+            // it first.
+            let error = io::Error::last_os_error();
+            if got == 0 && error.raw_os_error() == Some(libc::ESRCH) {
+                // proc_listallpids is a point-in-time list. A process that
+                // exits between that list and proc_pidinfo is no longer live
+                // capacity, not an incomplete measurement.
+                continue;
+            }
+            // A pid that dies between proc_name and this read is gone
+            // capacity, not a failed measurement. On macOS a defunct pid
+            // answers neither ESRCH here nor ESRCH to kill(2), so positive
+            // death evidence decides, the same rule the child marker ledger
+            // already applies to its own unreadable entries.
+            if crate::proto::pid_confirmed_dead(pid) {
+                continue;
+            }
             // System services owned by another user can expose a name but
             // deny BSD-info reads. They cannot be attributed without a root
             // name, so omit them. A denied fno root remains unknown and fails
@@ -984,7 +1361,9 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, String> {
             {
                 continue;
             }
-            return Err(format!("process snapshot row unavailable for pid={pid}"));
+            return Err(CensusFailure::Unread(format!(
+                "process snapshot row unavailable for pid={pid} name={name} got={got} errno={error}"
+            )));
         }
         let info = unsafe { info.assume_init() };
         rows.push(ProcessRow {
@@ -1007,7 +1386,9 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, String> {
             )
         };
         if got != i32::try_from(size).expect("proc_bsdinfo fits in c_int") {
-            return Err("current process missing from process snapshot".into());
+            return Err(CensusFailure::Unread(
+                "current process missing from process snapshot".into(),
+            ));
         }
         let info = unsafe { info.assume_init() };
         rows.push(ProcessRow {
@@ -1019,7 +1400,9 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, String> {
                     path.file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                 })
-                .ok_or_else(|| "current executable name unavailable".to_string())?,
+                .ok_or_else(|| {
+                    CensusFailure::Unread("current executable name unavailable".into())
+                })?,
         });
     }
     Ok(rows)
@@ -1035,11 +1418,36 @@ fn c_name(bytes: &[libc::c_char]) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
+/// True when a /proc read error means the pid exited between the directory
+/// listing and this read: gone capacity, not a failed measurement. Mirrors
+/// the macOS arm's ESRCH rule in snapshot_macos; on Linux the stat read can
+/// fail with ESRCH, not just NotFound.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn pid_gone(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
 #[cfg(target_os = "linux")]
-fn snapshot_linux() -> Result<Vec<ProcessRow>, String> {
+fn snapshot_linux() -> Result<Vec<ProcessRow>, CensusFailure> {
     let mut rows = Vec::new();
-    for entry in std::fs::read_dir("/proc").map_err(|e| format!("/proc unavailable: {e}"))? {
-        let entry = entry.map_err(|e| format!("/proc entry unavailable: {e}"))?;
+    let dir = match std::fs::read_dir("/proc") {
+        Ok(dir) => dir,
+        Err(error) => return Err(classify_proc_dir_error(&error)),
+    };
+    for entry in dir {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) if no_descriptor_left(&error) => {
+                return Err(CensusFailure::DescriptorsExhausted(format!(
+                    "descriptors-exhausted (cannot read /proc: {error})"
+                )));
+            }
+            Err(error) => {
+                return Err(CensusFailure::Unread(format!(
+                    "/proc entry unavailable: {error}"
+                )))
+            }
+        };
         let name = entry.file_name();
         let Some(pid_text) = name
             .to_str()
@@ -1049,18 +1457,27 @@ fn snapshot_linux() -> Result<Vec<ProcessRow>, String> {
         };
         let pid = pid_text
             .parse::<u32>()
-            .map_err(|e| format!("invalid /proc pid {pid_text}: {e}"))?;
+            .map_err(|e| CensusFailure::Unread(format!("invalid /proc pid {pid_text}: {e}")))?;
         let stat = match std::fs::read_to_string(entry.path().join("stat")) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            // A pid that exits between the listing and the read is gone
+            // capacity, not a failed measurement (the macOS arm's rule).
+            Err(error) if pid_gone(&error) => continue,
+            Err(error) if no_descriptor_left(&error) => {
+                return Err(CensusFailure::DescriptorsExhausted(format!(
+                    "descriptors-exhausted (cannot read pid={pid} stat: {error})"
+                )));
+            }
             Err(error) => {
-                return Err(format!(
+                return Err(CensusFailure::Unread(format!(
                     "process snapshot row unavailable for pid={pid}: {error}"
-                ))
+                )))
             }
         };
         let Some((comm, rest)) = stat.rsplit_once(") ") else {
-            return Err(format!("malformed process snapshot row for pid={pid}"));
+            return Err(CensusFailure::Unread(format!(
+                "malformed process snapshot row for pid={pid}"
+            )));
         };
         let name = comm
             .split_once(" (")
@@ -1069,15 +1486,528 @@ fn snapshot_linux() -> Result<Vec<ProcessRow>, String> {
             .to_string();
         let fields = rest.split_whitespace().collect::<Vec<_>>();
         let Some(ppid_text) = fields.get(1) else {
-            return Err(format!("malformed process snapshot row for pid={pid}"));
+            return Err(CensusFailure::Unread(format!(
+                "malformed process snapshot row for pid={pid}"
+            )));
         };
         let ppid = ppid_text
             .parse::<u32>()
-            .map_err(|e| format!("invalid parent pid for pid={pid}: {e}"))?;
+            .map_err(|e| CensusFailure::Unread(format!("invalid parent pid for pid={pid}: {e}")))?;
         rows.push(ProcessRow { pid, ppid, name });
     }
     if rows.is_empty() {
-        return Err("process snapshot is empty".into());
+        return Err(CensusFailure::Unread("process snapshot is empty".into()));
     }
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    /// The brake tests drive the process-global FNO_MACHINE_BRAKE path; the
+    /// suite runs two threads, so both tests hold this lock end to end.
+    static BRAKE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    use super::*;
+
+    /// ESRCH means the pid exited between the listing and the read, so the
+    /// census skips it like NotFound. EACCES is a real measurement failure
+    /// and still refuses.
+    #[test]
+    fn pid_gone_admits_only_vanished_pids() {
+        assert!(pid_gone(&io::Error::from_raw_os_error(libc::ESRCH)));
+        assert!(pid_gone(&io::Error::from_raw_os_error(libc::ENOENT)));
+        assert!(!pid_gone(&io::Error::from_raw_os_error(libc::EACCES)));
+    }
+
+    /// The namespace is a process-global env var, so two of these tests
+    /// running in parallel would each resolve the other's ledger path. The
+    /// guard is held for the whole test, not just the setup.
+    static LEDGER_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Holds the ledger lock and puts both env vars back on drop.
+    ///
+    /// Neither var may leak past the test. `server.rs` latches `FNO_E2E`
+    /// into a `OnceLock` for the life of the process, and `pty.rs` reads it
+    /// per call, so one leaked set here turns on E2E behavior for every
+    /// later test in this binary. Neither may simply be left unset either:
+    /// without `FNO_E2E`, `admission_state_suffix()` answers `global` and
+    /// this helper would delete the operator's live ledger.
+    struct LedgerEnv {
+        _guard: Option<std::sync::MutexGuard<'static, ()>>,
+        previous: [(&'static str, Option<std::ffi::OsString>); 2],
+    }
+
+    impl LedgerEnv {
+        /// Save both vars now and put them back on drop. The lock is
+        /// optional so a caller already holding it can save and restore
+        /// inside its own critical section.
+        fn capture(guard: Option<std::sync::MutexGuard<'static, ()>>) -> Self {
+            Self {
+                _guard: guard,
+                previous: [
+                    ("FNO_E2E", std::env::var_os("FNO_E2E")),
+                    (
+                        "FNO_MUX_ADMISSION_NAMESPACE",
+                        std::env::var_os("FNO_MUX_ADMISSION_NAMESPACE"),
+                    ),
+                ],
+            }
+        }
+    }
+
+    impl Drop for LedgerEnv {
+        fn drop(&mut self) {
+            for (name, value) in &self.previous {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
+    fn isolate(label: &str) -> (LedgerEnv, PathBuf) {
+        let guard = LEDGER_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let env = LedgerEnv::capture(Some(guard));
+        std::env::set_var("FNO_E2E", "1");
+        std::env::set_var(
+            "FNO_MUX_ADMISSION_NAMESPACE",
+            format!("{label}-{}", std::process::id()),
+        );
+        let path = admission_marker_path().unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        (env, path)
+    }
+
+    /// The guard is the whole reason these tests may touch a process-global
+    /// env var at all, so prove it puts both back rather than trusting the
+    /// shape of the Drop impl.
+    #[test]
+    fn ledger_guard_restores_both_env_vars_on_drop() {
+        // The lock is taken here, not by `capture`, so the before-read, the
+        // mutation and the after-read all sit in one critical section. A
+        // baseline read outside it would see a sibling's value and this test
+        // would report that as a leak.
+        let _lock = LEDGER_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let before = (
+            std::env::var_os("FNO_E2E"),
+            std::env::var_os("FNO_MUX_ADMISSION_NAMESPACE"),
+        );
+        {
+            let _env = LedgerEnv::capture(None);
+            std::env::set_var("FNO_E2E", "1");
+            std::env::set_var("FNO_MUX_ADMISSION_NAMESPACE", "guard-restores");
+            assert_eq!(std::env::var_os("FNO_E2E").as_deref(), Some("1".as_ref()));
+        }
+        assert_eq!(std::env::var_os("FNO_E2E"), before.0);
+        assert_eq!(std::env::var_os("FNO_MUX_ADMISSION_NAMESPACE"), before.1);
+    }
+
+    /// The measured 2026-09-02 wedge: one alive-but-unreadable marker pid
+    /// took the whole census down and refused every spawn on the machine.
+    /// Our own pid stands in for it (alive, not a zombie, not confirmed
+    /// dead) paired with a reader that never resolves a start time. The
+    /// malformed-line case prunes the torn line and keeps the readable one.
+    /// Each case scopes its own isolate: two live guards would deadlock on
+    /// the same env lock.
+    #[test]
+    fn unreadable_marker_pid_is_skipped_and_pruned_not_fatal() {
+        let pid = std::process::id();
+        {
+            let (_guard, path) = isolate("marker-unreadable");
+            std::fs::write(&path, format!("{pid}:12345\n")).unwrap();
+
+            let count = marker_count_with(&[], &HashSet::new(), |_| None)
+                .expect("an unreadable marker pid must not collapse the census");
+
+            assert_eq!(count, 0);
+            assert!(
+                !path.exists(),
+                "the unreadable entry must be pruned from the ledger"
+            );
+        }
+        {
+            let (_guard, path) = isolate("marker-malformed");
+            std::fs::write(&path, format!("not-a-marker\n{pid}:777\n")).unwrap();
+
+            let count = marker_count_with(&[], &HashSet::new(), |_| Some(777))
+                .expect("a torn ledger line must not collapse the census");
+
+            assert_eq!(count, 1);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                format!("{pid}:777\n")
+            );
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// A readable marker still counts, so the skip above is a targeted drop
+    /// and not a census that always answers zero.
+    #[test]
+    fn readable_unattributed_marker_still_counts() {
+        let (_guard, path) = isolate("marker-readable");
+        let pid = std::process::id();
+        std::fs::write(&path, format!("{pid}:777\n")).unwrap();
+
+        let count = marker_count_with(&[], &HashSet::new(), |_| Some(777)).unwrap();
+
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `record_child` runs in exactly the window the bounded retry exists
+    /// for, and every caller kills the child on Err. An unreadable start
+    /// time must cost one uncounted marker, never the spawn.
+    #[test]
+    fn record_child_skips_the_marker_rather_than_killing_the_child() {
+        let (_guard, path) = isolate("record-child");
+        let permit = AdmissionPermit {
+            _lock: None,
+            scope: Scope::Fleet,
+            count: 0,
+            ceiling: DEFAULT_MAX_PROCESSES,
+            track_children: true,
+        };
+
+        // Far above any OS pid ceiling, so it cannot exist and has no
+        // readable start time. Positive as an i32: u32::MAX would cast to
+        // -1, and kill(-1, 0) addresses every process we may signal.
+        permit
+            .record_child(0x7fff_fff0)
+            .expect("an unreadable start time must not fail the spawn");
+
+        assert!(!path.exists(), "no marker line may be written");
+    }
+
+    /// A recovery switch that refuses on a plausible spelling strands the
+    /// operator it exists to rescue.
+    #[test]
+    fn recovery_switch_accepts_every_documented_synonym() {
+        for value in ["off", "OFF", " false ", "0", "No"] {
+            assert_eq!(parse_admission_switch(value), Ok(true), "{value:?}");
+        }
+        for value in ["on", "ON", " true ", "1", "Yes"] {
+            assert_eq!(parse_admission_switch(value), Ok(false), "{value:?}");
+        }
+        let error = parse_admission_switch("maybe").unwrap_err();
+        assert!(error.contains(ADMISSION_ACCEPTED), "{error}");
+    }
+
+    /// The refusal an operator reads must list every spelling the parser
+    /// takes. A synonym added to an array and forgotten in the string the
+    /// operator reads would otherwise leave the recovery vocabulary understated.
+    #[test]
+    fn accepted_set_text_lists_every_spelling_the_parser_takes() {
+        for accepted in ADMISSION_OFF.iter().chain(ADMISSION_ON.iter()) {
+            assert!(
+                ADMISSION_ACCEPTED
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| word == *accepted),
+                "{accepted:?} is accepted but missing from {ADMISSION_ACCEPTED:?}"
+            );
+        }
+    }
+
+    /// A reading that arrives on a later attempt admits, and the attempt
+    /// count proves the retry loop actually looped.
+    #[test]
+    fn census_admits_a_reading_that_arrives_on_a_later_attempt() {
+        let mut calls = 0;
+        let census = census_with(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(CensusFailure::Unread("short read".into()))
+                } else {
+                    Ok(7)
+                }
+            },
+            4,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(census, Census::complete(7));
+    }
+
+    /// The refusal must carry the evidence an operator needs to diagnose:
+    /// how many reads, how long, and the last failure text.
+    #[test]
+    fn census_names_its_attempts_when_every_read_fails() {
+        let census = census_with(
+            || {
+                Err(CensusFailure::Unread(
+                    "process snapshot row unavailable for pid=1 name=fno got=0 errno=Operation not permitted"
+                        .into(),
+                ))
+            },
+            4,
+            std::time::Duration::from_millis(1),
+        );
+        let Census::Unavailable { reason } = census else {
+            panic!("expected unavailable, got {census:?}");
+        };
+        assert!(reason.contains("census unread after 4 reads"), "{reason}");
+        assert!(reason.contains("ms:"), "{reason}");
+        assert!(
+            reason.contains(
+                "process snapshot row unavailable for pid=1 name=fno got=0 errno=Operation not permitted"
+            ),
+            "{reason}"
+        );
+    }
+
+    /// A clean first reading costs one read and no wait.
+    #[test]
+    fn census_stops_at_the_first_reading() {
+        let mut calls = 0;
+        let census = census_with(
+            || {
+                calls += 1;
+                Ok(3)
+            },
+            4,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(census, Census::complete(3));
+        assert_eq!(calls, 1);
+    }
+
+    /// The in-crate guard for the fail-closed mapping the e2e suite pins:
+    /// an unread census refuses with no count and never a number.
+    #[test]
+    fn an_unread_census_never_reports_a_count() {
+        let decision =
+            decide_processes(&Census::unavailable("census unread"), MaxProcesses::new(2));
+        assert_eq!(
+            decision,
+            AdmissionDecision::Refuse {
+                count: None,
+                ceiling: 2,
+                scope: Scope::Fleet,
+                reason: AdmissionReason::MeasurementUnavailable,
+            }
+        );
+    }
+
+    /// No source and no descriptor both admit: neither is headroom or a
+    /// refusal, and the famine never reads as an absent host.
+    #[test]
+    fn a_census_with_no_source_or_no_descriptor_admits() {
+        for census in [
+            Census::no_source("cannot read /proc"),
+            Census::descriptors_exhausted("descriptors-exhausted (cannot read /proc)"),
+        ] {
+            let decision = decide_processes(&census, MaxProcesses::new(2));
+            assert_eq!(decision, AdmissionDecision::Admit, "{census:?}");
+        }
+    }
+
+    /// The guard against retry-then-hold-forever: a NoSource answer stops
+    /// Both stopping answers end the loop on their first answer, with no
+    /// wait spent.
+    #[test]
+    fn census_stops_at_the_first_stopping_answer() {
+        let mut calls = 0;
+        let census = census_with(
+            || {
+                calls += 1;
+                Err(CensusFailure::NoSource("no /proc on this host".into()))
+            },
+            4,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(census, Census::no_source("no /proc on this host"));
+        assert_eq!(calls, 1);
+        let mut calls = 0;
+        let census = census_with(
+            || {
+                calls += 1;
+                Err(CensusFailure::DescriptorsExhausted(
+                    "descriptors-exhausted (cannot read /proc: Too many open files)".into(),
+                ))
+            },
+            4,
+            std::time::Duration::from_millis(1),
+        );
+        assert_eq!(
+            census,
+            Census::descriptors_exhausted(
+                "descriptors-exhausted (cannot read /proc: Too many open files)"
+            )
+        );
+        assert_eq!(calls, 1);
+    }
+
+    /// EMFILE/ENFILE are the famine; EACCES/EIO are read failures.
+    #[test]
+    fn an_exhausted_descriptor_budget_is_descriptors_exhausted() {
+        for errno in [libc::EMFILE, libc::ENFILE] {
+            assert!(
+                matches!(
+                    classify_proc_dir_error(&io::Error::from_raw_os_error(errno)),
+                    CensusFailure::DescriptorsExhausted(_)
+                ),
+                "{errno}"
+            );
+        }
+        for errno in [libc::EACCES, libc::EIO] {
+            assert!(
+                matches!(
+                    classify_proc_dir_error(&io::Error::from_raw_os_error(errno)),
+                    CensusFailure::Unread(_)
+                ),
+                "{errno}"
+            );
+        }
+    }
+
+    /// The /proc directory door and the per-pid door do not share a rule:
+    /// a missing /proc is a missing source, a missing row is gone capacity.
+    #[test]
+    fn a_missing_proc_directory_is_no_source() {
+        let not_found = io::Error::from(io::ErrorKind::NotFound);
+        assert!(matches!(
+            classify_proc_dir_error(&not_found),
+            CensusFailure::NoSource(_)
+        ));
+        assert!(pid_gone(&io::Error::from_raw_os_error(libc::ENOENT)));
+    }
+
+    /// NoSource is reachable only from the absent-source facts. Every plain
+    /// read failure errno must land in Unread, which retries and refuses.
+    #[test]
+    fn no_source_never_comes_from_a_read_failure() {
+        for errno in [libc::EACCES, libc::EIO, libc::EPERM, libc::ESRCH] {
+            assert!(
+                matches!(
+                    classify_proc_dir_error(&io::Error::from_raw_os_error(errno)),
+                    CensusFailure::Unread(_)
+                ),
+                "{errno}"
+            );
+        }
+    }
+
+    /// Both admitting outcomes owe the receipt. A DescriptorsExhausted census
+    /// that admits silently is the CI specimen path: the gate stopped
+    /// measuring and said nothing.
+    #[test]
+    fn both_admitting_outcomes_earn_the_receipt() {
+        let famine = Census::descriptors_exhausted("descriptors-exhausted (cannot read /proc)");
+        assert_eq!(
+            census_receipt_reason(&famine),
+            Some("descriptors-exhausted (cannot read /proc)")
+        );
+        let sourceless = Census::no_source("no /proc directory on this host");
+        assert_eq!(
+            census_receipt_reason(&sourceless),
+            Some("no /proc directory on this host")
+        );
+        assert_eq!(census_receipt_reason(&Census::complete(3)), None);
+        assert_eq!(census_receipt_reason(&Census::unavailable("unread")), None);
+    }
+
+    /// The receipt names the reason and states the admit, so an operator
+    /// reading a log can tell a famine from a full fleet.
+    #[test]
+    fn the_receipt_names_the_reason_and_the_admit() {
+        let line = not_measuring_line("descriptors-exhausted (cannot read /proc)");
+        assert!(
+            line.contains("process admission is not measuring: descriptors-exhausted"),
+            "{line}"
+        );
+        assert!(
+            line.contains("; admitting, the spawn below reports its own limit"),
+            "{line}"
+        );
+    }
+
+    /// The marker ledger opens descriptors too, so its errors sit behind the
+    /// same famine rule as every other census door.
+    #[test]
+    fn a_famined_marker_ledger_is_descriptors_exhausted() {
+        assert!(matches!(
+            classify_ledger_error(&io::Error::from_raw_os_error(libc::EMFILE)),
+            CensusFailure::DescriptorsExhausted(_)
+        ));
+        assert!(matches!(
+            classify_ledger_error(&io::Error::from_raw_os_error(libc::EACCES)),
+            CensusFailure::Unread(_)
+        ));
+    }
+
+    #[test]
+    fn an_unexpired_brake_holds_only_the_agent_spawn_door_and_names_the_split() {
+        let _env = BRAKE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("brake.json");
+        let arm = |ppid: u32| {
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "until_epoch": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        + 600,
+                    "reason": "machine runaway: 10005 processes",
+                    "group": {"name": "g i t", "count": 8000, "ppid": ppid},
+                    "fleet_cores": 6.0,
+                    "machine_cores": 8.0,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        };
+        std::env::set_var("FNO_MACHINE_BRAKE", &path);
+        // A worker identity marks an agent even at a terminal.
+        std::env::set_var("FNO_AGENT_SELF", "brake-test-worker");
+        // The group's parent is this process, so the load is the fleet's.
+        arm(std::process::id());
+        let failure = admit_agent_spawn()
+            .err()
+            .expect("brake holds an agent spawn");
+        match failure.decision() {
+            AdmissionDecision::Refuse {
+                reason: AdmissionReason::MachineRunaway,
+                ..
+            } => {}
+            other => panic!("expected MachineRunaway, got {other:?}"),
+        }
+        let text = failure.to_string();
+        assert!(text.contains("largest group g i t x8000"), "{text}");
+        // The arm's measured split rides the brake file; the refusal names it
+        // where a re-walk of the process table used to guess.
+        arm(1);
+        let text = admit_agent_spawn().err().expect("brake holds").to_string();
+        assert!(text.contains("fleet 6.0 of 8.0 machine cores"), "{text}");
+        // The inversion: an armed brake holds nothing else. The default door,
+        // the tab cap, and the same verb typed without a worker identity all
+        // admit while the brake is armed.
+        assert!(
+            admit_fleet().is_ok(),
+            "the default door admits under an armed brake"
+        );
+        assert!(
+            admit_tab(0, None).is_ok(),
+            "the tab cap admits under an armed brake"
+        );
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert!(
+            admit_agent_spawn().is_ok(),
+            "a caller with no worker identity passes the agent-spawn door"
+        );
+        // The absent-file branch: the agent-spawn door reads as admitted.
+        std::env::set_var("FNO_MACHINE_BRAKE", dir.path().join("absent.json"));
+        std::env::set_var("FNO_AGENT_SELF", "brake-test-worker");
+        let permit = admit_agent_spawn();
+        std::env::remove_var("FNO_MACHINE_BRAKE");
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert!(permit.is_ok(), "absent brake admits as before");
+    }
 }

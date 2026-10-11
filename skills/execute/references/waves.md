@@ -50,9 +50,9 @@ Validate plan structure before execution. On ERROR: stop. On WARN: log and proce
 
 Load [plan-validation.md](plan-validation.md) for the full protocol.
 
-#### Joiner posture (`FNO_WORKER_NAME` starts with `j-`)
+#### Joiner posture (`FNO_WORKER_NAME` starts with `jn-t-`)
 
-A worker spawned by `fno backlog join <node>` (`j-<node>-<k>`) is a VISITOR in the node holder's worktree, not a target. First: `.fno/join-briefs/<node>.md` carries your joiner brief (the lead and mail hub, and your claim discipline) - when that file exists for the bound node, read it before dispatching. The brief's band table names YOUR band (one worker per band, the lead is the highest band): set `FNO_WORKER_BAND` from your row before the dispatch round - the spawn-time env export of the same name cannot reach a daemon-forked worker, the brief file can. Never run `target init` and never take the node claim: the target session keeps it, and a joiner that runs `target init` anyway gets the existing "another session holds the node, not this caller" refusal - on that refusal, stop with `<help>` instead of retrying. Read `graph_node_id` from THIS worktree's manifest with `target_state_field` (step 3e), and let `FNO_WORKER_NAME` be the task-claim holder (the joiner 1 contract): the task verbs bind their holder to the roster name, so each joiner is provable as a distinct owner. Everything else in this flow runs unchanged - a joiner's stop hook exits 0 (`visitor allowed`) because its session id matches no manifest in the worktree.
+A worker spawned by `fno backlog join <node>` (`jn-t-<node>-<k>`; legacy rows still read `j-<node>-<k>`) is a VISITOR in the node holder's worktree, not a target. First: `.fno/join-briefs/<node>.md` carries your joiner brief (the lead and mail hub, and your claim discipline) - when that file exists for the bound node, read it before dispatching. The brief's band table names YOUR band (the lead carries the highest; a band REPEATS when the plan has more lanes than distinct bands, so your band is your ROW's, never inferable from the lane count): set `FNO_WORKER_BAND` from your row before the dispatch round - the spawn-time env export of the same name cannot reach a daemon-forked worker, the brief file can. Never run `target init` and never take the node claim: the target session keeps it, and a joiner that runs `target init` anyway gets the existing "another session holds the node, not this caller" refusal - on that refusal, stop with `<help>` instead of retrying. Read `graph_node_id` from THIS worktree's manifest with `target_state_field` (step 3e), and let `FNO_WORKER_NAME` be the task-claim holder (the joiner 1 contract): the task verbs bind their holder to the roster name, so each joiner is provable as a distinct owner. Everything else in this flow runs unchanged - a joiner's stop hook exits 0 (`visitor allowed`) because its session id matches no manifest in the worktree. This is the joiner half only. The caller half names the join trigger. The one-wave pass, step 4 (`/fno:lead --once`), covers a lead handing out a `join: manual` plan, and `/target` initialization covers `join: auto` firing at `fno do target init`.
 
 ### 0b. Structural Context (AUTO)
 
@@ -62,7 +62,7 @@ Generate fresh codemap for structural awareness:
 fno doctor codemap --tokens 2048 2>/dev/null || true
 ```
 
-If `fno` is unavailable or `fno doctor codemap`'s deps are missing, skip silently. Read `.fno/codemap.md` if it exists. Use it to identify god nodes (high-PageRank files) that need careful handling during wave execution, and to understand module dependency flow for wave ordering.
+If `fno` is unavailable or `fno doctor codemap`'s deps are missing, skip silently. Read the codemap in the repo's space (`fno-agents state path codemap`) if it exists. Use it to identify god nodes (high-PageRank files) that need careful handling during wave execution, and to understand module dependency flow for wave ordering.
 
 ### 1. Load Execution Strategy
 
@@ -89,9 +89,9 @@ The `scope: cross-project` parallel-worktree pipeline has been removed;
 (from its `project:` field / node) against the workspace map and, when a wave
 belongs to a project OTHER than the session's:
 
-- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree: `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name "target-<foreign-node>")`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the verb is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned target-<node> --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves.
+- **Foreign node unblocked (ready):** first deterministically isolate the worker into a dedicated worktree, minting the name through the bridge (`WORKER_NAME="$(FNO_AGENTS_RUNTIME=python fno agents name --source ex --verb t <foreign-node>)"`, which yields `ex-t-<foreign-node>`): `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`. On success, link shared state into it best-effort: `[[ -f <foreign-root>/scripts/setup/setup-worktree.sh ]] && CANONICAL=<foreign-root> WORKTREE=$wt bash <foreign-root>/scripts/setup/setup-worktree.sh` (the verb is package code and cannot run this repo-root script itself; the caller does). Then `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` (the `${wt:-...}` fallback launches in the foreign main checkout when `ensure` fails for any reason, so the dispatch is never blocked). Mark the wave delegated, print a `spawned $WORKER_NAME --cwd ${wt:-<foreign-root>}` receipt, and continue this session's own waves. A refused mint refuses the spawn (AC1-EDGE): do not hand-assemble a name.
 - **Foreign node still blocked** (e.g. `blocked_by` the current, not-yet-merged node): do NOT spawn (the worker would refuse). Record a `fno backlog carveout add --kind deferred` entry, print a `deferred <node> to <project>; dispatch on <blocker> merge` line, and rely on `fno backlog advance` to dispatch it after merge.
-- **Foreign node blocked but `dep=contract`** (the optimistic stub pass, G3): dispatch it **NOW** instead of deferring. The node carries `dep: contract` + `stub_against: <ref>` + `contract_version: N` (set by `fno backlog decompose`, G2). Isolate the worker the same way first (`wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name "target-<foreign-node>")`, then the same best-effort `setup-worktree.sh` link as the ready bullet), then spawn `fno agents spawn --cwd "${wt:-<foreign-root>}" "/target <foreign-node>"` and print a `stubbed <node> vs contract v<N>` receipt. The spawned first pass MUST: build against the pinned `## Interface Contract`, **stub** the surface that needs the blocker landed, open its PR as **draft** (`gh pr create --draft` - it must not merge with mocks), emit its manifest via `fno do pr stub-manifest write --node <node> --contract-version <N> --contract-ref <ref> --contract-test '<cmd>' --stubs-json '[{stub_id,file,symbol,contract_ref,kind}, ...]'`, then **END**. Reconciliation is a later merge-triggered pass (G4); the first pass never waits for the blocker. **`--contract-test` is REQUIRED**: it is the executable command the G4 reconcile pass runs against the now-landed schema to authorize de-stubbing (the blocker ships this suite as part of its `## Interface Contract`; Locked Decision 5). A manifest without it makes G4 refuse auto-de-stub (fail-closed), so the draft PR strands - never omit it. For a non-typed contract, a thin schema-snapshot or type-check command is the minimum viable gate.
+- **Foreign node blocked but `dep=contract`** (the optimistic stub pass, G3): dispatch it **NOW** instead of deferring. The node carries `dep: contract` + `stub_against: <ref>` + `contract_version: N` (set by `fno backlog decompose`, G2). Isolate the worker the same way first (mint `WORKER_NAME` through the bridge exactly as the ready bullet; `wt=$(fno agents workspace worktree ensure --repo <foreign-root> --name <foreign-node>)`, then the same best-effort `setup-worktree.sh` link as the ready bullet), then spawn `fno agents spawn --cwd "${wt:-<foreign-root>}" --name "$WORKER_NAME" "/target <foreign-node>"` and print a `stubbed <node> vs contract v<N>` receipt. The spawned first pass MUST: build against the pinned `## Interface Contract`, **stub** the surface that needs the blocker landed, open its PR as **draft** (`gh pr create --draft` - it must not merge with mocks), emit its manifest via `fno do pr stub-manifest write --node <node> --contract-version <N> --contract-ref <ref> --contract-test '<cmd>' --stubs-json '[{stub_id,file,symbol,contract_ref,kind}, ...]'`, then **END**. Reconciliation is a later merge-triggered pass (G4); the first pass never waits for the blocker. **`--contract-test` is REQUIRED**: it is the executable command the G4 reconcile pass runs against the now-landed schema to authorize de-stubbing (the blocker ships this suite as part of its `## Interface Contract`; Locked Decision 5). A manifest without it makes G4 refuse auto-de-stub (fail-closed), so the draft PR strands - never omit it. For a non-typed contract, a thin schema-snapshot or type-check command is the minimum viable gate.
 - **Never** `cd` into the foreign repo and execute locally.
 
 A pure single-project plan (zero foreign waves) behaves byte-identically to
@@ -147,7 +147,7 @@ are allowed to complete atomically (no half-state) before the abort fires
 
 ```bash
 PLAN_PATH="${PLAN_DIR:-}"  # resolved in Step 1 "Load Execution Strategy"
-# kill-criteria.sh was folded into the fno-agents binary (US1, ab-58645f63).
+# kill-criteria.sh was folded into the fno-agents binary (US1).
 # `fno do phase kill-check` prints `KILL_CRITERIA_FIRED <name>|<reason>` and exits
 # 1 when a predicate fires, exits 0 (empty) when none fire, and exits 2 when the
 # fno-agents binary is unavailable. Branch on the exit code: only rc 1 WITH the
@@ -239,15 +239,20 @@ A task appears under `ready` when its effective blockers are all complete and no
 - Update STATE.md after each task
 
 **If mode: parallel**
-- Resolve provider capabilities first (a sequential-fallback provider still downgrades the wave)
-- Spawn the whole `ready` set concurrently - Task tool, multiple concurrent calls
+- A lone target with fewer than two ready tasks runs them sequentially in place.
+- A lone target (`--band` absent) with at least two ready tasks first runs `fno config assert-subagent-budget --width <ready-count>`. On refusal, record the reason in STATE.md and run sequentially in place.
+- Resolve provider capabilities. A sequential-fallback provider records the downgrade and runs sequentially in place.
+- Run `fno-agents wave fork "$PLAN_PATH" --wave <n>` with one `--task <ready-id>` per ready task. It prints `B<TAB><base-sha>` and one `O<TAB><task-id><TAB><absolute-worktree><TAB><branch>` per selected task. A refusal records the reason in STATE.md and runs sequentially in place. For each worktree, best-effort run `CANONICAL=<repo-root> WORKTREE=<path> bash scripts/setup/setup-worktree.sh`.
+- Dispatch one executor per `O` line in one message. Name its task id and worktree path in the prompt. Require edits only there, absolute paths with `git -C <path>`, and a commit before return.
+- When all task results arrive, run `fno-agents wave join "$PLAN_PATH" --wave <n> --base <base-sha>` with one `--task <id>` per returned `O` row. A refusal pauses the wave and names the task/error. `OFF<TAB><task-id><TAB><file>` rows are written under `## Off-surface writes` in SUMMARY.md. Join reruns each selected task's `verify` once in the target worktree. A failure names the task and enters the existing fix loop.
+- Joiner workers (`--band`), Gemini fallback, and sequential waves keep their current flow. They do not fork task worktrees.
 - With `--node` bound: update STATE.md as each task completes, then rerun the `--ready` query; do not wait for the round - the peers' live task rows hold their in-flight claims back
 - Node-less: wait for the whole round to complete, update STATE.md, then re-query - with no node rows an in-flight sibling still reads `ready`, and re-dispatching it double-spawns the work
 - Tasks under `blocked_on` need no action; their derived edges hold them until a later round
 
 `bands` maps each task to its wave's `difficulty` band, with the plan frontmatter band as the fallback. A pulling worker takes only tasks at or below its own band. The band-to-harness-and-model mapping lives in config, never in the plan.
 
-**Joined workers pull one task, never the set.** When `--band` was passed (a joined worker, `FNO_WORKER_NAME` starts with `j-`), the response carries `above_band` (tasks above your band, shown not offered) and `ready` sorted highest band first. Do NOT dispatch the whole `ready` set: take the FIRST entry, claim it (step 3e), then rerun the query - your claim holds the task out of every sibling's next `ready`. When every `ready` entry is above your band, dispatch nothing this round and re-query after the peers release their claims. A lone target (no `--band`) keeps whole-set dispatch exactly as below.
+**Joined workers pull one task, never the set.** When `--band` was passed (a joined worker, `FNO_WORKER_NAME` starts with `jn-t-`), the response carries `above_band` (tasks above your band, shown not offered) and `ready` sorted highest band first. Do NOT dispatch the whole `ready` set: take the FIRST entry, claim it (step 3e), then rerun the query - your claim holds the task out of every sibling's next `ready`. When every `ready` entry is above your band, dispatch nothing this round and re-query after the peers release their claims. A lone target (no `--band`) keeps whole-set dispatch exactly as below.
 
 An empty `ready` list does not prove execution is complete. If `claimed` is
 non-empty, wait for peer claims to leave `in_progress` and rerun `--ready`. If
@@ -262,9 +267,7 @@ See [wave-patterns.md](wave-patterns.md) for the decision tree on sequential vs 
 
 ### 3. Spawn Task Executors
 
-Use Task tool to spawn fresh executors for each task. Before dispatch, resolve
-the per-task executor with the three-tier chain (task → plan → surface
-inference → `do`):
+Use Task tool to spawn fresh executors for each task. The executor loads `fno:test-audit` in authoring mode beside `fno:tdd`. Every new or changed test's four gate answers must appear in the task result. Prefer extending the owning test or a table-driven case, and require a named reason before adding a test file. Before dispatch, resolve the per-task executor with the three-tier chain (task → plan → surface inference → `do`):
 
 ```bash
 # Resolve task.executor with documented precedence:
@@ -399,7 +402,7 @@ if [[ -n "$NODE_ID" ]]; then
 fi
 ```
 
-For a joiner (`FNO_WORKER_NAME` starts with `j-`, step 0 posture) this block is the whole claim path: the manifest read still resolves `graph_node_id` (that field names the node, not the session), and the task verbs bind the claim's holder to the joiner's roster name, so a joined worker's owner is provable without any session identity of the target.
+For a joiner (`FNO_WORKER_NAME` starts with `jn-t-`, step 0 posture) this block is the whole claim path: the manifest read still resolves `graph_node_id` (that field names the node, not the session), and the task verbs bind the claim's holder to the joiner's roster name, so a joined worker's owner is provable without any session identity of the target.
 
 Branch on `TASK_CLAIM_RC`. Every nonzero code means you did NOT take the claim, so dispatching anyway is the double-worker bug this step exists to close.
 
@@ -408,7 +411,7 @@ Branch on `TASK_CLAIM_RC`. Every nonzero code means you did NOT take the claim, 
 - **Exit 2**: the task id is not in the plan, or `--status` was misspelled. A stop: the wave and the plan disagree about what a task is.
 - **Exit 6**: this node has no task grain. Either no plan is bound to it, or the project runs a non-graph tracker backend that has no task rows at all. Dispatch unguarded, exactly as the no-bound-node case below. It is its own code because it is common rather than exceptional: about one live node in five carries no `plan_path`, and a tracker-backend project carries none anywhere, so reading it as a stop would halt waves that ran fine before task rows existed.
 - **Exit 3**: a peer session holds the task, or the task is already `done`. The message says which. For a peer holder, log `task <id> held by <holder>, skipping this round`, write `- [~] <id>: held by <holder>` to STATE.md, and move to the next task in the wave, the same shape as lane-fill leaving a peer-lane node ready. A `[~]` task needs no re-offer bookkeeping of its own: the next `--ready` read omits every row still `in_progress`, so once the peer releases it (the row leaves `in_progress`) the task simply returns under `ready`. For a `done` row there is no holder and no later pass that changes the answer: write `- [x] <id>` and never re-offer it, or the wave spins on shipped work forever.
-- **Exit 4**: no provable session id or session pid for the claim. A stop, not a skip: emit `<help reason="task claim needs a session id" evidence="task <id> of node <node>">`.
+- **Exit 4**: no provable per-worker identity, or this holder identity is live under another process. A stop, not a skip: emit `<help reason="task claim needs a session id" evidence="task <id> of node <node>">`.
 - **Exit 5**: the graph itself is unreadable. A stop for the whole wave, never a skip. This code is distinct from 3 on purpose: reading a corrupt graph as "a peer holds it" would make every task in the wave skip silently and log a holder that does not exist.
 - **No bound node** (plan-only sessions with no `graph_node_id`): skip the call and dispatch as today. There is no task row to guard.
 
@@ -429,11 +432,13 @@ For each task in wave.tasks:
 **Parallel Wave:**
 ```
 1. Announce: "## Executing Wave {n} (parallel: {count} tasks)"
-2. Spawn ALL targets concurrently
-3. Wait for ALL to complete
-4. Collect results (success/failure for each)
-5. Update STATE.md with all results
-6. If any failed, report and pause
+2. For a lone target with 2+ ready tasks, check `fno config assert-subagent-budget --width {count}`; on refusal, record the reason and use the sequential flow.
+3. Run `fno-agents wave fork "$PLAN_PATH" --wave {n}` with one `--task {id}` per ready task; capture `B` and every `O` row. On refusal, record the reason and use the sequential flow.
+4. Best-effort initialize every returned worktree with `CANONICAL=<repo-root> WORKTREE=<path> bash scripts/setup/setup-worktree.sh`.
+5. Dispatch one executor per `O` row concurrently. Pass the task id and absolute worktree path; require all edits and commits in that worktree.
+6. Wait for all results. A missing or failed result pauses the wave.
+7. Run `fno-agents wave join "$PLAN_PATH" --wave {n} --base {base-sha}` with one `--task {id}` per returned `O` row. A merge error pauses and names the task and conflict. Join reruns each selected task's verify once; a failure names the task and enters the fix loop.
+8. Record every `OFF` row in SUMMARY.md under `## Off-surface writes`, then update STATE.md with all task results.
 ```
 
 ### 3b. Atomic Commits Per Task (MANDATORY)
@@ -460,7 +465,7 @@ Task {N.M}: {task title}"
 harder, break `git bisect`, and prevent granular reverts. The review phase
 and PR are more effective when each task has its own commit.
 
-**Status-breakpoint emit (x-dbaf, best-effort).** Right after each task's return
+**Status-breakpoint emit (best-effort).** Right after each task's return
 is parsed, emit its boundary event so observers can track the run. `task_started`
 already fired from `resolve-executor.sh` at dispatch; `run_summary` fires from
 `finalize` at the terminal. Emit the middle boundary (one non-fatal line):
@@ -525,6 +530,8 @@ Before reporting completion:
 2. Pass plan path and STATE.md
 3. Wait for verification result
 4. Only report "done" if verification PASSES
+
+Each task's verification runs only the tests covering the files it changed (`fno doctor test <test files>`), never the whole suite locally. CI runs every suite on every PR. When a whole-suite local run is truly needed, start it as a background task: it queues on `test:suite` and the turn never blocks.
 
 If verification FAILS, report issues and do not claim done.
 

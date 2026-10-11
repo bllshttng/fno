@@ -1,4 +1,4 @@
-//! `fno-agents needs` - the needs-me-queue events-fold leg (x-feec).
+//! `fno-agents needs` - the needs-me-queue events-fold leg.
 //!
 //! A pure read-time fold over events.jsonl producing the two event-derived
 //! attention reasons the mux client cannot see from live badges alone:
@@ -18,23 +18,24 @@
 
 use crate::paths::AgentsHome;
 use serde::Serialize;
+use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Default fold window when `--since-epoch` is absent: the last 24h.
-const DEFAULT_WINDOW_SECS: u64 = 24 * 60 * 60;
+pub const DEFAULT_WINDOW_SECS: u64 = 24 * 60 * 60;
 
 /// `fires` floor for `review_wedged`: the loop must have re-checked at least
 /// this many times before a green-PR block counts as wedged (a fresh block
 /// during a normal review wait is not yet a wedge). Hardcoded heuristic, not a
 /// config knob - tune the const if it misfires (ponytail: no config for a value
 /// that never changes); a hidden `--fires-floor` overrides it for tests.
-const DEFAULT_FIRES_FLOOR: u64 = 2;
+pub const DEFAULT_FIRES_FLOOR: u64 = 2;
 
 /// Below this age, a pile of unharvested carve-outs or stale claims is not yet
 /// a needs-me item - only a pile that has actually gone stale belongs in the
-/// queue (x-801b measured 44 carve-out rows, oldest 29 days; x-e3be measured
+/// queue (measured 44 carve-out rows, oldest 29 days; x-bbbb measured
 /// 573 claim files, oldest specimens 56-75 days). Both legs are "somebody
 /// should look at this pile" signals, read from durable on-disk state rather
 /// than a recent event, so neither is windowed by `since` at all.
@@ -71,7 +72,7 @@ pub struct NeedItem {
 
 /// Read `<field>` regardless of envelope: nested under `/data` (unified) or
 /// top-level (retired flat). Mirrors [`crate::digest`] - kept local so this
-/// module stays a self-contained leaf (x-7fdd: no function-local cross-imports).
+/// module stays a self-contained leaf (: no function-local cross-imports).
 fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     v.get("data")
         .and_then(|d| d.get(key))
@@ -179,7 +180,7 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
         let ts = event_ts(&v);
         let kind = event_kind(&v);
         // operator_question/_closed are exempt from the `since` window: a
-        // question does not expire (no auto-close, x-99dc), so time-windowing
+        // question does not expire (no auto-close), so time-windowing
         // it here would silently resurrect the exact failure that node fixed
         // for the SessionStart block - just inside the mux queue instead.
         let windowed = !matches!(
@@ -199,7 +200,10 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
             let name = node
                 .clone()
                 .or_else(|| str_field(&v, "cwd").map(|c| basename(c).to_string()));
-            let session_id = str_field(&v, "session_id").unwrap_or(qid).to_string();
+            // The item's identity is the question id, matching the fold key
+            // and outstanding/core.py. An asking session_id in the row must
+            // not displace it: `answer <id>` has to name something closable.
+            let session_id = qid.to_string();
             let epoch = to_epoch_lenient(ts).unwrap_or(0);
             seq += 1;
             if questions
@@ -363,12 +367,23 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
     for (_, (_, _, item)) in mail_escalations {
         items.push(item);
     }
-    for (qid, (_, _, item)) in questions {
-        if closed_questions.contains(&qid) {
-            continue;
-        }
-        items.push(item);
-    }
+    // Operator questions rank newest-first, matching
+    // outstanding/core.py::read_open_questions: an ask filed minutes ago is
+    // the one a human can still act on. Pre-ordered here by (epoch, seq)
+    // descending - the fold's own total order, exact across a same-second
+    // stream where a ts string compare is not - so the comparator's
+    // same-(ts, session) ties below resolve through the stable sort into this
+    // push order instead of HashMap order.
+    let mut open_questions: Vec<_> = questions
+        .into_iter()
+        .filter(|(qid, _)| !closed_questions.contains(qid))
+        .collect();
+    open_questions.sort_by(|a, b| {
+        let (epoch_a, seq_a, _) = a.1;
+        let (epoch_b, seq_b, _) = b.1;
+        epoch_b.cmp(&epoch_a).then_with(|| seq_b.cmp(&seq_a))
+    });
+    items.extend(open_questions.into_iter().map(|(_, (_, _, item))| item));
     // `kind` is part of the sort key because it is part of the mail accumulator's
     // key: one recipient can now yield both a mail_question and a
     // mail_delivery_miss, and for mail rows session_id IS the recipient, so those
@@ -377,9 +392,22 @@ pub fn fold(events_raw: &str, ledger_raw: &str, since: u64, fires_floor: u64) ->
     // process. That makes `needs --json` reorder run to run and anything
     // diffing it flaky.
     items.sort_by(|a, b| {
-        a.ts.cmp(&b.ts)
-            .then_with(|| a.session_id.cmp(&b.session_id))
-            .then_with(|| a.kind.cmp(&b.kind))
+        // Operator questions rank newest-first among themselves; the
+        // direction flip is total only when BOTH sides are questions (mixing
+        // it into the cross-kind arm would break sort_by's total-order
+        // requirement). Every other pair keeps stream order.
+        let is_question = |i: &NeedItem| i.kind == "operator_question";
+        match (is_question(a), is_question(b)) {
+            (true, true) => {
+                b.ts.cmp(&a.ts)
+                    .then_with(|| b.session_id.cmp(&a.session_id))
+            }
+            _ => {
+                a.ts.cmp(&b.ts)
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+                    .then_with(|| a.kind.cmp(&b.kind))
+            }
+        }
     });
     items
 }
@@ -497,6 +525,15 @@ struct NeedsArgs {
     since_epoch: Option<u64>,
     fires_floor: u64,
     json: bool,
+    items: bool,
+    clear_settled: bool,
+    answer: Option<String>,
+    option: Option<u32>,
+    words: Option<String>,
+    done: bool,
+    delegate: bool,
+    archive: Vec<String>,
+    sink: Option<String>,
     events_override: Vec<PathBuf>,
     ledger_override: Option<PathBuf>,
 }
@@ -505,6 +542,15 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
     let mut since_epoch: Option<u64> = None;
     let mut fires_floor = DEFAULT_FIRES_FLOOR;
     let mut json = false;
+    let mut items = false;
+    let mut clear_settled = false;
+    let mut answer: Option<String> = None;
+    let mut option: Option<u32> = None;
+    let mut words: Option<String> = None;
+    let mut done = false;
+    let mut delegate = false;
+    let mut archive: Vec<String> = Vec::new();
+    let mut sink: Option<String> = None;
     let mut events_override: Vec<PathBuf> = Vec::new();
     let mut ledger_override: Option<PathBuf> = None;
 
@@ -525,6 +571,22 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
                     .ok_or("--fires-floor needs a non-negative integer")?
             }
             "--json" | "-J" => json = true,
+            "--items" => items = true,
+            "--clear-settled" => clear_settled = true,
+            "--answer" => answer = Some(it.next().ok_or("--answer needs an item id")?),
+            "--option" => {
+                option = Some(
+                    it.next()
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .filter(|n| *n > 0)
+                        .ok_or("--option needs a positive option number")?,
+                )
+            }
+            "--words" => words = Some(it.next().ok_or("--words needs the answer text")?),
+            "--done" => done = true,
+            "--delegate" => delegate = true,
+            "--archive" => archive.push(it.next().ok_or("--archive needs an item id")?),
+            "--sink" => sink = Some(it.next().ok_or("--sink needs a sink name")?),
             "--events" => {
                 events_override.push(PathBuf::from(it.next().ok_or("--events needs a path")?))
             }
@@ -538,6 +600,15 @@ fn parse_args(rest: &[String]) -> Result<NeedsArgs, String> {
         since_epoch,
         fires_floor,
         json,
+        items,
+        clear_settled,
+        answer,
+        option,
+        words,
+        done,
+        delegate,
+        archive,
+        sink,
         events_override,
         ledger_override,
     })
@@ -559,22 +630,695 @@ fn expand_eq(rest: &[String]) -> Vec<String> {
     out
 }
 
-/// Default event/ledger sources: project `.fno/events.jsonl` + global
+/// The question journal family: the cwd's space journal + global
+/// `~/.fno/events.jsonl` + `~/.fno/questions.jsonl`. Every reader of the
+/// question family folds these same three paths as a UNION (a question can
+/// land in any one of them), so the list lives here and nowhere else.
+pub(crate) fn question_journals(fno_dir: &Path, cwd: &Path) -> Vec<PathBuf> {
+    vec![
+        crate::paths::space_dir(cwd).join("events.jsonl"),
+        fno_dir.join("events.jsonl"),
+        fno_dir.join("questions.jsonl"),
+    ]
+}
+
+/// Default event/ledger sources: the repo's space journal + global
 /// `~/.fno/events.jsonl` + `~/.fno/questions.jsonl` + `~/.fno/ledger.json`.
-fn default_sources(home: &AgentsHome) -> (Vec<PathBuf>, PathBuf) {
+fn default_sources(home: &AgentsHome, cwd: &Path) -> (Vec<PathBuf>, PathBuf) {
     let fno_dir = home
         .root()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from(".fno"));
-    let global_events = fno_dir.join("events.jsonl");
-    let questions = fno_dir.join("questions.jsonl");
-    let project_events = PathBuf::from(".fno").join("events.jsonl");
+    let events = question_journals(&fno_dir, cwd);
     let ledger = fno_dir.join("ledger.json");
-    (vec![project_events, global_events, questions], ledger)
+    (events, ledger)
 }
 
-/// Stamp each item's `live` bit from its node claim (x-feec 1.4): an item whose
+/// The two kinds that mark a question open or answered, wherever the family
+/// of question readers folds them.
+pub(crate) const QUESTION_TYPES: &[&str] = &["operator_question", "operator_question_closed"];
+
+/// The kinds the attention projection folds: the question pair plus the
+/// answer and delivery rows that flip an item to answered and feed the
+/// panel's answered rows.
+pub(crate) const PROJECTION_TYPES: &[&str] = &[
+    "operator_question",
+    "operator_question_closed",
+    "attention_answer",
+    "attention_delivery",
+];
+
+/// The types the `--items` read folds unwindowed: the question pair plus
+/// answer rows. Deliveries ride the TTL window below; the events-leg kinds
+/// (mail_escalation, loop_check, termination, loop_terminated) belong to
+/// `fold`, never this read.
+pub(crate) const ITEMS_TYPES: &[&str] = &[
+    "operator_question",
+    "operator_question_closed",
+    "attention_answer",
+];
+
+/// One store's read outcome for the `--items` sources readout. A store that
+/// exists and fails to read is `readable: false`; the output never shows an
+/// empty `items` as a clean read.
+#[derive(Serialize)]
+struct SourceRead {
+    store: String,
+    readable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// The `--items` leg: the attention projection with named sources. Every
+/// surface that delivers or answers an item reads this one projection, so a
+/// store an operator cannot read is a named source, never a silent empty list.
+fn run_items(home: &AgentsHome, cwd: &Path) -> i32 {
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let mut sources: Vec<SourceRead> = Vec::new();
+    let mut journals_raw = String::new();
+    // Deliveries older than the answered panel's TTL can never surface in
+    // the fold, so the read bounds them by TTL plus slack instead of pulling
+    // the fleet's full delivery history (112k rows / 36.8 MB on the live
+    // store measured 2026-09-28).
+    let delivery_since_ms =
+        crate::claims::now_ms() - (crate::attention::ANSWERED_TTL_S as i64 + 900) * 1000;
+    for path in question_journals(&fno_dir, cwd) {
+        let store = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("journal")
+            .to_string();
+        let mut content = String::new();
+        let mut error: Option<String> = None;
+        let queries = [
+            crate::event_store::EventQuery::of_types(ITEMS_TYPES),
+            crate::event_store::EventQuery {
+                since_ms: Some(delivery_since_ms),
+                ..crate::event_store::EventQuery::of_types(&["attention_delivery"])
+            },
+        ];
+        for q in queries {
+            match crate::event_store::journal_text_checked(&path, &q) {
+                Ok(part) => {
+                    content.push_str(&part);
+                    if !part.ends_with('\n') {
+                        content.push('\n');
+                    }
+                }
+                Err(e) => {
+                    error.get_or_insert(e.to_string());
+                }
+            }
+        }
+        match error {
+            None => {
+                sources.push(SourceRead {
+                    store,
+                    readable: true,
+                    error: None,
+                });
+                journals_raw.push_str(&content);
+            }
+            Some(e) => sources.push(SourceRead {
+                store,
+                readable: false,
+                error: Some(e),
+            }),
+        }
+    }
+    // Escalation notes: the (slug, text) pairs the projection folds.
+    let notes_dir = crate::escalation::dir(cwd);
+    let mut notes: Vec<(String, String)> = Vec::new();
+    match std::fs::read_dir(&notes_dir) {
+        Ok(entries) => {
+            let mut paths: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("md"))
+                .collect();
+            paths.sort();
+            for path in paths {
+                let slug = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("note")
+                    .to_string();
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => notes.push((slug, text)),
+                    Err(e) => sources.push(SourceRead {
+                        store: format!("escalations/{slug}"),
+                        readable: false,
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }
+            sources.push(SourceRead {
+                store: "escalations".to_string(),
+                readable: true,
+                error: None,
+            });
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            sources.push(SourceRead {
+                store: "escalations".to_string(),
+                readable: true,
+                error: None,
+            });
+        }
+        Err(e) => sources.push(SourceRead {
+            store: "escalations".to_string(),
+            readable: false,
+            error: Some(e.to_string()),
+        }),
+    }
+    // The user lane file.
+    let lane_path = crate::org_board::scope::operator_lane_path(cwd);
+    let lane_text = match std::fs::read_to_string(&lane_path) {
+        Ok(text) => {
+            sources.push(SourceRead {
+                store: "lane".to_string(),
+                readable: true,
+                error: None,
+            });
+            text
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            sources.push(SourceRead {
+                store: "lane".to_string(),
+                readable: true,
+                error: None,
+            });
+            String::new()
+        }
+        Err(e) => {
+            sources.push(SourceRead {
+                store: "lane".to_string(),
+                readable: false,
+                error: Some(e.to_string()),
+            });
+            String::new()
+        }
+    };
+    let mut items = crate::attention::project(
+        &journals_raw,
+        &notes,
+        &lane_text,
+        crate::claims::now_ms() as u64 / 1000,
+    );
+    if let Ok(registry) = crate::state::load_registry(&home.registry_json()) {
+        crate::attention::attach_reach(&mut items, &registry);
+    }
+    // The settled flag shares the sweep's open-question fold, including its
+    // user-only exemption. An unreadable graph yields no settled ids.
+    let (statuses, raw) = crate::question_sweep::read_closed_rung_facts(cwd, home);
+    let statuses = statuses.into_iter().collect();
+    let settled = node_closed_question_ids(&raw, &statuses)
+        .into_iter()
+        .collect();
+    mark_settled(&mut items, &settled);
+    let as_of = now_secs();
+    let answered = crate::attention::answered(&journals_raw, as_of);
+    let payload = json!({
+        "as_of": as_of,
+        "sources": sources,
+        "items": items,
+        "answered": answered,
+    });
+    println!(
+        "{}",
+        serde_json::to_string(&payload).expect("serializing an owned value never fails")
+    );
+    let any_unreadable = payload["sources"]
+        .as_array()
+        .map(|a| a.iter().any(|s| s.get("readable") == Some(&json!(false))))
+        .unwrap_or(false);
+    if any_unreadable {
+        return 1;
+    }
+    0
+}
+
+/// Mark only open question/pin items the canonical node-closed fold returned.
+fn mark_settled(
+    items: &mut [crate::attention::AttentionItem],
+    settled: &std::collections::HashSet<String>,
+) {
+    for item in items.iter_mut() {
+        if item.state != "open" || !matches!(item.kind.as_str(), "question" | "pin") {
+            continue;
+        }
+        item.settled = settled.contains(&item.id);
+    }
+}
+
+/// The `--clear-settled` door: close every still-open question whose node or
+/// blocks entry reads done/superseded, right now, through the same close
+/// rows the daemon sweep writes (`reason: node-closed`), so the attention
+/// arm's vault-page write picks them up on its next beat. The bell's
+/// Clear all calls this; a graph it cannot read closes nothing.
+fn run_clear_settled(home: &AgentsHome, cwd: &Path) -> i32 {
+    let (statuses, raw) = crate::question_sweep::read_closed_rung_facts(cwd, home);
+    let statuses: std::collections::BTreeMap<String, String> = statuses.into_iter().collect();
+    let ids = node_closed_question_ids(&raw, &statuses);
+    let now = crate::claims::now_ms() / 1000;
+    let (cleared, errors) =
+        crate::question_sweep::close_questions(home, &ids, now, "clear-settled");
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
+    let _ = emitter.emit(
+        "question_sweep",
+        &json!({
+            "closed": cleared.len(),
+            "tasks_closed": 0,
+            "legacy_moved": 0,
+            "outcome": if errors.is_empty() { "ok" } else { "partial" },
+            "closed_by": "clear-settled",
+        }),
+    );
+    println!(
+        "{}",
+        json!({
+            "cleared": cleared,
+            "errors": errors,
+            "as_of": crate::claims::now_ms() / 1000,
+        })
+    );
+    i32::from(!errors.is_empty())
+}
+
+/// The `--answer` door: record one durable `attention_answer` row for an open
+/// item, first answer wins, and print a one-line JSON receipt. The mux is the
+/// caller this exists for, but any process gets the same receipt. The arm owns
+/// delivery (the clear, the resume, the team escalation) on its next beat;
+/// the door never delivers.
+fn run_answer(home: &AgentsHome, cwd: &Path, args: &NeedsArgs, item_id: &str) -> i32 {
+    let picks = [
+        args.option.is_some(),
+        args.words.is_some(),
+        args.done,
+        args.delegate,
+    ];
+    if picks.iter().filter(|p| **p).count() != 1 {
+        eprintln!(
+            "fno-agents: needs --answer needs exactly one of --option <n>, --words <text>, --done, --delegate"
+        );
+        return 2;
+    }
+    match args.sink.as_deref() {
+        Some("mux") => {}
+        other => {
+            eprintln!(
+                "fno-agents: needs --answer accepts only --sink mux (got {})",
+                other.unwrap_or("none")
+            );
+            return 2;
+        }
+    }
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    // The same projection `run_items` folds, so a closed or already-answered
+    // item refuses for the reason the panel will show. An unreadable store
+    // makes the projection incomplete; the refusal names it instead of
+    // reading as a clean not-found.
+    let (items, unreadable, _) = crate::attention_arm::read_items_at(&fno_dir, cwd);
+    let Some(item) = items.iter().find(|i| i.id == item_id) else {
+        if unreadable.is_empty() {
+            eprintln!("fno-agents: not found: {item_id}");
+        } else {
+            eprintln!(
+                "fno-agents: not found: {item_id} (some stores unreadable: {})",
+                unreadable.join("; ")
+            );
+        }
+        return 2;
+    };
+    if item.state != "open" {
+        eprintln!("fno-agents: not open: {item_id} (state {})", item.state);
+        return 2;
+    }
+    let answer = if let Some(n) = args.option {
+        if n as usize > item.options.len() {
+            eprintln!(
+                "fno-agents: option {n} is outside 1..={} for {item_id}",
+                item.options.len()
+            );
+            return 2;
+        }
+        crate::attention_file::FileAnswer::Option(n)
+    } else if args.done {
+        if item.kind != "pin" {
+            eprintln!("fno-agents: only a pin takes --done: {item_id} is a question");
+            return 2;
+        }
+        crate::attention_file::FileAnswer::Done
+    } else if args.delegate {
+        if let Err(reason) = delegable(item, cwd) {
+            eprintln!("fno-agents: {reason}");
+            return 2;
+        }
+        crate::attention_file::FileAnswer::Delegate
+    } else {
+        crate::attention_file::FileAnswer::Words(args.words.clone().unwrap_or_default())
+    };
+    match crate::attention_arm::append_answer_row(item_id, "mux", &answer, "sink", "mux") {
+        Ok((_, superseded)) => {
+            println!(
+                "{}",
+                json!({"recorded": true, "item_id": item_id, "superseded": superseded})
+            );
+            0
+        }
+        Err(e) => {
+            eprintln!("fno-agents: needs: {e}");
+            1
+        }
+    }
+}
+
+/// Whether the agents may decide `item` for the user: a question (a pin has
+/// nothing to decide), recorded reversible as `yes` or `costly` (an
+/// irreversible or unstated call stays the user's), and a live team over
+/// its node to decide it (else the question would close with nobody on it).
+fn delegable(item: &crate::attention::AttentionItem, cwd: &Path) -> Result<(), String> {
+    let id = &item.id;
+    if item.kind == "pin" {
+        return Err(format!("a pin has no delegate: {id}"));
+    }
+    match item.reversible.as_deref().map(str::trim) {
+        Some("yes" | "costly") => {}
+        Some("no") => return Err(format!("irreversible: the user decides {id}")),
+        _ => return Err(format!("reversibility not recorded: the user decides {id}")),
+    }
+    if crate::attention_reply::team_holder(item, cwd).is_none() {
+        let node = item.node.as_deref().unwrap_or("its node");
+        return Err(format!("no live team covers {node}; answer it yourself"));
+    }
+    Ok(())
+}
+
+/// The `--archive` door: withdraw open items with no answer through the
+/// in-process clear core, the same close `fno inbox outstanding clear` writes.
+/// An id that is not open is refused by name and closes nothing; the rest
+/// close. Prints one JSON receipt. `caller` is `None` outside tests, so the
+/// clear resolves who is at the door from the process itself.
+fn run_archive(
+    home: &AgentsHome,
+    cwd: &Path,
+    args: &NeedsArgs,
+    caller: Option<crate::question_clear::ClearCaller>,
+) -> i32 {
+    if args.sink.as_deref() != Some("mux") {
+        eprintln!("fno-agents: needs --archive accepts only --sink mux");
+        return 2;
+    }
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let (items, _, _) = crate::attention_arm::read_items_at(&fno_dir, cwd);
+    let mut lines = Vec::new();
+    let mut ids = Vec::new();
+    for id in &args.archive {
+        match items.iter().find(|i| &i.id == id) {
+            None => lines.push(format!("not found: {id}")),
+            Some(i) if i.state != "open" => {
+                lines.push(format!("not open: {id} (state {})", i.state))
+            }
+            Some(_) => ids.push(id.clone()),
+        }
+    }
+    let refused = lines.len();
+    let (mut code, mut archived) = (0, 0);
+    if !ids.is_empty() {
+        let answer = crate::question_clear::run_clear(&crate::question_clear::ClearRequest {
+            ids,
+            answer: None,
+            cap: crate::question_intake::QUESTION_CAP,
+            provenance: json!({}),
+            closed_by: Some("mux".to_string()),
+            caller,
+            journal_path: crate::paths::space_dir(cwd).join("events.jsonl"),
+            index_path: fno_dir.join("questions.jsonl"),
+            decisions_path: fno_dir.join("decisions.jsonl"),
+            graph: crate::backlog::settings::graph_path(),
+            repo_root: cwd.to_path_buf(),
+        });
+        code = answer.exit_code;
+        archived = answer.closed.len();
+        lines.extend(answer.lines);
+    }
+    println!("{}", json!({"archived": archived, "lines": lines}));
+    if refused > 0 {
+        for line in &lines[..refused] {
+            eprintln!("fno-agents: {line}");
+        }
+        if code == 0 {
+            code = 2;
+        }
+    }
+    code
+}
+
+/// One held node: the node an open question blocks, that question, and when
+/// it was asked.
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct HeldRow {
+    pub(crate) node: String,
+    pub(crate) question_id: String,
+    /// The question's first line, capped at 80 chars for rendering.
+    pub(crate) question: String,
+    pub(crate) ts: String,
+    pub(crate) epoch: u64,
+}
+
+/// The held map: node id -> the open question id that holds it. A node is
+/// HELD when an OPEN `operator_question` row names it in `data.blocks`; the
+/// oldest such question wins so every reader names the same one. A closed
+/// question never holds, and a question with no `blocks` array holds nothing.
+pub(crate) fn held_nodes(journals: &[PathBuf]) -> std::collections::BTreeMap<String, String> {
+    held_rows(journals)
+        .into_iter()
+        .map(|r| (r.node, r.question_id))
+        .collect()
+}
+
+/// The fail-open door over [`held_nodes`]: the fold resolves the state root,
+/// which panics in a process with no declared hermetic root, and no caller of
+/// a held read may die on it - the map it cannot read is an empty one.
+pub(crate) fn held_map(fno_dir: &Path, cwd: &Path) -> std::collections::BTreeMap<String, String> {
+    std::panic::catch_unwind(|| held_nodes(&question_journals(fno_dir, cwd))).unwrap_or_default()
+}
+
+/// The held rows: one per blocked node, oldest question first. Journals fold
+/// in order without concatenation: a space journal plus the global pair
+/// reaches 53MB here, and the raw carrier was the whole cost.
+fn held_rows(journals: &[PathBuf]) -> Vec<HeldRow> {
+    let mut rows = HeldFold::default();
+    for path in journals {
+        let content = crate::event_store::journal_text(path, crate::needs::QUESTION_TYPES);
+        rows.absorb(&content);
+    }
+    rows.finish()
+}
+
+/// The pure half of [`held_rows`], over newline-joined journal contents.
+/// Test-only since the fold moved to [`HeldFold`]: the fixtures pin the raw
+/// spelling directly.
+#[cfg(test)]
+fn held_rows_from_raw(raw: &str) -> Vec<HeldRow> {
+    let mut fold = HeldFold::default();
+    fold.absorb(raw);
+    fold.finish()
+}
+
+/// The asked/closed fold over question journals, in journal order. Latest
+/// ask of a qid wins (journal order, mirroring
+/// `scan_unrecorded_decisions`); the oldest OPEN ask per node then wins.
+#[derive(Default)]
+struct HeldFold {
+    asked: HashMap<String, (u64, String, Value)>,
+    closed: std::collections::HashSet<String>,
+}
+
+impl HeldFold {
+    fn absorb(&mut self, raw: &str) {
+        for line in raw.lines() {
+            if line.trim().is_empty() || !line.contains("operator_question") {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue; // torn/malformed tail line: skip, never abort
+            };
+            let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+            let data = v
+                .get("data")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}));
+            match kind {
+                "operator_question" => {
+                    let Some(qid) = data.get("question_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let ts_env = v.get("ts").and_then(Value::as_str).unwrap_or("");
+                    let epoch = to_epoch_lenient(ts_env).unwrap_or(0);
+                    self.asked
+                        .insert(qid.to_string(), (epoch, ts_env.to_string(), data));
+                }
+                "operator_question_closed" => {
+                    if let Some(qid) = data.get("question_id").and_then(Value::as_str) {
+                        self.closed.insert(qid.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<HeldRow> {
+        struct Best {
+            epoch: u64,
+            qid: String,
+            question: String,
+            ts: String,
+        }
+        let mut best: std::collections::BTreeMap<String, Best> = std::collections::BTreeMap::new();
+        let mut qids: Vec<(&String, &(u64, String, Value))> = self.asked.iter().collect();
+        qids.sort_by(|a, b| a.0.cmp(b.0));
+        for (qid, (epoch, ts, data)) in qids {
+            if self.closed.contains(qid) {
+                continue;
+            }
+            let Some(blocks) = data.get("blocks").and_then(Value::as_array) else {
+                continue;
+            };
+            let question: String = data
+                .get("question")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(80)
+                .collect();
+            let ts = ts.clone();
+            for node in blocks {
+                let Some(node) = node.as_str() else {
+                    continue;
+                };
+                let take = match best.get(node) {
+                    None => true,
+                    Some(b) => (*epoch, qid.as_str()) < (b.epoch, b.qid.as_str()),
+                };
+                if take {
+                    best.insert(
+                        node.to_string(),
+                        Best {
+                            epoch: *epoch,
+                            qid: qid.to_string(),
+                            question: question.clone(),
+                            ts: ts.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        let mut rows: Vec<HeldRow> = best
+            .into_iter()
+            .map(|(node, b)| HeldRow {
+                node,
+                question_id: b.qid,
+                question: b.question,
+                ts: b.ts,
+                epoch: b.epoch,
+            })
+            .collect();
+        rows.sort_by_key(|r| (r.epoch, r.question_id.clone()));
+        rows
+    }
+}
+
+/// The open question ids whose node reads a terminal rung: a
+/// question's node is the `node` field plus every `blocks` entry, and a rung
+/// is `done` or `superseded`. Pure over journal contents; the caller
+/// supplies the graph statuses and does the writing.
+pub(crate) fn node_closed_question_ids(
+    raw: &str,
+    statuses: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    const CLOSED_RUNGS: [&str; 2] = ["done", "superseded"];
+    let mut asked: HashMap<String, Value> = HashMap::new();
+    let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() || !line.contains("operator_question") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        let data = v
+            .get("data")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        match kind {
+            "operator_question" => {
+                if let Some(qid) = data.get("question_id").and_then(Value::as_str) {
+                    asked.insert(qid.to_string(), data);
+                }
+            }
+            "operator_question_closed" => {
+                if let Some(qid) = data.get("question_id").and_then(Value::as_str) {
+                    closed.insert(qid.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut ids: Vec<String> = asked
+        .into_iter()
+        .filter(|(qid, data)| {
+            if closed.contains(qid) {
+                return false;
+            }
+            // A user-only why_user survives the node: the user answers or
+            // withdraws, the sweep never closes it.
+            if crate::escalation::why_user_is_user_only(
+                data.get("why_user").and_then(Value::as_str).unwrap_or(""),
+            ) {
+                return false;
+            }
+            let mut nodes: Vec<String> = data
+                .get("node")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .into_iter()
+                .collect();
+            if let Some(blocks) = data.get("blocks").and_then(Value::as_array) {
+                nodes.extend(blocks.iter().filter_map(Value::as_str).map(str::to_string));
+            }
+            nodes.iter().any(|n| {
+                statuses
+                    .get(n)
+                    .is_some_and(|s| CLOSED_RUNGS.contains(&s.as_str()))
+            })
+        })
+        .map(|(qid, _)| qid)
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Stamp each item's `live` bit from its node claim (x-aaaa 1.4): an item whose
 /// node holds a Live or Suspect claim (a suspect TTL-unexpired claim still
 /// protects the slot) renders even without a roster row; an unclaimed or
 /// node-less one stays `live=false` and the client drops it when unjoined. This
@@ -626,7 +1370,7 @@ fn stamp_liveness(mut items: Vec<NeedItem>) -> Vec<NeedItem> {
 /// convention as `events.jsonl`) rather than the events fold: a carve-out has
 /// no natural expiry, so this is never windowed by `since` at all.
 ///
-/// One aggregate row, not one per carve-out: x-801b measured 44 rows at once,
+/// One aggregate row, not one per carve-out: measured 44 rows at once,
 /// and a needs-me queue flooded with individual rows would just get truncated
 /// by the client's worst-first cap anyway. "N carve-outs, oldest Xd" is what
 /// actually answers "should I go clean this up."
@@ -694,7 +1438,7 @@ pub struct ClaimAge {
 /// One stale-claim summary row, when the oldest `Stale` claim has actually
 /// gone stale for a while (>= [`DECISION_STALE_FLOOR_SECS`]). A `Stale` claim
 /// (dead pid, TTL expired) that is minutes old is normal churn; one that is
-/// weeks old is an orphaned lock nobody cleaned up (x-e3be measured 573 claim
+/// weeks old is an orphaned lock nobody cleaned up (x-bbbb measured 573 claim
 /// files, 570 dead pids, oldest specimens 56-75 days).
 ///
 /// One aggregate row, not one per claim, for the same reason as
@@ -736,7 +1480,7 @@ pub fn stale_claim_item(claims: &[ClaimAge], now_ms: i64) -> Option<NeedItem> {
 }
 
 /// One item per registry row the progress axis classifies `refused`
-/// (x-cbd9 Task 3.4): alive, reachable, and unable to think, because its
+/// (Task 3.4): alive, reachable, and unable to think, because its
 /// endpoint was handed a model it cannot serve. Nothing else rotates this
 /// state today -- `status` reads `live`, the pid is real, and every roster
 /// reader that stops at reachability keeps it forever. This is the leg that
@@ -750,7 +1494,7 @@ pub fn stale_claim_item(claims: &[ClaimAge], now_ms: i64) -> Option<NeedItem> {
 /// Best-effort: an unreadable registry or a probe failure degrades to no
 /// items, never a crash of `fno agents needs`.
 fn refused_worker_items(home: &AgentsHome) -> Vec<NeedItem> {
-    refused_worker_items_with(home, crate::claude_ask::family1_truth_probe_many)
+    refused_worker_items_with(home, crate::truth_probe::family1_truth_probe_many)
 }
 
 /// [`refused_worker_items`] with the batch probe injected, so a test can count
@@ -762,7 +1506,7 @@ fn refused_worker_items(home: &AgentsHome) -> Vec<NeedItem> {
 /// where the question is liveness.
 fn refused_worker_items_with(
     home: &AgentsHome,
-    truth_fn: impl Fn(&[String]) -> std::collections::HashMap<String, crate::claude_ask::TruthProbe>,
+    truth_fn: impl Fn(&[String]) -> std::collections::HashMap<String, crate::truth_probe::TruthProbe>,
 ) -> Vec<NeedItem> {
     let registry = match crate::daemon::load_registry_asserted(&home.registry_json()) {
         Ok(r) => r,
@@ -783,6 +1527,7 @@ fn refused_worker_items_with(
         let probe = truths.get(&crate::daemon::registry_truth_handle(e));
         let (progress, _basis) = crate::daemon::progress_from_truth(
             probe,
+            crate::truth_probe::BatchOutcome::Measured,
             e.harness_name(),
             e.route_settings_path.as_deref(),
         );
@@ -832,90 +1577,76 @@ fn now_secs() -> u64 {
 /// unparseable lockfile yields fewer entries, never an error - same posture
 /// as `claim_sweep_payload`.
 fn scan_claim_ages(dir: &Path) -> Vec<ClaimAge> {
-    let node_pfx = crate::claims::encode_key("node:");
-    let dispatch_pfx = crate::claims::encode_key("dispatch:");
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
+    let records = match crate::claim_store::records_in(dir, None, true) {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!("claim ages {}: {error}", dir.display());
+            return Vec::new();
+        }
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        if !name.ends_with(".lock")
-            || !(name.starts_with(&node_pfx) || name.starts_with(&dispatch_pfx))
-        {
-            continue;
-        }
-        let Ok(rec) = crate::claims::read_claim_file(&entry.path()) else {
-            continue; // gone-away or corrupted: skip, never abort
-        };
-        if !(rec.key.starts_with("node:") || rec.key.starts_with("dispatch:")) {
-            continue; // filename lied about its own key: exclude like the sweep does
-        }
-        let state = crate::claims::classify(&rec, None);
-        out.push(ClaimAge {
+    let records: Vec<_> = records
+        .into_iter()
+        .filter(|r| r.key.starts_with("node:") || r.key.starts_with("dispatch:"))
+        .collect();
+    // One primed witness: a per-row verdict paid a cold truth run per session.
+    let states: Vec<_> = {
+        let (witness, _answer) = crate::claim_verbs::session_witness_primed_for(&records);
+        records
+            .iter()
+            .map(|rec| {
+                crate::claims::classify_with_basis_and_exclusivity(
+                    rec,
+                    None,
+                    &|pid| crate::claims::probe_pid(pid),
+                    None,
+                    Some(&witness),
+                )
+                .0
+            })
+            .collect()
+    };
+    records
+        .into_iter()
+        .zip(states)
+        .map(|(rec, state)| ClaimAge {
             key: rec.key,
             holder: rec.holder,
             acquired_at_ms: rec.acquired_at,
             state,
-        });
-    }
-    out
+        })
+        .collect()
 }
 
-/// The `fno-agents needs` verb. Read-only; exits 0 on empty/corrupt input (only
-/// a usage error exits 2), so the overlay caller never sees a failure it must
-/// handle beyond a nonzero exit.
-pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {
-    let args = match parse_args(rest) {
-        Ok(a) => a,
-        Err(msg) => {
-            eprintln!("fno-agents: {msg}");
-            return 2;
-        }
-    };
-
-    let (default_events, default_ledger) = default_sources(home);
-    let explicit_events = !args.events_override.is_empty();
-    let mut event_paths = if explicit_events {
-        args.events_override
-    } else {
-        default_events
-    };
-    // `fno inbox outstanding ask` appends to the CANONICAL checkout's
-    // `.fno/events.jsonl` (never a linked worktree's), while the default
-    // project journal above is cwd-relative and this verb inherits the
-    // caller's cwd. Without the canonical journal in the set, a question
-    // asked from a worktree is invisible to the fold.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let canonical = crate::paths::canonical_repo_root(&cwd);
-    if let Some(root) = &canonical {
-        let canonical_events = root.join(".fno").join("events.jsonl");
-        let cwd_events = cwd.join(".fno").join("events.jsonl");
-        if !explicit_events
-            && canonical_events != cwd_events
-            && !event_paths.contains(&canonical_events)
-        {
-            event_paths.push(canonical_events);
-        }
-    }
-    let ledger_path = args.ledger_override.unwrap_or(default_ledger);
-
+/// The whole needs fold over explicit sources: events read + fold + the three
+/// non-event legs (carveout age, stale claims, refused workers) + liveness
+/// stamp. Shared by the `needs` verb and the lead board's in-process needs
+/// read, so the two surfaces cannot drift (the lead board is why this is `pub`).
+/// `cwd` anchors the carveout leg: the verb passes the process cwd it inherits,
+/// the board passes its own resolved cwd (the process cwd is not guaranteed to
+/// be the project for an in-process caller).
+pub fn collect_needs_items(
+    home: &AgentsHome,
+    event_paths: &[PathBuf],
+    ledger_path: &Path,
+    since: u64,
+    fires_floor: u64,
+    cwd: &Path,
+) -> Vec<NeedItem> {
     let mut events_raw = String::new();
-    for p in &event_paths {
-        if let Ok(content) = std::fs::read_to_string(p) {
-            events_raw.push_str(&content);
-            if !content.ends_with('\n') {
+    for p in event_paths {
+        // Every source journal — questions.jsonl included — answers from
+        // committed rows in commit order now; the import inside `event_lines`
+        // pulls any journal bytes a pre-cutover writer (or fixture) left.
+        if let Ok(lines) = crate::loopcheck::event_lines(p) {
+            for line in lines {
+                events_raw.push_str(&line);
                 events_raw.push('\n');
             }
         }
     }
-    let ledger_raw = std::fs::read_to_string(&ledger_path).unwrap_or_default();
+    let ledger_raw = std::fs::read_to_string(ledger_path).unwrap_or_default();
 
-    let since = args
-        .since_epoch
-        .unwrap_or_else(|| now_secs().saturating_sub(DEFAULT_WINDOW_SECS));
-    let mut items = fold(&events_raw, &ledger_raw, since, args.fires_floor);
+    let mut items = fold(&events_raw, &ledger_raw, since, fires_floor);
 
     // Carve-out-age and stale-claim legs: durable on-disk state, not events,
     // so they are read directly here (IO layer) rather than folded from
@@ -924,7 +1655,7 @@ pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {
     // canonical checkout's `.fno/` (`resolve_carveout_root` on the write
     // side); a worktree only sees it through a skip-if-missing symlink, so
     // read the canonical path directly and fall back to cwd outside a repo.
-    let carveouts_path = canonical
+    let carveouts_path = crate::paths::canonical_repo_root(cwd)
         .map(|r| r.join(".fno").join("carveouts.jsonl"))
         .unwrap_or_else(|| PathBuf::from(".fno").join("carveouts.jsonl"));
     let carveouts_raw = std::fs::read_to_string(&carveouts_path).unwrap_or_default();
@@ -939,7 +1670,77 @@ pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {
     }
     items.extend(refused_worker_items(home));
 
-    let items = stamp_liveness(items);
+    stamp_liveness(items)
+}
+
+/// The `fno-agents needs` verb. Read-only; exits 0 on empty/corrupt input (only
+/// a usage error exits 2), so the overlay caller never sees a failure it must
+/// handle beyond a nonzero exit.
+pub async fn run_needs(rest: &[String], home: &AgentsHome) -> i32 {
+    let args = match parse_args(rest) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("fno-agents: {msg}");
+            return 2;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // The --items leg reads the attention projection; everything else is the
+    // session-needs fold (never touches the ledger).
+    if !args.archive.is_empty() {
+        if args.answer.is_some() {
+            eprintln!("fno-agents: needs --archive and --answer are separate doors; pass one");
+            return 2;
+        }
+        return run_archive(home, &cwd, &args, None);
+    }
+    if let Some(id) = args.answer.clone() {
+        return run_answer(home, &cwd, &args, &id);
+    }
+    if args.clear_settled {
+        if args.items || args.answer.is_some() || !args.archive.is_empty() {
+            eprintln!("fno-agents: needs --clear-settled is its own door; pass it alone");
+            return 2;
+        }
+        return run_clear_settled(home, &cwd);
+    }
+    if args.items {
+        return run_items(home, &cwd);
+    }
+    let (default_events, default_ledger) = default_sources(home, &cwd);
+    let explicit_events = !args.events_override.is_empty();
+    let mut event_paths = if explicit_events {
+        args.events_override
+    } else {
+        default_events
+    };
+    // One journal per space: the cwd journal and the canonical journal are the
+    // same file now (the worktree fork is what the spaces move retired), so
+    // this push collapses to a no-op and stays only as the shape's record.
+    let canonical = crate::paths::canonical_repo_root(&cwd);
+    if let Some(root) = &canonical {
+        let canonical_events = crate::paths::space_dir(root).join("events.jsonl");
+        let cwd_events = crate::paths::space_dir(&cwd).join("events.jsonl");
+        if !explicit_events
+            && canonical_events != cwd_events
+            && !event_paths.contains(&canonical_events)
+        {
+            event_paths.push(canonical_events);
+        }
+    }
+    let ledger_path = args.ledger_override.unwrap_or(default_ledger);
+
+    let since = args
+        .since_epoch
+        .unwrap_or_else(|| now_secs().saturating_sub(DEFAULT_WINDOW_SECS));
+    let items = collect_needs_items(
+        home,
+        &event_paths,
+        &ledger_path,
+        since,
+        args.fires_floor,
+        &cwd,
+    );
 
     if args.json {
         println!(
@@ -1055,21 +1856,24 @@ mod tests {
         home
     }
 
-    fn refused_probe(model: &str) -> crate::claude_ask::TruthProbe {
-        crate::claude_ask::TruthProbe {
+    fn refused_probe(model: &str) -> crate::truth_probe::TruthProbe {
+        crate::truth_probe::TruthProbe {
             state: "working".into(),
             reachability: Some("reachable".into()),
             basis: Some("transcript".into()),
             last_activity_age_s: Some(1.0),
+            last_activity_basis: None,
             last_event_at: None,
             last_message: None,
             observed_model: serde_json::json!({"kind": "observed", "model": model}),
+            provider_refusal: None,
+            harness_title: None,
         }
     }
 
     #[test]
     fn refused_leg_pays_exactly_one_batch_call_regardless_of_roster_size() {
-        // x-0d93: this leg used to spawn one Python interpreter per registry
+        // this leg used to spawn one Python interpreter per registry
         // row on every `fno agents needs`. One batch, one process, 24 rows.
         let home = refused_home("batchonce", 24);
         let calls = std::cell::RefCell::new(Vec::new());
@@ -1096,7 +1900,7 @@ mod tests {
         // `fno agents needs`. A registry it cannot read also spends no
         // subprocess, which the panicking factory is what asserts.
         let home = refused_home("unreadable", 0);
-        std::fs::write(home.registry_json(), b"{ not json at all").unwrap();
+        crate::registry_store::seed_raw(&home.registry_json(), b"{ not json at all");
 
         let items = refused_worker_items_with(&home, |_| {
             panic!("an unreadable registry means no probe to spend")
@@ -1200,7 +2004,7 @@ mod tests {
 
     #[test]
     fn reachable_miss_folds_to_its_own_kind() {
-        // Measured 2026-08-17: three of twelve operator rows were the king's own
+        // Measured 2026-08-17: three of twelve operator rows were the lead's own
         // outbound mail that missed a reachable recipient, sorted beside a real
         // question. A miss needs a retry or a wake, not a human.
         let events = mail_escalation(
@@ -1600,10 +2404,10 @@ mod tests {
             false,
             5,
         );
-        let ledger = r#"{"entries":[{"session_id":"sess-x","graph_node_id":"x-feec","title":"needs queue","worktree":"/w/footnote/x-feec"}]}"#;
+        let ledger = r#"{"entries":[{"session_id":"sess-x","graph_node_id":"x-aaaa","title":"needs queue","worktree":"/w/footnote/x-aaaa"}]}"#;
         let items = fold(&events, ledger, ALL, DEFAULT_FIRES_FLOOR);
-        assert_eq!(items[0].node.as_deref(), Some("x-feec"));
-        assert_eq!(items[0].name.as_deref(), Some("x-feec"));
+        assert_eq!(items[0].node.as_deref(), Some("x-aaaa"));
+        assert_eq!(items[0].name.as_deref(), Some("x-aaaa"));
         assert_eq!(items[0].title.as_deref(), Some("needs queue"));
     }
 
@@ -1624,7 +2428,7 @@ mod tests {
         assert_eq!(items[0].session_id, "ghost");
     }
 
-    // --- operator_question (x-e3be: NeedKind::Decision producer) --------------
+    // --- operator_question (x-bbbb: NeedKind::Decision producer) --------------
 
     fn operator_question(ts: &str, qid: &str, question: &str, node: Option<&str>) -> String {
         let node_field = node
@@ -1647,17 +2451,26 @@ mod tests {
             "2026-07-03T02:00:00Z",
             "q-abc",
             "auto-merge or hold?",
-            Some("x-e3be"),
+            Some("x-bbbb"),
         );
         let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, "operator_question");
-        assert_eq!(items[0].node.as_deref(), Some("x-e3be"));
+        assert_eq!(items[0].node.as_deref(), Some("x-bbbb"));
         assert!(items[0].evidence.contains("auto-merge or hold?"));
     }
 
     #[test]
+    fn question_identity_is_the_question_id_even_when_the_row_names_a_session() {
+        let events = r#"{"ts":"2026-07-03T02:00:00Z","type":"operator_question","source":"target","data":{"question_id":"q-abc","session_id":"sess-123","question":"hold?"}}"#;
+        let items = fold(events, "", ALL, DEFAULT_FIRES_FLOOR);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].session_id, "q-abc");
+    }
+
+    #[test]
     fn question_index_is_a_default_source_and_ask_is_folded_as_evidence() {
+        let _root = crate::paths::DeclaredRoot::declare("question_index_is_a_default_");
         let tmp = tempfile::tempdir().unwrap();
         let state_dir = tmp.path().join(".fno");
         let home = AgentsHome::at(state_dir.join("agents"));
@@ -1670,7 +2483,7 @@ mod tests {
         )
         .unwrap();
 
-        let (sources, _) = default_sources(&home);
+        let (sources, _) = default_sources(&home, tmp.path());
         let events = sources
             .iter()
             .filter_map(|path| std::fs::read_to_string(path).ok())
@@ -1726,21 +2539,176 @@ mod tests {
         assert_eq!(items.len(), 2);
     }
 
+    // --- held fold --------------------------------------------------
+
+    fn operator_question_blocked(ts: &str, qid: &str, question: &str, blocks: &[&str]) -> String {
+        let blocks = blocks
+            .iter()
+            .map(|b| format!("\"{b}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"ts":"{ts}","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"{question}","blocks":[{blocks}]}}}}"#
+        )
+    }
+
     #[test]
-    fn loop_check_stays_windowed_when_operator_question_is_exempt() {
-        // The window-bypass restructure must not accidentally widen the window
-        // for the existing kinds - only operator_question/_closed are exempt.
-        let events = loop_check(
+    fn open_blocking_question_holds_its_node() {
+        let raw = operator_question_blocked(
             "2026-07-03T02:00:00Z",
-            "s",
-            "block",
-            "SUCCESS",
-            "OPEN",
-            false,
-            5,
+            "q-hold",
+            "auto-merge or hold?",
+            &["x-bbbb"],
         );
-        let future = crate::state::rfc3339_like_to_secs("2099-01-01T00:00:00Z").unwrap();
-        assert!(fold(&events, "", future, DEFAULT_FIRES_FLOOR).is_empty());
+        let held = held_rows_from_raw(&raw);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].node, "x-bbbb");
+        assert_eq!(held[0].question_id, "q-hold");
+    }
+
+    #[test]
+    fn closed_blocking_question_holds_nothing() {
+        let raw = [
+            operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]),
+            operator_question_closed("2026-07-03T03:00:00Z", "q-hold"),
+        ]
+        .join("\n");
+        assert!(held_rows_from_raw(&raw).is_empty());
+    }
+
+    #[test]
+    fn question_without_blocks_holds_nothing() {
+        let raw = operator_question("2026-07-03T02:00:00Z", "q-loose", "idle thought", None);
+        assert!(held_rows_from_raw(&raw).is_empty());
+    }
+
+    #[test]
+    fn oldest_open_question_wins_per_node() {
+        let raw = [
+            operator_question_blocked("2026-07-03T02:00:00Z", "q-old", "older", &["x-bbbb"]),
+            operator_question_blocked("2026-07-03T05:00:00Z", "q-new", "newer", &["x-bbbb"]),
+        ]
+        .join("\n");
+        let held = held_rows_from_raw(&raw);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].question_id, "q-old");
+    }
+
+    #[test]
+    fn held_map_lists_every_blocked_node_of_one_question() {
+        let raw = operator_question_blocked(
+            "2026-07-03T02:00:00Z",
+            "q-hold",
+            "pick",
+            &["x-aaaa", "x-bbbb"],
+        );
+        let held = held_rows_from_raw(&raw);
+        assert_eq!(held.len(), 2);
+        assert!(held.iter().all(|r| r.question_id == "q-hold"));
+    }
+
+    #[test]
+    fn sweep_skips_an_already_closed_question() {
+        let raw = [
+            operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]),
+            operator_question_closed("2026-07-03T03:00:00Z", "q-hold"),
+        ]
+        .join("\n");
+        let statuses: std::collections::BTreeMap<String, String> =
+            [("x-bbbb".to_string(), "done".to_string())]
+                .into_iter()
+                .collect();
+        assert!(node_closed_question_ids(&raw, &statuses).is_empty());
+    }
+
+    #[test]
+    fn sweep_closes_only_terminal_rungs() {
+        let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-hold", "pick", &["x-bbbb"]);
+        let mk = |status: &str| {
+            let statuses: std::collections::BTreeMap<String, String> =
+                [("x-bbbb".to_string(), status.to_string())]
+                    .into_iter()
+                    .collect();
+            node_closed_question_ids(&raw, &statuses)
+        };
+        assert_eq!(mk("done"), vec!["q-hold".to_string()]);
+        assert_eq!(mk("superseded"), vec!["q-hold".to_string()]);
+        assert!(mk("in_progress").is_empty());
+        assert!(mk("blocked").is_empty());
+    }
+
+    fn operator_question_with_why_user(ts: &str, qid: &str, why: &str, blocks: &[&str]) -> String {
+        let blocks = blocks
+            .iter()
+            .map(|b| format!("\"{b}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"ts":"{ts}","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"approve?","blocks":[{blocks}],"why_user":"{why}"}}}}"#
+        )
+    }
+
+    #[test]
+    fn sweep_spares_a_user_only_question_whose_node_closed() {
+        // A user-only why_user survives its node closing; only an answer or
+        // a withdrawal closes it. A machine-side reason, or no why_user at
+        // all, still closes with the node.
+        let statuses: std::collections::BTreeMap<String, String> =
+            [("x-bbbb".to_string(), "done".to_string())]
+                .into_iter()
+                .collect();
+        let raw = operator_question_with_why_user(
+            "2026-07-03T02:00:00Z",
+            "q-user",
+            "a product or taste call",
+            &["x-bbbb"],
+        );
+        assert!(node_closed_question_ids(&raw, &statuses).is_empty());
+        let raw = operator_question_with_why_user(
+            "2026-07-03T02:00:00Z",
+            "q-mach",
+            "reversible, any agent on the machine can run it",
+            &["x-bbbb"],
+        );
+        assert_eq!(
+            node_closed_question_ids(&raw, &statuses),
+            vec!["q-mach".to_string()]
+        );
+        let raw = operator_question_blocked("2026-07-03T02:00:00Z", "q-plain", "pick", &["x-bbbb"]);
+        assert_eq!(
+            node_closed_question_ids(&raw, &statuses),
+            vec!["q-plain".to_string()]
+        );
+    }
+
+    #[test]
+    fn operator_questions_rank_newest_first_and_other_kinds_stay_ascending() {
+        // AC11: the fold mirrors outstanding/core.py's rank - question
+        // rows newest-first among themselves, every other kind keeps ascending
+        // (ts, session_id, kind) stream order. Interleaved streams, so push
+        // order alone can satisfy neither half.
+        let events = [
+            operator_question("2026-07-03T01:00:00Z", "q-old", "older ask", None),
+            termination("2026-07-03T02:00:00Z", "sa", "Budget"),
+            operator_question("2026-07-03T03:00:00Z", "q-new", "newer ask", None),
+            termination("2026-07-03T02:30:00Z", "sb", "Budget"),
+        ]
+        .join("\n");
+        let items = fold(&events, "", ALL, DEFAULT_FIRES_FLOOR);
+
+        let question_ids: Vec<&str> = items
+            .iter()
+            .filter(|i| i.kind == "operator_question")
+            .map(|i| i.session_id.as_str())
+            .collect();
+        let stop_sessions: Vec<&str> = items
+            .iter()
+            .filter(|i| i.kind == "budget_stop")
+            .map(|i| i.session_id.as_str())
+            .collect();
+
+        assert_eq!(question_ids, ["q-new", "q-old"]);
+        assert_eq!(stop_sessions, ["sa", "sb"]);
     }
 
     #[test]
@@ -1846,5 +2814,247 @@ mod tests {
             crate::claims::ClaimState::Stale,
         )];
         assert!(stale_claim_item(&claims, now_ms).is_none());
+    }
+
+    #[test]
+    fn held_rows_read_a_store_committed_question() {
+        // AC11-HELD: an open store-only question holds the node; a store-only
+        // close releases it.
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let ask = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-1", "blocks": ["x-1"], "question": "proceed?"}
+        });
+        crate::event_store::append_envelope(&journal, &ask.to_string(), None).unwrap();
+        let held = held_rows(&[journal.clone()]);
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!(held[0].node, "x-1");
+        let close = serde_json::json!({
+            "ts": "2026-09-17T13:00:00Z", "type": "operator_question_closed", "source": "test",
+            "data": {"question_id": "q-1"}
+        });
+        crate::event_store::append_envelope(&journal, &close.to_string(), None).unwrap();
+        assert!(
+            held_rows(&[journal]).is_empty(),
+            "the close releases the node"
+        );
+    }
+
+    #[test]
+    fn held_map_folds_journals_fail_open() {
+        // AC1/AC2: an open store-committed question holds the node; a fno
+        // dir with no journals is an empty map, never a panic.
+        let dir = tempfile::tempdir().unwrap();
+        let journal = dir.path().join("events.jsonl");
+        let ask = serde_json::json!({
+            "ts": "2026-09-25T12:00:00Z", "type": "operator_question", "source": "test",
+            "data": {"question_id": "q-1", "blocks": ["x-hold"], "question": "proceed?"}
+        });
+        crate::event_store::append_envelope(&journal, &ask.to_string(), None).unwrap();
+        let held = held_map(dir.path(), Path::new("."));
+        assert_eq!(
+            held.get("x-hold").map(String::as_str),
+            Some("q-1"),
+            "{held:?}"
+        );
+        let empty = tempfile::tempdir().unwrap();
+        assert!(held_map(empty.path(), Path::new(".")).is_empty());
+    }
+
+    /// An open question row in the space journal, and the args for a mux
+    /// option answer against it. The [`DeclaredRoot`] guard rides the return
+    /// so the fixture outlives setup: dropping it restores the env and
+    /// deletes the root.
+    fn door_setup(tag: &str) -> (tempfile::TempDir, crate::paths::DeclaredRoot, NeedsArgs) {
+        let root = crate::paths::DeclaredRoot::declare(tag);
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("repo");
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        std::fs::create_dir_all(crate::paths::space_dir(&cwd)).unwrap();
+        let ask = serde_json::json!({
+            "ts": "2026-09-26T05:00:00Z", "type": "operator_question", "source": "test",
+            "data": {
+                "question_id": "q-door", "question": "pick one", "ask": "pick one",
+                "session_id": "s1", "cwd": "/repo/fno", "asker": "w1", "node": "x-1",
+                "options": ["a", "b"]
+            }
+        });
+        crate::event_store::append_envelope(&space, &ask.to_string(), None).unwrap();
+        let args = NeedsArgs {
+            since_epoch: None,
+            fires_floor: 0,
+            json: false,
+            items: false,
+            clear_settled: false,
+            answer: Some("q-door".to_string()),
+            option: Some(2),
+            words: None,
+            done: false,
+            delegate: false,
+            archive: vec![],
+            sink: Some("mux".to_string()),
+            events_override: vec![],
+            ledger_override: None,
+        };
+        (dir, root, args)
+    }
+
+    #[test]
+    fn ac1_hp_the_mux_door_records_a_durable_answer_row() {
+        let (dir, _root, args) = door_setup("needs_door_hp_open_");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        let code = run_answer(&home, &cwd, &args, "q-door");
+        assert_eq!(code, 0);
+        let home2 = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
+        assert!(
+            raw.contains("attention_answer") && raw.contains("\"sink\":\"mux\""),
+            "the mux row landed: {raw}"
+        );
+        // The projection shows it answered.
+        let fno_dir = home2.root().parent().map(Path::to_path_buf).unwrap();
+        let (items, _, _) = crate::attention_arm::read_items_at(&fno_dir, &cwd);
+        let item = items.iter().find(|i| i.id == "q-door").unwrap();
+        assert_eq!(item.state, "answered");
+    }
+
+    #[test]
+    fn ac1_err_the_door_refuses_and_names_the_reason() {
+        let (dir, _root, mut args) = door_setup("needs_door_err_refus");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        // Absent id.
+        assert_eq!(run_answer(&home, &cwd, &args, "q-none"), 2);
+        // Sink other than mux (and a missing sink).
+        args.sink = Some("file".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = None;
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.sink = Some("mux".to_string());
+        // Two picks at once.
+        args.words = Some("nope".to_string());
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.words = None;
+        // Option out of range.
+        args.option = Some(3);
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        args.option = None;
+        // --done on a question.
+        args.done = true;
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        // --delegate on an unstated, an irreversible, and a reversible call
+        // with no live team over its node: each stays the user's.
+        args.done = false;
+        args.delegate = true;
+        assert_eq!(run_answer(&home, &cwd, &args, "q-door"), 2);
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        for (id, rev) in [("q-rev-no", "no"), ("q-rev-yes", "yes")] {
+            let ask = serde_json::json!({
+                "ts": "2026-09-26T05:00:00Z", "type": "operator_question", "source": "test",
+                "data": {"question_id": id, "question": "pick", "asker": "w1", "node": "x-1",
+                         "options": ["a", "b"], "context": {"reversible": rev}}
+            });
+            crate::event_store::append_envelope(&space, &ask.to_string(), None).unwrap();
+            assert_eq!(run_answer(&home, &cwd, &args, id), 2, "{id}");
+        }
+        // Nothing landed: the door writes nothing on a refusal.
+        let home2 = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home2), &[]);
+        assert!(
+            !raw.contains("attention_answer"),
+            "refusals write nothing: {raw}"
+        );
+    }
+
+    #[test]
+    fn the_archive_door_withdraws_open_items_and_refuses_the_rest() {
+        let (dir, _root, mut args) = door_setup("needs_door_archive_");
+        let cwd = dir.path().join("repo");
+        let home = crate::paths::AgentsHome::from_env();
+        let space = crate::paths::space_dir(&cwd).join("events.jsonl");
+        let index = crate::provider_cap::questions_path(&home);
+        let ask = |id: &str| {
+            serde_json::json!({
+                "ts": "2026-09-26T05:00:00Z", "type": "operator_question", "source": "test",
+                "data": {"question_id": id, "question": "pick one", "asker": "w1",
+                         "session_id": "s1", "cwd": "/repo/fno", "options": ["a", "b"]}
+            })
+        };
+        crate::event_store::append_envelope(&space, &ask("q-two").to_string(), None).unwrap();
+        for id in ["q-door", "q-two"] {
+            crate::provider_cap::append_questions_row(&index, &ask(id)).unwrap();
+        }
+        args.answer = None;
+        args.archive = vec!["q-door".into(), "q-two".into(), "q-none".into()];
+        // An unknown id is refused by name; the open ones still close.
+        assert_eq!(run_archive(&home, &cwd, &args, Some(Default::default())), 2);
+        let closes = |path: &Path| {
+            crate::event_store::journal_text(path, &[])
+                .matches("operator_question_closed")
+                .count()
+        };
+        assert_eq!(closes(&space), 2, "one project close each");
+        assert_eq!(closes(&index), 2, "one index close each");
+        let fno_dir = home.root().parent().map(Path::to_path_buf).unwrap();
+        let (items, _, _) = crate::attention_arm::read_items_at(&fno_dir, &cwd);
+        assert!(items.iter().all(|i| i.state != "open"), "{items:?}");
+        // A closed id is refused and writes nothing more.
+        args.archive = vec!["q-door".into()];
+        assert_eq!(run_archive(&home, &cwd, &args, Some(Default::default())), 2);
+        assert_eq!(closes(&index), 2);
+        // --archive beside --answer is a usage error.
+        let rest: Vec<String> = ["--archive", "q-door", "--answer", "q-door", "--sink", "mux"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(run_needs(&rest, &home)),
+            2
+        );
+    }
+
+    #[test]
+    fn ac1_edge_append_marks_a_second_row_superseded() {
+        // First answer wins across writers: the second row records
+        // superseded and changes nothing.
+        let _root = crate::paths::DeclaredRoot::declare("needs_door_edge_sup");
+        let first = crate::attention_arm::append_answer_row(
+            "q-sup",
+            "questions",
+            &crate::attention_file::FileAnswer::Words("narrow".to_string()),
+            "file_edit",
+            "file:q-sup",
+        )
+        .unwrap();
+        assert_eq!(first.1, false, "the first row wins");
+        let second = crate::attention_arm::append_answer_row(
+            "q-sup",
+            "mux",
+            &crate::attention_file::FileAnswer::Words("wide".to_string()),
+            "sink",
+            "mux",
+        )
+        .unwrap();
+        assert_eq!(second.1, true, "the second row records superseded");
+        // A delegate row carries the flag and the delegate sentence as words.
+        crate::attention_arm::append_answer_row(
+            "q-dlg",
+            "mux",
+            &crate::attention_file::FileAnswer::Delegate,
+            "sink",
+            "mux",
+        )
+        .unwrap();
+        let home = crate::paths::AgentsHome::from_env();
+        let raw =
+            crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[]);
+        let row = raw.lines().find(|l| l.contains("q-dlg")).unwrap();
+        assert!(row.contains("\"delegate\":true"), "{row}");
+        assert!(row.contains(crate::attention_file::DELEGATE_TEXT), "{row}");
     }
 }

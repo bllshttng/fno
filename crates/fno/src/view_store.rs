@@ -1,4 +1,4 @@
-//! Persisted per-client sideline view state (`~/.fno/mux-view.json`).
+//! Persisted per-client sideline view state (`~/.fno/mux/mux-view.json`).
 //!
 //! Client-local display preference, NOT session state: which sideline sections
 //! the operator left expanded, live-only, or collapsed. Keyed by squad NAME
@@ -21,10 +21,9 @@ const STORE_VERSION: u32 = 1;
 
 /// Which sideline section a view state belongs to.
 ///
-/// Keyed by what is STABLE, which is deliberately not the rendered name: a
-/// mission header's name embeds its live `done/total` counters, and an
+/// Keyed by what is STABLE, which is deliberately not the rendered name: an
 /// attach-born squad's derived label is rewritten (`foo` -> `parent/foo`) as
-/// soon as a sibling collides. Either would orphan the operator's choice on an
+/// soon as a sibling collides. That would orphan the operator's choice on an
 /// unrelated event, and the derived label is not even unique - the
 /// disambiguation is one level deep, and the server's uniqueness gate compares
 /// explicit names only.
@@ -36,21 +35,12 @@ pub enum SectionKey {
     /// strictly better than sharing it with whatever squad happens to render
     /// under the same name today.
     Squad(String),
-    /// A synthetic mission header, keyed by its per-epic id. That id is a pure
-    /// hash of the epic id, so unlike the mission's name it survives a progress
-    /// tick and a restart alike.
-    Mission(u64),
     /// The `~ elsewhere` catch-all for agents matched to no squad.
     Elsewhere,
-    /// The `~ backlog` lane.
-    WorkQueue,
-    /// The `~ missions` band: the synthetic mission squads grouped as one
-    /// pull-section. A mission squad can never hold an agent row (its id is a
-    /// high-bit sentinel no agent is ever assigned), so it is a progress
-    /// indicator, not a workspace - rendering it under a `~` band keeps it from
-    /// being read as one. Binary like WorkQueue: the mission names have no
-    /// exited state, so the cycle is expanded <-> collapsed.
-    Missions,
+    /// A group-by mode's section (a lead name, a cwd base, a status band).
+    /// Keyed by the rendered label; the operator's fold choice survives a
+    /// restart the same way a squad's does.
+    Group(String),
 }
 
 impl SectionKey {
@@ -61,39 +51,31 @@ impl SectionKey {
     fn to_wire(&self) -> String {
         match self {
             SectionKey::Squad(cwd) => format!("squad:{cwd}"),
-            SectionKey::Mission(id) => format!("mission:{id:x}"),
             SectionKey::Elsewhere => "elsewhere".into(),
-            SectionKey::WorkQueue => "work-queue".into(),
-            SectionKey::Missions => "missions".into(),
+            SectionKey::Group(label) => format!("group:{label}"),
         }
     }
 
     fn from_wire(s: &str) -> Option<Self> {
         match s {
             "elsewhere" => Some(SectionKey::Elsewhere),
-            "work-queue" => Some(SectionKey::WorkQueue),
-            "missions" => Some(SectionKey::Missions),
-            _ => {
-                if let Some(cwd) = s.strip_prefix("squad:") {
-                    return Some(SectionKey::Squad(cwd.into()));
-                }
-                let id = s.strip_prefix("mission:")?;
-                u64::from_str_radix(id, 16).ok().map(SectionKey::Mission)
-            }
+            // Anything else, including a `mission:`, `missions`, or `work-queue`
+            // key saved by an older build, reads as None and `load` drops that
+            // key alone.
+            _ => s
+                .strip_prefix("squad:")
+                .map(|cwd| SectionKey::Squad(cwd.into()))
+                .or_else(|| {
+                    s.strip_prefix("group:")
+                        .map(|l| SectionKey::Group(l.into()))
+                }),
         }
-    }
-
-    /// Whether this section's cycle is binary (expanded <-> collapsed). The
-    /// Backlog section's rows are cards, which have no exited state, so its middle
-    /// state would hide nothing.
-    fn is_binary(&self) -> bool {
-        matches!(self, SectionKey::WorkQueue | SectionKey::Missions)
     }
 }
 
-/// How much of a section renders. `LiveOnly` is the middle state x-975a adds:
+/// How much of a section renders. `LiveOnly` is the middle state adds:
 /// exited agent rows are hidden while the header's `✗N` rollup keeps them
-/// discoverable. Display filtering only - no row is reaped (that is x-f300).
+/// discoverable. Display filtering only - no row is reaped (that is).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SectionView {
@@ -104,14 +86,13 @@ pub enum SectionView {
 
 /// One click on a section header, as a pure function so the cycle is testable
 /// without a View. `has_dead` false skips the `LiveOnly` state entirely (there
-/// would be nothing to hide, so the click would look like a no-op), as does a
-/// binary section - a rule this owns via `key` rather than taking as a second
-/// transposable bool from its caller. `LiveOnly -> Collapsed` unconditionally,
+/// would be nothing to hide, so the click would look like a no-op).
+/// `LiveOnly -> Collapsed` unconditionally,
 /// so a section whose last dead row was reaped elsewhere can never wedge in
 /// `LiveOnly`.
-pub fn next_view(current: SectionView, has_dead: bool, key: &SectionKey) -> SectionView {
+pub fn next_view(current: SectionView, has_dead: bool) -> SectionView {
     match current {
-        SectionView::Expanded if has_dead && !key.is_binary() => SectionView::LiveOnly,
+        SectionView::Expanded if has_dead => SectionView::LiveOnly,
         SectionView::Expanded => SectionView::Collapsed,
         SectionView::LiveOnly => SectionView::Collapsed,
         SectionView::Collapsed => SectionView::Expanded,
@@ -152,7 +133,7 @@ pub fn view_path() -> PathBuf {
         return PathBuf::from(v).join("mux-view.json");
     }
     #[cfg(not(test))]
-    return crate::proto::mux_sidecar_root().join("mux-view.json");
+    return crate::proto::mux_sidecar_path("mux-view.json");
     #[cfg(test)]
     {
         let base = std::env::var_os("HOME")
@@ -162,7 +143,7 @@ pub fn view_path() -> PathBuf {
     }
 }
 
-/// `sections` rather than a bare map so a later view preference (x-b186's
+/// `sections` rather than a bare map so a later view preference (
 /// density/sort) extends this file instead of minting another one.
 /// Values stay `Value` on the way in so ONE unrecognized state does not fail
 /// the whole map: a file written by a build with a fourth `SectionView` would
@@ -175,7 +156,7 @@ struct StoreFile {
     version: u32,
     #[serde(default)]
     sections: HashMap<String, serde_json::Value>,
-    /// (x-b186) Sideline density and agent-sort order. `Value`, not the typed
+    /// Sideline density and agent-sort order. `Value`, not the typed
     /// enums, for the same reason `sections` is: a state a newer build wrote
     /// must survive a round-trip through this one rather than being reset to
     /// the default on the next gesture.
@@ -183,16 +164,361 @@ struct StoreFile {
     density: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sort: Option<serde_json::Value>,
-    /// (x-2e86) The operator's chosen sideline width, once they drag the border
+    /// The operator's chosen sideline width, once they drag the border
     /// off its density-canonical size. `Value` for the same forward-compat
     /// reason as `density`/`sort`; `None` (absent) means "use the current
     /// density's canonical width" - the back-compat default so existing installs
     /// are unchanged until their first drag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     width: Option<serde_json::Value>,
+    /// Ask before stop/remove. Default absent = false: the operator
+    /// said the stop-then-confirm two-step costs too many taps, so the confirm
+    /// is opt-in, and the next lifecycle gesture persists a clean value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_lifecycle: Option<serde_json::Value>,
+    /// The operator's chosen feed-panel width, once they drag the
+    /// panel's border. `Value` for the same forward-compat reason as `width`;
+    /// absent means "use the default width" - existing installs are unchanged
+    /// until their first drag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feed_width: Option<serde_json::Value>,
+    feed_order: Option<serde_json::Value>,
+    /// The open-session chooser's last pick, as its lowercase name. Absent
+    /// means "no pick yet" and the chooser pre-selects Split right.
+    open_target: Option<serde_json::Value>,
+    /// The experimental backlog board in the sidebar menu. Default
+    /// absent = off: the view is experimental, so the next toggle persists a
+    /// clean value. Same contract as `confirm_lifecycle`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    experimental_backlog_view: Option<serde_json::Value>,
+    /// The backlog board's column layout (which columns, order, focus
+    /// width). Default absent = the shipped default. Same contract as
+    /// `experimental_backlog_view`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    board_layout: Option<serde_json::Value>,
+    /// The backlog board's remembered view state: the query (lane
+    /// grouping, facet sets, search, list/kanban) plus the selected card.
+    /// Default absent = the fresh defaults. Same contract as
+    /// `board_layout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    board_query: Option<serde_json::Value>,
+    /// The sideline's active view. Default absent = agents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sideline_view: Option<serde_json::Value>,
+    /// The backlog board's full-screen toggle. Default absent = false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    board_full: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    org_mode: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    org_sessions: Option<serde_json::Value>,
+    /// The Messages tab's per-thread read marks: chat id -> the ts of the
+    /// last row the user opened (a ts, not a row id: fmail ids are random
+    /// hex, so only a ts answers "rows newer than the mark"). Persisted like
+    /// every other pref; absent reads as all-unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    messages_read_marks: Option<serde_json::Value>,
+    /// Newest fleet announcement timestamp seen in the notifications panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bell_seen_at: Option<serde_json::Value>,
+    /// The sideline agents view's group-by axis. Default absent = workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_group: Option<serde_json::Value>,
+    /// The card's `node · PR` header row. Default absent = true (shown).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    card_head: Option<serde_json::Value>,
+    /// The manual reorder sequence (agent names, display order). Default
+    /// absent = empty (everything sorts by name at the manual column).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    manual_order: Option<serde_json::Value>,
+    /// Pinned agent names, in pin order; they lead every sort. Default
+    /// absent = none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pinned: Option<serde_json::Value>,
 }
 
-/// How much of each sideline row renders (x-b186). Orthogonal to the panel's
+/// Which view the sideline column paints. `Agents` is the agent list the
+/// sideline shipped with; `Backlog` is the backlog's one-column list (the
+/// docked window's replacement).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SidelineView {
+    #[default]
+    Agents,
+    Messages,
+    Backlog,
+    Org,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OrgMode {
+    #[default]
+    Tree,
+    Table,
+    Graph,
+}
+
+/// The sideline agents view's group-by axis: the workspace tree the view
+/// shipped with, the workers' team lead, the cwd base, or fixed status bands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentGroup {
+    /// The squad tree, unchanged.
+    #[default]
+    Workspace,
+    /// One section per team lead; unteamed rows share one `~ unteamed` band.
+    Team,
+    /// One section per cwd base.
+    Cwd,
+    /// Fixed bands: Needs input / Working / Completed, counts in the header.
+    Status,
+}
+
+impl AgentGroup {
+    /// One press of the group key: the cycle the sideline paints.
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Workspace => Self::Team,
+            Self::Team => Self::Cwd,
+            Self::Cwd => Self::Status,
+            Self::Status => Self::Workspace,
+        }
+    }
+}
+impl OrgMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Tree => Self::Table,
+            Self::Table => Self::Graph,
+            Self::Graph => Self::Tree,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OrgSessions {
+    #[default]
+    Current,
+    Former,
+    All,
+}
+impl OrgSessions {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Current => Self::Former,
+            Self::Former => Self::All,
+            Self::All => Self::Current,
+        }
+    }
+}
+pub fn load_org_prefs() -> (OrgMode, OrgSessions) {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return (OrgMode::default(), OrgSessions::default());
+    }
+    let file = read_raw();
+    (
+        file.org_mode
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default(),
+        file.org_sessions
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default(),
+    )
+}
+pub fn save_org_prefs(mode: OrgMode, sessions: OrgSessions) {
+    mutate(|file| {
+        file.org_mode = serde_json::to_value(mode).ok();
+        file.org_sessions = serde_json::to_value(sessions).ok();
+    });
+}
+
+/// Read the sideline view pref. Absent, corrupt, or unknown reads as
+/// `Agents`, and the next cycle persists a clean value.
+pub fn load_sideline_view() -> SidelineView {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return SidelineView::default();
+    }
+    read_raw()
+        .sideline_view
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// Persist the sideline view pref. Best-effort like every other write here.
+pub fn save_sideline_view(v: SidelineView) {
+    mutate(|file| {
+        file.sideline_view = serde_json::to_value(v).ok();
+    });
+}
+
+/// The Messages tab's read marks, keyed by chat id, valued by the ts of the
+/// last row the user opened. Corrupt or absent reads as all-unread.
+pub fn load_messages_read_marks() -> std::collections::BTreeMap<String, String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return Default::default();
+    }
+    read_raw()
+        .messages_read_marks
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// Record one thread as read: the chat id's mark moves to `ts`. Best-effort.
+pub fn save_messages_read_mark(chat_id: &str, ts: &str) {
+    mutate(|file| {
+        let mut marks = load_messages_read_marks();
+        marks.insert(chat_id.to_string(), ts.to_string());
+        file.messages_read_marks = serde_json::to_value(marks).ok();
+    });
+}
+
+pub fn load_bell_seen_at() -> Option<String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .bell_seen_at
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
+pub fn save_bell_seen_at(ts: &str) {
+    mutate(|file| {
+        file.bell_seen_at = serde_json::to_value(ts).ok();
+    });
+}
+
+/// Read the board full-screen pref. Absent or corrupt reads as `false`.
+pub fn load_board_full() -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return false;
+    }
+    read_raw()
+        .board_full
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Persist the board full-screen pref. Best-effort like every other write.
+pub fn save_board_full(full: bool) {
+    mutate(|file| {
+        file.board_full = serde_json::to_value(full).ok();
+    });
+}
+
+/// Read the operator's stop/remove confirm pref. Absent, corrupt, or
+/// non-bool reads as `false` - a stop means stop, a remove means remove - and
+/// the next toggle persists a clean value.
+pub fn load_confirm_lifecycle() -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return false;
+    }
+    read_raw()
+        .confirm_lifecycle
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Persist the operator's stop/remove confirm pref. Best-effort like
+/// every other write here.
+pub fn save_confirm_lifecycle(confirm: bool) {
+    mutate(|file| {
+        file.confirm_lifecycle = serde_json::to_value(confirm).ok();
+    });
+}
+
+/// Read the operator's feed-panel width pref. Absent, corrupt, or
+/// out-of-range reads as `None` - "use the default width" - and the first
+/// drag persists a clean value, the same degrade-independently posture every
+/// pref here keeps.
+pub fn load_feed_width() -> Option<u16> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .feed_width
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u16::try_from(v).ok())
+}
+
+/// Persist the operator's dragged feed-panel width. Best-effort and
+/// fire-and-forget, the same locked read-modify-write core as [`save_width`].
+pub fn save_feed_width(width: u16) {
+    mutate(|file| {
+        file.feed_width = serde_json::to_value(width).ok();
+    });
+}
+
+/// The activity feed's row order, as persisted. Serialized as its lowercase
+/// name; anything unreadable degrades to the shipped grouped order.
+pub fn load_feed_order() -> Option<String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .feed_order
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
+/// Persist the feed's row order. Best-effort like every other write here.
+pub fn save_feed_order(order: &str) {
+    mutate(|file| {
+        file.feed_order = serde_json::to_value(order).ok();
+    });
+}
+
+/// The open-session chooser's last pick, as persisted. Serialized as its
+/// lowercase name; anything unreadable degrades to no saved pick, and the
+/// chooser falls back to Split right.
+pub fn load_open_target() -> Option<String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .open_target
+        .and_then(|v| v.as_str().map(str::to_string))
+}
+
+/// Persist the chooser's last pick. Best-effort like every other write here.
+pub fn save_open_target(pick: &str) {
+    mutate(|file| {
+        file.open_target = serde_json::to_value(pick).ok();
+    });
+}
+
+/// Read the experimental backlog board pref. Absent, corrupt, or
+/// non-bool reads as `false` - the view is off until the operator turns it
+/// on, and the next toggle persists a clean value. The same degrade posture
+/// every pref here keeps.
+pub fn load_experimental_backlog_view() -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return false;
+    }
+    read_raw()
+        .experimental_backlog_view
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Persist the experimental backlog board pref. Best-effort like every
+/// other write here.
+pub fn save_experimental_backlog_view(on: bool) {
+    mutate(|file| {
+        file.experimental_backlog_view = serde_json::to_value(on).ok();
+    });
+}
+
+/// How much of each sideline row renders. Orthogonal to the panel's
 /// on/off toggle: `Slim` is a narrow rail, NOT a hidden panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -227,6 +553,12 @@ pub enum AgentSortColumn {
     LastMessage,
     Pr,
     Age,
+    /// Session start time (newest first by default).
+    Created,
+    /// The freshest activity stamp (newest first by default).
+    Modified,
+    /// The operator's manual reorder sequence.
+    Manual,
 }
 
 /// Direction for one active table column.
@@ -265,11 +597,14 @@ impl AgentSort {
 
     pub const fn default_for(column: AgentSortColumn) -> Self {
         let direction = match column {
-            AgentSortColumn::Age => SortDirection::Descending,
+            AgentSortColumn::Age | AgentSortColumn::Created | AgentSortColumn::Modified => {
+                SortDirection::Descending
+            }
             AgentSortColumn::Status
             | AgentSortColumn::Agent
             | AgentSortColumn::LastMessage
-            | AgentSortColumn::Pr => SortDirection::Ascending,
+            | AgentSortColumn::Pr
+            | AgentSortColumn::Manual => SortDirection::Ascending,
         };
         Self { column, direction }
     }
@@ -325,6 +660,26 @@ impl AgentSort {
                 direction: Ascending,
             },
             (Age, Ascending) => Self {
+                column: Created,
+                direction: Descending,
+            },
+            (Created, Descending) => Self {
+                column: Created,
+                direction: Ascending,
+            },
+            (Created, Ascending) => Self {
+                column: Modified,
+                direction: Descending,
+            },
+            (Modified, Descending) => Self {
+                column: Modified,
+                direction: Ascending,
+            },
+            (Modified, Ascending) => Self {
+                column: Manual,
+                direction: Ascending,
+            },
+            (Manual, _) => Self {
                 column: Status,
                 direction: Ascending,
             },
@@ -416,7 +771,7 @@ pub fn load() -> HashMap<SectionKey, SectionView> {
         .collect()
 }
 
-/// Read the persisted density, sort, and sideline width (x-b186, x-2e86).
+/// Read the persisted density, sort, and sideline width.
 ///
 /// Missing, corrupt, or written by a build with a state this one cannot parse
 /// all resolve to the defaults (`Regular` + status/attention-first + no width), independently
@@ -454,7 +809,7 @@ pub fn save_prefs(density: Density, sort: AgentSort) {
     });
 }
 
-/// (x-2e86) Persist the operator's dragged sideline width. The same locked
+/// Persist the operator's dragged sideline width. The same locked
 /// read-modify-write core as [`save_prefs`], so a width write never clobbers a
 /// concurrent density/sort write from another mux client. Best-effort and
 /// fire-and-forget: a drag release must never block on the file write.
@@ -464,7 +819,7 @@ pub fn save_width(width: u16) {
     });
 }
 
-/// (x-2e86) Persist a density PRESET - mode, sort, and canonical width - in ONE
+/// Persist a density PRESET - mode, sort, and canonical width - in ONE
 /// locked mutation. A preset is a single logical choice of both mode and width,
 /// so writing density and width through separate `save_prefs`/`save_width` calls
 /// could interleave with another mux client (or be interrupted between them) and
@@ -476,6 +831,74 @@ pub fn save_preset(density: Density, sort: AgentSort, width: u16) {
         file.density = serde_json::to_value(density).ok();
         file.sort = serde_json::to_value(sort).ok();
         file.width = serde_json::to_value(width).ok();
+    });
+}
+
+pub fn load_agent_group() -> AgentGroup {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return AgentGroup::default();
+    }
+    read_raw()
+        .agent_group
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_agent_group(group: AgentGroup) {
+    mutate(|file| {
+        file.agent_group = serde_json::to_value(group).ok();
+    });
+}
+
+pub fn load_card_head() -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return true;
+    }
+    read_raw()
+        .card_head
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or(true)
+}
+
+pub fn save_card_head(on: bool) {
+    mutate(|file| {
+        file.card_head = serde_json::to_value(on).ok();
+    });
+}
+
+pub fn load_manual_order() -> Vec<String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return Vec::new();
+    }
+    read_raw()
+        .manual_order
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_manual_order(order: &[String]) {
+    mutate(|file| {
+        file.manual_order = serde_json::to_value(order).ok();
+    });
+}
+
+pub fn load_pinned() -> Vec<String> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return Vec::new();
+    }
+    read_raw()
+        .pinned
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_pinned(pins: &[String]) {
+    mutate(|file| {
+        file.pinned = serde_json::to_value(pins).ok();
     });
 }
 
@@ -592,15 +1015,14 @@ mod tests {
         }
     }
 
-    // AC1-HP: a saved map round-trips, including a squad name and both fixed
-    // sections.
+    // AC1-HP: a saved map round-trips, including a squad name and the fixed
+    // section.
     #[test]
     fn save_load_round_trips() {
         let _s = Scratch::new("round-trip");
         let mut m = HashMap::new();
         m.insert(SectionKey::Squad("footnote".into()), SectionView::LiveOnly);
         m.insert(SectionKey::Elsewhere, SectionView::Collapsed);
-        m.insert(SectionKey::WorkQueue, SectionView::Expanded);
         save(&m);
         assert_eq!(load(), m);
     }
@@ -624,6 +1046,117 @@ mod tests {
     fn missing_file_loads_empty() {
         let _s = Scratch::new("missing");
         assert!(load().is_empty());
+    }
+
+    // The experimental backlog toggle: absent reads off, a corrupt
+    // value reads off, and save/load round-trips (AC3-HP).
+    #[test]
+    fn experimental_backlog_view_absent_corrupt_and_round_trip() {
+        let _s = Scratch::new("backlog-view");
+        assert!(!load_experimental_backlog_view(), "absent reads off");
+        std::fs::write(view_path(), r#"{"experimental_backlog_view":"yes-please"}"#).unwrap();
+        assert!(!load_experimental_backlog_view(), "corrupt reads off");
+        save_experimental_backlog_view(true);
+        assert!(load_experimental_backlog_view());
+        save_experimental_backlog_view(false);
+        assert!(!load_experimental_backlog_view());
+    }
+
+    // The sideline view pref: absent reads agents, a corrupt or unknown
+    // value reads agents, and save/load round-trips.
+    #[test]
+    fn sideline_view_absent_corrupt_and_round_trip() {
+        let _s = Scratch::new("sideline-view");
+        assert_eq!(
+            load_sideline_view(),
+            SidelineView::Agents,
+            "absent reads agents"
+        );
+        std::fs::write(view_path(), r#"{"sideline_view":"diagonal"}"#).unwrap();
+        assert_eq!(
+            load_sideline_view(),
+            SidelineView::Agents,
+            "unknown reads agents"
+        );
+        save_sideline_view(SidelineView::Backlog);
+        assert_eq!(load_sideline_view(), SidelineView::Backlog);
+        save_sideline_view(SidelineView::Org);
+        assert_eq!(load_sideline_view(), SidelineView::Org);
+        for mode in [OrgMode::Tree, OrgMode::Table, OrgMode::Graph] {
+            for sessions in [OrgSessions::Current, OrgSessions::Former, OrgSessions::All] {
+                save_org_prefs(mode, sessions);
+                assert_eq!(load_org_prefs(), (mode, sessions));
+            }
+        }
+        save_sideline_view(SidelineView::Agents);
+        assert_eq!(load_sideline_view(), SidelineView::Agents);
+        // The Messages read marks: absent reads all-unread, save/load
+        // round-trips, and a second mark leaves the first standing.
+        assert!(load_messages_read_marks().is_empty(), "absent = unread");
+        save_messages_read_mark("chat-a", "2026-10-01T09:05:00Z");
+        save_messages_read_mark("chat-b", "2026-10-01T10:00:00Z");
+        let marks = load_messages_read_marks();
+        assert_eq!(
+            marks.get("chat-a").map(String::as_str),
+            Some("2026-10-01T09:05:00Z")
+        );
+        assert_eq!(
+            marks.get("chat-b").map(String::as_str),
+            Some("2026-10-01T10:00:00Z")
+        );
+        save_messages_read_mark("chat-a", "2026-10-01T11:00:00Z");
+        let marks = load_messages_read_marks();
+        assert_eq!(
+            marks.get("chat-a").map(String::as_str),
+            Some("2026-10-01T11:00:00Z")
+        );
+        assert_eq!(
+            marks.get("chat-b").map(String::as_str),
+            Some("2026-10-01T10:00:00Z")
+        );
+        assert_eq!(marks.len(), 2);
+    }
+
+    // The board layout pref: absent reads the shipped default (every model
+    // column, half focus), a corrupt value reads the default, and
+    // save/load round-trips a subset with a different focus.
+    #[test]
+    fn board_layout_absent_corrupt_and_round_trip() {
+        let _s = Scratch::new("board-layout");
+        let dflt = load_board_layout();
+        assert_eq!(
+            dflt.columns,
+            backlog_default_columns(),
+            "absent reads all columns"
+        );
+        assert_eq!(dflt.focus_pct, 50, "absent reads half focus");
+        std::fs::write(view_path(), r#"{"board_layout":{"columns":"wide"}}"#).unwrap();
+        let corrupt = load_board_layout();
+        assert_eq!(
+            corrupt.columns,
+            backlog_default_columns(),
+            "corrupt reads default"
+        );
+        let custom = BoardLayout {
+            columns: vec!["Now".into(), "Done".into()],
+            focus_pct: 65,
+        };
+        save_board_layout(&custom);
+        assert_eq!(load_board_layout(), custom);
+    }
+
+    // The board full-screen pref: absent or corrupt reads false, and
+    // save/load round-trips.
+    #[test]
+    fn board_full_absent_corrupt_and_round_trip() {
+        let _s = Scratch::new("board-full");
+        assert!(!load_board_full(), "absent reads false");
+        std::fs::write(view_path(), r#"{"board_full":"wide"}"#).unwrap();
+        assert!(!load_board_full(), "corrupt reads false");
+        save_board_full(true);
+        assert!(load_board_full());
+        save_board_full(false);
+        assert!(!load_board_full());
     }
 
     // An unknown key or value is dropped entry-wise, not fatally: a file
@@ -658,32 +1191,21 @@ mod tests {
         assert_eq!(got[&SectionKey::Elsewhere], SectionView::Collapsed);
     }
 
-    // AC5-EDGE: a section with no dead rows skips LiveOnly entirely, and the
-    // the Backlog section is binary in both directions.
+    // AC5-EDGE: a section with no dead rows skips LiveOnly entirely.
     #[test]
     fn next_view_skips_live_only_without_dead() {
         use SectionView::*;
-        let sq = SectionKey::Squad("/repo".into());
-        assert_eq!(next_view(Expanded, false, &sq), Collapsed);
-        assert_eq!(next_view(Collapsed, false, &sq), Expanded);
-        assert_eq!(
-            next_view(Expanded, true, &SectionKey::WorkQueue),
-            Collapsed,
-            "backlog binary even when told rows are dead"
-        );
+        assert_eq!(next_view(Expanded, false), Collapsed);
+        assert_eq!(next_view(Collapsed, false), Expanded);
     }
 
     // AC4-UI: the full tri-state cycle when dead rows exist.
     #[test]
     fn next_view_cycles_tri_state_with_dead() {
         use SectionView::*;
-        let sq = SectionKey::Squad("/repo".into());
-        assert_eq!(next_view(Expanded, true, &sq), LiveOnly);
-        assert_eq!(next_view(LiveOnly, true, &sq), Collapsed);
-        assert_eq!(next_view(Collapsed, true, &sq), Expanded);
-        // A mission header is a normal tri-state section, not a binary one.
-        let m = SectionKey::Mission(0x8000_0000_0000_0001);
-        assert_eq!(next_view(Expanded, true, &m), LiveOnly);
+        assert_eq!(next_view(Expanded, true), LiveOnly);
+        assert_eq!(next_view(LiveOnly, true), Collapsed);
+        assert_eq!(next_view(Collapsed, true), Expanded);
     }
 
     // AC12-FR: a section left in LiveOnly whose last dead row was reaped
@@ -691,27 +1213,25 @@ mod tests {
     #[test]
     fn live_only_never_wedges_when_dead_disappears() {
         assert_eq!(
-            next_view(
-                SectionView::LiveOnly,
-                false,
-                &SectionKey::Squad("/repo".into())
-            ),
+            next_view(SectionView::LiveOnly, false),
             SectionView::Collapsed
         );
     }
 
-    // A mission key round-trips through the wire form, so a mission section's
-    // state survives a restart (its NAME would not - it carries done/total).
+    // A mux-view.json saved by an older build with the deleted `work-queue`
+    // and `missions` section keys loads, and only the readable entries
+    // survive (AC6-EDGE for the sections' removal).
     #[test]
-    fn mission_key_round_trips() {
-        let _s = Scratch::new("mission");
-        let mut m = HashMap::new();
-        m.insert(
-            SectionKey::Mission(0x8000_0000_dead_beef),
-            SectionView::Collapsed,
-        );
-        save(&m);
-        assert_eq!(load(), m);
+    fn legacy_work_queue_and_missions_keys_load_and_drop() {
+        let _s = Scratch::new("legacy-keys");
+        std::fs::write(
+            view_path(),
+            r#"{"version":1,"sections":{"work-queue":"expanded","missions":"collapsed","squad:/x":"live_only"}}"#,
+        )
+        .unwrap();
+        let got = load();
+        assert_eq!(got.len(), 1, "only the squad key survives: {got:?}");
+        assert_eq!(got[&SectionKey::Squad("/x".into())], SectionView::LiveOnly);
     }
 
     // `strip_prefix` removes only the leading marker, so an identity that
@@ -799,10 +1319,12 @@ mod tests {
         assert_eq!(got[&SectionKey::Squad("/a".into())], SectionView::Expanded);
     }
 
-    // ---- x-b186: density + sort preferences ----
+    // ----: density + sort preferences ----
 
     #[test]
-    fn prefs_default_then_round_trip() {
+    // One persistence surface, folded from three fns (test-delta cap 0):
+    // every assert below ran in its own fn before the fold.
+    fn prefs_width_and_preset_persist_together() {
         let _s = Scratch::new("prefs-roundtrip");
         // AC7-FR: a missing file is not an error, it is the defaults. The
         // default sort is attention (evidence of neglect first); only a stored
@@ -814,11 +1336,9 @@ mod tests {
             (Density::Extended, AgentSort::Squad, None),
             "save_prefs leaves width untouched"
         );
-    }
+        // ----: width coexists with prefs
 
-    #[test]
-    fn width_round_trips_and_coexists_with_prefs() {
-        // x-2e86 US1: a dragged width persists, and shares the file with
+        // US1: a dragged width persists, and shares the file with
         // density/sort without either clobbering the other (one locked RMW).
         let _s = Scratch::new("width-roundtrip");
         save_prefs(Density::Slim, AgentSort::Attention);
@@ -839,10 +1359,8 @@ mod tests {
             load_prefs(),
             (Density::Extended, AgentSort::Squad, Some(60))
         );
-    }
+        // ----: the preset writes mode and width together
 
-    #[test]
-    fn save_preset_writes_mode_and_width_together() {
         // A preset is one choice of both fields; save_preset persists them in one
         // mutation so a reader never sees a mode paired with a stale width.
         let _s = Scratch::new("preset-atomic");
@@ -950,4 +1468,88 @@ mod tests {
         assert_eq!(AgentSort::Squad.toggle(), AgentSort::Attention);
         assert_eq!(AgentSort::Attention.toggle(), AgentSort::Squad);
     }
+}
+
+/// The board's column layout as the store sees it: JSON so the schema can
+/// evolve without a breaking read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BoardLayout {
+    pub columns: Vec<String>,
+    pub focus_pct: u16,
+}
+
+/// Read the board layout pref. Absent or corrupt reads as the shipped
+/// default: every model column, model order, half focus.
+pub fn load_board_layout() -> BoardLayout {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return BoardLayout {
+            columns: backlog_default_columns(),
+            focus_pct: 50,
+        };
+    }
+    let cfg = read_raw()
+        .board_layout
+        .and_then(|v| serde_json::from_value::<BoardLayout>(v).ok());
+    cfg.unwrap_or(BoardLayout {
+        columns: backlog_default_columns(),
+        focus_pct: 50,
+    })
+}
+
+/// Persist the board layout pref. Best-effort like every other write here.
+pub fn save_board_layout(layout: &BoardLayout) {
+    mutate(|file| {
+        file.board_layout = serde_json::to_value(layout).ok();
+    });
+}
+
+/// The model's column names, as the store's default.
+fn backlog_default_columns() -> Vec<String> {
+    crate::backlog_view::KANBAN_COLUMNS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// The backlog board's remembered view state: the query (lane grouping,
+/// facet sets, search text, list/kanban) plus the selected card id. JSON
+/// round-trip so a schema addition never breaks a read.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+pub struct BoardQueryPrefs {
+    /// `"project" | "epic" | "none"`; absent reads as the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lanes: Option<String>,
+    /// `"list" | "kanban"`; absent reads as kanban.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// The find text. Absent or empty reads as no filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// The facet multi-select sets, any-of, by facet name.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sets: std::collections::BTreeMap<String, Vec<String>>,
+    /// The card the cursor sat on, when it sat on one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sel: Option<String>,
+}
+
+/// Read the backlog board's remembered view state. Absent or corrupt reads
+/// as `None`: the board opens fresh.
+pub fn load_board_query() -> Option<BoardQueryPrefs> {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return None;
+    }
+    read_raw()
+        .board_query
+        .and_then(|v| serde_json::from_value::<BoardQueryPrefs>(v).ok())
+}
+
+/// Persist the backlog board's remembered view state. Best-effort like
+/// every other write here.
+pub fn save_board_query(prefs: &BoardQueryPrefs) {
+    mutate(|file| {
+        file.board_query = serde_json::to_value(prefs).ok();
+    });
 }

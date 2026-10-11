@@ -13,7 +13,6 @@ footnote/                              # Flat root - plugin.json at .claude-plug
 │   ├── plan/                           # Implementation plan generation
 │   ├── do/                             # Lightweight single-session executor
 │   ├── operator/                       # Wave-based task routing
-│   ├── megawalk/                     # Multi-session task orchestration
 │   ├── megaspec/                       # Iterative plan refinement
 │   ├── think/                          # Design exploration, brainstorming
 │   ├── what-if/                        # Scenario exploration, edge cases
@@ -22,7 +21,7 @@ footnote/                              # Flat root - plugin.json at .claude-plug
 │   ├── fix/                            # Autonomous fix loop (one fix/iteration)
 │   ├── debug/                          # Scientific method bug hunting
 │   ├── speculate/                      # Parallel approach exploration
-│   ├── sigma-review/                   # Multi-agent review orchestration
+│   ├── review/                         # The owned review lane
 │   ├── create-pr/                      # PR creation from commits
 │   ├── check-pr/                       # Poll for external review feedback
 │   ├── distill/                        # Conversation analysis/distillation
@@ -197,7 +196,7 @@ Users interact with footnote through slash commands:
 | `/fno:execute` | execute | Lightweight single-session execution |
 | `/fno:operator` | operator | Heavy wave orchestration |
 | `/fno:think "feature"` | think | Design exploration |
-| `/fno:sigma-review` | sigma-review | Multi-agent code review |
+| `/fno:review` | review | The owned review lane (inline, attested) |
 | `/fno:fix` | fix | Autonomous fix loop |
 | `/fno:debug` | debug | Scientific method debugging |
 | `/fno:tdd` | tdd | Test-driven development |

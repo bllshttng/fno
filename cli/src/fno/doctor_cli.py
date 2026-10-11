@@ -12,18 +12,19 @@ import typer.core
 from fno.bundle import bundle_app
 from fno.codemap_cli import app as codemap_app
 from fno.doctor import doctor_command, plugin_file_command
-from fno.agents.harness_probe import harness_probe_command
+from fno.doctor_bash_census import bash_census_command
 from fno.doctor_footprint import footprint_command
 from fno.doctor_lanes import lanes_command
+from fno.doctor_reclaim import reclaim_command
 from fno.evals.cli import evals_app
 from fno.events.cli import cli as event_app
 from fno.lint_cli import lint
 from fno.observer.cli import observer_app
 from fno.route_cli import inventory_cmd
+from fno.scratch_cli import scratch_app
 from fno.skill_diff.cli import skill_diff_app
 from fno.status_fanout import status_fanout_app
 from fno.test_cmd import test_command
-from fno.update import update_command
 
 
 class DoctorGroup(typer.core.TyperGroup):
@@ -60,20 +61,79 @@ doctor_app.add_typer(codemap_app, name="codemap")
 doctor_app.add_typer(evals_app, name="evals")
 doctor_app.add_typer(doctor_event_app, name="event")
 doctor_app.command("lint")(lint)
+# Machine janitor for dev-built disk bloat; hidden, `fno help doctor --all`.
+doctor_app.command("reclaim", hidden=True)(reclaim_command)
 doctor_app.command("footprint", hidden=True)(footprint_command)
+# Bash-call shape over this project's transcripts; hidden, `fno help doctor --all`.
+doctor_app.command("bash-census", hidden=True)(bash_census_command)
+
+
+# `doctor intel` shells to the Rust fold; hidden per the new-verb convention.
+@doctor_app.command("intel", hidden=True)
+def intel_command() -> None:
+    """Who typed: per-session provenance counters, tool calls, commits, relay facets.
+
+    Runs the fold at its defaults (14 days, this project). The flag surface
+    is the binary's, never Python's: `fno-agents intel --help`.
+    """
+    import subprocess
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("fno doctor intel: the fno-agents binary was not found; run `fno doctor update --rust`.", err=True)
+        raise typer.Exit(code=2)
+    result = subprocess.run([str(binary), "intel"], check=False)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 # `doctor lanes` is the whole-machine lane advisor: one number and its
 # reasoning, or a refusal naming every dark sensor. Hidden per the new-verb
 # convention; `fno help doctor --all`.
 doctor_app.command("lanes", hidden=True)(lanes_command)
-doctor_app.command("harness", hidden=True)(harness_probe_command)
+
+
+def _route_harness(verb: str, argv: list[str]) -> None:
+    from fno.agents.rust_runtime import refuse_without_binary, route_to_rust
+    from fno.rust_binary import resolve_installed_binary
+    binary = resolve_installed_binary() or refuse_without_binary(verb)
+    route_to_rust(argv, binary=binary)
+
+
+@doctor_app.command("harness", hidden=True)
+def harness_command(
+    harness: str = typer.Argument(...),
+    live: bool = typer.Option(False, "--live"),
+    json_out: bool = typer.Option(False, "--json", "-J"),
+) -> None:
+    _route_harness(
+        "harness", ["harness-probe", "rubric", harness] + ["--live"] * live + ["--json"] * json_out,
+    )
+
+
+@doctor_app.command("harness-matrix", hidden=True)
+def harness_matrix_command(
+    write: bool = typer.Option(False, "--write"),
+) -> None:
+    _route_harness("harness-matrix", ["harness-matrix"] + ["--write"] * write)
 doctor_app.command("plugin-file", hidden=True)(plugin_file_command)
 # `doctor route` is the reachability read: what this installation's declared
 # routing inventory can actually reach (absorbs the old "no surface answers
 # this" gap). Hidden per the new-verb convention; `fno help doctor --all`.
 doctor_app.command("route", hidden=True)(inventory_cmd)
 doctor_app.add_typer(observer_app, name="observer")
+# `doctor scratch` is the scratch-shape sweep; the Rust binary is
+# the only implementation and the leaf refuses without it.
+doctor_app.add_typer(scratch_app, name="scratch")
 doctor_app.add_typer(skill_diff_app, name="skill-diff")
-# `doctor test` is the canonical spelling (x-6233, d-df6c29a6): the root
-# `fno test` is a VERB_MOVES shim. `doctor update` resolves the same command
-# object as the root `fno update`, which stays a root verb.
-doctor_app.command("update")(update_command)
+# `doctor update` is native: the Rust front door's doctor_update.rs answers
+# it (both spellings). fno-py keeps only this signpost for the
+# no-front-door spelling, naming the one command that installs the door.
+def _update_signpost() -> None:
+    typer.echo(
+        "fno: the updater is native to the Rust front door; install it from the source checkout with "
+        "`cargo install --locked --path <src>/crates/fno`, then re-run `fno doctor update`."
+    )
+    raise typer.Exit(code=2)
+
+
+doctor_app.command("update", hidden=True)(_update_signpost)

@@ -26,6 +26,7 @@ from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+from fno.graph.store import read_graph_strict
 
 
 # ---------------------------------------------------------------------------
@@ -37,11 +38,13 @@ def _write_plan(
     path: Path,
     *,
     waves: int = 0,
+    exec_waves: int = 0,
     close_probes: list[str] | None = None,
     expected_url_count: int | None = None,
 ) -> Path:
     """Write a minimal plan doc. `waves` only adds body headings (flavor); the
-    gate no longer reads them, so a multi-wave plan declaring nothing closes."""
+    gate reads only an explicit `## Execution Strategy` `waves:` list, so a
+    multi-wave plan declaring nothing closes."""
     lines = ["---", "node: x-prom", "status: ready", "created: 2026-08-09T00:00:00+00:00"]
     if close_probes is not None:
         lines.append("close_probes:")
@@ -56,8 +59,35 @@ def _write_plan(
     for n in range(1, waves + 1):
         lines.append(f"## Wave {n}{' -' if n % 2 == 0 else ':'} wave {n} title")
         lines.append("")
+    if exec_waves:
+        wave_list = "\n".join(
+            f"  - wave: {n}\n    name: PR {n}" for n in range(1, exec_waves + 1)
+        )
+        lines.append("## Execution Strategy")
+        lines.append("")
+        lines.append("```yaml")
+        lines.append("execution_mode: sequential")
+        lines.append("waves:")
+        lines.append(wave_list)
+        lines.append("tasks:")
+        lines.append("  - id: '1'")
+        lines.append("    title: the work")
+        lines.append("```")
+        lines.append("")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_verdict_reader(monkeypatch: pytest.MonkeyPatch):
+    """Condition E shells the live verdict store by default; pin it empty so
+    these tests neither pay the subprocess nor read machine FAIL rows. Tests
+    that exercise condition E patch the reader seam themselves."""
+    import fno.graph._reconcile as reconcile
+
+    monkeypatch.setattr(
+        reconcile, "_verdict_reader_shellout", lambda plan_path: {"rows": []}
+    )
 
 
 @pytest.fixture
@@ -79,11 +109,22 @@ def routed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _seed(g: Path, entries: list[dict]) -> None:
-    g.write_text(json.dumps({"entries": entries}, indent=2) + "\n", encoding="utf-8")
+    """Rows the way the store writes them: the typed api drops a row the
+    model cannot parse, so seeds carry the stamped fields."""
+    complete = []
+    for e in entries:
+        row = {"type": "feature", "priority": "p2", "status": "idea", **e}
+        row.setdefault("title", e.get("id", "node"))
+        row.setdefault("slug", e.get("id", "node"))
+        complete.append(row)
+    # A re-seed must replace rows through the store: the db outlives the file.
+    from fno.graph.store import commit_rows_via_store
+
+    commit_rows_via_store(g, lambda _entries: complete)
 
 
 def _node(g: Path, node_id: str) -> dict:
-    return next(e for e in json.loads(g.read_text())["entries"] if e["id"] == node_id)
+    return next(e for e in read_graph_strict(g) if e["id"] == node_id)
 
 
 def _merged(monkeypatch, *, target="both"):
@@ -116,6 +157,35 @@ def _base_node(node_id: str, plan_path: str) -> dict:
     }
 
 
+def _door_close(tmp_path, entry: dict, *args: str, carveouts=(), pr_states=None, fail_stderr=""):
+    """Run the native close over a sandbox seeded like `routed` wires the
+    wheel: the same row shape, a real plan file (absolute path in the row), a
+    real carveouts.jsonl where the binary reads it, and a gh stub. Returns
+    (code, out, err, graph_path)."""
+    from tests.goldens._door import door, make_sandbox, seed_node, warm, write_pr_stub
+
+    row = _base_node(entry["id"], str(entry["plan_path"]))
+    row.update({k: v for k, v in entry.items() if k not in ("id", "plan_path")})
+    (tmp_path / f"door-{row['id']}").mkdir(exist_ok=True)
+    root = make_sandbox(tmp_path / f"door-{row['id']}", [seed_node(
+        row["id"], row.get("status", "in_review"),
+        **{k: v for k, v in row.items() if k not in ("id", "status")},
+    )])
+    warm(root, row["id"])
+    if carveouts:
+        fno_dir = root / ".fno"
+        fno_dir.mkdir(exist_ok=True)
+        rows = "\n".join(json.dumps(c) for c in carveouts)
+        (fno_dir / "carveouts.jsonl").write_text(rows + "\n", encoding="utf-8")
+    prepend = None
+    if pr_states is not None:
+        prepend = str(write_pr_stub(root, pr_states))
+    elif fail_stderr:
+        prepend = str(write_pr_stub(root, fail_stderr=fail_stderr))
+    code, out, err = door(root, ["done", row["id"], *args], path_prepend=prepend)
+    return code, out, err, root / "graph.json"
+
+
 # ---------------------------------------------------------------------------
 # resolve_promise_evidence, direct (no-declaration + conditions B / C + fail-open)
 # ---------------------------------------------------------------------------
@@ -131,6 +201,10 @@ def test_no_declaration_closes_clean_even_multi_wave(tmp_path: Path):
 
     plan = _write_plan(tmp_path / "p.md", waves=2)
     assert resolve_promise_evidence({"id": "x-a", "plan_path": str(plan)}).outcome == "ok"
+    # Body headings are flavor, but an Execution Strategy that declares ONE
+    # wave still promises one ship - below the multi-ship floor, so it closes.
+    one = _write_plan(tmp_path / "one.md", exec_waves=1)
+    assert resolve_promise_evidence({"id": "x-a", "plan_path": str(one)}).outcome == "ok"
 
 
 def test_no_plan_path_passes():
@@ -140,14 +214,26 @@ def test_no_plan_path_passes():
     assert resolve_promise_evidence({"id": "x-a"}).outcome == "ok"
 
 
-def test_unreadable_plan_fails_open_with_named_warning(tmp_path: Path):
+def test_unreadable_or_unparseable_plan_fails_closed(tmp_path: Path):
+    """An unreadable or unparseable delivery promise never reads as
+    complete. The refusal names the node, the path, the error, and the
+    --force remedy (the rule the Rust close gate cites)."""
     from fno.graph._reconcile import resolve_promise_evidence
 
     missing = tmp_path / "nope.md"
     v = resolve_promise_evidence({"id": "x-a", "plan_path": str(missing)})
-    assert v.outcome == "ok"
-    assert v.warning is not None
-    assert str(missing) in v.warning  # the path is named, not just "plan unreadable"
+    assert v.outcome == "promise_unmet"
+    assert v.exit_code == 6
+    assert str(missing) in (v.reason or "")  # the path is named, not just "plan unreadable"
+    assert "x-a" in (v.reason or "")  # the node is named
+    assert "--force --reason" in (v.reason or "")  # the remedy is named
+    # A plan whose frontmatter the parser rejects blocks the same way, and
+    # the parse error itself is named.
+    broken = tmp_path / "broken.md"
+    broken.write_text("---\n- a list, not a mapping\n---\n# b\n")
+    b = resolve_promise_evidence({"id": "x-a", "plan_path": str(broken)})
+    assert b.outcome == "promise_unmet"
+    assert b.warning is None
 
 
 def test_condition_b_passing_probes_pass(tmp_path: Path):
@@ -290,6 +376,99 @@ def test_condition_d_fires_on_a_multi_wave_plan(tmp_path: Path):
     assert "promised 2 waves" not in (v.reason or "")
 
 
+# ---------------------------------------------------------------------------
+# condition E - open prove-it FAIL on the node's plan artifacts
+# ---------------------------------------------------------------------------
+# The verdict_reader seam returns the verb's payload ({read_at, rows,
+# unreadable}); the real reader shells fno-agents prove-it-verdicts, which the
+# module-wide hermetic fixture pins empty.
+
+
+def _verdict_payload(node: str, *, open_: bool, verdict: str = "FAIL") -> dict:
+    return {
+        "read_at": "2026-09-12T00:00:00Z",
+        "rows": [
+            {
+                "node": node,
+                "status": "done",
+                "report": f"/plans/{node}.md.artifacts/coverage/REPORT.md",
+                "verdict": verdict,
+                "claim": "the retirement done probe rejects incomplete evidence",
+                "mtime": "2026-09-08T20:56:56Z",
+                "open": open_,
+                "routed": False,
+                "ruled_by": None,
+            }
+        ],
+        "unreadable": [],
+    }
+
+
+def test_condition_e_open_fail_holds_the_close(tmp_path: Path):
+    """AC3-HP: an open FAIL on the node's own artifacts refuses with the path."""
+    from fno.graph._reconcile import resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md")
+    v = resolve_promise_evidence(
+        {"id": "x-e1", "plan_path": str(plan)},
+        verdict_reader=lambda plan_path: _verdict_payload("x-e1", open_=True),
+    )
+    assert v.outcome == "promise_unmet"
+    assert v.exit_code == 6
+    assert "prove-it FAIL" in (v.reason or "")
+    assert "/plans/x-e1.md.artifacts/coverage/REPORT.md" in (v.reason or "")
+    assert "the retirement done probe rejects incomplete evidence" in (v.reason or "")
+    assert "fno inbox decide" in (v.reason or "")
+    assert "--force --reason" in (v.reason or "")
+
+
+def test_condition_e_ruled_or_retired_fail_closes_clean(tmp_path: Path):
+    from fno.graph._reconcile import resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md")
+    # A ruled FAIL (open=false) and a PASS verdict both read closed: a newer
+    # PASS retires the FAIL and a decision naming the report rules it.
+    for payload in (
+        _verdict_payload("x-e2", open_=False),
+        _verdict_payload("x-e2", open_=False, verdict="PASS"),
+    ):
+        v = resolve_promise_evidence(
+            {"id": "x-e2", "plan_path": str(plan)},
+            verdict_reader=lambda plan_path, payload=payload: payload,
+        )
+        assert v.outcome == "ok", payload
+
+
+def test_condition_e_ignores_another_nodes_fail(tmp_path: Path):
+    from fno.graph._reconcile import resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md")
+    v = resolve_promise_evidence(
+        {"id": "x-e3", "plan_path": str(plan)},
+        verdict_reader=lambda plan_path: _verdict_payload("x-other", open_=True),
+    )
+    assert v.outcome == "ok"
+
+
+def test_condition_e_failed_reader_degrades_to_named_warning(tmp_path: Path):
+    """AC3-ERR: a reader that raises is a warning, never a silent pass."""
+    from fno.graph._reconcile import resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md")
+
+    def _boom(plan_path: str) -> dict:
+        raise OSError("binary missing")
+
+    v = resolve_promise_evidence(
+        {"id": "x-e4", "plan_path": str(plan)},
+        verdict_reader=_boom,
+    )
+    assert v.outcome == "ok"
+    assert v.warning is not None
+    assert "prove-it verdict read failed" in v.warning
+    assert "binary missing" in v.warning
+
+
 def test_carveout_ledger_root_resolves_from_the_nodes_project(tmp_path):
     """The ledger root is the canonical of the repo at ``cwd``, not the ambient
     command repo, so a cross-project close reads the foreign project's ledger
@@ -331,6 +510,20 @@ def test_condition_c_shortfall_refuses(tmp_path: Path):
     assert v.outcome == "promise_unmet"
     assert "promised 3 ships" in (v.reason or "")
     assert "only 1 merged" in (v.reason or "")
+    # The incident specimen: a 3-wave quick-plan declared no expected_url_count,
+    # so wave 1's merge closed the node while waves 2 and 3 were still in
+    # flight. The Execution Strategy's own waves list is the promise now.
+    wave_plan = _write_plan(tmp_path / "w.md", exec_waves=3)
+    wave_node = {
+        "id": "x-w",
+        "plan_path": str(wave_plan),
+        "pr_number": 42,
+        "pr_url": "https://github.com/o/r/pull/42",
+    }
+    v = resolve_promise_evidence(wave_node, query=merged)
+    assert v.outcome == "promise_unmet"
+    assert "promised 3 ships" in (v.reason or "")
+    assert "only 1 merged" in (v.reason or "")
 
 
 def test_condition_c_satisfied_passes(tmp_path: Path):
@@ -352,10 +545,11 @@ def test_condition_c_satisfied_passes(tmp_path: Path):
     assert resolve_promise_evidence(node, query=merged).outcome == "ok"
 
 
-def test_condition_c_gh_outage_fails_open_not_refuses(tmp_path: Path):
-    """An unreachable ref is not a missing ship. Counting a gh outage as
-    unmerged told the operator the plan under-shipped when gh was simply down;
-    the merge gate treats the same outage as retryable, not a policy refusal."""
+def test_condition_c_gh_outage_is_unknown_not_ok(tmp_path: Path):
+    """AC1-HP. An unreachable ref is not a missing ship AND it is not a
+    confirmed one. The gate used to return ok here, which closed a declared
+    multi-ship node on the strength of an outage. It now returns a retryable
+    unknown carrying the confirmed and expected counts."""
     from fno.graph._reconcile import ReconcileError, resolve_promise_evidence
 
     plan = _write_plan(tmp_path / "p.md", expected_url_count=2)
@@ -367,12 +561,79 @@ def test_condition_c_gh_outage_fails_open_not_refuses(tmp_path: Path):
         "additional_prs": [{"number": 2, "url": "https://github.com/o/r/pull/2"}],
     }
 
-    def _down(n, **kw):
+    calls: list[int] = []
+
+    def _one_merged_one_down(n, **kw):
+        from fno.graph._reconcile import PrMergeState
+
+        calls.append(n)
+        if n == 1:
+            return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
         raise ReconcileError("gh pr view timed out")
 
-    v = resolve_promise_evidence(node, query=_down)
-    assert v.outcome == "ok"
-    assert "could not confirm 2 ships" in (v.warning or "")
+    v = resolve_promise_evidence(node, query=_one_merged_one_down)
+    assert v.outcome == "promise_unknown"
+    assert v.satisfied is False
+    assert v.exit_code == 4
+    assert "could not confirm 2 ships" in (v.reason or "")
+    assert "1 confirmed MERGED" in (v.reason or "")
+    assert "timed out" in (v.reason or "")
+
+
+def test_unknown_remedy_names_the_verb_that_can_recover(tmp_path: Path):
+    """The refusal exits BEFORE the close verb persists an explicit --pr ref,
+    so `reconcile --node` cannot see that ship: it would re-count the stored
+    refs, find no failure, and answer the PERMANENT policy refusal about a PR
+    that is merged. With extra_refs the remedy must name the same command."""
+    from fno.graph._reconcile import PrMergeState, ReconcileError, resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md", expected_url_count=2)
+    node = {
+        "id": "x-rem",
+        "plan_path": str(plan),
+        "pr_number": 1,
+        "pr_url": "https://github.com/o/r/pull/1",
+    }
+
+    def _down(n, **kw):
+        if n == 2:
+            return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
+        raise ReconcileError("gh pr view timed out")
+
+    with_extra = resolve_promise_evidence(
+        node, query=_down, extra_refs=[(2, "https://github.com/o/r/pull/2")]
+    )
+    assert with_extra.outcome == "promise_unknown"
+    assert "Re-run the same close command" in (with_extra.reason or "")
+    assert "reconcile --node" not in (with_extra.reason or "")
+
+    without_extra = resolve_promise_evidence(node, query=_down)
+    assert without_extra.outcome == "promise_unknown"
+    assert "fno backlog reconcile --node x-rem" in (without_extra.reason or "")
+
+
+def test_repeated_ref_never_satisfies_two_ships(tmp_path: Path):
+    """AC1-EDGE. One PR listed twice is one ship. The dedup lives in
+    node_pr_refs; this pins it against the promise gate so a duplicate
+    additional_prs row can never fake a second confirmed ship."""
+    from fno.graph._reconcile import PrMergeState, resolve_promise_evidence
+
+    plan = _write_plan(tmp_path / "p.md", expected_url_count=2)
+    node = {
+        "id": "x-dup",
+        "plan_path": str(plan),
+        "pr_number": 1,
+        "pr_url": "https://github.com/o/r/pull/1",
+        "additional_prs": [{"number": 1, "url": "https://github.com/o/r/pull/1"}],
+    }
+
+    def merged(n, **kw):
+        return PrMergeState(number=n, state="MERGED", url=None, merged_at=None)
+
+    assert resolve_promise_evidence(node, query=merged).outcome == "promise_unmet"
+
+    node["additional_prs"] = [{"number": 2, "url": "https://github.com/o/r/pull/2"}]
+    assert resolve_promise_evidence(node, query=merged).satisfied is True
 
 
 def test_condition_c_nonretryable_read_refuses(tmp_path: Path):
@@ -401,6 +662,10 @@ def test_promise_verdict_exit_code_table():
 
     assert PromiseVerdict(outcome="ok").exit_code == 0
     assert PromiseVerdict(outcome="promise_unmet").exit_code == 6
+    assert PromiseVerdict(outcome="promise_unknown").exit_code == 4
+    assert PromiseVerdict(outcome="ok").satisfied is True
+    assert PromiseVerdict(outcome="promise_unmet").satisfied is False
+    assert PromiseVerdict(outcome="promise_unknown").satisfied is False
 
 
 def test_relative_plan_resolved_against_owning_cwd(tmp_path: Path):
@@ -451,22 +716,28 @@ def test_condition_c_counts_extra_refs(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def _shortfall_world(g: Path, tmp_path: Path, node_id: str = "ab-prom01") -> str:
-    """A node whose plan DECLARES expected_url_count=2 but has one PR ref.
-    The merge gate passes (the one PR is merged); the promise gate refuses."""
+def _shortfall_plan(tmp_path: Path) -> str:
     plan = _write_plan(tmp_path / "shortfall.md", expected_url_count=2)
-    _seed(g, [_base_node(node_id, str(plan))])
     return str(plan)
 
 
-def test_condition_C_refuses_on_cmd_done(routed, tmp_path, monkeypatch):
-    _shortfall_world(routed, tmp_path)
-    _merged(monkeypatch, target="graph")
-    from fno.cli import app
+def _shortfall_world(g: Path, tmp_path: Path, node_id: str = "ab-prom01") -> str:
+    """A node whose plan DECLARES expected_url_count=2 but has one PR ref.
+    The merge gate passes (the one PR is merged); the promise gate refuses."""
+    plan = _shortfall_plan(tmp_path)
+    _seed(g, [_base_node(node_id, plan)])
+    return plan
 
-    r = CliRunner().invoke(app, ["backlog", "done", "ab-prom01"])
-    assert r.exit_code == 6, r.output
-    assert _node(routed, "ab-prom01").get("completed_at") is None
+
+def test_condition_C_refuses_on_cmd_done(routed, tmp_path, monkeypatch):
+    """The bare close is native: the shortfall refuses through the door."""
+    plan = _shortfall_plan(tmp_path)
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-prom01", "plan_path": plan},
+        pr_states={42: "MERGED"},
+    )
+    assert code == 6, out + err
+    assert _node(g, "ab-prom01").get("completed_at") is None
 
 
 def test_condition_C_refuses_on_fno_done(routed, tmp_path, monkeypatch):
@@ -479,21 +750,36 @@ def test_condition_C_refuses_on_fno_done(routed, tmp_path, monkeypatch):
     assert _node(routed, "ab-prom01").get("completed_at") is None
 
 
-def test_condition_C_holds_open_on_reconcile(routed, tmp_path, monkeypatch):
-    plan = _shortfall_world(routed, tmp_path)
+def _outage_world(g: Path, tmp_path: Path, monkeypatch, node_id: str = "ab-out01") -> str:
+    """A node declaring 2 ships with 2 refs: the first reads MERGED, the second
+    times out. The merge gate passes; the ship count is UNKNOWN, not short."""
+    from fno.graph._reconcile import PrMergeState, ReconcileError
     import fno.graph._reconcile as rec
-    from fno.graph._reconcile import PrMergeState
+    import fno.graph.cli as graph_cli
+    import fno.done.cli as done_cli
 
-    # Reconcile's resolve_promise_evidence uses the default query_pr_merge_state
-    # (not the verb shims), so stub it here too - condition C re-counts merges.
-    monkeypatch.setattr(
-        rec, "query_pr_merge_state",
-        lambda n, **kw: PrMergeState(number=n, state="MERGED", url=None, merged_at=None),
-    )
+    plan = _write_plan(tmp_path / "outage.md", expected_url_count=2)
+    node = _base_node(node_id, str(plan))
+    node["additional_prs"] = [{"number": 43, "url": "https://github.com/o/r/pull/43"}]
+    _seed(g, [node])
 
-    def _scan(entries, node_id=None):
+    def state(n, **kw):
+        if n == 42:
+            return PrMergeState(number=n, state="MERGED", url=None, merged_at="2026-08-09T00:00:00Z")
+        raise ReconcileError("gh pr view timed out")
+
+    monkeypatch.setattr(graph_cli, "_done_gh_query", state)
+    monkeypatch.setattr(done_cli, "_gh_query", state)
+    monkeypatch.setattr(rec, "query_pr_merge_state", state)
+    return str(plan)
+
+
+def _reconcile_scan(monkeypatch, held_id: str, plan: str):
+    import fno.graph._reconcile as rec
+
+    def _scan(entries, node_id=None, listings=None):
         return [rec.MergeDriftRecord(
-            node_id="ab-prom01",
+            node_id=held_id,
             plan_path=plan,
             pr_number=42,
             pr_url="https://github.com/o/r/pull/42",
@@ -502,17 +788,76 @@ def test_condition_C_holds_open_on_reconcile(routed, tmp_path, monkeypatch):
         )]
 
     monkeypatch.setattr(rec, "scan_merge_drift", _scan)
-    from fno.graph.cli import cli
-
-    r = CliRunner().invoke(cli, ["reconcile", "--json"])
-    payload = json.loads(r.output)
-    # The node is held open, not closed, and named in the sweep summary.
-    assert any(p["node_id"] == "ab-prom01" for p in payload["promise_unmet"])
-    assert all(c.get("node_id") != "ab-prom01" for c in payload["closed"])
-    assert _node(routed, "ab-prom01").get("completed_at") is None
 
 
-def test_undeclared_plan_closes_on_all_three_verbs(routed, tmp_path, monkeypatch):
+def test_retryable_unknown_holds_open_on_done_and_the_door(routed, tmp_path, monkeypatch):
+    """AC2-HP. The outage fixture through every real close caller: node stays
+    open and the receipt names a retryable read failure. This is the defect -
+    the gate returned ok here, so every one of these three closed the node."""
+    plan = _outage_world(routed, tmp_path, monkeypatch, "ab-out01")
+    from fno.cli import app
+
+    # The bare close is native: ref 42 reads MERGED, ref 43's read dies, so
+    # the ship count is unknown and the door refuses retryable.
+    from tests.goldens._door import door, make_sandbox, seed_node, warm
+
+    plan_path = _write_plan(tmp_path / "outage-door.md", expected_url_count=2)
+    (tmp_path / "door-out").mkdir(exist_ok=True)
+    root = make_sandbox(tmp_path / "door-out", [seed_node(
+        "ab-out01", "in_review", domain="code", pr_number=42,
+        pr_url="https://github.com/o/r/pull/42", plan_path=str(plan_path),
+        additional_prs=[{"number": 43, "url": "https://github.com/o/r/pull/43"}],
+    )])
+    warm(root, "ab-out01")
+    stubbin = root / "stubbin"
+    stubbin.mkdir()
+    gh = stubbin / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in */pulls/42*) '
+        'printf \'%s\' \'{"state": "closed", "merged": true, "merged_at": "2026-06-01T10:00:00Z", "html_url": "https://github.com/o/r/pull/42"}\'; exit 0;; esac\n'
+        "printf '%s' 'gh: network unreachable' >&2\nexit 1\n"
+    )
+    gh.chmod(0o755)
+    code, out, err = door(root, ["done", "ab-out01"], path_prepend=str(stubbin))
+    assert code == 4, out + err
+    assert _node(root / "graph.json", "ab-out01").get("completed_at") is None
+
+    r = CliRunner().invoke(app, ["done", "ab-out01", "--pr", "42", "--repo", "o/r"])
+    assert r.exit_code == 4, r.output
+    assert _node(routed, "ab-out01").get("completed_at") is None
+
+
+
+def test_held_open_roll_splits_refusal_from_outage():
+    """The sweep's operator-facing roll names the two causes apart: a policy
+    refusal the operator resolves, and a read outage the next sweep retries."""
+    from fno.graph._reconcile import summarize_promise_held
+
+    text = summarize_promise_held(
+        [("ab-1", "Refused: short", "promise_unmet"),
+         ("ab-2", "Unknown: gh down", "promise_unknown")],
+    )
+    assert "Held 1 node(s) open (merged PR, unmet plan promise):" in text
+    assert "Held 1 node(s) open (ship count unconfirmed, retryable read failure):" in text
+    assert "  ab-1: Refused: short" in text
+    assert "  ab-2: Unknown: gh down" in text
+    assert "Holding" in summarize_promise_held([("ab-1", "x", "promise_unmet")], dry_run=True)
+
+
+def test_held_open_roll_never_drops_an_unenumerated_outcome():
+    """A closed enumeration is the shape `satisfied` exists to kill: a fourth
+    refusal outcome must still reach the operator. Held open and printed as a
+    blank line is the silent-gate defect, not a display nit."""
+    from fno.graph._reconcile import summarize_promise_held
+
+    text = summarize_promise_held([("ab-9", "Refused: something new", "promise_future")])
+    assert "Held 1 node(s) open (promise_future):" in text
+    assert "  ab-9: Refused: something new" in text
+    assert text.strip()
+
+
+def test_undeclared_plan_closes_on_done_and_the_door(routed, tmp_path, monkeypatch):
     """The inverse of the refusal: a plan declaring nothing closes clean on
     every close path - a regression on any single path that re-introduces an
     ungated writer is caught because the other two still close."""
@@ -525,30 +870,22 @@ def test_undeclared_plan_closes_on_all_three_verbs(routed, tmp_path, monkeypatch
     _merged(monkeypatch)
     from fno.cli import app
 
-    assert CliRunner().invoke(app, ["backlog", "done", "ab-d1"]).exit_code == 0
+    # The bare close is native: the undeclared plan closes clean through the
+    # door (a real plan file, no gh call needed - the node has no open PR).
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-d1", "plan_path": plan}, pr_states={42: "MERGED"},
+    )
+    assert code == 0, out + err
+    assert _node(g, "ab-d1").get("completed_at") is not None
     # --repo o/r: the node's recorded pr_url already names o/r, and a cwd
     # derivation from this checkout would name a different repo - refused as a
     # guess since x-43e4. Naming the repo asserts the stamp instead.
     assert (
         CliRunner().invoke(app, ["done", "ab-d2", "--pr", "42", "--repo", "o/r"]).exit_code == 0
     )
-    # reconcile: stub the scan to mark x-d3 closeable.
-    import fno.graph._reconcile as rec
-
-    def _scan(entries, node_id=None):
-        return [rec.MergeDriftRecord(
-            node_id="ab-d3", plan_path=str(plan), pr_number=42,
-            pr_url="https://github.com/o/r/pull/42", pr_state="MERGED",
-            merged_at="2026-08-09T00:00:00Z",
-        )]
-
-    monkeypatch.setattr(rec, "scan_merge_drift", _scan)
-    from fno.graph.cli import cli
-
-    assert CliRunner().invoke(cli, ["reconcile", "--json"]).exit_code == 0
-    assert _node(routed, "ab-d1").get("completed_at") is not None
+    # ab-d1 closed in the door sandbox (its close is native); d2 in the
+    # wheel store.
     assert _node(routed, "ab-d2").get("completed_at") is not None
-    assert _node(routed, "ab-d3").get("completed_at") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +893,7 @@ def test_undeclared_plan_closes_on_all_three_verbs(routed, tmp_path, monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def test_condition_D_refuses_on_all_three_verbs(routed, tmp_path, monkeypatch):
+def test_condition_D_refuses_on_done_and_the_door(routed, tmp_path, monkeypatch):
     """A deferred carve-out holds the node open on every close path - the
     one-of-N decorative-guard shape this feature exists to end (a gate on a
     single verb would let a second path close around it)."""
@@ -585,26 +922,20 @@ def test_condition_D_refuses_on_all_three_verbs(routed, tmp_path, monkeypatch):
     _merged(monkeypatch)
     from fno.cli import app
 
-    assert CliRunner().invoke(app, ["backlog", "done", "ab-dc1"]).exit_code == 6
-    assert _node(routed, "ab-dc1").get("completed_at") is None
+    # The bare close is native: the carve-out ledger is a real file now, and
+    # the door refuses the node its row names.
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-dc1", "plan_path": plan},
+        carveouts=[{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
+                    "node": "ab-dc1"}],
+        pr_states={42: "MERGED"},
+    )
+    assert code == 6, out + err
+    assert _node(g, "ab-dc1").get("completed_at") is None
 
     assert CliRunner().invoke(app, ["done", "ab-dc2", "--pr", "42"]).exit_code == 6
     assert _node(routed, "ab-dc2").get("completed_at") is None
 
-    def _scan(entries, node_id=None):
-        return [rec.MergeDriftRecord(
-            node_id="ab-dc3", plan_path=str(plan), pr_number=42,
-            pr_url="https://github.com/o/r/pull/42", pr_state="MERGED",
-            merged_at="2026-08-09T00:00:00Z",
-        )]
-
-    monkeypatch.setattr(rec, "scan_merge_drift", _scan)
-    from fno.graph.cli import cli
-
-    payload = json.loads(CliRunner().invoke(cli, ["reconcile", "--json"]).output)
-    assert any(p["node_id"] == "ab-dc3" for p in payload["promise_unmet"])
-    assert all(c.get("node_id") != "ab-dc3" for c in payload["closed"])
-    assert _node(routed, "ab-dc3").get("completed_at") is None
 
 
 def test_condition_D_force_bypass_closes(routed, tmp_path, monkeypatch):
@@ -624,12 +955,16 @@ def test_condition_D_force_bypass_closes(routed, tmp_path, monkeypatch):
     _merged(monkeypatch, target="graph")
     from fno.cli import app
 
-    r = CliRunner().invoke(
-        app,
-        ["backlog", "done", "ab-dc4", "--force", "--reason", "cv-99ebc0f3 filed as x-rest"],
+    # The close is native: the force bypass is a door close with real fixtures.
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-dc4", "plan_path": plan},
+        "--force", "--reason", "cv-99ebc0f3 filed as x-rest",
+        carveouts=[{"id": "cv-99ebc0f3", "kind": "deferred", "need": "item 43",
+                    "node": "ab-dc4"}],
+        pr_states={42: "MERGED"},
     )
-    assert r.exit_code == 0, r.output
-    assert _node(routed, "ab-dc4").get("completed_at") is not None
+    assert code == 0, out + err
+    assert _node(g, "ab-dc4").get("completed_at") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -644,30 +979,38 @@ def test_force_bypass_closes_a_ship_shortfall(routed, tmp_path, monkeypatch):
     _merged(monkeypatch, target="graph")
     from fno.cli import app
 
-    r = CliRunner().invoke(
-        app, ["backlog", "done", "ab-prom01", "--force", "--reason", "second ship filed as ab-rest"]
+    # The close is native: the force bypass is a door close.
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-prom01", "plan_path": _shortfall_plan(tmp_path)},
+        "--force", "--reason", "second ship filed as ab-rest",
+        pr_states={42: "MERGED"},
     )
-    assert r.exit_code == 0, r.output
-    assert _node(routed, "ab-prom01").get("completed_at") is not None
+    assert code == 0, out + err
+    assert _node(g, "ab-prom01").get("completed_at") is not None
 
 
 def test_condition_c_through_cmd_done_refuses_then_closes(routed, tmp_path, monkeypatch):
+    """The bare close is native: C refuses short, then closes on full ships."""
     plan = _write_plan(tmp_path / "c.md", expected_url_count=3)
-    _seed(routed, [_base_node("ab-ship1", str(plan))])
     _merged(monkeypatch, target="graph")
     from fno.cli import app
 
     # One merged ref < 3 promised -> refused.
-    assert CliRunner().invoke(app, ["backlog", "done", "ab-ship1"]).exit_code == 6
-    assert _node(routed, "ab-ship1").get("completed_at") is None
+    code, out, err, g = _door_close(
+        tmp_path, {"id": "ab-ship1", "plan_path": str(plan)}, pr_states={42: "MERGED"},
+    )
+    assert code == 6, out + err
+    assert _node(g, "ab-ship1").get("completed_at") is None
 
     # Three merged refs satisfy the promise -> closes.
-    _seed(routed, [{
-        **_base_node("ab-ship3", str(plan)),
-        "additional_prs": [
-            {"number": 43, "url": "https://github.com/o/r/pull/43"},
-            {"number": 44, "url": "https://github.com/o/r/pull/44"},
-        ],
-    }])
-    assert CliRunner().invoke(app, ["backlog", "done", "ab-ship3"]).exit_code == 0
-    assert _node(routed, "ab-ship3").get("completed_at") is not None
+    code, out, err, g = _door_close(
+        tmp_path,
+        {"id": "ab-ship3", "plan_path": str(plan),
+         "additional_prs": [
+             {"number": 43, "url": "https://github.com/o/r/pull/43"},
+             {"number": 44, "url": "https://github.com/o/r/pull/44"},
+         ]},
+        pr_states={42: "MERGED", 43: "MERGED", 44: "MERGED"},
+    )
+    assert code == 0, out + err
+    assert _node(g, "ab-ship3").get("completed_at") is not None

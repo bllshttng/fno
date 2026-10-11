@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import sys
+import time
 
 import pytest
 
@@ -264,6 +266,24 @@ def test_batch_confinement_resolves_scope_once_and_refuses_unsafe_hits(
             scope_cwd="/scope",
             cross_project=False,
         )
+
+    # A full id is globally unique: the waiver fires with no flag and never
+    # even asks which project the caller sits in.
+    monkeypatch.setattr(
+        store_fallback,
+        "_project_identity",
+        lambda cwd: (_ for _ in ()).throw(AssertionError("must not be consulted")),
+    )
+    foreign = [store_fallback.StoreHit("codex", "session-foreign", "/foreign")]
+    assert (
+        store_fallback.confine_store_hits(
+            "979e1acc-e240-4af5-9998-0a74ec6c0683",
+            foreign,
+            scope_cwd="/scope",
+            cross_project=False,
+        )
+        == foreign
+    )
 
 
 # --- US2/US3: other harnesses ----------------------------------------------
@@ -535,9 +555,8 @@ def test_resume_refuses_registry_hit_that_collides_with_store_session(
     assert store_only_id in result.stderr
 
 
-@pytest.mark.parametrize("verb", ["stop", "rm"])
 def test_lifecycle_refuses_registry_name_that_collides_with_store_session(
-    _registry_home, verb
+    _registry_home,
 ):
     from fno.agents import dispatch
     from fno.agents.registry import AgentEntry, write_registry
@@ -556,45 +575,11 @@ def test_lifecycle_refuses_registry_name_that_collides_with_store_session(
     _write_codex_session(_registry_home, store_only_id)
 
     with pytest.raises(dispatch.DispatchAskError) as exc:
-        getattr(dispatch, f"{verb}_agent")("deadbeef")
+        dispatch.stop_agent("deadbeef")
 
     assert exc.value.exit_code == 2
     assert registered_id in str(exc.value)
     assert store_only_id in str(exc.value)
-
-
-def test_attach_refuses_registry_name_that_collides_with_store_session(
-    _registry_home, monkeypatch
-):
-    from fno.agents import dispatch
-    from fno.agents.registry import AgentEntry, write_registry
-
-    registered_id = "aaaaaaaa-1111-2222-3333-444455556666"
-    store_only_id = "bbbbbbbb-1111-2222-3333-0000deadbeef"
-    write_registry([
-        AgentEntry(
-            name="deadbeef",
-            cwd="/registered",
-            log_path="",
-            harness="claude",
-            harness_session_id=registered_id,
-            short_id="aaaaaaaa",
-        )
-    ])
-    _write_codex_session(_registry_home, store_only_id)
-    attached = []
-    monkeypatch.setattr(
-        "fno.agents.harnesses.claude.claude_attach",
-        lambda short, **_kw: attached.append(short) or 0,
-    )
-
-    with pytest.raises(dispatch.DispatchAskError) as exc:
-        dispatch.attach_agent("deadbeef")
-
-    assert exc.value.exit_code == 2
-    assert registered_id in str(exc.value)
-    assert store_only_id in str(exc.value)
-    assert attached == []
 
 
 def test_dispatch_send_refuses_registry_name_colliding_with_store_session(
@@ -625,7 +610,7 @@ def test_dispatch_send_refuses_registry_name_colliding_with_store_session(
     )
 
     with pytest.raises(dispatch.DispatchAskError) as exc:
-        dispatch.dispatch_send(
+        dispatch.dispatch_send(from_name="lead", 
             name="deadbeef",
             message="do not misroute",
             provider=None,
@@ -777,11 +762,14 @@ def test_resume_heals_an_unregistered_session(_registry_home):
 
     assert result.exit_code == 0
     assert result.exec_argv[0] == "codex"
-    # The unregistered session healed and rendered ITS uuid, as the last two
-    # tokens: codex's globals all precede the subcommand, so the positional
-    # stays at the tail.
-    assert result.exec_argv[-2:] == ["resume", CODEX_UUID]
-    assert any("writable_roots=" in arg for arg in result.exec_argv)
+    # The unregistered session healed and rendered ITS uuid, as the second-
+    # to-last positional before the daemon-attach flag the resume_strategy
+    # form always appends: codex's globals all precede the subcommand, so
+    # the positional stays right after "resume".
+    assert result.exec_argv[-4:] == ["resume", CODEX_UUID, "--remote", "unix://"]
+    # codex 0.156.1 refuses the writable_roots override on the form's
+    # --remote lane, so the grant is absent; the roots ride the turn carrier.
+    assert not any("writable_roots=" in arg for arg in result.exec_argv)
     assert result.exec_cwd == "/repo/two"
 
 
@@ -795,24 +783,6 @@ def test_resume_reports_ambiguity_rather_than_guessing(_registry_home):
 
     assert result.exit_code == 13
     assert "matches 2 sessions" in result.stderr
-
-
-def test_attach_heals_an_unregistered_claude_session(_registry_home, monkeypatch):
-    """AC1-HP: attach shells claude against exactly the resolved session."""
-    from fno.agents import dispatch
-
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-    attached = []
-    monkeypatch.setattr(dispatch, "is_provider_available", lambda _p: True)
-    monkeypatch.setattr(
-        "fno.agents.harnesses.claude.claude_attach",
-        lambda short, **_kw: attached.append(short) or 0,
-    )
-
-    result = dispatch.attach_agent("c655c326")
-
-    assert result.exit_code == 0
-    assert attached == ["c655c326"]
 
 
 def test_uppercase_uuid_still_resolves(_registry_home):
@@ -863,30 +833,6 @@ def test_resume_keeps_registry_ambiguity(_registry_home):
 
     assert result.exit_code == 13
     assert "is ambiguous across 2 agents" in result.stderr
-
-
-def test_attach_survives_an_unwritable_registry(_registry_home, monkeypatch):
-    """The healer returns a synthesized row when it cannot persist; attach must
-    use THAT row, not re-read the unchanged registry and report not-found."""
-    from fno.agents import dispatch
-
-    _write_claude_session(_registry_home, CLAUDE_UUID)
-
-    def _boom(**_kwargs):
-        raise OSError("read-only registry")
-
-    monkeypatch.setattr("fno.agents.registry.register_existing_session", _boom)
-    attached = []
-    monkeypatch.setattr(dispatch, "is_provider_available", lambda _p: True)
-    monkeypatch.setattr(
-        "fno.agents.harnesses.claude.claude_attach",
-        lambda short, **_kw: attached.append(short) or 0,
-    )
-
-    result = dispatch.attach_agent("c655c326")
-
-    assert result.exit_code == 0
-    assert attached == ["c655c326"]
 
 
 def test_invalid_utf8_transcript_does_not_crash(_registry_home):
@@ -1135,3 +1081,120 @@ def test_adopt_refuses_a_shared_store_mtime_as_a_session_stamp(monkeypatch):
     hit = store_fallback.StoreHit(harness="opencode", session_id=sid, cwd="/repo/one")
     assert store_fallback._transcript_last_write(hit) is None
     assert calls == ["opencode"], "the resolver must still be consulted"
+
+
+def test_adopt_stamps_the_newest_entry_not_the_mtime(tmp_path):
+    """``last_message_at`` is the newest TIMESTAMPED entry, not the file mtime.
+
+    Trailing untimestamped records keep the file young while the conversation
+    is silent (x-54cf), and ``row_contradiction`` cross-checks this stamp
+    against truth's ``last_event_at`` - two fields here is how that comparison
+    fires on a healthy row.
+    """
+    from fno.agents import store_fallback
+
+    sid = "0badc0de-54cf-0000-0000-000000000004"
+    _write_claude_session(tmp_path, sid)
+    transcript = tmp_path / "projects" / "-repo-one" / f"{sid}.jsonl"
+    entry_epoch = 1_700_000_000.0
+    stamp_txt = datetime.datetime.fromtimestamp(
+        entry_epoch, tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with transcript.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps({"type": "assistant", "sessionId": sid, "timestamp": stamp_txt,
+                        "message": {"role": "assistant",
+                                    "content": [{"type": "text", "text": "gone quiet"}]}})
+            + "\n"
+        )
+    hour_later = entry_epoch + 3600
+    os.utime(transcript, (hour_later, hour_later))
+
+    hit = store_fallback.StoreHit(harness="claude", session_id=sid, cwd="/repo/one")
+    entry = store_fallback.adopt_store_hit(hit, registry_path=tmp_path / "registry.json")
+
+    # The entry's stamp, not the mtime an hour fresher: mtime would read
+    # 2023-11-14T23:13:20Z.
+    assert entry.last_message_at == "2023-11-14T22:13:20Z"
+
+
+def test_raising_store_import_degrades_pid_and_resolution_survives(monkeypatch, tmp_path):
+    """A failing fno.inbox.store import degrades to pid=None; the verb completes.
+
+    The lazy import sat inside the try, so a raising import (module or dep
+    missing) made ``except ProjectIdentificationError:`` evaluate an unbound
+    local and the UnboundLocalError escaped the broad except, crashing stop.
+    """
+    monkeypatch.setitem(sys.modules, "fno.inbox.store", None)
+
+    assert store_fallback._project_identity("/tmp") == (None, None)
+
+    # Through the public path: an unresolvable scope identity skips
+    # confinement, so the store hit still heals instead of crashing.
+    _write_claude_session(tmp_path, CLAUDE_UUID)
+    entry = store_fallback.heal_from_harness_store("c655c326", scope_cwd=str(tmp_path))
+    assert entry is not None
+    assert entry.harness_session_id == CLAUDE_UUID
+
+
+# --- rm tombstone: a just-removed session is not re-adopted ------------------
+
+
+def _write_tombstone(root, harness, session_id, *, age_s=0):
+    """Stage the tombstone file `fno agents rm` writes beside the registry."""
+    removed_at = int(time.time()) - age_s
+    (root / "agents" / "rm_tombstones.json").write_text(
+        json.dumps(
+            [{"harness": harness, "session_id": session_id, "removed_at": removed_at}]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_recently_removed_codex_session_is_not_readopted(tmp_path):
+    _write_codex_session(tmp_path, CODEX_UUID)
+    _write_tombstone(tmp_path, "codex", CODEX_UUID, age_s=60)
+
+    with pytest.raises(AgentResolutionError) as err:
+        store_fallback.heal_from_harness_store(CODEX_UUID)
+
+    assert "removed" in str(err.value)
+    assert err.value.ambiguous
+    # The refusal left no row behind: no adopted duplicate blocks a later
+    # resume of the session the operator removed.
+    assert load_registry() == []
+
+
+def test_tombstone_for_another_session_does_not_block_adoption(tmp_path):
+    _write_codex_session(tmp_path, CODEX_UUID)
+    _write_tombstone(tmp_path, "codex", "d655c326-aaaa-bbbb-cccc-ddddeeeeffff")
+
+    entry = store_fallback.heal_from_harness_store(CODEX_UUID)
+
+    assert entry is not None
+    assert entry.origin == "adopted"
+
+
+def test_expired_tombstone_no_longer_blocks_adoption(tmp_path):
+    _write_codex_session(tmp_path, CODEX_UUID)
+    _write_tombstone(
+        tmp_path, "codex", CODEX_UUID, age_s=store_fallback.RM_TOMBSTONE_GRACE_SECS + 1
+    )
+
+    entry = store_fallback.heal_from_harness_store(CODEX_UUID)
+
+    assert entry is not None
+    assert entry.origin == "adopted"
+
+
+def test_tombstoned_short_token_still_refuses_ambiguity(tmp_path):
+    _write_claude_session(tmp_path, CLAUDE_UUID)
+    _write_codex_session(tmp_path, CODEX_UUID)
+    # Same 8-hex prefix -> both stores match the short token. The tombstone
+    # lives at the registration seam, so it does not disambiguate: the mixed
+    # answer is still refused, nothing is adopted, no duplicate can form.
+    _write_tombstone(tmp_path, "codex", CODEX_UUID)
+
+    with pytest.raises(AgentResolutionError):
+        store_fallback.heal_from_harness_store(CLAUDE_UUID[:8])
+    assert load_registry() == []

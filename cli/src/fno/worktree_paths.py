@@ -1,19 +1,10 @@
-"""Canonical worktree path resolution: ~/.fno/worktrees/{proj}-{slug}/.
+"""Worktree base, project id, and worktree policy resolution.
 
-Single source of truth for where worktrees live. Replaces the previous
-``.claude/worktrees/`` and ``~/conductor/workspaces/`` locations that
-were hardcoded in multiple files (ab-3180b3f4).
-
-The path shape is flat with a project prefix so a single
-``~/.fno/worktrees/`` directory holds every worktree across every
-project the user works in. ``project_id`` is the stable short identifier
-declared in ``.fno/settings.yaml`` under ``project.id`` (or
-derived from ``git remote get-url origin`` basename when absent).
-
-Both ``project_id`` and ``name`` are validated against
-``^[A-Za-z0-9][A-Za-z0-9._-]*$`` so path components can never escape
-the worktree root (defense-in-depth against the path-traversal class
-of bug previously flagged on PR #225).
+``project_id`` is the stable short identifier declared in
+``.fno/settings.yaml`` under ``project.id`` (or derived from
+``git remote get-url origin`` basename when absent). It is validated
+against ``^[A-Za-z0-9][A-Za-z0-9._-]*$`` so it can never escape a path
+root (defense-in-depth against the path-traversal class of bug).
 """
 from __future__ import annotations
 
@@ -135,41 +126,8 @@ def resolve_project_id(repo_root: Path | None = None) -> str:
     return _validate_component(pid, kind="project_id")
 
 
-def worktree_path(
-    name: str,
-    *,
-    project_id: str | None = None,
-    repo_root: Path | None = None,
-) -> Path:
-    """Return the canonical worktree path for ``name``.
-
-    Shape: ``~/.fno/worktrees/{project_id}-{name}/``.
-
-    ``project_id`` is resolved from settings/git when omitted. ``name``
-    is validated to be a safe path component.
-    """
-    _validate_component(name, kind="name")
-    if project_id is None:
-        project_id = resolve_project_id(repo_root)
-    else:
-        project_id = _validate_component(project_id, kind="project_id")
-    return worktree_base() / f"{project_id}-{name}"
-
-
-def legacy_worktree_path(name: str, repo_root: Path | None = None) -> Path:
-    """Return the OLD ``.claude/worktrees/{name}/`` path.
-
-    Kept so AC7 (back-compat) can detect a worktree that lives at the
-    old location and reuse its branch. Not used for new worktrees.
-    """
-    _validate_component(name, kind="name")
-    if repo_root is None:
-        repo_root = Path.cwd()
-    return repo_root / ".claude" / "worktrees" / name
-
-
 # ---------------------------------------------------------------------------
-# Worktree policy resolution (x-168b)
+# Worktree policy resolution
 # ---------------------------------------------------------------------------
 # Per-project opt-out from auto-isolation. The c3po incident: an Obsidian vault
 # whose working tree IS the product got auto-worktree'd. The gate reads this
@@ -196,9 +154,10 @@ class WorktreePolicy:
     policy: str   # one of VALID_WORKTREE_POLICIES (post harness degradation)
     base: Path    # target worktrees base (informational for a `never` result)
     project: str  # resolved project id (for the receipt line)
-    source: str   # "per-project" | "global" | "default"
+    source: str   # "per-project" | "global" | "default" | "env"
     requested_policy: str  # pre-degradation policy, for truthful receipts
     degraded: bool  # requested harness-native but substrate cannot allocate it
+    note: str = ""  # advisory the caller should surface (deprecations)
 
 
 def _flat_config_or_raise(settings_path: Path) -> Optional[dict]:
@@ -288,11 +247,15 @@ def resolve_worktree_policy(
 ) -> WorktreePolicy:
     """Resolve the worktree policy for ``repo_root`` under ``harness``.
 
-    Precedence: per-project ``work.workspaces.<slug>.projects[].worktree`` >
-    global ``worktree.policy`` > built-in ``harness-native``. A config file that
-    exists but fails to parse RAISES (fail closed); an absent key is not an
-    error. ``harness-native`` with no native mechanism for ``harness`` (anything
-    but claude in this PR) resolves to ``external``.
+    Precedence: ``FNO_WORKTREE_POLICY`` (how a dispatcher pins an undeclared
+    target's child) > per-project
+    ``work.workspaces.<slug>.projects[].worktree`` > global ``worktree.policy`` >
+    built-in ``harness-native``. A config file that exists but fails to parse
+    RAISES (fail closed); an absent key is not an error. ``harness-native``
+    degrades to ``external`` when the harness has no native mechanism (anything
+    but claude), when ``paths.worktrees_base`` is explicitly set (: the
+    key alone relocates; setting it AND ``worktree.policy`` is no longer
+    required), and under the deprecated ``worktree.use_conductor_canonical``.
     """
     repo_root = repo_root.resolve()
     from fno.config_io import _deep_merge
@@ -331,6 +294,10 @@ def resolve_worktree_policy(
             source = "global"
     if raw_policy is None:
         raw_policy = "harness-native"
+    # The env override sits above every config layer; the SAME validation below refuses it.
+    env_policy = os.environ.get("FNO_WORKTREE_POLICY")
+    if env_policy:
+        raw_policy, source = env_policy, "env"
 
     if not isinstance(raw_policy, str) or raw_policy not in VALID_WORKTREE_POLICIES:
         raise WorktreePolicyError(
@@ -339,15 +306,30 @@ def resolve_worktree_policy(
         )
 
     policy = raw_policy
+    base = None
+    note = ""
     if policy == "harness-native" and harness not in _NATIVE_WORKTREE_HARNESSES:
         policy = "external"
-
-    degraded = policy != raw_policy
-    base = (
-        _fallback_worktrees_base_from(merged)
-        if degraded
-        else _worktrees_base_from(merged)
-    )
+        base = _fallback_worktrees_base_from(merged)
+    if policy == "harness-native":
+        # An explicit paths.worktrees_base is an external allocator choice on
+        # its own: setting the key relocates, no second key needed. Before
+        # the hooks read the raw key and relocated while this resolver
+        # (and `worktree ensure` with it) ignored it unless policy was also
+        # set - two location answers that disagreed.
+        explicit = _explicit_worktrees_base(merged)
+        if explicit is not None:
+            policy = "external"
+            base = explicit
+        elif _conductor_canonical(merged):
+            note = (
+                "worktree.use_conductor_canonical is DEPRECATED; set "
+                "config.paths.worktrees_base instead."
+            )
+            policy = "external"
+            base = _CONDUCTOR_BASE
+    if base is None:
+        base = _worktrees_base_from(merged)
 
     return WorktreePolicy(
         policy=policy,
@@ -355,8 +337,52 @@ def resolve_worktree_policy(
         project=project_id,
         source=source,
         requested_policy=raw_policy,
-        degraded=degraded,
+        degraded=policy != raw_policy,
+        note=note,
     )
+
+
+def _repo_identity(path: Path) -> Optional[tuple[Path, Path]]:
+    """``(top, common dir)``; None outside a git repo. Config reads the top; identity is the common dir."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel", "--git-common-dir"],
+            capture_output=True, text=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+    outs = proc.stdout.split()
+    top = Path(outs[0]).resolve()
+    common = Path(outs[1])
+    common = common if common.is_absolute() else top / common
+    return top, common.resolve()
+
+
+UNDECLARED_REPO_RECEIPT = (
+    "worktree=never (undeclared repo; declare work.workspaces.<slug>.projects[].worktree)"
+)
+
+
+def undeclared_dispatch_pin(
+    target_cwd: Path, caller_cwd: Path, harness: Optional[str]
+) -> dict[str, str]:
+    """The env a dispatcher exports for a spawn into an UNDECLARED repo.
+
+    Identity is the git common dir, so the caller's own worktree is not
+    foreign. ``source == "default"`` means nothing anywhere named the target
+    repo; pin ``never`` rather than write config into somebody else's project.
+    """
+    target = _repo_identity(target_cwd)
+    caller = _repo_identity(caller_cwd)
+    if target is None or caller is None or target[1] == caller[1]:
+        return {}
+    try:
+        pol = resolve_worktree_policy(target[0], harness)
+    except Exception:  # noqa: BLE001 - undecidable target keeps the ambient posture
+        return {}
+    if pol.source != "default":
+        return {}
+    return {"FNO_WORKTREE_POLICY": "never"}
 
 
 def _worktrees_base_from(merged: dict) -> Path:
@@ -369,14 +395,38 @@ def _worktrees_base_from(merged: dict) -> Path:
     leak a dispatcher repo's paths.worktrees_base onto a foreign repo. ponytail:
     does not expand ``{project}``-style templates (unused for a base dir).
     """
-    paths_cfg = merged.get("paths")
-    raw = paths_cfg.get("worktrees_base") if isinstance(paths_cfg, dict) else None
-    if isinstance(raw, str) and raw:
-        return Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+    explicit = _explicit_worktrees_base(merged)
+    if explicit is not None:
+        return explicit
     state = merged.get("state_dir")
     if not (isinstance(state, str) and state):
         state = "~/.fno/"
     return (Path(os.path.expandvars(os.path.expanduser(state))) / "worktrees").resolve()
+
+
+def _explicit_worktrees_base(merged: dict) -> Optional[Path]:
+    """The explicitly configured paths.worktrees_base, or None when unset.
+
+    None - not the state-dir fallback - is what tells the resolver an
+    explicit relocation was chosen, so harness-native can degrade to
+    external on it.
+    """
+    paths_cfg = merged.get("paths")
+    raw = paths_cfg.get("worktrees_base") if isinstance(paths_cfg, dict) else None
+    if isinstance(raw, str) and raw:
+        return Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+    return None
+
+
+# The deprecated use_conductor_canonical relocation target (kept for
+# back-compat; the resolver emits the deprecation note when it fires).
+_CONDUCTOR_BASE = Path("~/conductor/workspaces").expanduser().resolve()
+
+
+def _conductor_canonical(merged: dict) -> bool:
+    wt = merged.get("worktree")
+    raw = wt.get("use_conductor_canonical") if isinstance(wt, dict) else None
+    return raw is True or raw == "true"
 
 
 def _fallback_worktrees_base_from(merged: dict) -> Path:

@@ -22,6 +22,43 @@ fi
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
+
+# Run the carrier from a COPY, never from the real checkout.
+#
+# The carrier caches at `$SCRIPT_DIR/../.fno/.worktree-stranded-cache.json` and
+# claims its refresh window at `../.fno/.worktree-stranded-refresh-stamp`. Both
+# paths are built from the script's own location, so running the repo's copy
+# writes those two files into the repo's own `.fno`. On a developer box that is
+# the live checkout state root. The poisoned-HOME canary caught exactly this on
+# CI, as ADDED under `<checkout>/.fno`, which is what it is for.
+#
+# Copying is the fix rather than excluding the two names from the canary: they
+# are a hand-built `<root>/.fno/<file>` write, which is the class the canary
+# exists to find, not the instrument's own exhaust.
+#
+# hooks/ carries the carrier and helpers/; scripts/lib/ carries the
+# with-timeout and reconcile-throttle helpers the carrier sources.
+# `.claude-plugin/` comes along so session-start.sh still resolves a plugin
+# root and behaves as it does in the real tree.
+CARRIER_ROOT="$TMP_DIR/carrier-root"
+mkdir -p "$CARRIER_ROOT/scripts"
+cp -R "$REPO_ROOT/hooks" "$CARRIER_ROOT/hooks"
+cp -R "$REPO_ROOT/scripts/lib" "$CARRIER_ROOT/scripts/lib"
+cp -R "$REPO_ROOT/.claude-plugin" "$CARRIER_ROOT/.claude-plugin" 2>/dev/null || true
+# Every hook the test executes moves to the copy, not just the carrier:
+# session-start.sh chains the same carrier, so leaving it pointed at the real
+# tree writes the two files anyway. Measured: repointing the carrier alone left
+# both present in the checkout.
+CARRIER="$CARRIER_ROOT/hooks/worktree-peers-session-start.sh"
+CODEX_WRAPPER="$CARRIER_ROOT/hooks/session-start.sh"
+HEARTBEAT="$CARRIER_ROOT/hooks/claim-heartbeat.sh"
+for _copied in "$CARRIER" "$CODEX_WRAPPER" "$HEARTBEAT"; do
+  if [[ ! -f "$_copied" ]]; then
+    fail "hook copy must exist under the sandbox root: $_copied"
+    exit 1
+  fi
+done
+
 PROJECT="$TMP_DIR/project"
 git init -q "$PROJECT"
 PROJECT_GIT_DIR="$(git -C "$PROJECT" rev-parse --absolute-git-dir)"
@@ -304,14 +341,38 @@ make_fno_shim '{"recorded":false,"record_reason":"lock-timeout"}'
 MISSING_THROTTLE_ROOT="$TMP_DIR/missing-throttle-root"
 MISSING_THROTTLE_LOG="$TMP_DIR/missing-throttle-fno.log"
 MISSING_THROTTLE_BIN="$TMP_DIR/missing-throttle-bin"
-mkdir -p "$MISSING_THROTTLE_ROOT/hooks/helpers" "$MISSING_THROTTLE_ROOT/.fno" "$MISSING_THROTTLE_BIN"
+mkdir -p "$MISSING_THROTTLE_ROOT/hooks/helpers" "$MISSING_THROTTLE_ROOT/.fno" \
+  "$MISSING_THROTTLE_ROOT/scripts/lib" "$MISSING_THROTTLE_BIN"
 cp "$CARRIER" "$MISSING_THROTTLE_ROOT/hooks/worktree-peers-session-start.sh"
+# The carrier resolves its stranded dir through the paths stub under
+# FNO_TEST_HERMETIC=1, which the smoke runner sets and a bare `bash` run of
+# this file does not. Give the root its own stub and its own HOME so the cache
+# below is at the resolved path either way. Without both, this case passed
+# locally and failed on CI, because it was relying on the carrier falling back
+# to the checkout state root when the stub was missing, which is exactly the
+# fallback that got removed.
+# Asserted, not swallowed. A silent copy failure leaves the stub absent, the
+# carrier then resolves its dir through the fallback below rather than the
+# stub, and this case quietly measures the wrong branch while still reporting
+# a pass on the unpinned lane.
+if ! cp "$REPO_ROOT/scripts/lib/paths.sh" "$MISSING_THROTTLE_ROOT/scripts/lib/paths.sh"; then
+  fail "missing throttle setup: could not stage paths.sh, so this case would measure the fallback branch instead of the pinned one"
+fi
 cat > "$MISSING_THROTTLE_ROOT/hooks/helpers/worktree-live-peers.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
 chmod +x "$MISSING_THROTTLE_ROOT/hooks/helpers/worktree-live-peers.sh"
-cat > "$MISSING_THROTTLE_ROOT/.fno/.worktree-stranded-cache.json" <<'EOF'
+# Seed the cache at the spelling this run's branch reads: the hermetic lane
+# keeps the flat root layout, the ambient lane moved it under state/.
+if [[ "${FNO_TEST_HERMETIC:-}" == "1" ]]; then
+  mkdir -p "$MISSING_THROTTLE_ROOT/.fno"
+  MISSING_THROTTLE_CACHE="$MISSING_THROTTLE_ROOT/.fno/.worktree-stranded-cache.json"
+else
+  mkdir -p "$MISSING_THROTTLE_ROOT/.fno/state"
+  MISSING_THROTTLE_CACHE="$MISSING_THROTTLE_ROOT/.fno/state/.worktree-stranded-cache.json"
+fi
+cat > "$MISSING_THROTTLE_CACHE" <<'EOF'
 {"rows":[{"class":"UNKNOWN","node":"x-test","path":"/tmp/test-worktree"}]}
 EOF
 cat > "$MISSING_THROTTLE_BIN/fno" <<'EOF'
@@ -322,6 +383,7 @@ EOF
 chmod +x "$MISSING_THROTTLE_BIN/fno"
 missing_throttle_out="$(
   FNO_STRANDED_LOG="$MISSING_THROTTLE_LOG" PATH="$MISSING_THROTTLE_BIN:$PATH" \
+  HOME="$MISSING_THROTTLE_ROOT" \
     bash "$MISSING_THROTTLE_ROOT/hooks/worktree-peers-session-start.sh" 2>/dev/null
 )"
 for _ in 1 2 3 4 5 6 7 8 9 10; do
@@ -384,6 +446,71 @@ if [[ "$never_refused" -eq 1 ]]; then
   pass "Edit, Write, and Bash never refuse across every stamp state"
 else
   fail "an Edit, Write, or Bash activity payload returned non-zero"
+fi
+
+# Checkout staleness lines (AC2-*). A stub fno-agents keeps this test
+# independent of whether CI built the Rust change; the verb's own unit tests
+# cover the answer. The carrier is pointed at a temp main checkout through
+# CLAUDE_PROJECT_DIR, the same resolution the real hook gets from Claude.
+CHK_PROJECT="$TMP_DIR/chk-project"
+git init -q "$CHK_PROJECT"
+git -C "$CHK_PROJECT" commit -q --allow-empty -m init
+CHK_WT="$TMP_DIR/chk-worktree"
+git -C "$CHK_PROJECT" worktree add -q "$CHK_WT" -b chk-wt-branch
+CHK_SHIM_DIR="$TMP_DIR/fno-agents-shim"
+make_fno_agents_shim() {
+  mkdir -p "$CHK_SHIM_DIR"
+  cat >"$CHK_SHIM_DIR/fno-agents" <<EOF
+#!/usr/bin/env bash
+cat >/dev/null 2>&1 || true
+printf '%s' '$1'
+EOF
+  chmod +x "$CHK_SHIM_DIR/fno-agents"
+}
+run_carrier_at() {
+  printf '{"cwd":"%s","session_id":"self-session"}' "$1" \
+    | FNO_HOME="$TMP_DIR/fno-home" PATH="$CHK_SHIM_DIR:$FNO_SHIM_DIR:$PATH" \
+        CLAUDE_PROJECT_DIR="$1" bash "$CARRIER" 2>/dev/null
+}
+
+reset_live
+touch "$LIVE_DIR/self-session"
+make_fno_agents_shim '{"default_branch":"main","head_branch":"main","behind":3,"blocking":["a.sh"],"dirty":["a.sh"]}'
+out="$(run_carrier_at "$CHK_PROJECT")"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"3 commit(s) behind origin/main"* \
+      && "$out" == *"[fno-checkout-behind]"* \
+      && "$out" == *"a.sh"* && "$out" == *"[fno-checkout-ff-blocked]"* ]]; then
+  pass "stale main checkout surfaces behind + fast-forward-blocked lines"
+else
+  fail "checkout staleness: rc=$rc out=[$out]"
+fi
+
+# A linked worktree is behind by design; the carrier stays silent about it.
+out="$(run_carrier_at "$CHK_WT")"; rc=$?
+if [[ "$rc" -eq 0 && "$out" != *"[fno-checkout-behind]"* \
+      && "$out" != *"[fno-checkout-ff-blocked]"* ]]; then
+  pass "linked worktree never surfaces checkout staleness lines"
+else
+  fail "worktree silence: rc=$rc out=[$out]"
+fi
+
+# behind 0: no line. fno-agents absent from PATH: silent and still exit 0.
+make_fno_agents_shim '{"default_branch":"main","head_branch":"main","behind":0,"blocking":[]}'
+out="$(run_carrier_at "$CHK_PROJECT")"; rc=$?
+if [[ "$rc" -eq 0 && "$out" != *"[fno-checkout-behind]"* \
+      && "$out" != *"[fno-checkout-ff-blocked]"* ]]; then
+  pass "behind 0 stays silent"
+else
+  fail "behind 0: rc=$rc out=[$out]"
+fi
+out="$(printf '{"cwd":"%s","session_id":"self-session"}' "$CHK_PROJECT" \
+  | FNO_HOME="$TMP_DIR/fno-home" PATH="$FNO_SHIM_DIR:$PATH" \
+      CLAUDE_PROJECT_DIR="$CHK_PROJECT" bash "$CARRIER" 2>/dev/null)"; rc=$?
+if [[ "$rc" -eq 0 && "$out" != *"[fno-checkout-behind]"* \
+      && "$out" != *"[fno-checkout-ff-blocked]"* ]]; then
+  pass "missing fno-agents stays silent and exits zero"
+else
+  fail "missing fno-agents: rc=$rc out=[$out]"
 fi
 
 printf '[worktree-peers] %d passed, %d failed\n' "$PASS" "$FAIL"

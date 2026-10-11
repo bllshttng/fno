@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from fno.events.store_client import read_committed_lines
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SKILL_MD = _REPO_ROOT / "skills" / "review" / "SKILL.md"
 _EMIT = _REPO_ROOT / "skills" / "review" / "scripts" / "emit-attestation.sh"
@@ -93,10 +95,12 @@ def _head(repo: Path) -> str:
 
 
 def _events(repo: Path) -> list[dict]:
-    path = repo / ".fno" / "events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    """The journal the producers resolve (the repo's space, via the accessor);
+    a legacy checkout path goes quiet once a writer migrates it."""
+    from fno.paths import project_log
+
+    path = project_log("events.jsonl", project_root=repo)
+    return [json.loads(ln) for ln in read_committed_lines(path) if ln.strip()]
 
 
 def _base_env() -> dict:
@@ -338,8 +342,8 @@ def test_subagent_stop_with_findings_emits_failed_attestation(tmp_path: Path) ->
     assert data["head_sha"] == head
     assert data["findings_blocking"] == 1
     assert data["findings_nonblocking"] == 0
-    assert "classified 1 finding(s): 1 blocking, 0 non-blocking" in r.stdout
-    assert f"reviewed head {head}" in r.stdout
+    assert "classified 1 finding(s): 1 blocking, 0 non-blocking" in r.stderr
+    assert f"reviewed head {head}" in r.stderr
 
 
 _SURFACES = {
@@ -600,7 +604,7 @@ def test_unfinished_work_events_build_and_land(tmp_path, monkeypatch):
             },
         )
 
-    rows = [json.loads(ln) for ln in events_file.read_text().splitlines() if ln.strip()]
+    rows = [json.loads(ln) for ln in read_committed_lines(events_file) if ln.strip()]
     types = [r["type"] for r in rows]
     assert "watchdog_unfinished_work_scan" in types
     assert "watchdog_unfinished_work_finding" in types

@@ -3,8 +3,6 @@ rename, carrying the ProviderBudget record, with the legacy spelling parsing
 forever and ONE deprecation line."""
 from __future__ import annotations
 
-import pytest
-
 
 def test_legacy_spelling_parses_with_deprecation_line(capsys):
     from fno.config import AgentsBlock
@@ -48,6 +46,38 @@ def test_modern_spelling_is_silent(capsys):
     assert capsys.readouterr().err == ""
 
 
+def test_retired_trigger_parses_warns_once_and_is_ignored(caplog):
+    """AC7-HP (x-7783): agents.max_load_per_cpu still parses, prints ONE
+    deprecation line naming the decider, and nothing coerces the value - the
+    key is ignored, not clamped."""
+    import logging
+
+    from fno import config as config_mod
+    from fno.config import AgentsBlock
+
+    # The once-guard is process-global: an earlier test in the same run may
+    # have consumed this key's single warning. Reset it for determinism.
+    config_mod._DEPRECATED_WARNED.discard("agents.max_load_per_cpu")
+    with caplog.at_level(logging.WARNING, logger="fno.config"):
+        block = AgentsBlock(max_load_per_cpu=10.0)
+    assert block.max_load_per_cpu == 10.0
+    warnings = [r.message for r in caplog.records if "max_load_per_cpu" in str(r.message)]
+    assert len(warnings) == 1
+    assert "max_fleet_cpu_share" in warnings[0]
+    assert "delete the key" in warnings[0]
+
+
+def test_retired_backstop_key_is_no_longer_modeled():
+    """x-7783 LD2 removed the trigger/backstop pair; x-c588 retired the
+    backstop key itself. It no longer parses onto the model: a config that
+    still sets it is named as unmodeled on every load and ignored."""
+    from fno.config import AgentsBlock
+
+    block = AgentsBlock(max_load_per_cpu=2.0, hard_max_load_per_cpu=1.0)
+    assert block.max_load_per_cpu == 2.0
+    assert getattr(block, "hard_max_load_per_cpu", None) is None
+
+
 def test_provider_limits_table_reads_both_spellings():
     # The ONE accessor every reader routes through: new spelling wins, the
     # legacy one still reads (a pre-rename embedded settings object), and a
@@ -63,43 +93,6 @@ def test_provider_limits_table_reads_both_spellings():
     assert provider_limits_table(SimpleNamespace()) == {}
 
 
-def test_gate_reads_provider_limits_not_the_legacy_leaf(monkeypatch, capsys):
-    """AC3-HP: the spawn gate applies the provider_limits cap exactly as
-    max_lanes was applied before the rename. Proven on the provider-cap
-    terminal: a zai-routed spawn reaches the cap read (and its refusal) only
-    through provider_limits."""
-    from fno.agents import spawn_gate
-    from fno.config import ProviderBudget
-
-    def fake_run_gate_settings():
-        class _A:
-            max_live = 3
-            min_free_gb = 0.0
-            max_load_per_cpu = 0.0
-            provider_limits = {"zai": ProviderBudget(lanes=5, subagents=1)}
-
-            def __getattr__(self, name):  # any legacy reader must miss loudly
-                raise AttributeError(name)
-
-        class _S:
-            agents = _A()
-
-        return _S()
-
-    monkeypatch.setattr("fno.config.load_settings", fake_run_gate_settings)
-    monkeypatch.delenv("FNO_SPAWN_GATE", raising=False)
-    # A census that cannot answer forces the provider-cap arm to refuse
-    # immediately - the arm that read provider_limits on the way in.
-    def broken_census():
-        raise spawn_gate.ProviderCountUnavailable("count unavailable")
-
-    monkeypatch.setattr(spawn_gate, "census", broken_census)
-    with pytest.raises(SystemExit) as exc:
-        spawn_gate.run_gate("w", "bg", route_provider="zai")
-    assert exc.value.code == spawn_gate.EXIT_PROVIDER_CAP
-    assert "provider zai, cap 5" in capsys.readouterr().err
-
-
 def test_no_second_agents_leaf_named_max_lanes():
     """AC4-EDGE: after this change, every surviving `max_lanes` leaf belongs to
     `parallel.max_lanes` (the epic-advance cap, LD2) or the legacy alias."""
@@ -107,3 +100,6 @@ def test_no_second_agents_leaf_named_max_lanes():
 
     agents_fields = {f for f in AgentsBlock.model_fields if f.endswith("max_lanes")}
     assert agents_fields == set(), f"agents.* grew a second max_lanes leaf: {agents_fields}"
+
+# The gate's own provider_limits read moved into the ONE Rust gate
+# (spawn_gate_lanes::provider_lane_caps); its cases live there.

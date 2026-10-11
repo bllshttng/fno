@@ -1,6 +1,6 @@
 """Fuzzy id and domain matching for graph entries.
 
-Near-pure: callers pass already-loaded entries (from `read_graph()`) and get
+Near-pure: callers pass already-loaded entries (from the graph read) and get
 back a discriminated result dataclass the CLI can format into a user-facing
 message. The one exception is `resolve_node`'s bare-hex tier, which consults
 the fail-open, lru-cached `node_id_prefix()` (file I/O) to re-prefix; the import
@@ -43,7 +43,7 @@ _BARE_HEX_RE = re.compile(r"[0-9a-f]{4,8}")
 _KNOWN_BRANCH_PREFIXES = (
     "feat/",
     "feature/",
-    "fno/",  # x-ff83 W3: dispatched branches are <prefix>/<slug>-<node> (default fno)
+    "fno/",  # W3: dispatched branches are <prefix>/<slug>-<node> (default fno)
     "fix/",
     "hotfix/",
     "bugfix/",
@@ -196,6 +196,12 @@ def resolve_id(
     """
     q = (query or "").strip()
 
+    # A dash-leading token is a leaked flag, never a node id (the grammar is
+    # lowercase-led): refuse before any graph lookup so it cannot exact-hit or
+    # substring-match a title.
+    if q.startswith("-"):
+        return IdMatch(kind="none", note=f"flag-shaped query '{q}' is not a node id")
+
     # Exact id match is format-agnostic (any configured prefix/width AND legacy
     # ab-): a graph lookup, not a regex, so a graph holding mixed-format ids all
     # resolves. Exact equality wins regardless of suffix shape - test fixtures
@@ -238,7 +244,7 @@ def resolve_id(
         # title-fuzzy path below: an "ab-" prefix is a strong user signal
         # that they want id resolution, and silently matching such a query
         # against a title that happens to contain the literal substring
-        # would be a hard-to-diagnose wrong match (e.g. 'ab-9728b70b,'
+        # would be a hard-to-diagnose wrong match (e.g. 'x-aaaa,'
         # with a trailing comma fuzzying onto an unrelated entry).
         return IdMatch(
             kind="none",
@@ -280,7 +286,7 @@ def resolve_id(
     )
 
 
-# -- slug + bare-hex resolution (ab-f82e8083) --------------------------------
+# -- slug + bare-hex resolution --------------------------------
 #
 # resolve_node implements the deterministic resolution tiers 1-3 for a spawn /
 # lookup target: exact ab-id, exact slug, bare-8-hex re-prefix. It is the
@@ -304,6 +310,8 @@ def resolve_node(query: Optional[str], entries: list[Entry]) -> IdMatch:
     q = (query or "").strip()
     if not q:
         return IdMatch(kind="none", note="empty query")
+    if q.startswith("-"):
+        return IdMatch(kind="none", note=f"flag-shaped query '{q}' is not a node id")
 
     # Tier 1: exact ab-id (canonical, unchanged behavior).
     for e in entries:
@@ -327,7 +335,7 @@ def resolve_node(query: Optional[str], entries: list[Entry]) -> IdMatch:
             )
 
     # Tier 3: bare hex -> re-prefix and match exactly. Try the configured node
-    # id prefix first (so a repo on `x-`/4hex seeds `4af4` -> `x-4af4`), then
+    # id prefix first (so a repo on `x-`/4hex seeds `4af4` -> ``), then
     # legacy `ab-` for back-compat with mixed-format graphs. Configured-first
     # makes an ambiguous hex (a key under both) resolve deterministically.
     if _BARE_HEX_RE.fullmatch(q):

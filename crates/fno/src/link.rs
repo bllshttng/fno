@@ -1,4 +1,4 @@
-//! URL detection and open-safety for clickable links in mux panes (x-a2d0).
+//! URL detection and open-safety for clickable links in mux panes.
 //!
 //! Two sources feed the same model. An app can declare a link explicitly with
 //! OSC 8, which `alacritty_terminal` already parses into `Cell::hyperlink()`;
@@ -153,6 +153,366 @@ pub fn for_notice(url: &str) -> String {
     format!("{head}…")
 }
 
+/// The pseudo scheme a tapped `@sender` header token resolves to. Never
+/// openable: the client intercepts it before [`open_url`], and [`is_openable`]
+/// rejects it, so it can never reach the platform opener.
+pub const SENDER_SCHEME: &str = "fno-sender:";
+
+/// The pseudo scheme for a tapped `fmail-` message id. Like the sender
+/// pseudo URI, it is intercepted by the mux client and never reaches an OS
+/// opener.
+pub const MESSAGE_SCHEME: &str = "fno-message:";
+
+/// The pseudo scheme for a clicked `@handle` token. Intercepted by the mux
+/// client like [`SENDER_SCHEME`] and [`MESSAGE_SCHEME`]: it opens the
+/// Messages tab filtered to the handle, never a platform opener.
+pub const HANDLE_SCHEME: &str = "fno-handle:";
+
+/// The pseudo scheme for a clicked bare file path (`crates/fno/src/link.rs:42`
+/// printed in a pane). The URI carries the CANONICAL absolute path plus an
+/// optional `:<line>` tail. It is intercepted by the mux client - open the
+/// file today, hand it to the file viewer when that lands - and
+/// [`OPENABLE_SCHEMES`] stays at two, so it can never reach the platform
+/// opener through the pane-sourced door.
+pub const FILE_SCHEME: &str = "fno-file:";
+
+/// Parse an exact [`FILE_SCHEME`] URI into its canonical path and optional
+/// line. Strict, because it is the trust gate on pane-sourced bytes: the path
+/// must be absolute and free of whitespace or control characters, or the URI
+/// resolves nothing.
+pub fn file_uri_parts(uri: &str) -> Option<(PathBuf, Option<u32>)> {
+    let rest = uri.strip_prefix(FILE_SCHEME)?;
+    let (path, line) = match rest.rfind(':') {
+        Some(pos) => match rest[pos + 1..].parse::<u32>() {
+            Ok(n) => (&rest[..pos], Some(n)),
+            Err(_) => (rest, None),
+        },
+        None => (rest, None),
+    };
+    if !Path::new(path).is_absolute()
+        || path.is_empty()
+        || path.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    Some((PathBuf::from(path), line))
+}
+
+/// True when `s` is a well-formed [`FILE_SCHEME`] URI.
+pub fn is_file_uri(s: &str) -> bool {
+    file_uri_parts(s).is_some()
+}
+
+/// Characters that may appear inside a bare-path candidate: everything but
+/// whitespace, controls, and the punctuation that prose and shells wrap paths
+/// in. `:` is admitted so `path:line` scans as one run; the line is split
+/// back off before the candidate is resolved. Permissiveness is safe here
+/// because a candidate only linkifies if it EXISTS on disk - a prose token
+/// dies at the stat, not at the scan.
+fn is_path_char(c: char) -> bool {
+    !c.is_whitespace() && !c.is_control() && !"<>()[]{}\"'`,;!?&|*".contains(c)
+}
+
+/// One detected path: its half-open CHAR range in the line plus the
+/// [`FILE_SCHEME`] URI it resolves to (canonical path, optional `:<line>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathLink {
+    pub start: usize,
+    pub end: usize,
+    pub uri: String,
+}
+
+/// Every bare path in `text` that exists, resolved against the pane's cwd.
+/// The impure twin of [`find_urls`]: each candidate is a filesystem probe,
+/// which is the whole point - ambiguity is settled by existence, not by more
+/// syntax. Only tokens containing a separator (`/`, or a `~/` prefix)
+/// qualify, so ordinary prose words never reach the stat.
+pub fn find_paths(text: &str, cwd: &Path) -> Vec<PathLink> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    find_paths_with(text, cwd, home.as_deref(), |p| {
+        std::fs::canonicalize(p).ok()
+    })
+}
+
+/// [`find_paths`] with the filesystem and HOME injected, mirroring the
+/// `open_url_with` seam: detection is assertable without touching the real
+/// tree, and the one real-filesystem test pins the probe's contract
+/// (canonicalize = existence + symlink resolution in one call).
+pub fn find_paths_with(
+    text: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    probe: impl Fn(&Path) -> Option<PathBuf>,
+) -> Vec<PathLink> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // A candidate starts at a path char that is not continuing a run.
+        if !is_path_char(chars[i]) || i > 0 && is_path_char(chars[i - 1]) {
+            i += 1;
+            continue;
+        }
+        let mut end = i + 1;
+        while end < chars.len() && is_path_char(chars[end]) {
+            end += 1;
+        }
+        let trimmed = i + trim_tail(&chars[i..end]);
+        let raw: String = chars[i..trimmed].iter().collect();
+        let start = i;
+        i = end;
+        match resolve_path_candidate(&raw, cwd, home, &probe) {
+            Some((path, line)) => out.push(PathLink {
+                start,
+                end: trimmed,
+                uri: file_uri(&path, line),
+            }),
+            None => continue,
+        }
+    }
+    out
+}
+
+/// Resolve one trimmed candidate to a canonical path plus optional line.
+/// `None` when it is prose: no separator, a `~user/` form, or a probe miss.
+fn resolve_path_candidate(
+    raw: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    probe: &impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<(PathBuf, Option<u32>)> {
+    // `path:line`: the valuable half of the feature. The tail after the LAST
+    // colon must be all digits to count, so `a/b:c` stays a path.
+    let (path_str, line) = match raw.rfind(':') {
+        Some(pos) => match raw[pos + 1..].parse::<u32>() {
+            Ok(n) => (&raw[..pos], Some(n)),
+            Err(_) => (raw, None),
+        },
+        None => (raw, None),
+    };
+    // The crate's one tilde-expansion helper, shared with the obsidian vault
+    // root. Only `~/rest` expands; a bare `~` is prompt text more often than
+    // a path, and `~user/` passes through to die at the probe. With no HOME
+    // the helper passes it through and the probe rejects the literal.
+    let expanded = if path_str.starts_with("~/") {
+        PathBuf::from(crate::connections_view::expand_tilde(
+            path_str,
+            home.map(Path::as_os_str),
+        ))
+    } else if Path::new(path_str).is_absolute() {
+        PathBuf::from(path_str)
+    } else {
+        if !path_str.contains('/') {
+            return None;
+        }
+        cwd.join(path_str)
+    };
+    // `./` and `../` need no lexical normalizing: the probe resolves them,
+    // and the URI carries the canonical answer.
+    let canonical = probe(&expanded)?;
+    Some((canonical, line))
+}
+
+/// Build a [`FILE_SCHEME`] URI for a canonical path and optional line.
+pub fn file_uri(path: &Path, line: Option<u32>) -> String {
+    let mut uri = format!("{FILE_SCHEME}{}", path.display());
+    if let Some(line) = line {
+        uri.push_str(&format!(":{line}"));
+    }
+    uri
+}
+
+/// True when `s` is exactly the sender pseudo URI for a `@handle`: scheme
+/// plus a handle-shaped name, nothing else. The handle names the sender row
+/// to open; the `fmail-` id travels on the message URI instead.
+pub fn is_sender_uri(s: &str) -> bool {
+    s.strip_prefix(SENDER_SCHEME).is_some_and(is_handle_name)
+}
+
+/// The name grammar every `@handle`-shaped URI payload follows: a short run
+/// of letters, digits, `_` and `-`, led by a letter or digit. Shared by the
+/// handle and sender validators so neither can smuggle a path or whitespace
+/// into a later opener. A header token the grammar rejects (a retired
+/// `a/b` name, say) spans no sender URI.
+pub fn is_handle_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The message id carried by an exact `fno-message:` pseudo URI.
+pub fn message_id_from_uri(s: &str) -> Option<&str> {
+    let id = s.strip_prefix(MESSAGE_SCHEME)?;
+    let hex = id.strip_prefix("fmail-")?;
+    (hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+}
+
+pub fn is_message_uri(s: &str) -> bool {
+    message_id_from_uri(s).is_some()
+}
+
+/// The bare handle carried by an exact `fno-handle:` pseudo URI.
+pub fn handle_from_uri(s: &str) -> Option<&str> {
+    let name = s.strip_prefix(HANDLE_SCHEME)?;
+    is_handle_name(name).then_some(name)
+}
+
+pub fn is_handle_uri(s: &str) -> bool {
+    handle_from_uri(s).is_some()
+}
+
+/// True for the pseudo URIs the mux client intercepts (message, sender,
+/// handle). These are the URIs a click claims even from a pane whose app
+/// negotiated mouse reporting: the tokens mean what fno says, so the mux
+/// answers them itself and forwards nothing.
+pub fn is_fno_uri(s: &str) -> bool {
+    is_message_uri(s) || is_sender_uri(s) || is_handle_uri(s)
+}
+
+/// The `@name` span of a delivered-mail header line in pane text, as a
+/// half-open CHAR range plus the bare handle and the `fmail-<12 hex>` id.
+///
+/// The header the mail transport types into the pane reads
+/// `` `@name · fmail-<12hex> · summary` `` — a harness prompt prefix and the
+/// wrapping backticks may sit around it, so the scan anchors on the id token
+/// and tolerates whatever precedes the `@`. A spaced name, a non-hex or
+/// over-long id, or a missing summary resolves nothing, and a legacy `msg-`
+/// id resolves no span: there is no sender session to find. The handle
+/// excludes the leading `@`, so it is the URI payload that opens the
+/// handle's session.
+pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
+    for i in 0..chars.len() {
+        if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
+            continue;
+        }
+        let hex_start = i + "fmail-".len();
+        let id_end = hex_start + 12;
+        if !hex12(chars.get(hex_start..id_end)?) {
+            continue;
+        }
+        // A hex digit right after the id means a longer token, not this id.
+        if chars.get(id_end).is_some_and(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        // Left: exactly ` · ` between the id and the sender token.
+        if i < 3 || chars[i - 3..i] != [' ', '·', ' '] {
+            continue;
+        }
+        let name_end = i - 3;
+        // Right: exactly ` · ` then a non-empty summary.
+        if chars.get(id_end..id_end + 3) != Some(&[' ', '·', ' '][..]) {
+            continue;
+        }
+        if chars.get(id_end + 3).is_none_or(|c| c.is_whitespace()) {
+            continue;
+        }
+        // The sender token: the non-space run ending at the separator. The
+        // header's own `@` is the RIGHTMOST one in that run, so prompt text
+        // like `user@host` and the wrapping backtick stay outside the range.
+        let mut run_start = name_end;
+        while run_start > 0 && !chars[run_start - 1].is_whitespace() {
+            run_start -= 1;
+        }
+        let Some(at) = chars[run_start..name_end].iter().rposition(|c| *c == '@') else {
+            continue;
+        };
+        let name_start = run_start + at;
+        if name_start + 1 >= name_end {
+            continue;
+        }
+        let handle: String = chars[name_start + 1..name_end].iter().collect();
+        let id: String = chars[hex_start..id_end].iter().collect();
+        return Some((name_start, name_end, handle, format!("fmail-{id}")));
+    }
+    None
+}
+
+/// The fmail id span in a well-formed delivered-mail header. Reuse the
+/// sender parser as the header validator so a coincidental id in body text
+/// does not become a message link.
+pub fn find_mail_message(text: &str) -> Option<(usize, usize, String)> {
+    let (_, sender_end, _, id) = find_mail_sender(text)?;
+    let byte_start = text.char_indices().nth(sender_end)?.0;
+    let id_byte = byte_start + text[byte_start..].find(&id)?;
+    let start = text[..id_byte].chars().count();
+    Some((start, start + id.chars().count(), id))
+}
+
+/// The BARE `fmail-<12 hex>` token span in pane text, as a half-open CHAR
+/// range plus the full id. Where [`find_mail_message`] needs the delivered
+/// header around the id, this is the id wherever it prints - a transcript
+/// quote, a log line - because the token means what fno says. Word-bounded:
+/// a longer hex run and an `fmail-`-prefixed name never match. `skip` is the
+/// CHAR index to scan from, so a caller can walk a line's later occurrences.
+pub fn find_fmail_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
+    for i in skip..chars.len() {
+        if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
+            continue;
+        }
+        // Word-start: the token cannot begin inside `xfmail-...`.
+        if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '-') {
+            continue;
+        }
+        let hex_start = i + "fmail-".len();
+        let id_end = hex_start + 12;
+        if !hex12(chars.get(hex_start..id_end)?) {
+            continue;
+        }
+        // Any word character right after the id means a longer token, not
+        // this id: `fmail-0123456789abg` names no mail this parse may pick.
+        if chars
+            .get(id_end)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        {
+            continue;
+        }
+        let id: String = chars[hex_start..id_end].iter().collect();
+        return Some((i, id_end, format!("fmail-{id}")));
+    }
+    None
+}
+
+/// The `@handle` token span in pane text, as a half-open CHAR range plus the
+/// bare handle (no `@`). The char before `@` must not continue a word, so an
+/// email address (`user@host`) never matches; a trailing `-` reads as
+/// punctuation, not the name. `skip` is the CHAR index to scan from, so a
+/// caller can walk a line's later occurrences.
+pub fn find_handle_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    for i in skip..chars.len() {
+        if chars[i] != '@' {
+            continue;
+        }
+        if i > 0 && is_name(chars[i - 1]) {
+            continue;
+        }
+        let raw: String = chars[i + 1..]
+            .iter()
+            .copied()
+            .take_while(|c| is_name(*c))
+            .collect();
+        // The name proper starts with a letter or digit and is at least two
+        // characters: `@-x`, `@_` and a lone `@a` are punctuation or a
+        // fragment, not handles (and `@a` sits inside malformed mail
+        // headers, which resolve nothing). A trailing `-` is punctuation too.
+        if !raw.starts_with(|c: char| c.is_ascii_alphanumeric()) || raw.len() < 2 || raw.len() > 64
+        {
+            continue;
+        }
+        let name = raw.trim_end_matches('-');
+        return Some((i, i + 1 + name.chars().count(), name.to_string()));
+    }
+    None
+}
+
 /// Hand `url` to the platform opener, blocking until it exits. `Err` carries
 /// one human line for the status notice.
 ///
@@ -258,7 +618,7 @@ pub enum PlanUnavailable {
 }
 
 /// Resolve an open-plan target. Pure: reads no files. The vault root is resolved
-/// the same way `paths.py :: vault_root` resolves it (bare name -> `~/<name>`;
+/// the same way `paths.py:: vault_root` resolves it (bare name -> `~/<name>`;
 /// absolute or `~`-prefixed honored as-is), and the URI carries the BASENAME of
 /// that root, so a bare `myvault` and an absolute `/Users/x/myvault` produce the
 /// same URI (a test pins this).
@@ -295,7 +655,7 @@ pub fn plan_link(plan_path: Option<&Path>, cfg: &ObsidianCfg) -> PlanLink {
 }
 
 /// Resolve the obsidian vault root from its config value, mirroring
-/// `paths.py :: vault_root`. Takes `home` so a test can fix HOME without touching
+/// `paths.py:: vault_root`. Takes `home` so a test can fix HOME without touching
 /// the process environment.
 fn resolve_vault_root_with(vault: &str, home: Option<&Path>) -> PathBuf {
     // `~/rest` and bare `~` share the crate's one tilde-expansion helper
@@ -369,9 +729,13 @@ where
     run_opener(spawn, uri)
 }
 
-/// Open a plan that resolved OUTSIDE the vault as a plain file. The path is
-/// fno-constructed (from the graph), never pane-sourced, so no scheme gate
-/// applies; the spawn discipline is shared via [`run_opener`].
+/// Open an fno-resolved plain path with the platform opener. Callers are the
+/// graph's plan paths and, since path linkification, the client's
+/// [`FILE_SCHEME`] router: the pane-sourced URI is gated there by
+/// [`file_uri_parts`] (absolute, no whitespace) and by the server's
+/// `is_file_uri` send gate before it ever reaches this call. No scheme gate
+/// applies to the path itself; the spawn discipline is shared via
+/// [`run_opener`].
 pub fn open_fno_path(path: &Path) -> Result<(), String> {
     open_fno_path_with(spawn_opener, path)
 }
@@ -454,6 +818,68 @@ mod tests {
     }
 
     #[test]
+    fn fno_token_spans_and_their_uris_stay_intercepted() {
+        // The plain body-text form the delivered-header parsers reject.
+        let (start, end, id) =
+            find_fmail_token("quote: fmail-0123456789ab done", 0).expect("parses");
+        assert_eq!((start, end), (7, 25));
+        assert_eq!(id, "fmail-0123456789ab");
+        // Word bounds: a longer hex run and a prefixed token never match.
+        for bad in [
+            "fmail-0123456789abc",
+            "xfmail-0123456789ab",
+            "fmail-0123456789ab-cd",
+            "fmail-0123456789",
+            "fmail-0123456789abg",
+        ] {
+            assert!(find_fmail_token(bad, 0).is_none(), "{bad} resolves nothing");
+        }
+        // A second occurrence on one line answers from the skip offset.
+        let line = "fmail-0123456789ab and fmail-fedcba987654";
+        let (start, end, _id) = find_fmail_token(line, 0).expect("first");
+        assert_eq!((start, end), (0, 18));
+        let (start, end, id) = find_fmail_token(line, end).expect("second");
+        assert_eq!(id, "fmail-fedcba987654");
+        assert_eq!(
+            line.chars().collect::<Vec<_>>()[start..end]
+                .iter()
+                .collect::<String>(),
+            id
+        );
+        let (start, end, name) = find_handle_token("ping @nemo about it", 0).expect("parses");
+        assert_eq!((start, end), (5, 10));
+        assert_eq!(name, "nemo");
+        // A trailing dash reads as punctuation; the span stops before it.
+        assert_eq!(
+            find_handle_token("cc @nemo- later", 0),
+            Some((3, 8, "nemo".into()))
+        );
+        let two = "@aa and @bb";
+        let (_start, end, name) = find_handle_token(two, 0).expect("first");
+        assert_eq!(name, "aa");
+        assert_eq!(find_handle_token(two, end), Some((8, 11, "bb".into())));
+        // The char before @ continues a word: emails and mid-word @s never match.
+        for bad in ["user@example.com", "see bob@host", "@", "@-x", "@a"] {
+            assert!(
+                find_handle_token(bad, 0).is_none(),
+                "{bad} resolves nothing"
+            );
+        }
+        // The handle URI parses, and neither pseudo scheme is ever openable:
+        // the platform opener can never receive either.
+        assert_eq!(handle_from_uri("fno-handle:nemo"), Some("nemo"));
+        for bad in ["fno-handle:", "fno-handle:-x", "fno-handle:with space"] {
+            assert!(!is_handle_uri(bad), "{bad} resolves nothing");
+        }
+        assert!(!is_openable("fno-handle:nemo"));
+        assert!(is_fno_uri("fno-message:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-sender:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-handle:nemo"));
+        assert!(!is_fno_uri("https://example.com"));
+        assert!(!is_fno_uri("fno-file:/tmp/a.md"));
+    }
+
+    #[test]
     fn uppercase_scheme_is_still_a_url() {
         assert_eq!(urls("HTTPS://Example.COM/a"), ["HTTPS://Example.COM/a"]);
     }
@@ -488,16 +914,6 @@ mod tests {
             "https://a.test/{}",
             "x".repeat(5000)
         )));
-    }
-
-    #[test]
-    fn open_url_refuses_before_spawning_anything() {
-        // The refusal arm is the security-relevant half and needs no process.
-        // A pass would exec a browser, so only the refusal is asserted here.
-        for bad in ["file:///etc/passwd", "javascript:alert(1)", "", "https://"] {
-            let err = open_url(bad).expect_err("must refuse");
-            assert!(err.starts_with("refused to open"), "{bad} -> {err}");
-        }
     }
 
     /// An exit status without launching anything: `true`/`false` are the two
@@ -703,5 +1119,107 @@ mod tests {
             i += 1;
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// A candidate resolves iff a listed ABSOLUTE path equals the probe's
+    /// input, normalized like canonicalize (no symlinks here).
+    fn fake_probe(entries: &[&str]) -> impl Fn(&Path) -> Option<PathBuf> {
+        let owned: Vec<String> = entries.iter().map(|s| s.to_string()).collect();
+        move |p: &Path| {
+            let lossy = p.to_string_lossy().to_string();
+            let mut parts: Vec<&str> = Vec::new();
+            for seg in lossy.split('/') {
+                match seg {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop();
+                    }
+                    other => parts.push(other),
+                }
+            }
+            let s = format!("/{}", parts.join("/"));
+            owned
+                .iter()
+                .find(|e| e.as_str() == s)
+                .map(|e| PathBuf::from(e))
+        }
+    }
+
+    fn hits(text: &str, cwd: &Path, probe: &impl Fn(&Path) -> Option<PathBuf>) -> Vec<String> {
+        find_paths_with(text, cwd, Some(Path::new("/Users/jn")), probe)
+            .into_iter()
+            .map(|l| l.uri)
+            .collect()
+    }
+
+    /// One table over the detection seam. Each row is an independent
+    /// contract: cwd resolution with the line tail kept, prose rejection
+    /// (no separator, probe miss), the ./ join with its comma given back,
+    /// tilde against HOME, absolute pass-through, and the punct tail.
+    #[test]
+    fn path_detection_table() {
+        let probe = fake_probe(&[
+            "/w/crates/fno/src/link.rs",
+            "/w/README.md",
+            "/Users/jn/code/AGENTS.md",
+            "/w/a/b.md",
+        ]);
+        let cases: Vec<(&str, &str, Option<&str>)> = vec![
+            (
+                "see crates/fno/src/link.rs:42 there",
+                "/w",
+                Some("fno-file:/w/crates/fno/src/link.rs:42"),
+            ),
+            ("see foo.md and bar", "/w", None),
+            ("see docs/missing.md here", "/w", None),
+            (
+                "read ./README.md, then go",
+                "/w",
+                Some("fno-file:/w/README.md"),
+            ),
+            (
+                "check ~/code/AGENTS.md out",
+                "/w",
+                Some("fno-file:/Users/jn/code/AGENTS.md"),
+            ),
+            ("at /w/README.md end", "/w", Some("fno-file:/w/README.md")),
+            ("open a/b.md:7, please", "/w", Some("fno-file:/w/a/b.md:7")),
+        ];
+        for (text, cwd, want) in cases {
+            assert_eq!(
+                hits(text, Path::new(cwd), &probe),
+                want.map(|s| vec![s.to_string()]).unwrap_or_default(),
+                "{text}"
+            );
+        }
+        // The URI gate is the pane-sourced trust boundary: absolute, no
+        // whitespace. The parser round trips path + line, including a literal
+        // colon-path whose digit tail is not the line.
+        for (uri, ok) in [
+            ("fno-file:/abs/ok.md", true),
+            ("fno-file:/abs/ok.md:7", true),
+            ("fno-file:relative.md", false),
+            ("fno-file:/has space.md", false),
+            ("fno-file:", false),
+            ("https://example.com", false),
+        ] {
+            assert_eq!(is_file_uri(uri), ok, "{uri}");
+        }
+        let (p, l) = file_uri_parts("fno-file:/w/a.md:42").expect("parses");
+        assert_eq!(p, PathBuf::from("/w/a.md"));
+        assert_eq!(l, Some(42));
+        assert_eq!(
+            file_uri_parts("fno-file:/w/a.md"),
+            Some((PathBuf::from("/w/a.md"), None))
+        );
+        assert_eq!(
+            file_uri_parts("fno-file:/w/a.md:9:9"),
+            Some((PathBuf::from("/w/a.md:9"), Some(9)))
+        );
     }
 }

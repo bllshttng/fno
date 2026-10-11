@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 GH_QUERY_TIMEOUT_S = 30.0
 
 # reverse_map_unstamped fires one gh call per distinct repo in its scope
-# (x-59a6 round-9 review fix). A --pr-number call now includes every open
+# (round-9 review fix). A --pr-number call now includes every open
 # ref-less node graph-wide (needed so a stale ref-less node in another
 # project still self-heals), so a multi-repo graph can fan out to several
 # repos' worth of gh calls on a single merge. Same reasoning as cli.py's
@@ -176,17 +176,7 @@ def pr_url_for_repo(
 ) -> Optional[str]:
     """The canonical PR url for the checkout at ``cwd``, or None.
 
-    A writer must resolve the url at least as capably as the reader resolves
-    the slug, so this shares ``resolve_current_repo_slug``'s origin-then-gh
-    chain: a url-less ``pr_number`` names no repo, and PR numbers collide
-    across repos.
-
-    An absent ``cwd`` resolves against the invocation checkout - the caller is
-    standing in the repo it is stamping. A ``cwd`` that IS recorded but no
-    longer exists returns None instead: that is positive evidence the node
-    belongs to another repo, and `backlog done`/`backlog update` can name any node
-    in the cross-project graph, so falling back would stamp the running repo's
-    slug onto a foreign node.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     if cwd:
         cwd = os.path.expanduser(cwd)
@@ -323,7 +313,7 @@ class PrMergeState:
     url: Optional[str]
     merged_at: Optional[str]
     # mergeCommit.oid - the dedup key for post-merge-ritual auto-dispatch
-    # (x-47be). Optional: absent on a non-merged PR or when gh omits it.
+    #. Optional: absent on a non-merged PR or when gh omits it.
     merge_sha: Optional[str] = None
     changed_files: list[str] = field(default_factory=list)
     files_truncated: bool = False
@@ -347,12 +337,12 @@ class MergeDriftRecord:
     error: Optional[str] = None
     # The owning target session + its working directory, carried from the graph
     # node so the CLI can emit a session_satisfied event for that session after
-    # closing the node (Group 1 / ab-f7f8bc53). Both optional: a node may have
+    # closing the node (Group 1 /). Both optional: a node may have
     # been intaken without a session (session_id null) or without a cwd.
     session_id: Optional[str] = None
     cwd: Optional[str] = None
     # mergeCommit.oid for the closed PR - the exactly-once dedup key for the
-    # post-merge-ritual auto-dispatch (x-47be). None on a reverse-mapped record
+    # post-merge-ritual auto-dispatch. None on a reverse-mapped record
     # (branch-name match has no SHA); the dispatcher falls back to a pr-number
     # key there.
     merge_sha: Optional[str] = None
@@ -387,15 +377,7 @@ def verify_pending_supersessions(
 ) -> list[dict]:
     """Verify predecessor cause surfaces against one merged PR's file set.
 
-    Returns positive receipts for predecessors that remain pending. A
-    predecessor never becomes terminal from the relationship alone: every
-    declared repo-relative surface must appear in the merged PR's changed-file
-    evidence.
-
-    ``evidence_complete=False`` says the file list is known to be short of the
-    PR's real one. A surface missing from a truncated list is an absence with
-    two explanations, so neither verdict is available: nothing verifies and the
-    receipt names the truncation rather than blaming the surface.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     changed = {
         _normalize_surface(path)
@@ -448,15 +430,7 @@ def verify_pending_supersessions(
 def successors_owing_verification(entries: list[dict]) -> dict[str, dict]:
     """Successor id -> successor node, for pending predecessors already owed proof.
 
-    ``verify_pending_supersessions`` only ever runs while reconcile is CLOSING a
-    successor. A successor that closed at any other moment - an earlier sweep, a
-    hand-run ``fno backlog done``, or a supersede recorded against a node that
-    had already shipped - never passes through that path. Its predecessors stay
-    pending, pending reads as blocked, and nothing in the system ever revisits
-    them: the only escape was ``unsupersede``.
-
-    This finds those rows so the sweep can settle them against the evidence the
-    successor already carries.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     by_id = {
         entry.get("id"): entry
@@ -524,10 +498,26 @@ def node_pr_refs(node: dict) -> list[tuple[int, Optional[str]]]:
     return refs
 
 
+def _normalized_pr_url(url: Optional[str]) -> Optional[str]:
+    """A PR URL reduced to its comparable form, or None.
+
+    Query, fragment and a trailing slash are display noise; the graph and gh
+    can differ on all three for the same PR. Lowercased because the host and
+    owner segments are case-insensitive in practice and the path segments the
+    comparison relies on are already lowercase.
+    """
+    if not isinstance(url, str):
+        return None
+    stripped = url.strip()
+    for sep in ("?", "#"):
+        stripped = stripped.split(sep, 1)[0]
+    return stripped.rstrip("/").lower() or None
+
+
 @dataclass
 class PrRowBinding:
     node_id: str
-    action: str  # filled_primary | appended_additional | already_bound | already_done
+    action: str  # filled_primary | appended_additional | already_bound | already_done | released
 
 
 @dataclass
@@ -553,16 +543,15 @@ def bind_pr_rows(
     pr_number: int,
     pr_url: Optional[str],
     repo: Optional[str] = None,
-    owner: Optional[str] = None,
+    rebind: bool = False,
 ) -> PrRowBindResult:
     """Validate and bind every PR claim as one graph-owned mutation.
 
     Callers may run this against a copy for a dry-run or inside
     ``locked_mutate_graph`` for persistence. Validation completes before any
-    row changes, so malformed, unknown, or cross-repository claims cannot
+    row changes, so unknown or cross-repository claims cannot
     leave a partial binding behind.
     """
-    from fno.graph._constants import is_wellformed_node_id
     from fno.graph._intake import _find_node
 
     if not claimed_ids:
@@ -571,10 +560,6 @@ def bind_pr_rows(
     our_repo = repo or repo_slug_from_url(pr_url)
     nodes: dict[str, dict] = {}
     for nid in claimed_ids:
-        if not is_wellformed_node_id(nid):
-            return PrRowBindResult(
-                outcome="refused", claimed_ids=claimed_ids, refusal=f"malformed claim: {nid!r}"
-            )
         node = _find_node(entries, nid)
         if node is None:
             return PrRowBindResult(
@@ -615,14 +600,22 @@ def bind_pr_rows(
         nodes[nid] = node
 
     bindings: list[PrRowBinding] = []
-    clean_owner = owner.strip() if isinstance(owner, str) else ""
     for nid in claimed_ids:
         node = nodes[nid]
+        # The claim line predates the release: skip it, bind the rest.
+        if node.get("released_from") in claimed_ids and not node.get("contained_in"):
+            bindings.append(PrRowBinding(nid, "released"))
+            continue
         refs = node_pr_refs(node)
         if any(number == pr_number for number, _ in refs):
             action = "already_bound"
         elif not node_is_open(node):
             action = "already_done"
+        elif rebind and isinstance(node.get("pr_number"), int):
+            old = {"number": node["pr_number"], "url": node.get("pr_url")}
+            node["additional_prs"] = [old, *(node.get("additional_prs") or [])]
+            node["pr_number"], node["pr_url"], node["merge_status"] = pr_number, pr_url, None
+            action = "appended_additional"
         elif not isinstance(node.get("pr_number"), int):
             node["pr_number"] = pr_number
             node["pr_url"] = pr_url
@@ -632,35 +625,9 @@ def bind_pr_rows(
             additional.append({"number": pr_number, "url": pr_url})
             node["additional_prs"] = additional
             action = "appended_additional"
-        if clean_owner and node_is_open(node):
-            node["locked_by"] = clean_owner
-            node["session_id"] = clean_owner
         bindings.append(PrRowBinding(nid, action))
 
     return PrRowBindResult(outcome="bound", claimed_ids=claimed_ids, bindings=bindings)
-
-
-def node_cwd_in_repo(entry: dict, our_root: str) -> bool:
-    """Does ``entry``'s own ``cwd`` sit inside ``our_root`` (or is it missing)?
-
-    A missing/empty/non-string cwd can't be proven NOT this repo's, and
-    there is no cost to treating it as in-scope here: ``reverse_map_unstamped``
-    (the only caller of this scope) independently skips a missing cwd
-    unconditionally before it would ever fire a gh call, so this branch
-    changes candidate-set membership only - never the observable close/skip
-    outcome for a no-cwd node.
-
-    Module-level (not nested inside a caller) precisely so this predicate is
-    unit-testable on its own, independent of the reverse-map machinery that
-    happens to make its no-cwd branch behaviorally inert today.
-    """
-    raw_cwd = entry.get("cwd")
-    if not isinstance(raw_cwd, str) or not raw_cwd:
-        return True
-    our_root = os.path.normpath(our_root)
-    our_root_prefix = our_root.rstrip(os.sep) + os.sep
-    norm = os.path.normpath(os.path.expanduser(raw_cwd))
-    return norm == our_root or norm.startswith(our_root_prefix)
 
 
 # The exit-code contract, owned here so no verb can fork it. The loop runtime
@@ -798,6 +765,11 @@ def render_merge_evidence_failure(
 # free slot across graph/cli.py and done/cli.py. Do not renumber.
 PROMISE_REFUSAL_EXIT_CODE = 6
 
+# A retryable read outage is not a policy refusal, so it does not reuse 6. It
+# reuses the merge gate's own outage code so one number means "the reader was
+# down, retry" across both gates.
+PROMISE_UNKNOWN_EXIT_CODE = REFUSAL_EXIT_CODES["outage"]
+
 # Wall clock for the fno-agents probe-run subprocess (3 probes * 60s native
 # timeout + overhead). resolve_promise_evidence runs outside the graph lock,
 # same as the gh cross-check, so a slow probe holds no other mutation.
@@ -811,22 +783,38 @@ class PromiseVerdict:
     Sibling to :class:`MergeEvidence`: the merge gate asks "is a PR merged" (a
     fact about an artifact); this asks "did the plan's declared work all ship".
     One verdict, three callers (``cmd_done``, ``cmd_reconcile``, ``done_command``)
-    so a node can never close through a second, ungated path. Fails open
-    (``outcome="ok"``) on an absent/unreadable/unparseable plan so a stale
-    ``plan_path`` never wedges a close; the warning names the path.
+    so a node can never close through a second, ungated path. An absent
+    ``plan_path`` promises nothing and passes; an unreadable or unparseable
+    plan is a delivery promise that cannot be confirmed, so it fails CLOSED
+    (``promise_unmet``) with the remedy in the refusal - never as a
+    silent pass.
     """
 
-    outcome: Literal["ok", "promise_unmet"]
+    outcome: Literal["ok", "promise_unmet", "promise_unknown"]
     reason: Optional[str] = None  # multi-line refusal text; None when ok
-    # Why a fail-open happened (unreadable plan, unparseable frontmatter), naming
-    # the path. Returned, not printed: the close verbs emit it on stderr, but a
-    # raw stderr write here would pollute the `reconcile --json` stream (JSON on
-    # stdout) and break the JSON-only contract of that path.
+    # Why a degraded read passed anyway (today only the prove-it verdict
+    # reader). Returned, not printed: the close verbs emit it on stderr, but
+    # a raw stderr write here would pollute the `reconcile --json` stream
+    # (JSON on stdout) and break the JSON-only contract of that path.
     warning: Optional[str] = None
 
     @property
+    def satisfied(self) -> bool:
+        """True only on positive evidence. Every close boundary reads THIS.
+
+        A negative test (``outcome == "promise_unmet"``) closed the node on any
+        outcome the author had not enumerated, which is how a retryable read
+        outage closed a declared multi-ship node.
+        """
+        return self.outcome == "ok"
+
+    @property
     def exit_code(self) -> int:
-        return PROMISE_REFUSAL_EXIT_CODE if self.outcome == "promise_unmet" else 0
+        if self.outcome == "promise_unmet":
+            return PROMISE_REFUSAL_EXIT_CODE
+        if self.outcome == "promise_unknown":
+            return PROMISE_UNKNOWN_EXIT_CODE
+        return 0
 
 
 def _close_probe_runner_shellout(
@@ -893,6 +881,15 @@ def _close_probe_runner_shellout(
     return (False, reason)
 
 
+def _verdict_reader_shellout(plan_path: str) -> "dict[str, Any]":
+    """Default ``verdict_reader``: one round-trip with ``fno-agents
+    prove-it-verdicts``; a ``VerbUnavailable`` degrades to a warning, the
+    same posture a plan read failure takes."""
+    from fno.rust_binary import verb_call
+
+    return verb_call("prove-it-verdicts", {})
+
+
 def resolve_promise_evidence(
     node: dict,
     *,
@@ -901,54 +898,17 @@ def resolve_promise_evidence(
     probe_runner: Optional[Callable[[str, Optional[str]], tuple[bool, str]]] = None,
     extra_refs: Optional[list[tuple[int, Optional[str]]]] = None,
     carveout_reader: Optional[Callable[[Optional[str]], "list[dict]"]] = None,
+    verdict_reader: Optional[Callable[[str], "dict[str, Any]"]] = None,
 ) -> PromiseVerdict:
     """Decide whether a node's plan promised work that has not all shipped.
 
-    Fires ONLY on an explicit declaration - a plan that declares neither
-    ``close_probes`` nor ``expected_url_count`` closes exactly as it does today.
-    Inferring "multi-wave" from ``## Wave N`` headings was rejected: the common
-    case (one .md == one PR == one node) uses waves as internal structure and
-    would false-positive identically to a half-ship, parking every such node on
-    autonomous /target. Coverage grows as /blueprint stamps ``expected_url_count``
-    going forward, so nothing retroactively parks.
-
-    Three conditions, first refusal wins. D reads the carve-out ledger and is
-    independent of the plan; B and C read the plan at ``node["plan_path"]``:
-
-      D. Unharvested deferred carve-outs. The project ledger
-         (``.fno/carveouts.jsonl``) still carries a ``deferred`` carve-out -
-         declared scope that did not ship. It must become a node (the retro
-         harvest files and consumes it) or be force-overridden. ``oos-bug`` and
-         ``backfill`` carve-outs do NOT block (genuine discovery, filed by the
-         later harvest); both land in the same ledger and look identical, which
-         is why a deferred item can merge away unnoticed (cv-99ebc0f3 on
-         x-44cb). Checked first and independent of the plan so a close is held
-         even when the plan is absent or unreadable. Scoped to the closing
-         node's OWN rows via the ``node`` field stamped at capture time
-         (``find_held_node`` proven ownership): a row filed by another node's
-         session must not hold this close open (x-40be - one unrelated
-         carve-out was blocking every close in the repo). Unattributed rows
-         (legacy, ambient shell, harness without a session id) block nothing
-         at close time; they stay visible via ``fno backlog carveout list`` and the
-         retro sweep, which are the repo-wide backstop.
-      B. Outcome probes. Any ``close_probes`` entry exits non-zero. Probes are
-         delegated to ``fno-agents probe-run`` (the same runner the loop uses for
-         ``done_probes``); a declared gate that cannot be evaluated fails closed.
-      C. Ship count. ``expected_url_count: N`` (N >= 2) and fewer than N of the
-         node's PR refs are MERGED. The right check for multi-repo / split
-         deliveries.
-
-    A gate that only fires on an explicit promise cannot false-positive, which
-    is the reason the count is written at blueprint time rather than inferred
-    afterward. Fails open on an absent/unreadable plan or unparseable
-    frontmatter: a stale ``plan_path`` must not wedge a close, but the warning
-    names the unreadable path so the gap is visible, not silent.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     # Condition D (checked first; independent of the plan): an unharvested
     # `deferred` carve-out is declared scope that did not ship, and it blocks
     # the close until it becomes a node (harvest) or is force-overridden. Only
     # the closing node's OWN rows (``node`` field, stamped at capture time):
-    # a repo-wide read held every close open on any unrelated row (x-40be).
+    # a repo-wide read held every close open on any unrelated row.
     # See the docstring for why unattributed rows block nothing.
     node_id = str(node.get("id") or "")
     deferred = [
@@ -982,10 +942,12 @@ def resolve_promise_evidence(
         text = plan_file.read_text(encoding="utf-8")
     except OSError as exc:
         return PromiseVerdict(
-            outcome="ok",
-            warning=(
-                f"promise gate could not read plan {plan_path_clean} ({exc}); "
-                f"gate skipped for this close"
+            outcome="promise_unmet",
+            reason=(
+                f"{node_id or '(unknown)'}: the promise gate could not read plan "
+                f"{plan_path_clean} ({exc}). An unreadable delivery promise is "
+                f"never a complete one. Fix or restore the plan, then close; "
+                f"or close with --force --reason."
             ),
         )
 
@@ -998,10 +960,12 @@ def resolve_promise_evidence(
         frontmatter = _parse_frontmatter(yaml_text) if yaml_text.strip() else {}
     except FrontmatterError as exc:
         return PromiseVerdict(
-            outcome="ok",
-            warning=(
-                f"promise gate skipped {plan_path_clean}; plan frontmatter "
-                f"would not parse ({exc})"
+            outcome="promise_unmet",
+            reason=(
+                f"{node_id or '(unknown)'}: plan frontmatter would not parse "
+                f"({exc}) in {plan_path_clean}. An unparseable delivery promise "
+                f"never reads as complete. Fix the frontmatter, then close; "
+                f"or close with --force --reason."
             ),
         )
 
@@ -1011,6 +975,46 @@ def resolve_promise_evidence(
     node_id = node.get("id", "(unknown)")
     plan_display = node.get("plan_path", plan_path_clean)
 
+    # An Execution Strategy that declares waves promises one ship per wave
+    # (the multi-wave stamp bug: wave 1's merge closed a 3-wave node).
+    if expected is None:
+        m = re.search(r"^## +Execution Strategy\b.*?$(.*?)(?=^## +|\Z)", _body, re.M | re.S)
+        if m is not None:
+            try:
+                from fno.plan.brief import parse_execution_strategy
+
+                waves = parse_execution_strategy(m.group(1)).get("waves")
+            except Exception:  # noqa: BLE001 - unread skips the gate, never blocks
+                waves = None
+            if isinstance(waves, list) and len(waves) >= 2:
+                expected = len(waves)
+
+    # Condition E: an open prove-it FAIL on this node's own plan
+    # artifacts is claimed work whose outcome did not hold; it needs no
+    # declaration. A done node is never reopened; a failed reader is a warning.
+    if node_id:
+        try:
+            payload = (verdict_reader or _verdict_reader_shellout)(plan_path_clean)
+        except Exception as exc:  # noqa: BLE001 - a failed read must not block a close
+            return PromiseVerdict(
+                outcome="ok",
+                warning=f"prove-it verdict read failed ({exc}); gate skipped for this close",
+            )
+        fail_rows = [
+            r for r in (payload.get("rows") or [])
+            if isinstance(r, dict) and r.get("node") == node_id and r.get("open")
+        ]
+        if fail_rows:
+            row = fail_rows[0]
+            return PromiseVerdict(
+                outcome="promise_unmet",
+                reason=(
+                    f"{node_id}: prove-it FAIL on its own plan artifacts "
+                    f"({row.get('report')}): {row.get('claim')}. Fix and re-run prove-it, "
+                    f"rule with fno inbox decide, or close with --force --reason."
+                ),
+            )
+
     # The gate fires ONLY on an explicit declaration. A plan that declares
     # neither close_probes nor expected_url_count closes exactly as it does
     # today - inferring "multi-wave" from `## Wave N` headings was rejected
@@ -1019,7 +1023,6 @@ def resolve_promise_evidence(
     # parking every such node on autonomous /target. Coverage grows as
     # /blueprint stamps expected_url_count going forward; nothing retroactively
     # parks. A gate that only fires on an explicit promise cannot false-positive.
-    #
     # Condition B: run the declared outcome probes. Opt-in by construction (only
     # fires when the plan declared the field).
     if close_probes:
@@ -1054,11 +1057,32 @@ def resolve_promise_evidence(
             # down, and the merge gate already treats an outage as retryable
             # (exit 4) rather than a policy refusal.
             if failure and failure.retryable:
+                # Unknown, not ok: the read was down, so the ship count is
+                # unconfirmed in BOTH directions. Closing here stamped a
+                # declared multi-ship node done on the strength of an outage.
+                # The node stays open and the sweep retries when gh answers.
+                # The remedy names the verb that can actually recover, which is
+                # NOT always reconcile. When `extra_refs` carried an explicit
+                # ship the close verb had not yet persisted, the refusal exits
+                # before the write, so reconcile cannot see that ref at all: it
+                # would re-count the STORED refs, find no failure, and answer
+                # the permanent policy refusal (exit 6, "promised N; only M
+                # merged") about a ship that is merged. Re-running the same
+                # command is the path that both records the ref and closes.
+                retry = (
+                    "Re-run the same close command once GitHub answers; it "
+                    "records the explicit --pr ref, which this refusal exited "
+                    "before writing."
+                    if extra_refs
+                    else f"Retry with `fno backlog reconcile --node {node_id}` "
+                    f"once GitHub answers."
+                )
                 return PromiseVerdict(
-                    outcome="ok",
-                    warning=(
-                        f"promise gate could not confirm {expected} ships for "
-                        f"{node_id}: {failure}; ship-count check skipped"
+                    outcome="promise_unknown",
+                    reason=(
+                        f"Unknown: {node_id} could not confirm {expected} ships "
+                        f"({merged} confirmed MERGED): {failure}\n"
+                        f"  The read failed retryably; the node stays open. {retry}"
                     ),
                 )
             if failure:
@@ -1140,7 +1164,7 @@ def _promise_refusal_c(node_id: str, plan_display: str, expected: int, merged: i
     return (
         f"Refused: {node_id} promised {expected} ships; only {merged} merged.\n"
         f"  plan: {plan_display}\n"
-        f"  expected_url_count: {expected}    merged refs: {merged}\n"
+        f"  promised ships: {expected}    merged refs: {merged}\n"
         f"\n"
         f"  Two legal exits:\n"
         f"    ship the rest, then close; or\n"
@@ -1149,20 +1173,42 @@ def _promise_refusal_c(node_id: str, plan_display: str, expected: int, merged: i
     )
 
 
+def summarize_promise_held(
+    held: "list[tuple[str, str, str]]", *, dry_run: bool = False
+) -> str:
+    """Render reconcile's held-open roll, split by WHY the node stayed open.
+
+    ``held`` rows are ``(node_id, first_reason_line, outcome)``. The two
+    outcomes need different operator sentences: an unmet promise is a policy
+    refusal the operator resolves, an unknown is a read outage that resolves
+    itself on the next sweep.
+    """
+    verb = "Holding" if dry_run else "Held"
+    headlines = {
+        "promise_unmet": "merged PR, unmet plan promise",
+        "promise_unknown": "ship count unconfirmed, retryable read failure",
+        "reopen_held": "deliberate reopen postdates the merge",
+    }
+    # Grouped by the outcomes PRESENT, not by a hard-coded pair. A closed
+    # enumeration is the same shape the `satisfied` property exists to kill:
+    # a fourth outcome would be dropped from the roll, and a sweep holding
+    # only those nodes would print a blank line while holding them open.
+    order = list(headlines) + sorted({o for _, _, o in held} - set(headlines))
+    lines: list[str] = []
+    for outcome in order:
+        rows = [(nid, reason) for nid, reason, out in held if out == outcome]
+        if not rows:
+            continue
+        headline = headlines.get(outcome, outcome)
+        lines.append(f"{verb} {len(rows)} node(s) open ({headline}):")
+        lines.extend(f"  {nid}: {reason}" for nid, reason in rows)
+    return "\n".join(lines)
+
+
 def _unharvested_deferred_carveouts(cwd: Optional[str]) -> list[dict]:
     """Unharvested ``deferred`` carve-outs on the node's project ledger.
 
-    ``deferred`` blocks a close (declared scope did not ship); ``oos-bug`` and
-    ``backfill`` do not (genuine discovery, filed by the later harvest). Both
-    land in the same ``.fno/carveouts.jsonl``, which is why a deferred item can
-    merge away unnoticed (cv-99ebc0f3 on x-44cb). The ledger is resolved from
-    the NODE's project (``cwd``), not the ambient command repo: a cross-project
-    close names a foreign node from this session, and reading the ambient
-    ledger would both miss the foreign carve-out and let an unrelated local one
-    block it. Falls back to the ambient canonical ledger when ``cwd`` is absent
-    or unresolvable (the same-project close, the common case). Fails open on an
-    unreadable ledger: a corrupt ledger must not wedge a close, and the retro
-    harvest is the durable resolution path either way.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     root = _carveout_ledger_root(cwd)
     try:
@@ -1276,6 +1322,27 @@ def query_pr_merge_state(
         )
     )
 
+    # Merged-PR facts never change: serve the permanent gh-cache row; injected readers bypass.
+    cached = None
+    if info_reader is None:
+        from fno.rust_binary import VerbUnavailable, verb_call
+        try:
+            ask = {"op": "read", "kind": "merged", "slug": repo, "pr": pr_number}
+            cached = verb_call("gh-cache", ask).get("row")
+        except VerbUnavailable:
+            pass
+    row: dict = cached if isinstance(cached, dict) else {}
+    info = row.get("info") if isinstance(row.get("info"), dict) else None
+    files_ok = not include_files or isinstance(row.get("files"), list)
+    if info is not None and isinstance(info.get("state"), str) and files_ok:
+        number = info.get("pr") if isinstance(info.get("pr"), int) else pr_number
+        files = list(row.get("files") or []) if include_files else []
+        return PrMergeState(
+            number=number, state=info["state"], url=info.get("url"),
+            merged_at=info.get("merged_at"), merge_sha=info.get("merge_sha"),
+            changed_files=files, files_truncated=False,
+        )
+
     try:
         info, reason = info_reader(pr_number, repo=repo, cwd=cwd)
     except ReconcileError:
@@ -1339,6 +1406,14 @@ def query_pr_merge_state(
             kind="malformed",
         ) from exc
 
+    if info_reader is None and state == "MERGED":
+        from fno.rust_binary import VerbUnavailable, verb_call
+        try:
+            row = {"info": info, **({"files": changed_files} if include_files else {})}
+            ask = {"op": "write", "kind": "merged", "slug": repo, "pr": pr_number, "row": row}
+            verb_call("gh-cache", ask)
+        except VerbUnavailable:
+            pass
     return PrMergeState(
         number=number,
         state=state,
@@ -1364,13 +1439,24 @@ _REVERT_TITLE_RE = re.compile(r"^\s*Revert\b")
 _REVERT_BODY_PR_RE = re.compile(r"\breverts\s+(?:([\w.-]+/[\w.-]+))?#(\d+)", re.IGNORECASE)
 
 
+def _rest_pr_rows(cwd: Optional[str], state: str, *, max_pages: int = 1) -> list[dict]:
+    from fno.pr import _rest
+
+    slug, why = _rest._slug_or_reason(cwd, _rest.run)
+    if not slug:
+        raise ReconcileError(why)
+    rows, why = _rest.list_prs_rest(
+        slug, state=state, cwd=cwd, max_pages=max_pages, details=True, runner=_rest.run
+    )
+    if rows is None:
+        raise ReconcileError(f"gh api pulls ({state}) failed: {why}")
+    return rows
+
+
 def fetch_recent_merged_prs(
     *,
-    repo: Optional[str] = None,
     cwd: Optional[str] = None,
     limit: int = 30,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    timeout_s: float = GH_QUERY_TIMEOUT_S,
 ) -> list[dict]:
     """Recently merged PRs (number/title/body) for revert detection.
 
@@ -1380,33 +1466,13 @@ def fetch_recent_merged_prs(
     """
     if _gh_executable() is None:
         return []
-    cmd = ["gh", "pr", "list", "--state", "merged", "--limit", str(limit)]
-    if repo:
-        cmd += ["--repo", repo]
-    cmd += ["--json", "number,title,body,url"]
-    try:
-        result = runner(
-            cmd, capture_output=True, text=True, check=False, timeout=timeout_s, cwd=cwd
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        raise ReconcileError(f"gh pr list failed: {exc}") from exc
-    if result.returncode != 0:
-        raise ReconcileError(
-            f"gh pr list failed (rc={result.returncode}): {(result.stderr or '').strip()}"
-        )
-    try:
-        rows = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise ReconcileError(f"gh stdout was not JSON: {exc}") from exc
-    return rows if isinstance(rows, list) else []
+    return [r for r in _rest_pr_rows(cwd, "closed") if r["state"] == "MERGED"][:limit]
 
 
 def list_merged_pr_branches(
     *,
     cwd: str,
     limit: int = 100,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    timeout_s: float = GH_QUERY_TIMEOUT_S,
 ) -> list[dict]:
     """Merged PRs (number/url/headRefName/mergedAt) for reverse-mapping.
 
@@ -1418,35 +1484,16 @@ def list_merged_pr_branches(
     """
     if _gh_executable() is None:
         return []
-    cmd = [
-        "gh", "pr", "list", "--state", "merged", "--limit", str(limit),
-        "--json", "number,url,headRefName,mergedAt",
-    ]
-    try:
-        result = runner(
-            cmd, capture_output=True, text=True, check=False, timeout=timeout_s, cwd=cwd
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        raise ReconcileError(f"gh pr list (merged) failed: {exc}") from exc
-    if result.returncode != 0:
-        raise ReconcileError(
-            f"gh pr list (merged) failed (rc={result.returncode}): "
-            f"{(result.stderr or '').strip()}"
-        )
-    try:
-        rows = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise ReconcileError(f"gh stdout was not JSON: {exc}") from exc
-    return rows if isinstance(rows, list) else []
+    return [r for r in _rest_pr_rows(cwd, "closed") if r["state"] == "MERGED"][:limit]
 
 
 def _branch_matches_node(head_ref: str, node_id: str) -> bool:
     """True when ``node_id`` is a full delimiter-bounded segment of ``head_ref``.
 
     ``branch_name()`` puts the whole node id in every dispatch branch as a
-    ``/``- or ``-``-bounded segment (``feature/x-5b66``,
-    ``target/some-slug-x-5b66``). A bare substring must NOT match: fixed-width
-    hex ids make ``x-5b66`` a prefix of ``x-5b667``, so an unbounded match
+    ``/``- or ``-``-bounded segment (``feature/``,
+    ``target/some-slug-x-aaaa``). A bare substring must NOT match: fixed-width
+    hex ids make ```` a prefix of ``x-5b667``, so an unbounded match
     would close the wrong node.
     """
     if not head_ref or not node_id:
@@ -1454,9 +1501,156 @@ def _branch_matches_node(head_ref: str, node_id: str) -> bool:
     return re.search(rf"(^|[/-]){re.escape(node_id)}([/-]|$)", head_ref) is not None
 
 
+def clear_reopen_warning_if_child_matches(parent: dict, child: object) -> None:
+    """Clear ``parent``'s ``reopen_warning`` when it names ``child``'s id.
+
+    The child that reopened this already-done parent just closed again: the
+    marker no longer describes a live state. Runs unconditionally on
+    ``_cascade_close_parents``'s climb, whether or not the parent re-closes.
+    """
+    marker = parent.get("reopen_warning")
+    child_id = child.get("id") if isinstance(child, dict) else None
+    if isinstance(marker, dict) and marker.get("child") == child_id:
+        parent.pop("reopen_warning", None)
+
+
+def _reopen_outranks_child_closes(parent: dict, kids: list[dict]) -> bool:
+    """True when a deliberate reopen postdates every child's close.
+
+    Both close paths ask :func:`children_all_closed` - every child closed, at
+    least one really shipped - and that predicate stays true forever once the
+    last child merges. So a node reopened after its children finished was
+    re-closed by the very next sweep:
+    measured 2026-09-05, a reopen carrying a written reason was overridden by
+    ``reconcile`` seven minutes later, and no retry could hold it. ``reopen``
+    requires ``--reason`` precisely because a close is evidenced by a merged PR
+    while a reopen is nothing but human judgment; an automatic sweep discarding
+    that judgment without a word is the defect this guards.
+
+    Keyed on the CHILDREN's closes rather than on "now", so it expires by
+    itself. A reopen made BEFORE the last child landed is stale and the cascade
+    still fires, because the parent genuinely became complete after that
+    judgment was formed. Only a reopen postdating every child close is a
+    statement about the finished set, and only that one holds.
+
+    Ambiguity favours the human, deliberately and in both directions: an
+    unreadable ``reopened_at`` protects, and so does an unreadable child
+    ``completed_at``. Those stamps are written by one place in one format, so a
+    value this cannot parse means something is already wrong, and re-closing on
+    the strength of a timestamp we failed to read is the same silent override in
+    a different coat. A parent carrying no ``reopened_at`` is unaffected, which
+    is every node that was never reopened.
+    """
+    from fno.graph.board import _parse_iso
+
+    reopened_raw = parent.get("reopened_at")
+    if not isinstance(reopened_raw, str) or not reopened_raw.strip():
+        return False
+    reopened = _parse_iso(reopened_raw)
+    if reopened is None:
+        return True
+    for kid in kids:
+        closed = _parse_iso(kid.get("completed_at"))
+        if closed is not None and closed >= reopened:
+            return False
+    return True
+
+
+def _reopen_outranks_merge(node: dict, merged_at: object) -> bool:
+    """True when a deliberate reopen postdates the merge being closed on.
+    Merge-keyed twin of :func:`_reopen_outranks_child_closes`; full contract:
+    docs/architecture/backlog-graph-verb-contracts.md
+    """
+    from fno.graph.board import _parse_iso
+
+    reopened_raw = node.get("reopened_at")
+    if not isinstance(reopened_raw, str) or not reopened_raw.strip():
+        return False
+    reopened = _parse_iso(reopened_raw)
+    if reopened is None:
+        return True
+    merged = _parse_iso(merged_at) if isinstance(merged_at, str) else None
+    return merged is None or reopened > merged
+
+
+def reopen_held_reason(node: dict, pr_number: object) -> str:
+    """Hold-row reason for a reopen that outranks a merge: the reopener's own words."""
+    why = node.get("reopened_reason")
+    why = why.strip() if isinstance(why, str) else ""
+    return f"reopened after PR #{pr_number} merged: {why or 'no reopen reason recorded'}"
+
+
+def _merge_postdates_reopen(
+    node: dict,
+    *,
+    skip_pr: Optional[int],
+    query: Callable[..., PrMergeState],
+    cwd: Optional[str] = None,
+) -> bool:
+    """True when a ref OTHER than ``skip_pr`` merged after the node's reopen.
+    Expiry half of :func:`_reopen_outranks_merge`; full contract:
+    docs/architecture/backlog-graph-verb-contracts.md
+    """
+    from fno.graph.board import _parse_iso
+
+    reopened_raw = node.get("reopened_at")
+    reopened = _parse_iso(reopened_raw) if isinstance(reopened_raw, str) else None
+    if reopened is None:
+        return False
+    for number, url in node_pr_refs(node):
+        if number == skip_pr:
+            continue
+        try:
+            state = query(number, repo=repo_slug_from_url(url), cwd=cwd)
+        except Exception:  # noqa: BLE001 - a read outage must not close on a guess
+            return False
+        if state.state != "MERGED" or not state.merged_at:
+            continue
+        merged = _parse_iso(state.merged_at)
+        if merged is not None and merged > reopened:
+            return True
+    return False
+
+
+def children_all_closed(parent: dict, kids: list[dict]) -> bool:
+    """Every child is closed, and at least one really shipped.
+
+    The one closure question both epic close paths ask
+    (:func:`cascade_close_should_stop` and ``_strandable_epic_ids``). A child
+    counts closed when :func:`fno.graph.statuses.is_terminal_entry` says so -
+    done, superseded, or freshly stamped ``completed_at`` with its status
+    still catching up - EXCEPT a child superseded BY THIS PARENT: the parent
+    absorbed that child's work, so the parent's own liveness keeps it open.
+    The shipped term keeps a parent whose every child was replaced elsewhere
+    from closing as done with nothing built.
+    """
+    from fno.graph.statuses import is_terminal_entry
+
+    pid = parent.get("id")
+    if not kids:
+        return False
+    if any(not is_terminal_entry(k) or k.get("superseded_by") == pid for k in kids):
+        return False
+    return any(k.get("status") != "superseded" and not k.get("superseded_by") for k in kids)
+
+
+def cascade_close_should_stop(parent: dict, kids: list[dict], child: object) -> bool:
+    """One climb step of ``_cascade_close_parents``: clear a stale marker on
+    ``parent`` first, then report whether the walk stops here (``parent``
+    already done, a kid still open, or a deliberate reopen that outranks the
+    sweep) rather than closing it and climbing on.
+    """
+    clear_reopen_warning_if_child_matches(parent, child)
+    if parent.get("completed_at"):
+        return True
+    if _reopen_outranks_child_closes(parent, kids):
+        return True  # reopened after its children finished -> the human call holds
+    return not children_all_closed(parent, kids)
+
+
 @dataclass
 class OpenPrBinding:
-    """One open PR row's verdict against the graph (x-d3c6).
+    """One open PR row's verdict against the graph.
 
     ``node_id`` is set only when exactly one real node resolves - an
     ``untracked`` or ``ambiguous`` row carries no candidate, because a guess
@@ -1477,15 +1671,24 @@ def classify_open_pr_bindings(
 ) -> list[OpenPrBinding]:
     """Classify every open-PR row against graph entries: ``bound`` (the node
     points back at this PR), ``missing`` (a unique real node resolves but does
-    not point back), ``untracked`` (the branch names no real node), or
+    not point back), ``untracked`` (no key names a real node), or
     ``ambiguous`` (several real nodes, or one node named by several open PRs).
 
-    Pure (no I/O), so the reconcile heal, ``fno do pr list``, and the king
-    board all read the same verdicts. Delimiter-bounded branch matching is
+    Three resolution keys, in order: delimiter-bounded branch matching is
     ``branch_node_ids`` - the same producer/gate authority the merged reverse
-    map's ``_branch_matches_node`` agrees with.
+    map's ``_branch_matches_node`` agrees with; when it yields nothing, the
+    graph's own ``(pr_number, pr_url)`` back-pointer read through
+    ``node_pr_refs``, scoped by URL because a ``pr_number`` is only unique
+    within one repository; when both miss, the row body's exact closure line
+    (``Fixes``, or the retired ``Backlog-Closure:`` spelling). The branch key wins whenever it
+    hits, so existing verdicts are unchanged. A row produced without a
+    ``body`` field never reads the trailer; the ``untracked`` detail names
+    that absence instead of reading it as an empty body.
+
+    Pure (no I/O), so the reconcile heal, ``fno do pr list``, and the lead
+    board all read the same verdicts.
     """
-    from fno.pr.closure import branch_node_ids
+    from fno.pr.closure import branch_node_ids, parse_closure_answer
 
     real_ids = {
         e.get("id")
@@ -1495,7 +1698,18 @@ def classify_open_pr_bindings(
     node_by_id = {
         e["id"]: e for e in entries if isinstance(e, dict) and isinstance(e.get("id"), str)
     }
-    parsed: list[tuple[int, Optional[str], str, list[str]]] = []
+    by_pr_ref: dict[tuple[int, str], list[str]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        nid = entry.get("id")
+        if not isinstance(nid, str):
+            continue
+        for num, url in node_pr_refs(entry):
+            key_url = _normalized_pr_url(url)
+            if key_url is not None:
+                by_pr_ref.setdefault((num, key_url), []).append(nid)
+    parsed: list[tuple[int, Optional[str], str, list[str], list[str], bool]] = []
     open_prs_by_node: dict[str, list[int]] = {}
     for row in open_rows:
         if not isinstance(row, dict):
@@ -1504,16 +1718,85 @@ def classify_open_pr_bindings(
         head = str(row.get("headRefName") or "")
         if not isinstance(number, int) or not head:
             continue
+        if row.get("isCrossRepository"):
+            continue
+        body_supplied = "body" in row
+        # ONE pr-closure-parse spawn per body answers both fields.
+        answer = parse_closure_answer(row["body"]) if body_supplied else {}
         matched = [nid for nid in branch_node_ids(head) if nid in real_ids]
-        parsed.append((number, row.get("url"), head, matched))
+        gone = answer.get("retargeted_from", [])
+        if matched and gone:
+            matched = [nid for nid in matched if nid not in gone]
+        trailer: list[str] = (
+            [nid for nid in answer.get("ids", []) if nid in real_ids]
+            if body_supplied
+            else []
+        )
+        parsed.append((number, row.get("url"), head, matched, trailer, body_supplied))
         if len(matched) == 1:
             open_prs_by_node.setdefault(matched[0], []).append(number)
+        elif not matched:
+            # Sibling guard: a trailer-resolved row competes for its node like
+            # a branch-resolved one, so one node named by a branch PR and a
+            # trailer PR reads ambiguous on both rows.
+            key_url = _normalized_pr_url(row.get("url"))
+            hits = by_pr_ref.get((number, key_url), []) if key_url else []
+            if not hits and len(trailer) == 1:
+                open_prs_by_node.setdefault(trailer[0], []).append(number)
 
     verdicts: list[OpenPrBinding] = []
-    for number, url, head, matched in parsed:
+    for number, url, head, matched, trailer, body_supplied in parsed:
+        via = "branch"
         if not matched:
-            verdicts.append(OpenPrBinding(number, url, head, "untracked"))
-            continue
+            # Fallback: the node's own back-pointer. A reverse candidate
+            # already points at this PR, so this can only ever produce
+            # ``bound`` (or refuse on ambiguity) - never a heal.
+            key_url = _normalized_pr_url(url)
+            hits = by_pr_ref.get((number, key_url), []) if key_url else []
+            if not hits:
+                if not trailer:
+                    verdicts.append(
+                        OpenPrBinding(
+                            number, url, head, "untracked",
+                            detail=(
+                                f"branch '{head}' names no real node; "
+                                + (
+                                    f"no node carries #{number} at {url}"
+                                    if url
+                                    else "no url, back-pointer not read"
+                                )
+                                + (
+                                    "; body carries no closure line"
+                                    if body_supplied
+                                    else "; body not supplied, trailer not read"
+                                )
+                            ),
+                        )
+                    )
+                    continue
+                if len(trailer) > 1:
+                    verdicts.append(
+                        OpenPrBinding(
+                            number, url, head, "ambiguous",
+                            detail=f"trailer names {len(trailer)} real nodes: "
+                            f"{' '.join(trailer)}",
+                        )
+                    )
+                    continue
+                matched = trailer
+                via = "trailer"
+            else:
+                if len(hits) > 1:
+                    verdicts.append(
+                        OpenPrBinding(
+                            number, url, head, "ambiguous",
+                            detail=f"{len(hits)} nodes carry this PR: "
+                            f"{' '.join(sorted(hits))}",
+                        )
+                    )
+                    continue
+                matched = hits
+                via = "branch"
         if len(matched) > 1:
             verdicts.append(
                 OpenPrBinding(
@@ -1524,7 +1807,7 @@ def classify_open_pr_bindings(
             )
             continue
         nid = matched[0]
-        siblings = sorted(open_prs_by_node[nid])
+        siblings = sorted(open_prs_by_node.get(nid, []))
         if len(siblings) > 1:
             verdicts.append(
                 OpenPrBinding(
@@ -1540,6 +1823,11 @@ def classify_open_pr_bindings(
         verdicts.append(
             OpenPrBinding(
                 number, url, head, "bound" if refs_this_pr else "missing", node_id=nid,
+                detail=(
+                    None
+                    if refs_this_pr
+                    else f"{nid} resolved via {via} but does not point back at #{number}"
+                ),
             )
         )
     return verdicts
@@ -1549,10 +1837,8 @@ def list_open_pr_branches(
     *,
     cwd: str,
     limit: int = 100,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    timeout_s: float = GH_QUERY_TIMEOUT_S,
 ) -> list[dict]:
-    """Open PRs (number/url/headRefName) for the open-binding heal (x-d3c6).
+    """Open PRs (number/url/headRefName) for the open-binding heal.
 
     Same shape and contract as :func:`list_merged_pr_branches`: one bounded
     call in ``cwd`` so gh resolves the repo from that dir's origin remote,
@@ -1561,27 +1847,7 @@ def list_open_pr_branches(
     """
     if _gh_executable() is None:
         return []
-    cmd = [
-        "gh", "pr", "list", "--state", "open", "--limit", str(limit + 1),
-        "--json", "number,url,headRefName",
-    ]
-    try:
-        result = runner(
-            cmd, capture_output=True, text=True, check=False, timeout=timeout_s, cwd=cwd
-        )
-    except (subprocess.TimeoutExpired, OSError) as exc:
-        raise ReconcileError(f"gh pr list (open) failed: {exc}") from exc
-    if result.returncode != 0:
-        raise ReconcileError(
-            f"gh pr list (open) failed (rc={result.returncode}): "
-            f"{(result.stderr or '').strip()}"
-        )
-    try:
-        rows = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise ReconcileError(f"gh stdout was not JSON: {exc}") from exc
-    if not isinstance(rows, list):
-        raise ReconcileError("gh stdout for open PR listing was not a JSON array")
+    rows = _rest_pr_rows(cwd, "open", max_pages=2)
     if len(rows) > limit:
         raise ReconcileError(
             f"open PR listing hit its {limit}-row limit; refusing a unique binding"
@@ -1589,62 +1855,147 @@ def list_open_pr_branches(
     return rows
 
 
-def collect_open_binding_heals(
+def _repo_group_key(cwd: str, memo: dict[str, str]) -> str:
+    """The git common dir of ``cwd``, or ``cwd`` when git can't say."""
+    hit = memo.get(cwd)
+    if hit is None:
+        try:
+            probe = subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"], capture_output=True,
+                text=True, check=False, timeout=3, cwd=cwd,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            probe = None
+        # ``.git`` comes back relative on a main checkout; anchor it so keys agree.
+        hit = (
+            str((Path(cwd) / probe.stdout.strip()).resolve())
+            if probe is not None and probe.returncode == 0 and probe.stdout.strip()
+            else cwd
+        )
+        memo[cwd] = hit
+    return hit
+
+
+class _ListingCache:
+    """One gh listing per repo per run, shared by the scans.
+
+    A failed fetch caches the error so later asks re-raise, not re-hit gh.
+    """
+
+    def __init__(self) -> None:
+        self._repo_keys: dict[str, str] = {}
+        self._store: dict[tuple[str, str], list[dict]] = {}
+        self._errors: dict[tuple[str, str], ReconcileError] = {}
+
+    def rows_for(
+        self, kind: str, cwd: str, fetch: Optional[Callable[..., list[dict]]] = None
+    ) -> list[dict]:
+        """Cached rows for ``kind`` ("open" | "merged") of ``cwd``'s repo."""
+        if fetch is None:
+            fetch = list_open_pr_branches if kind == "open" else list_merged_pr_branches
+        key = (kind, _repo_group_key(cwd, self._repo_keys))
+        if key in self._errors:
+            raise self._errors[key]
+        if key not in self._store:
+            try:
+                self._store[key] = fetch(cwd=cwd)
+            except ReconcileError as exc:
+                self._errors[key] = exc
+                raise
+        return self._store[key]
+
+
+def _group_refless_by_repo(
     entries: list[dict],
     *,
     node_id: Optional[Union[str, Iterable[str]]] = None,
-    list_open: Optional[Callable[..., list[dict]]] = None,
-) -> "tuple[list[OpenPrBinding], list[str]]":
-    """Discover open PRs that uniquely name an open, ref-less node (x-d3c6).
+    memo: dict[str, str],
+    with_refs: bool = False,
+) -> "tuple[dict[str, list[dict]], dict[str, str], list[str]]":
+    """Group open ref-less candidates by repo: (by_repo, cwd_by_nid, skipped).
 
-    One ``gh pr list --state open`` per distinct candidate cwd, under the same
-    ``REVERSE_MAP_BUDGET_S`` wall clock as the merged reverse map. Returns
-    ``(heals, advisories)``: heals are ``missing`` verdicts whose node is open
-    with no PR refs - the exact repair a human did by hand with
-    ``fno backlog update <id> --pr-number``; advisories name ambiguity and gh
-    read failures without mutating anything. Persisting the fills is the
-    CALLER's job; this function only reads.
+    Shared eligibility of both listing scans; the first member's cwd runs the
+    gh call so gh still resolves the repo from that dir's origin remote. Pass
+    the cache's ``_repo_keys`` so both scans probe each cwd once per run.
     """
-    if list_open is None:
-        list_open = list_open_pr_branches
     _scope = _node_id_scope(node_id)
-
-    # Same eligibility as reverse_map_unstamped: open, ref-less, live cwd -
-    # one gh call per cwd group, not per node.
-    by_cwd: dict[str, set[str]] = {}
+    by_repo: dict[str, list[dict]] = {}
+    cwd_by_nid: dict[str, str] = {}
+    skipped: list[str] = []
     for node in entries:
         nid = node.get("id")
         if not isinstance(nid, str):
             continue
         if _scope is not None and nid not in _scope:
             continue
-        if not node_is_open(node) or node_pr_refs(node):
+        if not node_is_open(node) or (node_pr_refs(node) and not with_refs):
             continue
         cwd = node.get("cwd")
+        # str-only: a corrupt non-string cwd would be a bad dict key and a
+        # TypeError at the subprocess cwd= below.
         if not isinstance(cwd, str) or not cwd:
             continue
         cwd = _effective_reconcile_cwd(cwd, node.get("project"))
-        if not os.path.isdir(cwd):
+        if not os.path.isdir(cwd) or _repo_group_key(cwd, memo) == cwd:
+            skipped.append(nid)
             continue
-        by_cwd.setdefault(cwd, set()).add(nid)
+        cwd_by_nid[nid] = cwd
+        by_repo.setdefault(_repo_group_key(cwd, memo), []).append(node)
+    return by_repo, cwd_by_nid, skipped
+
+
+def collect_open_binding_heals(
+    entries: list[dict],
+    *,
+    node_id: Optional[Union[str, Iterable[str]]] = None,
+    list_open: Optional[Callable[..., list[dict]]] = None,
+    listings: Optional[_ListingCache] = None,
+) -> "tuple[list[OpenPrBinding], list[str]]":
+    """Discover open PRs that uniquely name an open, ref-less node.
+
+    One ``gh pr list --state open`` per repo (same-repo worktrees share the
+    call), under the same ``REVERSE_MAP_BUDGET_S`` wall clock as the merged
+    reverse map. Returns ``(heals, advisories)``: heals are ``missing``
+    verdicts whose node is open with no PR refs - the exact repair a human did
+    by hand with ``fno backlog update <id> --pr-number``; advisories name
+    ambiguity and gh read failures without mutating anything. Persisting the
+    fills is the CALLER's job; this function only reads.
+    """
+    if list_open is None:
+        list_open = list_open_pr_branches
+    cache = listings if listings is not None else _ListingCache()
+
+    by_repo, cwd_by_nid, _skipped = _group_refless_by_repo(
+        entries, node_id=node_id, memo=cache._repo_keys, with_refs=True
+    )
 
     heals: list[OpenPrBinding] = []
     advisories: list[str] = []
     _deadline = time.monotonic() + REVERSE_MAP_BUDGET_S
-    _groups = list(by_cwd.items())
-    for _i, (cwd, nids) in enumerate(_groups):
+    def _primary_closed(node, cwd) -> bool:
+        if not isinstance(number := node.get("pr_number"), int):
+            return False
+        try:
+            return query_pr_merge_state(number, cwd=cwd).state == "CLOSED"
+        except ReconcileError as exc:
+            advisories.append(f"open-binding rebind: {node.get('id')} PR #{number} unreadable ({exc})")
+            return False
+    _groups = list(by_repo.items())
+    for _i, (_key, nodes) in enumerate(_groups):
         if time.monotonic() >= _deadline:
-            _deferred = sorted(n for _c, ns in _groups[_i:] for n in ns)
+            _deferred = sorted(n["id"] for _c, ns in _groups[_i:] for n in ns)
             advisories.append(
                 f"open-binding scan stopped at its {REVERSE_MAP_BUDGET_S:.0f}s budget "
                 f"(gh is slow or degraded); deferred {len(_deferred)} node(s) to a "
                 f"later sweep: {' '.join(_deferred)}"
             )
             break
+        nids = {n["id"] for n in nodes}
+        gh_cwd = cwd_by_nid[nodes[0]["id"]]
         try:
-            rows = list_open(cwd=cwd)
+            rows = cache.rows_for("open", gh_cwd, list_open)
         except ReconcileError as exc:
-            advisories.append(f"open-binding gh query failed ({cwd}): {exc}")
+            advisories.append(f"open-binding gh query failed ({gh_cwd}): {exc}")
             continue
         for binding in classify_open_pr_bindings(rows, entries):
             if binding.verdict == "ambiguous":
@@ -1652,21 +2003,32 @@ def collect_open_binding_heals(
                     f"open PR #{binding.pr_number} binding ambiguous: {binding.detail}"
                 )
             elif binding.verdict == "missing" and binding.node_id in nids:
+                node = next(n for n in nodes if n.get("id") == binding.node_id)
+                if node_pr_refs(node) and not _primary_closed(node, gh_cwd):
+                    continue
+                if node_pr_refs(node):
+                    binding.verdict = "rebind"
                 heals.append(binding)
     return heals, advisories
+
+
+def _in_checkout(cwd: str) -> bool:
+    p = Path(cwd)
+    return p.is_dir() and any((d / ".git").exists() for d in (p, *p.parents))
 
 
 def _effective_reconcile_cwd(cwd: str, project: Optional[str]) -> str:
     """The dir reconcile should run a node's gh query / post-close routing in.
 
     Usually the node's recorded ``cwd`` (a worktree). When that worktree was
-    archived (dir gone), fall back to the node's OWN project checkout so gh
+    archived (dir gone) or is not a git checkout (e.g. a node filed from a
+    stray dir), fall back to the node's OWN project checkout so gh
     queries the right repo and post-close routing (advance/auto-continue) probes
     the campaign-arm marker under the real root, not a missing dir - but only
     when that root exists, else keep the original cwd so the existing degrade
     (per-node warning / node-cwd routing) is strictly unchanged.
     """
-    if cwd and not os.path.isdir(cwd):
+    if cwd and not _in_checkout(cwd):
         from fno.graph._intake import project_root_from_settings
 
         root = project_root_from_settings(project)
@@ -1678,7 +2040,7 @@ def _effective_reconcile_cwd(cwd: str, project: Optional[str]) -> str:
 def _node_id_scope(node_id: Optional[Union[str, Iterable[str]]]) -> Optional[set[str]]:
     """Normalize a scan's ``node_id`` filter to a set, or None for unscoped.
 
-    Accepts a single id (the common case) or an iterable of ids (x-59a6: a
+    Accepts a single id (the common case) or an iterable of ids (: a
     ``--pr-number`` call scopes the scan to every node this one PR actually
     touches - its own stamped ref plus every exact trailer claim - rather
     than either a single node or the whole graph.
@@ -1695,58 +2057,21 @@ def reverse_map_unstamped(
     *,
     node_id: Optional[Union[str, Iterable[str]]] = None,
     list_merged: Optional[Callable[..., list[dict]]] = None,
+    listings: Optional[_ListingCache] = None,
 ) -> list[MergeDriftRecord]:
     """Close open nodes with NO PR refs by matching the id in a merged branch.
 
-    A /target session that dies between ``gh pr create`` and the node<->PR
-    stamp leaves an open node with no ``pr_number`` - invisible to the forward
-    ``scan_merge_drift`` (which needs a ref to query). The branch convention
-    (``branch_name()``) still carries the full node id, so one
-    ``gh pr list --state merged`` per repo reverse-maps it. A unique headRef hit
-    synthesizes the same MergeDriftRecord the stamped path emits (so the
-    existing close path applies unchanged); an ambiguous hit (two merged PRs
-    for one id) emits an ``error`` record naming both, never a guess.
-
-    ``list_merged`` is injected in tests to avoid shelling to gh.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     if list_merged is None:
         list_merged = list_merged_pr_branches
-    _scope = _node_id_scope(node_id)
+    cache = listings if listings is not None else _ListingCache()
 
-    # Open, ref-less, cwd-resolvable candidates grouped by repo dir so we make
-    # ONE gh call per repo, not per node.
-    # ponytail: group by cwd string; two worktrees of one repo -> two identical
-    # gh calls. Collapse to git-common-dir only if that ever shows on a profile.
-    by_cwd: dict[str, list[dict]] = {}
-    skipped_dead_cwd: list[str] = []
-    for node in entries:
-        nid = node.get("id")
-        if not isinstance(nid, str):
-            continue
-        if _scope is not None and nid not in _scope:
-            continue
-        if not node_is_open(node):
-            continue
-        if node_pr_refs(node):
-            continue
-        cwd = node.get("cwd")
-        # str-only: a non-string cwd (corrupt graph) would become a bad dict key
-        # here and a TypeError at the subprocess cwd= below.
-        if not isinstance(cwd, str) or not cwd:
-            continue
-        # An archived-worktree cwd would make gh raise Errno 2; substitute the
-        # node's project root when it's gone (also collapses same-project gone
-        # worktrees to one gh call).
-        cwd = _effective_reconcile_cwd(cwd, node.get("project"))
-        # Original dead AND project-root fallback unresolvable: this ref-less node
-        # cannot be reverse-mapped at all - handing the missing dir to
-        # subprocess(cwd=) raises Errno 2, one hard failure per node on EVERY
-        # reconcile (SessionStart + every merge). Skip it and surface ONE
-        # aggregated advisory below instead of that permanent per-node spam.
-        if not os.path.isdir(cwd):
-            skipped_dead_cwd.append(nid)
-            continue
-        by_cwd.setdefault(cwd, []).append(node)
+    # Open, ref-less, cwd-resolvable candidates grouped by repo so we make
+    # ONE gh call per repo, not per node or per worktree cwd.
+    by_repo, cwd_by_nid, skipped_dead_cwd = _group_refless_by_repo(
+        entries, node_id=node_id, memo=cache._repo_keys
+    )
 
     if skipped_dead_cwd:
         # Name EVERY skipped id (not a capped subset): the id is the only handle
@@ -1756,17 +2081,17 @@ def reverse_map_unstamped(
         # preserve. One line, however many ids; the count is realistically small.
         print(
             f"reverse-map: skipped {len(skipped_dead_cwd)} ref-less node(s) with "
-            f"missing cwd: {' '.join(skipped_dead_cwd)} "
+            f"missing or non-checkout cwd: {' '.join(skipped_dead_cwd)} "
             f"(heal with: fno backlog update <id> --project <p> --cwd <path>)",
             file=sys.stderr,
         )
 
     records: list[MergeDriftRecord] = []
     _deadline = time.monotonic() + REVERSE_MAP_BUDGET_S
-    _cwds = list(by_cwd.items())
-    for _i, (cwd, nodes) in enumerate(_cwds):
+    _groups = list(by_repo.items())
+    for _i, (_key, nodes) in enumerate(_groups):
         if time.monotonic() >= _deadline:
-            _deferred = [n["id"] for _c, ns in _cwds[_i:] for n in ns]
+            _deferred = [n["id"] for _c, ns in _groups[_i:] for n in ns]
             print(
                 f"reverse-map: stopped at its {REVERSE_MAP_BUDGET_S:.0f}s budget "
                 f"(gh is slow or degraded); deferred {len(_deferred)} node(s) to a "
@@ -1774,8 +2099,9 @@ def reverse_map_unstamped(
                 file=sys.stderr,
             )
             break
+        gh_cwd = cwd_by_nid[nodes[0]["id"]]
         try:
-            merged = list_merged(cwd=cwd)
+            merged = cache.rows_for("merged", gh_cwd, list_merged)
         except ReconcileError as exc:
             for node in nodes:
                 records.append(
@@ -1783,17 +2109,20 @@ def reverse_map_unstamped(
                         node_id=node["id"], plan_path=node.get("plan_path"),
                         pr_number=0, pr_url=None, pr_state="UNKNOWN", merged_at=None,
                         error=f"reverse-map gh query failed: {exc}",
-                        session_id=node.get("session_id"), cwd=cwd,
+                        session_id=node.get("session_id"),
+                        cwd=cwd_by_nid[node["id"]],
                     )
                 )
             continue
 
         for node in nodes:
             nid = node["id"]
+            from fno.pr.closure import retargeted_from_ids
             hits = [
                 row for row in merged
                 if isinstance(row, dict)
                 and _branch_matches_node(str(row.get("headRefName") or ""), nid)
+                and nid not in retargeted_from_ids(str(row.get("body") or ""))
             ]
             if not hits:
                 continue
@@ -1804,7 +2133,8 @@ def reverse_map_unstamped(
                         node_id=nid, plan_path=node.get("plan_path"),
                         pr_number=0, pr_url=None, pr_state="UNKNOWN", merged_at=None,
                         error=f"reverse-map ambiguous: {nums} both match branch id {nid}",
-                        session_id=node.get("session_id"), cwd=cwd,
+                        session_id=node.get("session_id"),
+                        cwd=cwd_by_nid[nid],
                     )
                 )
                 continue
@@ -1814,7 +2144,8 @@ def reverse_map_unstamped(
                     node_id=nid, plan_path=node.get("plan_path"),
                     pr_number=int(row.get("number") or 0), pr_url=row.get("url"),
                     pr_state="MERGED", merged_at=row.get("mergedAt"),
-                    session_id=node.get("session_id"), cwd=cwd,
+                    session_id=node.get("session_id"),
+                    cwd=cwd_by_nid[nid],
                 )
             )
     return records
@@ -1825,16 +2156,7 @@ def detect_reverted_nodes(
 ) -> list[tuple[str, int]]:
     """(node_id, revert_pr_number) pairs to stamp ``reverted: true``.
 
-    A merged PR whose title starts with ``Revert`` and whose body references
-    a PR number carried by a not-yet-reverted graph node names that node's
-    ship as reverted. Pure (no I/O) so tests need no gh.
-
-    Matching is REPO-SCOPED: the graph is global across projects, so bare PR
-    numbers collide. A candidate node must carry a ``pr_url`` in the SAME
-    repo as the revert PR's own ``url``, a body qualifier
-    (``Reverts other/repo#N``) must match that repo, and an ambiguous match
-    (two same-repo nodes on one number) stamps nothing - the same
-    ambiguity-resolves-to-nothing rule as the W1 backfill.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     # pr_number -> [(entry, that ref's repo slug)]; refs without a parseable
     # pr_url are indexed with slug None and never match (conservative).
@@ -1877,31 +2199,45 @@ def detect_reverted_nodes(
     return out
 
 
+def _listing_answer(
+    rows: list[dict], number: int, ref_repo: Optional[str]
+) -> Optional[dict]:
+    """First row carrying this number whose repo may answer for the ref."""
+    for row in rows:
+        if not isinstance(row, dict) or row.get("number") != number:
+            continue
+        slug = repo_slug_from_url(row.get("url"))
+        if ref_repo is None or slug is None or slug.lower() == ref_repo.lower():
+            return row
+    return None
+
+
 def scan_merge_drift(
     entries: list[dict],
     *,
     query: Optional[Callable[..., PrMergeState]] = None,
     node_id: Optional[Union[str, Iterable[str]]] = None,
     list_merged: Optional[Callable[..., list[dict]]] = None,
+    listings: Optional[_ListingCache] = None,
 ) -> list[MergeDriftRecord]:
     """Find open nodes whose PR has merged outside the ship gate.
 
-    Returns one record per open node that resolves to a MERGED PR, plus
-    records flagged with ``error`` for nodes whose PR state could not be
-    resolved. Nodes whose PRs are all still OPEN (or closed-unmerged) yield no
-    record - they are not drift. ``node_id`` restricts the scan to a single
-    node (a str) or a set of nodes (an iterable of str) - e.g. every node one
-    specific PR's exact trailer names, so a ``--pr-number`` call scans only
-    what that PR could possibly touch instead of the whole graph (x-59a6).
-    Tests inject a ``query`` stub to avoid shelling out to gh.
+    With ``listings``, a ref resolves against the repo's listings first; the
+    per-node ``query`` fires only for a number in neither listing.
 
-    A second pass (``reverse_map_unstamped``) covers open nodes with NO PR ref
-    at all - a session that died before the node<->PR stamp - by matching the
-    node id against merged branch names. ``list_merged`` is injected in tests.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     if query is None:
         query = query_pr_merge_state
     _scope = _node_id_scope(node_id)
+
+    # Successors of a pending supersession need changed-file evidence, which
+    # only the per-node query fetches: route them around the listings.
+    pending_supersede = {
+        e.get("superseded_by")
+        for e in entries
+        if isinstance(e.get("supersession"), dict) and not e["supersession"].get("verified_at")
+    }
 
     records: list[MergeDriftRecord] = []
 
@@ -1930,6 +2266,17 @@ def scan_merge_drift(
                 cwd = None
         else:
             cwd = None
+
+        # No cache, no live dir, or supersession evidence owed: query.
+        merged_rows: list[dict] = []
+        open_rows: list[dict] = []
+        if listings is not None and cwd is not None and nid not in pending_supersede:
+            try:
+                merged_rows = listings.rows_for("merged", cwd, list_merged)
+                open_rows = listings.rows_for("open", cwd)
+            except ReconcileError:
+                merged_rows = open_rows = []
+
         merged: Optional[PrMergeState] = None
         first_error: Optional[str] = None
         first_error_kind: Optional[str] = None
@@ -1942,6 +2289,18 @@ def scan_merge_drift(
             # cannot safely identify the repo: record a failure rather than
             # risk closing a node off a same-numbered PR elsewhere.
             repo = repo_slug_from_url(url)
+            # A merged listing row closes this ref; only a number in NEITHER
+            # listing owes the query below.
+            hit = _listing_answer(merged_rows, number, repo)
+            if hit is not None:
+                # No mergeCommit oid/files on a listing row - like a reverse-mapped record.
+                merged = PrMergeState(
+                    number=number, state="MERGED",
+                    url=hit.get("url"), merged_at=hit.get("mergedAt"),
+                )
+                break
+            if _listing_answer(open_rows, number, repo) is not None:
+                continue  # still open on GitHub: no drift, and no query owed
             if repo is None and not cwd:
                 if first_error is None:
                     first_error = (
@@ -2014,37 +2373,12 @@ def scan_merge_drift(
             )
 
     records.extend(
-        reverse_map_unstamped(entries, node_id=node_id, list_merged=list_merged)
+        reverse_map_unstamped(
+            entries, node_id=node_id, list_merged=list_merged, listings=listings
+        )
     )
 
     return records
-
-
-def write_retro_sentinel(record: MergeDriftRecord, *, sentinel_dir: Path) -> Path:
-    """Drop a per-node retro sentinel naming a node closed by reconcile.
-
-    The sentinel hands the judgment half (follow-up capture via inbox/triage)
-    to a later session's LLM/human pass. Reconcile must NOT auto-create inbox
-    lines or backlog nodes - that stays explicit. Overwrites an existing
-    sentinel for the same node (idempotent).
-
-    Only ever called with a closeable (resolved-merged) record; the assertion
-    catches misuse (e.g. handing it an error record) in tests and dev.
-    """
-    assert record.closeable, f"refusing to write sentinel for non-closeable {record.node_id}"
-    sentinel_dir.mkdir(parents=True, exist_ok=True)
-    path = sentinel_dir / f"{record.node_id}.json"
-    payload = {
-        "node_id": record.node_id,
-        "pr_number": record.pr_number,
-        "pr_url": record.pr_url,
-        "merged_at": record.merged_at,
-        "plan_path": record.plan_path,
-        "closed_by": "backlog-reconcile",
-        "closed_at": datetime.now(timezone.utc).isoformat(),
-    }
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    return path
 
 
 def _owning_state_path(record: MergeDriftRecord) -> Optional[Path]:
@@ -2092,23 +2426,8 @@ def emit_session_satisfied_for_record(
     reason: str = "reconcile_detected_merge",
 ) -> Optional[Path]:
     """Emit a ``session_satisfied{source:"pr_merge"}`` event for the target
-    session that owns a merged-and-now-closed node (Group 1 / ab-f7f8bc53).
 
-    Today only an in-gate merge through ``scripts/lib/pr-merge.sh`` emits this
-    signal, so an out-of-band merge (web button, bare ``gh pr merge``) leaves the
-    owning session hot and the stop hook hard re-blocks it. After reconcile
-    closes the drifted node, this hands the same auto-complete signal to the
-    owning session.
-
-    The event binds to that session via ``session_id`` + ``gate_state_hash`` (the
-    md5 of the owning target-state.md at emit time), matching the stop hook's
-    staleness check (``check_session_satisfied``). The defensive stop-hook probe
-    (Task 1.2) is the backstop for when this emit is stale or never lands.
-
-    Best-effort and non-fatal: returns the events.jsonl path on a successful
-    emit, or None when there is nothing to satisfy (no cwd, no live state file,
-    already-COMPLETE session, missing session_id) or any failure. A failure here
-    must never abort the reconcile close.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     state_path = _owning_state_path(record)
     if state_path is None or not state_path.exists():
@@ -2158,7 +2477,9 @@ def emit_session_satisfied_for_record(
             evidence_url=record.pr_url,
             source="backlog",
         )
-        events.append_event(event, events_path)
+        from fno.events.store_client import emit_envelope
+
+        emit_envelope(event, events_path)
     except Exception as exc:  # best-effort: never abort the close on emit failure
         print(
             f"reconcile: session_satisfied emit failed for {record.node_id} "
@@ -2180,7 +2501,7 @@ def emit_human_touch_for_record(record: MergeDriftRecord) -> Optional[Path]:
     diagnostic and never aborts the close.
     """
     try:
-        from fno.events import _build, append_event
+        from fno.events import _build
 
         event = _build(
             "human_touch",
@@ -2191,11 +2512,15 @@ def emit_human_touch_for_record(record: MergeDriftRecord) -> Optional[Path]:
                 "resolution": "ok",
             },
         )
+        from fno.events.store_client import emit_envelope
+
+        from fno.paths import project_events_json
+
         if isinstance(record.cwd, str) and record.cwd:
             events_path = Path(record.cwd) / ".fno" / "events.jsonl"
-            append_event(event, events_path=events_path)
+            emit_envelope(event, events_path)
             return events_path
-        append_event(event)
+        emit_envelope(event, project_events_json())
         return None
     except Exception as exc:  # best-effort: never abort the close on emit failure
         print(
@@ -2206,12 +2531,12 @@ def emit_human_touch_for_record(record: MergeDriftRecord) -> Optional[Path]:
         return None
 
 
-# Tier-1 gate_escape (x-f894). A required review bot that never reviewed a PR
+# Tier-1 gate_escape. A required review bot that never reviewed a PR
 # which merged out-of-band is autonomy debt: the loop should have waited for /
 # resolved that review, and the human merge past it is the escape. Kept as a
 # module constant so the emit site and its tests name the same string.
 _GATE_ESCAPE_REASON_DEADBOT = "dead-bot"
-# x-0eaf: an out-of-band merge of a PR nothing reviewed. Distinct from dead-bot
+# an out-of-band merge of a PR nothing reviewed. Distinct from dead-bot
 # (a required bot never reviewed) - this fires whether or not any bot was
 # required, closing the gap where the dead-bot escape's early return on empty
 # github_apps emitted nothing for the exact zero-coverage merges this node
@@ -2271,7 +2596,7 @@ def _fetch_pr_review_logins(
     return logins
 
 
-# Tier-1 reuses the shared gate_escape emit machinery (x-91b5): the canonical
+# Tier-1 reuses the shared gate_escape emit machinery: the canonical
 # events path, the durable failure-log, and the final dedup+append all live in
 # ONE place (fno.events.gate_escape) so Tier-1 (dead-bot) and Tier-2 (spawn-cap
 # + the manual verb) never drift into parallel telemetry paths (Locked Decision
@@ -2290,12 +2615,12 @@ def _latest_review_coverage(pr_number: int, events_path: Path) -> Optional[dict]
     """The latest ``review_coverage`` event data for ``pr_number``, or None.
 
     Fail-open: a missing/unreadable log or a parse error returns None (the
-    caller under-reports rather than crashes). (x-0eaf)
+    caller under-reports rather than crashes).
 
     Reads the global log alongside ``events_path`` for the same reason the merge
     gate does: reconcile runs from canonical while the review that produced the
     event ran wherever the session stood, usually a worktree. Scanning one log
-    left this detector reasoning about coverage it could not see (x-f43c).
+    left this detector reasoning about coverage it could not see.
     """
     try:
         from fno.pr._reviews import latest_review_coverage
@@ -2315,7 +2640,7 @@ def _emit_zero_coverage_escape(record: "MergeDriftRecord", events_path: Path) ->
     event shows 0/unknown coverage. Returns True if emitted.
 
     Fires whether or not any bot was required, so a no-required-bots config that
-    merged a PR nothing reviewed is still recorded as autonomy debt (x-0eaf). A
+    merged a PR nothing reviewed is still recorded as autonomy debt. A
     genuinely-reviewed PR (covered, count > 0) does not escape; no event at all
     (loop-check never ran) under-reports (fail-open). Returns True/False so the
     caller can short-circuit the dead-bot path when the headline gap is coverage.
@@ -2324,11 +2649,10 @@ def _emit_zero_coverage_escape(record: "MergeDriftRecord", events_path: Path) ->
     if cov is None:
         return False
     if cov.get("coverage") == "covered":
-        try:
-            if int(cov.get("reviewed_count") or 0) > 0:
-                return False  # genuinely reviewed; not an escape
-        except (TypeError, ValueError):
-            pass
+        # The word decides, never the count: a budget spent on fail rounds
+        # reads covered with passed_count 0, and the count conjunct here
+        # reported that as "nothing reviewed this diff".
+        return False  # genuinely reviewed; not an escape
     count = cov.get("reviewed_count", 0)
     count_str = str(count) if count is not None else "unknown"
     detail = (
@@ -2352,24 +2676,9 @@ def emit_gate_escape_for_record(
     reviews_fetcher: Callable[..., set[str]] = _fetch_pr_review_logins,
     events_path: Optional[Path] = None,
 ) -> Optional[Path]:
-    """Tier-1 auto-emit (x-f894): a ``gate_escape{reason:dead-bot}`` when
-    reconcile closes an out-of-band-merged node whose required review bot never
-    reviewed.
+    """Tier-1 auto-emit : a ``gate_escape{reason:dead-bot}`` when
 
-    Boundary (the #222 rule - the load-bearing correctness surface):
-      - required_bots empty          -> NOT an escape: a no-required-bots repo
-                                        self-merging a green PR is normal (AC2).
-      - every required bot reviewed  -> NOT an escape: the gate was met; only
-                                        the merge happened out of band (AC2b).
-      - some required bot never reviewed -> escape: the loop should have waited
-                                        for / resolved that review (AC1).
-
-    Lands in the CANONICAL events log (``events_path`` overrides for tests) so a
-    closed node's telemetry outlives its worktree and retro aggregates one
-    coherent log. Dedup on (pr, reason) (AC4). Telemetry fails OPEN: any failure
-    logs a durable emit-failure line beside the events log (AC7) and returns
-    None, never raising - the emit must never abort the reconcile close (AC5).
-    Returns the events.jsonl path on a successful emit.
+    Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
     reason = _GATE_ESCAPE_REASON_DEADBOT
     resolved_events: Optional[Path] = events_path
@@ -2384,7 +2693,7 @@ def emit_gate_escape_for_record(
         if resolved_events is None:
             resolved_events = _canonical_events_path(record.cwd)
 
-        # x-0eaf: zero-coverage escape fires whether or not any bot was required.
+        # zero-coverage escape fires whether or not any bot was required.
         # The dead-bot-only path below returned early when github_apps was empty,
         # so on a no-required-bots config it emitted nothing for the exact
         # zero-coverage merges this node exists to catch. Reads the

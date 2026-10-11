@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
-import shutil
-import subprocess
-import tempfile
+import re
+import sys
 import time
 from functools import lru_cache
 from datetime import datetime, timezone
@@ -16,7 +15,8 @@ from typing import Any, NoReturn
 
 import typer
 
-from fno.footprint import Footprint, parse_footprint
+from fno.footprint import Admission, Footprint, parse_footprint, top_consumers
+from fno.rust_binary import call_binary_json
 
 
 #: The sustained-CPU threshold derives from measured capacity at this fraction
@@ -26,8 +26,12 @@ from fno.footprint import Footprint, parse_footprint
 SUSTAINED_CPU_CAPACITY_FRACTION = 0.1
 SUSTAINED_CPU_FLOOR_CORES = 0.25
 DAEMON_ALLOWANCE = 1
-_PS_COLUMNS = "pid,ppid,etime,%cpu,rss,command"
 PS_TIMEOUT_SECONDS = 5.0
+#: The sccache fields the latest process-table fetch carried: server pid and
+#: trailing-hour restarts, counted by the daemon's watch tick. One slot,
+#: refreshed by _read_ps - the census door answers table and fields in one
+#: call. The verb reads it at emit time; the cause-only lane never does.
+_LAST_SCCACHE: tuple[int | None, int | None] = (None, None)
 _NO_LOAD_SNAPSHOT = object()
 #: Exit codes. A capacity breach keeps 3 (existing readers depend on it); the
 #: leak alarm gets its own code so ``echo $?`` answers WHICH alarm fired. The
@@ -188,10 +192,6 @@ def _cgroup_ancestors(path: Path, mount: Path) -> list[Path]:
         current = current.parent
 
 
-def _fno_binary() -> str:
-    return shutil.which("fno") or shutil.which("fno-py") or "fno"
-
-
 def _root_pid_is_live(pid: int, pid_start: int | None) -> bool | None:
     from fno.agents.spawn_gate import _pid_alive, _process_start_time
 
@@ -207,13 +207,23 @@ def _root_pid_is_live(pid: int, pid_start: int | None) -> bool | None:
     return _pid_alive(pid, pid_start)
 
 
+def _pid_recycled(pid: int, pid_start: int | None) -> bool:
+    """True only when the pid runs under a start time we never recorded.
+
+    Proof the recorded process is gone and this pid belongs to someone else.
+    An unreadable or matching start time answers False and the caller keeps
+    failing closed: recycling must be proven, never guessed.
+    """
+    from fno.agents.spawn_gate import _process_start_time
+
+    current = _process_start_time(pid)
+    return pid_start is not None and current is not None and current != pid_start
+
+
 class AttributionGap:
     """Live worker rows this reading could not attribute to processes.
 
-    Not an error: the machine-level measurement stands, and the gap text
-    names what is missing so a reader can tell an undercount from a clean
-    reading. A spawn gate must treat a gapped fleet share as unknown, never
-    as headroom (x-e040).
+    Not an error: the measurement stands and the gap names what is missing; a spawn gate reads a gapped share as unknown, never headroom.
     """
 
     def __init__(self, text: str) -> None:
@@ -224,21 +234,92 @@ class AttributionGap:
 
 
 def _pidless_route(row: Any) -> str | None:
-    """Name the route that can resolve this pidless row, or None.
+    """Name the bg-socket route that can resolve this pidless row, or None.
 
-    A route names the MECHANISM it drives, and may legitimately mention the
-    harness whose machinery that is. What it must never do is gate a
-    capability on a harness name: the predicate callers care about is the
-    PROPERTY - "this row carries an identity handle some route accepts" -
-    and a new harness gets resolution by adding a route entry here, never by
-    editing a hardcoded-name list somewhere else (x-e040, the seventh
-    specimen of that family).
+    Never a harness-name gate: the predicate is the property - an identity handle some route accepts. A short_id is the claude bg rv-map handle; a claude row without one derives it from the session id. A codex row's route is the rollout-fd oracle, partitioned separately in `_live_root_pids`; None here sends it there, not to the gap.
     """
-    # The claude bg socket farm: an 8-hex jobId resolves through the rv
-    # socket map. short_id is that handle.
     if getattr(row, "short_id", None):
         return "bg-socket"
+    if str(getattr(row, "harness", "")) == "claude" and getattr(row, "harness_session_id", None):
+        return "bg-socket"
     return None
+
+
+def _row_is_advancing(row: Any) -> bool:
+    """Positive transcript evidence this pidless row is advancing: the shared classifier's own ADVANCING verdict, a working/watching reading inside STALE_ATTENTION_S. Never raises: an unreadable probe proves nothing and the row stays judged by the witness, which fails closed to a gap."""
+    try:
+        from fno.agents import session_truth
+        from fno.agents.reachability import ADVANCING, classify_progress, classify_reachability
+        truth = session_truth.resolve_session_truth(str(getattr(row, "name", "") or ""))
+        state = truth.get("state")
+        age_s = truth.get("last_activity_age_s")
+        reach = classify_reachability(truth_state=state, age_s=age_s, falsifier=None, observed_model=truth.get("observed_model"))
+        prog = classify_progress(truth_state=state, reachability=reach.verdict, observed_model=truth.get("observed_model"), harness=getattr(row, "harness", None), route_settings_path=getattr(row, "route_settings_path", None), last_activity_age_s=age_s)
+        return prog.verdict == ADVANCING
+    except Exception:  # noqa: BLE001 - an unreadable probe never voids or clears
+        return False
+
+
+_SHARED_DAEMON_BY_HARNESS: dict[str, str] = {"codex": "codex-app-server"}
+
+
+def _shared_daemon_label(row: Any) -> str | None:
+    """Name the shared daemon hosting this row's work, or None.
+
+    Deliberately not a ``_pidless_route`` widening: a shared-daemon row
+    resolves to no process of its own. A table, so the next harness with a
+    shared daemon plugs in beside codex.
+    """
+    return _SHARED_DAEMON_BY_HARNESS.get(str(getattr(row, "harness", "")))
+
+
+def _claim_witness(name: str) -> str | None:
+    """The ``worker:<name>`` claim state, or None when the store cannot answer.
+
+    free/stale positively report no live holder; an unreadable store or a claim file that never existed proves nothing.
+    """
+    try:
+        from fno.agents.spawn_gate import _gate_claims_root
+        from fno.claims.core import claim_path, claim_status
+
+        key = f"worker:{name}"
+        root = _gate_claims_root()
+        state = (
+            claim_status(key, root=root).get("state")
+            if claim_path(key, root=root).exists()
+            else None
+        )
+    except Exception:  # noqa: BLE001 - an unreadable store proves nothing
+        return None
+    return str(state) if state else None
+
+
+def _row_transport_key(row: Any) -> str:
+    from fno.agents.session_procs import transport_join_key
+
+    return transport_join_key(
+        getattr(row, "short_id", ""), getattr(row, "harness_session_id", "")
+    )
+
+
+def _unrouted_row_costs_fleet(row: Any, deadline: float | None = None) -> bool:
+    """Whether an unrouted live row's cost is plausibly real and unattributed.
+    Fail closed: only a POSITIVE dead answer drops the row; the pane probe inherits the reading's remaining budget.
+    """
+    if deadline is not None and time.monotonic() >= deadline:
+        return True
+    mux = getattr(row, "mux", None)
+    if isinstance(mux, dict) and mux:
+        try:
+            from fno.agents.mux_spawn import _mux_pane_alive
+
+            budget = None if deadline is None else max(0.01, deadline - time.monotonic())
+            pane = _mux_pane_alive(mux, timeout=budget)
+        except Exception:  # noqa: BLE001 - an unanswered probe proves nothing
+            pane = None
+        return pane is None
+    state = _claim_witness(str(getattr(row, "name", "")))
+    return state not in ("free", "stale")
 
 
 def _terminal_row_changed_after_snapshot(row: Any, snapshot_at: float) -> bool:
@@ -265,12 +346,15 @@ def _live_root_pids(
     deadline: float | None = None,
     snapshot_pids: set[int] | None = None,
     snapshot_at: float | None = None,
+    serves: dict[str, str] | None = None,
 ) -> tuple[set[int], str | AttributionGap | None]:
     """Return positively live worker PIDs that may have detached children."""
     roots: set[int] = set()
+    recycled_rows: list[Any] = []
+    dead_rows: list[str] = []
     try:
         from fno.agents.registry import load_registry
-        from fno.agents.session_procs import bg_socket_pid_map
+        from fno.agents.session_procs import bg_socket_pid_map, roster_pid_map
         from fno.agents.spawn_gate import LIVE_STATUSES
 
         rows = load_registry()
@@ -286,7 +370,7 @@ def _live_root_pids(
                     and row.pid is None
                     and _terminal_row_changed_after_snapshot(row, snapshot_at)
                 ):
-                    return roots, "worker root liveness unavailable"
+                    return roots, f"worker root liveness unavailable: terminal row {getattr(row, 'name', '?')} exited inside the ps snapshot's second, so a later transition cannot be ruled out"
                 if (
                     snapshot_pids is None
                     or row.pid is None
@@ -294,74 +378,225 @@ def _live_root_pids(
                 ):
                     continue
                 if row.pid_start_time is None:
-                    return roots, "worker root liveness unavailable"
+                    return roots, f"worker root liveness unavailable: terminal row {getattr(row, 'name', '?')} sits in the ps snapshot and carries no pid start token"
                 root_live = _root_pid_is_live(row.pid, row.pid_start_time)
                 if root_live is not True:
-                    return roots, "worker root liveness unavailable"
+                    if not _pid_recycled(row.pid, row.pid_start_time):
+                        return roots, f"worker root liveness unavailable: terminal row {getattr(row, 'name', '?')} pid {row.pid} is not live and recycling is unproven"
+                    continue
                 roots.add(row.pid)
                 continue
             if row.pid is None:
                 continue
             if row.pid_start_time is None:
-                return roots, "worker root liveness unavailable"
+                return roots, f"worker root liveness unavailable: registry row {getattr(row, 'name', '?')} carries no pid start token"
             root_live = _root_pid_is_live(row.pid, row.pid_start_time)
             if root_live is None:
-                return roots, "worker root liveness unavailable"
+                return roots, f"worker root liveness unavailable: pid {row.pid} start time could not be read for row {getattr(row, 'name', '?')}"
             if root_live:
                 roots.add(row.pid)
             elif snapshot_pids is not None and row.pid in snapshot_pids:
-                return roots, "worker root liveness unavailable"
+                if not _pid_recycled(row.pid, row.pid_start_time):
+                    return roots, f"worker root liveness unavailable: row {getattr(row, 'name', '?')} pid {row.pid} is dead, sits in the ps snapshot, and recycling is unproven"
+                recycled_rows.append(row)
         pidless_rows = [
             row for row in rows if row.status in LIVE_STATUSES and row.pid is None
         ]
-        unrouted_rows = [row for row in pidless_rows if _pidless_route(row) is None]
-        routed_rows = [row for row in pidless_rows if _pidless_route(row) is not None]
-        # A pidless row NO route accepts is an attribution gap, not a dead
-        # reading: one such row used to suppress the entire report (x-e040,
-        # measured: six pidless codex rows kept the sensor returning
-        # "worker root discovery unavailable" at rest). The machine-level
-        # measurement stands; the gap names what is unattributed.
+        serves = serves or {}
+        # A row whose work runs inside a shared daemon is attributed by that
+        # daemon's verdict, not by an identity route of its own. A
+        # live verdict means the cost already sits inside the attributed
+        # shared root; any other verdict falls through to the per-row
+        # identity chain below (the rollout fd, then advancing, then the
+        # witness), which still fails closed to a gap.
+        daemon_rows = [
+            row for row in pidless_rows if _shared_daemon_label(row) is not None
+        ]
+        attributed_daemon = {
+            id(row)
+            for row in daemon_rows
+            if serves.get(_shared_daemon_label(row) or "", "unreadable") == "live"
+        }
+        own_rows = [row for row in pidless_rows if id(row) not in attributed_daemon]
+        unrouted_rows = [row for row in own_rows if _pidless_route(row) is None]
+        routed_rows = [row for row in own_rows if _pidless_route(row) is not None]
+        routed_keys = [(_row_transport_key(row), row) for row in routed_rows]
+        # a codex thread row's session id has an accepting route (the
+        # rollout fd) even though the claude short-id oracle cannot answer for
+        # it; resolved rows attribute like any root, unresolved ones ride the
+        # gap path below.
+        codex_keys = [
+            (str(getattr(row, "harness_session_id", "") or ""), row)
+            for row in unrouted_rows
+            if str(getattr(row, "harness", "")) == "codex"
+            and getattr(row, "harness_session_id", None)
+        ]
+        resolved_codex_ids: set[int] = set()
+        codex_pids: dict[str, int] = {}
+        if codex_keys and (deadline is None or time.monotonic() < deadline):
+            from fno.agents.session_procs import codex_rollout_pid_map
+
+            codex_pids = codex_rollout_pid_map(
+                {sid for sid, _row in codex_keys},
+                timeout=(5.0 if deadline is None else max(0.01, deadline - time.monotonic())),
+            )
+        for sid, row in codex_keys:
+            pid = codex_pids.get(sid)
+            if pid is not None:
+                if _root_pid_is_live(pid, None) is not True:
+                    dead_rows.append(f"{getattr(row, 'name', '?')} (codex rollout pid={pid})")
+                    resolved_codex_ids.add(id(row))  # named here; keep it out of the pidless gap below
+                    continue
+                roots.add(pid)
+                resolved_codex_ids.add(id(row))
+        # a routless row is a NAMED gap, not a dead reading -:
+        # only while a witness says the cost is real; past it all stay gaps.
+        # a row advancing by transcript evidence is a live worker whose
+        # pid no route can see, never an unattributable process - it drops from
+        # the gap and the reading stands as an undercount (an undercount is
+        # recoverable, a void is not).
+        unresolved_rows = [row for row in unrouted_rows if id(row) not in resolved_codex_ids]
+        advancing_ids: set[int] = set()
+        for row in unresolved_rows:
+            if deadline is not None and time.monotonic() >= deadline:
+                break  # out of budget: the rest stay with the witness, fail closed
+            if _row_is_advancing(row):
+                advancing_ids.add(id(row))
+        fleet_unrouted = [
+            row
+            for row in unresolved_rows
+            if id(row) not in advancing_ids
+            and _unrouted_row_costs_fleet(row, deadline)
+        ]
+        gap_labels = sorted(
+            f"{getattr(row, 'name', '?')} "
+            f"(node={getattr(row, 'node', None) or 'unknown'})"
+            for row in fleet_unrouted
+        )
         gap_rows: list[str] = [
-            f"{len(unrouted_rows)} pidless row(s) with no identity route "
-            f"({', '.join(sorted({str(row.harness) for row in unrouted_rows}))})"
-        ] if unrouted_rows else []
+            f"{len(fleet_unrouted)} pidless row(s) with no identity route "
+            f"({', '.join(sorted({str(row.harness) for row in fleet_unrouted}))}; "
+            f"rows: {', '.join(gap_labels)})"
+        ] if fleet_unrouted else []
+        if recycled_rows:
+            gap_rows.append(
+                f"{len(recycled_rows)} live row(s) whose pid was reused: "
+                + ", ".join(sorted(
+                    f"{getattr(row, 'name', '?')} (pid={row.pid})" for row in recycled_rows
+                ))
+            )
+        if dead_rows:
+            gap_rows.append(f"{len(dead_rows)} live row(s) whose resolved pid is not live: " + ", ".join(sorted(dead_rows)))
+            dead_rows.clear()
         if not routed_rows:
             return roots, AttributionGap("; ".join(gap_rows)) if gap_rows else None
-        if deadline is not None and time.monotonic() >= deadline:
-            gap_rows.append("bg-socket resolution timed out")
-            return roots, AttributionGap("; ".join(gap_rows))
-        socket_timeout = (
-            15.0
-            if deadline is None
-            else max(0.01, deadline - time.monotonic())
+        # The deadline binds the lsof sweep only; the roster below is one file read.
+        socket_blind = deadline is not None and time.monotonic() >= deadline
+        socket_pids = {} if socket_blind else bg_socket_pid_map(
+            timeout=15.0 if deadline is None else max(0.01, deadline - time.monotonic())
         )
-        socket_pids = bg_socket_pid_map(timeout=socket_timeout)
-        missing = [row for row in routed_rows if row.short_id not in socket_pids]
+        socket_blind = socket_blind or (deadline is not None and time.monotonic() >= deadline)
+        missing = [pair for pair in routed_keys if pair[0] not in socket_pids]
+        if missing:
+            # the socket map is the FIRST oracle; a key in neither is a
+            # corpse, an unreadable roster stays a gap.
+            roster_pids = roster_pid_map()
+            still_missing: list[Any] = []
+            for key, row in missing:
+                if roster_pids is not None and key not in roster_pids and not socket_blind:
+                    continue  # absent from a readable oracle: a corpse drops
+                pid = (roster_pids or {}).get(key)
+                if pid is None:
+                    # An unreadable oracle and a held row without a usable pid both stay gaps.
+                    still_missing.append(row)
+                    continue
+                if not _root_pid_is_live(pid, None):
+                    dead_rows.append(f"{getattr(row, 'name', '?')} (roster pid={pid})")
+                    continue
+                roots.add(pid)
+            missing = still_missing
         if missing:
             gap_rows.append(
-                f"{len(missing)} bg-socket row(s) missing from the socket map"
+                f"{len(missing)} bg-socket row(s) "
+                + ("unresolved: bg-socket resolution timed out" if socket_blind else "missing from the socket map")
+                + ("" if roster_pids is not None else " (roster oracle unavailable)")
             )
-        for row in routed_rows:
-            pid = socket_pids.get(row.short_id)
+        for key, row in routed_keys:
+            pid = socket_pids.get(key)
             if pid is None:
                 continue
             root_live = _root_pid_is_live(pid, None)
-            if root_live is None:
-                return roots, "worker root liveness unavailable"
             if root_live:
                 roots.add(pid)
             else:
-                return roots, "worker root liveness unavailable"
+                dead_rows.append(f"{getattr(row, 'name', '?')} (socket pid={pid})")
+        if dead_rows:
+            gap_rows.append(f"{len(dead_rows)} live row(s) whose resolved pid is not live: " + ", ".join(sorted(dead_rows)))
         return roots, AttributionGap("; ".join(gap_rows)) if gap_rows else None
     except ImportError:
         raise
-    except Exception:
-        return roots, "worker root discovery unavailable"
+    except Exception as exc:
+        return roots, f"worker root discovery unavailable: {type(exc).__name__}"
+
+
+def _codex_app_server_serve(snapshot_pids: set[int] | None) -> tuple[set[int], str]:
+    """The shared codex app-server's live root and its verdict.
+
+    The verdict is ``live``, ``absent`` (every oracle cleanly names no live
+    process) or ``unreadable`` (some oracle could not be read, so absence is
+    unproven and the caller must fail its rows closed). Oracles: fno's own
+    state file, then the provider's ``app-server.pid``, which carries no
+    start token. The token spellings mirror the Rust reader
+    (``codex_inject.rs`` ``parse_state``).
+    """
+    daemons = Path(
+        os.environ.get("CODEX_HOME") or Path.home() / ".codex"
+    ).expanduser() / "app-server-daemon"
+    oracles: list[tuple[Path, tuple[str, ...]]] = [
+        (
+            daemons / "fno-harness-daemon.json",
+            ("processStartToken", "process_start_time", "startTime", "processStartTime"),
+        ),
+        (daemons / "app-server.pid", ()),
+    ]
+    all_absent = True
+    for path, token_keys in oracles:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        except Exception:
+            record = None
+        pid = record.get("pid") if isinstance(record, dict) else None
+        token = None
+        for key in token_keys:
+            value = record.get(key) if isinstance(record, dict) else None
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                token = value
+                break
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or (bool(token_keys) and token is None)
+        ):
+            all_absent = False
+            continue
+        root_live = _root_pid_is_live(pid, token)
+        if root_live is None:
+            return set(), "unreadable"
+        if root_live:
+            return {pid}, "live"
+        if snapshot_pids is not None and pid in snapshot_pids:
+            # A root gone dead mid-reading is not a clean absence answer.
+            all_absent = False
+        # A dead root is a positive answer: no live process sits here.
+    return set(), ("absent" if all_absent else "unreadable")
 
 
 def _live_shared_serve_root_pids(
     *, snapshot_pids: set[int] | None = None
-) -> tuple[set[int], str | None]:
+) -> tuple[set[int], str | AttributionGap | None]:
     """Return the confirmed PID of the detached shared opencode serve."""
     roots: set[int] = set()
     try:
@@ -371,7 +606,7 @@ def _live_shared_serve_root_pids(
             (paths.agents_home_dir() / "opencode-serve.json").read_text(encoding="utf-8")
         )
         if not isinstance(record, dict):
-            return roots, "shared serve root discovery unavailable"
+            return roots, AttributionGap("shared opencode serve root unattributed: opencode-serve.json is not a mapping")
         pid = record.get("pid")
         pid_start = record.get("pid_start")
         if (
@@ -382,19 +617,27 @@ def _live_shared_serve_root_pids(
             or isinstance(pid_start, bool)
             or pid_start <= 0
         ):
-            return roots, "shared serve root liveness unavailable"
+            return roots, AttributionGap("shared opencode serve root unattributed: opencode-serve.json carries no usable pid and pid_start pair")
         root_live = _root_pid_is_live(pid, pid_start)
         if root_live is None:
-            return roots, "shared serve root liveness unavailable"
+            return roots, AttributionGap(f"shared opencode serve root unattributed: pid {pid} start time could not be read")
         if root_live:
             roots.add(pid)
         elif snapshot_pids is not None and pid in snapshot_pids:
-            return roots, "shared serve root liveness unavailable"
+            if not _pid_recycled(pid, pid_start):
+                return roots, AttributionGap(f"shared opencode serve root unattributed: pid {pid} is dead, sits in the ps snapshot, and recycling is unproven")
     except FileNotFoundError:
         return roots, None
-    except Exception:
-        return roots, "shared serve root discovery unavailable"
+    except Exception as exc:
+        return roots, f"shared serve root discovery unavailable: {type(exc).__name__}"
     return roots, None
+
+
+def _unparsed_sample_evidence(reading: Footprint) -> str:
+    """Render the capped masked samples for a refusal message."""
+    parts = [f"row {s.row} pid {s.pid if s.pid is not None else '?'} {s.reason}: {s.masked}" for s in reading.unparsed_samples]
+    # Only reached when unparsed_lines > 0, so at least one sample exists.
+    return "; " + "; ".join(parts)
 
 
 def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None]:
@@ -412,77 +655,79 @@ def cause_reading(*, timeout: float = 5.0) -> tuple[Footprint | None, str | None
     if error is not None or ps_output is None:
         return None, error or "footprint unavailable: ps returned no output"
     snapshot_pids = _snapshot_pids(ps_output)
+    shared_serve_pids, shared_serve_error = _live_shared_serve_root_pids(
+        snapshot_pids=snapshot_pids
+    )
+    serve_gap = shared_serve_error.text if isinstance(shared_serve_error, AttributionGap) else None
+    if shared_serve_error is not None and serve_gap is None:
+        return None, f"footprint unavailable: {shared_serve_error}"
+    codex_roots, codex_verdict = _codex_app_server_serve(snapshot_pids)
     root_pids, root_error = _live_root_pids(
-        deadline=deadline, snapshot_pids=snapshot_pids, snapshot_at=snapshot_at
+        deadline=deadline,
+        snapshot_pids=snapshot_pids,
+        snapshot_at=snapshot_at,
+        serves={"codex-app-server": codex_verdict},
     )
     attribution_gap = None
     if isinstance(root_error, AttributionGap):
         # The reading stands with a named gap; the fleet share above it is an
-        # undercount, which the gates must read as unknown (x-e040).
+        # undercount, which the gates must read as unknown.
         attribution_gap = root_error.text
         root_error = None
     if root_error is not None:
         return None, f"footprint unavailable: {root_error}"
-    shared_serve_pids, shared_serve_error = _live_shared_serve_root_pids(
-        snapshot_pids=snapshot_pids
-    )
-    if shared_serve_error is not None:
-        return None, f"footprint unavailable: {shared_serve_error}"
-    if (root_pids | shared_serve_pids) - snapshot_pids:
+    if (root_pids | shared_serve_pids | codex_roots) - snapshot_pids:
         return None, "footprint unavailable: discovered worker root missing from ps snapshot"
     reading = parse_footprint(
         ps_output,
         excluded_root_pids={os.getpid()},
-        attributed_root_pids=root_pids | shared_serve_pids,
-        threshold_excluded_root_pids=shared_serve_pids,
+        attributed_root_pids=root_pids | shared_serve_pids | codex_roots,
+        threshold_excluded_root_pids=shared_serve_pids | codex_roots,
     )
     if reading.unparsed_lines:
-        return None, (
-            f"footprint unavailable: {reading.unparsed_lines} ps line(s) could not be parsed"
-        )
+        # Three arms replace any-count-refuses: no ratio is
+        # defensible (the measured event is 4 of 1163 rows) and a count arm
+        # took the fleet's dispatch offline over rows nobody read. Relevance
+        # and total failure refuse; anything else keeps the reading.
+        discovered = root_pids | shared_serve_pids | codex_roots
+        if root_hits := sorted(reading.unparsed_pids & discovered):
+            # A bad root row reads its subtree as zero CPU: blind, not noisy.
+            return None, (
+                f"footprint unavailable: unparsable ps row carries discovered fleet root pid {root_hits[0]}"
+                + _unparsed_sample_evidence(reading)
+            )
+        # Floor, not ceiling: every data row failing is an unreadable ps.
+        rows = sum(1 for raw in ps_output.splitlines() if (ln := raw.strip()) and not ln.startswith("PID "))
+        if reading.unparsed_lines >= rows:
+            return None, (
+                f"footprint unavailable: all {reading.unparsed_lines} ps row(s) "
+                "failed to parse" + _unparsed_sample_evidence(reading)
+            )
+    if serve_gap is not None:
+        attribution_gap = "; ".join(text for text in (attribution_gap, serve_gap) if text)
     if attribution_gap is not None:
         reading = reading._replace(attribution_gap=attribution_gap)
     return reading, None
 
 
 def _read_ps(*, timeout: float = PS_TIMEOUT_SECONDS) -> tuple[str | None, str | None]:
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            # errors="replace": ps command lines legally carry non-UTF-8 bytes
-            # (any process's argv may); one undecodable byte must degrade a
-            # command string, not kill the reading with a traceback.
-            mode="w+",
-            encoding="utf-8",
-            errors="replace",
-            prefix=".fno-footprint-",
-            delete=False,
-        ) as output:
-            path = Path(output.name)
-            run_kwargs: dict[str, Any] = {
-                "stdout": output,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "check": False,
-                "timeout": timeout,
-            }
-            result = subprocess.run(["ps", "-Ao", _PS_COLUMNS], **run_kwargs)
-            if result.returncode != 0:
-                detail = (result.stderr or "").strip() or f"exit {result.returncode}"
-                return None, f"ps unavailable: {detail}"
-            output.flush()
-            output.seek(0)
-            return output.read(), None
-    except subprocess.TimeoutExpired:
-        return None, f"ps unavailable: timed out after {timeout:.1f}s"
-    except OSError as exc:
-        return None, f"ps unavailable: {exc}"
-    finally:
-        if path is not None:
-            try:
-                path.unlink()
-            except OSError:
-                pass
+    """The process table over the Rust door: `fno-agents census --ps` keeps
+    the table in memory, so a seatbelt that refuses the setuid `ps` exec
+    still gets a reading, and a read-only sandbox needs no temp file."""
+    global _LAST_SCCACHE
+    # A failed fetch answers "unknown" below, never yesterday's server: the
+    # stash resets before the read, so a dead census door cannot print a
+    # stale pid as live.
+    _LAST_SCCACHE = (None, None)
+    error, payload = call_binary_json("census", ["--ps"], timeout=timeout)
+    if error is not None or not isinstance(payload, dict):
+        return None, f"process table unavailable: {error or 'census --ps returned no table'}"
+    table = payload.get("ps")
+    if not isinstance(table, str):
+        return None, "process table unavailable: census --ps returned no table"
+    pid, restarts = payload.get("sccache_server_pid"), payload.get("sccache_restarts_1h")
+    _LAST_SCCACHE = (pid if isinstance(pid, int) else None, restarts if isinstance(restarts, int) else None)
+    return table, None
 
 
 def _snapshot_pids(ps_output: str) -> set[int]:
@@ -519,56 +764,158 @@ def _spawn_load_snapshot():
     return _load_snapshot(max_load_per_cpu)
 
 
-def _roster_count() -> tuple[int | None, str | None]:
+def live_registry_rows() -> tuple[list | None, str | None]:
+    """The live registry rows, read in process. ONE reader, two consumers.
+
+    ``None`` is a distinct answer from ``[]``: an unreadable registry must not
+    read as an empty fleet. Why not a shell-out, and how the count changed:
+    docs/architecture/resource-meter.md.
+    """
     try:
-        result = subprocess.run(
-            [_fno_binary(), "agents", "list", "--status", "live", "--json"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=5.0,
+        from fno.agents.registry import load_registry
+        from fno.agents.spawn_gate import LIVE_STATUSES
+
+        rows = load_registry()
+    except Exception as exc:
+        return None, f"roster unavailable: registry unreadable ({exc})"
+    if not getattr(rows, "complete", True):
+        # Incomplete is not unreadable: the rows present are real, but a count
+        # over them undercounts. Name the registry, not a dead timeout.
+        return None, "roster unavailable: worker registry incomplete"
+    return [row for row in rows if row.status in LIVE_STATUSES], None
+
+
+def _gap_row_count(gap: str | None) -> int | None:
+    """The row count a gap sentence opens with, when it names one."""
+    if not gap:
+        return None
+    match = re.match(r"(\d+)", gap)
+    return int(match.group(1)) if match else None
+
+
+def _share_segment(
+    share_low: float, share_high: float, bound: str, gap: str | None
+) -> str:
+    """The ``(41.1%[, up to ...])`` bracket shared by reasons and the line."""
+    seg = f"{share_low * 100:.1f}%"
+    if bound == "upper":
+        rows = _gap_row_count(gap)
+        seg += (
+            f", up to {share_high * 100:.1f}% with "
+            + (f"{rows} " if rows is not None else "")
+            + "rows unattributed"
         )
-    except subprocess.TimeoutExpired:
-        return None, "roster unavailable: fno agents list timed out after 5.0s"
-    except OSError as exc:
-        return None, f"roster unavailable: {exc}"
-    if result.returncode != 0:
-        detail = (result.stderr or "").strip() or f"exit {result.returncode}"
-        return None, f"roster unavailable: {detail}"
+    return seg
+
+
+def _admission_config() -> float:
+    """``max_fleet_cpu_share``, degraded to the default."""
     try:
-        payload = json.loads(result.stdout)
-    except (TypeError, json.JSONDecodeError) as exc:
-        return None, f"roster unavailable: invalid JSON ({exc})"
-    if isinstance(payload, list):
-        return len(payload), None
-    if isinstance(payload, dict):
-        for key in ("agents", "rows", "workers", "items"):
-            rows = payload.get(key)
-            if isinstance(rows, list):
-                return len(rows), None
-    return None, "roster unavailable: JSON did not contain a row list"
+        from fno.config import load_settings
+
+        agents = load_settings().agents
+        return float(getattr(agents, "max_fleet_cpu_share", 0.5))
+    except Exception:  # noqa: BLE001 - footprint is a reading, not an enforcer
+        return 0.5
 
 
-def capacity_verdict(load_snapshot: Any) -> str:
-    """``within`` | ``near`` | ``over`` | ``unknown`` from the spawn-load
-    ceiling - the only reading here derived from hardware.
+def _compute_admission(reading: Footprint, load_snapshot: Any) -> Admission:
+    """Feed :func:`cpu_admission` from one snapshot; the seam the payload
+    and the exit decision share."""
+    share_ceiling = _admission_config()
+    return cpu_admission(
+        reading,
+        capacity_cores=_cpu_capacity_cores(),
+        share_ceiling=share_ceiling,
+    )
 
-    ``load_ceiling`` is ``max_load_per_cpu x ncpu``; 1-minute load against it
-    is a real ceiling in a way the roster-derived process arithmetic is not.
-    An unavailable snapshot is ``unknown``, never a verdict."""
-    status = getattr(load_snapshot, "spawn_load_status", "unavailable")
-    ceiling = getattr(load_snapshot, "load_ceiling", None)
-    load = getattr(load_snapshot, "load_1m", None)
-    if status not in ("within", "exceeded") or ceiling is None or load is None:
-        return "unknown"
-    if status == "exceeded":
-        return "over"
-    ratio = load / ceiling if ceiling > 0 else 0.0
-    if ratio > 1.0:
-        return "over"
-    if ratio >= 0.9:
-        return "near"
-    return "within"
+
+def _top_holder(reading: Footprint) -> str | None:
+    """The single largest fleet program, short enough for a refusal line."""
+    ranked = top_consumers(reading.top, 1)
+    if not ranked:
+        return None
+    c = ranked[0]
+    # The tree is named only when it accounts for every proc in the cluster:
+    # the totals span worktrees, so naming a partial tree would point the
+    # reader at a place that does not own the stated load.
+    where = (
+        f" in {c['worktree']}"
+        if c["worktree"] and c["worktree_procs"] == c["procs"] >= 2
+        else ""
+    )
+    return f"{c['name']} {c['procs']} procs {c['cpu_pct'] / 100:.2f} cores{where}"
+
+
+def cpu_admission(
+    reading: Footprint,
+    *,
+    capacity_cores: float,
+    share_ceiling: float,
+) -> Admission:
+    """The one CPU-axis decider, consumed by both gates and every readout
+    (LD1/LD3). The fleet's attributed share decides; a gap widens it
+    to an interval bounded above by the machine's measured CPU, so a ceiling
+    above the interval admits, below its floor holds, and inside it refuses.
+    Pure: no clocks, no subprocesses, no config."""
+    holder = _top_holder(reading)
+    holder_clause = f"; top holder {holder}" if holder else ""
+    capacity = float(capacity_cores)
+    share_low = reading.fleet_cpu_cores / capacity if capacity > 0 else 0.0
+    gap = reading.attribution_gap
+    machine_share = reading.measured_cpu_cores / capacity if capacity > 0 else 0.0
+    share_high = max(share_low, machine_share) if gap is not None else share_low
+    bound = "upper" if gap is not None else "exact"
+    ceil_pct = share_ceiling * 100.0
+    seg = _share_segment(share_low, share_high, bound, gap)
+    fields: dict[str, Any] = dict(
+        share_low=share_low,
+        share_high=share_high,
+        bound=bound,
+        fleet_cores=reading.fleet_cpu_cores,
+        machine_cores=reading.measured_cpu_cores,
+        capacity_cores=capacity,
+        ceiling=share_ceiling,
+        gap=gap,
+        top_holder=holder,
+    )
+    if share_high <= share_ceiling:
+        return Admission(
+            verdict="admit",
+            axis="fleet_cpu_share",
+            reason=(
+                f"fleet CPU {reading.fleet_cpu_cores:.3f} of {capacity:.2f} "
+                f"cores ({seg}) against max_fleet_cpu_share {ceil_pct:.1f}%; "
+                f"admitting"
+            ),
+            **fields,
+        )
+    if share_low > share_ceiling:
+        return Admission(
+            verdict="hold",
+            axis="fleet_cpu_share",
+            reason=(
+                f"spawn held: the fleet holds {reading.fleet_cpu_cores:.2f}/"
+                f"{capacity:.2f} cores ({share_low * 100:.1f}%) over "
+                f"max_fleet_cpu_share {ceil_pct:.1f}%{holder_clause}; waiting "
+                f"for the fleet's own work to drain (--no-wait to fail fast, "
+                f"--force to bypass)"
+            ),
+            **fields,
+        )
+    return Admission(
+        verdict="undecidable",
+        axis="fleet_cpu_share",
+        reason=(
+            f"spawn-gate: the fleet's CPU share cannot be decided: attributed "
+            f"{share_low * 100:.1f}% of capacity, up to "
+            f"{share_high * 100:.1f}% with rows unattributed, and "
+            f"max_fleet_cpu_share {ceil_pct:.1f}% falls inside that band; "
+            f"{gap}{holder_clause}; close the attribution gap or lower foreign load "
+            f"(--force to bypass)"
+        ),
+        **fields,
+    )
 
 
 def leak_verdict(direct_processes: int, threshold: int | None) -> str:
@@ -589,10 +936,13 @@ def _payload(
     top_limit: int | None = None,
     command_limit: int | None = None,
     load_snapshot: Any = _NO_LOAD_SNAPSHOT,
+    admission: Admission | None = None,
 ) -> dict[str, Any]:
     cpu_capacity = _cpu_capacity_cores()
     if load_snapshot is _NO_LOAD_SNAPSHOT:
         load_snapshot = _spawn_load_snapshot()
+    if admission is None:
+        admission = _compute_admission(reading, load_snapshot)
     threshold_cores = sustained_cpu_threshold(cpu_capacity)
     measured_share = (
         reading.fleet_cpu_cores / reading.measured_cpu_cores * 100
@@ -615,12 +965,22 @@ def _payload(
         "fleet_percent_capacity": reading.fleet_cpu_cores / cpu_capacity * 100,
         "fleet_percent_measured_cpu": measured_share,
         "leak_verdict": leak_verdict(reading.direct_process_count, process_threshold),
-        "capacity_verdict": capacity_verdict(load_snapshot),
+        # AC8: the CPU axis's decision, computed once and carried on
+        # every emission; both spawn gates read THIS object, never the exit
+        # code. `capacity_verdict` stays one release as an alias of the verdict.
+        "admission": admission._asdict(),
+        "capacity_verdict": admission.verdict,
         "load_1m": getattr(load_snapshot, "load_1m", None),
-        "max_load_per_cpu": getattr(load_snapshot, "max_load_per_cpu", None),
-        "load_ceiling": getattr(load_snapshot, "load_ceiling", None),
+        "load_5m": getattr(load_snapshot, "load_5m", None),
+        "load_15m": getattr(load_snapshot, "load_15m", None),
         "load_cpu_count": getattr(load_snapshot, "load_cpu_count", None),
-        "spawn_load_status": getattr(load_snapshot, "spawn_load_status", "unavailable"),
+        # The Claude Code background daemon's idle pre-warm pool. Outside the
+        # fleet numbers above on purpose - fno neither owns nor bounds it - but
+        # measured, because it can hold most of the machine whose load refuses
+        # every fno spawn.
+        "spare_pool_process_count": reading.spare_pool_process_count,
+        "spare_pool_cpu_cores": reading.spare_pool_cpu_cores,
+        "spare_pool_rss_gb": reading.spare_pool_rss_gb,
         "top": [
             {
                 "cpu_percent": cpu_percent,
@@ -635,6 +995,7 @@ def _payload(
             )
         ],
         "unparsed_lines": reading.unparsed_lines,
+        "unparsed_samples": [sample._asdict() for sample in reading.unparsed_samples],
         "exit_code": exit_code,
     }
     if reading.attribution_gap is not None:
@@ -657,28 +1018,21 @@ def _emit_result(
     cause_only: bool = False,
     note: str | None = None,
 ) -> NoReturn:
-    capacity = "unknown"
     leak = "unknown"
     exit_code = 0
-    # cause_only keeps passing None (never the sentinel) so _payload does not
-    # compute a load snapshot the cause-only contract promises not to spend.
-    load_snapshot = None if cause_only else _spawn_load_snapshot()
+    load_snapshot = _spawn_load_snapshot()
+    admission = _compute_admission(reading, load_snapshot)
     if not cause_only:
         leak = leak_verdict(reading.direct_process_count, process_threshold)
-        capacity = capacity_verdict(load_snapshot)
-        # Capacity keeps the historical exit (callers depend on 3); the leak
-        # alarm gets its own code. When BOTH fire, capacity wins the exit as
-        # the more urgent alarm and the leak still prints.
-        if capacity == "over":
+        # The CPU axis keeps the historical exit (callers depend on 3);
+        # AC8: it fires on hold or undecidable - an
+        # attribution gap no longer forces an exit, because both gates read
+        # the admission interval, not the gap. When BOTH alarms fire, the
+        # CPU axis wins the exit and the leak still prints.
+        if admission.verdict != "admit":
             exit_code = EXIT_CAPACITY_OVER
         elif leak == "unexplained":
             exit_code = EXIT_LEAK
-    # A gapped reading answers, but it does not clear the gate: --cause-only
-    # keeps exit 4 (the Rust spawn gate takes stdout only on exit 0, so a
-    # gapped undercount can never be admitted as headroom without a Rust
-    # change). The measurement itself is printed either way.
-    if reading.attribution_gap is not None and cause_only:
-        exit_code = 4
     top_limit = 5 if cause_only else None
     command_limit = 1024 if cause_only else None
     payload = _payload(
@@ -688,9 +1042,13 @@ def _emit_result(
         top_limit=top_limit,
         command_limit=command_limit,
         load_snapshot=load_snapshot,
+        admission=admission,
     )
     if note is not None:
         payload["degraded"] = note
+    if not cause_only:
+        payload["sccache_server_pid"] = _LAST_SCCACHE[0]
+        payload["sccache_restarts_1h"] = _LAST_SCCACHE[1]
     if json_output:
         typer.echo(json.dumps(payload, sort_keys=True))
     else:
@@ -700,26 +1058,18 @@ def _emit_result(
             f"({payload['fleet_percent_capacity']:.1f}% capacity, "
             f"{payload['fleet_percent_measured_cpu']:.1f}% of measured CPU)"
         )
-        load_status = payload["spawn_load_status"]
-        if load_status in {"within", "exceeded"}:
-            typer.echo(
-                f"spawn load: {payload['load_1m']:.1f} against "
-                f"{payload['load_ceiling']:.1f} (max_load_per_cpu "
-                f"{payload['max_load_per_cpu']:g} x {payload['load_cpu_count']} cpus; "
-                f"{load_status})"
-            )
-        else:
-            if payload["max_load_per_cpu"] is None:
-                typer.echo(f"spawn load: {load_status} (cause-only snapshot)")
-            else:
-                typer.echo(
-                    f"spawn load: {load_status} (max_load_per_cpu "
-                    f"{payload['max_load_per_cpu']:g} x {payload['load_cpu_count']} cpus; "
-                    f"{load_status})"
-                )
+        adm = payload["admission"]
+        typer.echo(
+            f"cpu admission: fleet {adm['fleet_cores']:.3f} of "
+            f"{adm['capacity_cores']:.2f} cores "
+            f"({_share_segment(adm['share_low'], adm['share_high'], adm['bound'], adm.get('gap'))}) "
+            f"against max_fleet_cpu_share {adm['ceiling'] * 100:.1f}% "
+            f"-> {adm['verdict']}"
+        )
         typer.echo(
             f"sustained CPU: {reading.sustained_cpu_cores:.3f} cores "
-            f"(threshold {threshold_cores:.3f} from {payload['cpu_capacity_cores']} cpus)"
+            f"(threshold {threshold_cores:.3f} from {payload['cpu_capacity_cores']} cpus; "
+            "a separate axis - it did not decide the verdict)"
         )
         typer.echo(
             f"descendant CPU: {reading.descendant_cpu_cores:.3f} cores "
@@ -741,19 +1091,55 @@ def _emit_result(
                 f"({reading.direct_process_count} direct, roster unavailable)"
             )
         typer.echo(f"transient calls: {reading.transient_call_count}")
+        sccache_pid = payload.get("sccache_server_pid")
+        if sccache_pid is not None:
+            restarts = payload.get("sccache_restarts_1h")
+            suffix = "unknown" if restarts is None else restarts
+            typer.echo(f"sccache server: pid {sccache_pid}, restarts last hour: {suffix}")
+        else:
+            typer.echo("sccache server: none running")
+        if reading.spare_pool_process_count:
+            typer.echo(
+                f"claude spare pool: {reading.spare_pool_process_count} processes, "
+                f"{reading.spare_pool_cpu_cores:.2f} cores, "
+                f"{reading.spare_pool_rss_gb:.1f}GB (idle pre-warm, not fleet; "
+                "never sweep it - a bg spawn is claimed from it)"
+            )
         if reading.attribution_gap is not None:
             typer.echo(
                 f"attribution gap: {reading.attribution_gap} "
-                "(fleet share is an undercount, not headroom)"
+                "(the share reads as an interval bounded above by the "
+                "machine's measured CPU)"
             )
-        if exit_code == EXIT_CAPACITY_OVER:
-            typer.echo(f"verdict: capacity over (exit {exit_code})")
-        elif exit_code == EXIT_LEAK:
-            typer.echo(f"verdict: leak (exit {exit_code})")
+        axis = adm["axis"]
+        if axis == "fleet_cpu_share":
+            axis_numbers = (
+                f" ({adm['share_low'] * 100:.1f}% against "
+                f"{adm['ceiling'] * 100:.1f}%)"
+            )
         else:
-            typer.echo(f"verdict: {capacity} (exit {exit_code})")
+            axis_numbers = ""
+        # A leak beside an admitting capacity names the unexplained processes
+        # as the cause; the CPU axis numbers are context there, not the cause.
+        if exit_code == EXIT_LEAK:
+            unexplained = max(
+                0, reading.direct_process_count - (process_threshold or 0)
+            )
+            typer.echo(
+                f"verdict: leak on unexplained processes "
+                f"({unexplained} of {reading.direct_process_count} direct, "
+                f"roster explains {process_threshold}; cpu admission: "
+                f"{adm['verdict']} on {axis}{axis_numbers}, a separate axis - "
+                f"it did not decide the verdict) (exit {exit_code})"
+            )
+        else:
+            typer.echo(
+                f"verdict: {adm['verdict']} on {axis}{axis_numbers} (exit {exit_code})"
+            )
         if reading.unparsed_lines:
             typer.echo(f"unparsed lines: {reading.unparsed_lines}")
+            for sample in reading.unparsed_samples:
+                typer.echo(f"  row {sample.row} (pid {sample.pid if sample.pid is not None else '?'}, {sample.reason}): {sample.masked}")
         if note is not None:
             typer.echo(f"degraded: {note}")
         if exit_code != 0 or cause_only:
@@ -798,12 +1184,12 @@ def footprint_command(
             cause_only=True,
         )
 
-    roster_count, error = _roster_count()
-    if error is not None or roster_count is None:
+    roster_rows, error = live_registry_rows()
+    if error is not None or roster_rows is None:
         # The roster is an ENRICHMENT: it sets the process threshold. On
         # roster failure the measurement still prints, with the threshold
         # degraded away and the reason named - a 5s roster timeout under load
-        # is exactly when this reading matters (x-e040). _emit_result raises
+        # is exactly when this reading matters. _emit_result raises
         # with its own verdict, so the CPU threshold still applies here.
         _emit_result(
             reading,
@@ -814,6 +1200,17 @@ def footprint_command(
 
     _emit_result(
         reading,
-        process_threshold=roster_count + DAEMON_ALLOWANCE,
+        process_threshold=len(roster_rows) + DAEMON_ALLOWANCE,
         json_output=json_output,
     )
+
+
+def cause_main() -> None:
+    """Console-script entry (``fno-footprint-cause``): the Rust spawn gate's
+    probe. Calls ``footprint_command`` so the verb and the probe share one
+    payload producer; outside a typer app its ``typer.Exit`` does not become a
+    process exit on its own, so translate it here."""
+    try:
+        footprint_command(json_output=True, cause_only=True)
+    except typer.Exit as exc:
+        sys.exit(exc.exit_code)

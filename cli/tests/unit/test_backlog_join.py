@@ -78,9 +78,48 @@ tasks:
 """
 
 
+# One distinct band, six independent tasks. The width is what should size the
+# lane count; `len(bands)` is 1 and used to cap it at a single joiner.
+SINGLE_BAND_WIDE_PLAN = """---
+title: single band wide
+status: ready
+---
+
+## Execution Strategy
+
+```yaml
+execution_mode: parallel
+waves:
+  - wave: 1
+    mode: parallel
+    difficulty: medium
+    tasks: ['1.1', '1.2', '1.3', '1.4', '1.5', '1.6']
+tasks:
+  - id: '1.1'
+    title: a
+    surface: ['a.py']
+  - id: '1.2'
+    title: b
+    surface: ['b.py']
+  - id: '1.3'
+    title: c
+    surface: ['c.py']
+  - id: '1.4'
+    title: d
+    surface: ['d.py']
+  - id: '1.5'
+    title: e
+    surface: ['e.py']
+  - id: '1.6'
+    title: f
+    surface: ['f.py']
+```
+"""
+
+
 # Four single-task waves banded high / medium / medium / low; the later
 # waves declare explicit empty blockers so the whole graph is ready at once
-# (width 4). Distinct bands: three lanes.
+# (width 4). Distinct bands: three, and the lane count is now the width.
 BANDED_PLAN = """---
 title: banded
 status: ready
@@ -123,6 +162,20 @@ tasks:
 """
 
 
+def _naming_real(cmd, **kw):
+    """The name verbs run in the binary; a blanket stub answers the mint with
+    a spawn receipt. Capture the real run before any test patches it."""
+    parts = [str(part) for part in cmd]
+    if {"name-mint", "name-codes", "name-parse", "registry-commit"} & set(parts):
+        return _REAL_RUN(cmd, **kw)
+    if {"doctor", "event"} <= set(parts):
+        # Event emission rides the same subprocess seam; it is not a spawn.
+        return _REAL_RUN(cmd, **kw)
+    return None
+
+_REAL_RUN = __import__("subprocess").run
+
+
 def _wire(monkeypatch, tmp_path, plan_text, *, claim_state="live", worktree=True):
     """Mock join's seams; returns the recorded spawn calls."""
     calls: list[dict] = []
@@ -136,10 +189,10 @@ def _wire(monkeypatch, tmp_path, plan_text, *, claim_state="live", worktree=True
         status["metadata"] = {"worktree": str(tmp_path / "wt")}
         (tmp_path / "wt").mkdir(exist_ok=True)
 
-    monkeypatch.setattr("fno.graph.store.read_graph", lambda *_a, **_k: [entry])
+    monkeypatch.setattr("fno.graph.api.wire_rows", lambda *_a, **_k: [entry])
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "graph.json")
     monkeypatch.setattr("fno.claims.core.claim_status", lambda key, root=None: status)
-    monkeypatch.setattr(advance, "_claims_root_for", lambda key: tmp_path / "claims")
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
     # Plan fixtures are absolute; skip resolve_plan_path's git rev-parse so the
     # recorded spawn calls carry ONLY join's own spawns.
     monkeypatch.setattr(
@@ -153,7 +206,7 @@ def _wire(monkeypatch, tmp_path, plan_text, *, claim_state="live", worktree=True
         "fno.paths.agents_registry_path", lambda: tmp_path / "registry-absent.json"
     )
     monkeypatch.setattr(
-        advance, "_claude_harness_session_states", lambda: {}
+        advance, "_claude_harness_session_states", lambda ids: {}
     )
     monkeypatch.setattr(
         advance, "_transcript_recently_active", lambda sid: False
@@ -174,7 +227,8 @@ def _wire(monkeypatch, tmp_path, plan_text, *, claim_state="live", worktree=True
 
     monkeypatch.setattr(
         advance.subprocess, "run",
-        lambda cmd, **_kw: (calls.append({"cmd": cmd, "env": _kw.get("env")}), _Proc())[1],
+        lambda cmd, **_kw: (_naming_real(cmd, **_kw)
+                            or (calls.append({"cmd": cmd, "env": _kw.get("env")}), _Proc())[1]),
     )
     return calls
 
@@ -194,13 +248,13 @@ def test_join_spawns_width_minus_one_workers_with_lead_hub(tmp_path, monkeypatch
         "band": "medium",
         "workers": 3,
         "workers_source": "explicit",
-        "spawned": ["j-x-8d1d-1", "j-x-8d1d-2"],
-        "lead": "j-x-8d1d-1",
+        "spawned": ["jn-t-8d1d-1", "jn-t-8d1d-2"],
+        "lead": "jn-t-8d1d-1",
         # An unbanded plan degrades to joiner 2's shapeless spawn: no grid
         # call, the caller's default lane.
         "lanes": {
-            "j-x-8d1d-1": shapeless,
-            "j-x-8d1d-2": shapeless,
+            "jn-t-8d1d-1": shapeless,
+            "jn-t-8d1d-2": shapeless,
         },
     }
     assert len(calls) == 2
@@ -273,7 +327,7 @@ def test_join_writes_the_brief_file_into_the_holder_worktree(tmp_path, monkeypat
     _wire(monkeypatch, tmp_path, PARALLEL_PLAN)
     join_node("x-8d1d", 3)
     brief = (tmp_path / "wt" / ".fno" / "join-briefs" / "x-8d1d.md").read_text()
-    assert "mail hub: j-x-8d1d-1" in brief
+    assert "mail hub: jn-t-8d1d-1" in brief
     assert "task update x-8d1d" in brief
 
 
@@ -282,7 +336,7 @@ def test_missing_holder_worktree_refuses_exit_2(tmp_path, monkeypatch):
     entry_plan = tmp_path / "plan.md"
     entry_plan.write_text(PARALLEL_PLAN)
     monkeypatch.setattr(
-        "fno.graph.store.read_graph",
+        "fno.graph.api.wire_rows",
         lambda *_a, **_k: [{"id": "x-8d1d", "plan_path": str(entry_plan)}],
     )
     monkeypatch.setattr("fno.paths.graph_json", lambda: tmp_path / "graph.json")
@@ -293,7 +347,7 @@ def test_missing_holder_worktree_refuses_exit_2(tmp_path, monkeypatch):
             "metadata": {"worktree": str(tmp_path / "gone")},
         },
     )
-    monkeypatch.setattr(advance, "_claims_root_for", lambda key: tmp_path / "claims")
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
     monkeypatch.setattr(
         "fno.graph.collision.resolve_plan_path", lambda p: entry_plan
     )
@@ -308,7 +362,7 @@ def test_zero_workers_still_spawns_one(tmp_path, monkeypatch):
     lead that was never spawned."""
     calls = _wire(monkeypatch, tmp_path, PARALLEL_PLAN)
     receipt = join_node("x-8d1d", 0)
-    assert receipt["spawned"] == ["j-x-8d1d-1"]
+    assert receipt["spawned"] == ["jn-t-8d1d-1"]
     assert len(calls) == 1
 
 
@@ -345,44 +399,44 @@ def test_second_join_refuses_while_joiners_live(tmp_path, monkeypatch):
     """Exit 5: live j-<node>-* workers make join non-idempotent. The live
     proof hit this when a JOINER re-ran join on its own node - the rewrite
     truncated the brief and nearly duplicated the spawns. A row counts only
-    when the harness store still answers non-terminally for its session."""
+    when the truth probe still answers non-terminally for its session."""
     calls = _wire(monkeypatch, tmp_path, BANDED_PLAN)
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps({"schema_version": 2, "agents": [
-        {"name": "j-x-8d1d-1", "harness_session_id": "s-1", "status": "live"},
-        {"name": "j-x-8d1d-2", "harness_session_id": "s-2", "status": "stopped"},
+        {"name": "jn-t-8d1d-1", "harness_session_id": "s-1", "status": "live"},
+        {"name": "jn-t-8d1d-2", "harness_session_id": "s-2", "status": "stopped"},
     ]}))
     monkeypatch.setattr("fno.paths.agents_registry_path", lambda: reg)
     monkeypatch.setattr(
         advance, "_claude_harness_session_states",
-        lambda: {"s-1": "working", "s-2": "failed"},
+        lambda ids: {"s-1": "working", "s-2": "done"},
     )
     with pytest.raises(JoinRefuse) as excinfo:
         join_node("x-8d1d", 5)
     assert excinfo.value.code == 5
-    assert "already joined by j-x-8d1d-1" in excinfo.value.message
+    assert "already joined by jn-t-8d1d-1" in excinfo.value.message
     assert not calls  # refused before any spawn, brief untouched
 
 
 def test_crashed_joiner_does_not_lock_the_node(tmp_path, monkeypatch):
     """A registry row can stay ``live`` after its daemon dies (a stored field
-    is not liveness). The guard must probe: harness store terminal or a stale
+    is not liveness). The guard must probe: truth terminal or a stale
     transcript reads dead, and the re-join proceeds."""
     calls = _wire(monkeypatch, tmp_path, BANDED_PLAN)
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps({"schema_version": 2, "agents": [
-        {"name": "j-x-8d1d-1", "harness_session_id": "s-dead", "status": "live"},
+        {"name": "jn-t-8d1d-1", "harness_session_id": "s-dead", "status": "live"},
     ]}))
     monkeypatch.setattr("fno.paths.agents_registry_path", lambda: reg)
     monkeypatch.setattr(
         advance, "_claude_harness_session_states",
-        lambda: {"s-dead": "failed"},
+        lambda ids: {"s-dead": "done"},
     )
     receipt = join_node("x-8d1d", 5)
     assert len(receipt["spawned"]) == 3
-    # The transcript probe is the second rung: harness store has no row at
+    # The transcript probe is the second rung: truth has no row at
     # all, but the transcript moved inside the window -> still live.
-    monkeypatch.setattr(advance, "_claude_harness_session_states", lambda: {})
+    monkeypatch.setattr(advance, "_claude_harness_session_states", lambda ids: {})
     monkeypatch.setattr(
         advance, "_transcript_recently_active", lambda sid: sid == "s-dead"
     )
@@ -397,7 +451,7 @@ def test_join_allowed_when_no_live_joiner_rows(tmp_path, monkeypatch):
     calls = _wire(monkeypatch, tmp_path, BANDED_PLAN)
     reg = tmp_path / "registry.json"
     reg.write_text(json.dumps({"schema_version": 2, "agents": [
-        {"name": "j-x-8d1d-1", "harness_session_id": "s-1", "status": "stopped"},
+        {"name": "jn-t-8d1d-1", "harness_session_id": "s-1", "status": "stopped"},
     ]}))
     monkeypatch.setattr("fno.paths.agents_registry_path", lambda: reg)
     receipt = join_node("x-8d1d", 5)
@@ -422,7 +476,8 @@ def test_lead_spawn_requires_launch_identity(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         advance.subprocess, "run",
-        lambda cmd, **_kw: (calls.append({"cmd": cmd}), _Bare())[1],
+        lambda cmd, **_kw: (_naming_real(cmd, **_kw)
+                            or (calls.append({"cmd": cmd}), _Bare())[1]),
     )
     with pytest.raises(SpawnError):
         join_node("x-8d1d", 3)
@@ -446,22 +501,28 @@ def test_join_spawns_one_worker_per_distinct_band(tmp_path, monkeypatch):
     def _grid(node, *, model, provider):
         band = node["difficulty"]
         picked.append(band)
-        return {"high": ("claude", "glm-x"), "medium": ("codex", "gpt-x"),
-                "low": ("claude", "glm-sm")}[band]
+        return {"high": ("claude", "glm-x", None, None, None),
+                "medium": ("codex", "gpt-x", None, None, None),
+                "low": ("claude", "glm-sm", None, None, None)}[band]
 
     monkeypatch.setattr(advance, "_grid_lane_for", _grid)
     receipt = join_node("x-8d1d", 5)
-    assert receipt["spawned"] == ["j-x-8d1d-1", "j-x-8d1d-2", "j-x-8d1d-3"]
+    assert receipt["spawned"] == ["jn-t-8d1d-1", "jn-t-8d1d-2", "jn-t-8d1d-3"]
     # Highest band first; the lead carries it.
-    assert receipt["lead"] == "j-x-8d1d-1"
+    assert receipt["lead"] == "jn-t-8d1d-1"
     assert picked == ["high", "medium", "low"]
     assert receipt["lanes"] == {
-        "j-x-8d1d-1": {"band": "high", "harness": "claude", "model": "glm-x",
+        "jn-t-8d1d-1": {"band": "high", "harness": "claude", "model": "glm-x",
                        "sandbox": "off"},
-        "j-x-8d1d-2": {"band": "medium", "harness": None, "model": None,
+        # The grid PICKED codex here, and the thread substrate is claude-only,
+        # so the pick is unusable and reads as declined. That decline now
+        # carries its reason too: it is the one most likely to puzzle a reader,
+        # because the grid had no complaint of its own.
+        "jn-t-8d1d-2": {"band": "medium", "harness": None, "model": None,
                        "sandbox": "off",
-                       "grid": "declined"},
-        "j-x-8d1d-3": {"band": "low", "harness": "claude", "model": "glm-sm",
+                       "grid": "declined",
+                       "grid_reason": "grid=harness-not-claude (codex)"},
+        "jn-t-8d1d-3": {"band": "low", "harness": "claude", "model": "glm-sm",
                        "sandbox": "off"},
     }
     for call, name in zip(calls, receipt["spawned"]):
@@ -484,36 +545,83 @@ def test_band_count_capped_by_width_rule(tmp_path, monkeypatch):
         "title: d\n    blocked_by: []", "title: d\n    blocked_by: ['1.1']",
     ))
     monkeypatch.setattr(
-        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x")
+        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x", None, None, None)
     )
     receipt = join_node("x-8d1d", 3)
     assert receipt["width"] == 3
-    assert receipt["spawned"] == ["j-x-8d1d-1", "j-x-8d1d-2"]
+    assert receipt["spawned"] == ["jn-t-8d1d-1", "jn-t-8d1d-2"]
     assert [lane["band"] for lane in receipt["lanes"].values()] == ["high", "medium"]
     assert len(calls) == 2
 
 
 def test_grid_declined_spawns_default_lane_and_records_it(tmp_path, monkeypatch):
-    """AC2-ERR: a (None, None) grid answer is a decline, not a failure: the
-    worker rides the caller's default lane and the receipt says so."""
+    """AC2-ERR: a declined grid answer is a decline, not a failure: the worker
+    rides the caller's default lane and the receipt says so.
+
+    AC12-HP: and it says WHY. A decline spawns on the ambient default, which
+    is the most expensive thing the fleet can buy, so `declined` alone left an
+    empty `config.routing.models` reading exactly like a momentarily busy one.
+    """
     calls = _wire(monkeypatch, tmp_path, BANDED_PLAN)
-    monkeypatch.setattr(advance, "_grid_lane_for", lambda *_a, **_k: (None, None))
+    monkeypatch.setattr(
+        advance,
+        "_grid_lane_for",
+        lambda *_a, **_k: (None, None, None, None, "grid=no-inventory-declared"),
+    )
     receipt = join_node("x-8d1d", 5)
     assert len(calls) == 3
     for call in calls:
         assert call["cmd"][call["cmd"].index("--harness") + 1] == "claude"
         assert "--model" not in call["cmd"]
+    declined = {"grid": "declined", "grid_reason": "grid=no-inventory-declared"}
     assert receipt["lanes"] == {
-        "j-x-8d1d-1": {"band": "high", "harness": None, "model": None,
-                       "sandbox": "off",
-                       "grid": "declined"},
-        "j-x-8d1d-2": {"band": "medium", "harness": None, "model": None,
-                       "sandbox": "off",
-                       "grid": "declined"},
-        "j-x-8d1d-3": {"band": "low", "harness": None, "model": None,
-                       "sandbox": "off",
-                       "grid": "declined"},
+        "jn-t-8d1d-1": {"band": "high", "harness": None, "model": None,
+                       "sandbox": "off", **declined},
+        "jn-t-8d1d-2": {"band": "medium", "harness": None, "model": None,
+                       "sandbox": "off", **declined},
+        "jn-t-8d1d-3": {"band": "low", "harness": None, "model": None,
+                       "sandbox": "off", **declined},
     }
+
+
+def test_grid_pick_records_no_decline_reason(tmp_path, monkeypatch):
+    """AC12-ERR: the receipt is unchanged when the grid resolves a lane. A
+    reason key on a successful pick would make every receipt look like a
+    problem."""
+    _wire(monkeypatch, tmp_path, BANDED_PLAN)
+    monkeypatch.setattr(
+        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x", None, None, None)
+    )
+    receipt = join_node("x-8d1d", 5)
+    for lane in receipt["lanes"].values():
+        assert "grid" not in lane, lane
+        assert "grid_reason" not in lane, lane
+
+
+def test_lane_count_is_not_capped_by_the_number_of_distinct_bands(
+    tmp_path, monkeypatch
+):
+    """AC8-HP: `len(bands)` used to sit inside the lane-count `min`, so the
+    number of DISTINCT bands capped the joiner count and `--workers` could not
+    override it - a single-band plan of width 6 got one joiner. Bands route
+    difficulty; their cardinality was never a capacity.
+
+    The band assignment CYCLES rather than truncating, so every lane still
+    carries a band and the lead still carries the highest.
+    """
+    calls = _wire(monkeypatch, tmp_path, SINGLE_BAND_WIDE_PLAN)
+    monkeypatch.setattr(
+        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x", None, None, None)
+    )
+    receipt = join_node("x-8d1d", 4)
+
+    assert len(calls) == 4, "one distinct band must not cap the lane count at 1"
+    assert receipt["spawned"] == [
+        "jn-t-8d1d-1", "jn-t-8d1d-2", "jn-t-8d1d-3", "jn-t-8d1d-4",
+    ]
+    assert [lane["band"] for lane in receipt["lanes"].values()] == [
+        "medium", "medium", "medium", "medium",
+    ]
 
 
 def test_banded_brief_carries_the_band_table(tmp_path, monkeypatch):
@@ -522,9 +630,9 @@ def test_banded_brief_carries_the_band_table(tmp_path, monkeypatch):
     _wire(monkeypatch, tmp_path, BANDED_PLAN)
     join_node("x-8d1d", 5)
     brief = (tmp_path / "wt" / ".fno" / "join-briefs" / "x-8d1d.md").read_text()
-    assert "| j-x-8d1d-1 | high |" in brief
-    assert "| j-x-8d1d-2 | medium |" in brief
-    assert "| j-x-8d1d-3 | low |" in brief
+    assert "| jn-t-8d1d-1 | high |" in brief
+    assert "| jn-t-8d1d-2 | medium |" in brief
+    assert "| jn-t-8d1d-3 | low |" in brief
 
 
 def test_explicit_model_skips_the_band_grid(tmp_path, monkeypatch):
@@ -533,6 +641,10 @@ def test_explicit_model_skips_the_band_grid(tmp_path, monkeypatch):
     caller's default lane and the model rides every spawn."""
     calls = _wire(monkeypatch, tmp_path, BANDED_PLAN)
     receipt = join_node("x-8d1d", 5, model="my-model")
+    # A pinned model now really resolves through the slot, so the recorder
+    # also catches the resolver's own subprocesses; keep only the spawns
+    # this test counts.
+    calls = [c for c in calls if "spawn" in c["cmd"]]
     assert len(calls) == 3
     for call in calls:
         assert call["cmd"][call["cmd"].index("--model") + 1] == "my-model"
@@ -682,7 +794,7 @@ def _settings(monkeypatch, sandbox: bool) -> None:
 
     model = SettingsModel(join={"sandbox": sandbox})
     monkeypatch.setattr("fno.config.load_settings", lambda *a, **k: model)
-    monkeypatch.setattr(advance, "_grid_lane_for", lambda *_a, **_k: (None, None))
+    monkeypatch.setattr(advance, "_grid_lane_for", lambda *_a, **_k: (None, None, None, None, "grid=no-inventory-declared"))
 
 
 def test_flag_off_is_byte_identical(tmp_path, monkeypatch):
@@ -711,7 +823,7 @@ def test_flag_off_argv_matches_the_historical_shape(tmp_path, monkeypatch):
     assert calls[0]["cmd"][1:] == [
         "agents", "spawn", "--substrate", "thread",
         "--harness", "claude",
-        "--cwd", str(tmp_path / "wt"), "--name", "j-x-8d1d-1",
+        "--cwd", str(tmp_path / "wt"), "--name", "jn-t-8d1d-1",
         f"/fno:execute waves {plan}",
     ]
 
@@ -858,7 +970,7 @@ def _entry_priority(monkeypatch, tmp_path, priority):
         "plan_path": str(tmp_path / "plan.md"),
         "priority": priority,
     }
-    monkeypatch.setattr("fno.graph.store.read_graph", lambda *_a, **_k: [entry])
+    monkeypatch.setattr("fno.graph.api.wire_rows", lambda *_a, **_k: [entry])
 
 
 def test_width_invariant_under_flipping_waves_to_parallel(tmp_path):
@@ -940,3 +1052,184 @@ def test_derivation_defaults_to_p2_without_a_node_priority(tmp_path, monkeypatch
     receipt = join_node("x-8d1d", None)
     assert receipt["priority"] == "p2"
     assert receipt["workers"] == 2
+
+
+# ---------------------------------------------------------------------------
+# The collision partition runs for EVERY wave (x-a804 task 5.1).
+#
+# It used to be gated on `mode == "parallel"`, so two tasks in one sequential
+# wave editing the same file read as simultaneously ready. 396 of 430 waves in
+# a fortnight are sequential, so the partition ran on roughly 8% of waves and
+# the label named `sequential` scheduled MORE in parallel than the one named
+# `parallel`. join could hand a joiner a task colliding with the holder's.
+#
+# Corpus re-measure over 532 plans carrying an Execution Strategy: 193 change,
+# every one downward, zero raised. The partition can only narrow.
+# ---------------------------------------------------------------------------
+
+SEQUENTIAL_SAME_FILE_PLAN = """---
+title: sequential same file
+status: ready
+---
+
+## Execution Strategy
+
+```yaml
+execution_mode: sequential
+waves:
+  - wave: 1
+    mode: sequential
+    tasks: ['1.1', '1.2', '1.3']
+tasks:
+  - id: '1.1'
+    title: a
+    surface: ['src/one.py']
+  - id: '1.2'
+    title: b
+    surface: ['src/one.py']
+  - id: '1.3'
+    title: c
+    surface: ['src/one.py']
+```
+"""
+
+SEQUENTIAL_DISJOINT_PLAN = SEQUENTIAL_SAME_FILE_PLAN.replace(
+    """  - id: '1.2'
+    title: b
+    surface: ['src/one.py']
+  - id: '1.3'
+    title: c
+    surface: ['src/one.py']""",
+    """  - id: '1.2'
+    title: b
+    surface: ['src/two.py']
+  - id: '1.3'
+    title: c
+    surface: ['src/three.py']""",
+)
+
+
+def test_sequential_wave_same_file_measures_one(tmp_path):
+    """AC10-ERR: three tasks in a sequential wave all naming one file are NOT
+    simultaneously ready. Before this, they measured 3 and join would spawn
+    two joiners onto the file the holder is editing."""
+    plan = tmp_path / "plan.md"
+    plan.write_text(SEQUENTIAL_SAME_FILE_PLAN)
+
+    assert _plan_parallel_width(plan) == 1
+
+
+def test_sequential_wave_disjoint_files_is_unchanged(tmp_path):
+    """AC10-HP: the partition only narrows where surfaces genuinely collide.
+    A sequential wave over disjoint files still measures its full width, so
+    this change costs no real parallelism anywhere."""
+    plan = tmp_path / "plan.md"
+    plan.write_text(SEQUENTIAL_DISJOINT_PLAN)
+
+    assert _plan_parallel_width(plan) == 3
+
+
+def test_parallel_wave_same_file_still_measures_one(tmp_path):
+    """The parallel case is unchanged: it was already the only one of the four
+    measured cells that read the same-file case correctly."""
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        SEQUENTIAL_SAME_FILE_PLAN.replace("mode: sequential", "mode: parallel")
+    )
+
+    assert _plan_parallel_width(plan) == 1
+
+
+def test_sandbox_on_caps_lanes_at_the_band_count(tmp_path, monkeypatch):
+    """REGRESSION, caught in review. `render_join_write_policy` is keyed by
+    BAND, so two lanes sharing a band share one `allow_write` set and get an
+    EMPTY `deny_edit` (the deny list is the peer bands' surfaces, and a reused
+    band has no peer). Uncapping the lane count under enforcement therefore
+    hands several sessions byte-identical, mutually unrestricted policies -
+    the isolation the partition exists to provide, silently gone.
+
+    With enforcement ON the band cardinality legitimately caps the count. The
+    uncap that this PR ships is for the enforcement-OFF default, which is
+    where the 34 lost joiner slots were.
+    """
+    from fno.config import SettingsModel
+
+    settings = SettingsModel()
+    settings.join.sandbox = True
+    calls = _wire(monkeypatch, tmp_path, SINGLE_BAND_WIDE_PLAN)
+    monkeypatch.setattr("fno.config.load_settings", lambda *a, **k: settings)
+    monkeypatch.setattr(
+        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x", None, None, None)
+    )
+
+    receipt = join_node("x-8d1d", 4)
+
+    assert len(calls) == 1, (
+        "one distinct band under enforcement must yield one lane; more lanes "
+        "would share a write policy and an empty deny_edit"
+    )
+    assert receipt["spawned"] == ["jn-t-8d1d-1"]
+
+
+def test_sandbox_off_leaves_the_lane_count_uncapped(tmp_path, monkeypatch):
+    """The other half of the pair: with enforcement off (the default) the band
+    cardinality caps nothing, which is the whole point of the fix."""
+    calls = _wire(monkeypatch, tmp_path, SINGLE_BAND_WIDE_PLAN)
+    monkeypatch.setattr(
+        advance, "_grid_lane_for", lambda *_a, **_k: ("claude", "glm-x", None, None, None)
+    )
+
+    receipt = join_node("x-8d1d", 4)
+
+    assert len(calls) == 4
+    assert receipt["spawned"] == [
+        "jn-t-8d1d-1", "jn-t-8d1d-2", "jn-t-8d1d-3", "jn-t-8d1d-4",
+    ]
+
+
+def test_joiner_transcript_probe_reads_the_newest_entry(tmp_path, monkeypatch):
+    """The joiner's activity probe ages the newest TIMESTAMPED entry, not the
+    file mtime: trailing untimestamped records kept a worker silent past the
+    window reading active (x-54cf). Unreadable stays False, never a raise."""
+    import os
+    import time as time_mod
+    from datetime import datetime, timezone
+
+    sid = "0badc0de-54cf-0000-0000-000000000005"
+    projects = tmp_path / "home" / ".claude" / "projects" / "slug"
+    projects.mkdir(parents=True)
+    transcript = projects / f"{sid}.jsonl"
+
+    def _write_entry(age_s):
+        stamp = datetime.fromtimestamp(
+            time_mod.time() - age_s, tz=timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        transcript.write_text(
+            json.dumps({"type": "assistant", "timestamp": stamp,
+                        "message": {"role": "assistant",
+                                    "content": [{"type": "text", "text": "turn"}]}})
+            + "\n"
+        )
+        now = time_mod.time()
+        os.utime(transcript, (now, now))
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    # Entry 1h old, mtime fresh: mtime would call this active; the entry
+    # correctly does not (window is 30m).
+    _write_entry(3600)
+    assert advance._transcript_recently_active(sid) is False
+
+    # Positive control, same run: a 10s-old entry reads active.
+    _write_entry(10)
+    assert advance._transcript_recently_active(sid) is True
+
+    # No timestamped entry: NO evidence, and the fresh mtime must not rescue
+    # it - the mtime fallback read a file touched 2h33m after its newest
+    # record as live, so an undatable transcript answers False, never a
+    # raise.
+    transcript.write_text(json.dumps({"type": "last-prompt"}) + "\n")
+    assert advance._transcript_recently_active(sid) is False  # fresh mtime, no records
+
+    # An absent transcript is activity-nothing -> False.
+    assert advance._transcript_recently_active("0badc0de-54cf-0000-0000-ffffffffffff") is False

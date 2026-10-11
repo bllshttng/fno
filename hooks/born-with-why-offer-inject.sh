@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# hooks/born-with-why-offer-inject.sh -- surface a pending born-with-why offer (x-af8d).
+# fno hook: UserPromptSubmit - born with why offer inject
+# hooks/born-with-why-offer-inject.sh -- surface a pending born-with-why offer.
 #
 # UserPromptSubmit hook. The attended born-with-why path (spawn_think.py) emits a
 # `think_offered` event to .fno/events.jsonl, but its only surfacing to the agent
@@ -17,26 +18,59 @@
 # sessions sharing .fno should not both nag. Bursts DO happen (four births 3s
 # apart, 2026-07-30T02:39:58..02:40:08), so only the newest gets the full offer,
 # but the rest ride along as bare ids: the cursor eats them either way, and
-# naming them is the difference between deferred and destroyed (x-965f).
+# naming them is the difference between deferred and destroyed.
 
 set -uo pipefail
 
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
 # fno shells can wedge on a stalled daemon / graph lock; bound every call with
-# the shared wall-clock helper rather than the harness's 30s hook timeout
-# (x-989d). Fails closed like the other injection hooks: a missing helper exits 0.
+# the shared load-aware budget rather than the harness's 30s hook timeout.
+# Fails closed like the other injection hooks: a missing helper
+# exits 0.
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/lib/with-timeout.sh
-source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
+# shellcheck source=scripts/lib/hook-budget.sh
+source "$HOOK_DIR/../scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
+# Overload skip BEFORE the cursor: past the threshold the preamble alone can
+# pass the harness cap, and a death mid-scan would burn the one-way slice.
+# The cursor stays put, so the offer re-surfaces next turn.
+hook_overloaded && exit 0
+OFFER_BUDGET="$(hook_budget_secs)"
 # shellcheck source=../scripts/lib/events-lock.sh
 source "$HOOK_DIR/../scripts/lib/events-lock.sh" 2>/dev/null || exit 0
 
 REPO_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
-EVENTS="$REPO_ROOT/.fno/events.jsonl"
-# No journal means there is no cursor state to serialize. Keep this ahead of
-# lock acquisition because a fresh checkout does not have a .fno parent yet.
+# HOME-as-repo guard (law d-8ddaba56): a cwd of $HOME outside git resolves
+# REPO_ROOT to $HOME, so the cursor write below would land a dot file at the
+# top level of the state root. No checkout, no offer to surface.
+if [[ "$REPO_ROOT" == "$HOME" ]] \
+    || [[ "$(cd "${FNO_HOME:-$HOME/.fno}" 2>/dev/null && pwd -P || true)" \
+        == "$(cd "$REPO_ROOT/.fno" 2>/dev/null && pwd -P || true)" ]]; then
+    exit 0
+fi
+# The project journal and the cursor both live in the repo's space, so every
+# worktree shares one daily offer budget. Resolution is deliberately
+# subprocess-free: the migration leaves a MOVED-TO pointer in the checkout, so
+# a stat finds the space; a fresh checkout has no journal at all and exits
+# before any expensive work, which is the posture the old hook had and the
+# smoke test's prompt-return bound still holds.
+EVENTS_DIR=""
+if [[ -f "$REPO_ROOT/.fno/MOVED-TO" ]]; then
+    EVENTS_DIR=$(head -n 1 "$REPO_ROOT/.fno/MOVED-TO" 2>/dev/null || true)
+fi
+if [[ -z "$EVENTS_DIR" && -f "$REPO_ROOT/.fno/events.jsonl" ]]; then
+    EVENTS_DIR="$REPO_ROOT/.fno"
+fi
+if [[ -z "$EVENTS_DIR" ]]; then
+    # Never migrated, never created: no journal to read, no offer to make.
+    exit 0
+fi
+EVENTS="$EVENTS_DIR/events.jsonl"
 [[ -f "$EVENTS" ]] || exit 0
 
-CURSOR="$REPO_ROOT/.fno/.think-offer-cursor"
+CURSOR="$EVENTS_DIR/.think-offer-cursor"
 if [[ -L "$CURSOR" ]]; then
     CURSOR=$(_resolve_event_symlink "$CURSOR") || exit 0
 fi
@@ -234,7 +268,7 @@ Nodes born this gap, not offered: ${older_ids}.
 #       born-with-why /think only makes sense on a just-born, not-yet-started
 #       node; once it is claimed or has a PR the "why" conversation already
 #       happened, so re-offering just spawns a DUPLICATE /think on a live
-#       session (observed: x-ef41 offered in an unrelated session AND in its
+#       session (observed: offered in an unrelated session AND in its
 #       own, while claimed + PR open). Keyed off the resolved JSON.
 # Degrade to surfacing whenever `fno` is unavailable or its output cannot be
 # parsed, so a missing/garbled resolver never eats a real fresh offer. Run from
@@ -244,7 +278,7 @@ if command -v fno >/dev/null 2>&1; then
     # deleted worktree (archive-worktree.sh / `fno agents workspace worktree cleanup` can remove one
     # under a live session) would read as "node absent" and destroy a live offer.
     # Map it to 99 so it lands in the degrade-to-surfacing branch below.
-    node_json=$( cd "$REPO_ROOT" 2>/dev/null || exit 99; with_timeout 3 fno backlog get "$node_id" 2>/dev/null )
+    node_json=$( cd "$REPO_ROOT" 2>/dev/null || exit 99; with_timeout "$OFFER_BUDGET" fno backlog get "$node_id" 2>/dev/null )
     _get_rc=$?
     if [[ "$_get_rc" -eq 0 ]]; then
         # Resolved. Suppress only if the node is already underway; a parse
@@ -344,7 +378,7 @@ except Exception:
         cand_id=""
         cand_title=""
         if command -v fno >/dev/null 2>&1; then
-            cand_id=$( cd "$REPO_ROOT" && with_timeout 3 fno backlog ready 2>/dev/null | python3 -c '
+            cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog ready 2>/dev/null | python3 -c '
 import sys, json
 offered, domain = sys.argv[1], sys.argv[2]
 try:
@@ -362,7 +396,7 @@ except Exception:
 ' "$node_id" "$e_domain" 2>/dev/null ) || cand_id=""
 
             if [[ -z "$cand_id" ]]; then
-                cand_id=$( cd "$REPO_ROOT" && with_timeout 3 fno backlog next 2>/dev/null | python3 -c '
+                cand_id=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog next 2>/dev/null | python3 -c '
 import sys, json
 offered = sys.argv[1]
 try:
@@ -375,7 +409,7 @@ except Exception:
             fi
 
             if [[ -n "$cand_id" ]]; then
-                cand_title=$( cd "$REPO_ROOT" && with_timeout 3 fno backlog get "$cand_id" 2>/dev/null | python3 -c '
+                cand_title=$( cd "$REPO_ROOT" && with_timeout "$OFFER_BUDGET" fno backlog get "$cand_id" 2>/dev/null | python3 -c '
 import sys, json, re
 _TAG = re.compile(r"<\s*(/?)\s*system-reminder\s*>", re.IGNORECASE)
 try:

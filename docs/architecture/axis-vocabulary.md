@@ -84,9 +84,11 @@ The caller sets one value on the effort axis. Each harness spells the reasoning-
 | codex | `reasoning.effort` | `-c model_reasoning_effort=<value>` |
 | opencode | provider/model-defined | no token emitted |
 
-`effort_tokens` in `cli/src/fno/agents/mux_spawn.py` owns only this flag translation. Gemini and agy have no fno effort surface and refuse `--effort`. Other harnesses pass the value to their provider CLI.
+`effort_tokens` in `crates/fno-agents/src/effort_surface.rs` owns the flag translation; `mux_spawn.py` only forwards the ask. Gemini and agy have no fno effort surface and refuse `--effort`. Other harnesses pass the value to their provider CLI.
 
 claude accepts `max`, and codex does not. codex accepts `minimal`, and claude does not. An `--effort` value valid for one harness can be invalid for another, so `effort_tokens` validates against the resolved harness's own set, not the union.
+
+Because the accepted set differs per harness, effort is STORED per verb and per harness: `config.agents.profiles.<verb>.harness.<harness>.effort` re-answers the scalar for one harness (`xhigh` on codex, `high` on claude), with `config.agents.defaults.harness.<harness>.effort` beneath it. The scalar stays the base that works for most; `fno config doctor` names a scalar a harness cannot serve.
 
 ## Provider translation, and why an unset effort costs money
 
@@ -109,13 +111,26 @@ An unset effort resolves to `max`. fno spawns most workers without one, so a mec
 
 Every spawn-minted registry row holds the model axis twice. `requested_model`, `requested_provider`, and `requested_effort` record the REQUEST verbatim as the flags spelled it, `[1m]` suffix included, stamped once at birth and never overwritten. `model` with `model_basis`, and the transcript-derived `observed_model` reading, carry what the session ACTUALLY answers as.
 
-The comparison is family-wise and suffix-aware. The bracketed suffix names the context window the caller asked for, not a different model, so `glm-5.3[1m]` vs `glm-5.3` is a match. `glm-5.3[1m]` vs `glm-5.3-flash` is a substitution. The spawn path names it instead of printing the request back as the effect. The naming rides three channels: a stderr line, a `model_substituted` event, and a receipt marker. The agent-list row derives `model_substituted` at emission from the observed payload it already carries, so a late substitution is visible on the next list read.
+The comparison is family-wise and suffix-aware. The bracketed suffix names the context window the caller asked for, not a different model, so `glm-5.3[1m]` vs `glm-5.3` is a match. `glm-5.3[1m]` vs `glm-5.3-flash` is a substitution. The bracket suffix is a request. The measured window lives on the dated `[[routing.models]]` row, not the suffix. The spawn path names it instead of printing the request back as the effect. The naming rides three channels: a stderr line, a `model_substituted` event, and a receipt marker. The agent-list row derives `model_substituted` at emission from the observed payload it already carries, so a late substitution is visible on the next list read.
 
 Absence of a `requested_*` stamp means unknown, never a default. Adoption reuses a live session (correct, standing policy) and observed no request, so its row stamps nothing. The verdict helper lives in `fno.agents.row_contradiction.model_substitution` with its Rust twin in `crates/fno-agents/src/state.rs`.
 
+## Account: one axis, two readings
+
+| Reading | Decided by | Moves when |
+|---|---|---|
+| pays | the credential the session holds. Its `CLAUDE_CONFIG_DIR` setting determines which Keychain item it reads. | the item it reads changes and its daemon re-reads it, or a new session starts. The steps live in the rotation doc's switching section. |
+| sees | the remote-control identity the session connected with | the session reconnects |
+
+"Pays" and "sees" move by different steps, so they can split. A reconnect moves "sees". A login moves "pays" only for sessions that read the item it wrote. Those sessions move only after they re-read it. See [Switching claude accounts is manual, by design](../provider-rotation.md#switching-claude-accounts-is-manual-by-design) for the steps. The mobile app shows "sees" and says nothing about billing.
+
+For a spawn, `--account`, `agents.defaults.account`, `agents.profiles.<verb>.account` and a lane's `account` choose "pays". `accounts.active` is not one of them.
+
+An unpinned claude spawn bills whatever login its launching process holds. Read which login that is in the identity column of `fno config accounts list`. See [What chooses the account a spawn bills](../provider-rotation.md#what-chooses-the-account-a-spawn-bills).
+
 ## Resolver authority
 
-`inject_spawn_defaults` (`cli/src/fno/agents/spawn_defaults.py`) decides which config value fills which axis on a spawn. It holds one rule: an explicit command-line axis is never overwritten by a profile default. A profile can fill an axis the command line left unset. A profile-filled harness that cannot carry an already-typed route is the case this plan handles. When that fill makes an explicitly-set axis unusable, the refusal names the config path, the value, the axis it set, and the caller's own flags. This is a cross-axis collision, not a precedence bug. No field-wise rule was ever violated, so the report says what happened instead of what looks like an override.
+The spawn compose (`crates/fno-agents/src/spawn_compose.rs`, applied by `compose_spawn_argv` in `cli/src/fno/agents/spawn_defaults.py`) decides which config value fills which axis on a spawn. It holds one rule: an explicit command-line axis is never overwritten by a profile default. A profile can fill an axis the command line left unset. A profile-filled harness that cannot carry an already-typed route is the case this plan handles. When that fill makes an explicitly-set axis unusable, the refusal names the config path, the value, the axis it set, and the caller's own flags. This is a cross-axis collision, not a precedence bug. No field-wise rule was ever violated, so the report says what happened instead of what looks like an override.
 
 ## Ambiguous values
 
@@ -141,11 +156,24 @@ Intake prints `linked plan to <id>`, not `claimed`, and names the verb that take
 
 A receipt that said a plan was claimed stated a fact about the first sense while writing the second. The word is retired from that line.
 
+## Session: one word, two senses
+
+`session` named the largest mux container and the smallest harness unit at the same time. `fno mux server --session fno-x7955-live` minted a whole server, one socket and every workspace on it, while `session` everywhere else in footnote means one agent transcript. On 2026-09-04 an operator read a deliberate, correctly isolated scratch server as an accident, because the flag said `session`. The mux server axis is now `server`. The transcript keeps `session`.
+
+| Sense | Surface | Means |
+|---|---|---|
+| harness session | `FNO_HARNESS_SESSION_ID`, the `--session-id` flag on backlog and resume verbs, `mail-inject --session` | one transcript, roughly pane-level; this sense keeps the word |
+| mux server | `--server`, `FNO_SERVER` | one socket and its workspaces; `fno mux server --server main` is repetitive and never ambiguous |
+
+`host` was rejected: `claims.rs` writes `host` as the machine into every claim record, and `registry.py` defines `host_mode` as the interactive-drive axis.
+
+The old spellings stay as deprecated aliases that work and warn: `--session`, `FNO_SESSION`, `--mux-session` on `dispatch next`, and pane-identity `--session-id`. Each prints one stderr line naming the replacement, and the alias will be removed in a future release. Env precedence is: flag, then `FNO_SERVER`, then `FNO_SESSION`, then `main`. When `FNO_SESSION` is the value that decided the server, its warning prints. A pane's writers set `FNO_SERVER` and `FNO_SESSION` to the same value, so new panes never warn and old readers keep working.
+
+Workspace and squad are one object under two names. The ruling and its senses table live in [vocabulary-user-and-operator.md](vocabulary-user-and-operator.md) under "Workspace, squad, project, project group". A person types `workspace`. `squad` survives in crate identifiers and on-disk data.
+
 ## Recognized and unrecognized harness values
 
-Session-marker detection (`HARNESS_SESSION_MARKERS` in `cli/src/fno/harness_identity.py`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`.
-`agy` dispatches through its own adapter (`crates/fno-agents/src/agy_ask.rs`) but has no session marker.
-`oh-my-pi` and `openclaw` are operator-named harnesses the code does not model at all yet; they appear in this table as legal vocabulary, not as values any code path recognizes.
+Session-marker detection (`HARNESS_SESSION_MARKERS` in `cli/src/fno/harness_identity.py`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`. `agy` dispatches through its own adapter (`crates/fno-agents/src/agy_ask.rs`) but has no session marker. `oh-my-pi` and `openclaw` are operator-named harnesses the code does not model yet. They appear in this table as legal vocabulary, not as values any code path recognizes.
 
 A literal like `agy` or `openclaw` under a provider-named binding is still a defect even though no session marker detects that harness.
 
@@ -160,16 +188,29 @@ A literal like `agy` or `openclaw` under a provider-named binding is still a def
 | `config.accounts.records` | account | |
 | `config.agent_harnesses` | harness | |
 | `config.agents.defaults.effort`, `config.agents.profiles.<verb>.effort` | effort | |
+| `config.agents.defaults.harness.<h>.effort`, `config.agents.profiles.<verb>.harness.<h>.effort` | effort | the per-harness overlay rungs |
 | `config.agents.defaults.provider`, `config.agents.profiles.<verb>.provider` | harness | the field name is parked by the value rule; the resolver receipt names the axis it feeds, not the field |
 | `FNO_AGENT_HARNESS` | harness | injected at spawn, read for identity |
 | `FNO_HARNESS_NAME` | harness | fno-owned canonical family stamp on spawned children; vendor markers remain the fallback for operator-started or adopted sessions |
 | `FNO_HARNESS_SESSION_ID` | harness session identity | fno-owned exact bound harness session id; absent when the launcher does not know it before exec |
+| `--server`, `FNO_SERVER` | mux server | the server axis: one socket and its workspaces |
+| `--session`, `FNO_SESSION`, `--mux-session`, pane-identity `--session-id` | mux server | deprecated aliases of `--server` / `FNO_SERVER`; they work, warn once, and keep live dispatch running |
 | spawn/register receipt `harness` | harness | |
 | spawn/register receipt `provider` | provider | present only when a route was applied |
 | spawn/register receipt `model` | model | effective model; an explicit `--model` wins over `--route` |
 | `observed_model` | model | the sole answer to "what is this worker actually running" |
 | agent row `requested_model`, `requested_provider`, `requested_effort` | model, provider, effort | the REQUEST verbatim as typed, stamped once at birth (registry v24) |
 | agent row `model_substituted` | model | the emission-time marker naming both values when request and observation disagree |
+| reap receipt `model_provenance` | model, provider, effort | carries provider and effort beside model; a value rides only when its row had it, never inferred |
+| ledger execution row `harness` | harness | |
+| ledger execution row `provider` | provider | the vendor axis, from the registry row or the reap receipt, never inferred from a harness or model value |
+| ledger execution row `model` | model | the finalize row's model is the transcript's primary model or the registry's; the fill takes the session's answer |
+| ledger execution row `effort` | effort | |
+| ledger row `provider_id` | legacy | a rotation account id or a harness value; read only by review routing and the cost breakdown, never the provider axis |
+
+## Lane names are keys, not axis values
+
+A lane name (an `agents.profiles.<verb>.lanes` entry) is a `[[routing.models]]` row key and never an axis value. The row carries the axes: `harness`, `model`, `route` and `account`. The name is only the handle a lane list refers to it by. A lane named `flash-zai` asserts nothing about any axis. Reading a lane name as a provider, vendor or model value is the same conflation this document exists to kill.
 
 ## Canonical spawned-session identity
 

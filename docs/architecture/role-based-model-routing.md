@@ -1,6 +1,6 @@
 # Role-based model routing
 
-fno spawns every claude worker on the primary model (Anthropic Opus, billed to the Max/coding pool). There was no per-task model selection, so auxiliary coordination work (backlog tidying, node orientation, memory consolidation) burned expensive coding usage. Role-based routing sends low-stakes coordination to a secondary provider (z.ai GLM by default, DeepSeek or others by config) while production work (writing the diff, the correctness verdict) stays on the primary model, without replacing the main models and without a proxy in the critical path.
+fno spawns every claude worker on the primary model (Anthropic Opus, billed to the Max/coding pool). There was no per-task model selection, so auxiliary coordination work (backlog tidying, node orientation, memory consolidation) burned expensive coding usage. Role-based routing sends low-stakes coordination to a secondary provider (z.ai GLM by default, DeepSeek or others by config). Inline self-review uses the model already routed to the authoring session; independent review follows an explicitly configured peer or external-review policy.
 
 ## Why route by role, not task
 
@@ -46,13 +46,19 @@ cmd_spawn --role  ->  dispatch_spawn  ->  _claude_create_path  ->  bg_create(rol
 
 **Fail safe, not fail closed.** If no key is configured for the role's provider (the named env var / `.env` file has none), the role falls back to the primary Anthropic model with a one-line stderr notice, and the spawn still succeeds. `resolve_route` never raises.
 
+## The spawn seam: every launch crosses it
+
+Every `fno agents spawn` crosses the spawn seam (`compose_spawn_argv`, whose decisions the Rust compose owns). The binary enforces this: a direct `fno-agents spawn` without the `--defaults-applied` marker is sent back to the front door once, and a marked spawn dispatches natively. The marker carries the seam's enforcement verdict (`enforced` or `unenforced`). It records a decision the seam already made. It never grants one.
+
+A configured axis that was not applied says so. stderr names the dropped value, the config rung it came from, and the reason. One `spawn_defaults_applied` journal event per spawn records every resolved, applied, and suppressed axis, with empty values included. A new config-sourced spawn axis needs nothing else: route the value through the seam, and let the seam name what it did not apply.
+
 ## What the guard does and does not cover
 
 The guard covers two role *names*. It does not cover the two things a reader reasonably assumes it covers.
 
 **It does not keep the diff on the primary model.** `build` is a routable lane carrying exactly the payload `implement` names: `skills/target/scripts/dispatch-node.sh` attaches `--role build` to claude node dispatch, so a configured `build` route sends the worker that writes the diff to a secondary provider. That is deliberate, and config presence is the consent, but it means "no settings edit can route the diff" is false. `implement` is guarded; the lane that actually delivers is not.
 
-**It does not decide the reviewer's model.** No dispatch surface anywhere passes `--role review-verdict`; the name resolves nothing because nothing declares it. The model that renders a correctness verdict is the model of the session that runs the review, and routing sets every entry in `MODEL_ENV_KEYS` for the whole worker process. So a worker routed by `build` renders its own `/code-review` verdict on the routed model, and no per-spawn role guard can see that, because the verdict is a later activity inside an already-routed process. Keep the reviewer off the authoring worker (see [review lanes](review-lanes.md)); a role table cannot enforce it.
+**It does not decide the review model.** No dispatch surface passes `--role review-verdict`; the name resolves nothing because nothing declares it. The fno self-review lane runs inline in the authoring session, so it uses that session's routed model. A role table does not select a separate reviewer. See [review lanes](review-lanes.md) for the inline and configured peer paths.
 
 `review_attestation` records the `model` and `provider` in effect when a local verdict was emitted, so this is auditable after the fact rather than assumed. Both fields are optional and best-effort: they report what the worker's environment *claimed*, which is not proof of the model that answered. Empty means *not observable*, not "primary" - `resolve_codex_route` carries a codex worker's route in `-c model=...` config args and puts only the API key in the environment, so a routed codex verdict records empty on both fields.
 
@@ -63,9 +69,22 @@ The guard covers two role *names*. It does not cover the two things a reader rea
 | Key | Default | Purpose |
 |-----|---------|---------|
 | `enabled` | `true` | Master on/off. |
-| `providers` | _(built-in `zai`)_ | Name → `{protocol, base_url, api_key_env, api_key_file}`. Add `deepseek` etc.; override `zai` per field. |
+| `providers` | _(built-in `zai`)_ | Name → `{protocol, base_url, api_key_env, api_key_file, tier_models}`. Add `deepseek` etc.; override `zai` per field. |
 | `roles` | _(built-in → `zai/glm-5.3`)_ | Role → `"provider/model"` (e.g. `tidy: "zai/glm-4.7"`; legacy comma `zai,glm-4.7` also accepted). |
-| `extra_env` | `{}` | Extra env merged into routed spawns (e.g. `API_TIMEOUT_MS`, a cheaper per-tier model). |
+| `extra_env` | `{}` | Extra env merged into routed spawns (e.g. `API_TIMEOUT_MS`). Prefer `tier_models` for per-tier models; `extra_env` still wins as a hand pin. |
+
+`tier_models` maps a Claude tier to a model. It makes `/model` in the running worker offer a real choice instead of the spawn model written into every tier:
+
+```yaml
+config:
+  model_routing:
+    providers:
+      zai:
+        tier_models:
+          opus: "glm-5.3[1m]"   # keys: opus | sonnet | haiku | fable
+```
+
+Undeclared tiers keep the spawn model. `tier_models.haiku` beats the provider's `haiku_model`. An `extra_env` pin beats both. The pin does not survive a resume, where declared tiers re-resolve against today's registry. A composed route whose five model keys hold one distinct value says so at spawn and names this key. There is no check that the provider serves the named model. A wrong id fails at the endpoint. A bare tier alias (`sonnet`) routed to a non-Anthropic endpoint is refused at compose time.
 
 A worked example:
 
@@ -92,7 +111,7 @@ The key (secret) never lives in `config.toml`: it is read from the process env v
 
 ## The `build` delivery lane
 
-The auxiliary roles above are coordination work. `build` extends the same mechanism to *delivery* spawns (`/target bg` + blueprint autolaunch), so a whole feature build can run on GLM.
+The auxiliary roles above are coordination work. `build` extends the same mechanism to *delivery* spawns (`/target bg` + the ordered advance drain), so a whole feature build can run on GLM.
 
 `build` is **opt-in by config presence**: it ships unconfigured and routes nothing (fail-safe `None`, byte-identical to today). Writing the roles line IS the consent:
 
@@ -104,17 +123,9 @@ fno config route set build zai/glm-5.3[1m]        # atomic config write; effect:
 
 For a one-off "just this node on GLM" without flipping the lane default, `dispatch-node.sh <node> --route provider/model` (or `fno agents spawn --route ...`) forwards an explicit route. Unlike the role lane, an explicit `--route` **fails closed**: an unknown provider, non-anthropic protocol, or missing key refuses the spawn (you asked for GLM by name; billing Anthropic instead would violate intent). `--route` wins over a configured `build` lane on the same spawn.
 
-## The `pr-create` lane
+## PR creation runs inline
 
-`/pr create` dispatches its worker on the `pr-create` role, not a hardcoded model tier. The role used to be a `model: haiku` literal baked into the agent; it now flows from `config.model_routing` so a Codex session opens its PR on its own model and an operator can route the cheap mechanical worker to a secondary provider without forking the skill.
-
-`pr-create` is **opt-in by config presence**, exactly like `build`: it ships unconfigured and routes nothing (fail-safe `None`, so the worker runs on the invoking harness's primary model - no model literal in the skill). Writing the roles line IS the consent:
-
-```bash
-fno config route set pr-create zai/glm-4.7      # atomic config write; effect: next /pr create
-```
-
-The `/pr create` dispatch declares `--role pr-create` (or omits any `model:` override) at the spawn boundary, so the fail-safe makes the role a no-op until the lane is configured. The worker keeps its fresh, minimal context - branch, base, a one-line summary, and merge posture only - regardless of which model the role resolved to, because the small-context property is what makes the worker cheap, not the tier name.
+`/fno:ship pr create` loads `skills/ship/references/create.md` in the invoking context. It dispatches no role and no model lane: PR creation is ordinary tool calls in the session that asks for it.
 
 ## The stage table: per-verb profile overlay
 
@@ -133,22 +144,58 @@ pane_group_max = 4
 [agents.profiles.blueprint]
 model = "opus"
 
-[[agents.profiles.target.lanes]]
-provider = "codex"
-effort = "high"
-substrate = "pane"
-permission_mode = "yolo"
-pane_group = "codex"
+# lanes is RANK: the walk is in declared order, first pass wins.
+[agents.profiles.target]
+lanes = ["flash-zai", "luna-codex"]
+on_exhausted = "queue"
 
-[[agents.profiles.target.lanes]]
-provider = "claude"
-route = "zai/glm-5.3[1m]"
-substrate = "bg"
+[[routing.models]]
+name = "flash-zai"
+harness = "claude"
+model = "glm-5.3-flash[1m]"
+route = "zai/glm-5.3-flash[1m]"
+account = "zai-main"
+effort = "high"
+
+[[routing.models]]
+name = "luna-codex"
+harness = "codex"
+model = "luna"
+effort = "xhigh"
 ```
 
-When a profile has `lanes`, the live-worker count chooses the round-robin start. Selection then skips forward past a routed vendor already at `agents.provider_limits`. If every lane is capped, or the provider count is incomplete, the spawn refuses rather than billing an unintended lane. Two escapes narrow that refusal, and neither weakens the skip. A command line can name its own lane with `--harness`, `-P` or `--route`. That spawn is not spending a capped vendor's budget, so it continues with no lane applied. `FNO_SPAWN_GATE=0`, the admission bypass, never blocks a spawn either. Substrate and `permission_mode` ride the lane, not the profile. The Claude/GLM lane can use `bg`, and the Codex lane needs a pane.
+### The harness overlay: one base, per-harness answers
 
-`pane_group` is injected as `fno agents spawn --tab <group>` on pane lanes. Placement happens AFTER the spawn, never before it. The pane reports its own squad, and the tab list is read scoped to that squad. The pane's own tab then joins the first `<group>`, `<group>-2`, ... tab below `pane_group_max`. If none has room, its tab takes the next sibling name instead. A group cannot combine with `--split`/`--at`. The pane then sits in a tab it does not own. The move takes that tab's other panes with it. The read-then-act is deliberately not globally serialized, so concurrent spawns can briefly overfill a tab. Placement never changes the worker route.
+A permission mode, an effort value, and a substrate are not fleet policies. Each is a flag spelling the harness defines, so one scalar under `agents.defaults` or `agents.profiles.<verb>` cannot serve every harness. The stage table therefore carries a `harness` table on the defaults and on every profile, keyed by harness name, whose entries re-answer `permission_mode`, `effort`, or `substrate` for that one harness, plus an opaque `args` list appended behind the spawn's `--` passthrough fence. `args` is how an operator references the harness's own bundle (`codex --profile <name>`, `claude --settings <file>`) instead of asking fno for a behavior column per harness: the overlay carries flags whose vocabulary the harness defines and fno already forwards, never a ranking field. `provider`, `model`, `route`, and `account` refuse at the spawn seam when found in an overlay: those are lane fields.
+
+Precedence across the six rungs, one line: `explicit flag > lane > profiles.<verb>.harness.<h> > profiles.<verb> > defaults.harness.<h> > defaults`. The scalars keep their meaning as the base that works for most; nothing migrates. For codex specifically the overlay key is `agents.*.harness.codex.permission_mode` (unset by default; see [codex-thread-sandbox-posture.md](codex-thread-sandbox-posture.md) for the scope decision): a codex lane carries a configured mode when `harness.codex.thread.carries` declares the lane and the mode resolves in codex's own vocabulary, and a claude-only token like `bypassPermissions` refuses by name instead of degrading open. `fno config doctor` names every (rung, harness) pair a scalar cannot serve, with the overlay table that fixes it.
+
+```toml
+[agents.defaults]
+permission_mode = "bypassPermissions"      # works for most: claude, grok
+
+[agents.defaults.harness.codex]
+permission_mode = "yolo"
+args = ["--profile", "fno"]                # codex resolves the rest from [profiles.fno]
+
+[agents.profiles.target]
+effort = "high"
+
+[agents.profiles.target.harness.codex]
+effort = "xhigh"
+```
+
+When a profile has `lanes`, the list is the rank. The live-worker count plays no part in where the walk starts. A lane is either the name of a `[[routing.models]]` row or an inline table with the same fields. Both spellings fold into one row inventory, so there is one selection path. The inline shape is sugar, never a second leg. The spawn walks the lanes in declared order and takes the first lane that passes. A lane skips for three reasons. The pinned substrate or permission mode cannot ride its harness. Its routed vendor sits at `agents.provider_limits`. Live capacity reads `exhausted` for the account the row names. Every skip names the lane and the reason in the spawn receipt. A verb with lanes never consults the difficulty grid. A verb without lanes falls through to the grid over the whole inventory, exactly as before lanes existed.
+
+Capacity resolves per lane, not per harness. Quota locks out at the ACCOUNT. A row that names a `config.accounts.records` id reads that account's own state. A lane pinned to a locked-out account skips. A sibling lane on a healthy account answers. The old harness-wide MAX read that same fleet as healthy. A row that names no account reads the harness-wide aggregate. That aggregate is the correct answer for an unnamed row. An account the capacity snapshot does not name reads `unknown`, which permits.
+
+A bounded codex worker gets a working posture on every lane. Every bounded workspace-write posture (exec create, exec resume, pane, and thread turn/start) forces network on with `-c sandbox_workspace_write.network_access=true`. A `full-auto` pane is the one bounded pane posture that stays network-off. Network off also denies AF_UNIX, and that takes out `gh` and the graph keeper socket with it. The exec create lanes grant the git common dir, the plan content dir, and the uv cache as `--add-dir` roots. The uv cache is the first of `UV_CACHE_DIR`, `$XDG_CACHE_HOME/uv`, and `$HOME/.cache/uv` that exists. `UV_CACHE_DIR` is authoritative, so a missing path grants nothing. The resume, inject, and thread lanes carry the same root set as a `writable_roots` override or the turn policy. The pane's bounded seed no longer rides argv. The spawn holds it and delivers it as a fno turn/start once the thread binds. That turn carries the roots even under `--remote`. The interim for unattended codex work stays config. Set `permission_mode = "yolo"` under `agents.defaults.harness.codex` and on every profile that sets a scalar `permission_mode` (`target`, `fix`), because a profile scalar outranks `defaults.harness.codex`.
+
+When every lane skipped, `on_exhausted` declares the terminal. `refuse` (the default) stops the spawn rather than billing an unintended lane. `degrade` lets the profile scalars and `agents.defaults` answer. The lanes play no part, and the receipt names the degrade. `queue` exits 78 with a typed capacity refusal that a dispatcher reads as capacity, not config. The refusal carries `reason: slot_exhausted` and one entry per lane. An out-of-enum value refuses by name. It never silently coerces to a terminal nobody named. Two escapes narrow any refusal, and neither weakens the skip. A command line can name its own lane with `--harness`, `-P` or `--route`. `FNO_SPAWN_GATE=0`, the admission bypass, never blocks a spawn. Both degrade instead of refusing, whatever `on_exhausted` says. A lane string naming no declared row refuses at the spawn seam with the declared row names.
+
+A lane is opaque about behavior and transparent about economics. fno ranks on what it declares: harness, optional band, cost, account. Everything else is passthrough to the harness's own bundle. That covers permission mode, sandbox, system prompt, skills, MCP and subagent roles. codex forwards them with `--profile`, claude with `--settings`. fno cannot win the flag-enumeration race against harnesses that grow launch flags every release, so it forwards and does not remodel. Substrate and `permission_mode` ride an inline lane as declared passthrough, and `pane_group` places the pane. Three personas the shape survives. A research-only installation fills one slot and leaves the rest empty. Empty means the harness default, never route nowhere. A single-frontier installation points every slot at one lane. A mixed installation orders cheap lanes first and lets the walk find the one that is up. `fno config route inventory` prints each verb's slot with live lane capacity. An armed router and an absent one are no longer the same silence.
+
+`pane_group` is injected as `fno agents spawn --tab <group>` on pane lanes. Placement happens AFTER the spawn, never before it. The pane reports its own workspace (the receipt's `squad` field), and the tab list is read scoped to that workspace. The pane's own tab then joins the first `<group>`, `<group>-2`, ... tab below `pane_group_max`. If none has room, its tab takes the next sibling name instead. A group cannot combine with `--split`/`--at`. The pane then sits in a tab it does not own. The move takes that tab's other panes with it. The read-then-act is deliberately not globally serialized, so concurrent spawns can briefly overfill a tab. Placement never changes the worker route.
 
 The two layers compose by design. The stage table picks the coordinate per verb; `--role`, attached by the dispatch lane, owns the model when it resolves. A field the dispatch pinned explicitly (harness, substrate) is not displaced, which is why a stage table entry can set the model or route without rerouting the fleet's binary.
 
@@ -160,13 +207,25 @@ The second easy misread is a wave's `mode`. `mode: sequential | parallel` descri
 
 ## The declared inventory and the dispatch grid
 
-`config.routing` declares the model inventory. One `[[routing.models]]` row per model carries `name`, `harness`, `model`, and optional `band`, `effort`, `cost_per_mtok_in`, `context`, `route`, `account`.
+`config.routing` declares the model inventory. One `[[routing.models]]` row per model carries `name`, `harness`, and `model`. Optional row fields: `band`, `effort`, `cost_per_mtok_in`, `context`, `context_measured_at`, `context_source`, `route`, `account`, and `color`. `color` is the sideline lane color for a row that matches an agent. The mux's Rust reader parses it, and the schema declares it so a typo surfaces at config validation. When a row also carries a `context_measured_at` date, its `context` counts as the measured window. `context-run --probe` and `fno config route inventory` read the dated row. An unmeasured model falls back to the id-based default and says so.
 
 A small built-in table sits under this key as a **fallback**, never the authority. Config overrides it and extends it. A row naming an existing model replaces only the fields it names. A new name is added to the set. Adding a model, provider or harness stays a config edit. It is never a Python edit. A stranger's install declares a fleet that outranks every built-in row.
 
 The fallback keeps a tier request answerable where nothing is declared. Review level names a model for every level. Answering nothing drops `/code-review` to the provider default everywhere. The grid is unaffected and stays config-first. A virgin install records `grid=no-inventory-declared` and injects nothing. The grid asks whether config declared a row, not whether any row exists.
 
-`cli/src/fno/routing_sample.toml` ships as a labelled sample inside the package, so an installed wheel finds it too. No routing code path reads it. `fno config routing init` appends it to your config commented out. `fno doctor route` lists every declared row with its resolved band and reachability verdict. A row on an uninstalled harness refuses BY NAME on stderr.
+`cli/src/fno_routing_sample/routing_sample.toml` ships as a labelled sample inside the package, so an installed wheel finds it too. No routing code path reads it. `fno config route init` appends it to your config commented out. `fno doctor route` lists every declared row with its resolved band and reachability verdict. A row on an uninstalled harness refuses BY NAME on stderr. The row table itself is rendered by the route-slot binary. With that binary unavailable the command prints a `route-slot-unavailable` refusal instead of a table.
+
+A codex row's `model` can name a family instead of a version: `sol`, `astra`, `terra`, or `luna`. At spawn, route-slot resolves the family to the newest `gpt-<version>-<family>` in codex's own `models_cache.json`. Codex refreshes that list without an fno release. The resolution prints a `slot family` chain line. A claude row can name the alias (`opus`, `sonnet`, `haiku`, `fable`), and the claude harness resolves it. A value that is already a full id is a pin: route-slot never rewrites it. A codex row pinned below the newest listed version of its family prints one `drift` line under `fno doctor route`.
+
+## The strict inventory policy
+
+`routing.enforce_inventory` (default off) turns the declared inventory from a preference into a boundary for autonomous tiering. Under it, a spawn with no typed axis flag qualifies against the declared slots only, and an unqualified lane is refused by name. A typed `--model`, `-P` or `--route` is an operator pin. It outranks the declared lanes and the slot's lane walk entirely. The flag is the operator's own statement of intent, not a machine choice strict routing exists to bound. Every axis the operator did not name still qualifies against the declared slots. The harness default and the built-in fallback sit out of the decision path entirely. `routing.operator_access` (default `unknown`) says where the operator watches from: `local`, `remote`, or `unknown`. Unknown filters like remote. A pinned spawn skips this filter too, for the same reason.
+
+A row can carry `operator_view`: `claude-native` or `codex-native`, matching its harness. A row with a vendor `route` cannot: that coordinate is not native, and labeling it so is a named refusal. Under `remote` or `unknown`, only labeled rows qualify. The point is observability: a launch must land in a view the operator can actually see. Under `local` every declared lane qualifies.
+
+The work kind picks the slot. Rust owns the ruling: a planless `/target` does planning work and walks the blueprint slot while its command stays target. A planned target, think, blueprint, review, and role walk their own slots. The qualification owner is one Rust verb, `fno-agents route-slot`. The spawn seam, `fno backlog explain`, and `fno config route inventory` all read the same decision, and the readouts carry its verdict: `routing=armed|unarmed|policy-held|capacity-held`. A policy hold is never described as a spent quota, and a held capacity never as a broken dispatch.
+
+Completion evidence is a read-only audit: `fno-agents route-slot audit --project <root> --node <node> --since 30m --json`. A bounded snapshot (config fingerprint, spawn receipts, registry rows, decision records) is loaded through the established readers and a pure verifier answers. Exit 0 prints `ROUTING_POLICY_VERIFIED` per session and names the account, vendor/model and observed model. The operator view evidence is a live decision record under subject `routing-view:<session-id>`. Record it with `fno inbox decide` only after the operator confirms that exact session in the named view. A worker or peer assertion is not operator confirmation. Anything missing, stale, contradictory, or merely simulated exits nonzero naming its boundary.
 
 Cost belongs to the ACCESS PATH, not the model. The same model reached two ways is two rows with two cost profiles. One vendor prices a pair 3x cheaper on subscription credits and 18x cheaper on API dollars. The rows are never averaged. Cheap is never read as a proxy for weak: the cheaper row can also carry more context, more throughput, and less latency.
 
@@ -180,9 +239,29 @@ The optional OpenRouter snapshot can supply a percentile for a row whose `band` 
 
 **Effort is the third grid coordinate.** The grid injects an atomic harness/model/effort triple. A row whose harness has no effort surface omits it, and nothing is injected. An explicit `--effort` wins.
 
-**A crown spawn gets a profile key.** A seed with no leading slash-verb is every king seed, and it resolves the profile key `crown`. `[agents.profiles.crown]` reaches a crown spawn exactly like every other stage row. The attended/unattended axis is declared this way, never inferred. The response-time instrument was retracted because fno mail is injected as user-shaped text.
+**A role spawn gets a profile key.** A seed with no leading slash-verb, or one opening with `term` or `fno-me`, resolves `role`. Lead work walks the role slot whichever verb opens its seed, and an `[agents.profiles.term]` table is never read. `[agents.profiles.role]` reaches a role spawn exactly like every other stage row. The attended/unattended axis is declared this way, never inferred. The response-time instrument was retracted because fno mail is injected as user-shaped text.
 
 `fno config doctor` checks the resolved posture before a worker is launched. It reports a substrate/provider pair the spawn seam cannot honor. It also probes whether THIS session can write the claim store, by writing a real file there and removing it. A hand-started session cannot receive a per-spawn grant, so that probe is the only thing covering it. A spawned worker is covered instead by the computed `--add-dir` set (see [coordination.md](coordination.md)).
+
+## The spawn seam contract
+
+Every launch crosses the spawn seam (`agents.spawn_defaults.compose_spawn_argv`). The seam projects the caller's argv and facts to the Rust compose, which resolves provider, model, effort, substrate, permission-mode, route, account and pane-group from config and profile defaults; the seam applies the answer, injects the flags, and marks the launch `--defaults-applied=<state>` straight after the verb. The binary reads no config: an unmarked direct `fno-agents spawn` is bounced back to the front door once, and the re-exec falls back to `fno-py` because a bare venv install ships no `fno` entrypoint.
+
+The receipt is exactly one `spawn_defaults_applied` row per completed resolution in the agents journal (`state_dir/events.jsonl`; the `FNO_EVENTS_PATH` pin redirects it under the hermetic guard). The row keeps the flat envelope - `kind` plus named fields, no nesting - and carries `name`, `verb`, `seed`, the routing config `fingerprint`, `resolved` (every axis as value and rung, empties included: "the config read as empty here" and "the value was suppressed" are different facts), `applied`, and `suppressed` (each omitted axis with its reason). The WRITE belongs to the `route-slot journal` op, not Python: the seam resolves the journal path and feeds the payload, the verb appends. The emit can never raise: a missing binary or an unwritable journal never turns an already-valid launch into a crash, and a diagnostic failure never waives strict qualification, which is decided upstream of the emit.
+
+The `fingerprint` is a short hash of the routing-relevant non-secret config inputs: declared rows, the policy fields, and the slot table. It answers "was the config that decided this the config that launched". A changed fingerprint says the next launch re-selects; it is never an ownership token.
+
+The walk's answer carries `refusal_terminal {class, text}` beside the verbatim chain. A `config` fault's text is bare; a `strict` refusal's carries the policy annotation naming `config routing.enforce_inventory`. Consumers read the field; the chain strings stay verbatim for the seam, advance and doctor matchers.
+
+Config is a leaf: the schema validates types only, and the spawn seam and the resolver validate meaning. No value validation lives in the config blocks.
+
+## Two keys, two axes
+
+`[[routing.models]]` is the band inventory the difficulty grid reads (`fno-agents route-slot`). `model_routing.roles` is the per-role provider map spawn-env applies. They are different axes and neither seeds the other.
+
+The grid stays config-first, so an undeclared inventory routes nothing. `resolve_grid` records `grid=no-inventory-declared`, the `dispatch_spawned` receipt carries that reason, and every banded plan lands on the ambient default. Having `model_routing.roles` set does not change it. That key is exactly what makes an undeclared inventory read as working. When the inventory is undeclared, `fno config doctor` prints a `band routing inactive:` line. When the roles key is also set, the line names it as the other axis.
+
+One ruling is open: whether roles can seed the inventory, or whether the two keys stay separate. Until it is made, the doctor line keeps the gap visible.
 
 ## `fno config route` - legibility + on-the-fly switching
 
@@ -195,7 +274,7 @@ Six verbs over the same machinery (`model_routing.py` stays the single source of
 | `fno config route unset <role>` | Revert a lane to its built-in default (or unrouted); idempotent no-op if unconfigured. |
 | `fno config route env <role \| provider/model>` | Print an eval-able export block for an interactive session: `eval "$(fno config route env build)" && claude`. Fails closed on a missing key (no partial block). |
 | `fno config route inventory [-J]` (also `fno doctor route`) | Every declared `[[routing.models]]` row with its resolved band and reachability verdict; an uninstalled harness refuses by name on stderr. |
-| `fno config routing init` | Append the shipped routing sample (`fno/routing_sample.toml`), commented out, to your config. |
+| `fno config routing init` | Append the shipped routing sample (`fno_routing_sample/routing_sample.toml`), commented out, to your config. |
 
 `route env` is the sanctioned interactive switch - never editing `~/.claude/settings.json` (global, restart-bound, races parallel sessions). The `ccz`-style alias becomes a one-liner over it.
 
@@ -212,7 +291,7 @@ config:
       API_TIMEOUT_MS: "3000000"
 ```
 
-A `[1m]` worker injects `CLAUDE_CODE_AUTO_COMPACT_WINDOW=800000` as the compaction backstop. The variant already selects the 1M context. This variable only sets the compaction threshold, capped at the model window. A value of `1000000` is therefore a no-op. The king compact nudge fires near 40%. The 800000 backstop fires near 80%. Override it through `extra_env` only to tune that backstop.
+A `[1m]` worker injects `CLAUDE_CODE_AUTO_COMPACT_WINDOW=800000` as the compaction backstop. The variant already selects the 1M context. This variable only sets the compaction threshold, capped at the model window. A value of `1000000` is therefore a no-op. The lead compact nudge fires near 40%. The 800000 backstop fires near 80%. Override it through `extra_env` only to tune that backstop.
 
 The built-in `zai` provider already routes the background (haiku) tier to the cheaper `glm-4.7`. Opus/sonnet run `glm-5.3`, while judgment-light background traffic stays cheap on the same provider.
 
@@ -226,11 +305,19 @@ A long-lived background daemon holds a copy of the env of its first shell. It re
 
 **The naming trap.** There is no Haiku 4.7. The current lineup is Haiku 4.5, with Sonnet, Opus and Fable at 5. The zai provider's `haiku_model` IS `glm-4.7`. That number does not transfer to an Anthropic id. Guessing `claude-haiku-4-7` fails exactly the way the GLM names do.
 
-The code side of the same defense: `incoherent_model_env` (`cli/src/fno/agents/model_routing.py`) names every offending model var. An offending var carries a non-Anthropic id while the endpoint is Anthropic's. The substrate seams that copy the parent env strip those vars before any route overlay. Those seams are `bg_create`, `headless_create`, `_default_wake_fn`, and `_mesh_env_wrapper`. Each strip prints one stderr line. A bg spawn needs more than the strip. The serving session is forked by the claude daemon with the daemon's own env. So `bg_create` also floats a `--settings` file flooring the offending vars. The Python front door never scrubs `os.environ` at the routing seam. That scrub blinds `bg_create`'s floor decision. The compiled client is reachable without the front door (`fno-agents spawn`, the loop runtime). Its own spawn arms scrub the child env and float the same floor (`crates/fno-agents/src/model_env_scrub.rs`). A real route is never stripped. A foreign base URL serves those model ids, so the predicate returns empty. When the daemon itself pre-warms a spare session, a spawn-time scrub cannot reach it: the process already exists. The settings pin covers that case. The SessionStart detector (`hooks/attest-model.sh`) warns over the same five vars. It bails out on Bedrock/Vertex lanes. A parity test pins its var list to `MODEL_ENV_KEYS`. A new tier cannot land in one list and not the other.
+The code side of the same defense: `incoherent_model_env` (`cli/src/fno/agents/model_routing.py`) names every offending model var. An offending var carries a non-Anthropic id while the endpoint is Anthropic's. The substrate seams that copy the parent env strip those vars before any route overlay. Those seams are `bg_create`, `headless_create`, and `_mesh_env_wrapper`. `bg_create` now reaches Claude through the Rust `claude-birth-exec` wrapper. Each strip prints one stderr line. A bg spawn needs more than the strip. The serving session is forked by the claude daemon with the daemon's own env. So `bg_create` also floats a `--settings` file flooring the offending vars. The Python front door never scrubs `os.environ` at the routing seam. That scrub blinds `bg_create`'s floor decision. The compiled client is reachable without the front door (`fno-agents spawn`, the loop runtime). Its own spawn arms scrub the child env and float the same floor (`crates/fno-agents/src/model_env_scrub.rs`). A real route is never stripped. A foreign base URL serves those model ids, so the predicate returns empty. When the daemon itself pre-warms a spare session, a spawn-time scrub cannot reach it: the process already exists. The settings pin covers that case. The SessionStart detector (`hooks/attest-model.sh`) warns over the same five vars. It bails out on Bedrock/Vertex lanes. A parity test pins its var list to `MODEL_ENV_KEYS`. A new tier cannot land in one list and not the other.
+
+## The codex route on relaunch
+
+A routed codex worker reaches its endpoint through three inline `-c` config tokens built by `codex_route.rs` in fno-agents. The API key rides the spawn env under the name the provider declares. The spawn records only the route IDENTITY on the registry row (`route_provider_id`, `model_name`). It never records an endpoint or a key. A relaunch re-resolves the route from today's config through the same Rust builder. The spawn and every relaunch door cannot disagree. An edited `base_url` applies on the next relaunch.
+
+`fno agents resume` and the headless followup (`fno agents ask`) restore the route. They own the child env. The mux ResumeAgent gesture and `fno mux workspace restore` refuse a routed codex row. They name `fno agents resume <row>`, because a pane spawn has one env channel: an argv prefix visible in `ps`. A refusal names the row and the provider. Nothing launches. A loaded codex thread still wakes over the app-server first. That door needs no route.
+
+A provider named `openai` is refused at resolve time. It is the sentinel every unrouted codex row already stamps. A relaunch cannot tell a restored route from a default-endpoint launch. If the provider is deleted from config, every relaunch door refuses by name. The same refusal applies to a protocol that is not `openai` and to a key that no longer resolves. The doors never relaunch on codex's default provider. A default-provider relaunch reads as success and bills the wrong account.
 
 ## Scope and deferrals
 
-Wires native per-spawn routing for the claude lane (Anthropic-protocol providers) with the fail-safe fallback and the hard guard. `extra_env` is the escape hatch for differentiated tiers (e.g. a cheaper `ANTHROPIC_DEFAULT_HAIKU_MODEL`). Deferred: a codex/openai lane that consumes the same provider registry over the OpenAI-protocol endpoints. Also deferred: an external router for in-session subagent routing to a non-Anthropic provider. Also deferred: a config UI for editing roles (hand-edit is acceptable first). `consolidate` is already served out-of-repo by modelkit/memdream, which calls z.ai directly.
+Wires native per-spawn routing for the claude lane (Anthropic-protocol providers) with the fail-safe fallback and the hard guard. `tier_models` is the declared per-tier model map, shown in the table above. `extra_env` remains the escape hatch for anything that is not a tier model (e.g. `API_TIMEOUT_MS`). Deferred: a codex/openai lane that consumes the same provider registry over the OpenAI-protocol endpoints. Also deferred: an external router for in-session subagent routing to a non-Anthropic provider. Also deferred: a config UI for editing roles (hand-edit is acceptable first). `consolidate` is already served out-of-repo by modelkit/memdream, which calls z.ai directly.
 
 ## Sigma panel routes
 

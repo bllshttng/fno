@@ -27,7 +27,7 @@ A done_race_collision event is emitted to events.jsonl for forensic audit.
 
 Never hand-rolls graph writes - goes through locked_mutate_graph for safety.
 
-Registered under `fno backlog done` (x-6233): the plain node-id close is
+Registered under `fno backlog done` : the plain node-id close is
 graph.cli's cmd_done; this command owns the rich completion surface
 (--backfill rollups, PR/link/note metadata, fuzzy and branch queries) and is
 reached through cmd_done's delegation and the `fno done` VERB_MOVES shim.
@@ -60,7 +60,9 @@ from fno.graph._reconcile import (
     resolve_promise_evidence,
 )
 from fno.graph.fuzzy import resolve_id
-from fno.graph.store import locked_mutate_graph, normalize_plan_path, read_graph
+from fno.graph.api import wire_rows
+from fno.graph.store import commit_rows_via_store, normalize_plan_path
+from fno.graph.strand import _reparent_live_children, _reparent_receipt
 
 
 def _path_graph():
@@ -190,7 +192,7 @@ def _rollup_from_ledger(node: Optional[dict]) -> dict:
     on plan_path, so N nodes sharing one plan each claim the same cost, points,
     and session_id - the flat project sum at ``fno backlog`` project-cost then
     counts one run N times. A contained node must therefore be suppressed here
-    (x-e957 task 1.4), and a plan_path parameter cannot see that. Passing the
+    (task 1.4), and a plan_path parameter cannot see that. Passing the
     node makes the containment read structurally unskippable: there is no
     signature a caller can satisfy while bypassing the guard.
 
@@ -394,7 +396,7 @@ def done_command(
             "owner/name of the repo the PR lives in, when that differs from the "
             "cwd checkout. Naming the repo makes the stamp an assertion rather "
             "than a cwd derivation, which is also what lets it override a "
-            "recorded pr_url naming a different repo (x-43e4)."
+            "recorded pr_url naming a different repo."
         ),
     ),
     link: Optional[str] = typer.Option(
@@ -454,7 +456,7 @@ def done_command(
                 err=True,
             )
             raise typer.Exit(code=1)
-        entries = read_graph(graph_path)
+        entries = wire_rows(path=graph_path)
         if query:
             branch = _current_branch()
             match = resolve_id(query, entries, git_branch=branch)
@@ -507,7 +509,7 @@ def done_command(
                     touched.append((eid, tags))
             return entries_inner
 
-        locked_mutate_graph(graph_path, _backfill_mutator)
+        commit_rows_via_store(graph_path, _backfill_mutator)
 
         if not touched:
             typer.echo(
@@ -554,7 +556,7 @@ def done_command(
         _done_via_seam(query, skip_stamp=False, force=False, reason=None)
         return
 
-    entries = read_graph(graph_path)
+    entries = wire_rows(path=graph_path)
     branch = _current_branch()
     match = resolve_id(query, entries, git_branch=branch)
 
@@ -655,7 +657,7 @@ def done_command(
             raise typer.Exit(code=evidence.exit_code)
         merge_status_to_write = "merged"
 
-    # -- promise gate (x-5d34) --
+    # -- promise gate --
     # Only on the close path (node not already done): a metadata update on a
     # done node was gated when it first closed, and re-gating here would let a
     # gh outage block a --note on a node that closed months ago. fno done has no
@@ -681,7 +683,7 @@ def done_command(
         promise = resolve_promise_evidence(
             node, cwd=node.get("cwd"), query=_gh_query, extra_refs=_extra_refs
         )
-        if promise.outcome == "promise_unmet":
+        if not promise.satisfied:
             typer.echo(promise.reason, err=True)
             raise typer.Exit(code=promise.exit_code)
         if promise.warning:
@@ -735,7 +737,7 @@ def done_command(
             pr_url_to_write = pr_url_for_repo(pr, node.get("cwd"))
             # The cwd derivation is a guess; on a node whose recorded pr_url
             # names another repo it would re-stamp a cross-repo move silently
-            # and PR numbers collide across repos (x-43e4). Refuse the guess,
+            # and PR numbers collide across repos. Refuse the guess,
             # keep the assertion path open.
             if pr_url_to_write is not None:
                 recorded = repo_slug_from_url(node.get("pr_url"))
@@ -772,6 +774,9 @@ def done_command(
     # session_id/points _apply_rollup fills inside the lock; `node` is the
     # pre-lock snapshot and never sees them.
     node_after: list = [None]
+    # No --force here (a refused mainstream close wedges autonomous loops), so
+    # live children are re-parented in the same mutation and echoed after.
+    reparented_box: list = []
 
     def _mutator(entries_inner):
         for e in entries_inner:
@@ -821,11 +826,12 @@ def done_command(
                 # imports this module, so a top-level import would cycle.
                 from fno.graph.cli import _cascade_close_parents
 
+                reparented_box.extend(_reparent_live_children(entries_inner, node_id))
                 cascade_closed.extend(_cascade_close_parents(entries_inner, node_id))
             break
         return entries_inner
 
-    locked_mutate_graph(graph_path, _mutator)
+    commit_rows_via_store(graph_path, _mutator)
 
     # Emit done_race_collision AFTER the lock releases (telemetry fires after
     # the op so the diagnostic line reflects the actual emit outcome - per
@@ -851,7 +857,7 @@ def done_command(
         ) as exc:
             emit_outcome = f"emit failed: {exc!r}"
         # On corrupt graph entries first_completed_at can be empty; conditional
-        # to avoid an awkward "already done at ;" diagnostic.
+        # to avoid an awkward "already done at;" diagnostic.
         at_msg = f" at {first_completed_at}" if first_completed_at else ""
         typer.echo(
             f"fno backlog done: {node_id} already done{at_msg}; "
@@ -860,6 +866,9 @@ def done_command(
         )
         typer.echo(f"fno backlog done: {node_id} -> already done (metadata updated)")
         return
+
+    if reparented_box:
+        typer.echo("fno backlog done: " + _reparent_receipt(reparented_box))
 
     # The canonical post-close steps (stamp+graduate, projection, retro),
     # shared with graph.cli's cmd_done so close depth never forks on flags.
@@ -887,7 +896,7 @@ def done_command(
     tag_bits.extend(rollup_tags)
     typer.echo(f"fno backlog done: {node_id} -> done  " + "  ".join(tag_bits))
 
-    # Operator-authority matrix (LD3/LD29): the top-level `fno done` verb is an
+    # Superuser-authority matrix (LD3/LD29): the top-level `fno done` verb is an
     # allowed action during a drive window, but audit-tag it so the trail
     # attributes the completion to the operator rather than the LLM. Mirrors
     # `graph/cli.py::cmd_done` exactly so both done verbs emit the identical

@@ -1,4 +1,4 @@
-"""In-package port of ``scripts/lib/pr-merge.sh`` (ab-d4c98550, US1).
+"""In-package port of ``scripts/lib/pr-merge.sh`` (US1).
 
 Skill-agnostic PR merge wrapper. Shells to ``gh``/``git`` and preserves the
 caller-facing contract verbatim:
@@ -19,7 +19,7 @@ caller-facing contract verbatim:
 - The footnote-canonical merge guard (config.auto_merge ``enabled`` + the
   CI-green / external-review / stub-manifest guards) and the worktree
   server-side-recovery fallback are preserved. The who-may-merge gate
-  (``--invoker`` + ``auto_merge.allowed_invokers``) was removed (x-04ab): the
+  (``--invoker`` + ``auto_merge.allowed_invokers``) was removed : the
   caller context is derivable and megawalk is deprecated, so the flag was
   redundant ceremony. A legacy ``--invoker=...`` arg is silently accepted and
   ignored so old callers never break.
@@ -34,27 +34,37 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
-from contextlib import contextmanager
-from typing import Any, Iterator, List, Literal, Optional, Sequence, Tuple
+from contextlib import contextmanager, suppress
+from pathlib import Path
+from typing import Any, Callable, Iterator, List, Literal, Optional, Sequence, Tuple
 
-from fno.pr._proc import ToolMissing, run
+from fno.pr._proc import run
+from fno.pr._rest import fetch_pr_file_paths_rest
 
 _PR_RE = re.compile(r"^[1-9][0-9]*$")
 
-# Merge serialization (parallel mode, epic x-42d5 G4, Locked Decision #9):
+# The post-merge reconcile bound (merge child and the ritual's leg alike):
+# above reconcile's own 240s close-probe budget (graph/_reconcile.py).
+POST_MERGE_RECONCILE_TIMEOUT_S = 300.0
+
+# Merge serialization (parallel mode, epic G4, Locked Decision #9):
 # builds run parallel, merges run ONE AT A TIME. The lock is held across the
 # gh merge call and its post-merge followups (typically seconds), so the wait
 # is short and bounded - a peer still holding it past the window is reported
 # as "held" (exit 2) for the caller to retry, never an indefinite block.
-#
-# Scope: the lock + freshness hold cover the IMMEDIATE merge path. There is no
-# queued lane anymore (x-9d11 dropped --auto): require_checks_pass is enforced
+# Scope: the lock covers the IMMEDIATE merge path. There is no
+# queued lane anymore (dropped --auto): require_checks_pass is enforced
 # by reading the checks under the lock and merging only on green, so every
 # merge this verb performs is serialized here.
 _MERGE_LOCK_WAIT_S = 120
 _MERGE_LOCK_POLL_S = 5
+
+#: The terminal-exemption reason prefix, and the last receipt _emit printed.
+ALREADY_TERMINAL = "PR already "
+LAST_RECEIPT: dict = {}
 
 
 def _emit(
@@ -90,6 +100,7 @@ def _emit(
         "reason": reason,
         "strategy": strategy,
     }
+    LAST_RECEIPT.update(obj)
     if cleanup:
         obj["cleanup"] = cleanup
     line = json.dumps(obj, separators=(",", ":")) + "\n"
@@ -105,10 +116,13 @@ def _git(args: Sequence[str], cwd: str):
     return run(["git", *args], cwd=cwd)
 
 
-def _load_auto_merge():
-    from fno.config import load_settings
+def _load_auto_merge(repo: str):
+    # Seeded at the repo this verb merges (ad11eb340's explicit-repo semantics):
+    # the ambient lens can answer a pinned FNO_CONFIG or a foreign cwd, which
+    # is not what the durable-grant arm below reads.
+    from fno.config import load_settings_for_repo
 
-    return load_settings().auto_merge
+    return load_settings_for_repo(Path(repo)).auto_merge
 
 
 # A checkout's toplevel never moves within a process, so the rev-parse
@@ -125,6 +139,25 @@ def _repo_state_dir(cwd: str) -> str:
         root = res.stdout.strip() if res.ok and res.stdout.strip() else cwd
         _REPO_ROOT_CACHE[cwd] = root
     return os.path.join(root, ".fno")
+
+
+def _manifest_file(cwd: str) -> str:
+    """This run's session manifest: the space slice, else the checkout's ``.fno/``.
+
+    The sentinels still live beside the checkout, but the manifest moved to the
+    space. Every followup reading ``<state_dir>/target-state.md`` was reading a
+    path init stopped writing. Resolve from the toplevel, never a nested cwd:
+    the space slice is named after the worktree root.
+    """
+    legacy = os.path.join(_repo_state_dir(cwd), "target-state.md")
+    try:
+        from pathlib import Path
+
+        from fno.paths import target_state_path_or_legacy
+
+        return str(target_state_path_or_legacy(Path(legacy).parent.parent))
+    except Exception:  # noqa: BLE001 - a resolver failure degrades to the legacy path
+        return legacy
 
 
 def _closes_quoted_scalar(raw: str) -> bool:
@@ -206,9 +239,9 @@ def _review_coverage_for_pr(
     """The ``review_coverage`` event data for ``pr_number``, recomputed once
     when there is no usable row, or ``(None, note)``.
 
-    loop-check emits one every gate eval (x-0eaf); a session with no manifest
+    loop-check emits one every gate eval ; a session with no manifest
     never does, which made the gate unsatisfiable for that shape - so a missing
-    or head-mismatched row now fires the standalone producer once (x-3a3f).
+    or head-mismatched row now fires the standalone producer once.
     Python still consumes the event rather than recomputing coverage itself
     (Ownership: Rust computes, Python reads). Any failure degrades to the
     original row (or None) plus a note naming the recompute's outcome, which
@@ -236,26 +269,29 @@ def _coverage_sources(repo: str) -> list[str]:
 
 def _pr_head_oid(pr_number: int, repo: str) -> Optional[str]:
     """The PR's current ``headRefOid`` for a staleness check, or None."""
-    from fno.pr._rest import fetch_pr_info_rest
-
-    info, _reason = fetch_pr_info_rest(str(pr_number), cwd=repo, runner=run)
-    if info is None:
+    from fno.rust_binary import VerbUnavailable, verb_call
+    try:
+        info = verb_call("authorized-merge", {"op": "pr-head", "pr": pr_number, "cwd": repo})
+    except VerbUnavailable:
         return None
-    return str(info.get("head_sha") or "").strip() or None
+    return info.get("head")
 
 
-def _pr_head_ref_and_oid(pr_number: int, repo: str) -> Optional[Tuple[str, str, str]]:
+def _pr_head_ref_and_oid(
+    pr_number: int, repo: str, runner: Callable = run
+) -> Optional[Tuple[str, str, str]]:
     """``(branch, head_sha, state)`` for a PR, or None when the read failed.
 
-    One REST request answers all three, the same one ``_pr_head_oid`` already
-    makes. Deliberately NOT ``_pr_base_head_refs``: that reads through ``gh pr
+    One REST request answers all three. Deliberately NOT ``_pr_base_head_refs``: that reads through ``gh pr
     view``, which bills the per-user GraphQL quota every watcher on the machine
     shares. The state rides along because it is already in the payload, and the
-    in-flight guard needs it to exempt a terminal PR.
+    in-flight guard needs it to exempt a terminal PR. ``runner`` is injectable
+    so the acquire verb, which runs inside a PreToolUse hook, can bound the
+    network call it sits inside.
     """
     from fno.pr._rest import fetch_pr_info_rest
 
-    info, _reason = fetch_pr_info_rest(str(pr_number), cwd=repo, runner=run)
+    info, _reason = fetch_pr_info_rest(str(pr_number), cwd=repo, runner=runner)
     if info is None:
         return None
     branch = str(info.get("head_ref") or "").strip()
@@ -263,82 +299,6 @@ def _pr_head_ref_and_oid(pr_number: int, repo: str) -> Optional[Tuple[str, str, 
     if not branch or not sha:
         return None
     return branch, sha, str(info.get("state") or "").upper()
-
-
-def _in_flight_review_refusal(pr_number: int, repo: str) -> Optional[str]:
-    """The merge-side spelling of "a review is still running", or None.
-
-    Fail-closed in both directions a read can go wrong. A PR whose branch and
-    head cannot be resolved cannot be probed at all, and an unprobed PR is not a
-    clear one: the whole defect is a merge taken while something unseen was
-    still writing. A raise inside the probe refuses for the same reason the
-    plan-hold read does, and says so in the same words.
-    """
-    from fno.pr._review_hold import review_hold_refusal
-
-    try:
-        refs = _pr_head_ref_and_oid(pr_number, repo)
-        if refs is None:
-            return (
-                "review-activity-unreadable: could not resolve the PR's head branch "
-                "and sha, so no in-flight review could be ruled out; "
-                "refusing to assume none is running"
-            )
-        branch, head, state = refs
-        # The same terminal exemption `fno do pr status` takes: this guard
-        # protects what WOULD merge, and a merged or closed PR has no
-        # would-merge left. Without it, a merge that LANDED and then failed
-        # during cleanup is retried, held at exit 2 by a worktree that is
-        # legitimately dirty, and never reaches the already-merged answer.
-        if state in ("MERGED", "CLOSED"):
-            return None
-        return review_hold_refusal(branch, pr_head=head, repo=repo)
-    except Exception as exc:  # noqa: BLE001 - matches the plan-hold polarity
-        return f"review-activity-unreadable: {exc}; refusing to assume no review is running"
-
-
-_REPO_FROM_URL = re.compile(r"github\.com/([^/]+/[^/]+?)(?:\.git)?/pull/")
-
-
-def _row_repo(row: dict) -> Optional[str]:
-    """The ``owner/name`` repo a ledger delivery row belongs to, parsed from its
-    ``pr_url``. None when the row has no usable url (older rows); callers treat
-    None as 'do not filter on repo' so a missing url never silently drops a plan.
-    """
-    url = row.get("pr_url")
-    if isinstance(url, str):
-        m = _REPO_FROM_URL.search(url)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _plan_path_for_pr(pr_number: int, repo: Optional[str] = None) -> Optional[str]:
-    """The plan_path bound to this PR's delivery row in the ledger, or None.
-
-    The ledger is global (cross-repo), and PR numbers are per-repo, so a bare
-    number match can return a foreign repo's plan. ``repo`` (``owner/name``)
-    scopes the match to this repository via the row's ``pr_url``; a row without a
-    parseable url is still considered, so the filter fails open rather than
-    silently dropping a plan. None means no plan - the fidelity gate is a no-op
-    for the PR. A ledger read failure is also None: a missing ledger must not
-    block a merge that has no plan-fidelity signal to evaluate."""
-    try:
-        from fno import paths as _paths
-        from fno.scoreboard.fold import load_ledger_rows
-
-        for row in load_ledger_rows(_paths.ledger_json()):
-            if row.get("pr_number") != pr_number:
-                continue
-            row_repo = _row_repo(row)
-            if repo is not None and row_repo is not None and row_repo != repo:
-                continue
-            pp = row.get("plan_path")
-            if isinstance(pp, str) and pp.strip():
-                return pp
-    except Exception:  # noqa: BLE001 - the gate is advisory on a missing ledger
-        return None
-    return None
 
 
 def _coverage_refused_reason(
@@ -369,11 +329,11 @@ def _coverage_refused_reason(
         # Name WHERE it looked, not just that it found nothing. The absence is
         # the one refusal a reader cannot diagnose from a count, and two workers
         # read the bare count as a policy problem and set about designing around
-        # a gate that was already green somewhere else (x-f43c).
+        # a gate that was already green somewhere else.
         where = f" (searched: {', '.join(sources)})" if sources else ""
         return f"no review_coverage event for this PR{where}"
     cov_word = str(cov.get("coverage"))
-    # `uncovered` (x-5b99) is a real known zero - the exact case that used to
+    # `uncovered` is a real known zero - the exact case that used to
     # serialize as `covered` with `reviewed_count: 0`. It has to reach the
     # naming branches below: short-circuiting on it here would send every
     # zero-coverage refusal - the most common one there is - back to the bare
@@ -448,7 +408,8 @@ def _coverage_refused_reason(
                 f"{', '.join(stale)} reviewed an older commit and must re-read"
             )
         return (
-            prefix + "0 reviewed (no head-pinned pass attestation; "
+            prefix + f"{_safe_int(cov.get('reviewed_count'))} reviewed "
+            "(no head-pinned pass attestation; "
             f"{'; '.join(waits)} - if a reviewer there is uninstalled or no "
             "longer configured, check config.review)"
         )
@@ -461,7 +422,8 @@ def _coverage_refused_reason(
     # the bare path exits 1 for anyone who copies it verbatim.
     return (
         prefix
-        + "0 reviewed (no head-pinned pass attestation - run the review verb at HEAD"
+        + f"{_safe_int(cov.get('reviewed_count'))} reviewed "
+        + "(no head-pinned pass attestation - run the review verb at HEAD"
         + (f" - `{self_review_hint}`" if self_review_hint else "")
         + " - close every finding, commit and push first, then attest at the "
         + "final head with `bash skills/review/scripts/emit-attestation.sh <reviewer>`)"
@@ -525,7 +487,7 @@ def _pr_payload_is_code(repo: str, pr_number: int) -> bool:
     if hit is not None and now - hit[0] < _PAYLOAD_CACHE_TTL:
         names = hit[1]
     else:
-        names = _pr_file_paths(pr_number, repo)
+        names, _paths_reason = fetch_pr_file_paths_rest(str(pr_number), repo=repo, runner=run)
         if names is None or any(not _is_documentation_path(p) for p in names):
             # Only a CODE answer (or a failed read, which fails closed to
             # code) memoizes: the cached key is (repo, pr), not the head, so
@@ -553,7 +515,7 @@ def _manifest_harness(repo: str) -> Optional[str]:
     from pathlib import Path
 
     try:
-        manifest = Path(_repo_state_dir(repo)) / "target-state.md"
+        manifest = Path(_manifest_file(repo))
     except Exception:  # noqa: BLE001 - an unreadable manifest is no attribution
         return None
     value = _read_state_field(str(manifest), "harness").strip()
@@ -575,7 +537,7 @@ def _ambient_harness() -> Optional[str]:
 
 
 def _harness_can_self_review(repo: str) -> bool:
-    """Whether the self-review floor engages for this run (x-129b).
+    """Whether the self-review floor engages for this run.
 
     The run's harness decides, alone: the target manifest's `harness:` field
     when it carries one, else the single-family ambient resolve (the merging
@@ -589,7 +551,7 @@ def _harness_can_self_review(repo: str) -> bool:
     demand an attestation no native verb there produces.
     Unattributable - no manifest, ambiguous or absent markers, or an
     unrecognized spelling - floors: ambiguity about who authored the change
-    is not permission to skip its review. The pre-x-129b shape read ONLY
+    is not permission to skip its review. The pre-change shape read ONLY
     ambient markers and treated multi-family ambiguity as 'no floor', which
     silently disengaged review on any claude session started from a codex
     shell. Mirrors self_review_floor_applies in loopcheck.rs: the two gates
@@ -648,7 +610,7 @@ def _review_lane_configured(
     unreviewed (lane), wedging the pipeline on the same config.
 
     code_payload=True answers a HYPOTHETICAL code payload (no PR to probe, no
-    pr_number): the doctor pair check (x-0888) asks this gate whether auto_merge
+    pr_number): the doctor pair check asks this gate whether auto_merge
     is armed with zero lanes, instead of a second lane implementation that can
     drift from this one. The lane logic is untouched, so the loopcheck.rs
     mirror still holds; the stop gate always has a real PR and never passes it.
@@ -760,8 +722,9 @@ def _sync_graph_merge_status(merge_status: str, pr_number: int, cwd: str = "") -
     """Set merge_status on the graph node carrying this pr_number (best-effort)."""
     try:
         from fno.paths import graph_json
-        from fno.graph.store import locked_mutate_graph
+        from fno.graph.store import commit_rows_via_store
 
+        from fno.graph._reconcile import repo_slug_from_url, resolve_current_repo_slug
         from fno.tracker import active_backend_name
 
         if active_backend_name() != "graph":
@@ -773,17 +736,44 @@ def _sync_graph_merge_status(merge_status: str, pr_number: int, cwd: str = "") -
             return
 
         path = graph_json()
-        if not path.exists():
+        if not path.with_suffix(".db").exists():
             return
 
+        # The graph is cross-project: a bare PR number can collide across
+        # repos. An additional-PR entry is stamped only when its url
+        # resolves to the same repo the merge ran in; an unresolvable slug
+        # on either side stamps nothing (unrecorded stays open, the
+        # fail-closed default the reaper reads).
+        our_slug = resolve_current_repo_slug(cwd or os.getcwd())
+
         def _mut(entries: List[dict]) -> List[dict]:
+            # The merged PR may be the node's PRIMARY ref or one of its
+            # additional refs (change 7): stamp whichever it is, so a
+            # merged additional PR is recorded merged and the reaper's
+            # recorded-openness test can settle its do rows. Unrecorded stays
+            # open everywhere - this is the recorder, never the assertion.
             for e in entries:
-                if e.get("pr_number") == pr_number:
-                    e["merge_status"] = merge_status
-                    break
+                if e.get("pr_number") != pr_number or our_slug is None:
+                    continue
+                their_slug = repo_slug_from_url(e.get("pr_url") or "")
+                if their_slug is not None and their_slug.lower() != our_slug.lower():
+                    continue
+                e["merge_status"] = merge_status
+                return entries
+            for e in entries:
+                for extra in e.get("additional_prs") or []:
+                    if not isinstance(extra, dict) or extra.get("number") != pr_number:
+                        continue
+                    if our_slug is None:
+                        return entries
+                    their_slug = repo_slug_from_url(extra.get("url") or "")
+                    if their_slug is None or their_slug.lower() != our_slug.lower():
+                        continue
+                    extra["merge_status"] = merge_status
+                    return entries
             return entries
 
-        locked_mutate_graph(path, _mut)
+        commit_rows_via_store(path, _mut)
     except (Exception, SystemExit):
         # Silent no-op on ANY failure (no graph, store error): the bash
         # `|| true`-guarded this, and it must never block the merge outcome.
@@ -875,8 +865,8 @@ def _repo_scoped_number_matches(
     return list(dict.fromkeys(matches))
 
 
-def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
-    """Close every node the just-merged PR closes, synchronously (x-59a6).
+def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> List[str]:
+    """Close every node the just-merged PR closes, synchronously.
 
     ``_run_post_merge_followups`` only drops a ``.triage-pending`` sentinel for a
     later stop-hook / ritual to consume; a standalone ``fno do pr merge`` from a
@@ -886,13 +876,17 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
 
     Delegates entirely to ``fno backlog reconcile --pr-number --repo`` (the
     same plural mode the post-merge ritual uses): it binds every node this
-    PR's exact ``Backlog-Closure`` trailer names, THEN runs the existing
+    PR's exact closure line names, THEN runs the existing
     forward scan (which also finds a node stamped at creation the old
     ``_find_pr_node_id`` match used to backfill by hand) plus the reverse
     branch-name map. A single-node PR with no trailer at all still closes via
     that forward scan exactly as before - this call site no longer resolves
     or stamps a node itself, so a PR naming several nodes closes all of them,
     not just the one this process happens to find first.
+
+    Returns the node ids the merge can name as closed (receipt ids, with the
+    ``_find_pr_node_id`` url match as fallback); the cleanup request carries
+    them as ``node_ids``, and an empty list is held by the daemon.
 
     Repo scoping is mandatory: without SOME resolvable repo the call is
     refused rather than risking a same-numbered PR in a different repository.
@@ -915,12 +909,6 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
 
         path = graph_json()
         external = active_backend_name() != "graph"
-        # The graph-mode close path below needs the file; the external path
-        # does not and correctly has no local graph.json to check - a bare
-        # `not path.exists(): return` here would silently no-op every
-        # external-backend close on a project that never used graph mode.
-        if not external and not path.exists():
-            return
         pr_url = ""
         view = _gh(
             ["pr", "view", str(pr_number), "--json", "url", "-q", ".url"],
@@ -930,8 +918,8 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
             pr_url = view.stdout.strip()
 
         if external:
-            # External selection has no Backlog-Closure trailer concept of its
-            # own yet (that is graph-only, x-59a6) - resolve the ONE node this
+            # External selection has no closure-trailer concept of its
+            # own yet (that is graph-only) - resolve the ONE node this
             # PR's ref matches via the tracker-agnostic sidecar projection,
             # backfill its primary link, and close through the shared
             # external terminal: same gates, sidecar rollups, one close.
@@ -944,7 +932,7 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
             ]
             nid = _find_pr_node_id(rows, pr_number, pr_url)
             if not nid:
-                return  # no node linked to this PR - nothing to close
+                return []  # no node linked to this PR - nothing to close
 
             from fno.graph.cli import _done_via_seam
 
@@ -955,12 +943,14 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
                     sc.pr_url = pr_url
                 sidecar_store.save(sc)
             _done_via_seam(nid, skip_stamp=False, force=False, reason=None)
-            return
+            return [nid]
 
+        matched_id = None
         if pr_url:
-            from fno.graph.store import locked_mutate_graph, read_graph
+            from fno.graph.api import wire_rows
+            from fno.graph.store import commit_rows_via_store
 
-            matched_id = _find_pr_node_id(read_graph(path), pr_number, pr_url)
+            matched_id = _find_pr_node_id(wire_rows(path=path), pr_number, pr_url)
             if matched_id:
                 def _backfill(entries: List[dict], _id=matched_id) -> List[dict]:
                     for e in entries:
@@ -972,7 +962,7 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
                         break
                     return entries
 
-                locked_mutate_graph(path, _backfill)
+                commit_rows_via_store(path, _backfill)
 
         from fno.graph._reconcile import repo_slug_from_url, resolve_current_repo_slug
 
@@ -981,18 +971,31 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
             print(
                 f"fno do pr merge: could not resolve a repo for PR #{pr_number} - "
                 "refusing to reconcile without repo scoping (post-merge node "
-                "close skipped; a later full sweep still catches it)",
+                "close skipped; the daemon's merge_close arm closes it within 15 minutes)",
                 file=sys.stderr,
             )
-            return
+            return []
 
         from fno import _subprocess_util
 
-        res = run(
-            [*_subprocess_util.fno_py_cmd(), "backlog", "reconcile",
-             "--pr-number", str(pr_number), "--repo", repo, "--json"],
-            cwd=cwd or os.getcwd(),
-        )
+        # Bounded above the 240s probe budget; parent-bound so a killed merge
+        # cannot orphan the child.
+        try:
+            res = run(
+                [*_subprocess_util.fno_cmd(), "backlog", "reconcile",
+                 "--pr-number", str(pr_number), "--repo", repo, "--json"],
+                cwd=cwd or os.getcwd(),
+                timeout=POST_MERGE_RECONCILE_TIMEOUT_S,
+                env=dict(os.environ, FNO_DIE_WITH_PARENT=str(os.getpid())),
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"fno do pr merge: reconcile for PR #{pr_number} timed out after "
+                f"{int(POST_MERGE_RECONCILE_TIMEOUT_S)}s; the daemon's merge_close arm"
+                " closes the merged nodes within 15 minutes",
+                file=sys.stderr,
+            )
+            return []
         if not res.ok:
             # A non-zero reconcile (gh query down, evidence refused) leaves the
             # node(s) OPEN - the exact gap this closes. run() returns rather
@@ -1002,23 +1005,43 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
                 f"{(res.stderr or res.stdout or '').strip()[:200]}",
                 file=sys.stderr,
             )
-        else:
-            # reconcile exits 0 even when the trailer-claimed nodes never got
-            # bound (only an unresolvable PR query exits non-zero) - the same
-            # closure_refused field leg_stamp checks via this identical --json
-            # call. Without this, a refused bind read as a clean, silent
-            # success (round-11 review fix, x-59a6).
-            try:
-                obj = json.loads(res.stdout or "{}")
-            except json.JSONDecodeError:
-                obj = {}
-            closure_refused = obj.get("closure_refused")
-            if closure_refused:
-                print(
-                    f"fno do pr merge: reconcile for PR #{pr_number} bound nothing: "
-                    f"{closure_refused}",
-                    file=sys.stderr,
-                )
+            return []
+        # reconcile exits 0 even when the trailer-claimed nodes never got
+        # bound (only an unresolvable PR query exits non-zero) - the same
+        # closure_refused field leg_stamp checks via this identical --json
+        # call. Without this, a refused bind read as a clean, silent
+        # success (round-11 review fix).
+        try:
+            obj = json.loads(res.stdout or "{}")
+        except json.JSONDecodeError:
+            obj = {}
+        closure_refused = obj.get("closure_refused")
+        if closure_refused:
+            print(
+                f"fno do pr merge: reconcile for PR #{pr_number} bound nothing: "
+                f"{closure_refused}",
+                file=sys.stderr,
+            )
+        if obj.get("held"):
+            # The one-in-flight gate: a sweep was already running, so this one
+            # stood down without scanning. Named, never silent - the merged
+            # nodes stay open until a later sweep revisits them.
+            print(
+                f"fno do pr merge: reconcile for PR #{pr_number} held "
+                f"(a sweep is already in flight, requests={obj.get('requests')}); "
+                "the daemon's merge_close arm closes the merged nodes within 15 minutes",
+                file=sys.stderr,
+            )
+        # `closed` = what the scan closed this run; `closure_bound`/`claims`
+        # = the trailer's bindings. The url match backfills a PR whose nodes
+        # the trailer never named.
+        named = {
+            *(row.get("node_id") for row in obj.get("closed") or [] if isinstance(row, dict)),
+            *(obj.get("closure_bound") or []),
+            *(obj.get("closure_claims") or []),
+        }
+        named = {str(nid) for nid in named if nid} or ({matched_id} if matched_id else set())
+        return sorted(named)
     except (Exception, SystemExit):
         # Never block the merge outcome on the node-close (mirrors
         # _sync_graph_merge_status: SystemExit covers a corrupt-graph exit).
@@ -1027,27 +1050,36 @@ def _reconcile_merged_pr_node(pr_number: int, cwd: str = "") -> None:
             "skipped (non-fatal)",
             file=sys.stderr,
         )
+        return []
 
 
-def _on_confirmed_merge(pr_number: int, cwd: str = "") -> None:
+def _on_confirmed_merge(
+    pr_number: int, cwd: str = "", *, defer_close: bool = False
+) -> List[str]:
     """Every graph side-effect of a CONFIRMED (immediate) merge, in one place.
 
     Sync merge_status + stamp ship provenance (``_sync_graph_merge_status``), then
     close the node (``_reconcile_merged_pr_node``). The three merged code paths
     call this ONE function so the node-close can never be forgotten on one of
     them; the failure paths keep calling ``_sync_graph_merge_status`` alone.
+    Returns the node ids the merge closed (the cleanup request's ``node_ids``).
+
+    ``defer_close`` (the watcher's durable-grant merge) skips the node-close:
+    the sweep ritual leg and merge_close arm close the node instead.
     """
     _sync_graph_merge_status("merged", pr_number, cwd)
-    _reconcile_merged_pr_node(pr_number, cwd)
+    if defer_close:
+        return []
+    return _reconcile_merged_pr_node(pr_number, cwd)
 
 
 def _post_merge_remote_delete(pr_number: int, repo: str, auto_merge) -> str:
-    """Delete the REMOTE branch after a confirmed merge; warn-only (x-9d11).
+    """Delete the REMOTE branch after a confirmed merge; warn-only.
 
     Branch cleanup is a separate operation from the merge and must never be
     able to fail it. `gh pr merge --delete-branch` also deletes the LOCAL
-    branch, which errors with "is already used by worktree" whenever the
-    session stands in that worktree - worktree-first is the standing principle,
+    branch, which git refuses whenever the session stands in the worktree
+    holding it - worktree-first is the standing principle,
     so the best-disciplined merge was the one most reliably reported failed.
     Splitting cleanup out: the merge command carries no delete flag at all, the
     remote ref goes through `gh api -X DELETE` against the PR's verified base
@@ -1119,24 +1151,59 @@ def _post_merge_remote_delete(pr_number: int, repo: str, auto_merge) -> str:
     )
 
 
-def _emit_session_satisfied(pr_url: str, state_dir: str) -> None:
-    """Emit a session_satisfied{source:pr_merge} event (best-effort)."""
-    state_file = os.path.join(state_dir, "target-state.md")
-    if not os.path.isfile(state_file):
-        return
+# Stands in for a manifest field the merge row could not read. Never a real
+# session id or md5, so the auto-complete matcher, which requires both to equal
+# the live session's, can never adopt a degraded row.
+_MERGE_ROW_UNKNOWN = "unknown"
+
+
+def _merge_identity(state_file: str) -> Tuple[Optional[str], Optional[str]]:
+    """The session and harness a merge row records: the manifest (which names
+    the run the PR belongs to) wins; else the merging process names itself."""
     sid = _read_state_field(state_file, "session_id")
-    if not sid or sid == "null":
-        return
+    if sid and sid != "null":
+        return sid, _read_state_field(state_file, "harness") or None
+    from fno.claims.self_identity import resolve_self_identity
+    ident = resolve_self_identity()
+    return ident.session_id or None, ident.harness or None
+
+
+def _emit_session_satisfied(pr_url: str, state_file: str) -> None:
+    """Emit a ``session_satisfied{source:pr_merge}`` row for EVERY merge.
+
+    Three silent early returns used to guard this and between them produced
+    ZERO rows in a 21605-event journal. Not zero for one PR: zero for every
+    merge ever taken. The manifest moved to the space and this path still
+    looked for it beside the checkout.
+
+    This row is the only record telling a merge that consulted the review-hold
+    gate from one that did not, and it cannot change a merge outcome. So a
+    missing input degrades to a NAMED sentinel with a diagnostic.
+    """
+    sid = _merge_identity(state_file)[0] or _MERGE_ROW_UNKNOWN
     try:
         with open(state_file, "rb") as fh:
             gate_hash = hashlib.md5(fh.read()).hexdigest()
-    except OSError:
-        return
+        if sid == _MERGE_ROW_UNKNOWN:
+            sys.stderr.write(
+                f"pr-merge: no session_id on {state_file}; recording the merge "
+                f"row as {sid}\n"
+            )
+    except FileNotFoundError:
+        sys.stderr.write(
+            f"pr-merge: no target manifest at {state_file}; recording the "
+            f"merge row as session {sid}\n"
+        )
+        gate_hash = _MERGE_ROW_UNKNOWN
+    except OSError as exc:
+        sys.stderr.write(
+            f"pr-merge: manifest {state_file} unreadable ({exc}); recording the "
+            f"merge row as {_MERGE_ROW_UNKNOWN}\n"
+        )
+        gate_hash = _MERGE_ROW_UNKNOWN
     if not gate_hash:
-        return
+        gate_hash = _MERGE_ROW_UNKNOWN
     try:
-        from pathlib import Path
-
         from fno.events import append_event, session_satisfied
 
         event = session_satisfied(
@@ -1147,14 +1214,17 @@ def _emit_session_satisfied(pr_url: str, state_dir: str) -> None:
             evidence_url=pr_url or None,
             source="target",
         )
-        append_event(event, events_path=Path(state_dir) / "events.jsonl")
+        # No explicit path: the resolver answers the space journal, which is
+        # what an audit reads. A row in `<checkout>/.fno/` dies with the
+        # worktree reap, which is as unauditable as no row at all.
+        append_event(event)
     except Exception as exc:  # noqa: BLE001 - best-effort, surface a diagnostic
         sys.stderr.write(
             f"pr-merge: session_satisfied emit failed ({exc}); merge outcome unaffected\n"
         )
 
 
-def _emit_human_touch_merge(pr_number: int, state_dir: str) -> None:
+def _emit_human_touch_merge(pr_number: int) -> None:
     """Emit ``human_touch{source:merge}`` for a MANUAL merge (W4 telemetry).
 
     Only a human at a terminal counts: the autonomous loop's ship gate runs
@@ -1190,8 +1260,6 @@ def _emit_human_touch_merge(pr_number: int, state_dir: str) -> None:
     except Exception:
         node_id = None
     try:
-        from pathlib import Path
-
         from fno.events import _build, append_event
 
         event = _build(
@@ -1203,16 +1271,143 @@ def _emit_human_touch_merge(pr_number: int, state_dir: str) -> None:
                 "resolution": "ok" if node_id else "failed",
             },
         )
-        append_event(event, events_path=Path(state_dir) / "events.jsonl")
+        # Same journal as the merge audit row above, for the same reason: a
+        # worktree-local write dies with the worktree.
+        append_event(event)
     except Exception as exc:  # noqa: BLE001 - best-effort, surface a diagnostic
         sys.stderr.write(
             f"pr-merge: human_touch emit failed ({exc}); merge outcome unaffected\n"
         )
 
 
-def _run_post_merge_followups(pr_number: int, strategy: str, cwd: str) -> None:
+def _merge_request_repo_and_project(cwd: str) -> tuple[str, str]:
+    """``(repo, project)`` resolved the ritual's way, so both mints share one fold key."""
+    repo = ""
+    gcd = _git(["rev-parse", "--git-common-dir"], cwd)
+    raw = gcd.stdout.strip() if gcd.ok else ""
+    if raw:
+        p = Path(raw)
+        p = p if p.is_absolute() else Path(cwd) / p
+        if p.exists():
+            repo = str(p.parent)
+    if not repo:
+        top = _git(["rev-parse", "--show-toplevel"], cwd)
+        repo = top.stdout.strip() if top.ok and top.stdout.strip() else cwd
+    try:
+        from fno.config import load_settings_for_repo
+
+        settings = load_settings_for_repo(Path(repo))
+        project = getattr(getattr(settings, "project", None), "id", "") or ""
+    except Exception:  # noqa: BLE001 - an unreadable config degrades to empty
+        project = ""
+    return repo, project
+
+
+def _emit_merge_cleanup_skip(
+    pr_number: int, cwd: str, state_file: str, reason: str,
+    detail: str = "", branch: Optional[str] = None,
+) -> None:
+    """Say that this merge minted no cleanup request, and why. Joined to the
+    merge the same way a request row is, so one reader answers both."""
+    from fno.agents.events import emit_merge_cleanup_skipped
+
+    session_id, harness = _merge_identity(state_file)
+    repo, project = _merge_request_repo_and_project(cwd)
+    emit_merge_cleanup_skipped(
+        repo=repo,
+        project=project,
+        pr=pr_number,
+        reason=reason,
+        detail=detail,
+        branch=branch,
+        session_id=session_id,
+        harness=harness,
+    )
+
+
+def _emit_merge_cleanup_request(
+    pr_number: int, cwd: str, state_file: str, bound_node_ids: List[str]
+) -> None:
+    """Mint the machine's reap order - for EVERY confirmed merge, no agent
+    in the path (the ritual needed an agent and ran for none of the six PRs
+    merged 2026-09-06). Only against a gh-confirmed MERGED state, as the
+    ritual holds.
+
+    Every call writes exactly one journal row, a request or a skip. Silence
+    is not a legal outcome: a merge that mints nothing must say why."""
+    from fno.agents.events import emit_merge_cleanup_requested, rows_for_cleanup
+    from fno.graph._reconcile import repo_slug_from_url
+
+    res = _gh(["pr", "view", str(pr_number), "--json", "state,headRefName,url,mergedAt"], cwd)
+    if not res.ok:
+        _emit_merge_cleanup_skip(
+            pr_number, cwd, state_file, "gh-unavailable",
+            detail=(res.stderr or "").strip()[:200],
+        )
+        return
+    try:
+        meta = json.loads(res.stdout or "{}")
+        if not isinstance(meta, dict):
+            # `null` and a bare array parse fine and then break `.get`.
+            raise ValueError("pr json is not an object")
+    except ValueError as exc:  # JSONDecodeError is a ValueError
+        _emit_merge_cleanup_skip(
+            pr_number, cwd, state_file, "unparseable-pr-json",
+            detail=type(exc).__name__,
+        )
+        return
+    if meta.get("state") != "MERGED":
+        _emit_merge_cleanup_skip(
+            pr_number, cwd, state_file, "not-merged",
+            detail=f"state={meta.get('state')}",
+            branch=meta.get("headRefName") or None,
+        )
+        return
+    if not meta.get("headRefName"):
+        _emit_merge_cleanup_skip(pr_number, cwd, state_file, "no-branch")
+        return
+    branch = meta["headRefName"]
+    session_id, harness = _merge_identity(state_file)
+    repo, project = _merge_request_repo_and_project(cwd)
+    # A linked worktree's `.git` is a FILE; the canonical checkout's is a
+    # directory. Inlined from the deleted Python gate: one line, so
+    # the import that kept a second implementation alive went with it.
+    worktree = cwd if (Path(cwd) / ".git").is_file() else None
+    emit_merge_cleanup_requested(
+        repo=repo,
+        project=project,
+        pr=pr_number,
+        branch=branch,
+        worktree=worktree,
+        node_ids=bound_node_ids,
+        repo_slug=repo_slug_from_url(meta.get("url") or ""),
+        session_id=session_id,
+        harness=harness,
+        merged_at=meta.get("mergedAt") or None,
+        # always emit the exact candidates - name-matched rows count
+        # even when the merge ran outside a linked worktree.
+        candidate_row_names=rows_for_cleanup(worktree, bound_node_ids),
+    )
+
+
+def _run_post_merge_followups(
+    pr_number: int, strategy: str, cwd: str, bound_node_ids: Optional[List[str]] = None
+) -> None:
     state_dir = _repo_state_dir(cwd)
-    state_file = os.path.join(state_dir, "target-state.md")
+    state_file = _manifest_file(cwd)
+
+    # Merge-minted cleanup request, FIRST: the grace clock starts at the merge.
+    try:
+        _emit_merge_cleanup_request(pr_number, cwd, state_file, bound_node_ids or [])
+    except Exception as exc:  # noqa: BLE001 - best-effort, merge outcome unaffected
+        sys.stderr.write(f"pr-merge: merge-cleanup emit failed ({exc}); unaffected\n")
+        try:
+            _emit_merge_cleanup_skip(
+                pr_number, cwd, state_file, "emit-failed",
+                detail=type(exc).__name__,
+            )
+        except Exception:  # noqa: BLE001 - a failing journal write changes no merge
+            pass
 
     # Memory-pass sentinel.
     try:
@@ -1229,7 +1424,7 @@ def _run_post_merge_followups(pr_number: int, strategy: str, cwd: str) -> None:
         ):
             mode = "autonomous"
         plan_path = _read_state_field(state_file, "plan_path")
-        session_id = _read_state_field(state_file, "session_id")
+        session_id = _merge_identity(state_file)[0] or ""
         pr_url = ""
         res = _gh(["pr", "view", str(pr_number), "--json", "url", "-q", ".url"], cwd)
         if res.ok:
@@ -1246,19 +1441,22 @@ def _run_post_merge_followups(pr_number: int, strategy: str, cwd: str) -> None:
     except Exception:
         pass
 
-    # Auto-complete signal.
+    # Auto-complete signal, and the merge's own audit row. Not swallowed: the
+    # `except: pass` here was a fourth silence on top of the emitter's three.
     try:
         pr_url = ""
         res = _gh(["pr", "view", str(pr_number), "--json", "url", "-q", ".url"], cwd)
         if res.ok:
             pr_url = res.stdout.strip()
-        _emit_session_satisfied(pr_url, state_dir)
-    except Exception:
-        pass
+        _emit_session_satisfied(pr_url, state_file)
+    except Exception as exc:  # noqa: BLE001 - telemetry, merge outcome unaffected
+        sys.stderr.write(
+            f"pr-merge: merge audit row not written ({exc}); merge outcome unaffected\n"
+        )
 
     # W4 touch telemetry: a manual (tty) merge is a human steering action.
     try:
-        _emit_human_touch_merge(pr_number, state_dir)
+        _emit_human_touch_merge(pr_number)
     except Exception as exc:
         sys.stderr.write(
             f"pr-merge: human_touch emit failed ({exc}); merge outcome unaffected\n"
@@ -1298,8 +1496,14 @@ def _finish_confirmed_merge(
     success_reason: str,
     *,
     prior_cleanup_failure: str = "",
+    release_lock: Optional[Callable[[], None]] = None,
+    defer_close: bool = False,
 ) -> int:
     """Emit and finalize one confirmed merge, including remote cleanup truth."""
+    # The race the lock closes ended at the merged receipt; release first so
+    # a peer never queues behind the post-merge work.
+    if release_lock is not None:
+        release_lock()
     cleanup_parts = [prior_cleanup_failure] if prior_cleanup_failure else []
     remote_cleanup = _post_merge_remote_delete(pr_number, repo, auto_merge)
     if remote_cleanup:
@@ -1326,8 +1530,8 @@ def _finish_confirmed_merge(
         )
         rc = 0
 
-    _on_confirmed_merge(pr_number, repo)
-    _run_post_merge_followups(pr_number, strategy, repo)
+    bound_node_ids = _on_confirmed_merge(pr_number, repo, defer_close=defer_close)
+    _run_post_merge_followups(pr_number, strategy, repo, bound_node_ids=bound_node_ids)
     return rc
 
 
@@ -1338,51 +1542,70 @@ def _finish_confirmed_merge(
 
 _MergeLockState = Literal["acquired", "held", "unavailable"]
 
+_MergeLockYield = tuple[_MergeLockState, Optional[Callable[[], None]], Optional[dict]]
+
 
 @contextmanager
-def _merge_lock() -> Iterator[_MergeLockState]:
-    """Serialize merges repo-wide; yield ``acquired`` | ``held`` | ``unavailable``.
+def _merge_lock(pr_number: int) -> Iterator[_MergeLockYield]:
+    """Serialize merges repo-wide; yield ``(state, release_now, held_detail)``.
 
     One ``merge:<canonical-root>`` claim per project (repo-local routing, so
     every worktree lane contends on the SAME lock - like ``walker:<root>``),
     pid-liveness anchored so a crashed merger frees it instantly. Acquisition
     polls for up to ``_MERGE_LOCK_WAIT_S`` (a merge holds it for seconds), then
-    yields ``held``. A claims-layer error yields ``unavailable`` and the merge
+    yields ``held`` with ``held_detail`` naming the holder PR and claim age.
+    Stale claims are stolen by the claims layer, so ``held`` reports a holder
+    live at the last poll. A claims-layer error yields ``unavailable`` and the merge
     proceeds unserialized: the lock is coordination, GitHub stays the merge
     authority, and our own tooling failing must never block a merge.
     """
     state: Literal["acquired", "held", "unavailable"] = "acquired"
+    held_detail: Optional[dict] = None
     key = holder = release = None
     # Acquisition happens fully BEFORE the yield: an exception the consumer
     # body throws into the generator must reach the finally-release, never an
     # except-then-yield-again (which would RuntimeError inside contextmanager).
     try:
-        from fno.claims.core import CLAIM_UNAVAILABLE, acquire_claim, release_claim
+        from fno.claims.core import CLAIM_UNAVAILABLE, ClaimHeldByOther, acquire_claim, release_claim
+        from fno.claims.io import claim_path, read_claim_file
         from fno.paths import resolve_canonical_repo_root
 
         key = f"merge:{resolve_canonical_repo_root()}"
-        holder = f"pr-merge:{os.getpid()}"
+        holder = f"pr-merge:pr{pr_number}:{os.getpid()}"
+
+        def _release_now() -> None:
+            try:
+                release_claim(key, holder)
+            except Exception:  # noqa: BLE001 - pid-liveness frees it anyway
+                pass
+
         deadline = time.monotonic() + _MERGE_LOCK_WAIT_S
         while True:
             try:
                 acquire_claim(key, holder, reason="serialized PR merge (LD#9)")
                 release = release_claim
                 break
-            except CLAIM_UNAVAILABLE:
+            except CLAIM_UNAVAILABLE as exc:
                 # At the exact moment two mergers are racing hardest, the
                 # outer except Exception below yields "unavailable" (lock
                 # disabled entirely), which is the wrong degrade for
                 # contention specifically when the whole point is LD#9's
                 # merge serialization under exactly this condition.
+                if isinstance(exc, ClaimHeldByOther):
+                    held_detail = {"holder": exc.holder, "pid": exc.pid, "host": exc.host}
                 if time.monotonic() >= deadline:
                     state = "held"
                     break
                 time.sleep(_MERGE_LOCK_POLL_S)
+        if state == "held" and held_detail is not None:
+            with suppress(Exception):
+                rec = read_claim_file(claim_path(key))
+                held_detail["age_s"] = max(0, int(time.time() * 1000 - rec.acquired_at) // 1000)
     except Exception as exc:  # noqa: BLE001 - fail-open: lock is best-effort
         sys.stderr.write(f"pr-merge: merge lock unavailable ({exc}); proceeding\n")
         state = "unavailable"
     try:
-        yield state
+        yield state, (_release_now if state == "acquired" else None), held_detail
     finally:
         if release is not None and state == "acquired":
             assert key is not None and holder is not None  # set together before release
@@ -1392,26 +1615,8 @@ def _merge_lock() -> Iterator[_MergeLockState]:
                 pass
 
 
-def _live_lane_count() -> int:
-    """Live parallel-lane slots (0 on any probe miss, keeping sequential paths
-    byte-identical: the stale-base hold below only arms while lanes run)."""
-    try:
-        from fno.claims.lanes import active_lane_count
-
-        return active_lane_count()
-    except Exception as exc:  # noqa: BLE001
-        # A probe miss disarms the stale-base hold entirely - leave the audit
-        # breadcrumb so an unguarded merge is distinguishable after the fact.
-        sys.stderr.write(
-            f"pr-merge: lane probe unavailable ({exc}); merging without freshness hold\n"
-        )
-        return 0
-
-
 def _pr_base_head_refs(pr_number: int, cwd: str) -> Optional[Tuple[str, str]]:
-    """(base, head) ref names for a PR, or None on any read miss. Shared by
-    `_behind_by` and `_base_move_paths` so the two probes cannot drift apart
-    about how the refs are read; each keeps its own miss polarity."""
+    """(base, head) ref names for a PR, or None on any read miss."""
     try:
         view = _gh(
             ["pr", "view", str(pr_number), "--json", "baseRefName,headRefName"], cwd
@@ -1433,148 +1638,37 @@ def _pr_base_head_refs(pr_number: int, cwd: str) -> Optional[Tuple[str, str]]:
         return None
 
 
-def _behind_by(pr_number: int, cwd: str) -> int:
-    """Commits the PR head is behind its base branch. 0 on any probe miss:
-    the hold must never block a merge because our own read failed, but each
-    miss leaves a stderr breadcrumb - a gh outage is likeliest exactly when
-    many lanes hammer gh, i.e. when the hold matters most."""
-
-    def _miss(why: str) -> int:
-        sys.stderr.write(
-            f"pr-merge: stale-base probe unavailable ({why}); "
-            "merging without freshness hold\n"
-        )
-        return 0
-
-    refs = _pr_base_head_refs(pr_number, cwd)
-    if refs is None:
-        return _miss("pr refs unreadable")
-    base, head = refs
-    try:
-        res = _gh(
-            ["api", f"repos/{{owner}}/{{repo}}/compare/{base}...{head}", "-q", ".behind_by"],
-            cwd,
-        )
-        if not res.ok:
-            return _miss("gh compare failed")
-        return int(res.stdout.strip())
-    except Exception as exc:  # noqa: BLE001 - the hold must never BLOCK a merge
-        return _miss(f"probe error: {exc}")
-
-
-def _base_move_paths(pr_number: int, cwd: str) -> Optional[List[str]]:
-    """Files the BASE branch gained since the PR head diverged, or None on any
-    probe miss. The reverse compare ({head}...{base}) names exactly the commits
-    the head lacks, so its file list IS the base move an overlap hold measures.
-    A renamed base-side entry contributes BOTH its previous and current
-    filename: a PR still editing the old path is a modify-vs-rename overlap,
-    the exact case the hold exists to catch.
-
-    Fails CLOSED, inverting `_behind_by` on purpose: there we did not know
-    whether we were behind at all and a read of ours failing must not block a
-    merge, while here we already know the base moved and cannot tell whether it
-    overlapped - so the caller holds. A truncated compare under-reports the
-    move (GitHub caps the response at 300 files) and fails in the merging
-    direction, so truncation is a miss too."""
-
-    def _miss(why: str) -> Optional[List[str]]:
-        sys.stderr.write(
-            f"pr-merge: overlap probe unavailable ({why}); holding for a rebase\n"
-        )
-        return None
-
-    refs = _pr_base_head_refs(pr_number, cwd)
-    if refs is None:
-        return _miss("pr refs unreadable")
-    head, base = refs
-    try:
-        res = _gh(
-            [
-                "api",
-                f"repos/{{owner}}/{{repo}}/compare/{head}...{base}",
-                "--jq",
-                "{truncated: .truncated, names: [.files[]"
-                " | ((.filename // empty), (.previous_filename // empty))]}",
-            ],
-            cwd,
-        )
-        if not res.ok:
-            return _miss("gh reverse compare failed")
-        try:
-            payload = json.loads(res.stdout or "{}")
-        except json.JSONDecodeError:
-            return _miss("unparseable compare output")
-        if not isinstance(payload, dict):
-            return _miss("compare payload not an object")
-        names = payload.get("names")
-        if not isinstance(names, list):
-            return _miss("compare payload carries no file list")
-        # A non-string entry is shape drift, not a path to drop: str(None) is
-        # the truthy garbage path "None", which would neither match a real
-        # overlap nor trip this breadcrumb. Fail closed on any of them.
-        if not all(isinstance(p, str) and p for p in names):
-            return _miss("compare file list carries non-string entries")
-        if payload.get("truncated") or len(names) >= 300:
-            return _miss(f"compare truncated ({len(names)} files; caps at 300)")
-        return names
-    except Exception as exc:  # noqa: BLE001 - fail CLOSED: holding equals today's behavior
-        return _miss(f"probe error: {exc}")
-
-
-def _pr_file_paths(pr_number: int, cwd: str) -> Optional[List[str]]:
-    """The PR's own changed file paths, complete, or None on a probe miss.
-
-    Served from the REST files endpoint with --paginate because `gh pr view
-    --json files` caps silently at 100 files (one unpaginated GraphQL page),
-    and a truncated PR side would under-report exactly the side whose overlap
-    the hold decides - the base side already treats its 300-file compare cap as
-    a miss, so the PR side must not fail open where its neighbour fails closed.
-    An EMPTY list is not a miss: a PR with no diff cannot overlap anything."""
-    res = _gh(
-        [
-            "api",
-            f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/files",
-            "--paginate",
-            "--jq",
-            ".[] | .filename // empty",
-        ],
-        cwd,
-    )
-    if not res.ok:
-        sys.stderr.write(
-            "pr-merge: overlap probe unavailable (gh pr files read failed); "
-            "holding for a rebase\n"
-        )
-        return None
-    return [line.strip() for line in res.stdout.splitlines() if line.strip()]
-
-
-def _overlaps(base_paths: List[str], pr_paths: List[str]) -> List[str]:
-    """Sorted intersection of two changed-file lists, documentation paths
-    dropped from both sides first. The overlap hold's whole decision, pure over
-    pre-computed path lists so it unit-tests with no gh and no git - the same
-    discipline `review_freshness` follows for the same reason. Empty means no
-    overlap: a base move that touches none of the PR's files cannot carry a
-    semantic conflict into this merge."""
-    base = {p for p in base_paths if not _is_documentation_path(p)}
-    pr = {p for p in pr_paths if not _is_documentation_path(p)}
-    return sorted(base & pr)
-
-
 # ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
 
 
-def run_merge(argv: Sequence[str], cwd: Optional[str] = None) -> int:
+def run_merge(
+    argv: Sequence[str], cwd: Optional[str] = None, *,
+    authority: str = "manifest", timeout_s: float = 300.0,
+) -> int:
+    """Merge one PR through the canonical guard chain.
+
+    ``authority`` selects where step (1) reads the merge posture from:
+    ``"manifest"`` (default) reads the calling session's ``target-state.md``
+    exactly as before; ``"durable_grant"`` reads the typed durable-grant
+    resolver (``_merge_grant``) instead - the path the PR watcher drives for a
+    worker that parked. It swaps ONLY the authority arm: the hold, in-flight
+    review, incarnation fence, stub-manifest, coverage, posture, and CI gates
+    below run identically for both callers, so a granted watcher lane can
+    never merge a PR the interactive lane would refuse (AC11-EDGE).
+    """
     repo = cwd or os.getcwd()
     pr_raw = ""
+    accept_flake = False
     for arg in argv:
-        # A legacy ``--invoker=...`` is silently accepted and ignored (x-04ab
+        # A legacy ``--invoker=...`` is silently accepted and ignored (
         # removed the flag + its gate). Never break a merge command on a stray
         # flag an un-updated caller still passes.
         if arg.startswith("--invoker="):
             continue
+        elif arg == "--accept-flake":
+            accept_flake = True
         elif arg[:1].isdigit():
             pr_raw = arg
         else:
@@ -1591,36 +1685,23 @@ def run_merge(argv: Sequence[str], cwd: Optional[str] = None) -> int:
         return 1
     pr_number = int(pr_raw)
 
-    # (-2) Plan-level hold. This is before every other merge gate and shares
-    # the same plan reader autonomous and named dispatch use. Unreadable state
-    # refuses rather than defaulting to unheld.
-    from fno.pr._hold import merge_hold_reason
+    try:
+        from fno.pr._review_hold import resolve_pr_worktree
 
-    hold_reason = merge_hold_reason(pr_number, repo)
-    if hold_reason:
-        _emit(pr_number, "held", hold_reason, "none", err=False)
+        # "" = no local worktree on the PR branch: the gates below probe from
+        # this checkout, whose worktree list still enumerates every worktree.
+        repo = resolve_pr_worktree(pr_number, repo) or repo
+    except Exception as exc:
+        _emit(pr_number, "held", str(exc), "none", err=True)
         return 2
 
-    # (-1.5) In-flight review (x-a089). A review that is RUNNING is invisible to
-    # every gate below: coverage answers what verdicts EXIST for this head, and
-    # a review still writing its fixes has produced none yet. Three PRs on
-    # 2026-08-22 were green, settled and mergeable while their reviews were
-    # mid-flight, one of them with five counted findings under repair.
-    #
-    # Sited HERE, beside the plan hold and BEFORE the auto_merge gate below, for
-    # the reason that comment already gives: the auto-merge lane is not a
-    # separate caller, it is this function with `auto_merge.enabled`, and it is
-    # the caller with no human judgment to fall back on. A guard placed after
-    # that gate would be decorative for exactly the path that needs it most.
-    #
-    # No self-exemption: an author who merges over its own uncommitted fixes
-    # loses them as surely as a stranger does.
-    review_refusal = _in_flight_review_refusal(pr_number, repo)
-    if review_refusal:
-        _emit(pr_number, "held", review_refusal, "none", err=False)
-        return 2
+    # The plan-level hold and the in-flight review hold used to be asked here,
+    # ahead of every other gate. Both now belong to the authorized-merge owner,
+    # which the terminal's auto-merge arm consults too - the arm never asked
+    # either of them, so a queue armed at the terminal could ship the code a
+    # review was still fixing. Asked once, by one owner, for both paths.
 
-    # (-1) Incarnation fence (x-eea5 1.3): a losing incarnation - a forked or
+    # (-1) Incarnation fence (1.3): a losing incarnation - a forked or
     # supervisor-restarted session whose session:<uuid> single-writer claim
     # another incarnation now holds - must not merge by construction. Read-only,
     # fail-closed; no resolvable identity -> invisible (proceed). Same outcome
@@ -1651,43 +1732,11 @@ def run_merge(argv: Sequence[str], cwd: Optional[str] = None) -> int:
         _emit(pr_number, "blocked", _fence_reason, "none", err=True)
         return 2
 
-    # (0) Stub-manifest hold: a `contract`-tier dependent's PR must not merge
-    # while it carries an unreconciled stub-manifest (mocks would ship). Checked
-    # BEFORE the auto_merge gate so auto-merge cannot bypass it (AC7-EDGE), and
-    # it no-ops for every non-contract PR so the default `hard` path is unchanged
-    # (AC6-EDGE).
-    try:
-        from fno.stub_manifest import unreconciled_manifest_for_pr
-
-        # Resolve the repo top-level: manifests are written under the PROJECT
-        # root's `.fno/`, so a merge invoked from a subdirectory must not look
-        # under that subdir (codex P2). Falls back to `repo` if git can't say.
-        top = _git(["rev-parse", "--show-toplevel"], repo)
-        root = top.stdout.strip() if top.ok and top.stdout.strip() else repo
-        held = unreconciled_manifest_for_pr(pr_number, root)
-    except Exception:
-        held = None  # never let the guard's own failure block a normal merge
-    if held:
-        if held.get("_malformed"):
-            detail = "malformed stub-manifest (cannot prove stubs are gone)"
-        else:
-            detail = f"unreconciled stub-manifest ({len(held.get('stubs', []))} stub(s))"
-        _emit(
-            pr_number,
-            "held",
-            f"contract dependent {held.get('_node')} carries a {detail}; "
-            "reconcile before merge",
-            "none",
-            err=False,
-        )
-        return 2
-
-    # (1) One authoritative posture (x-3855, x-01b9), resolved in the same
+    # (1) One authoritative posture, resolved in the same
     # order init folds it: granted = (live `auto_merge.enabled` OR an explicit
     # per-run env grant) AND NOT a per-run refusal. The who-may-merge gate
-    # (--invoker + allowed_invokers) was removed (x-04ab): auto-merge is gated
+    # (--invoker + allowed_invokers) was removed: auto-merge is gated
     # by posture plus the CI-green / external-review / stub-manifest guards.
-    #
     # The manifest's `auto_merge_approved` is init's fold of the documented
     # chain (hooks/helpers/init-target-state.sh, references/auto-merge.md). A
     # `false` is a per-run REFUSAL (--no-merge, the `/target bg` injected
@@ -1699,160 +1748,76 @@ def run_merge(argv: Sequence[str], cwd: Optional[str] = None) -> int:
     # satisfies the standing arm on its own - the sanctioned path the docs
     # promise and that a config-first order made unreachable: consulting
     # `enabled` before the manifest let the config leaf refuse a run init had
-    # granted (x-01b9: two workers read this seam the same night).
-    #
+    # granted (: two workers read this seam the same night).
     # `enabled` is still re-read LIVE, so a manifest whose `true` merely
     # mirrored config (source: config) does not outlive an operator flipping
-    # the switch off mid-flight (x-2270: the manifest is a snapshot; the live
+    # the switch off mid-flight (: the manifest is a snapshot; the live
     # switch wins). Absent manifest or absent field -> live config decides: a
     # manual `fno do pr merge` outside a target session is legitimate and must
     # not start refusing. TARGET_AUTO_MERGE is never read HERE - a grant is
     # folded at spawn where it is attributable, never exported on a merge
     # command line by the very worker that wants the merge.
-    #
-    # Every refusal names the sanctioned override in its own text (x-3855): a
+    # Every refusal names the sanctioned override in its own text: a
     # refusal that closes a door without pointing at the key is the one that
     # had two workers improvising config mutations inside sixty seconds.
-    auto_merge = _load_auto_merge()
-    state_file = os.path.join(_repo_state_dir(repo), "target-state.md")
+    auto_merge = _load_auto_merge(repo)
+    state_file = _manifest_file(repo)
     approved = _read_state_field(state_file, "auto_merge_approved")
-    if approved and not _approved_true(approved):
-        # Name WHICH input set the posture (x-9d11): the operator's first
-        # question on this refusal is "what layer said no". A pre-provenance
-        # manifest carries no source; that reads as unknown, never a guess.
-        # The override names levers that exist for the source it names: a
-        # flag-no-merge run was refused by its dispatcher (the `/target bg`
-        # default), not by anything typed by hand, so "without --no-merge"
-        # alone would point at a door that is not there.
-        source = (
-            _read_state_field(state_file, "auto_merge_source") or ""
-        ).strip() or "unknown (pre-provenance manifest)"
-        _emit(
-            pr_number,
-            "skipped",
-            f"per-run no-merge (manifest auto_merge_approved is not true; "
-            f"auto_merge_source: {source}); sanctioned override: an "
-            "out-of-band merge by the operator (any such merge satisfies "
-            "done()), or re-arm the run's dispatch (attended and without "
-            "--no-merge, or auto_merge.grant = dispatch); on a repo whose "
-            "standing switch is off, that alone is not enough - arm "
-            "auto_merge.enabled or spawn with TARGET_AUTO_MERGE=1 (the "
-            "config refusal names those levers)",
-            "none",
-            err=False,
-        )
-        return 2
-    if not auto_merge.enabled and not (
-        _approved_true(approved)
-        and (_read_state_field(state_file, "auto_merge_source") or "").strip()
-        == "env-target-auto-merge"
-    ):
-        # "resolves enabled=false", not "is set false": the same refusal fires
-        # on a stock install with no key and on a malformed block degraded to
-        # defaults, and prescribing `config set true` against a parse error
-        # masks it. The named levers are the OPERATOR's; a worker reading this
-        # escalates rather than pulling either one (skills/pr hard rule).
-        _emit(
-            pr_number,
-            "skipped",
-            "auto_merge disabled (live config resolves auto_merge.enabled="
-            "false); sanctioned override (operator levers): `fno config set "
-            "auto_merge.enabled true`, or start the run with "
-            "TARGET_AUTO_MERGE=1 from the operator's shell. The env grant "
-            "is folded into the manifest at init - mesh-spawned and "
-            "unattended runs scrub it, it is never a merge-time variable, "
-            "and never a synthesized config",
-            "none",
-            err=False,
-        )
-        return 2
+    if authority == "durable_grant":
+        # The watcher's authority arm: the parked worker's
+        # manifest is gone, so posture reads from the durable receipt instead.
+        # The resolver is fail-closed in every arm (absence, malformed,
+        # ambiguity, a live holder, a flipped config switch all refuse), and
+        # it re-checks the standing config itself, so arm B below is a
+        # no-op on this path and is left shared rather than forked.
+        from fno.pr._merge_grant import resolve_durable_grant
+
+        grant_verdict = resolve_durable_grant(pr_number, repo)
+        if not grant_verdict.merge_eligible:
+            word = {
+                "refused": "skipped",
+                "absent": "skipped",
+                "held": "held",
+            }.get(grant_verdict.state, "blocked")
+            _emit(
+                pr_number,
+                word,
+                f"durable-grant merge not executable: {grant_verdict.reason}",
+                "none",
+                err=(word == "blocked"),
+            )
+            return 2
+    # The manifest posture, the standing switch and the automerge floor are the
+    # authorized-merge owner's to fold, so this verb and the terminal arm cannot
+    # disagree about who may merge. What is resolved here is only WHICH posture
+    # to hand it: the durable arm above replaces the manifest for a parked
+    # worker, and everything else rides the manifest fields as written.
+    posture_source = (_read_state_field(state_file, "auto_merge_source") or "").strip()
+    if authority == "durable_grant":
+        # The resolver already said eligible and re-checked the standing config
+        # itself. Naming its own source keeps it out of the env-grant arm, so
+        # the owner still holds it to the live switch and the floor.
+        posture_approved: Optional[bool] = True
+        posture_source = "durable-grant"
+    elif not approved:
+        # No manifest, or a manifest predating the field: the live config decides
+        # on its own. A manual merge outside a target session is legitimate.
+        posture_approved = None
+    else:
+        posture_approved = _approved_true(approved)
 
     # (2) gh must be installed.
     if shutil.which("gh") is None:
         _emit(pr_number, "failed", "gh CLI not installed", "none", err=True)
         return 127
 
-    # (2a-pre) Terminal exemption, the same one the in-flight review guard at
-    # _in_flight_review_refusal takes: this gate protects what WOULD merge, and
-    # a merged or closed PR has no would-merge left. Without it, retrying
-    # `fno do pr merge` on a PR that already landed answers `unreviewed merge
-    # refused` instead of `already merged` - a receipt that sent a competent
-    # lane hunting a coverage defect that was blocking nothing. An unreadable
-    # state falls through to the gate (fail closed), never past it.
-    try:
-        _refs = _pr_head_ref_and_oid(pr_number, repo)
-    except Exception:
-        _refs = None
-    if _refs is not None and _refs[2] in ("MERGED", "CLOSED"):
-        _emit(
-            pr_number,
-            "skipped",
-            f"PR already {_refs[2].lower()}; nothing to merge "
-            "(the coverage gate protects what would merge)",
-            "none",
-            err=False,
-        )
-        return 2
-
-    # (2a) Coverage guard (x-0eaf): the sanctioned merge must not land a PR
-    # nothing reviewed. The predicate lives in _coverage_gate - one copy,
-    # shared with the hook-facing `fno do pr coverage-check` verb - and this path
-    # passes recompute=True, firing the standalone producer once when no row
-    # describes the head (x-3a3f). Consume the review_coverage event loop-check
-    # emits (Ownership: Rust computes, Python reads); missing/stale/zero/
-    # unknown refuses (fail closed), and so does UNANSWERED: a merge that
-    # cannot read its own coverage has not been reviewed. The recompute cannot
-    # rescue the UNANSWERED arm - the producer needs the head to pin the row it
-    # would emit - so a failed head fetch blocks until gh answers again. Runs
-    # only when auto_merge
-    # is enabled (step 1), so a manual `gh pr merge` on a non-auto-merge repo
-    # is untouched. After the gh check so a missing gh still reports its own
-    # exit 127. Skipped when no review lane is configured (a stock install
-    # opted out of review).
+    # (2a) Coverage read: the pin and the published receipt. The refusal is
+    # decide's now.
     from fno.pr import _coverage_gate
 
     state, refusal, covered_head, note = _coverage_gate.coverage_verdict(
         pr_number, repo, recompute=True
     )
-    if state != _coverage_gate.COVERED:
-        # Bracket append, never paren-splice surgery on a builder's output: a
-        # reason whose trailing paren closes an inner clause (a searched list,
-        # a truncated sha) would swallow the note into the wrong parenthetical.
-        line = _coverage_gate.refusal_line(refusal, note)
-        if state == _coverage_gate.IMPOSSIBLE:
-            # Distinct from the unreviewed receipt: "cannot be cleared by
-            # reviewing" prescribes escalation, not another round, and a
-            # receipt that reads like the ordinary refusal teaches exactly
-            # the loop this state exists to end.
-            _emit(
-                pr_number,
-                "blocked",
-                f"merge refused, coverage impossible: {line}",
-                "none",
-                err=True,
-            )
-            return 2
-        if state == _coverage_gate.UNANSWERED:
-            # UNANSWERED is an instrument failure, not a review verdict: a
-            # receipt that says "unreviewed" about a probe that died sends a
-            # worker hunting reviewers when the recovery is retrying the merge.
-            _emit(
-                pr_number,
-                "blocked",
-                f"coverage probe failed, merge refused: {line}",
-                "none",
-                err=True,
-            )
-            return 2
-        _emit(
-            pr_number,
-            "blocked",
-            f"unreviewed merge refused: {line}",
-            "none",
-            err=True,
-        )
-        return 2
-
     if note.startswith(_coverage_gate.OVERRIDE_NOTE_PREFIX):
         # A waived merge says so on its own receipt. A covered merge and an
         # overridden one both exit 0, and a receipt that cannot tell them apart
@@ -1863,191 +1828,167 @@ def run_merge(argv: Sequence[str], cwd: Optional[str] = None) -> int:
             file=sys.stderr,
         )
 
+    # (2b) The flake probe, pinned to covered_head (immutable history at that
+    # SHA, and outside the lock so the reads never stretch the merge window).
+    # The hold/journal decision stays in _do_merge, ahead of the stamp.
+    flake = None
+    if auto_merge.require_checks_pass:
+        try:
+            from fno.rust_binary import verb_call
+
+            flake = verb_call("authorized-merge", {"op": "status-rerun", "cwd": repo, "pr": int(pr_number), "sha": covered_head or ""}, timeout=120)
+        except Exception as exc:  # noqa: BLE001 - the probe must not wedge a merge
+            sys.stderr.write(
+                f"pr-merge: rerun-recovery probe unavailable ({exc}); "
+                "merging without the flake hold\n"
+            )
+
     # covered_head (from the gate) pins the merge so a racing push after the
-    # coverage check cannot land an unreviewed head (x-0eaf TOCTOU). The
+    # coverage check cannot land an unreviewed head (TOCTOU). The
     # staleness check inside the gate already refused a current mismatch; this
     # makes gh itself refuse if the head moves between here and the merge.
 
-    # (2c) Plan fidelity guard (x-cbab): the inverse of the coverage guard on the
-    # ownership axis - review_coverage is Rust-computed/Python-read; plan fidelity
-    # is Python-computed (fno.plan.fidelity)/read here. A plan whose declared
-    # deliverables did not all ship refuses the merge unless each shortfall
-    # carries a carveout (a PR-body sentence is not one). Skipped when the PR
-    # carries no plan (no denominator) or is not a code payload. The join is
-    # plan-grain, so an inline run with no separate planning thread has zero
-    # planned rows and passes; this catches an orphan plan that never shipped.
-    # A merge gate is required because a stop-gate-only check is skipped by a
-    # direct `fno do pr merge`; the stop gate (loopcheck.rs) holds the other path.
-    _plan_path = _plan_path_for_pr(pr_number, repo)
-    if _plan_path and _pr_payload_is_code(repo, pr_number):
-        from fno.plan.fidelity import compute_plan_fidelity
-
-        try:
-            _fid = compute_plan_fidelity(plan_path=_plan_path)
-        except Exception as exc:  # noqa: BLE001 - fail OPEN: a broken probe must not wedge a green merge
-            _fid = {"refused": False, "reason": f"fidelity probe degraded: {exc}"}
-        if _fid.get("refused"):
-            _emit(
-                pr_number,
-                "blocked",
-                f"plan fidelity refused: {_fid.get('reason', 'uncovered shortfall')}",
-                "none",
-                err=True,
-            )
-            return 2
-
-    # (2b) Merge serialization + overlap hold (parallel mode G4, LD#9).
-    # Builds run parallel; merges run one at a time, and while lanes are live a
-    # PR whose changed files OVERLAP the base move is held for `fno do pr rebase`
-    # first, so a lane never merges code the base moved under. The predicate is
-    # overlap, not distance: a base move that touches none of the PR's files
-    # cannot carry a semantic conflict into this merge, while holding on
-    # distance alone taxed every open lane with a rebase and a re-review per
-    # peer merge (N open PRs, N-1 rebases each round, GitHub itself reporting
-    # MERGEABLE the whole time). `_behind_by` stays the cheap first test: at
-    # zero there is no base move, so the overlap probes never run in the common
-    # sequential case. Both checks run UNDER the lock: a peer merge landing
-    # between the freshness read and our merge is exactly the race the lock
-    # exists to close. Sequential runs (no live lanes) skip the freshness hold
-    # and see only an uncontended lock - behavior unchanged.
-    with _merge_lock() as lock:
+    # (2b) Merge serialization: builds run parallel, merges run one at a time.
+    # The authorized-merge gate reads CI freshness under the lock, so a peer
+    # merge cannot land between that read and this merge.
+    with _merge_lock(pr_number) as (lock, release_now, held_detail):
         if lock == "held":
-            _emit(
-                pr_number,
-                "held",
-                "merge serialized: another merge holds the lock; retry",
-                "none",
-                err=False,
-            )
-            return 2
-        if _live_lane_count() > 0:
-            behind = _behind_by(pr_number, repo)
-            if behind > 0:
-                base_paths = _base_move_paths(pr_number, repo)
-                pr_paths = None if base_paths is None else _pr_file_paths(pr_number, repo)
-                if base_paths is None or pr_paths is None:
-                    _emit(
-                        pr_number,
-                        "held",
-                        "stale base: overlap probe unavailable (base moved; "
-                        "could not compare file sets); run fno do pr rebase, "
-                        "then retry",
-                        "none",
-                        err=False,
-                    )
-                    return 2
-                overlap = _overlaps(base_paths, pr_paths)
-                if overlap:
-                    shown = ", ".join(overlap[:3])
-                    extra = (
-                        f" and {len(overlap) - 3} more" if len(overlap) > 3 else ""
-                    )
-                    _emit(
-                        pr_number,
-                        "held",
-                        f"stale base: base move touches files this PR also "
-                        f"changes ({shown}{extra}); run fno do pr rebase, then "
-                        "retry",
-                        "none",
-                        err=False,
-                    )
-                    return 2
-        # (2c) Stacked-base guard: a base branch that no longer leads to the
-        # default branch merges green and ships nothing. Inside the lock because
-        # the event that kills a base IS a peer merge, which is what the lock
-        # serializes. `_behind_by` above cannot see this: it compares head to
-        # base, and a PR stacked on an already-landed base is 0 behind it.
-        # A refusal needs a retarget, so it is `blocked` (an operator action),
-        # never `held` (retry the same command). An unevaluated probe proceeds
-        # with a breadcrumb, matching `_behind_by`: our own read failing must
-        # not wedge a merge.
-        from fno.pr import _base_lineage
-
-        verdict, why = _base_lineage.lineage_verdict(pr_number, repo)
-        if verdict == "stale":
-            if _base_lineage.bypassed():
-                _base_lineage.emit_bypass_escape(pr_number, repo, why)
-                sys.stderr.write(
-                    f"pr-merge: stacked-base guard bypassed "
-                    f"({_base_lineage.BYPASS_ENV}); {why}\n"
+            reason = "merge serialized: another merge holds the lock; retry"
+            if held_detail:
+                age_part = f", held {held_detail['age_s']}s" if "age_s" in held_detail else ""
+                reason = (
+                    f"merge serialized: held by {held_detail['holder']} "
+                    f"(live at last poll{age_part}; waited {_MERGE_LOCK_WAIT_S}s); retry"
                 )
-            else:
-                _emit(pr_number, "blocked", f"stacked base refused: {why}", "none", err=True)
-                return 2
-        elif verdict == "unknown":
-            sys.stderr.write(
-                f"pr-merge: stacked-base probe unavailable ({why}); "
-                "merging without the lineage guard\n"
-            )
+            _emit(pr_number, "held", reason, "none", err=False)
+            return 2
         return _do_merge(
-            pr_number, auto_merge, repo, covered_head, (state, refusal, covered_head, note)
+            pr_number,
+            auto_merge,
+            repo,
+            covered_head,
+            (state, refusal, covered_head, note),
+            approved=posture_approved,
+            auto_merge_source=posture_source,
+            release_lock=release_now,
+            timeout_s=timeout_s,
+            accept_flake=accept_flake,
+            flake=flake,
+            authority=authority,
         )
 
 
-def _checks_verdict(
+def covered_pin(pr_number: int, repo: str, covered_head: str) -> str:
+    """The head a COVERED gate pins its merge to.
+
+    A gate answers COVERED with NO head in one case: no review lane is
+    configured, the stock-install opt-out. There is no reviewed head to pin
+    then, but there is still a head worth pinning, and it is the PR's own. The
+    owner refuses an unpinned effect outright, so without this a repo that
+    opted out of review could never merge at all.
+
+    An unreadable head stays empty on purpose. The owner reads that as unknown
+    and holds, which is the same fail-closed answer every other unpinnable
+    merge gets. Shared by the merge verb and the verify remediation, because a
+    second copy of this rule is a second chance for the two to disagree.
+    """
+    if covered_head:
+        return covered_head
+    refs = _pr_head_ref_and_oid(pr_number, repo)
+    return refs[1] if refs else ""
+
+
+def _authorized_merge(
     pr_number: int,
     repo: str,
-    ignore_contexts: Sequence[str] = (),
-) -> tuple[str, dict, str]:
-    """CI verdict for the PR plus the head it describes.
+    *,
+    effect: str,
+    approved: Optional[bool],
+    source: str,
+    require_checks: bool = False,
+    covered_head: str = "",
+    decide_only: bool = False,
+    timeout_s: float = 300.0,
+    authority: str = "manifest",
+    accept_flake: bool = False,
+) -> dict:
+    """Ask the one authorized-merge operation, in fno-agents.
 
-    Borrows `verdict_for` rather than hand-rolling a statusCheckRollup read: a
-    second opinion on what "green" means is how two surfaces drift apart. The
-    fetch goes through this module's own `_gh` so it sits on the same process
-    seam as every other call here. An unreadable rollup is ``unknown``, which
-    the caller treats as not-green (fail closed).
+    The decision - posture fold, standing switch, automerge floor, dispatch
+    hold, in-flight review hold, head pin, base lineage - lives in
+    ``crates/fno-agents/src/authorized_merge.rs`` so this verb and the terminal
+    arm cannot answer it differently. Python is the transport and the renderer.
 
-    ``headRefOid`` rides along because a verdict is only meaningful for the SHA
-    it was computed on: the caller pins the merge to that SHA so a push landing
-    between this read and the merge cannot slip an unverified head through.
+    An unavailable binary is reported as ``unknown``, never as a clear answer: a
+    merge whose authorization could not be read has not been authorized.
     """
-    from fno.pr._status import verdict_for
+    from fno.rust_binary import VerbUnavailable, verb_call
 
-    def _miss(why: str) -> tuple[str, dict, str]:
-        # Named, like _behind_by's own miss path: "checks are unknown" alone
-        # cannot tell a broken gh from a PR that simply has no checks, and the
-        # operator only ever sees the emitted reason.
-        return ("unknown", {"why": why}, "")
-
-    # ToolMissing is deliberately NOT caught: the module contract reserves 127
-    # for a missing gh, and both sibling handlers emit it. Swallowing it here
-    # would demote that to a generic exit-1 "checks are unknown".
-    from fno.pr._rest import fetch_pr_rest
-
-    data, reason = fetch_pr_rest(str(pr_number), cwd=repo, runner=run)
-    if data is None:
-        return _miss(reason or "REST checks read failed")
-    rollup = data.get("statusCheckRollup") or []
-    ignored = set(ignore_contexts)
-    if ignored:
-        # The shared filter, parameterized on the ignore set - one spelling of
-        # the both-keys drop (StatusContexts use `context`, CheckRuns use
-        # `name`, and an internal-gh rollup spells a status row's name as its
-        # context), never a second inline copy that drifts from every other
-        # surface's generic-CI read.
-        from fno.pr._status import without_coverage_statuses
-
-        rollup = without_coverage_statuses(rollup, contexts=ignored)
-    # Whole-rollup semantics: with require_checks_pass, every check must pass.
-    # A required-vs-optional split would need branch-protection context that
-    # `gh pr view` does not expose - its statusCheckRollup entries carry no
-    # isRequired key (live-probed on gh 2.95.0, export_pr.go emits none), so a
-    # filter keyed on that annotation can never fire. Held is the fail-safe
-    # verdict for an optional check that never settles.
-    verdict, _exit, counts = verdict_for(rollup)
-    return (verdict, counts, (data.get("headRefOid") or "").strip())
+    payload = {
+        "cwd": repo,
+        "pr": int(pr_number),
+        "effect": effect,
+        "auto_merge_source": source,
+        "require_checks": bool(require_checks),
+        "decide_only": bool(decide_only),
+        "authority": authority,
+        "accept_flake": bool(accept_flake),
+    }
+    if approved is not None:
+        payload["approved"] = bool(approved)
+    if covered_head:
+        payload["covered_head"] = covered_head
+    try:
+        # The owner makes its own network round trips: the PR fetch, the two
+        # holds, base lineage and the checks verdict, each a `fno` cold start.
+        # The door's 30s default reported it UNREACHABLE while it was merely
+        # still running, and an unread authorization refuses the merge - so a
+        # slow network made this verb unable to merge at all.
+        return verb_call("authorized-merge", payload, timeout=timeout_s)
+    except VerbUnavailable as exc:
+        return {
+            "outcome": "unknown",
+            "detail": (
+                f"the authorized-merge owner could not be reached ({exc}); "
+                "refusing to merge on an unread authorization"
+            ),
+        }
 
 
-def _already_armed(pr_number: int, repo: str) -> bool:
-    """True when GitHub's native auto-merge queue owns this PR (finalize armed
-    it). ONE probe argv shared by every executor that must stand down (x-9d11
-    AC5-CON), so a probe-shape change cannot drift between merge paths."""
-    res = _gh(
-        ["pr", "view", str(pr_number), "--json", "autoMergeRequest",
-         "-q", ".autoMergeRequest.enabled"],
-        repo,
-    )
-    return res.ok and res.stdout.strip() == "true"
+#: Receipt word -> (emit word, exit code, stderr?). ``failed`` is the only arm
+#: that spends the failure budget; every other refusal is the retry-or-escalate
+#: 2 the merge lane already speaks.
+_OUTCOME_EMIT = {
+    "merged": ("merged", 0, False),
+    "armed": ("skipped", 2, False),
+    "authorized": ("skipped", 2, False),
+    "held": ("held", 2, False),
+    "refused": ("skipped", 2, False),
+    "head_changed": ("held", 2, False),
+    "unknown": ("held", 2, False),
+    "failed": ("failed", 1, True),
+}
+
+
+def reason_after_outcome(reason: str) -> str:
+    """The reason past a leading "<outcome>: " prefix: the authorized-merge
+    renderer writes "<outcome>: <detail>", so readers matching bare prefixes
+    ("checks are red", ALREADY_TERMINAL) must match past the word.
+    """
+    word, sep, rest = reason.partition(": ")
+    return rest if sep and word in _OUTCOME_EMIT else reason
+
+
+def _emit_authorized_outcome(pr_number: int, receipt: dict, strategy: str) -> int:
+    """Render one authorized-merge receipt onto this verb's surface."""
+    outcome = str(receipt.get("outcome") or "unknown")
+    word, code, err = _OUTCOME_EMIT.get(outcome, ("held", 2, False))
+    detail = str(receipt.get("detail") or "no detail")
+    _emit(pr_number, word, f"{outcome}: {detail}", strategy, err=err)
+    LAST_RECEIPT["observed_head"] = receipt.get("observed_head")
+    if code == 1:
+        _sync_graph_merge_status("failed", pr_number)
+    return code
 
 
 def _do_merge(
@@ -2056,127 +1997,67 @@ def _do_merge(
     repo: str,
     covered_head: str = "",
     gate_verdict: Optional[tuple] = None,
+    approved: Optional[bool] = None,
+    auto_merge_source: str = "",
+    release_lock: Optional[Callable[[], None]] = None,
+    timeout_s: float = 300.0,
+    accept_flake: bool = False,
+    flake: Optional[dict] = None,
+    authority: str = "manifest",
 ) -> int:
-    """Steps (3)-(4): build + run the gh merge and classify the outcome."""
-    # AC5-CON (x-9d11): exactly one arming path. finalize.rs owns GitHub's
-    # auto-merge queue; if the PR is already armed there, merging here would
-    # race the queue. Say so and stand down - the queue merges it when checks
-    # pass, so the merge is not being lost, just not duplicated.
-    try:
-        armed = _already_armed(pr_number, repo)
-    except ToolMissing:
-        # _already_armed calls _gh, which can raise ToolMissing same as the
-        # sibling checks/merge calls below - it owes the same handler (review
-        # round 12).
-        _emit(pr_number, "failed", "gh CLI not installed", "none", err=True)
-        return 127
-    if armed:
-        _emit(
-            pr_number,
-            "skipped",
-            "PR already armed in GitHub's auto-merge queue (armed by fno-agents "
-            "finalize at the terminal); the queue merges it when checks pass",
-            auto_merge.merge_strategy,
-            err=False,
-        )
-        return 2
+    """Steps (3)-(4): authorize through the one owner, then run the effect.
 
-    # (3) Build command.
+    Nothing about "may this head merge?" is decided here any more. The argv, the
+    head pin, the already-armed stand-down, the checks verdict and the
+    worktree-held recovery all live in the Rust owner, which the terminal's
+    auto-merge arm calls too. What stays on this side is the coverage receipt
+    (a projection of this verb's own gate) and the post-merge follow-ups.
+    """
     strategy = auto_merge.merge_strategy
-    cmd: List[str] = ["pr", "merge", str(pr_number), f"--{strategy}"]
-    # Deliberately NO --delete-branch (x-9d11): it makes gh delete the LOCAL
-    # branch too, which fails "is already used by worktree" from inside the
-    # worktree and can make a landed merge report failed. Remote cleanup runs
-    # post-merge via _post_merge_remote_delete; the local branch/worktree is
-    # archive-worktree.sh's lifecycle.
-    # Deliberately NO --auto either (x-9d11): `--auto` was the second arming
-    # path (finalize.rs arms GitHub's queue at the terminal; this verb queued
-    # its own), and a repo without the auto-merge feature rejected the flag
-    # outright. One arming path: this verb EXECUTES. require_checks_pass is
-    # enforced here, before the merge call, instead of delegated to the queue
-    # (x-8543: an already-green PR merges without the repo having the feature).
-    # Set when THIS process is the one vouching for the checks; the worktree
-    # recovery path reads it so its server-side merge is pinned to the same
-    # SHA the verdict came from.
-    verified_head = ""
-    if auto_merge.require_checks_pass:
+    ask = {
+        "effect": "merge",
+        "approved": approved,
+        "source": auto_merge_source,
+        "require_checks": auto_merge.require_checks_pass,
+        "covered_head": covered_pin(pr_number, repo, covered_head),
+        "authority": authority,
+        "accept_flake": bool(accept_flake),
+    }
+
+    # Authorize BEFORE publishing anything. The coverage status greens the head
+    # for the web button, which enforces only the coverage context, so stamping
+    # it ahead of a refusal would open the door this verb is about to close.
+    decision = _authorized_merge(pr_number, repo, decide_only=True, timeout_s=timeout_s, **ask)
+    if decision.get("outcome") != "authorized":
+        return _emit_authorized_outcome(pr_number, decision, strategy)
+
+    # The flake hold: a rerun-recovered green is not a clean green (the checks
+    # verdict reads only the latest rollup). Probe ran at 2b; this is only the
+    # decision. Sits before the coverage stamp: a held head must not green.
+    if flake is not None and flake.get("recovered") and accept_flake:
+        # The hold is decide's flake gate; this is the receipt.
+        failed = ", ".join(flake.get("failed") or []) or "unknown checks"
         try:
-            ignore_contexts: Sequence[str] = ()
-            if gate_verdict is not None:
-                from fno.pr import _coverage_gate, _reviews
+            from fno.events import _build, append_event
 
-                if gate_verdict[0] == _coverage_gate.COVERED:
-                    # Both coverage contexts are THIS merge's own projections,
-                    # not generic CI: the required context (covered verdict)
-                    # and the diagnostic (an unknown-read stamp that says
-                    # "retry the review verb", not "wait"). Ignoring only the
-                    # required one let a pending diagnostic hold a covered,
-                    # CI-green merge, and the clearing publish runs after this
-                    # verdict, so a bare retry held again. One shared
-                    # collection, not a third spelling of the filter.
-                    ignore_contexts = tuple(_reviews.COVERAGE_STATUS_CONTEXTS)
-            verdict, counts, head_read = _checks_verdict(
-                pr_number, repo, ignore_contexts=ignore_contexts
+            append_event(_build("merge_flake_accepted", "python", {
+                "pr": pr_number,
+                "head": ask["covered_head"],
+                "failed_checks": list(flake.get("failed") or []),
+            }))
+        except Exception as exc:  # noqa: BLE001 - best-effort, never blocks
+            sys.stderr.write(
+                f"pr-merge: merge_flake_accepted emit failed ({exc}); merge outcome unaffected\n"
             )
-        except ToolMissing:
-            _emit(pr_number, "failed", "gh CLI not installed", "none", err=True)
-            return 127
-        verified_head = head_read
-        if verdict != "green":
-            # pending = wait for required checks (retry when green). unknown =
-            # no rollup at all (gh failure, or a repo with no CI): retry-later,
-            # never a failed-ship stamp - a PR with no checks configured needs
-            # require_checks_pass=false, not a red graph status (round 7).
-            _emit(
-                pr_number,
-                "held" if verdict in ("pending", "unknown") else "failed",
-                f"checks are {verdict} ({counts}); "
-                f"require_checks_pass forbids merging without green",
-                strategy,
-                err=verdict not in ("pending", "unknown"),
-            )
-            if verdict not in ("pending", "unknown"):
-                # Match the pre-existing failure path: a node left reading
-                # `queued` from an earlier attempt would otherwise stay queued
-                # after a red refusal, and the scoreboard consumes that field.
-                _sync_graph_merge_status("failed", pr_number)
-            return 2 if verdict in ("pending", "unknown") else 1
-        if not verified_head:
-            _emit(
-                pr_number,
-                "failed",
-                "checks read green but the PR head SHA was unreadable; refusing "
-                "to merge a head the verdict cannot be pinned to",
-                strategy,
-                err=True,
-            )
-            _sync_graph_merge_status("failed", pr_number)
-            return 1
-        # A verdict belongs to the SHA it was computed on. Between that read and
-        # this merge, another actor can push, and nothing upstream re-checks on
-        # our behalf. Pin the merge to the verified head so a racing push makes
-        # gh refuse instead of merging an unverified (and possibly red) commit.
-        # Server-side required-check rules would cover this too, but
-        # require_checks_pass exists precisely for repos without them.
-    # x-0eaf: pin the merge to the covered head so a racing push cannot land an
-    # unreviewed commit. gh refuses if the head moved.
-    if covered_head:
-        cmd += ["--match-head-commit", covered_head]
-    elif verified_head:
-        cmd += ["--match-head-commit", verified_head]
+        sys.stderr.write(f"flake override accepted: {failed}\n")
 
-    # Server-visible receipt of the verdict the gate acted on: the commit
-    # status the repo ruleset requires is written from the SAME answer that
-    # satisfied the gate here (gate_verdict, threaded down), never a fresh
-    # read - the label or the row can change while this merge waits on the
+    # Server-visible receipt of the verdict the gate acted on, written from the
+    # SAME answer that satisfied the gate here (gate_verdict, threaded down)
+    # rather than a fresh read: the row can change while this merge waits on the
     # lock, and a receipt that flips to failure on a head the merge then lands
-    # leaves a false-red status on a merge that passed the gate. Posted only now,
-    # after every local refusal - armed-check, checks verdict, unreadable
-    # head - has said yes: a success status stamped before a later refusal
-    # would green the head for the web button - which enforces only the
-    # coverage context - against exactly what this verb just refused.
-    # Best-effort and reported, never blocking: the gate lives on the GitHub
-    # side, where a missing status already reads as not-passing (fail-closed).
+    # leaves a false-red status on a merge that passed the gate. Best-effort and
+    # reported, never blocking: on the GitHub side a missing status already
+    # reads as not-passing.
     try:
         from fno.pr._reviews import publish_coverage_status
 
@@ -2192,124 +2073,29 @@ def _do_merge(
     except Exception as exc:  # noqa: BLE001 - a receipt must never block the merge
         sys.stderr.write(f"pr-merge: coverage status publish failed: {exc}\n")
 
-    # (4) Run + classify.
-    try:
-        res = _gh(cmd, repo)
-    except ToolMissing:
-        _emit(pr_number, "failed", "gh CLI not installed", "none", err=True)
-        return 127
-
-    output = (res.stdout or "") + (res.stderr or "")
-    if res.ok:
+    # The effect re-runs the whole decision, so the window the receipt opened is
+    # closed again by the same guards, and the merge stays pinned to the head
+    # those guards read. The second pass is the price of that window, not an
+    # oversight: it doubles the owner's probe spawns, and a merge is rare
+    # enough to pay it. Do not "optimize" it into one pass.
+    receipt = _authorized_merge(pr_number, repo, timeout_s=timeout_s, **ask)
+    if receipt.get("outcome") == "merged":
+        # Two different fields, and collapsing them is a bug: `note` says HOW
+        # the merge landed (the worktree-held REST recovery is a success),
+        # while `cleanup_failure` says a post-merge step failed AFTER the
+        # server-side merge. Only the second makes the outcome partial.
+        note = str(receipt.get("note") or "")
+        cleanup_failure = str(receipt.get("cleanup_failure") or "")
+        if note or cleanup_failure:
+            _git(["fetch", "origin"], repo)
         return _finish_confirmed_merge(
             pr_number,
             strategy,
             repo,
             auto_merge,
-            "merged immediately",
+            note or "merged immediately",
+            prior_cleanup_failure=(f"failed: {cleanup_failure}" if cleanup_failure else ""),
+            release_lock=release_lock,
+            defer_close=(authority == "durable_grant"),
         )
-
-    # Failure path. A worktree-local post-merge step can fail even though the
-    # SERVER-SIDE merge already landed (recurring PR #393/#395 bite).
-    first_line = output.splitlines()[0][:200] if output.strip() else ""
-    # ALWAYS re-read the merge state before reporting failure. `gh pr merge
-    # --delete-branch` exits non-zero whenever a POST-merge step fails after a
-    # successful server-side merge - the local branch delete (worktree-held), the
-    # base-branch checkout (main held by the canonical worktree in a worktree-first
-    # repo), a remote delete, a sync - and the error phrasing varies across git
-    # versions and failure points. Matching phrasings ages badly; the durable
-    # signal is the PR's merged state. If it landed, report merged with the
-    # cleanup failure in its own field - never failed. An autonomous caller keying
-    # off `outcome` then gets merge truth regardless of what post-merge cleanup did.
-    view = _gh(["pr", "view", str(pr_number), "--json", "mergedAt", "-q", ".mergedAt"], repo)
-    if view.ok:
-        landed = view.stdout.strip()
-        if landed and landed != "null":
-            _git(["fetch", "origin"], repo)
-            return _finish_confirmed_merge(
-                pr_number,
-                strategy,
-                repo,
-                auto_merge,
-                "merged server-side",
-                prior_cleanup_failure=(
-                    "failed: gh merge command after server-side merge: "
-                    f"{first_line or 'no error output'}"
-                ),
-            )
-
-    # The merge did NOT land. gh can refuse before merging when the branch is
-    # checked out in another worktree (the checkout-refused phrasing "is already
-    # used by worktree" / "already checked out"); recover via the server-side API
-    # so a worktree-held branch still merges. Landed cases already returned above,
-    # so reaching here means not-merged - this is the API fallback, not a recovery
-    # for a post-merge cleanup failure.
-    if re.search(r"is already used by worktree|already checked out", output, re.IGNORECASE):
-        # Carry the head pin when we have one. Reaching here from the no-auto
-        # fallback means THIS process vouched for the checks at a specific SHA,
-        # and this API call would otherwise merge whatever the head is now -
-        # silently undoing the pin on the `--match-head-commit` retry, in the
-        # very path a worktree run takes. `sha` is the endpoint's equivalent
-        # guard: the merge is refused unless the head still matches.
-        api_args = [
-            "api",
-            "--method",
-            "PUT",
-            f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/merge",
-            "-f",
-            f"merge_method={strategy}",
-        ]
-        # covered_head first: the review lane sets it when require_checks_pass
-        # is off, leaving verified_head empty - dropping it here (round 7)
-        # reopened the x-0eaf TOCTOU on exactly the worktree path every run
-        # takes.
-        _pinned_head = covered_head or verified_head
-        if _pinned_head:
-            api_args += ["-f", f"sha={_pinned_head}"]
-        api = _gh(api_args, repo)
-        if api.ok:
-            _git(["fetch", "origin"], repo)
-            return _finish_confirmed_merge(
-                pr_number,
-                strategy,
-                repo,
-                auto_merge,
-                "merged server-side (worktree fallback)",
-            )
-
-    # Merge state never became readable: `gh pr view` itself failed, so we cannot
-    # tell a landed merge from a failed one. Reporting `failed` here would assert
-    # merge truth we do not have - the same defect as the phrasing match this
-    # guard replaced, one level up - and an autonomous caller keying on `outcome`
-    # would retry a merge that may already have landed. Report `held` (exit 2,
-    # the established retry-later signal) so the uncertainty stays IN the receipt
-    # instead of being flattened into a false negative. A retry whose view read
-    # succeeds then reports the truth either way.
-    if not view.ok:
-        _emit(
-            pr_number,
-            "held",
-            "merge state unreadable (gh pr view failed: "
-            f"{(view.stderr or '').splitlines()[0][:120] if view.stderr.strip() else 'no error output'}); "
-            "cannot confirm whether the merge landed - retry",
-            strategy,
-            err=False,
-        )
-        return 2
-
-    # Unrecovered failure: classify and report.
-    reason = first_line
-    if "fno/review-coverage" in output:
-        reason = (
-            "fno/review-coverage is still required after its success status was "
-            "published; GitHub may not have observed the update yet - retry the merge"
-        )
-    elif re.search(r"protected", output, re.IGNORECASE):
-        reason = "branch protected"
-    elif re.search(r"not mergeable", output, re.IGNORECASE):
-        reason = "not mergeable (conflicts or base changed)"
-    elif re.search(r"required review", output, re.IGNORECASE):
-        reason = "required review pending"
-    _emit(pr_number, "failed", reason, strategy, err=True)
-    _sync_graph_merge_status("failed", pr_number)
-    return 1
+    return _emit_authorized_outcome(pr_number, receipt, strategy)

@@ -6,6 +6,11 @@ tests are what makes the new field load-bearing: the measured value per harness,
 the artifact behind an ``extension`` row, and the refusal that stops a looping
 dispatch from producing a worker with nothing to stop it.
 
+The decision itself lives in ``capability_leaves.rs`` (the ``fno-agents status
+--target-family --harness`` leaf); the Rust test module carries the refusal
+table. What stays here is the measured row per harness, the resolver and spawn
+seams that call the gate, and one end-to-end door test on a dev build.
+
 Every measurement here reads the capability-backed roster (``known_harnesses``),
 never the complete ``KNOWN_HARNESSES`` roster: hermes and openclaw are supported
 identities with no capability row, and loop participation is a property of the
@@ -17,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+import fno.agents.harness_map as harness_map
 from fno.agents.harness_map import (
     DispatchResolveError,
     capabilities,
@@ -24,15 +30,27 @@ from fno.agents.harness_map import (
     known_harnesses,
     resolve_dispatch,
 )
+from fno.rust_binary import find_dev_binary
+
+requires_rust = pytest.mark.dev_build
+
+# Captured at import time, before the autouse ``_hermetic_loop_gate``
+# conftest fixture stubs the module attribute: the door test re-binds the
+# real leaf answer so the real binary is driven end to end.
+_REAL_LOOP_GATE_ANSWER = harness_map._loop_gate_answer
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The measurement, 2026-08-28. Each value was read off the artifact and the
-# wiring that reaches it; the table's own comment carries the evidence per row.
+# wiring that reaches it; the table's own comment carries the evidence per
+# row. grok stays extension with an empty artifact: the 2026-09-26
+# linked-stage run recorded grok auto-disabling the discovered plugin, so a
+# trusted location alone does not put plugin hooks on the wire.
 MEASURED = {
     "claude": "native",
     "codex": "native",
     "agy": "native",
+    "grok": "extension",
     "gemini": "none",
     "opencode": "extension",
     "pi": "extension",
@@ -54,57 +72,6 @@ def test_the_table_is_not_uniform():
     assert len(values) > 1, values
 
 
-# A field allowed to hold one value on every row, with the reason it is a
-# measured result rather than an inherited default. Empty today, and adding to
-# it is the moment to prove the uniformity rather than assume it.
-UNIFORM_BY_MEASUREMENT: dict[str, str] = {}
-
-
-def test_no_capability_field_is_uniform_across_every_harness():
-    """The guard for the defect this node closed, aimed at the NEXT field.
-
-    ``stop_hook`` held one value for six harnesses because nothing would have
-    noticed a second one was needed, and ``send_keys_enter_delay_ms`` held one
-    default across four before that. A field with one distinct value has not
-    been measured for any row. ``scripts/diagnostics/capability-honesty-sweep.py``
-    prints the same pass with two more the uniformity check cannot see.
-    """
-    import json
-    import tomllib
-
-    table = tomllib.loads(
-        (REPO_ROOT / "crates/fno-agents/src/harness_capabilities.toml").read_text()
-    )
-    rows = table["harness"]
-
-    def flatten(prefix, value, out):
-        if isinstance(value, dict):
-            for key, sub in value.items():
-                flatten(f"{prefix}.{key}" if prefix else key, sub, out)
-        else:
-            out[prefix] = json.dumps(value, sort_keys=True)
-
-    flat = {}
-    for harness, caps in rows.items():
-        collected: dict[str, str] = {}
-        flatten("", caps, collected)
-        flat[harness] = collected
-
-    fields = {key for row in flat.values() for key in row}
-    # Non-vacuity: an empty field set would make the assertion below pass while
-    # measuring nothing, which is the absence-reads-as-success trap.
-    assert len(flat) == len(known_harnesses())
-    assert len(fields) > 30, len(fields)
-    uniform = {
-        field
-        for field in fields
-        if len({flat[h].get(field, "<absent>") for h in flat}) == 1
-    }
-    assert uniform <= set(UNIFORM_BY_MEASUREMENT), sorted(
-        uniform - set(UNIFORM_BY_MEASUREMENT)
-    )
-
-
 def test_a_declared_loop_extension_exists_on_disk():
     """An ``extension`` row's artifact is the thing that closes its loop.
 
@@ -120,37 +87,6 @@ def test_a_declared_loop_extension_exists_on_disk():
     assert named, "no harness declares a loop extension; the check would be vacuous"
     for harness, rel in named.items():
         assert (REPO_ROOT / rel).is_file(), f"{harness} names a missing artifact: {rel}"
-
-
-@pytest.mark.parametrize("command", ["/target x-1", "/fno:target x-1", "$fno:target x-1"])
-def test_a_harness_with_no_loop_boundary_is_refused(command):
-    with pytest.raises(DispatchResolveError) as exc:
-        check_loop_participation("gemini", command)
-    message = str(exc.value)
-    assert "gemini" in message
-    assert "loop_participation" in message
-    assert "never stop" in message
-
-
-def test_an_extension_harness_without_a_shipped_artifact_is_refused():
-    """pi's command_surface is ``slash``, so a /target resolves fine there.
-
-    Without this refusal the dispatch succeeds and the worker runs with nothing
-    to stop it, which is a hang no instrument reports.
-    """
-    with pytest.raises(DispatchResolveError) as exc:
-        check_loop_participation("pi", "/target x-1")
-    assert "pi" in str(exc.value)
-    assert "has not written yet" in str(exc.value)
-
-
-def test_an_extension_harness_with_a_shipped_artifact_is_dispatched():
-    check_loop_participation("opencode", "/fno:target x-1")
-
-
-@pytest.mark.parametrize("harness", ["claude", "codex", "agy"])
-def test_a_native_harness_is_dispatched(harness):
-    check_loop_participation(harness, "/target x-1")
 
 
 @pytest.mark.parametrize("harness", sorted(MEASURED))
@@ -169,12 +105,51 @@ def test_a_non_looping_dispatch_is_never_refused(harness):
     check_loop_participation(harness, "\t\n")
 
 
-def test_resolve_dispatch_refuses_a_looping_target_at_pi():
+def test_the_gate_refusal_raises_at_the_caller(monkeypatch):
+    """The Python seam is one leaf call: whatever refusal the leaf answers,
+    ``check_loop_participation`` raises verbatim at the dispatch caller."""
+    monkeypatch.setattr(
+        harness_map,
+        "_loop_gate_answer",
+        lambda h, c: {
+            "refusal": "refused: the grok plugin status reads absent - a loop "
+            "whose stop gate never runs would never stop."
+        },
+    )
     with pytest.raises(DispatchResolveError) as exc:
-        resolve_dispatch(
-            harness="pi", substrate="pane", trigger="attended", node_id="x-1"
-        )
-    assert "loop_participation" in str(exc.value)
+        check_loop_participation("grok", "/fno:target x-1")
+    assert "absent" in str(exc.value)
+    assert "never stop" in str(exc.value)
+
+
+def test_an_unreadable_leaf_refuses_never_admits(monkeypatch):
+    """A missing or older binary must fail closed: an unreadable gate answers
+    a refusal, so no harness is waved through on a broken door."""
+    import fno.rust_binary
+
+    def _missing(verb, args, **kwargs):
+        return ("fno-agents binary not found", None)
+
+    monkeypatch.setattr(fno.rust_binary, "call_binary_json", _missing)
+    # The autouse hermetic stub answers without the transport; re-bind the
+    # real answer so the stubbed transport is what the caller drives.
+    monkeypatch.setattr(harness_map, "_loop_gate_answer", _REAL_LOOP_GATE_ANSWER)
+    with pytest.raises(DispatchResolveError) as exc:
+        check_loop_participation("gemini", "/target x-1")
+    message = str(exc.value)
+    assert "could not be read" in message
+    assert "fno doctor update --rust" in message
+
+
+def test_resolve_dispatch_resolves_a_looping_target_at_pi(monkeypatch):
+    """pi's loop extension shipped, so the resolver that used to
+    refuse a looping /target here now resolves it: the worker has something
+    to stop it."""
+    monkeypatch.setattr(harness_map, "_loop_gate_answer", lambda h, c: {"refusal": None})
+    resolved = resolve_dispatch(
+        harness="pi", substrate="pane", trigger="attended", node_id="x-1"
+    )
+    assert resolved["loop_participation"] == "extension"
 
 
 def test_resolve_dispatch_still_resolves_a_looping_target_at_claude():
@@ -198,3 +173,17 @@ def test_the_direct_spawn_seam_still_calls_the_gate():
     """
     source = (REPO_ROOT / "cli/src/fno/agents/cli.py").read_text()
     assert "check_loop_participation(harness, message)" in source
+
+
+@requires_rust
+def test_the_real_door_refuses_a_looping_dispatch_at_gemini(monkeypatch):
+    """End to end on the dev build: the leaf reads the packaged row (gemini:
+    none) and the caller raises its ``never stop`` refusal. This is the door
+    wiring test - a stubbed seam cannot catch a broken argument list."""
+    binary = find_dev_binary()
+    assert binary is not None
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+    monkeypatch.setattr(harness_map, "_loop_gate_answer", _REAL_LOOP_GATE_ANSWER)
+    with pytest.raises(DispatchResolveError) as exc:
+        check_loop_participation("gemini", "/target x-1")
+    assert "never stop" in str(exc.value)

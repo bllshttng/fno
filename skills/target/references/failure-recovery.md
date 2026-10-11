@@ -90,13 +90,13 @@ When it stops the session, the loop-check verb emits a `termination` event to `.
 
 A separate detector (`scripts/lib/orphan-target-detector.sh`) blocks exit when the transcript shows a genuine `/fno:target` or `/fno:megawalk` invocation but the corresponding state file (`target-state.md` / `megawalk-state.md`) was never created, i.e. init was skipped and all completion gates were bypassed. It re-fires on every stop while that condition holds, so an unattended session with no human to type `/fno:target cancel` would loop forever and burn credits. To bound that, the detector counts consecutive orphan blocks for the conversation and, past the limit (`TARGET_ORPHAN_BLOCK_LIMIT`, default 5 attended / 3 unattended), allows a clean exit while loudly recording the gate-bypass as an `orphaned_target_abandoned` event.
 
-The counter is anchored to **(repo, conversation)**: keyed by the session UUID and stored under the root of the repo's shared git common dir (`git rev-parse --git-common-dir`), so every worktree of the repo reads one monotonic count. This is what makes the bound release **durably**: when one conversation fires Stop from two divergent worktree cwds (the same-transcript two-worktree ambiguity), a per-cwd counter would fork and never reach the limit in both, so the bound never released (ab-32076fa0). Resolution falls back to the legacy per-cwd `.orphan-block-count` when no session id is present, to `TARGET_ORPHAN_BLOCK_DIR` when that override is set, and to `~/.fno/orphan-blocks` outside a git repo. If the counter cannot be persisted at all (read-only FS, disk full, sparse hook env), the bound is structurally defeated, so it **fails open** (allows a clean exit, logged as `orphan_counter_unwritable`) rather than blocking forever.
+The counter is anchored to **(repo, conversation)**: keyed by the session UUID and stored under the root of the repo's shared git common dir (`git rev-parse --git-common-dir`), so every worktree of the repo reads one monotonic count. This is what makes the bound release **durably**: when one conversation fires Stop from two divergent worktree cwds (the same-transcript two-worktree ambiguity), a per-cwd counter would fork and never reach the limit in both, so the bound never released. Resolution falls back to the legacy per-cwd `.orphan-block-count` when no session id is present, to `TARGET_ORPHAN_BLOCK_DIR` when that override is set, and to `~/.fno/orphan-blocks` outside a git repo. If the counter cannot be persisted at all (read-only FS, disk full, sparse hook env), the bound is structurally defeated, so it **fails open** (allows a clean exit, logged as `orphan_counter_unwritable`) rather than blocking forever.
 
 A deliberate `/fno:target cancel` writes a session-keyed `.target-cancelled-final` tombstone that this detector honors before any block, so cancelling does not trip it.
 
 ## Reviewer-ordered restart
 
-The failure-recovery machinery above is builder-side: `stuck_test` self-aborts on repeated test failure, the circuit breaker rotates approach after 3 same-error failures. What none of it can do is *order* a discard-and-restart - a builder never throws away its own work. That order comes from a review: a sigma/peer panel that judges the approach unsalvageable emits the terminal `RECOMMEND RESTART` verdict (contract: `skills/review/references/report-template.md`, "Terminal recommendation: RECOMMEND RESTART"). This section is the operator playbook that honors it.
+The failure-recovery machinery above is builder-side: `stuck_test` self-aborts on repeated test failure, the circuit breaker rotates approach after 3 same-error failures. What none of it can do is *order* a discard-and-restart - a builder never throws away its own work. That order comes from a review: a sigma/peer panel that judges the approach unsalvageable emits the terminal `RECOMMEND RESTART` verdict (contract: `skills/review/references/report-template.md`, "Terminal recommendation: RECOMMEND RESTART"). This section is the user playbook that honors it.
 
 **Precondition (never honor a malformed recommendation).** A `RECOMMEND RESTART` is only honored when it carries both a why-fix-in-place-fails rationale and a lessons block. Missing either, treat it as a normal blocking review (a fix round), not a restart.
 
@@ -112,7 +112,7 @@ The order is load-bearing: supersede runs **before** cancel so no window exists 
    ```bash
    fno backlog supersede <NEW_ID> --replaces <OLD_ID> --cause "<what OLD_ID was for>" --surface <path/it/owned> -R "restart: <one-line why fix-in-place fails>"
    ```
-   If this exits non-zero (lock contention, bad id), **STOP** - do not cancel, do not dispatch. The old node stays claimed and the operator resolves the error first.
+   If this exits non-zero (lock contention, bad id), **STOP** - do not cancel, do not dispatch. The old node stays claimed and the user resolves the error first.
 3. **Close the PR if one exists.** Comment linking the lessons block; the branch is preserved, never deleted (its commits survive the discard - see AC5):
    ```bash
    gh pr close <N> --comment "Superseded by <NEW_ID> (reviewer-ordered restart). Lessons are in the details of node <NEW_ID>. Branch preserved."
@@ -132,7 +132,7 @@ At most **one** auto-honored restart per node lineage. A `RECOMMEND RESTART` on 
 
 ### Unattended posture (v1: never auto-honor)
 
-In v1 an unattended / headless session never runs the honor sequence itself. On a `RECOMMEND RESTART`, emit `<help reason="restart-recommended" evidence="<why + lessons pointer>">` and hold - do not mint, supersede, cancel, or dispatch. Only an attended operator executes the sequence. (A config-gated autonomous auto-honor, like `auto_merge_approved`, is deferred until the docs-first version shows real usage.)
+In v1 an unattended / headless session never runs the honor sequence itself. On a `RECOMMEND RESTART`, emit `<help reason="restart-recommended" evidence="<why + lessons pointer>">` and hold - do not mint, supersede, cancel, or dispatch. Only an attended user executes the sequence. (A config-gated autonomous auto-honor, like `auto_merge_approved`, is deferred until the docs-first version shows real usage.)
 
 ## Standard Error Responses
 

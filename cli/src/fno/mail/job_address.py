@@ -4,7 +4,7 @@ A job address names the WORK, not the process holding it. It resolves at
 delivery time to whoever holds the ``node:<id>`` claim RIGHT NOW, so the address
 outlives any one session: when a holder dies and a successor re-claims the node,
 the successor's drain picks up mail the dead session never read. That dissolves
-the dead-handle strand (x-8f8c part 2): a mail address used to name a process
+the dead-handle strand (part 2): a mail address used to name a process
 that dies, so the address expired faster than the message.
 
 Resolution is a read over the EXISTING claim system -- ``claim_status`` already
@@ -94,11 +94,9 @@ def _node_ids_for_pr(pr_number: int) -> list[str]:
 def _resolve_node(node_id: str) -> JobHolder:
     """Resolve a ``node:<id>`` to its claim holder over the global claims root."""
     from fno.claims.core import claim_status
-    from fno.claims.io import claims_root_for
 
     key = f"node:{node_id}"
-    root = claims_root_for(key)
-    status = claim_status(key, root=root)
+    status = claim_status(key)
     return JobHolder(
         node_id=node_id,
         address=key,

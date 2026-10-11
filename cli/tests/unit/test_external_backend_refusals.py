@@ -7,14 +7,19 @@ shared refusal fires on the wrapped callback BEFORE any graph read/write,
 and an injected unguarded verb is named by the detector.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 from typer.testing import CliRunner
 
 import fno.graph.cli as graph_cli
 from fno.cli import app
+from fno.graph.store import read_graph_strict, store_export_status
 
 runner = CliRunner()
 
@@ -31,6 +36,7 @@ def test_every_live_verb_is_classified_exactly_once():
     the two positive controls (a known creation verb, a known surviving read
     verb) sit in the stated classes."""
     tracker_owned = footnote_owned = 0
+    graph_cli.classify_backlog_verbs()  # lazy: stamps the markers this reads
     for label, info in _registry_labels():
         cb = info.callback
         assert cb is not None, label
@@ -43,7 +49,7 @@ def test_every_live_verb_is_classified_exactly_once():
     # Positive controls - absence means the registry drifted and the census
     # must be re-pinned, not silently passed.
     labels = dict(_registry_labels())
-    assert getattr(labels["add"].callback, "_fno_tracker_owned", False)
+    assert getattr(labels["new"].callback, "_fno_tracker_owned", False)
     assert getattr(labels["get"].callback, "_fno_footnote_owned", False)
     assert tracker_owned > 10 and footnote_owned > 10
 
@@ -54,7 +60,7 @@ def test_every_live_verb_is_classified_exactly_once():
         ["backlog", "add", "A thing"],
         ["backlog", "update", "EXT-1", "--priority", "p1"],
         ["backlog", "defer", "EXT-1", "--reason", "waiting"],
-        ["backlog", "rank", "EXT-1", "--top"],
+        ["backlog", "encounter", "EXT-1", "--evidence", "operator asked"],
         ["backlog", "queue", "EXT-1"],
         ["backlog", "maintain"],
         ["backlog", "session", "add", "EXT-1", "--phase", "do"],
@@ -64,17 +70,71 @@ def test_tracker_owned_verbs_refuse_under_external(argv, tmp_path, monkeypatch):
     """The shared guard fires exit 1, names the backend, and no local graph
     write happens (the contradictory file is byte-identical after)."""
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": []}), encoding="utf-8")
+    seed_graph(g, json.dumps({"entries": []}))
+    before = (read_graph_strict(g), store_export_status(g))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     monkeypatch.setattr(graph_cli, "_graph_path", lambda: g)
     monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: None)
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
     monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "claims"))
 
-    r = runner.invoke(app, argv, catch_exceptions=False)
-    assert r.exit_code == 1, r.output
-    assert "github" in r.output and "refused" in r.output
-    assert g.read_text() == json.dumps({"entries": []})
+    if (
+        argv[:2] in (["backlog", "update"], ["backlog", "add"], ["backlog", "queue"])
+        or argv[:2] == ["backlog", "session"]
+    ):
+        # The update, add and session leaves answer natively now; their guard
+        # rode along, so the refusal asserts at the binary under the same env.
+        from fno.rust_binary import find_dev_binary
+
+        binary = find_dev_binary()
+        if binary is None:
+            pytest.skip("no dev fno-agents build")
+        proc = subprocess.run(
+            [str(binary), *argv],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "FNO_STATE_DIR": str(tmp_path)},
+        )
+        out = proc.stderr
+        assert proc.returncode == 1, out
+    else:
+        r = runner.invoke(app, argv, catch_exceptions=False)
+        assert r.exit_code == 1, r.output
+        out = r.output
+    assert "github" in out and "refused" in out
+    assert (read_graph_strict(g), store_export_status(g)) == before
+
+
+def test_first_invocation_guard_is_on_before_click_builds_the_tree(tmp_path):
+    """Fresh-process regression: the lazy classification must run before
+    Click builds the command tree, or the first `fno backlog` call in a
+    process dispatches the original unwrapped callback and bypasses the
+    external-backend refusal (the in-process tests mask this: an earlier
+    invocation has already classified the shared module)."""
+    code = "from fno.cli import main; main()"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            "backlog",
+            "defer",
+            "EXT-1",
+            "--reason",
+            "probe",
+        ],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "FNO_TRACKER_BACKEND": "github",
+            "FNO_STATE_DIR": str(tmp_path),
+            "FNO_AGENTS_HOME": str(tmp_path / "home"),
+        },
+    )
+    out = proc.stderr + proc.stdout
+    assert proc.returncode == 1, out
+    assert "github" in out and "refused" in out, out
 
 
 def test_footnote_owned_read_verb_still_works_under_external(tmp_path, monkeypatch):
@@ -106,7 +166,7 @@ def test_footnote_owned_read_verb_still_works_under_external(tmp_path, monkeypat
                         lambda i: sidecars / f"{i}.json")
     monkeypatch.setattr("fno.tracker.get_tracker", lambda *a, **k: _T())
     g = tmp_path / "graph.json"
-    g.write_text(json.dumps({"entries": []}), encoding="utf-8")
+    seed_graph(g, json.dumps({"entries": []}))
     monkeypatch.setattr("fno.paths.graph_json", lambda: g)
     monkeypatch.setenv("FNO_TRACKER_BACKEND", "github")
 

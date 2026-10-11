@@ -1,5 +1,7 @@
 # Architecture: agent.deliver RPC and the injection gate
 
+> **Status note.** The Python claude follow-up legs named below (`_build_envelope`, `send_to_session`, `ask_followup_via_mcp`) were ported to the Rust runtime and deleted (the ask-adapter port, 2026-09-02). The container-escaping contract they pinned now lives in `crates/fno-agents/src/claude_ask.rs` and is byte-locked by `claude_ask_parity.rs` goldens. The `agent.deliver` RPC and gate material is unchanged.
+
 This document covers the internals of live PTY delivery for codex and gemini hosted peers: the `agent.deliver` daemon RPC, the `inject_into_pty` primitive, the provenance container format, and the per-provider injection gate that guards them. For the user-facing send verb, see [docs/guides/fno-agents-send.md](../guides/fno-agents-send.md).
 
 ## agent.deliver RPC
@@ -150,8 +152,10 @@ On the Python side, `dispatch_send` emits two events around the delivery attempt
 **`agent_send_done`** - delivery attempt complete:
 
 ```json
-{"name": "<agent>", "provider": "<p>", "msg_id": "msg-<8hex>", "delivery": "hosted|durable"}
+{"name": "<agent>", "provider": "<p>", "msg_id": "msg-<8hex>", "delivery": "hosted|durable", "reason": "<live-miss tokens>|null"}
 ```
+
+`reason` names why the live leg did not deliver: the lane's joined tokens (for example `not-confirmed;waited-32s`), a `transcript-<state>` liveness verdict, or the bus-only or lock-timeout cause. Null on a hosted send.
 
 Both Python events carry the dispatch context envelope (request_id, caller attribution, transport) set by `build_context` before the delivery attempt, matching the pattern established by `dispatch_ask`.
 
@@ -171,6 +175,21 @@ Two consequences landed from this measurement:
 
 - `crates/fno/src/server.rs`'s `rerun_allowed` doc comment no longer blames a corrupted composer for staying conservative on the `rerun` verb. That verb writes raw bytes via `pty.write_input`. This is a different write with no such measurement behind it. The guard's rationale is now scoped to that write specifically.
 - `cli/src/fno/agents/dispatch.py`'s `_mux_pane_send` dropped the equivalent busy-veto for mail delivery. That veto (`guarded=True`) rode `rerun_allowed` itself. It is replaced with a content confirm: poll the recipient's own transcript for the injected marker after the paste. This mirrors `crates/fno-agents/src/mail_inject.rs`'s `confirm_content_after`/`escaped_marker` pair. Both claude keystroke lanes, control.sock and mux pane, now confirm delivery the same way.
+
+## Mail is typed as one line, never a paste (C17)
+
+The typed lanes (`inject_with_submit` in `crates/fno-agents/src/mail_inject.rs`) no longer bracket-paste a multi-line mail body. A delivery is flattened to ONE line by `one_line`. Every newline run becomes the return glyph ` ⏎ `. A tab becomes a space. Every other control byte (ESC included) is dropped. The typed turn is one write, then the separate wire-level CR. The durable bus copy keeps the real newlines. Only the keystrokes are flattened (role ruling d-9187ccf6: one constant, `NEWLINE_GLYPH`, and the user can change it). A paste is only the user's own, so a delivered message never wears the pasted-content label.
+
+Two consequences:
+
+- The raw door's multi-line refusal ("an unframed payload must be a single line") is gone. Its premise was that a second line rides in as a second submitted turn. Flattening removed that harm. The held-mail drain (hold.py `release` -> `_deliver_live`) was the caller this stranded. Its digest now delivers, and it stays audited as a raw inject. A single-line unframed payload is still a command (starts with `/` or `$`, law d-f6570dc9).
+- The confirm marker derives from the typed text up to the first glyph. That is the same first line `text.lines().next()` always gave, so transcript confirms are unchanged.
+
+## The quiet wait, the one extra Enter, and the withdraw (C11, C12, C14)
+
+`wait_for_quiet_in` polls before the claude, keeper or pane lane types (1 s ticks, 30 s budget). It waits until the operator is neither typing nor holding an unfinished draft. The draft read is `typing_state` over the `operator_typing` feed. Recent means a row within 15 s. Draft means the newest typing row is later than the newest submit. It also waits until the recipient's effective state is not Blocked (a question picker or permission wall). It waits while a claude recipient runs its Stop hooks. The row reports Done as the hooks start. Until they end, the composer takes a CR as a newline. So the gate holds while the row is Done and its transcript has no `turn_duration` row since, for at most three minutes. On timeout the reason is `user-typing`, `session-asking` or `stop-hooks`, and Python queues the mail durable.
+
+`confirm_or_withdraw` replaces the re-Enter-every-8-polls cadence. It polls half the confirm budget. It sends exactly ONE extra CR (the swallowed-Enter fix the codex pane needed). It polls the rest. On total silence it withdraws the typed line with one write of DEL bytes. The count is the typed length plus the two CRs. A composer that took a CR as a newline holds one more character for each. When the operator typed since the inject, the withdraw never fires. Their text sits in the composer, and the DEL eats it with ours. That skip answers `left-in-composer`, so the sender knows a line is still there. The keeper `Unconfirmable` arm (cursor-agent, agy) keeps typing and never withdraws, because no landing can be seen there.
 
 ## What Group 3 changes
 

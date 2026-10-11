@@ -1,7 +1,7 @@
 """Subprocess helpers shared by the in-package ``fno do pr`` ports.
 
 The ``fno do pr {merge,verify,rebase}`` verbs were ported from bash to in-package
-Python that shells to ``gh`` / ``git`` (ab-d4c98550). This module centralises
+Python that shells to ``gh`` / ``git``. This module centralises
 the one idiom they all need: run an external tool, capture text output, and
 distinguish "tool not installed" from "tool ran and failed". Centralising it
 keeps the ``gh``-version-drift fixes in one place (Domain Pitfall: pin gh
@@ -10,11 +10,12 @@ fields, parse JSON in one spot).
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
-# gh subprocess invocations this process has issued (x-4eac: no agent could
+# gh subprocess invocations this process has issued (: no agent could
 # see its own quota spend). Per-process, not per-fleet: it answers "what did
 # THIS call cost", which is the number a poller can act on. Read it from the
 # verbs that shell gh through this helper; reset is never needed because a
@@ -55,6 +56,7 @@ def run(
     env: Optional[Mapping[str, str]] = None,
     input_text: Optional[str] = None,
     timeout: Optional[float] = None,
+    start_new_session: bool = False,
 ) -> Result:
     """Run ``cmd`` capturing stdout/stderr as text.
 
@@ -63,7 +65,9 @@ def run(
     exit code rather than surfacing a Python traceback.
     """
     global GH_CALLS
-    if cmd and cmd[0] == "gh":
+    # By basename: the GraphQL broker spawns an absolute gh path, uncounted
+    # by a raw argv[0] match.
+    if cmd and os.path.basename(str(cmd[0])) == "gh":
         GH_CALLS += 1
     try:
         proc = subprocess.run(
@@ -75,6 +79,7 @@ def run(
             capture_output=True,
             timeout=timeout,
             check=False,
+            start_new_session=start_new_session,
         )
     except FileNotFoundError as exc:
         # FileNotFoundError fires when argv[0] is not on PATH. (A missing cwd

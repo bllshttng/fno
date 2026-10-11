@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -32,12 +31,6 @@ def _live_lint_command():
 app = _live_lint_command()
 
 runner = CliRunner()
-
-
-def _clear_repo_root_cache() -> None:
-    # resolve_repo_root() is @cache'd per process; clear it around tests that
-    # pin FNO_REPO_ROOT so the env override is re-read.
-    paths.resolve_repo_root.cache_clear()
 
 
 def _write_provider(path: Path, body: str) -> None:
@@ -92,35 +85,28 @@ def _run_codex_like():
     assert "provider-stderr-merge: ok" in result.stdout
 
 
-def test_provider_stderr_merge_lint_uses_explicit_dir_outside_repo(tmp_path: Path) -> None:
-    providers = tmp_path / "providers"
-    _write_provider(
-        providers / "codex_like.py",
-        """
-import subprocess
-
-
-def _run_codex_like():
-    return subprocess.Popen(["codex"], stderr=subprocess.STDOUT)  # stderr=stdout: parsed by one drainer
-""",
+def test_plan_filenames_lint_names_mismatched_claim(tmp_path: Path, monkeypatch) -> None:
+    plans = tmp_path / "plans"
+    plans.mkdir()
+    (plans / "20260915-example-ab-aaaa1111.md").write_text(
+        "---\nclaims: ab-bbbb2222\n---\n# Example\n", encoding="utf-8"
     )
+    (plans / "20260915-example-ab-bbbb2222.md").write_text(
+        "---\nclaims: ab-bbbb2222\n---\n# Matching\n", encoding="utf-8"
+    )
+    (plans / "20260915-example-births-dead.md").write_text(
+        "---\nclaims: ab-cdca1234\n---\n# Id-less\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(paths, "plans_content_dir", lambda: plans)
 
-    with runner.isolated_filesystem():
-        result = runner.invoke(
-            app,
-            ["provider-stderr-merge", "--providers-dir", str(providers)],
-        )
+    result = runner.invoke(app, ["plan-filenames"])
 
-    assert result.exit_code == 0
-    assert "provider-stderr-merge: ok" in result.stdout
-
-
-def test_lint_cli_help_lists_promoted_flock_pattern() -> None:
-    result = runner.invoke(app, ["--help"])
-
-    assert result.exit_code == 0
-    assert "flock-pattern" in result.stdout
-    assert "provider-stderr-merge" in result.stdout
+    assert result.exit_code == 1
+    assert "20260915-example-ab-aaaa1111.md" in result.stdout
+    assert "ab-aaaa1111" in result.stdout
+    assert "ab-bbbb2222" in result.stdout
+    assert "20260915-example-ab-bbbb2222.md" not in result.stdout
+    assert "births-dead.md" not in result.stdout
 
 
 def test_registry_lint_reports_all_three_buckets_and_exits_nonzero(
@@ -225,11 +211,7 @@ def test_flock_pattern_degrades_when_script_absent(tmp_path: Path, monkeypatch) 
     the verb exits 2 with an actionable stderr message - never bash's 127 and
     never a Python traceback."""
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))  # empty dir -> no script
-    _clear_repo_root_cache()
-    try:
-        result = runner.invoke(app, ["flock-pattern"])
-    finally:
-        _clear_repo_root_cache()
+    result = runner.invoke(app, ["flock-pattern"])
 
     assert result.exit_code == 2  # exit 2, not 127, not 0
     assert "flock-pattern" in result.stderr
@@ -243,7 +225,6 @@ def test_flock_pattern_runs_script_when_present(tmp_path: Path, monkeypatch) -> 
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "lint-flock-pattern.sh").write_text("#!/bin/bash\nexit 0\n")
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    _clear_repo_root_cache()
 
     calls: dict[str, list[str]] = {}
 
@@ -255,10 +236,7 @@ def test_flock_pattern_runs_script_when_present(tmp_path: Path, monkeypatch) -> 
         return _Result()
 
     monkeypatch.setattr("fno.lint_cli.subprocess.run", _fake_run)
-    try:
-        result = runner.invoke(app, ["flock-pattern"])
-    finally:
-        _clear_repo_root_cache()
+    result = runner.invoke(app, ["flock-pattern"])
 
     assert result.exit_code == 7  # script's exit code preserved, not remapped
     assert calls["argv"][0] == "bash"
@@ -271,7 +249,6 @@ def test_flock_pattern_forwards_dispatch_path(tmp_path: Path, monkeypatch) -> No
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "lint-flock-pattern.sh").write_text("#!/bin/bash\nexit 0\n")
     monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
-    _clear_repo_root_cache()
 
     calls: dict[str, list[str]] = {}
 
@@ -283,613 +260,12 @@ def test_flock_pattern_forwards_dispatch_path(tmp_path: Path, monkeypatch) -> No
         return _Result()
 
     monkeypatch.setattr("fno.lint_cli.subprocess.run", _fake_run)
-    try:
-        result = runner.invoke(
-            app, ["flock-pattern", "--dispatch-path", "/tmp/dispatch.py"]
-        )
-    finally:
-        _clear_repo_root_cache()
+    result = runner.invoke(
+        app, ["flock-pattern", "--dispatch-path", "/tmp/dispatch.py"]
+    )
 
     assert result.exit_code == 0
     assert "/tmp/dispatch.py" in calls["argv"]
-
-
-# --------------------------------------------------------------------------- #
-# markdown style gate: a renamed doc is not authored prose
-# --------------------------------------------------------------------------- #
-
-
-def _git(repo: Path, *args: str) -> None:
-    import subprocess
-
-    subprocess.run(
-        ["git", *args],
-        cwd=str(repo),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _repo_with_renamed_doc(tmp_path: Path) -> tuple[Path, str, str]:
-    """A repo whose only change since 'base' is one pure `git mv` of a doc."""
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo.parent, "init", "-q", "repo")
-    _git(repo, "config", "user.email", "t@example.com")
-    _git(repo, "config", "user.name", "t")
-    old = "docs/old-name.md"
-    new = "docs/new-name.md"
-    # Prose that breaks rule 1 and rule 2, so a gate that reads it as added
-    # cannot come back clean by accident.
-    (repo / old).write_text(
-        "This existing sentence is deliberately far longer than the twenty five "
-        "word cap that the style checker enforces on ordinary prose lines; it "
-        "also carries a semicolon.\n",
-        encoding="utf-8",
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "base")
-    _git(repo, "mv", old, new)
-    _git(repo, "commit", "-qm", "rename")
-    return repo, new, old
-
-
-def test_count_and_reader_read_the_same_diff(tmp_path: Path, monkeypatch) -> None:
-    """Both sides of the count guard must ask git the SAME question.
-
-    git computes a different edit script at zero context than at the default
-    three. Reindenting a YAML scalar into a block in agents/verifier.md counts
-    19 added lines at default context and 18 at -U0. The guard compared a
-    default-context `--numstat` against `-U0` line numbers and reported an
-    instrument failure on a file with nothing wrong in it, telling the author
-    it was not theirs to annotate. Both numbers were right about different
-    questions.
-
-    Asserted on the argv rather than through a fixture, deliberately. The
-    divergence needs a specific interaction of blank lines and indentation
-    that a reduced fixture does not reproduce: a synthetic repo built for this
-    passed with the bug still present, which makes it a test that cannot fail.
-    The invariant is one flag, so pin the flag.
-    """
-    import os
-
-    from fno import lint_cli
-
-    repo, new, _old = _repo_with_renamed_doc(tmp_path)
-    (repo / new).write_text("A short added line.\n", encoding="utf-8")
-    _git(repo, "commit", "-qam", "edit")
-
-    seen: list[list[str]] = []
-    real_run_git = lint_cli._run_git
-
-    def recording_run_git(argv, *args, **kwargs):
-        seen.append(list(argv))
-        return real_run_git(argv, *args, **kwargs)
-
-    monkeypatch.setattr(lint_cli, "_run_git", recording_run_git)
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        lint_cli._style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    numstat = [argv for argv in seen if "--numstat" in argv]
-    reader = [argv for argv in seen if "-U0" in argv and "--numstat" not in argv]
-
-    # Positive controls: both calls must actually have happened, or the two
-    # assertions below pass over an empty list and prove nothing.
-    assert numstat, f"no --numstat call was made: {seen}"
-    assert reader, f"no -U0 line-number read was made: {seen}"
-    assert all("-U0" in argv for argv in numstat), (
-        "the count side must read the same zero-context diff as the reader, "
-        f"else the guard compares two different edit scripts: {numstat}"
-    )
-
-
-def test_added_line_nums_ignores_a_pure_rename(tmp_path: Path) -> None:
-    from fno.lint_cli import _git_added_line_nums
-
-    repo, new, old = _repo_with_renamed_doc(tmp_path)
-
-    # Positive control: without the pre-rename path, the pathspec hides the
-    # rename source and git reports the whole body as added. This asserts the
-    # bug is reachable, so the fix below is not passing on an empty diff.
-    assert _git_added_line_nums(new, "base", repo) != set()
-
-    assert _git_added_line_nums(new, "base", repo, old) == set()
-
-
-def test_style_gate_reports_no_violations_for_a_pure_rename(tmp_path: Path) -> None:
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, _old = _repo_with_renamed_doc(tmp_path)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        violations, inspected, changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert changed == 1, "the renamed doc must still be reported as a changed file"
-    assert inspected == 0, "a pure rename authors no lines"
-    assert violations == []
-    # The absence guard fires on this number, not on `inspected`. A pure rename
-    # is a legitimate zero, and the rename resolution above is what produces it,
-    # so counting bare zeros made the fix trip the guard it shares a function
-    # with: a rename-only PR inspected nothing and exited 1.
-    assert unexplained == [], "a pure rename is an explained zero, not a broken scan"
-
-
-def test_no_newline_marker_does_not_shift_added_line_numbers(tmp_path: Path) -> None:
-    """`\\ No newline at end of file` is a note, never a line of the file.
-
-    Counted as context it advances the position, so every added line after it
-    is numbered one too high. The marker lands MID-hunk when the old file had
-    no trailing newline and its last line is replaced, which is the shape that
-    makes a real line escape rather than merely inventing a phantom one.
-    """
-    from fno.lint_cli import _git_added_line_nums
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    doc = repo / "docs" / "m.md"
-    doc.write_text("Old last line.", encoding="utf-8")  # no trailing newline
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    doc.write_text("New first line.\nSecond added.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "replace the last line")
-
-    nums = _git_added_line_nums("docs/m.md", "base", repo)
-    assert nums == {1, 2}, (
-        "added lines must be numbered against the NEW file; counting the "
-        f"no-newline marker as context shifts them (got {sorted(nums)})"
-    )
-
-
-def test_an_added_line_beginning_with_plus_plus_is_not_read_as_a_header(
-    tmp_path: Path,
-) -> None:
-    """Content that looks like a diff header must not shift line numbers.
-
-    An added markdown line whose own text starts with `++` renders as `+++` in
-    the diff. Matched by prefix it was swallowed as a file header AND did not
-    advance the position, so every later added line in that file was numbered
-    one too low: a real violation ships while a different line is checked.
-    Repo docs carry fenced diff snippets, so this is reachable content.
-    """
-    from fno.lint_cli import _git_added_line_nums
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    doc = repo / "docs" / "d.md"
-    doc.write_text("Intro line.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    doc.write_text(
-        "Intro line.\n++ plus marker\nA line; with a semicolon.\n", encoding="utf-8"
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "add a plus-prefixed line")
-
-    nums = _git_added_line_nums("docs/d.md", "base", repo)
-    assert nums == {2, 3}, (
-        "both added lines must be numbered; swallowing the `++` line as a "
-        f"header hides line 3, which carries a real violation (got {sorted(nums)})"
-    )
-
-
-def test_a_files_scope_matching_nothing_refuses(tmp_path: Path) -> None:
-    """A caller scope that matches no changed file must not read as clean.
-
-    `--files` resolves against the caller's cwd, so a caller standing anywhere
-    but the repo root and passing a repo-relative path lands somewhere real,
-    keys to a plausible prefix, and matches nothing. Exiting 0 there is the
-    absence-read-as-success shape this whole change set exists to remove.
-    """
-    import os
-
-    import typer
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, _old = _repo_with_renamed_doc(tmp_path)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        with pytest.raises(typer.Exit) as exc:
-            _style_added_lines("base", [Path("docs/nothing-here")])
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-    assert exc.value.exit_code == 2
-
-
-def test_a_scope_naming_a_path_the_branch_renamed_away_is_allowed(
-    tmp_path: Path,
-) -> None:
-    """The PRE-rename path is a legitimate scope for a rename diff.
-
-    The existence check that catches a cwd mis-resolution also refused a path
-    the branch itself moved, which is exactly the diff a rename PR asks about.
-    Measured on this branch: `--files docs/providers/codex.md` exited 2 over a
-    file this branch renamed. Absence in the working tree cannot decide it, so
-    the base decides: present there means deleted or renamed since.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, old = _repo_with_renamed_doc(tmp_path)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        violations, inspected, changed, unexplained, _exempted = _style_added_lines(
-            "base", [Path(old)]
-        )
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    # A pure rename authors nothing, so the honest answer is a clean zero
-    # rather than a refusal. The sibling test above still proves a path absent
-    # from BOTH sides refuses.
-    assert (violations, inspected, unexplained) == ([], 0, [])
-    assert changed >= 0
-
-
-def test_the_guard_reaches_renamed_files(tmp_path: Path, monkeypatch) -> None:
-    """A renamed-and-edited doc must still be covered by the instrument guard.
-
-    `git --numstat` compresses a rename to `docs/{a.md => b.md}`, so keyed off
-    that output the NEW path is never present and the guard silently cannot
-    fire for any renamed file. That is precisely the class the rename
-    resolution makes eligible for a zero-inspection result, so the one file
-    type most likely to break the parser was the one the guard could not see.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    (repo / "docs" / "a.md").write_text("One.\nTwo.\nThree.\nFour.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    _git(repo, "mv", "docs/a.md", "docs/b.md")
-    (repo / "docs" / "b.md").write_text(
-        "One.\nTwo.\nThree.\nFour.\nFive added.\n", encoding="utf-8"
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "rename and edit")
-
-    # The parser loses the authored line on the renamed path.
-    monkeypatch.setattr("fno.lint_cli._git_added_line_nums", lambda *a, **k: set())
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo))
-    try:
-        _v, _inspected, _changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert unexplained == ["docs/b.md"], (
-        "git counted an added line on the renamed path and the parser found "
-        "none, so the guard must fire for renamed files too"
-    )
-
-
-def test_a_deletion_only_edit_is_an_explained_zero(tmp_path: Path) -> None:
-    """A trimmed doc must not fail the gate.
-
-    This test previously asserted the OPPOSITE, and it was wrong on purpose
-    rather than by accident: it encoded the author's misreading that any
-    zero-inspected file is suspicious. Making a test fail proves it is
-    connected to the code. It never proves it asserts the right thing.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    trim = repo / "docs" / "trim.md"
-    trim.write_text("One line.\nTwo line.\n", encoding="utf-8")
-    (repo / "docs" / "normal.md").write_text("Alpha.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    trim.write_text("One line.\n", encoding="utf-8")
-    (repo / "docs" / "normal.md").write_text("Alpha.\nBeta.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "trim one, extend the other")
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, inspected, changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert changed == 2 and inspected == 1, "positive control: one line was added"
-    assert unexplained == [], "a deletion-only edit authors nothing and is explained"
-
-
-def test_style_gate_still_fails_when_the_parser_loses_added_lines(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """The absence guard must survive the fix that narrowed it.
-
-    Narrowing a guard is where guards die quietly. The case it still has to
-    catch is the only one that ever meant trouble: git counted added lines for
-    a path and this parser returned none, so the instrument failed.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    doc = repo / "docs" / "d.md"
-    doc.write_text("One line.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    # A genuine authored line, so git's own count for this path is non-zero.
-    doc.write_text("One line.\nTwo line.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "author a line")
-
-    # The parser loses the line git counted. That disagreement, and only that,
-    # is what the guard exists to catch.
-    monkeypatch.setattr("fno.lint_cli._git_added_line_nums", lambda *a, **k: set())
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, inspected, changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert changed == 1 and inspected == 0
-    assert unexplained == ["docs/d.md"], (
-        "the guard must name the file, since a bare count is not investigable"
-    )
-
-
-def test_the_guard_catches_a_partial_parser_loss_not_only_a_total_one(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Losing SOME added lines is the same instrument failure as losing all.
-
-    The emptiness test this replaces caught only a total loss. One hunk header
-    failing the `\\+(\\d+)` search leaves the returned set non-empty, so the
-    file passed the guard, the unread lines shipped unstyled, and the receipt
-    reported the smaller number as though it were the whole job. Git's exact
-    count was already in hand.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    doc = repo / "docs" / "d.md"
-    doc.write_text("One line.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    doc.write_text("One line.\nTwo line.\nThree line.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "author two lines")
-
-    # Git counts two added lines; the parser returns one. Non-empty, and wrong.
-    monkeypatch.setattr("fno.lint_cli._git_added_line_nums", lambda *a, **k: {2})
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, inspected, _changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert inspected == 1, "the receipt reports what was actually read"
-    assert unexplained == ["docs/d.md"], (
-        "one line read out of two counted is an instrument failure, "
-        "and the old emptiness test called it clean"
-    )
-
-
-@pytest.mark.parametrize(
-    "marker", ["--name-only", "-U0", "--name-status", "--numstat", "rev-parse"]
-)
-def test_a_failing_git_diff_is_not_reported_as_a_clean_tree(
-    tmp_path: Path, monkeypatch, marker: str
-) -> None:
-    """A git failure must exit 2, never look like "nothing changed".
-
-    Every diff call answers with stdout alone, and empty stdout is also the
-    clean result, so an unchecked return code turns any git error into a green
-    gate. Measured before the fix: a malformed pathspec made git exit 128 while
-    the gate exited 0 reporting zero changed files.
-
-    Parameterized per CALL, not per outcome. Failing all three at once passed
-    with two of the three guards deleted, because the surviving guard raised
-    first and the assertion could not tell which one did. One failure injected
-    at a time is what pins each site.
-    """
-    import os
-    import subprocess as sp
-
-    import typer
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, _old = _repo_with_renamed_doc(tmp_path)
-    real_run = sp.run
-
-    def _fail_diffs(argv, *a, **k):
-        if isinstance(argv, list) and marker in argv:
-            return sp.CompletedProcess(argv, 128, "", "fatal: bad revision")
-        return real_run(argv, *a, **k)
-
-    monkeypatch.setattr("fno.lint_cli.subprocess.run", _fail_diffs)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo))
-    try:
-        with pytest.raises(typer.Exit) as exc:
-            _style_added_lines("base", None)
-    finally:
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-    assert exc.value.exit_code == 2
-
-
-def test_relative_files_paths_resolve_against_the_repo_root(tmp_path: Path) -> None:
-    """A caller-relative --files path must reach the same files from anywhere.
-
-    Every git call here runs from the repo root while the caller's paths are
-    relative to the caller's cwd. Measured before the fix: `--files ../docs`
-    from `cli/` matched nothing and the gate exited 0 over 27 changed files.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, _old = _repo_with_renamed_doc(tmp_path)
-    (repo / "sub").mkdir()
-
-    def _run(cwd_dir: Path, scope: Path):
-        cwd = os.getcwd()
-        os.chdir(cwd_dir)
-        _clear_repo_root_cache()
-        os.environ["FNO_REPO_ROOT"] = str(repo)
-        try:
-            return _style_added_lines("base", [scope])
-        finally:
-            os.environ.pop("FNO_REPO_ROOT", None)
-            _clear_repo_root_cache()
-            os.chdir(cwd)
-
-    from_root = _run(repo, Path("docs"))
-    from_sub = _run(repo / "sub", Path("../docs"))
-    assert from_root[2] > 0, "positive control: the scope must match files at all"
-    assert from_sub[2] == from_root[2], "the same scope must resolve from any cwd"
-
-
-def test_every_git_call_pins_the_rename_limit(tmp_path: Path, monkeypatch) -> None:
-    """Deleting either pin must fail this test.
-
-    Past ``diff.renameLimit`` git skips the exhaustive pass, warns on stderr,
-    and exits 0. Measured on a real branch at ``renameLimit=1``: exit 0 and 9 of
-    21 renames found, so a return-code guard sees nothing wrong. The earlier
-    version of this test called its helper once with the UNLIMITED value and
-    asserted unlimited detection works, which was never in doubt and stayed
-    green with both pins deleted. This asserts the pin itself, on every call
-    that resolves or reads a rename.
-    """
-    import subprocess as sp
-
-    from fno.lint_cli import _style_added_lines
-
-    repo, _new, _old = _repo_with_renamed_doc(tmp_path)
-    seen: list[list[str]] = []
-    real_run = sp.run
-
-    def _spy(argv, *a, **k):
-        if isinstance(argv, list) and argv and argv[0] == "git":
-            seen.append(list(argv))
-        return real_run(argv, *a, **k)
-
-    monkeypatch.setattr("fno.lint_cli.subprocess.run", _spy)
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    monkeypatch.setenv("FNO_REPO_ROOT", str(repo))
-    try:
-        _style_added_lines("base", None)
-    finally:
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    from fno.lint_cli import _pinned_diff_argv
-
-    diffs = [c for c in seen if "diff" in c]
-    assert diffs, "positive control: no git diff call was observed at all"
-    # Pin the MECHANISM, not the outcome. The previous version accepted either
-    # `diff.renames=true` or `--find-renames` at each site, which asserts that
-    # detection is on somehow and permits three sites to spell it three ways.
-    # It also false-flags a correct call using `-M`, git's own alias for
-    # `--find-renames`. Requiring the shared prefix means one thing decides how,
-    # and a fourth site cannot quietly invent a fourth spelling.
-    prefix = _pinned_diff_argv()
-    unowned = [c for c in diffs if c[: len(prefix)] != prefix]
-    assert not unowned, (
-        f"git diff calls not built by _pinned_diff_argv: {unowned}\n"
-        f"expected every call to start with {prefix}"
-    )
-    # And no site re-specifies detection by flag, which is how a second spelling
-    # gets back in beside the config pin.
-    by_flag = [c for c in diffs if "--find-renames" in c or "-M" in c]
-    assert not by_flag, f"rename detection respelled as a flag: {by_flag}"
 
 
 def test_every_check_parameter_is_declared_on_the_dispatcher() -> None:
@@ -918,197 +294,6 @@ def test_every_check_parameter_is_declared_on_the_dispatcher() -> None:
             f"`fno doctor lint {name}` accepts {sorted(missing)}, which `fno doctor lint` does "
             f"not declare, so those flags are unreachable. Add them to lint()."
         )
-
-
-def test_a_file_skipped_by_its_exception_marker_is_named_not_just_uncounted(
-    tmp_path: Path,
-) -> None:
-    """A skip and a clean scan must not print the same receipt.
-
-    An exempted file still counts as CHANGED while adding nothing to
-    INSPECTED, so "0 added line(s) across 1 changed file(s)" reads identically
-    whether the file had nothing to inspect or was never read. A reader cannot
-    judge an exception that the receipt does not mention.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    exempt = repo / "docs" / "exempt.md"
-    exempt.write_text(
-        "<!-- style-exception: fixture -->\nOne line.\n", encoding="utf-8"
-    )
-    (repo / "docs" / "plain.md").write_text("Alpha.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    exempt.write_text(
-        "<!-- style-exception: fixture -->\nOne line.\nA second line added here.\n",
-        encoding="utf-8",
-    )
-    (repo / "docs" / "plain.md").write_text("Alpha.\nBeta.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "add a line to each")
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, inspected, changed, _unexplained, exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert exempted == ["docs/exempt.md"], (
-        "the marker-skipped path must be named, since the counts alone cannot "
-        "distinguish a skipped file from one with nothing to inspect"
-    )
-    # Positive control: the un-exempted sibling really was scanned, so a zero
-    # from the exempted file is a skip rather than a scan that read nothing.
-    assert inspected == 1, "the plain file's one added line must still be read"
-    assert changed == 2, "both files changed; only one of them was read"
-
-
-def test_a_file_git_says_added_lines_to_but_gone_from_the_tree_is_flagged(
-    tmp_path: Path,
-) -> None:
-    """The second silent skip must not jump past the count-mismatch guard.
-
-    `if not full.is_file(): continue` covered two cases with one silence. A
-    deletion in the diff is a legitimate zero. A file git says ADDED lines to,
-    absent from the working tree, is the dirty-tree loss: its lines are never
-    read, and the guard written for exactly that never ran.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    (repo / "docs" / "gone.md").write_text("Alpha.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    (repo / "docs" / "gone.md").write_text("Alpha.\nBeta added here.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "add a line")
-    # Committed with an added line, then removed from the working tree only.
-    (repo / "docs" / "gone.md").unlink()
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, _inspected, _changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert unexplained == ["docs/gone.md"], (
-        "git counted an added line the gate never read, so the instrument "
-        "guard must fire instead of the loop skipping in silence"
-    )
-
-
-def test_a_deleted_file_stays_a_silent_legitimate_zero(tmp_path: Path) -> None:
-    """Positive control for the test above: only the LOSS is flagged.
-
-    Without this, flagging every absent file would pass that test while
-    failing every ordinary deletion.
-    """
-    import os
-
-    from fno.lint_cli import _style_added_lines
-
-    repo = tmp_path / "repo"
-    (repo / "docs").mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@t")
-    _git(repo, "config", "user.name", "t")
-    (repo / "docs" / "bye.md").write_text("Alpha.\n", encoding="utf-8")
-    (repo / "docs" / "stay.md").write_text("Alpha.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "base")
-    _git(repo, "branch", "-f", "base")
-    (repo / "docs" / "bye.md").unlink()
-    (repo / "docs" / "stay.md").write_text("Alpha.\nBeta.\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "delete one, extend the other")
-
-    cwd = os.getcwd()
-    os.chdir(repo)
-    _clear_repo_root_cache()
-    os.environ["FNO_REPO_ROOT"] = str(repo)
-    try:
-        _v, inspected, _changed, unexplained, _exempted = _style_added_lines("base", None)
-    finally:
-        os.environ.pop("FNO_REPO_ROOT", None)
-        _clear_repo_root_cache()
-        os.chdir(cwd)
-
-    assert unexplained == [], "a deletion adds no lines, so it is an explained zero"
-    assert inspected == 1, "positive control: the surviving file's added line was read"
-
-
-def test_the_skip_receipt_fires_on_the_files_branch_too(tmp_path: Path) -> None:
-    """The guarantee must hold on every branch that can skip.
-
-    `--files` without `--diff-base` used to `continue` past an exempted file and
-    print nothing, so the command exited 0 and silent for a file it never read.
-    """
-    exempt = tmp_path / "exempt.md"
-    exempt.write_text("<!-- style-exception: fixture -->\nOne line.\n", encoding="utf-8")
-    result = runner.invoke(
-        app, ["style", "--surface", "markdown", "--files", str(exempt)]
-    )
-    assert result.exit_code == 0, result.output
-    assert "style-exception" in result.output and "exempt.md" in result.output, (
-        "a --files run that read nothing must say so, not exit 0 in silence"
-    )
-
-
-def test_the_skip_receipt_fires_on_the_stdin_branch_too(tmp_path: Path) -> None:
-    """Same guarantee on the hand-run ``fno doctor lint style --stdin`` path.
-
-    A body carrying the marker used to pass with an empty log.
-    """
-    result = runner.invoke(
-        app,
-        ["style", "--surface", "pr-body", "--stdin"],
-        input="<!-- style-exception: fixture -->\nOne line.\n",
-    )
-    assert result.exit_code == 0, result.output
-    assert "style-exception" in result.output and "<stdin>" in result.output, (
-        "a --stdin run that read nothing must say so"
-    )
-
-
-def test_a_normal_files_run_prints_no_skip_receipt(tmp_path: Path) -> None:
-    """Positive control: the receipt must fire only on an actual skip.
-
-    Without this, a receipt printed unconditionally passes both tests above
-    while telling every clean run it skipped something.
-    """
-    plain = tmp_path / "plain.md"
-    plain.write_text("One line.\n", encoding="utf-8")
-    result = runner.invoke(
-        app, ["style", "--surface", "markdown", "--files", str(plain)]
-    )
-    assert "style-exception" not in result.output, (
-        "a file that was actually read must not be reported as skipped"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1146,7 +331,7 @@ def test_state_files_table_records_exactly_one_unowned_state_file() -> None:
     from fno.paths import STATE_FILES
 
     unowned = {row.filename for row in STATE_FILES if row.resolver is None}
-    assert unowned == {"target-state.md"}
+    assert unowned == set()
 
 
 def test_state_roots_rule_a_fires_on_a_hand_built_events_path(tmp_path: Path) -> None:
@@ -1172,7 +357,7 @@ def test_state_roots_rule_a_fires_on_a_multi_line_join(tmp_path: Path) -> None:
     source = tmp_path / "cli" / "src" / "fno" / "new_writer.py"
     source.parent.mkdir(parents=True)
     source.write_text(
-        "graph = (\n    root\n    / \".fno\"\n    / \"graph.json\"\n)\n", encoding="utf-8"
+        "graph = (\n    root\n    / \".fno\"\n    / \"ledger.json\"\n)\n", encoding="utf-8"
     )
 
     from fno.lint_cli import _state_root_path_violations
@@ -1180,7 +365,7 @@ def test_state_roots_rule_a_fires_on_a_multi_line_join(tmp_path: Path) -> None:
     violations = _state_root_path_violations(tmp_path)
 
     assert [(rel, key) for rel, key, _ in violations] == [
-        ("cli/src/fno/new_writer.py", "graph.json")
+        ("cli/src/fno/new_writer.py", "ledger.json")
     ]
 
 
@@ -1195,7 +380,7 @@ def test_state_roots_rule_a_fires_on_the_combined_literal(tmp_path: Path) -> Non
     """
     py = tmp_path / "cli" / "src" / "fno" / "new_writer.py"
     py.parent.mkdir(parents=True)
-    py.write_text('p = root / ".fno/graph.json"\n', encoding="utf-8")
+    py.write_text('p = root / ".fno/ledger.json"\n', encoding="utf-8")
     rs = tmp_path / "crates" / "fno-agents" / "src" / "new_writer.rs"
     rs.parent.mkdir(parents=True)
     rs.write_text('let p = root.join(".fno/claims");\n', encoding="utf-8")
@@ -1204,7 +389,7 @@ def test_state_roots_rule_a_fires_on_the_combined_literal(tmp_path: Path) -> Non
 
     hit = {(rel, key) for rel, key, _ in _state_root_path_violations(tmp_path)}
 
-    assert ("cli/src/fno/new_writer.py", "graph.json") in hit
+    assert ("cli/src/fno/new_writer.py", "ledger.json") in hit
     assert ("crates/fno-agents/src/new_writer.rs", "claims") in hit
 
 
@@ -1223,14 +408,14 @@ def test_state_roots_rule_a_only_skips_a_cfg_test_MOD(tmp_path: Path) -> None:
         "    static X: u8 = 0;\n"
         "}\n"
         '// a comment mentioning #[cfg(test)] must not open a region\n'
-        'let p = root.join(".fno").join("graph.json");\n',
+        'let p = root.join(".fno").join("ledger.json");\n',
         encoding="utf-8",
     )
 
     from fno.lint_cli import _state_root_path_violations
 
     assert [(rel, key) for rel, key, _ in _state_root_path_violations(tmp_path)] == [
-        ("crates/fno-agents/src/new_writer.rs", "graph.json")
+        ("crates/fno-agents/src/new_writer.rs", "ledger.json")
     ]
 
 
@@ -1257,22 +442,6 @@ def test_state_roots_rule_a_skips_nothing_for_a_cfg_test_mod_DECLARATION(
 
     assert [(rel, key) for rel, key, _ in _state_root_path_violations(tmp_path)] == [
         ("crates/fno/src/lib.rs", "ledger.json")
-    ]
-
-
-def test_state_roots_rule_a_fires_on_a_rust_join(tmp_path: Path) -> None:
-    source = tmp_path / "crates" / "fno-agents" / "src" / "new_writer.rs"
-    source.parent.mkdir(parents=True)
-    source.write_text(
-        'let p = root.join(".fno").join("events.jsonl");\n', encoding="utf-8"
-    )
-
-    from fno.lint_cli import _state_root_path_violations
-
-    violations = _state_root_path_violations(tmp_path)
-
-    assert [(rel, key) for rel, key, _ in violations] == [
-        ("crates/fno-agents/src/new_writer.rs", "events.jsonl")
     ]
 
 
@@ -1337,7 +506,7 @@ def test_state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver(
         "\n"
         "@lru_cache(maxsize=1)\n"
         "def _cached_graph():\n"
-        "    return graph_json()\n",
+        "    return state_dir()\n",
         encoding="utf-8",
     )
 
@@ -1350,50 +519,43 @@ def test_state_roots_rule_b_fires_on_a_zero_arg_cache_over_a_resolver(
     assert (rel, symbol) == ("cli/src/fno/new_reader.py", "_cached_graph")
     # The refusal must TEACH THE REMEDY, not only name the offence.
     assert "_cached_graph_at(root: Path)" in message
-    assert "fleet_has_crown_at" in message
 
 
-def test_state_roots_rule_b_stays_silent_on_the_repo_s_real_negatives() -> None:
-    """The false-positive controls, asserted against the tree they live in.
-
-    `_running_from_source` is keyed on `Path(__file__)` ON PURPOSE and its
-    docstring says so; `_gh_executable`, `_codex_cli_version` and `machine_id`
-    cache a PATH lookup, a subprocess and a host id, none of which resolve a
-    state root; `fleet_has_crown_at` already takes the root as an argument,
-    which is the remedy this rule prescribes.
-    """
-    from fno.lint_cli import _zero_arg_root_cache_violations
-
-    hit = {symbol for _rel, symbol, _msg in _zero_arg_root_cache_violations(_real_repo_root())}
-
-    assert hit.isdisjoint(
-        {
-            "_running_from_source",
-            "_gh_executable",
-            "_codex_cli_version",
-            "machine_id",
-            "fleet_has_crown_at",
-            "fleet_has_crown",
-        }
-    )
-
-
-def test_state_roots_rule_b_fires_on_the_live_load_settings_specimen() -> None:
+def test_state_roots_rule_b_fires_on_a_zero_arg_root_cache_specimen(
+    tmp_path: Path,
+) -> None:
     """The control that proves the rule reaches the offence, not a lookalike.
 
-    `load_settings` is the epic's own live R5 specimen and its body calls no
-    resolver by name - it reaches the root through `_candidate_paths`. A rule
-    that matched only the resolver names would run green against the exact
-    case it was written for.
+    The four retired x-3d21 specimens are keyed on their declaration now, so
+    the live tree holds no rule-B hit. This synthetic specimen is the positive
+    control that the rule still fires on the shape it was written for - a
+    zero-argument cache whose body reaches a state root.
     """
     from fno.lint_cli import _zero_arg_root_cache_violations
+
+    src = tmp_path / "cli" / "src" / "fno"
+    src.mkdir(parents=True)
+    (src / "specimen.py").write_text(
+        "from functools import lru_cache\n"
+        "import os\n"
+        "\n"
+        "@lru_cache(maxsize=1)\n"
+        "def specimen():\n"
+        "    return os.getcwd()\n",
+        encoding="utf-8",
+    )
 
     hit = {
         (rel, symbol)
+        for rel, symbol, _msg in _zero_arg_root_cache_violations(tmp_path)
+    }
+    assert ("cli/src/fno/specimen.py", "specimen") in hit
+
+    live = {
+        (rel, symbol)
         for rel, symbol, _msg in _zero_arg_root_cache_violations(_real_repo_root())
     }
-
-    assert ("cli/src/fno/config/__init__.py", "load_settings") in hit
+    assert live == set()
 
 
 def test_state_roots_baseline_covers_the_whole_live_census() -> None:
@@ -1413,7 +575,10 @@ def test_state_roots_baseline_covers_the_whole_live_census() -> None:
     assert len(baseline) > 20, "the ratchet lost its census"
     assert any(rule == "A" and rel.endswith(".rs") for rule, rel, _ in findings)
     assert any(rule == "A" and rel.endswith(".py") for rule, rel, _ in findings)
-    assert ("B", "cli/src/fno/config/__init__.py", "load_settings") in findings
+    # The four x-3d21 specimens are keyed on their declaration; rule B's live
+    # census is empty and its ratchet stays armed via the synthetic-specimen
+    # control above.
+    assert not any(rule == "B" for rule, rel, _ in findings)
 
     assert findings - baseline == set()
     assert baseline - findings == set()
@@ -1469,3 +634,26 @@ def test_state_roots_gate_fails_on_a_new_unbaselined_site(
     assert result.exit_code == 1
     assert "new violations" in result.output
     assert "fno.paths.ledger_json" in result.output
+
+
+def test_internal_refs_wrapper_propagates_the_gate_verdict(tmp_path, monkeypatch) -> None:
+    """Exit 1 from the gate exits 1 here; a missing gate script is exit 2."""
+    from fno import paths
+
+    monkeypatch.setattr(paths, "resolve_repo_root", lambda: tmp_path)
+    script = tmp_path / "scripts" / "ci" / "check-no-internal-refs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    result = runner.invoke(app, ["internal-refs"])
+    assert result.exit_code == 1
+
+    script.unlink()
+    result = runner.invoke(app, ["internal-refs"])
+    assert result.exit_code == 2
+
+
+def test_unknown_check_refusal_lists_internal_refs() -> None:
+    """The refusal derives from CHECKS, so the new name is discoverable there."""
+    result = runner.invoke(app, ["definitely-not-a-check"])
+    assert result.exit_code == 2
+    assert "internal-refs" in result.output

@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - session start
 # SessionStart hook for fno plugin — cross-platform
 # Injects project vision into session context.
 # Wraps existing Claude Code-specific hooks and re-formats output per platform.
 
 set -euo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 CONTEXT_HOOK_INPUT="$(mktemp "${TMPDIR:-/tmp}/fno-context-input.XXXXXX" 2>/dev/null || true)"
 if [[ -n "$CONTEXT_HOOK_INPUT" ]]; then
@@ -25,35 +30,29 @@ PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STATE_FILE=".fno/target-state.md"
 
 # ── Plugin-root pointer (best-effort, idempotent) ────────────────────
-# Persist the plugin root to ~/.fno/plugin-root so `fno do target init` and
+# Persist the plugin root to ~/.fno/install/plugin-root so `fno do target init` and
 # `fno gate set` can find their plugin scripts when run from a foreign project
 # with no env hint. `fno` is a uv-tool install whose wheel does not carry
 # hooks/, and CLAUDE_PLUGIN_ROOT is not propagated to arbitrary `fno`
-# subprocesses - the pointer is then the only env-less source. PLUGIN_ROOT here
-# is always the real plugin (parent of this hook's dir); the manifest check is
-# a belt-and-suspenders guard. Mirrors fno.paths._persist_plugin_root and
-# is read by fno.paths._read_persisted_plugin_root. errexit-safe.
+# subprocesses - the pointer is then the only env-less source. The hook copy
+# that runs can live in a linked worktree (a spawned worker's feature
+# worktree), so a worktree root must never become the machine-global value:
+# every env-less reader would run that unmerged branch, and the merge sweep
+# would later leave the pointer dangling. A linked worktree has a .git FILE;
+# a canonical checkout has a .git DIRECTORY; an installed stage has none.
+# Read by fno.paths._read_persisted_plugin_root. errexit-safe.
 prime_plugin_root_pointer() {
     [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]] || return 0
+    [[ -f "$PLUGIN_ROOT/.git" ]] && return 0
     local home="${FNO_HOME:-$HOME/.fno}"
-    local ptr="$home/plugin-root"
+    local ptr="$home/install/plugin-root"
     if [[ -f "$ptr" ]] && [[ "$(cat "$ptr" 2>/dev/null)" == "$PLUGIN_ROOT" ]]; then
         return 0
     fi
-    mkdir -p "$home" 2>/dev/null || return 0
+    mkdir -p "$home/install" 2>/dev/null || return 0
     printf '%s\n' "$PLUGIN_ROOT" > "$ptr" 2>/dev/null || true
 }
 prime_plugin_root_pointer || true
-
-# ── .fno gitignore housekeeping (best-effort, idempotent) ────────────
-# Keep machine-specific .fno/ session state (incl. target-state.md) out of the
-# project repo so personal state never leaks into an open-source checkout. The
-# helper no-ops when .fno/ is already ignored / absent / outside a git tree.
-ensure_fno_gitignored() {
-    local helper="$PLUGIN_ROOT/hooks/helpers/ensure-fno-gitignored.sh"
-    [[ -f "$helper" ]] && bash "$helper" 2>/dev/null || true
-}
-ensure_fno_gitignored || true
 
 # ── heal a wired Claude WorktreeRemove hook after a plugin move ──────
 # That hook lives in ~/.claude/settings.json (claude rm runs with no session,
@@ -63,18 +62,21 @@ ensure_fno_gitignored || true
 # actually changing, so the common session pays one string compare and no
 # subprocess. Repair-only: never wires the hook for someone who did not ask.
 heal_claude_worktree_hook() {
+    # A worktree start neither flips the stamp nor runs the repair, for the
+    # same reason prime_plugin_root_pointer skips worktrees.
+    [[ -f "$PLUGIN_ROOT/.git" ]] && return 0
     local settings="$HOME/.claude/settings.json"
     [[ -f "$settings" ]] || return 0
     grep -q 'worktree-remove\.sh' "$settings" 2>/dev/null || return 0
     local home="${FNO_HOME:-$HOME/.fno}" stamp
-    stamp="$home/.worktree-hook-root"
+    stamp="$home/install/.worktree-hook-root"
     [[ -f "$stamp" && "$(cat "$stamp" 2>/dev/null)" == "$PLUGIN_ROOT" ]] && return 0
     command -v fno >/dev/null 2>&1 || return 0
     # Stamp only on success. Stamping a failed repair (fno missing, or too old
     # to know --repair-only) would mark the heal done and never retry it.
     fno config setup cli-hooks --no-codex --no-gemini --claude --repair-only \
         >/dev/null 2>&1 || return 0
-    mkdir -p "$home" 2>/dev/null || return 0
+    mkdir -p "$home/install" 2>/dev/null || return 0
     printf '%s\n' "$PLUGIN_ROOT" > "$stamp" 2>/dev/null || true
 }
 heal_claude_worktree_hook || true
@@ -105,11 +107,17 @@ detect_platform() {
 PLATFORM=$(detect_platform)
 
 # Claude registers through its dedicated SessionStart hook in hooks.json.
-# Codex uses this shared wrapper as its sole SessionStart entry, so register the
-# addressable thread here exactly once. Supplying CODEX_PLUGIN_ROOT locally also
-# covers the user-config fallback, which sets only FNO_PLATFORM=codex.
+# Codex and Gemini use this shared wrapper as their sole SessionStart entry, so
+# register the addressable thread here exactly once, each through its OWN
+# plugin-root marker: the register script keys the harness on
+# GEMINI_PROJECT_DIR / CODEX_PLUGIN_ROOT, and a codex marker on a gemini
+# session would misdetect the harness. Supplying the root locally also covers
+# the user-config fallback, which sets only FNO_PLATFORM.
 if [[ "$PLATFORM" == "codex" && -f "${SCRIPT_DIR}/register-session-start.sh" ]]; then
     CODEX_PLUGIN_ROOT="${CODEX_PLUGIN_ROOT:-$PLUGIN_ROOT}" \
+        bash "${SCRIPT_DIR}/register-session-start.sh" || true
+elif [[ "$PLATFORM" == "gemini" && -f "${SCRIPT_DIR}/register-session-start.sh" ]]; then
+    GEMINI_PROJECT_DIR="${GEMINI_PROJECT_DIR:-$PWD}" \
         bash "${SCRIPT_DIR}/register-session-start.sh" || true
 fi
 
@@ -267,6 +275,16 @@ if [[ -f "${SCRIPT_DIR}/inject-mail-drain-session-start.sh" ]]; then
     mail_content=$(bash "${SCRIPT_DIR}/inject-mail-drain-session-start.sh" 2>/dev/null || echo "")
 fi
 
+# 6a. fleet announcements - one bus line every session reads by its
+#     own cursor. The sub-hook maps the SessionStart input's source:compact to
+#     the compact boundary itself, so a compacted session re-sees standing
+#     announcements. Fails open; silent when there is nothing standing.
+announce_content=""
+if [[ -f "${SCRIPT_DIR}/inject-announce.sh" ]]; then
+    announce_content=$(bash "${SCRIPT_DIR}/inject-announce.sh" start \
+        <"${CONTEXT_HOOK_INPUT:-/dev/null}" 2>/dev/null || true)
+fi
+
 # 7. outstanding — unharvested carve-outs + open operator questions. Delegates
 #    to the same hook Claude registers directly in hooks.json, so both harnesses
 #    run ONE implementation. `|| true` guards the assignment because this script
@@ -276,7 +294,7 @@ if [[ -f "${SCRIPT_DIR}/outstanding-session-start.sh" ]]; then
     outstanding_content=$(bash "${SCRIPT_DIR}/outstanding-session-start.sh" 2>/dev/null || true)
 fi
 
-# 7b. spawn seed provenance (x-3a64) — the <fno_mail> envelope for the seed that
+# 7b. spawn seed provenance — the <fno_mail> envelope for the seed that
 #     started this worker. The seed itself must stay byte-identical (normalize.sh
 #     and the harness REPL both key off its leading slash), so the attribution
 #     rides beside it here. The sub-hook owns the startup-only gate: it re-reads
@@ -379,26 +397,32 @@ append_section "$whoami_content"
 append_section "$hygiene_content"
 append_section "$nudge_content"
 append_section "$mail_content"
+append_section "$announce_content"
 append_section "$outstanding_content"
 append_section "$seed_prov_content"
 append_section "$orphan_content"
 
-# Self-heal a defunct target manifest (x-4af4) before anything reads it, so a
+# Self-heal a defunct target manifest before anything reads it, so a
 # dead target-state.md can no longer auto-lock an attended /think. Advisory.
 gc_helper="${SCRIPT_DIR}/helpers/gc-dead-target-manifest.sh"
 [[ -f "$gc_helper" ]] && bash "$gc_helper" "$STATE_FILE" || true
 
-# Plan status reconcile sweep (x-f34f US5) — project canonical-but-stale plan
+# Plan status reconcile sweep (US5) — project canonical-but-stale plan
 # frontmatter from graph truth. Daily-watermark gated and fully async so the
 # 452-file parse never lands on the session-start critical path more than once a
 # day; bg output is discarded so it can never corrupt this hook's JSON stdout.
 # Watermark written BEFORE launch = at-most-once-per-day even if the sweep dies
 # (the write-time projection and post-merge ritual are the other two layers).
 if command -v fno >/dev/null 2>&1; then
+    # Gated on an existing `.fno/`, and it never creates one. `mkdir -p .fno`
+    # here put a `.fno/` in every repo a session touched, whether or not that
+    # project ever used footnote, and it ran before the appender guard could
+    # see anything. Same gate hooks/reconcile-session-start.sh applies, for the
+    # same reason.
     rs_watermark=".fno/.reconcile-status-watermark"
     rs_today="$(date +%Y-%m-%d 2>/dev/null || echo "")"
-    if [[ -n "$rs_today" && "$(cat "$rs_watermark" 2>/dev/null || echo "")" != "$rs_today" ]]; then
-        mkdir -p .fno 2>/dev/null; printf '%s\n' "$rs_today" >"$rs_watermark" 2>/dev/null || true
+    if [[ -d .fno && -n "$rs_today" && "$(cat "$rs_watermark" 2>/dev/null || echo "")" != "$rs_today" ]]; then
+        printf '%s\n' "$rs_today" >"$rs_watermark" 2>/dev/null || true
         ( fno do plan reconcile-status --apply >/dev/null 2>&1 & ) 2>/dev/null || true
     fi
     # Grooming fallback, for the codex/gemini path only: claude registers the
@@ -406,34 +430,14 @@ if command -v fno >/dev/null 2>&1; then
     # its own watermark makes a double invocation a no-op regardless.
     gsh_helper="${SCRIPT_DIR}/groom-self-heal-session-start.sh"
     [[ -f "$gsh_helper" ]] && ( bash "$gsh_helper" >/dev/null 2>&1 & ) 2>/dev/null || true
-    # Graph->doc mirror sweep: bare `plan sync` self-gates on graph.json mtime
-    # (one stat, cheap on no change), so no shell watermark; backgrounded + output
-    # discarded so it can never corrupt this hook's JSON.
+    # Graph->doc mirror sweep: bare `plan sync` self-gates on the store
+    # version (one version probe, cheap on no change), so no shell watermark;
+    # backgrounded + output discarded so it can never corrupt this hook's JSON.
     ( fno do plan sync >/dev/null 2>&1 & ) 2>/dev/null || true
 fi
 
 hydrate_state_provider_context
 
-record_combined_context() {
-    [[ -n "$CONTEXT_HOOK_INPUT" ]] || return 0
-    command -v uv >/dev/null 2>&1 || return 0
-    local output_file
-    output_file="$(mktemp "${TMPDIR:-/tmp}/fno-context-output.XXXXXX" 2>/dev/null || true)"
-    [[ -n "$output_file" ]] || return 0
-    printf '%s' "$combined" >"$output_file"
-    python3 "$PLUGIN_ROOT/cli/src/fno/context_observation.py" run-bounded \
-        --timeout "${FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS:-2}" -- \
-        uv run --project "$PLUGIN_ROOT/cli" python3 \
-        "$PLUGIN_ROOT/cli/src/fno/context_observation.py" direct \
-        --source-id session-start-combined \
-        --expected session-start-combined \
-        --carrier hooks/session-start.sh \
-        --input-file "$CONTEXT_HOOK_INPUT" \
-        --output-file "$output_file" \
-        --output-is-directive >/dev/null 2>&1 || true
-    rm -f "$output_file" 2>/dev/null || true
-}
-record_combined_context || true
 [[ -n "$CONTEXT_HOOK_INPUT" ]] && rm -f "$CONTEXT_HOOK_INPUT" 2>/dev/null || true
 
 # No context to inject — exit silently

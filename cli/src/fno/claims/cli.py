@@ -1,83 +1,44 @@
 """fno agents claim - Typer surface for the work-claim verbs.
 
-Exit codes:
-    0  success
-    1  ClaimHeldByOther, or acquire/refresh's own contention-retry
-       exhaustion (both mean "transient, caller should retry later"); also
-       `reap`'s own distinct overload of 1 - a reapable file's archive move
-       could not be confirmed on re-read (see `reap`'s own docstring, not a
-       retry signal)
-    2  validation / input error
-    3  ClaimCorrupted or ClaimGoneAway (race during operation)
-    4  HolderMismatch (release/refresh wrong holder)
-
-The structured output uses --json on each verb. Without --json, output is a
-human-friendly summary on stdout; errors always go to stderr.
-
-do provenance: why the claim verbs write it
--------------------------------------------
-A node's `do` lifecycle row used to be written only at a clean terminal
-(release --stamp-do, the finalize backstop, /execute Step 1.5). A session killed
-mid-phase reaches none of those, so the whole row was lost - including a
-started_at that sat in its claim file the entire time. A node finished to an
-open, green, attested PR read `sessions=[blueprint only]`, and a groom pass
-would have redone it.
-
-The claim is the one thing every worker touches at the start of work and again
-at its end, so the row is bound to the claim's own lifecycle:
-
-  acquire  -> OPEN the row (started_at = claim.acquired_at, no ended_at)
-  release  -> CLOSE it (--stamp-do fills ended_at on the same row)
-
-`append_session_record` completes a duplicate row by filling a timestamp the
-first write omitted and never overwrites one, so open-then-close collapses to a
-single row and a retried stamp is a no-op.
-
-Three constraints shape the rest:
-
-* Both reachable acquire paths must stamp. The CLI `acquire` verb (init's cold
-  start) and target-start's in-process `_reacquire_node_claim` takeover are
-  separate code paths; a stamp on one is decorative, since a session killed on
-  the other still loses its row.
-* The identity is the OWNED one, never the ambient env. `_owned_do_identity`
-  reads the harness the claim was pinned to (init passes the proven --harness)
-  and the session encoded in the holder, because ambient marker precedence would
-  launder an inherited foreign marker into the row. Acquire and release share it
-  so they always address the same row.
-* Acquiring is not doing. A caller that takes the claim as a serialization step
-  and only then validates can be refused after the row is open; it releases with
-  --rollback-do, which removes an open row whose started_at matches this claim.
-  A closed row, or one opened by an earlier real window under the same identity,
-  is never touched.
+Exit codes: 0 success; 1 held/contention retry exhaustion (also reap's own
+archive-confirm failure, a distinct overload of 1, not a retry signal); 2
+validation or input error; 3 corruption or race; 4 holder mismatch. The full
+table lives in docs/architecture/claim-verbs-do-provenance.md. Structured
+output uses --json on each verb; without it, output is a human-friendly
+summary on stdout and errors always go to stderr. The claim verbs also write
+the node's `do` provenance rows; that contract lives in the same doc.
 """
+
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
-from types import MappingProxyType
-from typing import List, Mapping, NamedTuple, Optional
+from typing import Callable, List, Mapping, NamedTuple, Optional
 
 import typer
 
+# The core callables are resolved THROUGH the module at call time, never
+# bound here: a module-level `from .core import acquire_claim` snapshot is
+# frozen at this module's first import, and a worker whose first import lands
+# while a test's core stub is active captures the stub permanently - every
+# later `claim acquire` then prints success and writes nothing (the
+# xdist-scheduling flake in test_dispatch_barrier; see the regression test in
+# test_claims_cli.py). Constants and exception classes are safe to bind: the
+# suite patches functions, not classes.
+from . import core as _claims_core
+from . import io as _claims_io
+from . import roster as _roster
 from .core import (
     HANDOVER_HOLDER_PREFIX as _HANDOVER_HOLDER_PREFIX,
-    ClaimContended,
-    ClaimCorrupted,
-    ClaimGoneAway,
-    ClaimHeldByOther,
-    ClaimValidationError,
-    HolderMismatch,
-    acquire_claim,
-    claim_status,
-    force_release_claim,
-    list_claims_with_counts,
-    reap_dead_claims,
-    refresh_claim,
-    release_claim,
+    ClaimState,
 )
-from .io import dedup_claims_roots, global_claims_root
 from fno.tombstones import tombstone_group_cls
+
+RosterReading = _roster.RosterReading
+_finished_row_states = _roster._finished_row_states
+classify_workers = _roster.classify_workers
+read_roster = _roster.read_roster
 
 
 cli = typer.Typer(
@@ -127,21 +88,21 @@ def _parse_metadata(value: str) -> dict:
 
 #: Seconds the roster cross-check may spend shelling out to the harness.
 #: A status read is interactive, so it must answer late-but-honestly
-#: ("roster not consulted") rather than hang a king mid-decision.
+#: ("roster not consulted") rather than hang a lead mid-decision.
 _ROSTER_CROSSCHECK_TIMEOUT_S = 10.0
 
 
 def _node_aware_root(key: str):
-    """Resolve the claims root for a key (delegates to the shared helper).
+    """Resolve the claims root for a key: the native leg's routing read.
 
     Global-id kinds (``node:``/``dispatch:``/``reconcile:``/``session:``) route to
     the global ``~/.fno/claims`` so operator commands work without the env var
-    (ab-fcf9cec5); repo-local keys keep the cwd/env default. See
-    :func:`fno.claims.io.claims_root_for` for the single source of truth.
+; repo-local keys keep the cwd/env default. The prefix list lives once, in
+    crates/fno-agents/src/claims_root.rs.
     """
-    from .io import claims_root_for
+    from .core import native_claims_root
 
-    return claims_root_for(key)
+    return native_claims_root(key)
 
 
 @cli.command()
@@ -163,7 +124,9 @@ def acquire(
         None, "--max-lanes", help="With --lane: concurrency cap (>=1; 1 == sequential)."
     ),
     reason: str = typer.Option("", "--reason", "-R", help="Optional rationale recorded in audit"),
-    ttl: str = typer.Option("", "--ttl", help="TTL expression like 30m, 1h, 3600s (omit => PID-liveness)"),
+    ttl: str = typer.Option(
+        "", "--ttl", help="TTL expression like 30m, 1h, 3600s (omit => PID-liveness)"
+    ),
     metadata: str = typer.Option("{}", "--metadata", help="JSON object passed verbatim"),
     pid: Optional[int] = typer.Option(
         None,
@@ -213,175 +176,79 @@ def acquire(
     is the same operation against a different claim space; it was a separate
     ``lane-acquire`` verb whose name was its own flag.
     """
+    return _forward_acquire(
+        key, holder, lane, max_lanes, reason, ttl, metadata, pid,
+        pid_unavailable, json_output, verbose, harness, handover_from,
+    )
+
+
+def _forward_acquire(
+    key, holder, lane, max_lanes, reason, ttl, metadata, pid,
+    pid_unavailable, json_output, verbose, harness, handover_from,
+) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct.
+
+    The wave-1 port moved the leaf's logic (validations, lane slot, the
+    handover rebind, the do stamp, output and exit codes) into
+    `crates/fno-agents/src/claim_cli/acquire.rs`; Python owns transport only,
+    per the dual-implementation protocol.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = []
+    if key is not None:
+        argv.append(key)
+    if holder:
+        argv.extend(("--holder", holder))
     if lane is not None:
-        if key is not None or max_lanes is None or holder:
-            typer.echo(
-                "validation error: --lane takes no KEY and no --holder, and "
-                "requires --max-lanes (a lane slot is acquired by lane id, not "
-                "by claim key)",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        _acquire_lane(lane=lane, max_lanes=max_lanes, ttl=ttl, json_output=json_output)
-        return
-    # --max-lanes is meaningless without --lane, and silently ignoring it is how
-    # someone migrating off `lane-acquire` gets an ordinary claim with the cap
-    # not enforced and nothing on stderr to say so.
+        argv.extend(("--lane", lane))
+    # A lone --max-lanes forwards too: the leaf owns the refusal (the cap
+    # flag without its lane mode must exit 2, never be silently dropped).
     if max_lanes is not None:
-        typer.echo(
-            "validation error: --max-lanes is the lane-slot cap and requires "
-            "--lane <id>",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    if key is None:
-        typer.echo("validation error: KEY is required (or use --lane <id>)", err=True)
-        raise typer.Exit(code=2)
-    if not holder:
-        typer.echo("validation error: --holder is required", err=True)
-        raise typer.Exit(code=2)
-    if pid_unavailable and pid is not None:
-        typer.echo(
-            "validation error: --pid and --pid-unavailable are mutually exclusive",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    parsed_ttl = _parse_ttl(ttl)
-    # ponytail: an omitted --pid used to anchor to the TRANSIENT acquiring process
-    # (a one-shot `fno agents claim acquire` from a shell dies ~1s later, so the claim went
-    # instantly STALE -- the footgun). Default instead to the durable session
-    # (nearest harness ancestor: claude/codex/gemini/opencode/agy) when one
-    # exists; degrade to the prior os.getpid() default when not (standalone use,
-    # plain-shell, no agent session). Reuses the exact walk init-target-state.sh
-    # already runs via `fno agents claim session-pid`.
-    if pid is None and not pid_unavailable:
-        try:
-            from .session_pid import resolve_session_pid
-            pid = resolve_session_pid()
-        except Exception:
-            pid = None  # degrade to acquire_claim's os.getpid() default
-        if pid is None and parsed_ttl is not None:
-            pid_unavailable = True
-    if pid_unavailable and parsed_ttl is None:
-        typer.echo("validation error: --pid-unavailable requires --ttl", err=True)
-        raise typer.Exit(code=2)
-    # A handover MOVES a live worker's claim, so it must not land on this
-    # CLI's transient pid: compare_and_rebind would anchor the node to a
-    # process that exits seconds later and the claim reads STALE, reopening
-    # the exact pid-ambiguity gap the marker scheme closes. The plain
-    # acquire below keeps its documented os.getpid() fallback for standalone
-    # use; only the handover refuses.
-    if handover_from and key and pid is None and not pid_unavailable:
-        typer.echo(
-            "validation error: --handover-from needs a durable pid (run from "
-            "a harness session) or --pid-unavailable with --ttl; the transient "
-            "CLI pid would leave the claim STALE the moment it exits",
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    # The handover runs FIRST and is strictly additive: it either moves a claim
-    # whose prior holder the caller named exactly, or it declines and the
-    # ordinary acquire below runs unchanged. Declining covers every case that is
-    # not this handover - no claim on disk, a free key, a different holder - and
-    # acquire then applies its own rules, including refusing a live foreign
-    # claim. So a wrong or stale --handover-from never widens what can be taken.
-    if handover_from and key:
-        from .core import RebindRefused, compare_and_rebind
-
-        try:
-            claim, mode = compare_and_rebind(
-                key,
-                handover_from,
-                new_holder=holder,
-                # The claim changes OWNER, so it must stop describing the
-                # spawner. The init hook passes a PROVEN harness precisely so a
-                # session that inherited a foreign marker does not mislabel its
-                # claim, and silently keeping the spawner's tag would defeat it.
-                new_reason=reason or None,
-                new_harness=harness,
-                # --metadata means the same thing on both acquire paths. It was
-                # silently dropped here, so one flag behaved differently
-                # depending on on-disk state the caller cannot see.
-                new_metadata=_parse_metadata(metadata) or None,
-                new_pid=pid,
-                ttl_ms=parsed_ttl,
-                new_pid_unavailable=pid_unavailable,
-                root=_node_aware_root(key),
-            )
-        except RebindRefused:
-            pass
-        else:
-            # The MODE decides, not the absence of an exception. A rebind that
-            # declined the rename returns `idempotent` with the prior holder
-            # still on the claim, and reporting that as `acquired` exits 0 while
-            # somebody else holds the key. Fall through to the ordinary acquire,
-            # which applies its own rules and refuses a live foreign claim.
-            if mode == "handover":
-                # STAMP HERE TOO. The stamp below sits at what its own comment
-                # calls the one choke point every acquire path reaches, and this
-                # return was a second path around it. It is now the DEFAULT path
-                # for every `fno agents spawn --node` worker, so without this a
-                # worker killed mid-phase leaves no do row at all - the exact
-                # loss the acquire-side stamp exists to prevent.
-                if key.startswith("node:"):
-                    _stamp_do_on_acquire(key, claim, holder)
-                typer.echo(
-                    # to_yaml_dict, matching the ordinary acquire below. One
-                    # --json flag must not return two schemas chosen by on-disk
-                    # state the caller cannot see, and this is now the default
-                    # path for every node-driven spawn.
-                    json.dumps(claim.to_yaml_dict())
-                    if json_output
-                    else f"acquired {key} (handover from {handover_from})"
-                )
-                return
-    try:
-        claim = acquire_claim(
-            key=key,
-            holder=holder,
-            reason=reason or None,
-            ttl_ms=parsed_ttl,
-            metadata=_parse_metadata(metadata),
-            pid=pid,
-            pid_unavailable=pid_unavailable,
-            harness=harness,
-            root=_node_aware_root(key),
-        )
-    except ClaimValidationError as exc:
-        typer.echo(f"validation error: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except ClaimHeldByOther as exc:
-        typer.echo(
-            f"claim {key!r} held by {exc.holder} (pid={exc.pid}, host={exc.host})",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-    except (ClaimCorrupted, ClaimGoneAway) as exc:
-        typer.echo(f"transient error: {exc}", err=True)
-        raise typer.Exit(code=3)
-    except ClaimContended as exc:
-        # acquire_claim's own contention-retry-exhaustion guard: same
-        # "caller should retry later" semantic as ClaimHeldByOther, so it
-        # gets the same exit code rather than an uncaught traceback.
-        typer.echo(f"contention error: {exc}", err=True)
-        raise typer.Exit(code=1)
-
-    # do provenance opens at acquire - the one choke point a session killed
-    # mid-phase still reaches (release/finalize fire only on a clean terminal).
-    # started_at from this claim's own acquire time; ended_at stays open for the
-    # release path to fill. Best-effort and node-keyed, mirroring the release
-    # stamp's contract. A caller that acquires as a serialization step before
-    # its own validation (init's post-claim check-contained) can still be
-    # refused after this row is open, so it rolls the row back on that path via
-    # `release --rollback-do` - the stamp stays here, at the one choke point
-    # every acquire path reaches, rather than being deferred per caller.
-    if key.startswith("node:"):
-        _stamp_do_on_acquire(key, claim, holder)
-
+        argv.extend(("--max-lanes", str(max_lanes)))
+    if reason:
+        argv.extend(("--reason", reason))
+    if ttl:
+        argv.extend(("--ttl", ttl))
+    argv.extend(("--metadata", metadata))
+    if pid is not None:
+        argv.extend(("--pid", str(pid)))
+    if pid_unavailable:
+        argv.append("--pid-unavailable")
     if json_output:
-        typer.echo(json.dumps(claim.to_yaml_dict()))
-    else:
-        typer.echo(f"acquired: {key} (holder={holder}, pid={claim.pid})")
+        argv.append("--json")
+    if verbose:
+        argv.append("--verbose")
+    if harness is not None:
+        argv.extend(("--harness", harness))
+    if handover_from is not None:
+        argv.extend(("--handover-from", handover_from))
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno agents claim acquire: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "claim", "acquire", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 @cli.command()
@@ -406,23 +273,27 @@ def release(
             "takes no --holder."
         ),
     ),
-    reason: str = typer.Option("", "--reason", "-R", help="With --force: required audit rationale."),
+    reason: str = typer.Option(
+        "", "--reason", "-R", help="With --force: required audit rationale."
+    ),
     strict: bool = typer.Option(False, "--strict", help="Raise if holder does not match"),
     stamp_do: bool = typer.Option(
-        False, "--stamp-do",
-        help="Stamp a do provenance row (started_at from this claim's acquire time, "
-             "ended_at now). Set ONLY by a session releasing its OWN node claim at a "
-             "finished terminal - never a handoff, which runs under a successor's "
-             "identity and would mis-attribute the predecessor's window.",
+        False,
+        "--stamp-do",
+        help="Stamp a execute provenance row (started_at from this claim's acquire time, "
+        "ended_at now). Set ONLY by a session releasing its OWN node claim at a "
+        "finished terminal - never a handoff, which runs under a successor's "
+        "identity and would mis-attribute the predecessor's window.",
     ),
     rollback_do: bool = typer.Option(
-        False, "--rollback-do",
-        help="Remove the open do provenance row this claim's acquire opened. Set "
-             "by a releaser whose POST-ACQUIRE validation refused it: it took the "
-             "claim only to serialize, did no work, and must not leave the node "
-             "reading as in progress. Only an open row (no ended_at) whose "
-             "started_at matches this claim is removed. Mutually exclusive with "
-             "--stamp-do.",
+        False,
+        "--rollback-do",
+        help="Remove the open execute provenance row this claim's acquire opened. Set "
+        "by a releaser whose POST-ACQUIRE validation refused it: it took the "
+        "claim only to serialize, did no work, and must not leave the node "
+        "reading as in progress. Only an open row (no ended_at) whose "
+        "started_at matches this claim is removed. Mutually exclusive with "
+        "--stamp-do.",
     ),
     json_output: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
@@ -432,106 +303,78 @@ def release(
     the default releases a claim we hold, ``--lane <id>`` releases a lane slot,
     and ``--force`` drops a claim regardless of owner.
     """
-    # A flag that belongs to another mode is REFUSED, never ignored. Silently
-    # dropping `--stamp-do` on the force path (or `--reason` on the plain one)
-    # loses exactly the provenance the flag was passed to record, and the caller
-    # gets exit 0 saying it worked.
+    return _forward_release(
+        key, holder, lane, force, reason, strict, stamp_do, rollback_do, json_output
+    )
+
+
+def _forward_release(
+    key, holder, lane, force, reason, strict, stamp_do, rollback_do, json_output
+) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct.
+
+    The wave-2 port moved the leaf's logic (the mode-validation matrix, the
+    do-row close/rollback, lane and force release, output and exit codes)
+    into `crates/fno-agents/src/claim_cli/release.rs`; Python owns transport
+    only, per the dual-implementation protocol.
+    """
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = []
+    if key is not None:
+        argv.append(key)
+    if holder:
+        argv.extend(("--holder", holder))
     if lane is not None:
-        if key is not None or force or holder or strict or stamp_do or rollback_do or reason:
-            typer.echo(
-                "validation error: --lane takes only the lane id (no KEY, and "
-                "none of --force/--holder/--strict/--reason/--stamp-do/"
-                "--rollback-do): a lane slot has no owner and no do window",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        _release_lane(lane=lane, json_output=json_output)
-        return
-    if key is None:
-        typer.echo("validation error: KEY is required (or use --lane <id>)", err=True)
-        raise typer.Exit(code=2)
-    if reason and not force:
-        typer.echo(
-            "validation error: --reason records the --force override and has no "
-            "effect on an ordinary release",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+        argv.extend(("--lane", lane))
     if force:
-        if strict or stamp_do or rollback_do:
-            typer.echo(
-                "validation error: --force is the administrative drop and takes "
-                "none of --strict/--stamp-do/--rollback-do (there is no owner to "
-                "check and no do window to stamp)",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        if holder:
-            typer.echo(
-                "validation error: --force drops the claim regardless of owner, "
-                "so --holder is meaningless with it",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        if not reason:
-            typer.echo(
-                "validation error: --force requires --reason (the override is "
-                "recorded in the audit trail)",
-                err=True,
-            )
-            raise typer.Exit(code=2)
-        _force_release(key=key, reason=reason, json_output=json_output)
-        return
-    if not holder:
-        typer.echo("validation error: --holder is required (or use --force)", err=True)
-        raise typer.Exit(code=2)
-    if stamp_do and rollback_do:
+        argv.append("--force")
+    if reason:
+        argv.extend(("--reason", reason))
+    if strict:
+        argv.append("--strict")
+    if stamp_do:
+        argv.append("--stamp-do")
+    if rollback_do:
+        argv.append("--rollback-do")
+    if json_output:
+        argv.append("--json")
+    binary = resolve_binary()
+    if binary is None:
         typer.echo(
-            "validation error: --stamp-do and --rollback-do are mutually "
-            "exclusive (one records a finished do window, the other removes a "
-            "row for work that never ran)",
+            "fno agents claim release: the fno-agents binary was not found. "
+            "It ships in the `pip install fno` wheel and with the plugin; "
+            "reinstall fno or run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN to its path.",
             err=True,
         )
-        raise typer.Exit(code=2)
-    try:
-        released = release_claim(
-            key=key, holder=holder, strict=strict, root=_node_aware_root(key)
-        )
-    except HolderMismatch as exc:
-        typer.echo(f"holder mismatch: {exc}", err=True)
-        raise typer.Exit(code=4)
-    except ClaimValidationError as exc:
-        typer.echo(f"validation error: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except (ClaimCorrupted, ClaimGoneAway) as exc:
-        typer.echo(f"transient error: {exc}", err=True)
-        raise typer.Exit(code=3)
-
-    # do provenance: the third choke point (ship=pr_number, blueprint=plan_path,
-    # do=claim release). started_at from the claim's own acquire time, ended_at
-    # at the release instant - a true per-session hold window, not the
-    # stamp-fire time. The --stamp-do gate means only a session releasing its
-    # own claim (the finished-terminal path) records it.
-    if released is not None and key.startswith("node:"):
-        if stamp_do:
-            _stamp_do_on_release(key, released, holder)
-        elif rollback_do:
-            _rollback_do_on_release(key, released, holder)
-
-    if json_output:
-        typer.echo(json.dumps({"key": key, "released": True}))
-    else:
-        typer.echo(f"released: {key}")
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer: the leaf's output IS the
+    # operator surface, and a CliRunner-hosted caller (the tests) must see it.
+    result = subprocess.run(
+        [str(binary), "claim", "release", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 def _owned_do_identity(claim, holder: str) -> "tuple[str, str, str | None]":
-    """Resolve the (harness, session_id) a do provenance row should be written
+    """Resolve the (harness, session_id) a execute provenance row should be written
     under: the OWNED identity, not the ambient env.
 
     The harness the claim was pinned to (init passes the proven --harness;
     ``claim.harness`` carries it) and the session encoded in the holder
     (``target-session:<id>``). Ambient marker precedence would launder an
-    inherited foreign marker into the row (x-0bb9), so ambient is only a
+    inherited foreign marker into the row, so ambient is only a
     fallback when the owned values are absent. Shared by the acquire and
     release stamps so they always agree on the row key - release must fill the
     row acquire opened, not open a second one."""
@@ -545,6 +388,7 @@ def _owned_do_identity(claim, holder: str) -> "tuple[str, str, str | None]":
     if not session_id:
         session_id = (ident.session_id or "").strip()
     return harness, session_id, _owned_registry_effort(harness, session_id)
+
 
 
 def _do_row_coordinates(key: str, claim, holder: str, action: str):
@@ -562,16 +406,16 @@ def _do_row_coordinates(key: str, claim, holder: str, action: str):
     harness, session_id, effort = _owned_do_identity(claim, holder)
     if not harness or not session_id:
         typer.echo(
-            f"claim {action}: no owned identity for the do provenance row of "
+            f"claim {action}: no owned identity for the execute provenance row of "
             f"{node_id}; the row is skipped. Skipped.",
             err=True,
         )
         return None
     from datetime import datetime, timezone
 
-    started = datetime.fromtimestamp(
-        claim.acquired_at / 1000, tz=timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    started = datetime.fromtimestamp(claim.acquired_at / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     return node_id, harness, session_id, started, effort
 
 
@@ -592,7 +436,7 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
     pinned to (init passes the proven --harness; ``claim.harness`` carries it)
     and the session encoded in the holder (``target-session:<id>``). Ambient
     marker precedence would launder an inherited foreign marker into the row
-    (x-0bb9), so it is only a fallback when the owned values are absent.
+, so it is only a fallback when the owned values are absent.
 
     Two reachable acquire paths both call this: the CLI ``claim acquire`` verb
     (the init-script cold start) and ``_reacquire_node_claim`` (a target-start
@@ -617,13 +461,13 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
     node_id, harness, session_id, started, effort = coords
     try:
         found, _added = append_session_record(
-            graph_json(), node_id, phase="do",
+            graph_json(), node_id, phase="execute",
             harness=harness, session_id=session_id,
             started_at=started, effort=effort,
         )
     except (Exception, SystemExit) as exc:
         typer.echo(
-            f"claim acquire: do provenance open skipped for {node_id}: {exc}",
+            f"claim acquire: execute provenance open skipped for {node_id}: {exc}",
             err=True,
         )
         return
@@ -633,101 +477,8 @@ def _stamp_do_on_acquire(key: str, claim, holder: str) -> None:
     # the operator knows provenance was not opened, not silently dropped.
     if not found:
         typer.echo(
-            f"claim acquire: do provenance open skipped for {node_id} "
+            f"claim acquire: execute provenance open skipped for {node_id} "
             f"(node not in graph); the row was not written. Skipped.",
-            err=True,
-        )
-
-
-def _stamp_do_on_release(key: str, claim, holder: str) -> None:
-    """Close the do lifecycle row for the session that just released a node
-    claim: fills ended_at (started_at already set at acquire). Best-effort: a
-    graph failure or missing identity is a named stderr skip and never fails
-    the release. Uses the same owned identity as the acquire stamp
-    (``_owned_do_identity``) so it fills the row acquire opened rather than
-    opening a second one when ambient and owned diverge."""
-    from datetime import datetime, timezone
-
-    from fno.graph.store import append_session_record
-    from fno.paths import graph_json
-
-    coords = _do_row_coordinates(key, claim, holder, "release")
-    if coords is None:
-        return
-    node_id, harness, session_id, started, effort = coords
-    ended = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    try:
-        found, _added = append_session_record(
-            graph_json(), node_id, phase="do",
-            harness=harness, session_id=session_id,
-            started_at=started, ended_at=ended, effort=effort,
-        )
-    except (Exception, SystemExit) as exc:
-        typer.echo(
-            f"claim release: do provenance stamp skipped for {node_id}: {exc}",
-            err=True,
-        )
-        return
-    # append_session_record returns (found=False, added=False) without raising
-    # when the node id is absent from the graph (a superseded node whose claim
-    # file lingers). The named-skip contract requires an explicit stderr line
-    # so the operator knows provenance was lost, not silently dropped.
-    if not found:
-        typer.echo(
-            f"claim release: do provenance stamp skipped for {node_id} "
-            f"(node not in graph); the row was not written. Skipped.",
-            err=True,
-        )
-
-
-def _rollback_do_on_release(key: str, claim, holder: str) -> None:
-    """Drop the open do row this claim's acquire opened, for a worker whose
-    post-acquire validation refused it.
-
-    Acquiring is not doing. ``fno do target init`` takes the claim purely as a
-    serialization point and only then re-runs its containment gate; a worker
-    refused there releases without ``--stamp-do`` because it must not proceed -
-    but the acquire stamp had already opened its row, leaving the node reading
-    as permanently in progress for work nobody performed.
-
-    The removal is guarded in the graph primitive, not here: only an OPEN row
-    (no ended_at) whose started_at equals this claim's acquire time is dropped,
-    so a real earlier window under the same identity survives. Best-effort and
-    named on skip, matching the two stamps - a rollback failure must not turn a
-    refusal into a crash."""
-    from fno.graph.store import remove_open_session_record
-    from fno.paths import graph_json
-
-    coords = _do_row_coordinates(key, claim, holder, "release --rollback-do")
-    if coords is None:
-        return
-    node_id, harness, session_id, started, _effort = coords
-    try:
-        found, removed = remove_open_session_record(
-            graph_json(), node_id, phase="do",
-            harness=harness, session_id=session_id,
-            started_at=started,
-        )
-    except (Exception, SystemExit) as exc:
-        typer.echo(
-            f"claim release: do provenance rollback skipped for {node_id}: {exc}",
-            err=True,
-        )
-        return
-    if not found:
-        typer.echo(
-            f"claim release: do provenance rollback skipped for {node_id} "
-            f"(node not in graph); nothing was removed. Skipped.",
-            err=True,
-        )
-    elif not removed:
-        # Not an error: the acquire stamp itself may have been skipped (no owned
-        # identity, node absent at the time), or the row is a closed window this
-        # rollback must not touch. Say which outcome happened rather than let
-        # silence read as "the open row was removed".
-        typer.echo(
-            f"claim release: no open do row to roll back for {node_id} "
-            f"(none was opened, or the row is already closed).",
             err=True,
         )
 
@@ -740,151 +491,52 @@ def refresh(
     json_output: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
     """Extend a TTL claim's expires_at. No-op for PID-liveness claims."""
-    try:
-        result = refresh_claim(key=key, holder=holder, ttl_ms=_parse_ttl(ttl), root=_node_aware_root(key))
-    except HolderMismatch as exc:
-        typer.echo(f"holder mismatch: {exc}", err=True)
-        raise typer.Exit(code=4)
-    except ClaimGoneAway as exc:
-        typer.echo(f"claim missing: {exc}", err=True)
-        raise typer.Exit(code=3)
-    except ClaimValidationError as exc:
-        typer.echo(f"validation error: {exc}", err=True)
-        raise typer.Exit(code=2)
-    except ClaimCorrupted as exc:
-        typer.echo(f"corrupted claim: {exc}", err=True)
-        raise typer.Exit(code=3)
-    except ClaimContended as exc:
-        # refresh_claim's own contention-retry-exhaustion guard; same exit
-        # code as acquire's, both mean "transient, caller should retry".
-        typer.echo(f"contention error: {exc}", err=True)
-        raise typer.Exit(code=1)
+    return _forward_refresh(key, holder, ttl, json_output)
 
-    if result is None:
-        if json_output:
-            typer.echo(json.dumps({"key": key, "refreshed": False, "reason": "pid_liveness"}))
-        else:
-            typer.echo(f"no-op for PID-liveness claim: {key}")
-        return
 
+def _forward_refresh(
+    key, holder, ttl, json_output,
+) -> None:
+    """Forward to the bundled fno-agents binary, binary-direct. The wave-3
+    port put the leaf's logic in crates/fno-agents/src/claim_cli/refresh.rs
+    (Python owns transport only, per the dual-implementation protocol)."""
+    import subprocess
+
+    from fno._subprocess_util import propagate_returncode
+    from fno.rust_binary import resolve_binary
+
+    argv = [key, "--holder", holder]
+    if ttl:
+        argv.extend(("--ttl", ttl))
     if json_output:
-        typer.echo(json.dumps(result.to_yaml_dict()))
-    else:
-        typer.echo(f"refreshed: {key} (new expires_at={result.expires_at})")
+        argv.append("--json")
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo(
+            "fno agents claim refresh: the fno-agents binary was not found "
+            "(reinstall fno, run `fno doctor update --rust`, or set "
+            "FNO_AGENTS_BIN).",
+            err=True,
+        )
+        raise typer.Exit(code=127)
+    # Captured and re-emitted through typer (a CliRunner caller must see it).
+    result = subprocess.run(
+        [str(binary), "claim", "refresh", *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.stdout:
+        typer.echo(result.stdout.rstrip("\n"))
+    if result.stderr:
+        typer.echo(result.stderr.rstrip("\n"), err=True)
+    raise typer.Exit(code=propagate_returncode(result.returncode))
 
 
 #: States in which nobody holds the key, so a reader is about to conclude the
 #: node is free for the taking. ``suspect`` is absent on purpose: a dead pid
 #: inside its TTL still protects the slot and already reads as held.
 _UNHELD_STATES = frozenset({"free", "stale"})
-
-
-class RosterReading(NamedTuple):
-    """One reading of the fleet roster, reusable across many claims.
-
-    ``consulted`` is the honest instrument flag: False means the join could not
-    run, and ``reason`` says why. ``rows_scanned`` is the positive marker - a
-    scan of forty rows finding nobody is a different answer from a read that
-    failed, and rendering both the same way is how this defect would survive its
-    own fix. ``workers_by_node`` maps a resolved node id to the rows on it, and
-    ``rows_by_session`` maps a session id to its own row.
-
-    Taken ONCE and passed down. The read shells out to the harness, so a sweep
-    over sixty claims that took its own reading each time would pay sixty
-    subprocesses to answer one question.
-
-    WHAT THIS READING CANNOT SEE, and it decides how the probe below is allowed
-    to use it. ``fleet_rows`` enumerates ``claude agents --json --all`` and drops
-    ``kind == "interactive"``. So a codex or opencode worker, and any
-    hand-started session, has NO row here by construction. An empty
-    ``workers_on`` therefore means "not in this reading", never "nobody is
-    working that node".
-    """
-
-    consulted: bool
-    rows_scanned: int
-    workers_by_node: dict
-    reason: str = ""
-    # An immutable default, not a bare `{}`. A NamedTuple's default is built
-    # once and shared by every instance that omits it, so a plain dict here is
-    # one caller's `setdefault` away from leaking rows between readings.
-    rows_by_session: Mapping = MappingProxyType({})
-    rows_unresolved: int = 0
-    unresolved_rows: tuple = ()
-
-    def workers_on(self, node_id: str) -> list:
-        return self.workers_by_node.get(node_id, [])
-
-    def row_for_session(self, session_id: str):
-        return self.rows_by_session.get(session_id)
-
-
-def read_roster(timeout: float = 10.0) -> RosterReading:
-    """Read the fleet once and index it by resolved node id.
-
-    The join is :func:`fno.agents.watchdog.fleet_rows`, which resolves a row's
-    node from the worktree manifest and then the session-keyed ledger - both
-    machine-written. Never a name regex: eight auto-named workers read as
-    nobody-on-this-node on 2026-08-15 and were nearly double-dispatched, which
-    is recorded in that module's header.
-
-    Distinguishing "scanned and found nothing" from "could not scan" is the
-    whole point, so the degrade signal is explicit rather than inferred from an
-    empty index. ``fleet_rows`` returns ``([], warnings)`` for every failure
-    mode, so no rows PLUS a warning is an instrument that did not run, while no
-    rows and no warning is an honestly empty fleet.
-
-    A row whose node did not resolve carries ``node=None`` and is invisible
-    here - exactly the shape of a worker that never ran ``target init``. The
-    scanned count is the honest ceiling on what was checked, which is why every
-    caller prints it rather than just the hits.
-    """
-    try:
-        from fno.agents.watchdog import fleet_rows
-
-        rows, warnings = fleet_rows(timeout=timeout)
-    except Exception as exc:  # noqa: BLE001 - any failure must degrade loudly
-        return RosterReading(False, 0, {}, f"{type(exc).__name__}: {exc}")
-    # A warning degrades this reading UNLESS it marks itself advisory. The
-    # default has to be "do not trust", because a warning nobody anticipated is
-    # exactly the one that must not be waved through - and an instrument failure
-    # ("claude not on PATH") arrives as a plain warning with zero rows.
-    #
-    # Naming the harmless ones instead got this wrong twice. First only the
-    # latency notice was excused, so the two `unmapped row state` notices still
-    # threw away a listing whose rows were all present: one status spelling
-    # claude had not shipped before printed "roster not consulted" forever and
-    # answered None for every SUSPECT claim, and nothing was ever reaped again.
-    # Then the inverse blanket excused the instrument failure too.
-    from fno.agents.watchdog import ADVISORY_WARNING_PREFIX
-
-    blocking = [w for w in warnings if not w.startswith(ADVISORY_WARNING_PREFIX)]
-    if blocking:
-        # Still the absence-as-evidence rule: a truncated scan is never
-        # authoritative, and reporting it as one is the move this cross-check
-        # exists to delete, one layer up.
-        return RosterReading(False, 0, {}, blocking[0])
-    index: dict = {}
-    by_session: dict = {}
-    unresolved: list[dict] = []
-    for r in rows:
-        entry = {
-            "name": r.name,
-            "state": r.state,
-            "cwd": r.cwd,
-            # The session id travels with the row so a reader can ask the
-            # TRANSCRIPT whether a finished-looking row really finished.
-            "row_id": str(r.row_id or ""),
-        }
-        if r.node:
-            index.setdefault(r.node, []).append(entry)
-        else:
-            unresolved.append(entry)
-        if r.row_id:
-            by_session[str(r.row_id)] = entry
-    return RosterReading(
-        True, len(rows), index, "", by_session, len(unresolved), tuple(unresolved)
-    )
 
 
 def _roster_crosscheck(node_id: str, reading: Optional[RosterReading] = None) -> dict:
@@ -904,40 +556,22 @@ def _roster_crosscheck(node_id: str, reading: Optional[RosterReading] = None) ->
             "roster_skip_reason": reading.reason,
         }
     candidates = [
-        row["name"]
-        for row in reading.unresolved_rows
-        if Path(row.get("cwd") or "").name == node_id
+        row["name"] for row in reading.unresolved_rows if Path(row.get("cwd") or "").name == node_id
     ]
-    return {
+    payload = {
         "roster_consulted": True,
         "roster_rows_scanned": reading.rows_scanned,
         "roster_rows_unresolved": reading.rows_unresolved,
         "roster_unresolved_candidates": candidates,
+        # Additive display only: occupancy itself is decided by the overlay
+        # join below, which also sees rows this node-attributed fold misses.
         "roster_workers": reading.workers_on(node_id),
     }
-
-
-def _finished_row_states() -> frozenset:
-    """Roster row states that mean the session is no longer driving the node.
-
-    ONE authority, the watchdog's own terminal set, because this file carried
-    two hand-written copies that both read ``{"done"}``. A ``killed`` row then
-    counted as an engaged worker: the cross-check called the node worked, and
-    the abandonment probe answered "the holder is still working", so the claim
-    was never reaped and the operator was told a live worker held it.
-
-    ``done`` is not terminal for the SESSION (it is resumable), but it is the
-    positive marker that this worker stopped working, which is the only thing
-    either caller needs to know.
-    """
-    from fno.agents.watchdog import _TERMINAL_STATES, _WAKE_STATES
-
-    # DERIVED from both authorities, never hand-listed. `_TERMINAL_STATES`
-    # holds `stopped`, and `_WAKE_STATES` holds it too: the watchdog will WAKE a
-    # stopped worker, so its claim is not abandoned and reaping it hands a
-    # returnable session's node to somebody else. The difference is the set that
-    # means gone for good, and it cannot drift from either source.
-    return _TERMINAL_STATES - _WAKE_STATES
+    if reading.reason:
+        # The live probe degraded to the registry-only view and was tolerated:
+        # name it, so the payload never reads as a full-fleet answer.
+        payload["roster_probe"] = reading.reason
+    return payload
 
 
 def _roster_verdict_line(info: dict) -> str:
@@ -946,11 +580,13 @@ def _roster_verdict_line(info: dict) -> str:
     Each string is produced by exactly one outcome, so a caller asserts a
     positive marker instead of grepping for the absence of the word free - an
     absence has two explanations and cannot tell them apart, which is the
-    defect this whole cross-check exists to remove.
+    defect this whole cross-check exists to remove. One rider: the
+    finished-session clause rides any outcome it can coexist with.
 
-    Four outcomes, not three: a node whose only roster rows are finished
+    Five outcomes, not three: a node whose only roster rows are finished
     sessions is genuinely unworked, and printing the live-worker alarm for it
-    would train every reader to ignore the alarm.
+    would train every reader to ignore the alarm; and rows the predicate
+    could not date read UNKNOWN, never live-by-default.
     """
     # The claim's OWN state, never the hardcoded word free. The cross-check runs
     # for every unheld state, and `stale` is one of them, so a line saying free
@@ -960,34 +596,55 @@ def _roster_verdict_line(info: dict) -> str:
     if not info.get("roster_consulted"):
         return f"{state}, roster not consulted ({info.get('roster_skip_reason', 'unknown')})"
     workers = info.get("roster_workers") or []
-    finished = _finished_row_states()
 
-    def _really_finished(w: dict) -> bool:
-        # The row narrows, and the transcript may OVERRULE it - one direction
-        # only. The roster called a WORKING session done on 2026-08-15, which is
-        # why `_TERMINAL_STATES` carries its own warning, so a transcript that
-        # is positively still moving beats a row that says done.
-        #
-        # An UNREADABLE transcript leaves the row's answer standing, which is
-        # the opposite of what the reap probe does with the same reading. The
-        # asymmetry is deliberate and it follows the cost: a wrong reap archives
-        # a live worker's claim, while a wrong line here is an alarm on a node
-        # nobody is on - and an alarm that fires on every finished session whose
-        # transcript has aged out is the permanent noise that teaches operators
-        # to ignore the alarm entirely.
-        if w.get("state") not in finished:
-            return False
-        return _transcript_activity(w.get("row_id") or "", w.get("cwd") or "") is not False
+    # The overlay join is the occupancy authority, and its answer arrives as
+    # `worked_by`: rows it resolved through the graph's own session ids, a set
+    # the node-attributed `roster_workers` fold cannot see.
+    worked_by = info.get("worked_by") or []
+    if worked_by:
+        line = f"UNCLAIMED but a live worker is on this node: {', '.join(worked_by)}"
+        unresolved = info.get("roster_rows_unresolved", 0)
+        if unresolved:
+            # task 2.1: the verdict is only as good as its coverage,
+            # so the engaged line names the fraction too.
+            scanned = info.get("roster_rows_scanned", 0)
+            line += f"; coverage degraded: {unresolved} of {scanned} rows unresolved"
+        return line
 
-    engaged = [w for w in workers if not _really_finished(w)]
+    engaged, unmeasurable, _verdicts = classify_workers(workers)
     if engaged:
         rendered = ", ".join(f"{w['name']} (state={w['state']})" for w in engaged)
-        return f"UNCLAIMED but a live worker is on this node: {rendered}"
+        line = f"UNCLAIMED but a live worker is on this node: {rendered}"
+        unresolved = info.get("roster_rows_unresolved", 0)
+        if unresolved or unmeasurable:
+            scanned = info.get("roster_rows_scanned", 0)
+            line += (
+                f"; coverage degraded: {unresolved} of {scanned} rows unresolved"
+                + (f", {len(unmeasurable)} undated" if unmeasurable else "")
+            )
+        return line
+    if unmeasurable:
+        rendered = ", ".join(f"{w['name']} (state={w['state']})" for w in unmeasurable)
+        return (
+            f"{state}, no positively-live worker; {len(unmeasurable)} row(s) "
+            f"unmeasured, never live: {rendered}. "
+            f"Confirm with: fno agents peek {unmeasurable[0]['name']}"
+        )
+    # Two ways a row reads finished: the predicate said so (it is still in
+    # `workers`), or the session closed its own phase row on this node and the
+    # display field dropped it. The clause is built HERE, above the unresolved
+    # branch, because that branch returns and used to leave it unreachable: a
+    # node whose only row was a closed session read "no row resolved to this
+    # node" over a payload naming that row under `roster_closed_workers`.
+    finished = [w["name"] for w in workers] + list(info.get("roster_closed_workers") or [])
+    tail = ""
+    if finished:
+        tail = f"; {len(finished)} finished session(s) resolved to it: {', '.join(finished)}"
     unresolved = info.get("roster_rows_unresolved", 0)
     if unresolved:
         scanned = (
             f"{state}, no row resolved to this node "
-            f"({info['roster_rows_scanned']} scanned, {unresolved} unresolved)"
+            f"({info['roster_rows_scanned']} scanned, {unresolved} unresolved){tail}"
         )
         candidates = info.get("roster_unresolved_candidates") or []
         if candidates:
@@ -996,15 +653,30 @@ def _roster_verdict_line(info: dict) -> str:
                 f"{scanned}; {len(candidates)} unresolved row's worktree names this node: "
                 f"{names}. Confirm with: fno agents peek {candidates[0]}"
             )
-        return scanned
-    scanned = (
-        f"{state}, no live worker found "
-        f"(roster scanned: {info['roster_rows_scanned']} rows)"
-    )
-    if workers:
-        rendered = ", ".join(w["name"] for w in workers)
-        return f"{scanned}; {len(workers)} finished session(s) resolved to it: {rendered}"
-    return scanned
+        # Degraded, not complete: the reader must be able to tell "nobody
+        # holds this and the roster was patchy" from "nobody holds this and
+        # the roster was complete", which both used to render as plain free.
+        return f"{scanned}; roster coverage degraded"
+    scanned = f"{state}, no live worker found (roster scanned: {info['roster_rows_scanned']} rows)"
+    return f"{scanned}{tail}"
+
+
+def _expiry_clause(info: dict) -> str:
+    """One stderr line when a live holder's TTL lapsed : the word live
+    alone cannot tell a fresh lease from one that lapsed an hour ago. Empty
+    for every non-live state - "holder live by" would lie about stale."""
+    if info.get("expired") is not True or info.get("state") != "live":
+        return ""
+    from .types import now_ms
+
+    expires_at = info.get("expires_at")
+    if isinstance(expires_at, (int, float)):
+        mins = max(0, int((now_ms() - expires_at) / 60_000))
+        age = f"{mins}m ago"
+    else:
+        age = "unknown age"
+    basis = info.get("basis") or "live"
+    return f"live (ttl expired {age}; holder live by {basis})"
 
 
 @cli.command()
@@ -1021,32 +693,125 @@ def status(
         ),
     ),
 ) -> None:
-    """Inspect a single claim. Exit code reflects state for scripting.
+    """Inspect a single claim.
 
     On a ``node:<id>`` key that nobody holds, the roster is cross-checked
     before the answer is rendered. ``free`` had two explanations the output
     could not tell apart - nobody is working this, and the claim never got
-    taken - and four kings read the first while getting the second, then
+    taken - and four leads read the first while getting the second, then
     staffed a duplicate onto a node that already had a live worker on it.
 
     Only ``node:`` keys, because only they have a fleet to cross-check
     against. Every other key renders exactly as before.
 
-    Callers parsing the JSON keep reading ``state``; the roster fields are
-    additive and only appear when the cross-check applies.
+    Callers parsing the JSON keep reading ``state``; roster fields are additive and only appear when the cross-check applies.
 
-    ``--no-roster`` exists for one shape of caller: a hot path that reads only
-    the claim record. ``hooks/claim-heartbeat.sh`` runs on tool calls and reads
+    ``--no-roster`` exists for one shape of caller: a hot path that reads only the
+    claim record. ``hooks/claim-heartbeat.sh`` runs on tool calls and reads
     ``.holder`` alone, and the cross-check's whole cost lands on exactly the
     branch it hits when a claim has lapsed. Paying a harness subprocess there to
-    compute a field it discards would tax every tool call to answer a question
-    it never asked.
+    compute a field it discards would tax every tool call to answer a question it never asked.
     """
-    info = claim_status(key=key, root=_node_aware_root(key))
+    key = _normalize_status_key(key)
+    info = _claims_core.claim_status(key=key, root=_node_aware_root(key))
+    _refuse_unknown_status_key(key, info)
     node_id = key[len("node:"):] if key.startswith("node:") else ""
     crosschecked = roster and bool(node_id) and info.get("state") in _UNHELD_STATES
     if crosschecked:
-        info.update(_roster_crosscheck(node_id))
+        # ONE fleet read, shared with the overlay below. require_live_probe
+        # matches the overlay so the registry-only view still carries
+        # attribution, and a tolerated degraded probe surfaces as
+        # `roster_probe` instead of reading as a full answer.
+        reading = read_roster(timeout=_ROSTER_CROSSCHECK_TIMEOUT_S, require_live_probe=False)
+        info.update(_roster_crosscheck(node_id, reading))
+    if crosschecked and info.get("roster_consulted"):
+        try:
+            from fno.graph.store import read_nodes_by_ids
+            from fno.paths import graph_json
+
+            reply = read_nodes_by_ids(graph_json(), [node_id])
+            if reply is None:
+                # The fast path cannot answer (no keeper, a keeper that predates
+                # read_ids); the seam documents a full-read fallback so a stale
+                # keeper never reads as "no entry" and skips the closed-session
+                # filter below.
+                from fno.graph import api as graph_api_strict
+
+                reply = {
+                    "entries": [
+                        e for e in graph_api_strict.wire_rows(path=graph_json())
+                        if isinstance(e, dict) and e.get("id") == node_id
+                    ],
+                }
+            entry = next(iter(reply.get("entries") or []), None)
+        except Exception:  # noqa: BLE001 - a graph read failure never fakes a skip
+            entry = None
+        worked_names: list[str] = []
+        if entry is not None:
+            try:
+                from fno.graph.statuses import closed_worker_session_ids
+                from fno.graph.statuses import live_worked_node_ids
+
+                worked = live_worked_node_ids(
+                    strict=True, entries=[entry], reading=reading
+                )
+                # The display field drops the same rows the overlay's
+                # worked_by excludes: a session whose own phase row closed
+                # never renders as an occupancy candidate, and the array is
+                # the field the FAQ tells an operator to trust. The dropped
+                # names ride their own field so the verdict line can still
+                # name them as finished rather than reporting nothing.
+                closed = closed_worker_session_ids(entry)
+                kept: list[dict] = []
+                finished: list[dict] = []
+                for w in info.get("roster_workers") or []:
+                    (finished if str(w.get("row_id") or "") in closed else kept).append(w)
+                info["roster_workers"] = kept
+                if finished:
+                    info["roster_closed_workers"] = [
+                        w.get("name") or "unknown" for w in finished
+                    ]
+            except Exception as exc:  # noqa: BLE001 - display callers degrade loudly
+                typer.echo(f"worked overlay degraded: {exc}", err=True)
+                worked = {}
+            worked_names = worked.get(node_id) or []
+        from fno.graph.statuses import UNMEASURABLE_LABEL_MARK
+
+        reachable = [n for n in worked_names if UNMEASURABLE_LABEL_MARK not in n]
+        if reachable:
+            info["worked_by"] = reachable
+            # A positively-live worker on an unheld node is never `free`.
+            # task 2.1: degraded coverage enters the verdict, not a
+            # field beside it (31 of 53 rows went unresolved under a flat
+            # `live-worker`).
+            info["state"] = "unknown"
+            info["basis"] = (
+                "live-worker-degraded-coverage"
+                if info.get("roster_rows_unresolved", 0)
+                or any(UNMEASURABLE_LABEL_MARK in n for n in worked_names)
+                else "live-worker"
+            )
+        unresolved = info.get("roster_rows_unresolved", 0)
+        if info.get("roster_unresolved_candidates"):
+            # An unresolved row whose worktree names THIS node is an
+            # unanswered ownership read, so the composite verdict fails
+            # closed for dispatch consumers. A patchy roster that names
+            # nobody here used to fail closed fleet-wide: one unresolved row
+            # anywhere read every node in the fleet as unknown.
+            # 483b08dd6 (2026-09-06) shipped the general form of that -
+            # any unresolved row anywhere set state=unknown - and 144685877
+            # (2026-09-08) reverted it: at the measured wedge the fleet sat
+            # at 68 unresolved of 133 scanned, a majority, and a warm worker
+            # sat unimplementing because ownership was unprovable. A
+            # coverage-ratio arm was proposed for this exact reader,
+            # measured against those numbers, and refused by the role on
+            # 2026-09-11: a verdict about node N turns on evidence about
+            # node N, never on a count of rows that implicate no node at
+            # all. This per-node candidate check is the arm that survived.
+            info["state"] = "unknown"
+            info["basis"] = "unresolved-roster-row"
+        elif unresolved:
+            info["roster_coverage"] = "degraded"
     if json_output:
         typer.echo(json.dumps(info))
         return
@@ -1056,7 +821,17 @@ def status(
         # this command straight into jq without --json, and a trailing prose
         # line makes that read fail exactly when the claim has lapsed, which is
         # the case the operator most needs a truthful answer for.
-        typer.echo(_roster_verdict_line(info), err=True)
+        line = _roster_verdict_line(info)
+        if info.get("roster_probe"):
+            line += f"; roster probe degraded: {info['roster_probe']}"
+        # Witness named when one answered: a verdict from a failing probe
+        # stays auditable on the loud line.
+        if info.get("session_basis"):
+            line += f"; session witness: {info['session_basis']}"
+        typer.echo(line, err=True)
+    clause = _expiry_clause(info)
+    if clause:  # stderr: stdout stays parseable JSON on every path
+        typer.echo(clause, err=True)
 
 
 def _merge_claims_across_roots(
@@ -1085,7 +860,7 @@ def _merge_claims_across_roots(
     best_row: dict[str, Optional[dict]] = {}
 
     for candidate_root, cdir in deduped_roots:
-        rows, _counts, states_by_key = list_claims_with_counts(
+        rows, _counts, states_by_key = _claims_core.list_claims_with_counts(
             prefix=prefix or None, include_stale=include_stale, root=candidate_root,
         )
         row_by_key = {r["key"]: r for r in rows}
@@ -1115,6 +890,66 @@ def _merge_claims_across_roots(
     return all_rows, row_roots, totals
 
 
+# age_s None means unreadable, not silent or healthy - a separate bucket.
+ClaimSilenceRow = NamedTuple("ClaimSilenceRow", [("key", str), ("holder", str), ("age_s", Optional[float])])
+# scanned = live claims examined, always populated: a detector silent on a
+# healthy fleet is indistinguishable from one that never ran.
+ClaimSilenceReport = NamedTuple(
+    "ClaimSilenceReport",
+    [("scanned", int), ("silent", List[ClaimSilenceRow]), ("unreadable", List[ClaimSilenceRow])],
+)
+
+
+def _default_claim_age_lookup(session_id: str, cwd: str) -> Optional[float]:
+    """Seconds since the transcript last advanced. Never raises."""
+    try:
+        import time as _time
+
+        from fno.agents.watchdog import harness_for_session, tail_facts
+
+        facts = tail_facts(session_id, cwd, agent=harness_for_session(session_id))
+        if facts is None or facts.last_event_epoch is None:
+            return None
+        return max(0.0, _time.time() - facts.last_event_epoch)
+    except Exception:  # noqa: BLE001 - unreadable answers nothing
+        return None
+
+
+def _claim_silence_report(
+    rows: List[dict],
+    *,
+    threshold_s: float,
+    age_lookup: Callable[[str, str], Optional[float]],
+) -> ClaimSilenceReport:
+    """Pure over injected rows + age lookup. Reports only - never feed
+    `reap_cmd`, whose probe demands proof by finding the holder, not this."""
+    scanned, silent, unreadable = 0, [], []
+    for row in rows:
+        if row.get("state") != "live":
+            continue
+        scanned += 1
+        key, holder = row.get("key", ""), row.get("holder") or ""
+        session_id = _holder_session_id(holder)
+        cwd = _claim_worktree_cwd(row)
+        age_s = age_lookup(session_id, cwd) if session_id and cwd else None
+        if age_s is None:
+            unreadable.append(ClaimSilenceRow(key, holder, None))
+        elif age_s > threshold_s:
+            silent.append(ClaimSilenceRow(key, holder, age_s))
+    return ClaimSilenceReport(scanned=scanned, silent=silent, unreadable=unreadable)
+
+
+def _render_claim_silence_report(report: ClaimSilenceReport, *, threshold_s: float) -> str:
+    """Always a positive marker, never empty on a healthy fleet."""
+    m = threshold_s / 60.0
+    line = f"scanned {report.scanned} live claim(s); {len(report.silent)} silent past {m:g}m"
+    for r in report.silent:
+        line += f"\n  SILENT {r.key} holder={r.holder} age={(r.age_s or 0) / 60.0:.1f}m"
+    for r in report.unreadable:
+        line += f"\n  unreadable {r.key} holder={r.holder}"
+    return line
+
+
 @cli.command(name="list")
 def list_cmd(
     prefix: str = typer.Option("", "--prefix", help="Filter keys starting with this prefix"),
@@ -1122,6 +957,11 @@ def list_cmd(
     json_output: bool = typer.Option(False, "--json", "-J"),
     root: Optional[Path] = typer.Option(
         None, "--root", help="Explicit claims root (repo root); overrides the both-roots default"
+    ),
+    silent_after: Optional[str] = typer.Option(
+        None,
+        "--silent-after",
+        help="Opt-in: report LIVE claims silent this long ('15m'). Harness-neutral.",
     ),
 ) -> None:
     """Enumerate claims under the claims directory.
@@ -1132,22 +972,40 @@ def list_cmd(
     prefix happened to fall to, silently missing the other store (measured:
     574 lockfiles in a root a bare `list` could never reach).
     A colon-less or unrecognized --prefix cannot tell which root its keys
-    live in (:func:`fno.claims.io.claims_root_for` returns None for
-    exactly that case), so narrowing to a single guessed root would
+    live in (the native read returns None for exactly that case), so
+    narrowing to a single guessed root would
     silently reintroduce the same miss; only an explicit --root narrows.
     """
     if root is not None:
         roots: list[Optional[Path]] = [root]
     else:
-        # _node_aware_root("") already resolves to None via claims_root_for's
-        # own colon check, so no separate `if prefix` branch is needed here.
-        roots = [global_claims_root(), _node_aware_root(prefix)]
+        # _node_aware_root("") already resolves to None (no colon, no route),
+        # so no separate `if prefix` branch is needed here.
+        roots = [_claims_io.global_claims_root(), _node_aware_root(prefix)]
 
-    deduped_roots = dedup_claims_roots(roots)
+    deduped_roots = _claims_io.dedup_claims_roots(roots)
     all_rows, row_roots, totals = _merge_claims_across_roots(
         deduped_roots, prefix=prefix, include_stale=include_stale
     )
     n_roots = len(deduped_roots)
+
+    if silent_after is not None:
+        ttl_ms = _parse_ttl(silent_after)
+        if ttl_ms is None:
+            raise typer.BadParameter("--silent-after requires a duration, e.g. '15m'")
+        threshold_s = ttl_ms / 1000.0
+        report = _claim_silence_report(
+            all_rows, threshold_s=threshold_s, age_lookup=_default_claim_age_lookup
+        )
+        if json_output:
+            typer.echo(json.dumps({
+                "scanned": report.scanned,
+                "silent": [r._asdict() for r in report.silent],
+                "unreadable": [r._asdict() for r in report.unreadable],
+            }))
+        else:
+            typer.echo(_render_claim_silence_report(report, threshold_s=threshold_s))
+        return
 
     if json_output:
         # Bare list, matching the original shape: a scripted caller already
@@ -1185,23 +1043,21 @@ def list_cmd(
 HANDOVER_HOLDER_PREFIX = _HANDOVER_HOLDER_PREFIX
 
 
-
-
-
-
-
-
-
 def _node_settlement(reading: Optional[RosterReading] = None):
     """The closure-shaped reading ``sweep_verdict`` runs FIRST on a node claim
-    (x-94f8): is this claim's own node still the holder's workplace?
+    : is this claim's own node still the holder's workplace?
 
     Two positive findings, both proven by FINDING things, never by failing to:
 
-      * The claim's node is terminal in the graph (done/superseded). The
-        closure release should have dropped the claim already; one that
-        outlived its node (pre-fix leaks, a closer that crashed mid-release)
-        protects nothing whoever holds it. Holder-independent evidence.
+      * The claim's node is terminal in the graph (done/superseded) and the
+        holder cannot be proven alive. The closure release should have
+        dropped the claim already; one that outlived its node (pre-fix
+        leaks, a closer that crashed mid-release) protects nothing once its
+        lease is spent or its pid is gone. A LIVE holder keeps the claim
+        until its own lease ends: measured 2026-09-05, this arm reaped four
+        unexpired, live-pid claims on closed nodes (twice,
+        -node) on every sweep, killing active loop-check leases and
+        opening the dup-PR window each time.
       * The lease is EXPIRED and the holder's roster row resolves to a
         DIFFERENT node. An expired lease is the holder's own statement that
         it stopped renewing; a row on another node is where it went. An
@@ -1228,7 +1084,7 @@ def _node_settlement(reading: Optional[RosterReading] = None):
                     cache["terminal"] = None
                     return None
                 from fno.graph.statuses import is_terminal_entry
-                from fno.graph.store import read_graph
+                from fno.graph import api as graph_api
                 from fno.paths import graph_json
 
                 # is_terminal_entry, not a bare completed_at test: read_graph
@@ -1237,21 +1093,40 @@ def _node_settlement(reading: Optional[RosterReading] = None):
                 # completed_at, and deferral is a returnable rung.
                 cache["terminal"] = frozenset(
                     e.get("id")
-                    for e in read_graph(graph_json())
+                    for e in (
+                        n.model_dump(by_alias=True)
+                        for n in graph_api.nodes(include_archived=True, path=graph_json()).nodes
+                    )
                     if is_terminal_entry(e)
                 )
             except Exception:  # noqa: BLE001 - an unreadable graph proves nothing
                 cache["terminal"] = None
         return cache["terminal"]
 
-    def _probe(claim, now=None) -> Optional[bool]:
-        node_id = claim.key[len("node:"):]
+    def _probe(claim, native_verdict=None) -> Optional[bool]:
+        node_id = claim.key[len("node:") :]
         terminal = _terminal_ids()
         if terminal is not None and node_id in terminal:
+            # Closure settles a holder that cannot be proven alive, never one
+            # that can. Measured 2026-09-05 on four premature reaps (
+            # twice, -node): every one was an UNEXPIRED lease
+            # with a live recorded pid on a node the graph had closed, reaped
+            # by this arm on each sweep - a live session's loop-check lease
+            # (the follow-up-work shape) died with it, and every reap opened
+            # the dup-PR window the claim exists to close. An expired lease
+            # still settles here, as does a dead pid: the holder named its
+            # own end or the pid table ends it, and a closure release that
+            # crashed mid-way is exactly the leak this arm heals.
+            if native_verdict is not None and (
+                native_verdict.get("expired") is not True
+                and native_verdict.get("bucket") != "suspect"
+            ):
+                # Not expired and not dead-pid: the holder is proven live
+                # (bucket live) or unprobeable (offhost - unknown keeps, the
+                # same asymmetry the suspect buckets teach).
+                return None
             return True
-        from .staleness import is_expired
-
-        if not is_expired(claim, now=now):
+        if native_verdict is None or native_verdict.get("expired") is not True:
             return None
         if claim.holder.startswith(HANDOVER_HOLDER_PREFIX):
             # A launch window, never a settled abandonment: same reasoning as
@@ -1293,31 +1168,6 @@ def _node_settlement(reading: Optional[RosterReading] = None):
     return _probe
 
 
-def _transcript_activity(session_id: str, cwd: str):
-    """Tri-state: True finished, False still moving, None unreadable.
-
-    ``_transcript_says_finished`` folds "unreadable" into False because its
-    caller reaps, and there the safe answer is "still working". A reader that
-    only wants to OVERRULE a row needs the third value, or an aged-out
-    transcript reads as a live worker forever.
-    """
-    try:
-        import time
-
-        from fno.agents.watchdog import (
-            REAP_QUIET_AFTER_S,
-            finished_with_the_tree,
-            tail_facts,
-        )
-
-        facts = tail_facts(session_id, cwd)
-        if facts is None:
-            return None
-        return finished_with_the_tree(facts, time.time(), REAP_QUIET_AFTER_S)
-    except Exception:  # noqa: BLE001 - an unreadable transcript answers nothing
-        return None
-
-
 def _transcript_says_finished(session_id: str, cwd: str) -> bool:
     """Has this session gone quiet with a tail that is not engaged?
 
@@ -1329,13 +1179,16 @@ def _transcript_says_finished(session_id: str, cwd: str) -> bool:
         import time
 
         from fno.agents.watchdog import (
-            REAP_QUIET_AFTER_S,
+            QUIET_AFTER_S,
             finished_with_the_tree,
+            harness_for_session,
             tail_facts,
         )
 
         return finished_with_the_tree(
-            tail_facts(session_id, cwd), time.time(), REAP_QUIET_AFTER_S
+            tail_facts(session_id, cwd, agent=harness_for_session(session_id)),
+            time.time(),
+            QUIET_AFTER_S,
         )
     except Exception:  # noqa: BLE001 - an unreadable transcript proves nothing
         return False
@@ -1365,10 +1218,9 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
     disaster): the pane's ``fno_id`` is the SESSION uuid, not the worker
     name (mux_spawn stamps ``fno_id=stored_session_uuid or name``), the OSC
     ``title`` is whatever the pane's shell set, and the load-bearing join is
-    the worktree: dispatch names the worker's worktree after the worker
-    (``workspace worktree ensure --name <agent_name>``), so
-    ``basename(pane.cwd) == worker`` is the normal live-launch marker, with
-    the node id covering the ``target start`` naming. Follows
+    the worktree: dispatch names the worker's worktree after the NODE id, so
+    ``basename(pane.cwd) == node_id`` is the normal live-launch marker, with
+    a worker-named tree still possible from older spawns. Follows
     ``_pane_absent_from_listing``'s empty-is-ambiguous rule: ``pane ls``
     prints ``[]`` both for a session with no panes and for an unreachable
     socket, so only a NON-EMPTY listing somewhere proves the instrument ran
@@ -1394,9 +1246,7 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
         fno_bin = os.environ.get("FNO_BIN") or "fno"
 
         try:
-            return runner(
-                [fno_bin, *args], capture_output=True, text=True, timeout=10
-            )
+            return runner([fno_bin, *args], capture_output=True, text=True, timeout=10)
         except Exception:  # noqa: BLE001 - a probe never fails a sweep
             return None
 
@@ -1427,9 +1277,7 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
             # A zero-pane session would only contribute an
             # ambiguous []; the probe never raises on a malformed row.
             continue
-        panes = _mux(
-            "mux", "pane", "ls", "--session", str(session), "--json"
-        )
+        panes = _mux("mux", "pane", "ls", "--server", str(session), "--json")
         if panes is None or getattr(panes, "returncode", 1) != 0:
             return None
         try:
@@ -1443,11 +1291,7 @@ def _mux_pane_absent_for(worker: str, node_id: str = "", runner=None) -> Optiona
             if not isinstance(pane, dict):
                 continue
             cwd_name = str(pane.get("cwd") or "").rstrip("/").rsplit("/", 1)[-1]
-            if (
-                pane.get("fno_id") in names
-                or pane.get("title") in names
-                or cwd_name in names
-            ):
+            if pane.get("fno_id") in names or pane.get("title") in names or cwd_name in names:
                 return False
     return True if saw_content else None
 
@@ -1458,8 +1302,12 @@ def _claim_worktree_cwd(claim) -> Optional[str]:
     The transcript fallback needs a cwd to find the session's tree; the
     roster row (the usual source) is absent on exactly the paths that need
     the fallback, so the claim itself carries it when its writer could.
+    Accepts a Claim object OR a plain dict row (list_cmd's shape) - a bare
+    `getattr(a_dict, "metadata", None)` silently returns None for every
+    dict, so the two shapes need this one branch to share an implementation.
     """
-    meta = getattr(claim, "metadata", None) or {}
+    meta = claim.get("metadata") if isinstance(claim, dict) else getattr(claim, "metadata", None)
+    meta = meta or {}
     for key in ("worktree", "cwd"):
         value = meta.get(key)
         if isinstance(value, str) and value:
@@ -1505,7 +1353,7 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
     an opencode worker, and any hand-started session are invisible to it BY
     CONSTRUCTION. A forty-row scan that cannot represent the holder at all would
     have read as forty rows of proof, and reaping on it archives a live worker's
-    claim - x-ba4b's disaster from the other side, which the
+    claim - disaster from the other side, which the
     ``reaped_a_live_worker`` kill criterion exists to stop.
 
     So the roster's coverage gap now costs a missed reap rather than a wrongly
@@ -1513,7 +1361,7 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
     expires on its own TTL, and a wrongly reaped one hands a live worker's node
     to a second worker.
 
-    THREE additions feed it evidence that lives outside the claim (the king's
+    THREE additions feed it evidence that lives outside the claim (the lead's
     2026-08-23 specimens, both of which needed a manual --force release):
 
     1. A handover holder is no longer unconditionally unprovable. Its launch
@@ -1529,6 +1377,8 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
        finding.
     """
     cache: dict = {}
+    # One token per None answer, folded into kept_suspect_unprobed_by.
+    reasons: dict = {}
 
     def _reading() -> RosterReading:
         """Take (and cache) the shared reading; retry once on a degraded read."""
@@ -1547,8 +1397,11 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
                 cache["reading"] = first
         return cache["reading"]
 
-    def _probe(claim) -> Optional[bool]:
-        from .staleness import is_live
+    def _probe(claim, native_verdict=None) -> Optional[bool]:
+        native = native_verdict
+        if native is None:
+            reasons[claim.key] = "native-verdict-missing"
+            return None
 
         if claim.holder.startswith(HANDOVER_HOLDER_PREFIX):
             # The launch window, not an abandoned session - but the window is
@@ -1559,24 +1412,29 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
             # check is local and cheap, so it runs before the pane subprocess;
             # the pane answer is cached per worker for the sweep's lifetime,
             # like the shared roster reading.
-            if is_live(claim):
+            if native is not None and native.get("state") == ClaimState.LIVE.value:
+                reasons[claim.key] = "handover-live"
                 return None
             if _handover_pane_probe_blocked(claim):
+                reasons[claim.key] = "handover-pane-probe-blocked"
                 return None
-            worker = claim.holder[len(HANDOVER_HOLDER_PREFIX):]
-            node_id = claim.key[len("node:"):] if claim.key.startswith("node:") else ""
+            worker = claim.holder[len(HANDOVER_HOLDER_PREFIX) :]
+            node_id = claim.key[len("node:") :] if claim.key.startswith("node:") else ""
             pane_key = f"pane_absent:{worker}"
             if pane_key not in cache:
                 cache[pane_key] = _mux_pane_absent_for(worker, node_id)
             if cache[pane_key] is not True:
+                reasons[claim.key] = "handover-pane-not-absent"
                 return None
             return True
         session_id = _holder_session_id(claim.holder)
         if not session_id:
             # A holder shape this lane cannot parse names no session to look up.
+            reasons[claim.key] = "holder-session-unparsed"
             return None
         seen: RosterReading = _reading()
         if not seen.consulted:
+            reasons[claim.key] = "roster-read-degraded"
             return None
         row = seen.row_for_session(session_id)
         if row is None:
@@ -1585,12 +1443,17 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
             # a cwd to find the tree, and the claim carries one when its
             # writer stamped it. A finished tree is abandonment proven by
             # FINDING the end, never by failing to find the worker.
-            if is_live(claim):
+            if native is not None and native.get("state") == ClaimState.LIVE.value:
+                reasons[claim.key] = "row-absent-native-live"
                 return None
             cwd = _claim_worktree_cwd(claim)
             if not cwd:
+                reasons[claim.key] = "row-absent-no-cwd"
                 return None
-            return True if _transcript_says_finished(session_id, cwd) else None
+            if not _transcript_says_finished(session_id, cwd):
+                reasons[claim.key] = "row-absent-transcript-unfinished"
+                return None
+            return True
         if row.get("state") not in _finished_row_states():
             return False
         # The row state alone does NOT authorize a reap. `_TERMINAL_STATES`
@@ -1600,14 +1463,21 @@ def _abandonment_probe(reading: Optional[RosterReading] = None):
         # live worker's claim, which is the `reaped_a_live_worker` kill
         # criterion. So the row narrows the candidates and the transcript
         # decides, which is the instrument the watchdog itself trusts.
-        return _transcript_says_finished(session_id, row.get("cwd") or "")
+        if not _transcript_says_finished(session_id, row.get("cwd") or ""):
+            reasons[claim.key] = "row-transcript-unfinished"
+            return False
+        return True
 
+    setattr(_probe, "reasons", reasons)
     return _probe
+
 
 @cli.command(name="reap")
 def reap_cmd(
     apply: bool = typer.Option(
-        False, "--apply", help="Archive dead claims. Default is dry-run: report what would be reaped."
+        False,
+        "--apply",
+        help="Archive dead claims. Default is dry-run: report what would be reaped.",
     ),
     root: Optional[List[Path]] = typer.Option(
         None,
@@ -1618,31 +1488,11 @@ def reap_cmd(
     json_output: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
     """Archive every provably-dead claim, naming the instrument that proved it.
-
-    Not an age cutoff - death is measured, never guessed from how old a file is.
-    Which measurement applies depends on what the claim's holder is:
-
-      * An EXPIRED TTL is a clock reading and proves death from any host.
-      * A dead PID proves death only on this machine, by machine_id.
-      * A dead one-shot `dispatch:` holder is provable death even inside its
-        TTL: nothing respawns under `spawn-cli:<pid>`.
-      * A SUSPECT `node:` claim is the one case a pid cannot settle, because a
-        session can be respawned under a new pid. It is reaped only on a
-        POSITIVE roster finding: the join ran, scanned at least one row, and no
-        row resolves to that node. A join that could not run yields unknown, and
-        unknown keeps the claim.
-      * A `node:` claim is also settled node-aware, before liveness is even
-        asked: a claim on a node the graph closed (done/superseded), or a claim
-        whose EXPIRED lease's holder is provably working a DIFFERENT node, is
-        positive abandonment and is reaped. An unexpired lease is never settled
-        away from a live holder.
-
-    Dry-run by default; `--apply` archives to `.expired/` and re-reads the store
-    to confirm each move before counting it `reaped` - an exit code alone is not
-    evidence. Exits 1 when any reapable file's move could not be confirmed.
+    Expiry and liveness are measured by the claim's holder shape. Dry-run is the
+    default; `--apply` archives and verifies every move before counting it.
     """
     optout_sink: list = []
-    summary = reap_dead_claims(
+    summary = _claims_core.reap_dead_claims(
         roots=list(root) if root else None,
         apply=apply,
         abandonment_probe=_abandonment_probe(),
@@ -1652,9 +1502,7 @@ def reap_cmd(
     if optout_sink:
         from fno.claims.optout_lease import restore_reaped_optouts
 
-        summary.setdefault("reap_failed", []).extend(
-            restore_reaped_optouts(optout_sink)
-        )
+        summary.setdefault("reap_failed", []).extend(restore_reaped_optouts(optout_sink))
 
     if json_output:
         typer.echo(json.dumps(summary))
@@ -1668,16 +1516,27 @@ def reap_cmd(
                 f"would reap {summary['would_reap']} of {summary['scanned']} scanned "
                 "(dry-run; pass --apply)"
             )
-        # The suspect buckets are split because "kept: 2 suspect" is the line
-        # that taught the operator this verb was useless: it could not say
-        # whether those two were protected by a measurement or merely unmeasured.
+        # "roster not consulted" only ever renders beside the token that
+        # measured the degraded read, never as a blanket unprobed label.
         suspect = f"{summary['kept_suspect']} suspect"
         if summary["kept_suspect_alive"]:
             suspect += f", {summary['kept_suspect_alive']} suspect (worker alive)"
+        unprobed_by = summary.get("kept_suspect_unprobed_by") or {}
         if summary["kept_suspect_unprobed"]:
-            suspect += (
-                f", {summary['kept_suspect_unprobed']} suspect (roster not consulted)"
+            detail = ", ".join(
+                f"{token} {count} (roster not consulted)"
+                if token == "roster-read-degraded"
+                else f"{token} {count}"
+                for token, count in sorted(unprobed_by.items())
             )
+            suffix = f": {detail}" if detail else ""
+            suspect += f", {summary['kept_suspect_unprobed']} suspect (probe unanswered{suffix})"
+        if summary.get("kept_unclassified"):
+            dirs = ", ".join(
+                f"{path} {count}"
+                for path, count in sorted((summary.get("unclassified_dirs") or {}).items())
+            )
+            suspect += f", {summary['kept_unclassified']} unclassified (no native verdict: {dirs})"
         typer.echo(
             f"kept: {summary['kept_live']} live, {suspect}, "
             f"{summary['kept_offhost']} off-host, {summary['corrupted']} corrupted, "
@@ -1698,19 +1557,49 @@ def session_pid(
     ),
     json_output: bool = typer.Option(False, "--json", "-J"),
 ) -> None:
-    """Resolve the durable session pid (nearest harness ancestor:
-    claude/codex/gemini/opencode/agy) for the hybrid liveness pid-arm. Prints the
+    """Resolve the durable session pid (nearest harness ancestor that is not
+    Claude Code pool machinery) for the hybrid liveness pid-arm. Prints the
     pid on stdout, or nothing when uncapturable (plain-shell / no harness
-    ancestor; the caller degrades to TTL-only liveness). Always exit 0 - a
-    missing pid is a safe degrade, not an error (ab-cc5553f2)."""
-    from .session_pid import resolve_session_pid
+    ancestor / a pooled bg-spare; the caller degrades to TTL-only liveness).
+    Always exit 0 - a missing pid is a safe degrade, not an error.
 
-    pid = resolve_session_pid(from_pid=from_pid)
+    The walk is native: this command fronts the fno-agents binary, which owns
+    the one implementation (`spawn_context::session_identity_ambient`). The
+    Python module `session_pid` is a SHIM over this very verb, so importing it
+    here would recurse.
+    """
+    import subprocess as _subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is None:
+        # Uncapturable: empty stdout, exit 0 (the shim's degrade shape).
+        if json_output:
+            typer.echo(json.dumps({"session_pid": None, "harness": None}))
+        return
+    cmd = [str(binary), "claim", "session-pid"]
+    if from_pid is not None:
+        cmd += ["--from-pid", str(from_pid)]
     if json_output:
-        typer.echo(json.dumps({"session_pid": pid}))
-    elif pid is not None:
-        typer.echo(str(pid))
-    # else: emit nothing on stdout so `$(fno agents claim session-pid)` is empty.
+        cmd.append("--json")
+    try:
+        result = _subprocess.run(  # noqa: S603 - resolved binary, fixed verb
+            cmd, capture_output=True, text=True, check=False
+        )
+    except OSError:
+        if json_output:
+            typer.echo(json.dumps({"session_pid": None, "harness": None}))
+        return
+    if json_output:
+        try:
+            payload = json.loads(result.stdout)
+        except ValueError:
+            payload = {"session_pid": None, "harness": None}
+        typer.echo(json.dumps(payload))
+    elif result.stdout.strip():
+        typer.echo(result.stdout.strip())
+    # Always exit 0 - this command always exits 0.
 
 
 def _acquire_lane(*, lane: str, max_lanes: int, ttl: str, json_output: bool) -> None:
@@ -1719,54 +1608,45 @@ def _acquire_lane(*, lane: str, max_lanes: int, ttl: str, json_output: bool) -> 
     Exit 1 when the cap is full (no free slot) - the same "retry later" code as
     a held claim. The cap is enforced by atomic slot acquisition, never a count.
     """
-    from .lanes import acquire_lane_slot
+    import subprocess
 
-    try:
-        claim = acquire_lane_slot(
-            max_lanes=max_lanes, lane_id=lane, ttl_ms=_parse_ttl(ttl or "1h")
-        )
-    except ClaimValidationError as exc:
-        typer.echo(f"validation error: {exc}", err=True)
-        raise typer.Exit(code=2)
+    from fno.rust_binary import resolve_binary
 
-    if claim is None:
-        typer.echo(f"lane cap full (max_lanes={max_lanes})", err=True)
+    binary = resolve_binary()
+    if binary is None:
+        typer.echo("Error: no fno-agents binary", err=True)
         raise typer.Exit(code=1)
-
+    argv = [str(binary), "claim", "lane-acquire", "--lane", lane,
+            "--max-lanes", str(max_lanes), "--ttl", ttl or "1h"]
     if json_output:
-        out = claim.to_yaml_dict()
-        out["lane_id"] = lane
-        typer.echo(json.dumps(out))
-    else:
-        typer.echo(f"acquired lane slot {claim.key} for lane {lane}")
-
-
-def _release_lane(*, lane: str, json_output: bool) -> None:
-    """The former `claim lane-release`. Silent success if the lane holds none."""
-    from .lanes import release_lane_slot
-
-    release_lane_slot(lane_id=lane)
-    if json_output:
-        typer.echo(json.dumps({"lane_id": lane, "released": True}))
-    else:
-        typer.echo(f"released lane {lane}")
-
-
-def _force_release(*, key: str, reason: str, json_output: bool) -> None:
-    """The former `claim force-release`. Archived to .expired/."""
-    try:
-        force_release_claim(key=key, reason=reason, root=_node_aware_root(key))
-    except ClaimValidationError as exc:
-        typer.echo(f"validation error: {exc}", err=True)
+        argv.append("--json")
+    result = subprocess.run(argv, capture_output=True, text=True)
+    if result.stdout.strip():
+        typer.echo(result.stdout.strip())
+    if result.returncode == 2 and result.stderr.strip():
+        typer.echo(f"validation error: {result.stderr.strip()}", err=True)
         raise typer.Exit(code=2)
-
-    if json_output:
-        typer.echo(json.dumps({"key": key, "force_released": True, "reason": reason}))
-    else:
-        typer.echo(f"force-released: {key}")
+    if result.returncode != 0:
+        typer.echo((result.stderr or f"lane cap full (max_lanes={max_lanes})").strip(), err=True)
+        raise typer.Exit(code=result.returncode or 1)
 
 
 __all__ = ["cli"]
+
+
+def _normalize_status_key(key: str) -> str:
+    from fno.graph._constants import is_wellformed_node_id
+
+    return f"node:{key}" if is_wellformed_node_id(key) else key
+
+
+def _refuse_unknown_status_key(key: str, info: Mapping) -> None:
+    if ":" in key or info.get("state") != ClaimState.FREE.value:
+        return
+    typer.echo(
+        f"claim key must include a recognized prefix; no claim exists for {key!r}", err=True
+    )
+    raise typer.Exit(2)
 
 
 def _owned_registry_effort(harness: str, session_id: str) -> "str | None":
@@ -1779,10 +1659,10 @@ def _owned_registry_effort(harness: str, session_id: str) -> "str | None":
     if not harness or not session_id:
         return None
     try:
-        from fno import paths
+        from fno.registry_door import RegistryDoorError, read_registry_document
 
-        raw = json.loads(paths.agents_registry_path().read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError):
+        raw = read_registry_document()[0]
+    except (OSError, TypeError, ValueError, RegistryDoorError):
         return None
     rows = raw.get("agents") if isinstance(raw, dict) else None
     if not isinstance(rows, list):

@@ -20,6 +20,8 @@ import json
 from pathlib import Path
 
 import pytest
+from fno.graph.store import read_graph_strict
+from tests.fixtures.graph_seed import seed_graph
 
 
 # -- fixtures --
@@ -180,14 +182,16 @@ def test_malformed_sessions_coerce_rather_than_raise(ledger):
 
 def _graph(tmp_path: Path, rows: list[dict] | None = None) -> Path:
     path = tmp_path / "graph.json"
-    node = {"id": "ab-12345678", "title": "T", "cost_usd": None,
+    node = {"id": "ab-12345678", "title": "T", "slug": "ab-12345678",
+            "type": "feature", "priority": "p2", "status": "idea",
+            "cost_usd": None,
             "cost_sessions": rows if rows is not None else []}
-    path.write_text(json.dumps({"entries": [node]}))
+    seed_graph(path, [node])
     return path
 
 
 def _node(graph_path: Path) -> dict:
-    return json.loads(graph_path.read_text())["entries"][0]
+    return read_graph_strict(graph_path)[0]
 
 
 def test_cost_update_replaces_an_existing_session_row(tmp_path):
@@ -203,19 +207,13 @@ def test_cost_update_replaces_an_existing_session_row(tmp_path):
     assert node["cost_usd"] == 9.0
 
 
-def test_cost_update_leaves_the_sidecar_valid(tmp_path):
-    """A stale sidecar makes the next load_graph raise GraphCorruptionError,
-    after which cost attribution is silently skipped from then on."""
-    import hashlib
+def test_cost_update_leaves_the_graph_readable(tmp_path):
+    """A cost write publishes clean bytes: the next load_graph reads them."""
     from fno.cost import _update_graph_node
     from fno.graph.load import load_graph
 
     graph_path = _graph(tmp_path)
-    load_graph(graph_path)  # first contact writes the sidecar
     _update_graph_node(graph_path, "ab-12345678", "S1", 4.0)
-
-    sidecar = Path(str(graph_path) + ".sha256")
-    assert sidecar.read_text().strip() == hashlib.sha256(graph_path.read_bytes()).hexdigest()
     assert load_graph(graph_path)[0]["cost_usd"] == 4.0
 
 
@@ -392,7 +390,7 @@ def test_cost_update_degrades_when_the_graph_write_raises(tmp_path, monkeypatch,
     def boom(*a, **k):
         raise OSError("read-only .fno")
 
-    monkeypatch.setattr(gs, "locked_mutate_graph", boom)
+    monkeypatch.setattr(gs, "commit_rows_via_store", boom)
     assert _update_graph_node(graph_path, "ab-12345678", "S1", 4.0) is False
     assert "read-only .fno" in capsys.readouterr().err
 
@@ -401,7 +399,7 @@ def test_cost_update_says_so_when_there_is_no_graph(tmp_path, capsys):
     from fno.cost import _update_graph_node
 
     assert _update_graph_node(tmp_path / "absent.json", "ab-12345678", "S1", 4.0) is False
-    assert "no graph at" in capsys.readouterr().err
+    assert "node ab-12345678 not found" in capsys.readouterr().err
 
 
 # -- AC9: a contained node projects no rollup at all (x-e957 task 1.4) --

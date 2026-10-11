@@ -643,7 +643,7 @@ class _Gate:
     ("substrate", "extra"),
     [
         ("pane", []),
-        ("bg", ["--substrate", "bg"]),
+        ("bg", ["--substrate", "thread"]),
         ("headless", ["--substrate", "headless"]),
     ],
 )
@@ -675,7 +675,7 @@ def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
     monkeypatch.setattr(mux_spawn, "resolve_provenance", lambda *a, **k: {})
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **kwargs: received.update(kwargs)
         or mux_spawn.MuxSpawnResult(
             name=kwargs["name"],
@@ -725,6 +725,10 @@ def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
         "force": False,
         "no_wait": False,
         "route_provider": "zai",
+        "account": None,
+        "seed": "work",
+        "session_phase": "",
+        "succession_scope": None,
     }]
 
 
@@ -732,9 +736,9 @@ def test_cmd_spawn_resolves_role_route_once_before_substrate_fanout(
     ("routing", "extra"),
     [
         (["--role", "tidy"], []),
-        (["--role", "tidy"], ["--substrate", "bg"]),
+        (["--role", "tidy"], ["--substrate", "thread"]),
         (["--role", "tidy"], ["--substrate", "headless"]),
-        (["--route", "zai,glm-5.2"], ["--substrate", "bg"]),
+        (["--route", "zai,glm-5.2"], ["--substrate", "thread"]),
         (["--route", "zai,glm-5.2"], ["--substrate", "headless"]),
     ],
     ids=["role-pane", "role-bg", "role-headless", "route-bg", "route-headless"],
@@ -762,7 +766,7 @@ def test_cmd_spawn_composes_role_route_over_managed_oauth_overlay(
     )
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **kwargs: spawn_calls.append(kwargs)
         or mux_spawn.MuxSpawnResult(
             name=kwargs["name"],

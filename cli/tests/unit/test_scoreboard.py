@@ -1,6 +1,7 @@
 """Context-to-outcome trace contracts for x-2e3c Task 1.2."""
 
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import hashlib
 import json
@@ -14,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from fno.events.log import normalize_event, read_events
+from fno.scoreboard import fold
 from fno.scoreboard.fold import (
     _comparison_contract_from_events,
     _num_opt,
@@ -23,10 +25,19 @@ from fno.scoreboard.fold import (
     read_jsonl_events_with_coverage,
     render_context_trace_field_docs,
 )
+from tests._delivery_reference import delivered_stub, reference_deliveries
 
 
 ROOT = Path(__file__).resolve().parents[3]
 NOW = datetime(2026, 7, 3, 20, 0, 0)
+
+
+@pytest.fixture(autouse=True)
+def hermetic_deliveries(monkeypatch):
+    # The fold tests here run the real graph reads in a subprocess CLI or
+    # none at all; the classifier seam stays hermetic either way.
+    monkeypatch.setattr(fold, "classify_deliveries", reference_deliveries)
+    monkeypatch.setattr("fno.rust_binary.delivered_terminals", delivered_stub)
 
 
 def _snapshot_event(session_id: str, context_bytes: int, ts: str) -> dict:
@@ -927,7 +938,7 @@ def test_plan_fidelity_includes_the_derived_trace() -> None:
     ]
     result = build_plan_fidelity(
         rows,
-        [{"id": "x-1", "title": "Observe context"}],
+        [{"id": "x-1", "title": "Observe context", "merge_status": "merged", "completed_at": "2026-07-03T11:00:00"}],
         since_days=28,
         now=NOW,
         read_plan_doc=lambda _path: "## Acceptance Criteria\n#### AC1-HP: yes\n",
@@ -1080,35 +1091,35 @@ def test_same_timestamp_complete_snapshot_supersedes_incomplete() -> None:
     assert trace["context"]["measurement_complete"] is True
 
 
-def test_recorded_merge_failure_is_observed_and_falsifiable() -> None:
+@pytest.mark.parametrize("dead_status", ["queued", "failed"])
+def test_dead_merge_status_is_displayed_but_never_observed(dead_status: str) -> None:
+    # No writer produces these values (the only writer stamps "merged" or
+    # None), so a row carrying one is residue, not evidence. The raw string
+    # still shows as the display state, but it observes nothing.
     trace = build_context_outcome_trace(
         {"session_id": "s", "commit_sha": "head"},
-        {"id": "x-1", "merge_status": "failed"},
+        {"id": "x-1", "merge_status": dead_status},
         [],
     )
 
     assert trace["outcomes"]["merge"] == {
-        "observed": True,
-        "state": "failed",
-        "merged": False,
+        "observed": False,
+        "state": dead_status,
+        "merged": None,
         "at": None,
     }
-    assert trace["falsifiable"] is True
+    assert trace["falsifiable"] is False
 
 
-def test_queued_merge_is_observed_and_falsifiable() -> None:
+def test_merge_status_merged_is_observed_and_falsifiable() -> None:
     trace = build_context_outcome_trace(
         {"session_id": "s", "commit_sha": "head"},
-        {"id": "x-1", "merge_status": "queued"},
+        {"id": "x-1", "merge_status": "merged"},
         [],
     )
 
-    assert trace["outcomes"]["merge"] == {
-        "observed": True,
-        "state": "queued",
-        "merged": False,
-        "at": None,
-    }
+    assert trace["outcomes"]["merge"]["observed"] is True
+    assert trace["outcomes"]["merge"]["merged"] is True
     assert trace["falsifiable"] is True
 
 
@@ -1228,10 +1239,18 @@ def test_scoreboard_cli_joins_canonical_project_context_journal(
     (state_dir / "ledger.json").write_text(
         json.dumps({"entries": rows}), encoding="utf-8"
     )
-    (state_dir / "graph.json").write_text(
-        json.dumps({"entries": [{"id": "x-1", "title": "Observe context"}]}),
-        encoding="utf-8",
-    )
+    seed_graph(state_dir / "graph.json", json.dumps(
+            {
+                "entries": [
+                    {
+                        "id": "x-1",
+                        "title": "Observe context",
+                        "merge_status": "merged",
+                        "completed_at": delivery_at,
+                    }
+                ]
+            }
+        ))
     event_at = (now - timedelta(minutes=90)).astimezone().isoformat()
     event = _snapshot_event("harness-session", 100, event_at)
     (repo / ".fno" / "events.jsonl").write_text(
@@ -1268,6 +1287,33 @@ def test_scoreboard_cli_joins_canonical_project_context_journal(
         joined["context_outcome_trace"]["context"]["context_hash"]
         == event["data"]["context_hash"]
     )
+    _wait_subprocess_keeper_exit(tmp_path)
+
+
+def _wait_subprocess_keeper_exit(root: Path, timeout: float = 12.0) -> None:
+    """A CLI subprocess spawns a detached keeper that self-exits after its
+    idle window; the session reaper asserts nothing rooted under this tmp
+    tree survives teardown, so the test that owns the keeper waits it out."""
+    import time
+
+    import psutil
+
+    deadline = time.monotonic() + timeout
+    while True:
+        live = [
+            proc
+            for proc in psutil.process_iter(["cwd", "cmdline"], ad_value=None)
+            if str(proc.info["cwd"] or "").startswith(str(root))
+            and any("store-keeper" in part for part in (proc.info["cmdline"] or []))
+        ]
+        if not live:
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"keeper still rooted under {root} after {timeout}s: "
+                f"{[p.pid for p in live]}"
+            )
+        time.sleep(0.2)
 
 
 @pytest.mark.parametrize("archive_second", [False, True])
@@ -1323,17 +1369,24 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
     (state_dir / "ledger.json").write_text(
         json.dumps({"entries": rows}), encoding="utf-8"
     )
-    (state_dir / "graph.json").write_text(
-        json.dumps(
+    seed_graph(state_dir / "graph.json", json.dumps(
             {
                 "entries": [
-                    {"id": "x-1", "title": "First root"},
-                    {"id": "x-2", "title": "Second root"},
+                    {
+                        "id": "x-1",
+                        "title": "First root",
+                        "merge_status": "merged",
+                        "completed_at": completed,
+                    },
+                    {
+                        "id": "x-2",
+                        "title": "Second root",
+                        "merge_status": "merged",
+                        "completed_at": completed,
+                    },
                 ]
             }
-        ),
-        encoding="utf-8",
-    )
+        ))
 
     duplicate_snapshot = _snapshot_event("run-1", 110, "2026-07-03T11:00:00Z")
     duplicate_review = {
@@ -1350,7 +1403,12 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
         json.dumps(duplicate_snapshot) + "\n" + json.dumps(duplicate_review) + "\n",
         encoding="utf-8",
     )
-    (roots[0] / ".fno" / "events.jsonl").write_text(
+    from fno.paths import project_log
+
+    spaces_root = tmp_path / "spaces"  # pinned into the CLI subprocess below
+    root_a_journal = project_log("events.jsonl", project_root=roots[0])
+    root_a_journal.parent.mkdir(parents=True, exist_ok=True)
+    root_a_journal.write_text(
         json.dumps(duplicate_snapshot)
         + "\n"
         + json.dumps(_snapshot_event("run-1", 90, "2026-07-03T10:00:00Z"))
@@ -1398,6 +1456,7 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
             **os.environ,
             "FNO_CONFIG": str(settings),
             "FNO_REPO_ROOT": str(roots[0]),
+            "FNO_SPACES_DIR": str(spaces_root),
             "FNO_TEST_MODE": "1",
         },
         text=True,
@@ -1423,12 +1482,13 @@ def test_scoreboard_cli_inventories_live_and_archived_delivery_roots(
     }
     expected_paths = {
         str((state_dir / "events.jsonl").resolve()),
-        str((roots[0] / ".fno" / "events.jsonl").resolve()),
+        str(root_a_journal.resolve()),
         str(second_event_path.resolve()),
     }
     if archived_first_path is not None:
         expected_paths.add(str(archived_first_path.resolve()))
     assert observed_paths == expected_paths
+    _wait_subprocess_keeper_exit(tmp_path)
 
 
 def test_evals_documentation_is_generated_from_the_trace_contract() -> None:

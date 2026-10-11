@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
-import pytest
 import yaml
 
-from fno.approvals.models import classify_effect
 from fno.plugins.verify import verify_pack
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -45,55 +42,6 @@ def _frontmatter_tools(path: Path) -> list[str]:
     return [str(t) for t in tools]
 
 
-# AC14-INV: the resolution core is byte-identical to main, and the function-
-# agnostic gate still passes.
-
-
-def _base_ref() -> str | None:
-    """A ref pointing at the default-branch tip, or None if none is resolvable.
-
-    CI PR checkouts do not always carry origin/main; try the common names and
-    the GitHub Actions base-ref env, in order.
-    """
-    candidates = ["origin/main", "main", "master", "origin/HEAD", "upstream/main"]
-    base = os.environ.get("GITHUB_BASE_REF")
-    if base:
-        candidates.append(f"origin/{base}")
-    for ref in candidates:
-        if (
-            subprocess.run(
-                ["git", "rev-parse", "--verify", "-q", ref],
-                cwd=REPO_ROOT,
-                capture_output=True,
-            ).returncode
-            == 0
-        ):
-            return ref
-    return None
-
-
-def test_resolver_core_byte_identical_to_main() -> None:
-    base = _base_ref()
-    if base is None:
-        pytest.skip("no default-branch ref available to compare the resolver core against")
-    result = subprocess.run(
-        ["git", "diff", "--exit-code", base, "--",
-         "cli/src/fno/roles/registry.py", "cli/src/fno/roles/resolver.py"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-    )
-    assert result.returncode == 0, f"resolver core differs from {base}:\n" + result.stdout.decode()
-
-
-def test_plugins_function_agnostic_gate_passes() -> None:
-    result = subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts" / "ci" / "check-plugins-function-agnostic.sh")],
-        cwd=REPO_ROOT,
-        capture_output=True,
-    )
-    assert result.returncode == 0, result.stderr.decode()
-
-
 # AC13-SEC: no packaged agent holds a network, shell, or delegation tool, and a
 # declared publication effect still requires approval. The tool-list check is
 # scoped to each agent's `tools:` field (not its disallowedTools refusal list).
@@ -118,8 +66,8 @@ def test_every_packaged_agent_tool_list_is_bounded() -> None:
     assert all_tools & ALLOWED_TOOLS
 
 
-def test_publication_effect_still_requires_approval() -> None:
-    assert classify_effect("external.publication").value == "require_approval"
+# The declared-publication-effect classification moved to Rust
+# (effect_gate.rs, tested there); this file no longer asserts the table.
 
 
 # The faucet surface verifies clean: agents, skill, and runnable evaluators all

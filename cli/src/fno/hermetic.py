@@ -38,6 +38,7 @@ Docs: ``docs/architecture/test-hermeticity.md``.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -45,8 +46,10 @@ from fno.harness_identity import AMBIENT_IDENTITY_ENV
 
 __all__ = [
     "AMBIENT_LEAK_CANARY",
+    "UndeclaredStateRootError",
     "ambient_names",
     "classify",
+    "declared_root",
     "neutralise",
     "poison",
 ]
@@ -69,11 +72,6 @@ _AMBIENT_PREFIXES = ("FNO_", "TARGET_")
 # is already derived from HARNESS_SESSION_MARKERS because a hand-maintained copy
 # had already lost CLAUDE_SESSION_ID once.
 _AMBIENT_NAMES: tuple[str, ...] = (
-    # pi's session store root. It relocates the (cwd, session_id) lookup
-    # wholesale, which is exactly the state a test must not read from a
-    # developer's machine: unscrubbed, a duplicate-refusal test would see real
-    # sessions. Scrubbed, the lookup falls back to the sandboxed HOME.
-    "PI_HOME",
     *AMBIENT_IDENTITY_ENV,
     # Harness config roots. resolve_plugin_script takes the plugin roots as
     # authoritative, so a suite run inside a live session resolves the
@@ -82,9 +80,20 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "CLAUDE_PLUGIN_ROOT",
     "CODEX_PLUGIN_ROOT",
     "CLAUDE_CONFIG_DIR",  # the account-alias channel; picks which bill is paid
+    "CLAUDE_JOB_DIR",  # the session job tmp dir the write gate names in refusals; a suite must not see the developer's
+    "CLAUDE_DIR_OVERRIDE",  # redirects the Claude config root (the rule-file git repo the corrections hook watches); same category as CLAUDE_CONFIG_DIR
     "CODEX_HOME",  # 12 reads in source; a real per-developer setting
+    # `fno update` keeps a set wrapper and installs the admission wrapper only
+    # when it is unset, so a developer's value would change what a test runs.
+    "RUSTC_WRAPPER",
     "GEMINI_PROJECT_DIR",
     "GEMINI_SANDBOX",
+    "OPENCODE_CONFIG_DIR",  # opencode's config root; same category as CODEX_HOME
+    "OPENCODE_DB",  # points the intel fold at one opencode store; same category as CODEX_HOME
+    "OPENCODE_CONFIG",  # selects the active opencode config file
+    "XDG_CONFIG_HOME",  # redirects user config discovery, including opencode
+    "GROK_HOME",  # grok's session store root; the same category pi once read a store-root var for
+    "GROK_SESSION_ID",  # a live grok session marker; identity, not test input
     "CLAUDE_CLI",
     "CLI",  # legacy harness selector; CLI=codex flips harness resolution
     "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP",
@@ -92,6 +101,18 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # developer's Rust build directory; Cargo supplies its own value to build
     # scripts when it invokes them.
     "OUT_DIR",
+    # The sccache server's idle timeout. fill_sccache_env and the rustc
+    # wrapper resolve an operator's value, and a test inheriting it would
+    # see a server lifetime the code under test did not choose; the wrapper
+    # test pins its own value explicitly.
+    "SCCACHE_IDLE_TIMEOUT",
+    # The sccache opt-in and kill switches. A test inheriting the developer's
+    # machine-wide SCCACHE_DISABLE=1 (or a stray FNO_SCCACHE) would compile
+    # bare rustc where the code under test opted into the cache; the wrapper
+    # tests pin every value they assert on.
+    "FNO_SCCACHE",
+    "SCCACHE_DISABLE",
+    "EDITOR",  # the board editor (backlog_board.rs spawns it); a developer's editor is not a test input
     # Colour suppression, scrubbed rather than kept, which splits it from its
     # siblings TERM and COLORTERM in _ENVIRONMENT below. Those two DESCRIBE a
     # terminal's capability; this one SUPPRESSES output, so its mere presence
@@ -104,15 +125,40 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     # value instead of the one the code under test states. Keeping NO_COLOR
     # visible here reproduces that false positive on the Python side.
     "NO_COLOR",
+    # A developer's visual-motion preference must not change the splash output
+    # seen by tests or subprocesses.
+    "REDUCED_MOTION",
+    # The mux client's light-background probe (digest_overlay.rs theme_for):
+    # a developer's terminal reports its own palette, and a suite must not
+    # resolve the theme from the machine it happens to run on.
+    "COLORFGBG",
+    # A user's OS motion preference changes splash animation, not test behavior.
+    "REDUCED_MOTION",
     # State-path overrides. Each one relocates a store a test then reads.
     "EVENTS_FILE",
+    "GLOBAL_EVENTS_PATH",  # the native stop hook's global journal override
+    # Relocates uv's tools dir, which scrape::fno_py stats for the wheel's
+    # fno-py console script. Scrubbed, the resolver reads the default
+    # ~/.local/share/uv layout instead of a developer's XDG customization.
+    "XDG_DATA_HOME",
+    # Where cargo writes build intermediates. A developer shell that exports it
+    # would point test-built artifacts at an arbitrary tree; neutralise re-pins
+    # it into the sandbox after this scrub.
+    "CARGO_BUILD_BUILD_DIR",
+    # Cargo sets it on processes it launches, and the live-store fence keys
+    # on it; a test must not inherit that from a cargo-run parent.
+    "CARGO_MANIFEST_DIR",
     "STATE_FILE",
     "POSTMORTEMS_DIR",
     "POSTMORTEM_CORRECTIONS_LOG",
     "WORKTREE_STATUS_REGISTRY",
     "TASK_LOCK_TTL_HOURS",
+    # The open-do-row TTL beside the lock TTL: same family, same scrub.
+    "TASK_DO_TTL_HOURS",
     "POST_MERGE_NONINTERACTIVE",
     "MCP_CHANNEL_INBOUND_POKE",
+    # User display preference; tests must not inherit the developer's setting.
+    "REDUCED_MOTION",
     # CI transport state, never developer intent: the push-event sha the
     # hook-tombstones base resolver falls back to. A test wanting a base
     # revision passes --base; inheriting the runner's push context would
@@ -148,6 +194,15 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "GIT_AUTHOR_EMAIL",
     "GIT_COMMITTER_NAME",
     "GIT_COMMITTER_EMAIL",
+    # Editor selection for the board's $EDITOR description edit, with VISUAL
+    # its convention sibling. The client falls back to vi when unset, so the
+    # developer's exported editor is ambient state a test must not inherit.
+    "EDITOR",
+    "VISUAL",
+    # The routing-page bless toggle a deliberate `cargo test -- --ignored
+    # bless_help_routing` sets by hand; no hermetic run needs the ambient
+    # value (crates/fno-agents/src/help_router.rs reads it).
+    "HELP_ROUTING_BLESS",
 )
 
 # Read by source but NOT ambient state: the process needs these to run, and
@@ -172,6 +227,21 @@ _ENVIRONMENT: tuple[str, ...] = (
     "XDG_STATE_HOME",  # pinned into the sandbox below
     "XDG_CACHE_HOME",  # a cache, preserved at its real value
     "CARGO_HOME",  # ditto
+    # Ditto: the darwin pin in _CACHE_DEFAULTS resolves sccache at its
+    # sandbox default, so a test child's server never shares the operator's
+    # developer cache.
+    "SCCACHE_DIR",
+    "UV_CACHE_DIR",  # ditto: resolved at its real value by the cache pins
+    # The venv path an uv sync would write. A developer's value would
+    # redirect a test's install into their own checkout; the spawn-door
+    # venv guard sets it explicitly in its own tests.
+    "UV_PROJECT_ENVIRONMENT",
+    # The toolchain binary itself (rustup shims set it); the cargo_build_dirs
+    # lane reads it first, before PATH and ~/.cargo/bin/cargo. A developer's
+    # value names the same toolchain the caches above resolve, so a test
+    # seeing it is consistent, and the sandbox build-dir pin depends on a
+    # working cargo surviving the scrub.
+    "CARGO",
     # A unix socket path, not a source of answers. Sandboxing it risks the
     # 108-byte sockaddr limit under a long pytest tmpdir, which would break the
     # mux tests for no isolation gain.
@@ -180,18 +250,28 @@ _ENVIRONMENT: tuple[str, ...] = (
     # the sandbox itself, and it is read here only to widen the config ceiling
     # so a test's OWN config stays findable.
     "TMPDIR",
+    # pi's relocation knobs: a store test sets them for the Rust child.
+    "PI_CODING_AGENT_DIR",
+    "PI_CODING_AGENT_SESSION_DIR",
 )
 
 # Set deliberately by a CI workflow, not inherited from a developer's shell.
-# This is the ONE place a runner-configured FNO_* var is exempted; a step that
-# needs a new one adds it here with a comment naming the workflow line, and
-# until then it is dropped and the step fails loudly rather than reading a
-# developer's value. (Vars set inline in a smoke step's own command, e.g.
-# ``FNO_CLAIMS_COMPAT_REQUIRED=1 uv run pytest ...``, are set inside the child
-# and never travel this path.)
 _RUNNER_PASSTHROUGH = (
+    # Native claim-door tests pin the checkout binary; without this runner
+    # channel hermetic children resolve an older PATH binary.
+    "FNO_AGENTS_BIN",
+    # The store worker the same tests pin from the checkout build
+    # (conftest._door_binary_from_this_checkout): without this channel the
+    # sweep deletes the pin and a one-shot store exec resolves the older
+    # PATH binary, which refuses keeper methods this tree adds.
+    "FNO_AGENTS_WORKER",
+    "FNO_BIN",  # the event store client pins the checkout's fno front door
+    "FNO_AGENTS_FRONT",  # .github/actions/smoke-setup/action.yml
     "FNO_REAL_CODEX_PLUGIN_TEST",  # .github/workflows/cli-ci.yml
     "FNO_RUST_FRONT",  # .github/workflows/cli-ci.yml, via $GITHUB_ENV
+    # The smoke workflow sets this on the pytest step so each matrix leg keeps
+    # its own collected test slice instead of silently running the full suite.
+    "FNO_PYTEST_SHARD",  # .github/workflows/cli-ci.yml
     "FNO_LIVE_PROVIDER_USAGE",  # opt-in integration gate; test restores real HOME
     # opt-in live pi journey (cli/tests/agents/test_pi_journey.py). Without
     # this keep the FNO_* prefix sweep clears the flag before the module reads
@@ -206,6 +286,20 @@ _RUNNER_PASSTHROUGH = (
     # live test restores real HOME because kimi's credential lives under
     # ~/.kimi-code, while its cwd remains an isolated fixture.
     "FNO_KIMI_LIVE",
+    # opt-in live dsh journey. The live test restores real HOME because a key
+    # stored through the dsh credentials service lives there.
+    "FNO_DSH_LIVE",
+    # opt-in live agy journey. Real HOME is restored because agy's credential,
+    # its conversation store and its Stop hooks.json all live there.
+    "FNO_AGY_LIVE",
+    # opt-in live codex journey (cli/tests/agents/test_codex_thread_effort_journey.py).
+    # Without this keep the FNO_* prefix sweep clears the flag before the module
+    # reads it, so the journey skips for someone who set it - an acceptance
+    # nobody can run. It spends real tokens only when the flag is set.
+    "FNO_CODEX_LIVE",
+    # opt-in live relay journey (cli/tests/relay/test_roundtrip.py): drives the
+    # live daemon RPC substrate, same skip-for-someone-who-set-it trap.
+    "FNO_LIVE_RELAY",
 )
 
 # Toolchain CACHES, not state fno reads. Sandboxing HOME relocates them, which
@@ -220,6 +314,7 @@ _CACHE_NAMES = (
     "PIP_CACHE_DIR",
     "XDG_CACHE_HOME",
     "npm_config_cache",
+    "SCCACHE_DIR",
 )
 
 # Cache defaults live under the real home, so an unset var still has to be
@@ -229,6 +324,10 @@ _CACHE_DEFAULTS = {
     "RUSTUP_HOME": ".rustup",
     "XDG_CACHE_HOME": ".cache",
 }
+if sys.platform == "darwin":
+    # sccache ignores XDG_CACHE_HOME on macOS; this is its own default there,
+    # so a server started by a test child shares the operator's cache.
+    _CACHE_DEFAULTS["SCCACHE_DIR"] = "Library/Caches/Mozilla.sccache"
 
 # XDG config/data/state are sandboxed (they are state); XDG_CACHE_HOME is not
 # (it is a cache) and is handled above.
@@ -335,6 +434,14 @@ def neutralise(
     # State: HOME (POSIX) and USERPROFILE (Windows, which Path.home() reads).
     out["HOME"] = str(home)
     out["USERPROFILE"] = str(home)
+    # Cargo intermediates are pinned into the sandbox like HOME: the scrubbed
+    # var would otherwise let cargo resolve its own default, and the tracked
+    # .cargo/config.toml template lands that default in the REAL
+    # ~/.cargo/build, which grew ~30 GiB/day of test orphans. Every
+    # tree (pytest, shell, cargo) routes through this function, so all three
+    # build into the sandbox; pytest_sessionfinish removes it, and reclaim's
+    # stale_test_scratch lane reaps what a crashed session leaves.
+    out["CARGO_BUILD_BUILD_DIR"] = f"{home / '.fno' / 'cargo-build'}/{{workspace-path-hash}}"
     for name in _XDG_SANDBOXED:
         out[name] = str(sandbox / "xdg" / name.lower())
 
@@ -434,6 +541,7 @@ def neutralise(
     # FNO_TEST_HERMETIC is set, so a hand-built path is stopped rather than
     # landing in a live journal. See docs/architecture/test-hermeticity.md.
     out["FNO_EVENTS_PATH"] = str(sandbox / "events.jsonl")
+    out["FNO_SPACES_DIR"] = str(sandbox / "spaces")  # spaces root, like events
 
     out.update(caches)
     out.update(_git_pins(sandbox))
@@ -519,3 +627,60 @@ def poison(env: Optional[Mapping[str, str]] = None, fixtures: Optional[Path] = N
     # The simulated missed channel. See AMBIENT_LEAK_CANARY.
     out[AMBIENT_LEAK_CANARY] = "fno-poison-canary"
     return out
+
+
+class UndeclaredStateRootError(RuntimeError):
+    """A state path resolved under a test runner with no root declared."""
+
+
+def declared_root(path: Path) -> Path:
+    """Judge one resolved state path against the process root declaration.
+
+    ``FNO_TEST_HERMETIC`` has three states and this reads all three. The rule,
+    and why ``"0"`` names no lane, are in ``docs/architecture/test-hermeticity.md``.
+    Absent under a test runner is the state that refuses: it is a lane that
+    skipped the conftest chain, which overwrote the live graph on 2026-09-06.
+    ``"pytest" in sys.modules`` is its marker, because the runner produces it.
+    """
+    pin = os.environ.get("FNO_TEST_HERMETIC")
+    if pin == "0":
+        return path
+    if pin != "1" and "pytest" not in sys.modules:
+        return path
+
+    from fno.events import HermeticEscapeError, _hermetic_allowed_roots
+
+    # Realpath only: a symlink inside the sandbox can resolve to live state.
+    resolved = Path(os.path.realpath(path))
+    roots = _hermetic_allowed_roots()
+    if any(resolved == root or root in resolved.parents for root in roots):
+        return path
+
+    if pin == "1":
+        raise HermeticEscapeError(
+            f"refused a state path outside the test sandbox: {path}. Pass an "
+            "explicit path under tmp_path, or resolve it with a fno.paths "
+            "accessor so the sandbox pins apply."
+        )
+    raise UndeclaredStateRootError(
+        f"fno resolved a state path under a test runner with no declared "
+        f"root: {path} (root class: {_root_class_of(path)}). Ambient position "
+        "never selects a root. Declare one of three ways: "
+        "FNO_TEST_HERMETIC=1 (a sandboxed process root), "
+        "FNO_TEST_HERMETIC=0 (ambient on purpose), or "
+        "fno.paths_testing.use_tmpdir(monkeypatch, tmp_path) in the test."
+    )
+
+
+def _root_class_of(path: Path) -> str:
+    """The epic's root class for ``path``, from the state-file table.
+
+    The state ROOT has no table row; the table lists files. HOME is read to
+    LABEL a refusal here, never to select a root.
+    """
+    from fno.paths import STATE_FILES
+
+    named = {f.filename: f.root_class for f in STATE_FILES}
+    home = os.environ.get("HOME")
+    under_home = bool(home) and Path(str(home)) in [path, *path.parents]
+    return named.get(path.name, "OPERATOR" if under_home else "unclassified")

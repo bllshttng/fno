@@ -7,7 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ROOT = REPO_ROOT / "cli" / "src" / "fno"
 _ROOT_PARAMETER_NAMES = frozenset(
-    {"cwd", "path", "registry_path", "repo_root", "root", "root_path", "state_path"}
+    {"cwd", "graph_path", "path", "registry_path", "repo_root", "root", "root_path", "state_path"}
 )
 
 # These caches are intentionally not declared-state readers. Their reasons are
@@ -17,7 +17,14 @@ _NON_STATE_CACHE_REASONS = {
     ("fno.claims.hostid", "machine_id"): "cache key is the process machine identity, not fno state",
     ("fno.graph._reconcile", "_gh_executable"): "cache key is tool discovery, not fno state",
     ("fno.agents.mux_spawn", "_codex_cli_version"): "cache key is tool version discovery, not fno state",
-    ("fno.agents.harness_map", "footnote_verbs"): "cache key is the shipped plugin surface, not fno state",
+    ("fno.agents.harness_map", "_shipped_verbs"): "cache key is the shipped plugin surface, not fno state",
+    ("fno.agents.harness_map", "_carrier_vocab"): "cache key is the shipped package-data table, not fno state",
+    ("fno.agents.spawn_phase", "_verb_phases"): "cache key is the shipped package-data table (spawn_phase.toml), not fno state",
+    ("fno.agents.naming", "_codes"): "cache key is the binary-served vocabulary table (name-codes), not fno state",
+    ("fno.rust_binary", "delivered_terminals"): "cache key is the binary-served delivered-terminal vocabulary, not fno state",
+    ("fno.harness_identity", "_legacy_handle_re"): "cache key is the binary-served harness roster, not fno state",
+    ("fno.autonomy_cli", "_provenance_by_spawner"): "cache key is the binary-served vocabulary table, not fno state",
+    ("fno.config._loader", "_load_settings_at"): "cache key is the full declaration plus a stat fingerprint of the settings candidates (_settings_key), which carries the state root and the file contents",
 }
 
 
@@ -129,11 +136,8 @@ def test_cached_state_probe_finds_the_known_surface():
     names = {reader.qualified_name for reader in _cached_readers()}
 
     assert {
-        "fno.config.load_settings",
-        "fno.paths._settings",
-        "fno.paths.resolve_repo_root",
-        "fno.plan.reconcile_status._node_status_map",
-        "fno.mail.envelope.fleet_has_crown_at",
+        "fno.config._loader._load_settings_at",
+        "fno.paths.resolve_repo_root_at",
     } <= names
 
 
@@ -173,3 +177,79 @@ def test_guard_accepts_a_cached_reader_keyed_by_a_root(tmp_path: Path):
     )
 
     assert _violations(tmp_path) == []
+
+
+# --- settings cache key: declaration + content fingerprint (x-b545) --------
+
+
+def test_settings_key_sees_a_config_edit_without_cache_clear(tmp_path, monkeypatch):
+    """AC11-HP: a live process that has called load_settings() sees new
+    config after a settings-file edit, with no cache_clear."""
+    from fno.config import load_settings
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("project = 'one'\n")
+    monkeypatch.setenv("FNO_CONFIG", str(cfg_file))
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    assert load_settings().project.id == "one"
+    cfg_file.write_text("project = 'two'\n")
+    assert load_settings().project.id == "two"
+
+
+def test_settings_key_unchanged_calls_are_served_from_cache(tmp_path, monkeypatch):
+    """AC12-HP: no edit between two calls -> the same object, no reparse."""
+    from fno.config import load_settings
+
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text("project_id = 'one'\n")
+    monkeypatch.setenv("FNO_CONFIG", str(cfg_file))
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    assert load_settings() is load_settings()
+
+
+def test_settings_key_missing_candidate_contributes_nothing(tmp_path, monkeypatch):
+    """AC13-EDGE: a missing candidate raises nothing and contributes nothing."""
+    from fno.config import _loader
+
+    monkeypatch.setenv("FNO_CONFIG", str(tmp_path / "absent.toml"))
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    key = _loader._settings_key()
+    assert key[-1] == ()
+
+
+def test_settings_key_runs_no_migration_check_and_no_subprocess(
+    tmp_path, monkeypatch
+):
+    """AC14-EDGE: the key is computed on every settings read, so it stats
+    candidates directly - _ensure_migrated never runs from it and it never
+    shells out."""
+    import fno.config as cfg
+    from fno import paths as fno_paths
+    from fno.config import _loader
+
+    monkeypatch.setenv("FNO_REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        cfg, "_ensure_migrated",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("_ensure_migrated ran")),
+    )
+    monkeypatch.setattr(
+        fno_paths.subprocess, "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("subprocess ran")),
+    )
+    key = _loader._settings_key()
+    assert len(key) == 7
+
+
+def test_canonical_root_reads_the_gitfile_pointer(tmp_path):
+    """The canonical candidate is derived from the worktree's .git pointer by
+    file IO alone; a real .git dir (this IS canonical) yields None."""
+    from fno.config import _loader
+
+    main = tmp_path / "main"
+    main.mkdir()
+    linked = tmp_path / "wt"
+    linked.mkdir()
+    (linked / ".git").write_text(f"gitdir: {main}/.git/worktrees/wt\n")
+    assert _loader._canonical_root_from_gitfile(linked) == main
+    (main / ".git").mkdir()
+    assert _loader._canonical_root_from_gitfile(main) is None

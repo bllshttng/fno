@@ -3,8 +3,8 @@
 ``agents.profiles.<verb>.provider`` (the stage table) is the home; the
 deprecated ``dispatch.harness`` reads as the fallback rung beneath it for one
 release. Both dispatch doors - ``resolve_dispatch`` (dispatch-node.sh /
-``fno agents dispatch resolve``) and ``fno agents spawn``
-(inject_spawn_defaults) - must answer one harness for one node.
+``resolve_node_spawn``) and ``fno agents spawn``
+(compose_spawn_argv) - must answer one harness for one node.
 """
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from typing import Optional
 
 from fno.agents.harness_map import resolve_dispatch
 from fno.dispatch_flags import configured_dispatch_harness
+
+import pytest
 
 
 class _Defaults:
@@ -50,10 +52,13 @@ def _settings(
     profile_provider: Optional[str] = None,
     legacy_harness: Optional[str] = None,
     verb: str = "target",
+    profile_route: Optional[str] = None,
 ) -> _Settings:
     from types import SimpleNamespace
 
-    profiles = {verb: {"provider": profile_provider}} if profile_provider else None
+    profiles = None
+    if profile_provider or profile_route:
+        profiles = {verb: {"provider": profile_provider, "route": profile_route}}
     # Attribute access, like the typed DispatchBlock the real model carries.
     dispatch = (
         SimpleNamespace(harness=legacy_harness, substrate="", command="")
@@ -132,15 +137,60 @@ def test_dispatch_door_keeps_the_legacy_key_alone() -> None:
     assert not any("ignored" in entry for entry in out["decision"])
 
 
-def test_spawn_door_answers_the_same_harness() -> None:
+def test_spawn_door_answers_the_same_harness(tmp_path, monkeypatch) -> None:
     """The measured failure this file pins: one node through both doors must
     not land on two vendors. The spawn door reads the same stage-table field
     its own merge already owned; the dispatch door now reads it too."""
-    from fno.agents.spawn_defaults import inject_spawn_defaults
+    from fno.rust_binary import find_dev_binary
 
-    stub = _settings(profile_provider="codex", legacy_harness="claude")
-    argv = inject_spawn_defaults(
-        ["spawn", "/fno:target x-1"], settings=stub, env={}
+    binary = find_dev_binary()
+    if binary is None:
+        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        '[agents.profiles.target]\nprovider = "codex"\n', encoding="utf-8"
     )
-    assert "--harness" in argv
+    monkeypatch.setenv("FNO_CONFIG", str(config_path))
+    monkeypatch.setenv("FNO_NO_CANONICAL_CONFIG", "1")
+
+    from fno.agents.spawn_defaults import compose_spawn_argv
+
+    argv = compose_spawn_argv(["spawn", "/fno:target x-1"])
     assert argv[argv.index("--harness") + 1] == "codex"
+
+    out = resolve_dispatch(settings=_settings(profile_provider="codex"))
+    assert out["harness"] == "codex"
+
+
+def test_dispatch_door_carries_the_stage_table_route() -> None:
+    """The route rides the same stage-table row the harness does: a dispatch
+    that forwards the harness but not the route sends a routed model to the
+    default endpoint, where it dies on first inference. The tuple must carry
+    both, so a caller can forward both."""
+    out = resolve_dispatch(
+        settings=_settings(profile_provider="claude",
+                           profile_route="zai,glm-5.3-flash[1m]")
+    )
+    assert out["harness"] == "claude"
+    assert out["route"] == "zai,glm-5.3-flash[1m]"
+    assert any("route=config(" in entry for entry in out["decision"])
+
+
+def test_dispatch_door_route_unset_reads_empty() -> None:
+    """No stage-table route: the field reads "" (never None/absent), so a
+    shell consumer's select(. != "") sees a clean absence."""
+    out = resolve_dispatch(settings=_settings(profile_provider="claude"))
+    assert out["route"] == ""
+    assert not any(entry.startswith("route=config") for entry in out["decision"])
+
+
+def test_configured_dispatch_route_reads_the_same_rung() -> None:
+    """The standalone reader answers the same rung the tuple does, with the
+    verb normalization (leading slash, fno: namespace) applied."""
+    from fno.dispatch_flags import configured_dispatch_route
+
+    assert configured_dispatch_route(
+        _settings(profile_route="zai/glm-5.3-flash[1m]"), verb="/fno:target"
+    ) == "zai/glm-5.3-flash[1m]"
+    assert configured_dispatch_route(_settings()) == ""

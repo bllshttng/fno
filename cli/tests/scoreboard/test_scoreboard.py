@@ -8,6 +8,7 @@ AC5-FR  mid-append partial -> single retry recovers rather than crashing.
 """
 
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 from datetime import datetime
@@ -56,11 +57,20 @@ _RECENT = _days_ago(1)
 _OLDER = _days_ago(2)
 
 
-def _wire(monkeypatch, tmp_path, ledger_path):
+def _wire(monkeypatch, tmp_path, ledger_path, *, hermetic_graph=True):
     import fno.paths as paths
 
     monkeypatch.setattr(paths, "ledger_json", lambda: ledger_path)
     monkeypatch.setattr(paths, "graph_json", lambda: tmp_path / "graph.json")
+    if hermetic_graph:
+        # A graph fixture that parses sends read_graph_nodes down the
+        # _apply_graph_defaults seam, which needs the fno-agents-worker
+        # runtime (absent on CI's changed-smoke and pip-only boxes). These
+        # tests judge the fold and the render, not the migration pass, so
+        # identity keeps them hermetic.
+        import fno.graph.store as graph_store
+
+        monkeypatch.setattr(graph_store, "_apply_graph_defaults", lambda entries, **k: entries)
 
 
 # --- AC5-HP -----------------------------------------------------------------
@@ -80,10 +90,12 @@ def test_hp_prints_core_metrics(tmp_path, monkeypatch):
 
 
 def test_hp_autonomy_survival_activate_with_w4(tmp_path, monkeypatch):
-    # W4 signals present: a human_touch event + a graph node carrying a causal field.
-    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 5.0}]
+    # W4 signals present: a human_touch event + a graph node carrying a causal
+    # field. The ship is 20 days old, so it has completed the observation
+    # window and survival may judge it.
+    rows = [{"completed": _days_ago(20), "termination_reason": "DonePRGreen", "graph_node_id": "x-00000001", "cost_usd": 5.0}]
     (tmp_path / "events.jsonl").write_text(json.dumps({"type": "human_touch", "ts": _days_ago(1, hour=9)}) + "\n")
-    (tmp_path / "graph.json").write_text(json.dumps({"entries": [{"id": "x-1", "reverted": False}]}))
+    seed_graph(tmp_path / "graph.json", json.dumps({"entries": [{"id": "x-00000001", "reverted": False, "merge_status": "merged", "completed_at": _days_ago(20)}]}))
     _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
     res = runner.invoke(_app(), ["--json"])
     sb = json.loads(res.output)
@@ -173,19 +185,89 @@ def test_aware_offset_timestamps_land_on_one_timeline():
 def test_survival_ignores_fix_predating_ship(tmp_path, monkeypatch):
     # A fix-node created BEFORE the ship is not a follow-up to it -> node survives.
     # Fixed dates on purpose: this test injects an explicit `now=`, so it is
-    # deterministic and must NOT follow the wall clock.
-    rows = [{"completed": "2026-07-03T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
+    # deterministic and must NOT follow the wall clock. The ship sits 20 days
+    # before `now`, so it has completed the observation window.
+    rows = [{"completed": "2026-06-15T10:00:00", "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
     graph = [
-        {"id": "x-1", "reverted": False},
-        {"id": "x-fix", "caused_by": "x-1", "created_at": "2026-07-01T00:00:00"},  # 2 days BEFORE ship
+        {"id": "x-1", "reverted": False, "merge_status": "merged", "completed_at": "2026-06-15T10:00:00"},
+        {"id": "x-fix", "caused_by": "x-1", "created_at": "2026-06-10T00:00:00"},  # 5 days BEFORE ship
     ]
-    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime(2026, 7, 3, 20, 0, 0))
+    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime(2026, 7, 5, 20, 0, 0))
     assert sb["survival"]["available"] is True and sb["survival"]["survived"] == 1
 
     # a fix AFTER the ship, within 14 days, counts against survival
-    graph[1]["created_at"] = "2026-07-04T00:00:00"
+    graph[1]["created_at"] = "2026-06-25T00:00:00"
     sb2 = build_scoreboard(rows, [], graph, since_days=28, now=datetime(2026, 7, 5, 20, 0, 0))
     assert sb2["survival"]["survived"] == 0
+
+
+# --- AC3: integrity, cohorts, emission failures -----------------------------
+def test_quality_denominator_only_mature_deliveries(tmp_path, monkeypatch):
+    # One delivery observed past the follow-up window, one 1 day old: only the
+    # mature one is judged; the young one is pending, never in the denominator.
+    rows = [
+        {"completed": _days_ago(20), "termination_reason": "DonePRGreen", "graph_node_id": "x-old", "cost_usd": 1.0},
+        {"completed": _days_ago(1), "termination_reason": "DonePRGreen", "graph_node_id": "x-new", "cost_usd": 1.0},
+    ]
+    graph = [
+        {"id": "x-old", "reverted": False, "merge_status": "merged", "completed_at": _days_ago(20)},
+        {"id": "x-new", "reverted": False, "merge_status": "merged", "completed_at": _days_ago(1)},
+    ]
+    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime.now())
+    su = sb["survival"]
+    assert su["available"] is True
+    assert su["shipped_nodes"] == 1
+    assert su["survived"] == 1
+    assert su["pending"] == 1
+
+
+def test_malformed_journal_states_its_omission(tmp_path, monkeypatch):
+    # A malformed line in the touch journal is an omission the report states,
+    # never a silent zero in the rates that read that journal.
+    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
+    (tmp_path / "events.jsonl").write_text("{not json\n")
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    res = runner.invoke(_app(), ["--json"])
+    sb = json.loads(res.output)
+    assert sb["event_coverage"]["complete"] is False
+    assert sb["event_coverage"]["malformed_lines"] == 1
+    res2 = runner.invoke(_app(), [])
+    assert "event journals incomplete" in res2.output
+
+
+def test_emission_failures_unknown_when_server_unreachable(tmp_path, monkeypatch):
+    # AC3-ERR: an unavailable counter renders as Unknown with its reason, not
+    # as a measured zero.
+    import fno.scoreboard.cli as cli_mod
+
+    monkeypatch.setattr(
+        cli_mod,
+        "emission_failures_snapshot",
+        lambda: {"available": False, "reason": "connection refused"},
+    )
+    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    res = runner.invoke(_app(), [])
+    assert "touch emission failures: unknown (connection refused)" in res.output
+
+
+def test_emission_failures_measured_count_renders(tmp_path, monkeypatch):
+    import fno.scoreboard.cli as cli_mod
+
+    monkeypatch.setattr(
+        cli_mod,
+        "emission_failures_snapshot",
+        lambda: {
+            "available": True,
+            "count": 3,
+            "measured_since": "2026-09-11T00:00:00Z",
+            "measured_at": "2026-09-11T12:00:00Z",
+        },
+    )
+    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 1.0}]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    res = runner.invoke(_app(), [])
+    assert "touch emission failures: 3 since 2026-09-11T00:00:00Z" in res.output
 
 
 def test_zero_shipped_nodes_is_na_not_a_bare_rate():
@@ -245,3 +327,222 @@ def test_fr_single_retry_recovers(tmp_path, monkeypatch):
     assert state["n"] == 1  # retried exactly once
     assert len(rows) == 1
     _ = real_sleep  # keep reference; no real sleeping in the test
+
+
+# --- x-b6bd: shipped is the merge, the terminal is a breakdown ---------------
+def test_merged_node_with_backstop_row_counts_shipped():
+    # AC1-HP: a node whose PR merged ships even when its only ledger row is a
+    # reconcile-backstop (the session's terminal never said Done*), and its
+    # spend is ship spend. The second merged node has no ledger row at all -
+    # the population the ledger never saw, reported separately.
+    rows = [
+        {"completed": _RECENT, "termination_reason": "reconcile-backstop", "graph_node_id": "x-m", "cost_usd": 3.0}
+    ]
+    graph = [
+        {"id": "x-m", "merge_status": "merged", "completed_at": _RECENT, "reverted": False},
+        {"id": "x-orphan", "merge_status": "merged", "completed_at": _RECENT},
+        {"merge_status": "merged", "completed_at": _RECENT},  # junk row: no id, never a crash
+    ]
+    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 2
+    assert sb["merged_nodes_without_ledger_row"] == 1
+    assert sb["spend"]["ship_terminal_usd"] == 3.0
+    assert sb["spend"]["wedge_terminal_usd"] == 0.0
+
+
+def test_terminal_fallback_counts_node_absent_from_graph():
+    # AC2-HP: the union keeps a Done* row whose node the graph has lost.
+    rows = [{"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-gone", "cost_usd": 1.0}]
+    sb = build_scoreboard(rows, [], [], since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 1
+    assert sb["shipped_by_terminal"] == 1
+
+
+def test_noprogress_merged_node_is_shipped_not_wedge():
+    # The session BELIEVED it made no progress; the merge is what HAPPENED.
+    # Spend follows the node, so this row is ship spend, not wedge spend.
+    rows = [{"completed": _RECENT, "termination_reason": "NoProgress", "graph_node_id": "x-np", "cost_usd": 2.0}]
+    graph = [{"id": "x-np", "merge_status": "merged", "completed_at": _RECENT, "reverted": False}]
+    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 1
+    assert sb["spend"]["ship_terminal_usd"] == 2.0
+    assert sb["spend"]["wedge_terminal_usd"] == 0.0
+
+
+def test_shipped_by_terminal_matches_legacy_count():
+    # Parity: with no merged graph nodes the new count degrades to the old one.
+    rows = [
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 5.0},
+        {"completed": _OLDER, "termination_reason": "NoProgress", "graph_node_id": "x-2", "cost_usd": 2.0},
+    ]
+    sb = build_scoreboard(rows, [], [], since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 1
+    assert sb["shipped_by_terminal"] == 1
+
+
+def test_register_stamps_utc_suffix(monkeypatch, tmp_path):
+    # AC4-HP: the writer's started/completed carry the same +00:00 suffix and
+    # never read completed < started (the 268-rows defect this closes).
+    from fno.cost import _register
+
+    def fake_git(*args):
+        return {
+            ("branch", "--show-current"): "feature/x-1",
+            ("remote", "get-url", "origin"): "",
+            ("rev-parse", "--show-toplevel"): str(tmp_path),
+        }.get(args, "")
+
+    monkeypatch.setattr(_register, "git_cmd", fake_git)
+    monkeypatch.setattr(_register._paths, "resolve_canonical_worktree", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(_register, "_pr_number_from_ship_artifact", lambda *_: None)
+    monkeypatch.setattr(_register, "_pr_number_from_gh", lambda *_: None)
+    monkeypatch.setattr(_register, "sum_plan_points", lambda *_: 0)
+    entry = _register.build_entry({"created_at": "2026-09-03T05:34:17Z", "fno_id": "tgt-utc"}, "")
+    assert entry["started"].endswith("+00:00")
+    assert entry["completed"].endswith("+00:00")
+    assert datetime.fromisoformat(entry["completed"]) >= datetime.fromisoformat(entry["started"])
+    # A malformed stamp is stored verbatim, never a lost row (round-1 finding).
+    assert _register._utc_iso("ts") == "ts"
+    assert _register._utc_iso("2026-09-02T22:43:24Z") == "2026-09-02T22:43:24+00:00"
+
+
+def test_render_shipped_caveat_shows_and_hides(tmp_path, monkeypatch):
+    # AC3-HP: both counts ride together; the caveat only when they differ by
+    # more than 10 percent.
+    rows = [
+        {"completed": _RECENT, "termination_reason": "reconcile-backstop", "graph_node_id": "x-m", "cost_usd": 1.0}
+    ]
+    graph = [{"id": "x-m", "merge_status": "merged", "completed_at": _RECENT}]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    seed_graph(tmp_path / "graph.json", json.dumps({"entries": graph}))
+    res = runner.invoke(_app(), [])
+    assert "Shipped" in res.output and "by session terminal alone: 0" in res.output
+    assert "the merge is the count" in res.output  # 0 of 1 = >10% apart
+
+    rows2 = [
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-m", "cost_usd": 1.0}
+    ]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows2))
+    res2 = runner.invoke(_app(), [])
+    assert "the merge is the count" not in res2.output  # 1 of 1 = no gap
+
+
+# --- x-e159: undated events never enter a timed window ----------------------
+def test_undated_touch_excluded_from_window():
+    from datetime import timedelta
+
+    from fno.scoreboard.fold import _event_in_window
+
+    now = datetime.now()
+    cutoff = now - timedelta(days=28)
+    assert _event_in_window({"kind": "human_touch"}, cutoff, now) is False
+    assert _event_in_window({"kind": "human_touch", "data": {}}, cutoff, now) is False
+    assert _event_in_window({"kind": "human_touch", "ts": _RECENT}, cutoff, now) is True
+
+
+def test_undated_touch_never_inflates_autonomy():
+    from datetime import timedelta
+
+    from fno.scoreboard.fold import _autonomy
+
+    now = datetime.now()
+    cutoff = now - timedelta(days=28)
+    events = [{"kind": "human_touch"}, {"kind": "human_touch", "ts": _RECENT}]
+    out = _autonomy(events, {"x-1"}, cutoff, now)
+    assert out["available"] is True
+    assert out["touches"] == 1
+
+
+# --- AC1: one delivery classification across the main view ------------------
+def test_in_review_node_does_not_ship_and_document_stays_delivered():
+    # AC1-HP: a DonePRGreen terminal on a known unmerged code node is a
+    # session stop, not a delivery; an explicitly delivered doc stays one.
+    rows = [
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-code", "cost_usd": 1.0},
+        {"completed": _RECENT, "termination_reason": "DoneAdvisory", "graph_node_id": "x-doc", "cost_usd": 1.0},
+    ]
+    graph = [
+        {"id": "x-code", "merge_status": None, "completed_at": _RECENT},
+        {"id": "x-doc", "merge_status": None, "completed_at": _RECENT},
+    ]
+    sb = build_scoreboard(rows, [], graph, since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 1
+    assert sb["delivery_classes"] == {"delivered_doc": 1}
+
+
+def test_merged_node_without_ledger_row_is_delivery_with_missing_cost():
+    # AC1-EDGE: the merge alone delivers; no ledger row means cost coverage
+    # is missing, never no_data.
+    graph = [{"id": "x-m", "merge_status": "merged", "completed_at": _RECENT}]
+    sb = build_scoreboard([], [], graph, since_days=28, now=datetime.now())
+    assert sb["state"] != "no_data"
+    assert sb["shipped_nodes"] == 1
+    assert sb["merged_nodes_without_ledger_row"] == 1
+    assert sb["spend"]["ship_terminal_usd"] == 0.0
+
+
+# --- AC2: the denominator is scoped once ------------------------------------
+def test_project_scope_counts_once_and_keeps_unattributed_out(tmp_path, monkeypatch):
+    graph = [
+        {"id": "x-1", "project": "p1", "merge_status": "merged", "completed_at": _RECENT},
+        {"id": "x-2", "project": "p2", "merge_status": "merged", "completed_at": _RECENT},
+    ]
+    rows = [
+        # p1: a retry, then the delivering run - one delivered node.
+        {"completed": _RECENT, "termination_reason": "NoProgress", "graph_node_id": "x-1", "cost_usd": 1.0, "project": "p1", "provider_id": "zai"},
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 2.0, "project": "p1", "provider_id": "zai"},
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-1", "cost_usd": 3.0, "project": "p1", "provider_id": "claude"},
+        # p2 must not leak into p1; the unattributed row is counted, not copied.
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "graph_node_id": "x-2", "cost_usd": 9.0, "project": "p2"},
+        {"completed": _RECENT, "termination_reason": "DonePRGreen", "cost_usd": 5.0},
+    ]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    seed_graph(tmp_path / "graph.json", json.dumps({"entries": graph}))
+    res = runner.invoke(_app(), ["--project", "p1", "--json"])
+    sb = json.loads(res.output)
+    assert sb["shipped_nodes"] == 1
+    assert sb["project_scope"]["project"] == "p1"
+    assert sb["project_scope"]["unattributed_rows"] == 1
+    assert sb["project_scope"]["other_project_rows"] == 1
+    assert sb["spend"]["ship_terminal_usd"] == 6.0
+
+
+def test_stale_queued_status_loses_to_merge_evidence():
+    # A queued value nothing writes is stale state if it ever surfaces;
+    # current merge evidence wins and no queued population is invented.
+    graph = [{"id": "x-m", "merge_status": "queued", "merged_at": _RECENT}]
+    sb = build_scoreboard([], [], graph, since_days=28, now=datetime.now())
+    assert sb["shipped_nodes"] == 1
+    assert sb["delivery_classes"] == {"merged": 1}
+
+
+# --- x-fe4d: the JSON stream stays strict (no NaN/Infinity tokens) ----------
+def test_num_never_returns_nonfinite():
+    from fno.scoreboard.fold import _num
+
+    assert _num(float("nan")) == 0.0
+    assert _num(float("inf")) == 0.0
+    assert _num(float("-inf")) == 0.0
+    assert _num("nan") == 0.0
+    assert _num(None) == 0.0
+    assert _num("junk") == 0.0
+    assert _num("12.5") == 12.5
+    assert _num(3) == 3.0
+
+
+def test_scoreboard_json_stream_is_strict(tmp_path, monkeypatch):
+    rows = [
+        {
+            "completed": _RECENT,
+            "termination_reason": "DonePRGreen",
+            "graph_node_id": "x-1",
+            "cost_usd": float("inf"),
+        }
+    ]
+    _wire(monkeypatch, tmp_path, _ledger(tmp_path, rows))
+    res = runner.invoke(_app(), ["--json"])
+    assert res.exit_code == 0, res.output
+    import json as _json
+
+    parsed = _json.loads(res.output, parse_constant=lambda c: pytest.fail(f"non-finite {c}"))
+    assert isinstance(parsed, dict)

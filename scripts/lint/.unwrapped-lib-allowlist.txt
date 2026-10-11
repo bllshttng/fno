@@ -15,11 +15,11 @@ events-lock.sh
 state-parser.sh
 transcript-parser.sh
 worktree-manager.sh
+worktree-config.sh
 corrections-lock.sh
 phase-handoff.sh
 target-guard.sh
 spawn-subagent.sh
-hook-events.sh
 blocked-taxonomy.sh
 checkpoint.sh
 graph-resolve.sh
@@ -136,19 +136,12 @@ cancel-signal-writer.sh
 # point.
 blocked-handler.sh
 
-# Verified-merge ground truth (ab-f7f8bc53). Sourced by hooks/target-stop-hook.sh;
+# Verified-merge ground truth. Sourced by hooks/target-stop-hook.sh;
 # exposes is_verified_merge (the shared rc0/1/2 check, also called from
 # gate-audit.sh) and maybe_softexit_on_verified_merge (the defensive completion).
 # Pure sourcing library; tests source it directly for behavioral + structural
 # checks. No standalone CLI of its own.
 verified-merge.sh
-
-# Phase 12 of stop-hook refactor: budget-display computation. Reads
-# total_cost_usd + budget_cap_usd from STATE_FILE; sets COST_DISPLAY for
-# the resume system message. Pure display logic; the actual budget
-# enforcement (cap trip) lives in crates/fno-agents/src/loopcheck.rs.
-# Sourced by the hook; not a user-facing entry point.
-budget-display.sh
 
 # Advisory body-length lint for gate artifacts. Soft warning only;
 # called from gates-satisfied.sh::gate_satisfied to surface bloat in
@@ -158,32 +151,32 @@ budget-display.sh
 check-artifact-body.sh
 
 # Per-PR artifact consolidator. Invoked best-effort by fno/pr/_merge.py
-# (the internalized `fno do pr merge`, ab-d4c98550) after a successful merge to
+# (the internalized `fno do pr merge`) after a successful merge to
 # collect every phase artifact for the session into one
 # {YYYYMMDD}{SS}-{pr#}-artifact.md file. Internal helper, not a user-facing
 # entry point; degrades to a silent no-op when absent (bare pip install).
 consolidate-artifacts.sh
 
-# Shared throttled-reconcile helper (retro-auto-triage, ab-79165ba1). Sourced
+# Shared throttled-reconcile helper (retro-auto-triage). Sourced
 # by hooks/reconcile-session-start.sh and hooks/megawalk-stop-hook.sh to fire a
 # backgrounded, throttled `fno backlog reconcile` (which IS the wrapped entry
 # point). Pure sourcing library: exposes reconcile_maybe_fire; no standalone CLI.
 reconcile-throttle.sh
 
-# Shared daily-throttled eval-loop ignition helper (x-42f6). Sourced by
+# Shared daily-throttled eval-loop ignition helper. Sourced by
 # hooks/eval-sweep-session-start.sh to fire a backgrounded, throttled
 # `fno doctor observer sweep` + `fno doctor skill-diff tick` (which ARE the wrapped entry
 # points); itself sources reconcile-throttle.sh for helper reuse. Pure sourcing
 # library: exposes eval_sweep_maybe_fire; no standalone CLI.
 eval-sweep-throttle.sh
 
-# W8 operator-authority enforcement (cv-b36e32b1). Sourced by
+# W8 superuser-authority enforcement (cv-b36e32b1). Sourced by
 # hooks/target-stop-hook.sh; drive_authority_active() is a thin bash consumer
 # of the EXISTING `fno agents drive-authority` verb (which IS the wrapped entry
 # point). Pure sourcing library; no standalone CLI of its own.
 drive-authority.sh
 
-# Human-gated operator-override close (ab-ae3cc4a8). Sourced by
+# Human-gated operator-override close. Sourced by
 # hooks/target-stop-hook.sh; exposes _detect_operator_override_reason and
 # handle_operator_override_if_authorized. The authorization is a genuine
 # user-authored `/target override <reason>` message detected from the
@@ -202,16 +195,24 @@ infer-has-ui.sh
 resolve-plan-executor.sh
 
 # Megawalk lineage-aware pre-advance verification (target self-handoff,
-# ab-534bcc55). resolve_terminal_session implements the terminal-session
+#). resolve_terminal_session implements the terminal-session
 # resolution rule (docs/architecture/target-self-handoff.md). Sourced by
 # hooks/megawalk-stop-hook.sh; tests source the lib directly. Pure sourcing
 # library; no standalone CLI of its own.
 
+# The zero-verdict helper (runs a control and a probe through ONE argv so a
+# zero needs a live control in the same tool and scope). Invoked via
+# `bash <path>` by the scripts/ci gates (check-no-internal-refs.sh,
+# check-no-stale-spec-refs.sh) and by tests/lib/test_assert_absent.sh; the
+# calling gates ARE the entry points, so an fno verb would be a third path
+# to the same scan. Standalone tool; no CLI of its own.
+assert-absent.sh
+
 # The shared "is removing this worktree safe?" answer. Sourced by
 # scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
-# exposes wt_reapable. It is the bash ADAPTER for the wrapped entry point
-# `fno workspace worktree reapable` (cli/src/fno/worktree_reapable.py), which is where the
-# classifier actually lives, so a second wrapper would be a third opinion on a
+# exposes wt_reapable. It is the bash ADAPTER for the gate binary
+# (crates/fno-agents/src/worktree_reapable.rs), where the classifier
+# actually lives, so a second wrapper would be a third opinion on a
 # question that must have exactly one. Pure sourcing library; no CLI of its own.
 worktree-reapable.sh
 
@@ -230,14 +231,30 @@ worktree-unpushed.sh
 # Pure sourcing library; no CLI of its own.
 worktree-removal-event.sh
 
-# Bounded append-log rotation (.fno/ dir-hygiene, ab-d5a984f6). A thin
+# The shared "which of these rooted processes actually holds the tree?" answer.
+# Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
+# exposes wt_classify_pids. The bridge is the bash ADAPTER for the classifier
+# beside it (worktree_occupancy.py), which composes the fno Python modules
+# (keeper_lane, session_procs, footprint) from cli/src on PYTHONPATH; the
+# wrapped entry points users drive are `fno workspace worktree cleanup/archive`.
+# Pure sourcing library; no CLI of its own.
+worktree-occupancy.sh
+
+# The per-hit worktree occupancy classifier (holder vs inert) run AS A SCRIPT
+# by the bridge above: `python scripts/lib/worktree_occupancy.py <wt> <pid>...`.
+# It lives here, not in cli/src/fno, because cli/src is shrink-only net
+# (check-file-budget) and this is sweep-side tooling like worktree-status.py.
+# Its caller is the bridge; no fno verb wraps it directly.
+worktree_occupancy.py
+
+# Bounded append-log rotation (.fno/ dir-hygiene). A thin
 # `bash <path> <file> <max_bytes>` helper invoked by hooks/convo-signal-capture.sh
 # to cap convo-signals.jsonl; tests run it directly. Pure utility, not a
 # user-facing fno verb.
 rotate-append-log.sh
 
 # Cross-references a worktree path against ~/.fno/agents/registry.json for
-# its real session name + live/exited status (x-ad51). Invoked by
+# its real session name + live/exited status. Invoked by
 # scripts/lib/worktree-lifecycle.sh's `status` case, which IS the wrapped
 # entry point (`fno workspace worktree status` -> cli/src/fno/worktree_cli/cli.py);
 # a second wrapper here would be a third opinion on one question.
@@ -245,9 +262,51 @@ rotate-append-log.sh
 worktree-status.py
 
 # Shared post-compaction carrier selection for the two reinject hooks
-# (target-postcompact-reinject.sh and king-postcompact-reinject.sh) plus
+# (target-postcompact-reinject.sh and lead-postcompact-reinject.sh) plus
 # precompact-canon-doc.sh. Sourced, never executed; the hooks are the entry
 # points and need no fno verb between them and the lib. Pure sourcing
 # library; no standalone CLI of its own.
 postcompact-carrier.sh
+
+# Canon-doc marker-block reader for the fno:user fence: extraction, the seed
+# placeholder, and the placeholder classifier. Sourced by
+# hooks/precompact-canon-doc.sh, hooks/lead-postcompact-reinject.sh, and the
+# lead check-in body. Sourced, never executed; the hooks are the entry
+# points. Pure sourcing library; no standalone CLI of its own.
+canon-doc-marker.sh
 cargo-rustc-wrapper.sh
+
+# The foreign-rooted-writers predicate for the flush nudge. Sourced by
+# hooks/context-nudge.sh's flush branch; exposes foreign_rooted_writers, which
+# reuses _wt_pids from scripts/lib/worktree-lifecycle.sh and joins the agents
+# registry - the wrapped entry point for that population is
+# `fno agents registry-json`, so a wrapper here would be a second path around
+# the one registry read. The plan's declared second caller is a future
+# add -A guard in hooks/git-protection.py, which would source it the same way.
+# Pure sourcing library; no CLI of its own.
+rooted-writers.sh
+
+# The skill-discovery engine behind scripts/setup.sh, scripts/doctor.sh and
+# scripts/diagnostics/codex-skill-load-audit.py. It must run before fno may
+# even be installed (bootstrap-era, plain python3 with a pyyaml degrade), so
+# an fno wrapper would invert the dependency; the bash scripts are the entry
+# points. Pure library + standalone CLI of its own; no fno verb wraps it.
+skill_discovery.py
+cargo-build-dir.sh
+
+# The code-index provider detector. Invoked via `bash <path>` by
+# scripts/validate-plan.sh's Code Index Audit (the validator and its bundled
+# copies are the entry points) and by tests/test-code-index-detect.sh; an fno
+# verb would be a second path around the same detection. Standalone tool; no
+# CLI of its own.
+code-index-detect.sh
+
+# The shared mux-test keeper reaper. Sourced by the test proof scripts
+# (tests/mux-portal-restore-server-kill.sh, tests/mux-workspace-standalone.sh)
+# from their EXIT cleanup; a pure library with no fno surface of its own.
+keeper-reap.sh
+
+# The load-aware hook budget. Sourced by the optional hooks in hooks/ (see
+# docs/hooks-fail-open.md) and by tests/hooks/test_hook_budget.sh; the bound
+# and the cache are pure library, no fno verb wraps them.
+hook-budget.sh

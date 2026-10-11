@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - session start using fno
 # SessionStart hook: inject the using-fno SKILL.md as additionalContext.
 #
 # It ensures every Claude session opened in a footnote-enabled project
@@ -22,6 +23,10 @@
 #   no-op response. Errors go to stderr where the harness logs them.
 
 set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 if [[ -z "${PLUGIN_ROOT}" ]]; then
@@ -48,6 +53,13 @@ SKILL_BODY="$(cat "${SKILL_PATH}" 2>/dev/null)" || {
 # JSON-escape via bash parameter substitution. Each ${s//old/new} is a
 # single C-level pass - orders of magnitude faster than a character loop.
 escape_for_json() {
+    # macOS bash 3.2 decodes the active locale inside ${s//pat/repl} and
+    # takes ~20s wall on this 11KB body (measured 2026-10-08; 0.9s with this
+    # pin). Escaping \\, ", CR, LF, TAB is byte-safe in the C locale: UTF-8
+    # continuation bytes never collide with those ASCII bytes, so the output
+    # is identical to the multibyte pass.
+    local LC_ALL=C
+    export LC_ALL
     local s="$1"
     s="${s//\\/\\\\}"
     s="${s//\"/\\\"}"

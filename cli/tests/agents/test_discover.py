@@ -10,13 +10,16 @@ host-independent.
 """
 
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import builtins
 import fcntl
 import json
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -99,6 +102,42 @@ def _run(sdir, alive, tmp_path, **kw):
         project_resolver=kw.pop("project_resolver", lambda c: None),
         **kw,
     )
+
+
+def test_discover_walks_a_registered_account_root(tmp_path, monkeypatch):
+    """With no FNO_CLAUDE_SESSIONS_DIR, discovery walks every root: a record
+    under a registered claude account's sessions dir is a candidate. The env
+    override still wins, so the test seam stays hermetic."""
+    use_tmpdir(monkeypatch, tmp_path)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv(discover.SESSIONS_DIR_ENV, raising=False)
+    acct = tmp_path / "acct"
+    acct.mkdir()
+    config = tmp_path / "accounts-config.toml"
+    config.write_text(
+        "[[accounts.records]]\n"
+        'id = "makers"\n'
+        'name = "makers"\n'
+        'harness = "claude"\n'
+        'auth = "managed"\n'
+        f'config_dir = "{acct}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FNO_CONFIG", str(config))
+    sdir = acct / "sessions"
+    ct = _write_session(sdir, 4242, session_id="uuid-acct", job_id="feedc0de", cwd="/tmp")
+    kwargs = dict(
+        name_map_path=tmp_path / ".fno" / "session-names.json",
+        psutil_mod=_FakePsutil({4242: ct}),
+        project_resolver=lambda c: None,
+        registry_path=tmp_path / "registry.json",
+    )
+    sessions = discover.discover_live_sessions(**kwargs)
+    assert "feedc0de" in [s.short_id for s in sessions]
+
+    override = tmp_path / "override"
+    monkeypatch.setenv(discover.SESSIONS_DIR_ENV, str(override))
+    assert discover.discover_live_sessions(**kwargs) == []
 
 
 def test_ac1_hp_three_live_sessions(tmp_path, monkeypatch):
@@ -388,15 +427,9 @@ def test_alias_lock_contention_is_bounded_to_canonical_handle(tmp_path, monkeypa
         job_id="deadbeef",
         cwd="/Users/x/code/project",
     )
-    monkeypatch.setattr(discover, "_ALIAS_LOCK_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(discover, "_ALIAS_LOCK_POLL_SECONDS", 0.005)
-    lock_path = name_map.with_suffix(name_map.suffix + ".lock")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(lock_path, "w") as holder:
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
-        started = time.monotonic()
-        sessions = discover.discover_live_sessions(
+    def scan():
+        return discover.discover_live_sessions(
             sessions_dir=sdir,
             projects_dir=tmp_path / "no-projects",
             codex_sessions_dir=tmp_path / "no-codex",
@@ -408,7 +441,51 @@ def test_alias_lock_contention_is_bounded_to_canonical_handle(tmp_path, monkeypa
             classify_truth=False,
         )
 
-    assert time.monotonic() - started < 0.5
+    # Contrast pass: with the lock free the same scan writes the map, so the
+    # contended pass can attribute its fallback to the lock timeout alone.
+    baseline = scan()
+    assert len(baseline) == 1
+    assert name_map.exists()
+    name_map.unlink()
+
+    monkeypatch.setattr(discover, "_ALIAS_LOCK_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(discover, "_ALIAS_LOCK_POLL_SECONDS", 0.005)
+    lock_path = name_map.with_suffix(name_map.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # The contender consumes its timeout on a controlled clock: monotonic
+    # advances only when the lock loop sleeps, so a paused runner cannot
+    # inflate the contended pass. Wall time is never measured.
+    real_time = discover.time
+    now = 0.0
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds):
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(
+        discover,
+        "time",
+        SimpleNamespace(
+            monotonic=lambda: now,
+            sleep=fake_sleep,
+            time=lambda: real_time.time(),
+        ),
+    )
+
+    with open(lock_path, "w") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        sessions = scan()
+
+    # Gave up at the deadline on the controlled clock, one poll-sized sleep
+    # at a time, then fell back to the canonical handle without the write.
+    budget = discover._ALIAS_LOCK_TIMEOUT_SECONDS
+    poll = discover._ALIAS_LOCK_POLL_SECONDS
+    assert sleeps
+    assert all(d <= poll for d in sleeps)
+    assert now == pytest.approx(budget, abs=poll / 2)
     assert [session.handle for session in sessions] == ["aaaaaaaa"]
     assert not name_map.exists()
 
@@ -1155,11 +1232,14 @@ def test_us2_codex_old_watching_rollout_is_not_bulk_enumerated(tmp_path):
         resolve=lambda _handle: (match, []),
         codex_sessions_dir=codex,
     )
-    assert truth["state"] == "watching"
+    # The <watching> tag is 10,000s old: expiry (x-c1a3) retires the news to
+    # stalled. Discovery still resolves it (require_alive=False), it is just
+    # no longer warm.
+    assert truth["state"] == "stalled"
 
 
 def test_codex_truth_reuses_discovered_rollout_path(tmp_path, monkeypatch):
-    """One discovery scan serves tail content and mtime classification."""
+    """One discovery scan serves tail content and age classification."""
     codex = tmp_path / "codex"
     rollout = _write_codex_rollout(codex, session_id="019f48e1-direct", cwd="/x", mtime_age=5.0)
     with rollout.open("a", encoding="utf-8") as fh:
@@ -1167,6 +1247,8 @@ def test_codex_truth_reuses_discovered_rollout_path(tmp_path, monkeypatch):
             json.dumps(
                 {
                     "type": "response_item",
+                    "timestamp": datetime.now(timezone.utc)
+                    .strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "payload": {
                         "type": "message",
                         "role": "assistant",
@@ -1456,11 +1538,11 @@ def test_resolver_only_provisional_registry_id_cannot_hide_canonical_owner(
 
 @pytest.mark.parametrize(
     "truth_state,expected",
-    # `done` is UNKNOWN, not orphaned: a worker that declared its mission complete
-    # says nothing about whether it is still up, and this row carries no falsifier
-    # (pid 0 is the "not recorded" placeholder). Only an affirmative falsifier
-    # condemns a row, in this lane exactly as in the registry lane.
-    [("working", "live"), ("done", "unknown"), ("unknown", "unknown")],
+    # Served activity (x-c672, AC7): `done` renders PARKED - the tail closed a
+    # promise - and a state with no measured age renders unknown, exactly as
+    # the registry lane does. This row carries no falsifier (pid 0 is the
+    # "not recorded" placeholder), so nothing reads orphaned.
+    [("working", "unknown"), ("done", "parked"), ("unknown", "unknown")],
 )
 def test_discovered_row_status_projects_family1_truth(truth_state, expected):
     session = discover.DiscoveredSession(
@@ -1694,9 +1776,11 @@ def test_daemon_row_is_enriched_by_recent_rollout(tmp_path, monkeypatch):
         subprocess.CompletedProcess([], 1, stdout="", stderr="unsupported"),
         subprocess.CompletedProcess([], 0, stdout="not-json", stderr=""),
         subprocess.CompletedProcess(
-            [], 0, stdout='{"available":false,"reason":"no-daemon"}', stderr=""
+            [], 0, stdout='{"codex_loaded":{"available":false,"reason":"no-daemon"}}', stderr=""
         ),
-        subprocess.CompletedProcess([], 0, stdout='{"available":true,"threads":[]}', stderr=""),
+        subprocess.CompletedProcess(
+            [], 0, stdout='{"codex_loaded":{"available":true,"threads":[]}}', stderr=""
+        ),
     ],
 )
 def test_daemon_probe_failure_or_empty_is_lenient(monkeypatch, completed):
@@ -1712,13 +1796,15 @@ def test_daemon_probe_shapes_valid_rows_and_skips_bad_entries(monkeypatch):
     from fno import rust_binary
 
     output = {
-        "available": True,
-        "threads": [
-            {"session_id": "short", "cwd": None},
-            {"session_id": "short", "cwd": "/duplicate"},
-            {"session_id": "019f4d0c-full", "cwd": "/repo"},
-            {"session_id": 7, "cwd": "/bad"},
-        ],
+        "codex_loaded": {
+            "available": True,
+            "threads": [
+                {"session_id": "short", "cwd": None},
+                {"session_id": "short", "cwd": "/duplicate"},
+                {"session_id": "019f4d0c-full", "cwd": "/repo"},
+                {"session_id": 7, "cwd": "/bad"},
+            ],
+        }
     }
     monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: Path("/fake/fno-agents"))
     monkeypatch.setattr(
@@ -1733,6 +1819,44 @@ def test_daemon_probe_shapes_valid_rows_and_skips_bad_entries(monkeypatch):
         ("short", "short", ""),
         ("019f4d0c-full", "019f4d0c", "/repo"),
     ]
+
+
+def test_daemon_probe_argv_rides_list_not_a_hidden_verb(monkeypatch):
+    from fno import rust_binary
+
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess([], 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: Path("/fake/fno-agents"))
+    monkeypatch.setattr(discover.subprocess, "run", fake_run)
+
+    assert discover._codex_daemon_threads_raw() is None
+    assert seen["argv"] == [
+        "/fake/fno-agents",
+        "list",
+        "--json",
+        "--no-discovered",
+        "--harness",
+        "codex",
+    ]
+
+
+def test_daemon_probe_list_without_codex_loaded_block_returns_none(monkeypatch):
+    from fno import rust_binary
+
+    monkeypatch.setattr(rust_binary, "resolve_installed_binary", lambda: Path("/fake/fno-agents"))
+    monkeypatch.setattr(
+        discover.subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"agents": [], "count": 0}), stderr=""
+        ),
+    )
+
+    assert discover._codex_daemon_threads_raw() is None
 
 
 def test_us2_codex_malformed_meta_skipped_not_fatal(tmp_path):
@@ -1926,6 +2050,41 @@ def test_us2_registry_handle_resolves(tmp_path, monkeypatch):
         "9a063cd3", registry_path=reg, **_empty_seams(tmp_path)
     )
     assert by_short is not None
+
+
+def test_identity_only_sweep_skips_falsifier_and_project(tmp_path, monkeypatch):
+    """The address sweep reads identity alone: the falsifier spawns a holder
+    probe per claude row and a project resolve parses every settings file."""
+    use_tmpdir(monkeypatch, tmp_path)
+    from fno.agents.registry import AgentEntry, write_registry
+
+    reg = tmp_path / "registry.json"
+    write_registry(
+        [
+            AgentEntry(
+                name="x-foo",
+                harness="claude",
+                cwd="/Users/x/code/proj",
+                log_path="/tmp/x-foo.log",
+                short_id="9a063cd3",
+                harness_session_id="9a063cd3-69d4-415a-ada5-649b0164189c",
+            )
+        ],
+        path=reg,
+    )
+    monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(tmp_path / "no-daemon"))
+    calls: list[str] = []
+    monkeypatch.setattr(discover, "registry_falsifier", lambda e: calls.append("falsify"))
+    seams = _empty_seams(tmp_path)
+    seams["project_resolver"] = lambda cwd: calls.append("project")
+    sessions = discover.discover_live_sessions(
+        registry_path=reg, classify_truth=False, identity_only=True, **seams
+    )
+    assert [s.name for s in sessions] == ["x-foo"]
+    assert sessions[0].project is None
+    assert calls == []
+    discover.discover_live_sessions(registry_path=reg, classify_truth=False, **seams)
+    assert sorted(calls) == ["falsify", "project"]
 
 
 def test_us2_registry_name_resolves_codex_after_cross_store_uniqueness_check(tmp_path):
@@ -2718,8 +2877,7 @@ def test_resolve_reachable_reads_backlog_session_stamps(tmp_path, monkeypatch):
 
     sid = "ccdd1122-3344-5566-7788-99aabbccddee"
     graph = tmp_path / "graph.json"
-    graph.write_text(
-        json.dumps(
+    seed_graph(graph, json.dumps(
             {
                 "entries": [
                     {
@@ -2728,9 +2886,7 @@ def test_resolve_reachable_reads_backlog_session_stamps(tmp_path, monkeypatch):
                     }
                 ]
             }
-        ),
-        encoding="utf-8",
-    )
+        ))
     monkeypatch.setattr("fno.graph.load.GRAPH_JSON", graph)
 
     empty_projects = tmp_path / "no-projects"
@@ -2758,6 +2914,44 @@ def test_resolve_reachable_reports_ambiguity_instead_of_guessing(tmp_path, monke
 
     assert found is None
     assert sorted(ambiguous) == sorted([a, b])
+
+
+def test_resolve_reachable_ambiguity_names_the_source_of_each_candidate(tmp_path, monkeypatch, capsys):
+    """The ambiguity refusal must attribute each candidate to its store.
+
+    The 2026-09-05 refusal named two uuids for one token while 0 of the
+    registry's rows carried the id, and nothing said which stores disagreed
+    (x-a469). A transcript hit and a registry hit sharing one 8-hex token
+    reproduce the shape; the stderr line must name source=transcript and
+    source=registry.
+    """
+    from fno.agents import discover
+
+    a = "c0ffee11-1111-2222-3333-444444444444"
+    b = "c0ffee11-9999-8888-7777-666666666666"
+
+    proj = tmp_path / "projects" / "-Users-x-a"
+    proj.mkdir(parents=True)
+    t = proj / f"{a}.jsonl"
+    t.write_text("{}\n", encoding="utf-8")
+    _stale(t)
+
+    class _Row:
+        harness = "claude"
+        harness_session_id = b
+        short_id = "c0ffee11"
+
+    monkeypatch.setattr("fno.agents.registry.load_registry", lambda *_a, **_k: [_Row()])
+
+    found, ambiguous = discover.resolve_reachable(
+        "c0ffee11", projects_dir=tmp_path / "projects", registry_path=tmp_path / "registry.json"
+    )
+
+    assert found is None
+    assert sorted(ambiguous) == sorted([a, b])
+    err = capsys.readouterr().err
+    assert f"{a} (source=transcript" in err
+    assert f"{b} (source=registry" in err
 
 
 def test_resolve_reachable_misses_cleanly_on_an_unknown_token(tmp_path, monkeypatch):
@@ -3063,8 +3257,12 @@ def test_malformed_graph_is_reported_unreadable_not_empty(tmp_path, monkeypatch)
     """
     from fno.agents import discover
 
+    # A corrupt STORE is the unreadable case: the seed json below only
+    # marks the path as existing, so the wire read raises instead of
+    # answering an empty (absence-proven) store.
     graph = tmp_path / "graph.json"
-    graph.write_text(json.dumps({"entries": [{"id": "x-0001", "sessions": 42}]}), encoding="utf-8")
+    seed_graph(graph, json.dumps({"entries": [{"id": "x-0001", "sessions": []}]}))
+    graph.with_suffix(".db").write_bytes(b"{broken")
     monkeypatch.setattr("fno.graph.load.GRAPH_JSON", graph)
     daemon = tmp_path / "daemon"
     daemon.mkdir()
@@ -3108,7 +3306,7 @@ def test_resolve_reachable_keeps_case_distinct_opencode_sessions(tmp_path, monke
         discover,
         "_reachable_from_transcripts",
         lambda *_a: (
-            [(upper, "opencode", "/upper", True), (lower, "opencode", "/lower", True)],
+            [(upper, "opencode", "/upper", True, None), (lower, "opencode", "/lower", True, None)],
             True,
         ),
     )
@@ -3139,8 +3337,8 @@ def test_resolve_reachable_keeps_same_id_under_different_harnesses_distinct(tmp_
         "_reachable_from_transcripts",
         lambda *_a: (
             [
-                (_SHARED_SID, "claude", "/claude-cwd", True),
-                (_SHARED_SID, "codex", "/codex-cwd", True),
+                (_SHARED_SID, "claude", "/claude-cwd", True, None),
+                (_SHARED_SID, "codex", "/codex-cwd", True, None),
             ],
             True,
         ),
@@ -3158,10 +3356,13 @@ def test_resolve_reachable_keeps_same_id_under_different_harnesses_distinct(tmp_
 def test_reachable_from_registry_keeps_cross_harness_rows_distinct(tmp_path):
     """The registry spans providers, so its own dedup must carry harness."""
     from fno.agents import discover
-    from fno.agents.registry import AgentEntry, write_registry
+    from fno.agents.registry import AgentEntry
+    from tests._table_seed import seed_legacy_registry
 
     reg = tmp_path / "registry.json"
-    write_registry(
+    # Two harness rows sharing one session id predate the identity
+    # invariant; only a legacy registry file can still hold them.
+    seed_legacy_registry(
         [
             AgentEntry(
                 name="claude-side",
@@ -3179,22 +3380,25 @@ def test_reachable_from_registry_keeps_cross_harness_rows_distinct(tmp_path):
                 harness_session_id=_SHARED_SID,
             ),
         ],
-        path=reg,
+        reg,
     )
 
     hits, read_ok = discover._reachable_from_registry(_SHARED_SID, reg)
 
     assert read_ok
-    assert sorted(harness for _sid, harness, _cwd, _v in hits) == ["claude", "codex"]
+    assert sorted(harness for _sid, harness, _cwd, _v, _tp in hits) == ["claude", "codex"]
 
 
 def test_discover_live_sessions_keeps_cross_harness_rows_distinct(tmp_path, monkeypatch):
     """Candidates are the union of every harness's source; the merge must not
     fold two of them into one row that absorbs the other's cwd."""
-    from fno.agents.registry import AgentEntry, write_registry
+    from fno.agents.registry import AgentEntry
+    from tests._table_seed import seed_legacy_registry
 
     reg = tmp_path / "registry.json"
-    write_registry(
+    # Two harness rows sharing one session id predate the identity
+    # invariant; only a legacy registry file can still hold them.
+    seed_legacy_registry(
         [
             AgentEntry(
                 name="claude-side",
@@ -3212,7 +3416,7 @@ def test_discover_live_sessions_keeps_cross_harness_rows_distinct(tmp_path, monk
                 harness_session_id=_SHARED_SID,
             ),
         ],
-        path=reg,
+        reg,
     )
     monkeypatch.setenv("FNO_CLAUDE_DAEMON_DIR", str(tmp_path / "no-daemon"))
 
@@ -3282,7 +3486,7 @@ def test_resolve_reachable_includes_complete_harness_store_hits(tmp_path, monkey
     monkeypatch.setattr(
         discover,
         "_reachable_from_harness_stores",
-        lambda _token: ([(sid, "codex", "/repo", True)], True),
+        lambda _token: ([(sid, "codex", "/repo", True, None)], True),
     )
 
     found, ambiguous = discover.resolve_reachable("deadbeef", projects_dir=tmp_path / "projects")
@@ -3355,171 +3559,6 @@ def test_resolve_reachable_canonical_and_legacy_collision_fails_ambiguous(tmp_pa
     found, ambiguous = discover.resolve_reachable("deadbeef", projects_dir=project.parent)
     assert found is None
     assert sorted(ambiguous) == sorted([legacy_sid, canonical_sid])
-
-
-# --------------------------------------------------------------------------
-# Harness-native subagent discovery (x-af92): read-only sidechain visibility
-# --------------------------------------------------------------------------
-def _write_subagent(projects_dir, *, enc_cwd, parent_sid, agent_id, mtime_age=5.0, record=None):
-    """Sidechain transcript at <enc-cwd>/<session>/subagents/agent-*.jsonl."""
-    sdir = projects_dir / enc_cwd / parent_sid / "subagents"
-    sdir.mkdir(parents=True, exist_ok=True)
-    f = sdir / f"agent-{agent_id}.jsonl"
-    rec = (
-        record
-        if record is not None
-        else {
-            "isSidechain": True,
-            "agentId": agent_id,
-            "sessionId": parent_sid,
-            "cwd": "/Users/x/code/proj",
-            "gitBranch": "main",
-            "type": "user",
-        }
-    )
-    f.write_text(json.dumps(rec) + "\n", encoding="utf-8")
-    mt = time.time() - mtime_age
-    os.utime(f, (mt, mt))
-    return f
-
-
-def test_subagent_discovery_reads_fields_and_liveness(tmp_path):
-    """AC4-HP: a live sidechain surfaces with agentId, parent, cwd, branch, verdict."""
-    projects = tmp_path / "projects"
-    parent = "62ec5501-9d77-4430-bc34-a2d036dbeb79"
-    _write_subagent(
-        projects,
-        enc_cwd="-Users-x-code-proj",
-        parent_sid=parent,
-        agent_id="af8f986001a0cc559",
-        mtime_age=30.0,
-        record={
-            "isSidechain": True,
-            "agentId": "af8f986001a0cc559",
-            "sessionId": parent,
-            "cwd": "/Users/x/code/proj",
-            "gitBranch": "feature/x",
-            "type": "user",
-        },
-    )
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert warnings == []
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.agent_id == "af8f986001a0cc559"
-    assert r.parent_session_id == parent
-    assert r.cwd == "/Users/x/code/proj"
-    assert r.git_branch == "feature/x"
-    assert r.verdict == "active"
-    assert r.age_seconds == pytest.approx(30.0, abs=2.0)
-
-
-def test_subagent_liveness_idle_within_scan_window(tmp_path):
-    """AC4-HP: past the live threshold but inside the scan window -> idle, kept."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="p-1-2-3-4-5",
-        agent_id="deadbeef0011000",
-        mtime_age=1200.0,  # 20 min: past 600s live, within the 2h scan window
-    )
-    rows, _ = discover.discover_subagents(
-        projects_dir=projects, live_within_seconds=600.0, scan_window_seconds=7200.0
-    )
-    assert len(rows) == 1
-    assert rows[0].verdict == "idle"
-
-
-def test_subagent_aged_out_past_scan_window(tmp_path):
-    """A frozen transcript ages out entirely past the scan window (parent-dies case)."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="p-1-2-3-4-5",
-        agent_id="aged00000000000",
-        mtime_age=3 * 3600.0,
-    )
-    rows, warnings = discover.discover_subagents(projects_dir=projects, scan_window_seconds=7200.0)
-    assert rows == []
-    assert warnings == []  # pruned by mtime, not a read failure
-
-
-def test_subagent_malformed_first_record_skipped(tmp_path):
-    """AC5-EDGE: a malformed first record is skipped; the sweep continues."""
-    projects = tmp_path / "projects"
-    _write_subagent(projects, enc_cwd="-c", parent_sid="p-1-2-3-4-5", agent_id="good00000000001")
-    sdir = projects / "-c" / "p-1-2-3-4-5" / "subagents"
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / "agent-bad00000000002.jsonl").write_text("{not json\n", encoding="utf-8")
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert warnings == []
-    assert [r.agent_id for r in rows] == ["good00000000001"]
-
-
-def test_subagent_missing_fields_fall_back_to_filename_and_dir(tmp_path):
-    """A record missing agentId/sessionId resolves off the filename stem and parent dir."""
-    projects = tmp_path / "projects"
-    parent = "9aaa0000-1111-2222-3333-444455556666"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid=parent,
-        agent_id="cafe00000000000f",
-        record={"isSidechain": True, "type": "user"},
-    )
-    rows, _ = discover.discover_subagents(projects_dir=projects)
-    assert len(rows) == 1
-    r = rows[0]
-    assert r.agent_id == "cafe00000000000f"
-    assert r.parent_session_id == parent
-    assert r.cwd == ""
-    assert r.git_branch is None
-
-
-def test_subagent_dedups_on_agent_id_across_sessions(tmp_path):
-    """Two session dirs holding the same agentId collapse to one row."""
-    projects = tmp_path / "projects"
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="sess-1-1-1-1-1",
-        agent_id="share0000000000a",
-        mtime_age=60.0,
-    )
-    _write_subagent(
-        projects,
-        enc_cwd="-c",
-        parent_sid="sess-2-2-2-2-2",
-        agent_id="share0000000000a",
-        mtime_age=10.0,
-    )
-    rows, _ = discover.discover_subagents(projects_dir=projects)
-    assert len(rows) == 1
-    assert rows[0].agent_id == "share0000000000a"
-
-
-def test_subagent_absent_store_is_silent_zero(tmp_path):
-    """AC7-EDGE: a store with no subagents/ dirs -> zero rows, no warning."""
-    projects = tmp_path / "empty-projects"
-    projects.mkdir()
-    rows, warnings = discover.discover_subagents(projects_dir=projects)
-    assert rows == []
-    assert warnings == []
-
-
-def test_subagent_unreadable_root_emits_one_warning(tmp_path, monkeypatch):
-    """AC5-EDGE: a read error from the scan -> exactly one warning, zero rows, no raise."""
-
-    def _boom(*_a, **_k):
-        raise OSError("permission denied")
-
-    monkeypatch.setattr("pathlib.Path.glob", _boom)
-    rows, warnings = discover.discover_subagents(projects_dir=tmp_path / "projects")
-    assert rows == []
-    assert len(warnings) == 1
-    assert "unreadable" in warnings[0]
 
 
 def test_disambiguate_does_not_compound_a_non_unique_short_id():

@@ -11,8 +11,20 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from fno import recovery
-from fno.events import validate
+def _naming_real(cmd, **kw):
+    """The name verbs execute in the fno-agents binary: a blanket stub would
+    answer the mint with a spawn-shaped SimpleNamespace lacking .stdout. Ride
+    the real binary for them; _REAL_RUN is captured at module import, before
+    any test patches the subprocess module."""
+    parts = [str(part) for part in cmd]
+    if "name-mint" in parts or "name-codes" in parts or "name-parse" in parts:
+        return _REAL_RUN(cmd, **kw)
+    return None
+
+_REAL_RUN = __import__("subprocess").run
+
+
+from fno import recovery  # noqa: E402 - after capturing subprocess.run
 
 
 def _now() -> datetime:
@@ -160,6 +172,22 @@ class TestCandidateJoin:
         live = {"deadbeef": _Locator("deadbeef", "/tmp/x.sock", tmp_path)}
         cands = recovery.iter_candidates(entries, locate_fn=lambda sid: live.get(sid))
         assert cands == []
+
+    def test_launch_account_is_carried_from_the_registry_row(self, tmp_path):
+        # x-bbc0: the quota lock is written against the account the worker
+        # was LAUNCHED on, so the join carries it off the registry row.
+        entry = _Entry("claude", "dddd4444")
+        entry.launch_account = "readyrule"
+        live = {"dddd4444": _Locator("dddd4444", "/tmp/d.sock", tmp_path)}
+        (cand,) = recovery.iter_candidates([entry], locate_fn=lambda sid: live.get(sid))
+        assert cand.launch_account == "readyrule"
+
+    def test_a_legacy_row_without_launch_account_yields_none(self, tmp_path):
+        # Older rows predate the column; getattr keeps the join from raising.
+        entry = _Entry("claude", "eeee5555")
+        live = {"eeee5555": _Locator("eeee5555", "/tmp/e.sock", tmp_path)}
+        (cand,) = recovery.iter_candidates([entry], locate_fn=lambda sid: live.get(sid))
+        assert cand.launch_account is None
 
 
 # ---------------------------------------------------------------------------
@@ -443,11 +471,7 @@ class TestRunRecoverySweep:
         assert "capped:gone9999" not in saved
         assert saved["aaaa1111"] == 1
 
-
-# ---------------------------------------------------------------------------
-# out-of-usage provider failover (x-7abe) — wire attempt_swap into the watchdog
-# ---------------------------------------------------------------------------
-
+    
 class TestClassifySessionError:
     """classify_session_error reuses the shipped normalize() text rules."""
 
@@ -612,6 +636,14 @@ class TestRefusalHoistedAboveTheStalenessGate:
         assert recovery._prune_keep("refused:aaaa1111:provider_4xx_quota", live)
         assert not recovery._prune_keep("refused:bbbb2222:provider_4xx_quota", live)
 
+    def test_the_quota_lock_sentinel_survives_while_the_session_lives(self):
+        # Without the prefix arm the plain fall-through compares the whole
+        # key against the live set, prunes the sentinel every tick, and the
+        # lock re-fires on a worker that already locked.
+        live = {"aaaa1111"}
+        assert recovery._prune_keep("quota-locked:aaaa1111", live)
+        assert not recovery._prune_keep("quota-locked:bbbb2222", live)
+
     def test_the_dedup_key_is_scoped_to_the_error_class(self):
         # A quota refusal followed by an auth refusal is two findings; the SAME
         # refusal re-read every tick is one.
@@ -623,15 +655,13 @@ class TestRefusalHoistedAboveTheStalenessGate:
 class _StaleRefusalHarness(_Harness):
     """A worker that is BOTH stale and carrying a refusal in its last turn.
 
-    The population where the transcript source can actually drive a failover:
-    the sweep still requires NUDGE before the failover branch is reached.
+    The sweep records the quota refusal and surfaces the strand; the move
+    itself belongs to the provider-cap actor (x-7e05).
     """
 
-    def __init__(self, last_message, outcome="swapped", **kw):
+    def __init__(self, last_message, **kw):
         super().__init__(**kw)
         self._last_message = last_message
-        self.failover_calls = []
-        self._outcome = outcome
 
     def truth(self, _candidate):
         return {
@@ -640,10 +670,6 @@ class _StaleRefusalHarness(_Harness):
             "last_message": self._last_message,
             "observed_model": {"kind": "observed", "model": "glm-5.2"},
         }
-
-    def failover(self, candidate, err):
-        self.failover_calls.append((candidate.short_id, err))
-        return self._outcome
 
 
 class TestTranscriptRefusalNeedsCorroboration:
@@ -662,7 +688,6 @@ class TestTranscriptRefusalNeedsCorroboration:
             counts=counts,
             emit=h.emit, read_state_fn=h.read_state,
             truth_fn=h.truth, liveness_fn=h.liveness,
-            failover_fn=h.failover,
         )
 
     def test_the_first_tick_reports_but_does_not_act(self, tmp_path):
@@ -670,14 +695,16 @@ class TestTranscriptRefusalNeedsCorroboration:
         h = _StaleRefusalHarness(self._QUOTA)
         self._sweep(h, tmp_path, counts)
         assert "worker_refused" in h.event_types()
-        assert h.failover_calls == [], "a first sighting must not stop a worker"
+        assert "provider_quota_locked" not in h.event_types(), (
+            "a first sighting must not record the lock"
+        )
 
     def test_the_same_turn_a_tick_later_acts(self, tmp_path):
         counts: dict = {}
         self._sweep(_StaleRefusalHarness(self._QUOTA), tmp_path, counts)
         h2 = _StaleRefusalHarness(self._QUOTA)
         self._sweep(h2, tmp_path, counts)
-        assert len(h2.failover_calls) == 1
+        assert "provider_quota_locked" in h2.event_types()
 
     def test_a_worker_that_moved_on_never_acts(self, tmp_path):
         # The independent signal: prose about a cap is followed by a different
@@ -689,7 +716,7 @@ class TestTranscriptRefusalNeedsCorroboration:
         )
         h2 = _StaleRefusalHarness("Pushed the branch and opened the PR.")
         self._sweep(h2, tmp_path, counts)
-        assert h2.failover_calls == []
+        assert "provider_quota_locked" not in h2.event_types()
 
     def test_the_event_carries_a_resolvable_naive_stamp(self, tmp_path, monkeypatch):
         # Without the record's zone the event always reported resets_at null
@@ -725,447 +752,18 @@ class TestTranscriptRefusalNeedsCorroboration:
         assert payload["reset_stamp_unparsed"] is None
 
     def test_a_dead_sessions_own_error_still_acts_at_once(self, tmp_path):
-        # output_result is the session's own error text, not prose about
-        # someone else's cap, so its path is unchanged.
-        h = _FailoverHarness(output_result="rate limit exceeded", outcome="swapped")
+        # The session's own error text (not prose about someone else's cap)
+        # records the refusal at once instead of waiting out a tick.
+        h = _StaleRefusalHarness("rate limit exceeded")
         recovery.recovery_sweep(
             _now(), _Cfg(),
             candidates=[_stale_candidate(tmp_path)],
             counts={},
             emit=h.emit, read_state_fn=h.read_state,
             truth_fn=h.truth, liveness_fn=h.liveness,
-            failover_fn=h.failover,
         )
-        assert len(h.failover_calls) == 1
+        assert "worker_refused" in h.event_types()
 
-
-class _FailoverHarness(_Harness):
-    """A sweep harness with a controllable last-error and a fake failover_fn."""
-
-    def __init__(self, output_result=None, outcome="swapped", **kw):
-        super().__init__(**kw)
-        self._output = output_result
-        self._outcome = outcome
-        self.failover_calls: list = []
-
-    def read_state(self, jobs_dir):
-        return recovery._SnapshotView(self._state, self._updated, self._output)
-
-    def failover(self, candidate, err):
-        self.failover_calls.append((candidate.short_id, err.error_class))
-        return self._outcome
-
-
-class TestFailoverSweep:
-    def _run(self, h, tmp_path):
-        recovery.recovery_sweep(
-            _now(), _Cfg(),
-            candidates=[_stale_candidate(tmp_path)],
-            counts={},
-            emit=h.emit, read_state_fn=h.read_state,
-            truth_fn=h.truth, liveness_fn=h.liveness,
-            failover_fn=h.failover,
-        )
-
-    def test_swap_class_routes_to_failover_not_nudge(self, tmp_path):
-        # AC1-FR: a quota-died bg session swaps + re-dispatches, never nudges.
-        h = _FailoverHarness(output_result="API Error: rate limit exceeded", outcome="swapped")
-        self._run(h, tmp_path)
-        assert len(h.failover_calls) == 1
-        assert h.sends == []                       # NOT nudged
-        # worker_refused first: the swap-class error is now announced as a
-        # positive finding before anything acts on it.
-        assert h.event_types() == ["worker_refused", "failover_swapped"]
-        assert h.events[1][1]["redispatched"] is True   # honest: worker started
-        validate({
-            "ts": "2026-06-29T20:00:00Z",
-            "type": "failover_swapped",
-            "source": "daemon",
-            "data": h.events[1][1],
-        })
-
-    def test_rotated_no_worker_emits_swapped_then_held(self, tmp_path):
-        # codex P1: the swap rotated the provider but no replacement worker
-        # started (non-claude target / spawn failed). The event must report
-        # redispatched=False (no phantom redispatch); the stuck session then
-        # falls through to the held-by-design surface (not a socket nudge).
-        h = _FailoverHarness(output_result="rate limit", outcome="rotated-no-worker")
-        self._run(h, tmp_path)
-        assert h.event_types() == [
-            "worker_refused", "failover_swapped", "recovery_skipped",
-        ]
-        assert h.events[1][1]["redispatched"] is False
-        assert h.events[2][1]["reason"] == "held-by-design"
-        assert h.sends == []
-
-    def test_launched_with_owner_stamp_failure_surfaces_partial_once(self, tmp_path):
-        h = _FailoverHarness(output_result="rate limit", outcome="partial")
-
-        self._run(h, tmp_path)
-
-        assert len(h.failover_calls) == 1
-        assert h.sends == []
-        assert h.event_types() == [
-            "worker_refused", "failover_swapped", "failover_blocked",
-        ]
-        assert h.events[1][1]["redispatched"] is True
-        assert h.events[2][1]["reason"] == "partial-owner-stamp"
-
-    def test_one_swap_per_tick(self, tmp_path):
-        # codex P2: a swap mutates the GLOBAL active provider, so only one
-        # rotation may fire per tick; the second stale session surfaces
-        # held-by-design this tick (reconsidered next tick against the settled
-        # provider).
-        h = _FailoverHarness(output_result="rate limit", outcome="swapped")
-        recovery.recovery_sweep(
-            _now(), _Cfg(),
-            candidates=[
-                _stale_candidate(tmp_path, short_id="aaaa1111"),
-                _stale_candidate(tmp_path, short_id="bbbb2222", sock="/tmp/b.sock"),
-            ],
-            counts={},
-            emit=h.emit, read_state_fn=h.read_state,
-            truth_fn=h.truth, liveness_fn=h.liveness,
-            failover_fn=h.failover,
-        )
-        assert len(h.failover_calls) == 1            # only the first swaps
-        assert h.failover_calls[0][0] == "aaaa1111"
-        # Two candidates, so two refusal notices: the once-only guard is per
-        # short_id, and the one-swap-per-tick guard is separate from it.
-        assert h.event_types() == [
-            "worker_refused", "failover_swapped",
-            "worker_refused", "recovery_skipped",
-        ]
-        assert h.events[3][1]["short_id"] == "bbbb2222"   # the second surfaced
-
-    def test_connection_drop_surfaces_held(self, tmp_path):
-        # AC2-FR: a clean connection-drop never triggers failover; the stuck
-        # worker is surfaced held-by-design (the socket nudge is held by the
-        # bypass recipient, x-d93d).
-        h = _FailoverHarness(output_result="API Error: Connection closed mid-response")
-        self._run(h, tmp_path)
-        assert h.failover_calls == []
-        assert h.sends == []
-        assert h.event_types() == ["recovery_skipped"]
-        assert h.events[0][1]["reason"] == "held-by-design"
-
-    def test_no_output_result_surfaces_held(self, tmp_path):
-        # No last-error text (the common idle case): held-by-design surface.
-        h = _FailoverHarness(output_result=None)
-        self._run(h, tmp_path)
-        assert h.failover_calls == []
-        assert h.event_types() == ["recovery_skipped"]
-        assert h.events[0][1]["reason"] == "held-by-design"
-
-    def test_blocked_thrash_emits_blocked_no_nudge(self, tmp_path):
-        # AC2-EDGE: storm-cap reached -> bounded stop, no nudge churn.
-        h = _FailoverHarness(output_result="rate limit", outcome="blocked-thrash")
-        self._run(h, tmp_path)
-        assert h.sends == []
-        assert h.event_types() == ["worker_refused", "failover_blocked"]
-        assert h.events[1][1]["reason"] == "blocked-thrash"
-
-    def test_notified_emits_swapped_and_does_not_nudge(self, tmp_path):
-        # US4/US5 (AC3-FR + AC4-FR "dead one not also nudged"): a revival that
-        # degraded to the manual-resume notification rotated the provider but
-        # started no worker, so it reports redispatched=False and must NOT also
-        # nudge the exhausted session.
-        h = _FailoverHarness(output_result="usage limit reached", outcome="notified")
-        self._run(h, tmp_path)
-        assert h.sends == []                           # NOT nudged
-        assert h.event_types() == ["worker_refused", "failover_swapped"]
-        assert h.events[1][1]["redispatched"] is False
-
-    def test_queue_exhausted_falls_through_to_held(self, tmp_path):
-        # AC1-EDGE (watchdog reading): no eligible alternate -> nothing to swap
-        # to, so fall through to the held-by-design surface. Nothing can be
-        # swapped to and the socket nudge cannot reach a bypass recipient, so the
-        # honest action is to surface the stuck session once for the operator.
-        h = _FailoverHarness(output_result="quota exceeded", outcome="queue-exhausted")
-        self._run(h, tmp_path)
-        assert h.sends == []
-        assert h.event_types() == ["worker_refused", "recovery_skipped"]
-        assert h.events[1][1]["reason"] == "held-by-design"
-
-    def test_no_swap_outcome_falls_through_to_held(self, tmp_path):
-        # Controller declined (NO_SWAP_NEEDED): defensive fall-through to held.
-        h = _FailoverHarness(output_result="rate limit", outcome="no-swap")
-        self._run(h, tmp_path)
-        assert h.event_types() == ["worker_refused", "recovery_skipped"]
-        assert h.events[1][1]["reason"] == "held-by-design"
-
-    def test_failover_disabled_when_fn_absent(self, tmp_path):
-        # Backward compat: no failover_fn -> swap-class error surfaces held-by-design.
-        h = _FailoverHarness(output_result="rate limit exceeded")
-        recovery.recovery_sweep(
-            _now(), _Cfg(),
-            candidates=[_stale_candidate(tmp_path)],
-            counts={},
-            emit=h.emit, read_state_fn=h.read_state,
-            truth_fn=h.truth, liveness_fn=h.liveness,
-            # failover_fn omitted
-        )
-        assert h.failover_calls == []
-        # The refusal notice is independent of failover_fn: reporting that a
-        # worker cannot think must not depend on having somewhere to move it.
-        assert h.event_types() == ["worker_refused", "recovery_skipped"]
-        assert h.events[1][1]["reason"] == "held-by-design"
-
-
-class TestDefaultFailover:
-    """The real failover_fn maps SwapDecision -> the sweep's outcome strings.
-    It re-reads the active provider's cli KIND after a swap and only
-    bg-redispatches when that kind is claude. Controller + settings are
-    monkeypatched so no real provider rotation / subprocess fires."""
-
-    def _patch(self, monkeypatch, decision, new_cli="claude", redispatch_result=None,
-               calls=None, auth=None, seen_materialize=None):
-        from fno.adapters.providers import failover as fo_mod
-        from fno.adapters.providers import loader as loader_mod
-        from fno.adapters.providers import dispatch as dispatch_mod
-
-        class _Result:
-            def __init__(self):
-                self.decision = decision
-                self.new_provider_id = "claude-secondary"  # a RECORD id, not a kind
-
-        class _Ctrl:
-            def __init__(self, **kw):
-                pass
-
-            def attempt_swap(self, *, current_provider_id, error, materialize_managed=True):
-                if seen_materialize is not None:
-                    seen_materialize.append(materialize_managed)
-                return _Result()
-
-        class _Snap:
-            # Read AFTER the swap, so it is the swapped-to record: .id is the new
-            # active id, .harness its kind, .auth its auth strategy (US3: "managed"
-            # needs a credential materialization into the shared slot pre-redispatch).
-            id = "claude-secondary"
-            harness = new_cli
-        _Snap.auth = auth
-
-        monkeypatch.setattr(fo_mod, "FailoverController", _Ctrl)
-        monkeypatch.setattr(loader_mod, "read_active_provider_atomic", lambda **kw: _Snap())
-        monkeypatch.setattr(dispatch_mod, "_default_settings_path", lambda: "/tmp/settings.yaml")
-        if redispatch_result is not None:
-            def _fake_redispatch(cand, *, pre_spawn=None):
-                if calls is not None:
-                    calls.append(cand.short_id)
-                # Honor the real contract: pre_spawn (managed materialize) runs
-                # inside _redispatch; a False result aborts the respawn.
-                if pre_spawn is not None and not pre_spawn():
-                    return False
-                return redispatch_result
-            monkeypatch.setattr(recovery, "_redispatch", _fake_redispatch)
-
-    def test_swapped_claude_redispatch_ok_returns_swapped(self, monkeypatch, tmp_path):
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls)
-        cand = _stale_candidate(tmp_path)
-        err = recovery.classify_session_error("rate limit exceeded")
-        assert recovery._default_failover(cand, err) == "swapped"
-        assert calls == [cand.short_id]              # redispatch was attempted
-
-    def test_swapped_nonclaude_is_rotated_no_worker(self, monkeypatch, tmp_path):
-        # codex P1: a swap onto a non-claude provider cannot bg-redispatch a
-        # /target, so no worker starts — and _redispatch must not even be called.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="codex",
-                    redispatch_result=True, calls=calls)
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "rotated-no-worker"
-        assert calls == []                           # never tried to bg-spawn on codex
-
-    def test_swapped_claude_redispatch_fails_is_rotated_no_worker(self, monkeypatch, tmp_path):
-        # The swap landed on claude but the spawn failed (returncode != 0).
-        from fno.adapters.providers.failover import SwapDecision
-
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude", redispatch_result=False)
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "rotated-no-worker"
-
-    def test_swapped_claude_owner_stamp_failure_returns_partial(self, monkeypatch, tmp_path):
-        from fno.adapters.providers.failover import SwapDecision
-
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result="partial")
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "partial"
-
-    def test_blocked_thrash_maps(self, monkeypatch, tmp_path):
-        from fno.adapters.providers.failover import SwapDecision
-
-        self._patch(monkeypatch, SwapDecision.BLOCKED_THRASH)
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "blocked-thrash"
-
-    def test_queue_exhausted_maps(self, monkeypatch, tmp_path):
-        from fno.adapters.providers.failover import SwapDecision
-
-        self._patch(monkeypatch, SwapDecision.QUEUE_EXHAUSTED)
-        err = recovery.classify_session_error("quota exceeded")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "queue-exhausted"
-
-    def test_controller_error_degrades_to_no_swap(self, monkeypatch, tmp_path):
-        from fno.adapters.providers import dispatch as dispatch_mod
-
-        def boom():
-            raise RuntimeError("settings unreadable")
-
-        monkeypatch.setattr(dispatch_mod, "_default_settings_path", boom)
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "no-swap"
-
-    # --- US3: managed-account materialization hook (auto-switch) ---------------
-
-    def test_managed_swap_materializes_then_redispatches(self, monkeypatch, tmp_path):
-        # AC3-HP: swap lands on an armed managed claude record -> _redispatch runs
-        # with a pre_spawn that materializes the account (after the stop, before
-        # the spawn). Returns "swapped".
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        seen_materialize: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls, auth="managed",
-                    seen_materialize=seen_materialize)
-        monkeypatch.setattr(recovery, "_auto_switch_enabled", lambda repo_root=None: True)
-        mat: list = []
-        monkeypatch.setattr(recovery, "_materialize_managed_switch",
-                            lambda rid, repo_root=None: mat.append(rid) or True)
-        err = recovery.classify_session_error("usage limit reached")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "swapped"
-        assert mat == ["claude-secondary"]   # materialized the swapped-to record
-        assert calls == [_stale_candidate(tmp_path).short_id]  # via _redispatch
-        # attempt_swap itself must NOT materialize here: the candidate still
-        # pins the shared slot until _redispatch stops it below, so an eager
-        # switch() would hit that live pin and self-block the swap. This
-        # sweep always does its own, correctly post-stop materialize via
-        # _redispatch's pre_spawn instead (asserted above via `mat`).
-        assert seen_materialize == [False]
-
-    def test_managed_materialize_fails_is_rotated_no_worker(self, monkeypatch, tmp_path):
-        # Armed, but a live-pin defer / store error makes materialize (the
-        # pre_spawn) return False -> _redispatch aborts the respawn -> nudge.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls, auth="managed")
-        monkeypatch.setattr(recovery, "_auto_switch_enabled", lambda repo_root=None: True)
-        monkeypatch.setattr(recovery, "_materialize_managed_switch",
-                            lambda rid, repo_root=None: False)
-        err = recovery.classify_session_error("usage limit reached")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "rotated-no-worker"
-        assert calls == [_stale_candidate(tmp_path).short_id]  # _redispatch ran (stopped worker)
-
-    def test_managed_auto_switch_off_leaves_worker_alive(self, monkeypatch, tmp_path):
-        # Disarmed managed swap: never stop the worker (never _redispatch); leave
-        # it alive for the bounded nudge. codex P1 ordering guard: the exhausted
-        # worker must not be stopped for a switch that will not happen.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        seen_materialize: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls, auth="managed",
-                    seen_materialize=seen_materialize)
-        monkeypatch.setattr(recovery, "_auto_switch_enabled", lambda repo_root=None: False)
-        mat = {"called": False}
-        monkeypatch.setattr(recovery, "_materialize_managed_switch",
-                            lambda rid, repo_root=None: mat.__setitem__("called", True) or True)
-        err = recovery.classify_session_error("usage limit reached")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "rotated-no-worker"
-        assert calls == []                    # never stopped/redispatched the worker
-        assert mat["called"] is False         # never materialized
-        # attempt_swap is never asked to materialize from this caller,
-        # armed or not - the sweep's own auto_switch gate above (line 775)
-        # is what actually decides, and it decided nothing happens here.
-        assert seen_materialize == [False]
-
-    def test_oauth_dir_swap_skips_materialize(self, monkeypatch, tmp_path):
-        # An oauth_dir claude record needs no materialization (env-var switch at
-        # spawn); _redispatch runs with no pre_spawn hook. auto_switch being
-        # armed has no effect on an oauth_dir candidate: no pre_spawn hook,
-        # no _materialize_managed_switch call.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls, auth="oauth_dir")
-        called = {"mat": False}
-        monkeypatch.setattr(recovery, "_auto_switch_enabled", lambda repo_root=None: True)
-        monkeypatch.setattr(recovery, "_materialize_managed_switch",
-                            lambda rid, repo_root=None: called.__setitem__("mat", True) or True)
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(_stale_candidate(tmp_path), err) == "swapped"
-        assert called["mat"] is False         # no materialize for oauth_dir
-        assert calls == [_stale_candidate(tmp_path).short_id]
-
-    # --- US4: node-bound vs node-less routing ---------------------------------
-
-    def test_node_less_thread_routes_to_revival(self, monkeypatch, tmp_path):
-        # US4: a claude swap whose candidate has a live cwd but NO target-state
-        # node routes to _revive_bg_thread (resume the transcript), NOT _redispatch.
-        from fno.adapters.providers.failover import SwapDecision
-
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude", auth="oauth_dir")
-        monkeypatch.setattr(recovery, "_worktree_is_node_less", lambda cwd: True)
-        seen: dict = {}
-        monkeypatch.setattr(
-            recovery, "_revive_bg_thread",
-            lambda cand, snap, repo_root, *, managed: seen.update(
-                short=cand.short_id, root=repo_root, managed=managed) or "swapped")
-        cand = recovery.Candidate(short_id="cccc3333", sock_path="/tmp/c.sock",
-                                  jobs_dir=tmp_path, cwd=str(tmp_path), name="thread-w")
-        err = recovery.classify_session_error("usage limit reached")
-        assert recovery._default_failover(cand, err) == "swapped"
-        assert seen == {"short": "cccc3333", "root": str(tmp_path), "managed": False}
-
-    def test_node_bound_worker_skips_revival(self, monkeypatch, tmp_path):
-        # A candidate whose worktree HAS a manifest stays on the _redispatch path.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=True, calls=calls, auth="oauth_dir")
-        monkeypatch.setattr(recovery, "_worktree_is_node_less", lambda cwd: False)
-        monkeypatch.setattr(
-            recovery, "_revive_bg_thread",
-            lambda *a, **k: pytest.fail("revival must not run for a node-bound worker"))
-        cand = recovery.Candidate(short_id="dddd4444", sock_path="/tmp/d.sock",
-                                  jobs_dir=tmp_path, cwd=str(tmp_path), name="node-w")
-        err = recovery.classify_session_error("rate limit")
-        assert recovery._default_failover(cand, err) == "swapped"
-        assert calls == ["dddd4444"]
-
-    def test_unreadable_manifest_stays_node_bound(self, monkeypatch, tmp_path):
-        # Finding 1: a real node-bound worker whose manifest read transiently fails
-        # (._node_id_from_worktree -> None) must NOT misroute into revival. The
-        # gate is confirmed manifest ABSENCE, so an unreadable manifest (is_node_less
-        # False) falls through to _redispatch and its bounded nudge, not a revival.
-        from fno.adapters.providers.failover import SwapDecision
-
-        calls: list = []
-        self._patch(monkeypatch, SwapDecision.SWAPPED, new_cli="claude",
-                    redispatch_result=False, calls=calls, auth="oauth_dir")
-        monkeypatch.setattr(recovery, "_worktree_is_node_less", lambda cwd: False)
-        monkeypatch.setattr(
-            recovery, "_revive_bg_thread",
-            lambda *a, **k: pytest.fail("a read-miss worker must not revive"))
-        cand = recovery.Candidate(short_id="eeee0000", sock_path="/tmp/e0.sock",
-                                  jobs_dir=tmp_path, cwd=str(tmp_path), name="node-w")
-        err = recovery.classify_session_error("rate limit")
-        # redispatch returned False -> rotated-no-worker (nudge), never notified.
-        assert recovery._default_failover(cand, err) == "rotated-no-worker"
-        assert calls == ["eeee0000"]
 
 
 class TestMaterializeManagedSwitch:
@@ -1257,8 +855,9 @@ class TestNodeIsDone:
     """x-370f AC1-EDGE: the already-done guard reads node status, fail-open."""
 
     def _patch_graph(self, monkeypatch, entries):
-        from fno.graph import load as gl
-        monkeypatch.setattr(gl, "load_graph", lambda *a, **k: entries)
+        from fno.graph import store as gl
+        monkeypatch.setattr(gl, "read_nodes_by_ids", lambda *a, **k: {"entries": entries, "missing": []})
+        monkeypatch.setattr(gl, "read_graph_strict", lambda *a, **k: entries)
 
     def test_true_when_done(self, monkeypatch):
         self._patch_graph(monkeypatch, [{"id": "x-370f", "status": "done"}])
@@ -1271,14 +870,17 @@ class TestNodeIsDone:
     def test_false_when_absent(self, monkeypatch):
         self._patch_graph(monkeypatch, [{"id": "x-other", "status": "done"}])
         assert recovery._node_is_done("x-370f") is False
+        self._patch_graph(monkeypatch, [{"id": "x-370f", "status": "done", "archived_at": "2026-09-01"}])
+        assert recovery._node_is_done("x-370f") is False
 
     def test_load_error_degrades_to_false(self, monkeypatch):
-        from fno.graph import load as gl
+        from fno.graph import store as gl
 
         def boom(*a, **k):
             raise RuntimeError("corrupt graph")
 
-        monkeypatch.setattr(gl, "load_graph", boom)
+        monkeypatch.setattr(gl, "read_nodes_by_ids", lambda *a, **k: None)
+        monkeypatch.setattr(gl, "read_graph_strict", boom)
         assert recovery._node_is_done("x-370f") is False
 
 
@@ -1330,7 +932,7 @@ class TestMissionAwareTerminalGate:
 
     # -- sweep wiring -----------------------------------------------------
     def _sweep(self, tmp_path, *, mission_complete_fn, counts=None,
-               failover_fn=None, output_result=None):
+               output_result=None):
         h = _Harness(state="done")
         if output_result is not None:
             h.read_state = lambda jobs_dir: recovery._SnapshotView(
@@ -1342,7 +944,6 @@ class TestMissionAwareTerminalGate:
             counts=counts,
             emit=h.emit, read_state_fn=h.read_state,
             truth_fn=h.truth, liveness_fn=h.liveness,
-            failover_fn=failover_fn,
             mission_complete_fn=mission_complete_fn,
         )
         return h, counts
@@ -1417,19 +1018,7 @@ class TestMissionAwareTerminalGate:
         assert h.event_types() == ["recovery_skipped"]
         assert h.events[0][1]["reason"] == "held-by-design"
 
-    def test_hollow_promise_reaches_failover(self, tmp_path):
-        # AC1/US4: a swap-class death behind a hollow promise rotates providers
-        # instead of nudging an already-rate-limited account.
-        seen: list = []
-        h, _ = self._sweep(
-            tmp_path, mission_complete_fn=lambda c: False,
-            output_result="API Error: 429 rate limit exceeded",
-            failover_fn=lambda c, err: seen.append(err) or "swapped",
-        )
-        assert len(seen) == 1
-        assert h.event_types() == ["worker_refused", "failover_swapped"]
-        assert h.sends == []
-
+    
     def test_cap_bounds_the_restored_path(self, tmp_path):
         # AC6: the newly reachable candidates obey max_nudges + capped-once.
         h, counts = self._sweep(tmp_path, mission_complete_fn=lambda c: False,
@@ -1445,8 +1034,9 @@ class TestMissionComplete:
     """x-5583: the family-2 artifact probe behind the terminal-suppression gate."""
 
     def _patch_graph(self, monkeypatch, entries):
-        from fno.graph import load as gl
-        monkeypatch.setattr(gl, "load_graph", lambda *a, **k: entries)
+        from fno.graph import store as gl
+        monkeypatch.setattr(gl, "read_nodes_by_ids", lambda *a, **k: {"entries": entries, "missing": []})
+        monkeypatch.setattr(gl, "read_graph_strict", lambda *a, **k: entries)
 
     def _cand(self, name=None, cwd=None):
         return recovery.Candidate(short_id="s1", sock_path="/s", jobs_dir=None,
@@ -1502,6 +1092,7 @@ class TestMissionComplete:
         ({"id": "x-1111", "status": "ready"}, False),
         # AC5: a blueprinted-but-unshipped target node is NOT complete.
         ({"id": "x-1111", "status": "ready", "plan_path": "/p.md"}, False),
+        ({"id": "x-1111", "status": "done", "archived_at": "2026-09-01"}, None),
     ])
     def test_target_artifacts(self, monkeypatch, entry, expected):
         self._patch_graph(monkeypatch, [entry])
@@ -1564,20 +1155,20 @@ class TestMissionComplete:
             self._cand(name="target-x-1111-foo")) is None
 
     def test_graph_error_degrades_to_none(self, monkeypatch):
-        from fno.graph import load as gl
+        from fno.graph import store as gl
 
         def boom(*a, **k):
             raise RuntimeError("corrupt graph")
 
-        monkeypatch.setattr(gl, "load_graph", boom)
+        monkeypatch.setattr(gl, "read_nodes_by_ids", lambda *a, **k: None)
+        monkeypatch.setattr(gl, "read_graph_strict", boom)
         assert recovery.mission_complete(
             self._cand(name="target-x-1111-foo")) is None
 
 
 class TestRedispatch:
-    """x-370f residual 1: failover respawn frees the dead session's claim via
-    ``fno agents claim release --force`` before spawning, skips an already-done node, and
-    bails to the nudge (False) when the claim cannot be freed."""
+    """Failover frees the dead session's claim before spawn; the child init
+    acquires its own lockfile claim."""
 
     def _cand(self):
         return recovery.Candidate(
@@ -1590,7 +1181,7 @@ class TestRedispatch:
         monkeypatch.setattr(recovery, "_node_is_done", lambda n: done)
 
     def _patch_run(self, monkeypatch, *, stop_rc=0, stop_out=b"", force_release_rc=0,
-                   spawn_rc=0, spawn_exc=None, stamp_rc=0, clear_rc=0):
+                   spawn_rc=0, spawn_exc=None):
         """Stub subprocess.run; record the (markered) calls for assertions."""
         from types import SimpleNamespace
         import subprocess as sp
@@ -1598,6 +1189,9 @@ class TestRedispatch:
         calls = []
 
         def fake_run(cmd, **kw):
+            passthrough = _naming_real(cmd, **kw)
+            if passthrough is not None:
+                return passthrough
             calls.append(cmd)
             if cmd[:3] == ["fno-py", "agents", "stop"]:
                 return SimpleNamespace(returncode=stop_rc, stdout=stop_out, stderr=b"")
@@ -1613,11 +1207,6 @@ class TestRedispatch:
                 if spawn_exc is not None:
                     raise spawn_exc
                 return SimpleNamespace(returncode=spawn_rc)
-            if cmd[:3] == ["fno-py", "backlog", "update"]:
-                owner = cmd[cmd.index("--locked-by") + 1]
-                return SimpleNamespace(
-                    returncode=clear_rc if owner == "null" else stamp_rc,
-                )
             return SimpleNamespace(returncode=0)
 
         monkeypatch.setattr(sp, "run", fake_run)
@@ -1638,6 +1227,12 @@ class TestRedispatch:
             None,
         )
 
+    @staticmethod
+    def _assert_no_graph_claim_writes(calls):
+        assert not any(
+            c[:3] == ["fno-py", "backlog", "update"] for c in calls
+        ), calls
+
     def test_force_release_before_spawn_happy_path(self, monkeypatch):
         # AC1-HP: stop -> release --force node:<id> -> canonical claude bg spawn.
         self._patch_resolve(monkeypatch)
@@ -1654,6 +1249,7 @@ class TestRedispatch:
         assert "--harness" in spawn_cmd and "claude" in spawn_cmd
         assert "--substrate" in spawn_cmd and "bg" in spawn_cmd
         assert "--cwd" in spawn_cmd and "/wt/x-370f" in spawn_cmd
+        self._assert_no_graph_claim_writes(calls)
 
     def test_stop_failure_skips_force_release_and_spawn(self, monkeypatch):
         # codex P2: a non-zero `fno agents stop` means the worker may still be
@@ -1664,7 +1260,7 @@ class TestRedispatch:
         assert not recovery._redispatch(self._cand())
         assert self._index_of(calls, ["fno-py", "agents", "claim", "release", "--force"]) is None
         assert self._index_of(calls, ["fno-py", "agents", "spawn"]) is None
-        assert self._index_of(calls, ["backlog", "update", "--locked-by"]) is None
+        self._assert_no_graph_claim_writes(calls)
 
     def test_pane_refusal_runs_the_named_pane_kill_then_rotates(self, monkeypatch):
         # The daemon refuses `agents stop` on a pane row and NAMES the pane-kill
@@ -1684,7 +1280,7 @@ class TestRedispatch:
         calls = self._patch_run(monkeypatch, stop_rc=1, stop_out=refusal)
         assert recovery._redispatch(self._cand()) is True
         kill = self._index_of(
-            calls, ["fno-py", "mux", "pane", "kill", "--session", "main", "10"]
+            calls, ["fno-py", "mux", "pane", "kill", "--server", "main", "10"]
         )
         assert kill is not None, "the named pane-kill verb ran"
         fr = self._index_of(calls, ["fno-py", "agents", "claim", "release", "--force"])
@@ -1692,14 +1288,13 @@ class TestRedispatch:
         assert fr is not None and spawn is not None
         assert kill < fr < spawn
 
-    def test_force_release_failure_skips_spawn(self, monkeypatch):
+    def test_claim_release_failure_skips_spawn(self, monkeypatch):
         # AC1-ERR: force-release non-zero → no spawn, False so the caller nudges.
         self._patch_resolve(monkeypatch)
         calls = self._patch_run(monkeypatch, force_release_rc=1)
         assert not recovery._redispatch(self._cand())
         assert self._index_of(calls, ["fno-py", "agents", "spawn"]) is None
-        clear = self._index_of(calls, ["backlog", "update", "--locked-by"])
-        assert clear is not None and calls[clear][-1] == "null"
+        self._assert_no_graph_claim_writes(calls)
 
     def test_done_node_not_redispatched(self, monkeypatch):
         # AC1-EDGE: already-done node → no stop/force-release/spawn at all.
@@ -1713,20 +1308,10 @@ class TestRedispatch:
         self._patch_resolve(monkeypatch)
         calls = self._patch_run(monkeypatch, spawn_rc=1)
         assert not recovery._redispatch(self._cand())
-        owner_updates = [c for c in calls if "backlog" in c and "--locked-by" in c]
-        assert [c[-1] for c in owner_updates] == ["null"]
-        spawn = self._index_of(calls, ["agents", "spawn"])
-        clear = self._index_of(calls, ["backlog", "update", "--locked-by"])
-        assert spawn is not None and clear is not None and spawn < clear
+        assert self._index_of(calls, ["agents", "spawn"]) is not None
+        self._assert_no_graph_claim_writes(calls)
 
-    def test_spawn_failure_surfaces_corpse_clear_failure(self, monkeypatch, caplog):
-        self._patch_resolve(monkeypatch)
-        self._patch_run(monkeypatch, spawn_rc=1, clear_rc=1)
-
-        assert not recovery._redispatch(self._cand())
-        assert "could not clear dead owner for x-370f" in caplog.text
-
-    def test_spawn_timeout_after_stop_clears_corpse(self, monkeypatch):
+    def test_spawn_timeout_after_stop_does_not_write_a_graph_claim(self, monkeypatch):
         import subprocess
 
         self._patch_resolve(monkeypatch)
@@ -1736,31 +1321,17 @@ class TestRedispatch:
         )
 
         assert not recovery._redispatch(self._cand())
-        clear = self._index_of(calls, ["backlog", "update", "--locked-by"])
-        assert clear is not None and calls[clear][-1] == "null"
+        self._assert_no_graph_claim_writes(calls)
 
-    def test_successful_spawn_repoints_node_to_replacement(self, monkeypatch):
+    def test_successful_spawn_leaves_claim_acquisition_to_child_init(self, monkeypatch):
         self._patch_resolve(monkeypatch)
         calls = self._patch_run(monkeypatch)
 
         assert recovery._redispatch(self._cand()) is True
 
         spawn = self._index_of(calls, ["agents", "spawn"])
-        stamp = self._index_of(calls, ["backlog", "update", "--locked-by"])
-        assert spawn is not None and stamp is not None and spawn < stamp
-        assert calls[stamp][3] == "x-370f"
-        assert calls[stamp][-2:] == ["--locked-by", "failover-aaaa1111"]
-
-    def test_post_launch_stamp_failure_clears_corpse_and_returns_partial(
-        self, monkeypatch
-    ):
-        self._patch_resolve(monkeypatch)
-        calls = self._patch_run(monkeypatch, stamp_rc=1)
-
-        assert recovery._redispatch(self._cand()) == "partial"
-
-        owner_updates = [c for c in calls if "backlog" in c and "--locked-by" in c]
-        assert [c[-1] for c in owner_updates] == ["failover-aaaa1111", "null"]
+        assert spawn is not None
+        self._assert_no_graph_claim_writes(calls)
 
     def test_spawn_failure_releases_lane_slot(self, monkeypatch):
         # Parallel G4: no replacement worker → the dead lane's dispatch-time
@@ -1768,7 +1339,10 @@ class TestRedispatch:
         self._patch_resolve(monkeypatch)
         calls = self._patch_run(monkeypatch, spawn_rc=1)
         assert not recovery._redispatch(self._cand())
-        lr = self._index_of(calls, ["fno-py", "agents", "claim", "release", "--lane"])
+        # The lane slot frees through the native door now: <binary> claim
+        # lane-release --lane <node> (the Python `claim release --lane` leg is
+        # deleted), so the pin names the door the code actually walks.
+        lr = self._index_of(calls, ["claim", "lane-release", "--lane"])
         assert lr is not None
         assert "x-370f" in calls[lr]
 
@@ -1778,7 +1352,7 @@ class TestRedispatch:
         self._patch_resolve(monkeypatch)
         calls = self._patch_run(monkeypatch)
         assert recovery._redispatch(self._cand()) is True
-        assert self._index_of(calls, ["fno-py", "agents", "claim", "release", "--lane"]) is None
+        assert self._index_of(calls, ["claim", "lane-release", "--lane"]) is None
 
     def test_unresolvable_node_returns_false(self, monkeypatch):
         # No node id in the worktree manifest → nothing to re-dispatch.
@@ -1810,9 +1384,8 @@ class TestRedispatch:
         calls = self._patch_run(monkeypatch)
         assert recovery._redispatch(self._cand(), pre_spawn=lambda: False) is False
         assert self._index_of(calls, ["fno-py", "agents", "spawn"]) is None
-        assert self._index_of(calls, ["fno-py", "agents", "claim", "release", "--lane"]) is not None
-        clear = self._index_of(calls, ["backlog", "update", "--locked-by"])
-        assert clear is not None and calls[clear][-1] == "null"
+        assert self._index_of(calls, ["claim", "lane-release", "--lane"]) is not None
+        self._assert_no_graph_claim_writes(calls)
 
 
 class TestReviveBgThread:
@@ -1924,6 +1497,9 @@ class TestRespawnBgResume:
         calls = []
 
         def fake_run(cmd, **kw):
+            passthrough = _naming_real(cmd, **kw)
+            if passthrough is not None:
+                return passthrough
             calls.append(cmd)
             if cmd[:3] == ["fno-py", "agents", "stop"]:
                 return SimpleNamespace(returncode=stop_rc)
@@ -2049,152 +1625,23 @@ class TestNotifyManualResume:
 
 
 class _FakeLink:
-    """One fallback link, in SpawnDefaultsBlock's own field spelling."""
+    """One fallback link, in the config's own field spelling."""
 
     def __init__(self, provider, model="", effort="", substrate=""):
-        self.provider = provider
-        self.model = model
-        self.effort = effort
-        self.substrate = substrate
-        self.permission_mode = ""
-        self.route = ""
-        self.account = ""
+        self.link = {"harness": provider}
+        if model:
+            self.link["model"] = model
+        if effort:
+            self.link["effort"] = effort
+        if substrate:
+            self.link["substrate"] = substrate
 
 
-class TestChainRedispatch:
-    """The operator's sentence, executed: complex work reaches codex."""
 
-    def _wire(self, monkeypatch, tmp_path, chain, redispatch_ok=True):
-        """Point the walk at a tmp state file and a fixed chain."""
-        from fno import fleet_state
+requires_rust = pytest.mark.dev_build
 
-        hb = tmp_path / "fleet-sweep-state.json"
-        monkeypatch.setattr(fleet_state, "fleet_state_path", lambda: hb, raising=True)
-        monkeypatch.setattr(recovery, "_node_size", lambda node: "L", raising=True)
 
-        import fno.agents.spawn_defaults as sd
-
-        monkeypatch.setattr(
-            sd, "resolve_fallback_chain",
-            lambda size, exclude=(), **kw: [
-                link for link in chain
-                if sd.link_id(link) not in set(exclude)
-            ],
-            raising=True,
-        )
-
-        spawned: list[list[str]] = []
-
-        def _fake_redispatch(candidate, *, pre_spawn=None, flags=None):
-            spawned.append(list(flags or []))
-            return redispatch_ok
-
-        monkeypatch.setattr(recovery, "_redispatch", _fake_redispatch, raising=True)
-
-        events: list[tuple[str, dict]] = []
-        monkeypatch.setattr(
-            recovery, "_emit_recovery_event",
-            lambda t, d: events.append((t, dict(d))), raising=True,
-        )
-        return spawned, events, hb
-
-    def test_ac6_hp_a_refused_node_reaches_codex(self, tmp_path, monkeypatch):
-        chain = [_FakeLink("codex", "gpt-5.6-sol", effort="high"),
-                 _FakeLink("claude", "sonnet", substrate="bg")]
-        spawned, events, _hb = self._wire(monkeypatch, tmp_path, chain)
-        _hb = _hb
-        c = _stale_candidate(tmp_path)
-
-        assert recovery._chain_redispatch(c, reason="queue-exhausted") == "swapped"
-        assert spawned == [["-H", "codex", "-m", "gpt-5.6-sol",
-                           "--effort", "high", "--substrate", "pane"]]
-        # ONE event per swap, and it is the sweep's. A second emit from in here
-        # would record two swaps for one replacement worker.
-        assert events == []
-        from fno import fleet_state
-        assert fleet_state.links_tried("x-test", path=_hb) == ["codex/gpt-5.6-sol"]
-
-    def test_a_node_walks_its_chain_once(self, tmp_path, monkeypatch):
-        # The link is recorded, so the next tick takes the NEXT link rather
-        # than the same failing vendor. A chain that loops is a worse failure
-        # than a chain that ends.
-        chain = [_FakeLink("codex", "gpt-5.6-sol"), _FakeLink("claude", "sonnet")]
-        spawned, _events, _hb = self._wire(monkeypatch, tmp_path, chain)
-        c = _stale_candidate(tmp_path)
-
-        recovery._chain_redispatch(c, reason="r")
-        recovery._chain_redispatch(c, reason="r")
-        assert [f[1] for f in spawned] == ["codex", "claude"]
-
-    def test_a_link_counts_as_tried_even_when_its_spawn_fails(
-        self, tmp_path, monkeypatch
-    ):
-        chain = [_FakeLink("codex", "gpt-5.6-sol"), _FakeLink("claude", "sonnet")]
-        spawned, _events, hb = self._wire(
-            monkeypatch, tmp_path, chain, redispatch_ok=False,
-        )
-        c = _stale_candidate(tmp_path)
-
-        assert recovery._chain_redispatch(c, reason="r") == "rotated-no-worker"
-        from fno import fleet_state
-        assert fleet_state.links_tried("x-test", path=hb) == ["codex/gpt-5.6-sol"]
-
-    def test_ac6_edge_an_exhausted_chain_spawns_nothing_and_says_so(
-        self, tmp_path, monkeypatch
-    ):
-        chain = [_FakeLink("codex", "gpt-5.6-sol")]
-        spawned, events, _hb = self._wire(monkeypatch, tmp_path, chain)
-        c = _stale_candidate(tmp_path)
-
-        recovery._chain_redispatch(c, reason="r")
-        spawned.clear()
-        assert recovery._chain_redispatch(c, reason="r") == "rotated-no-worker"
-        assert spawned == []
-        assert events[-1][0] == "failover_exhausted"
-        assert events[-1][1]["links_tried"] == "codex/gpt-5.6-sol"
-        assert events[-1][1]["reason"] == "all-tried"
-
-    def test_ac5_neg_a_malformed_chain_refuses_and_spawns_nothing(
-        self, tmp_path, monkeypatch
-    ):
-        from fno import fleet_state
-
-        hb = tmp_path / "fleet-sweep-state.json"
-        monkeypatch.setattr(fleet_state, "fleet_state_path", lambda: hb, raising=True)
-        monkeypatch.setattr(recovery, "_node_size", lambda node: "L", raising=True)
-
-        import fno.agents.spawn_defaults as sd
-
-        def _boom(size, exclude=(), **kw):
-            raise ValueError("config.agents.fallback.L[0].harness='banana'")
-
-        monkeypatch.setattr(sd, "resolve_fallback_chain", _boom, raising=True)
-
-        spawned = []
-        monkeypatch.setattr(
-            recovery, "_redispatch",
-            lambda c, **kw: spawned.append(kw) or True, raising=True,
-        )
-        events = []
-        monkeypatch.setattr(
-            recovery, "_emit_recovery_event",
-            lambda t, d: events.append((t, dict(d))), raising=True,
-        )
-
-        c = _stale_candidate(tmp_path)
-        assert recovery._chain_redispatch(c, reason="r") == "rotated-no-worker"
-        assert spawned == [], "a malformed chain must never bill a spawn"
-        assert events[0][0] == "failover_exhausted"
-        assert "banana" in events[0][1]["reason"]
-
-    def test_a_node_less_worktree_never_walks_a_chain(self, tmp_path, monkeypatch):
-        spawned, _events, _hb = self._wire(
-            monkeypatch, tmp_path, [_FakeLink("codex", "m")],
-        )
-        c = _stale_candidate(tmp_path, node_less=True)
-        assert recovery._chain_redispatch(c, reason="r") == "rotated-no-worker"
-        assert spawned == []
-
+@requires_rust
 
 class TestRedispatchAxisBundle:
     """The spawn call actually changes vendor, not just its label."""
@@ -2210,6 +1657,9 @@ class TestRedispatchAxisBundle:
             returncode = 0
 
         def _run(cmd, **kw):
+            passthrough = _naming_real(cmd, **kw)
+            if passthrough is not None:
+                return passthrough
             calls.append(cmd)
             return _Ok()
 
@@ -2234,7 +1684,10 @@ class TestRedispatchAxisBundle:
 
         import subprocess as _sp
         monkeypatch.setattr(
-            _sp, "run", lambda cmd, **kw: calls.append(cmd) or _Ok(), raising=True,
+            _sp, "run",
+            lambda cmd, **kw: calls.append(cmd)
+            or (_naming_real(cmd, **kw) or _Ok()),
+            raising=True,
         )
 
         c = _stale_candidate(tmp_path)
@@ -2245,3 +1698,132 @@ class TestRedispatchAxisBundle:
         assert "-H" in spawn_cmd and "codex" in spawn_cmd
         assert spawn_cmd[spawn_cmd.index("--substrate") + 1] == "pane"
         assert "--harness" not in spawn_cmd
+
+
+
+class TestSweepWritesTheQuotaLock:
+    """x-bbc0 change 2: a corroborated quota refusal cools the account the
+    worker was LAUNCHED on. The event fires even when nothing was written -
+    an unattributable refusal is the finding, not silence."""
+
+    _QUOTA = (
+        "Claude usage limit reached. Your limit will reset at "
+        "2026-08-18T07:19:38+08:00"
+    )
+
+    def _cand(self, tmp_path, account):
+        c = _stale_candidate(tmp_path)
+        c.launch_account = account
+        return c
+
+    def _sweep(self, h, tmp_path, counts, account):
+        recovery.recovery_sweep(
+            _now(), _Cfg(),
+            candidates=[self._cand(tmp_path, account)],
+            counts=counts,
+            emit=h.emit, read_state_fn=h.read_state,
+            truth_fn=h.truth, liveness_fn=h.liveness,
+        )
+
+    def _lock_calls(self, monkeypatch):
+        import fno.agents.quota_lock as ql
+
+        calls: list[tuple] = []
+
+        def _rec(acct, text, resets_at=None):
+            calls.append((acct, resets_at))
+            return acct
+
+        monkeypatch.setattr(ql, "record_quota_lock", _rec)
+        return calls
+
+    def test_second_corroborated_tick_locks_the_launch_account_once(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "FNO_RUNTIME_STATE_PATH", str(tmp_path / "provider-runtime-state.json")
+        )
+        calls = self._lock_calls(monkeypatch)
+        counts: dict = {}
+
+        h1 = self._harness()
+        self._sweep(h1, tmp_path, counts, "readyrule")  # tick 1
+        assert calls == []  # corroboration not yet met
+        assert "provider_quota_locked" not in h1.event_types()
+
+        h2 = self._harness()
+        self._sweep(h2, tmp_path, counts, "readyrule")  # tick 2: same refusal
+        assert len(calls) == 1
+        assert calls[0][0] == "readyrule"
+        payload = dict(
+            h2.events[h2.event_types().index("provider_quota_locked")][1]
+        )
+        assert payload["attributed"] is True
+        assert payload["account"] == "readyrule"
+        assert payload["source"] == "transcript"
+        assert payload["resets_at"] is not None
+
+        h3 = self._harness()
+        self._sweep(h3, tmp_path, counts, "readyrule")  # tick 3: once per worker
+        assert len(calls) == 1
+        assert "provider_quota_locked" not in h3.event_types()
+
+    def _harness(self):
+        return _RefusalHarness(self._QUOTA)
+
+    def test_an_unattributed_refusal_emits_and_writes_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        # The REAL record_quota_lock runs: launch_account None must write
+        # nothing, and the event must still say so.
+        monkeypatch.setenv(
+            "FNO_RUNTIME_STATE_PATH", str(tmp_path / "provider-runtime-state.json")
+        )
+        counts: dict = {}
+        h1 = self._harness()
+        self._sweep(h1, tmp_path, counts, None)
+        h2 = self._harness()
+        self._sweep(h2, tmp_path, counts, None)  # corroboration met
+
+        payload = dict(
+            h2.events[h2.event_types().index("provider_quota_locked")][1]
+        )
+        assert payload["attributed"] is False
+        assert payload["account"] is None
+        from fno.adapters.providers.runtime_state import read_state
+
+        assert read_state().provider_health == {}
+
+    def test_a_non_quota_refusal_writes_no_lock(self, tmp_path, monkeypatch):
+        # A hand-built auth refusal: classify_session_error cannot produce
+        # one from text, so build the NormalizedError directly.
+        from fno.adapters.providers.error_taxonomy import (
+            ErrorClass,
+            NormalizedError,
+        )
+
+        auth = NormalizedError(
+            error_class=ErrorClass.PROVIDER_4XX_AUTH,
+            raw_status=401, raw_exit_code=None,
+            body_excerpt="not authenticated",
+            triggers_swap=True,
+        )
+        monkeypatch.setattr(
+            recovery,
+            "classify_worker_refusal",
+            lambda *a, **k: (auth, "output_result"),
+        )
+        monkeypatch.setenv(
+            "FNO_RUNTIME_STATE_PATH", str(tmp_path / "provider-runtime-state.json")
+        )
+        calls = self._lock_calls(monkeypatch)
+        h = _Harness(updated_age_s=600)
+        recovery.recovery_sweep(
+            _now(), _Cfg(),
+            candidates=[self._cand(tmp_path, "readyrule")],
+            counts={},
+            emit=h.emit, read_state_fn=h.read_state,
+            truth_fn=h.truth, liveness_fn=h.liveness,
+        )
+        assert calls == []
+        assert "provider_quota_locked" not in h.event_types()

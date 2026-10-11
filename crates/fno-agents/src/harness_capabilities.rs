@@ -1,8 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
+/// The capability contract. This in-crate TOML is the CANONICAL table
+/// (operator ruling 2026-09-02): `build.rs` copies it over the
+/// Python-tree table (`cli/src/fno/agents/harness_capabilities.toml`) on
+/// every build, so this is the only file a human edits. `crates/fno` reads
+/// the table through the dep instead of carrying its own copy, and the
+/// rust-ci generated-copies dirty-tree step catches a hand-edited
+/// generated copy committed without a rebuild.
 pub const CAPABILITY_TOML: &str = include_str!("harness_capabilities.toml");
 
 const SESSION_LANES: [&str; 5] = [
@@ -29,25 +36,255 @@ const STOP_STRATEGIES: [&str; 2] = ["claude-short-id", "registry-noop"];
 /// Python validator in cli/src/fno/agents/harness_map.py so the two runtimes
 /// cannot disagree about which contracts are legal.
 const LOOP_PARTICIPATION: [&str; 3] = ["native", "extension", "none"];
+
+/// The fno hook jobs a harness row must declare beside its pane mechanics.
+/// The loop job is NOT one of them: `loop_participation` and
+/// `loop_extension` already declare it, and the wire-gate below derives the
+/// loop's state from that pair instead of a second field.
+pub const HOOK_JOBS: [&str; 4] = [
+    "lead_guard",
+    "lead_reinject",
+    "session_state",
+    "event_rules",
+];
 const REMOVE_STRATEGIES: [&str; 3] = ["claude-short-id", "codex-session-index", "registry-only"];
+const PROVIDER_ACTIONS: [&str; 3] = ["compact", "goal_get", "goal_set"];
+/// What keeps a lead waking between events on a harness. `agents.<harness>.beat
+/// = "auto"` resolves to the row's member; see `harness_beat`.
+pub const BEATS: [&str; 4] = ["daemon", "loop", "goal", "schedule"];
+
+/// Name the reason a harness cannot use the thread spawn lane.
+pub fn thread_substrate_refusal(harness: &str) -> String {
+    use crate::claude_ask::py_repr;
+
+    let head = format!(
+        "substrate 'thread' (detached interactive session) is unavailable on harness {}",
+        py_repr(harness)
+    );
+    let tail = "use --substrate headless for a one-shot";
+    let contract = HarnessContract::packaged().ok();
+    if let Some(caps) = contract.as_ref().and_then(|c| c.capabilities(harness).ok()) {
+        if caps.command_surface == "refused" {
+            return format!(
+                "harness {} has no maintained footnote dispatch lane and is deprecated; \
+                 route this work to its successor 'agy' (or a claude/codex/opencode harness) \
+                 - no prose build brief is generated",
+                py_repr(harness)
+            );
+        }
+    }
+    match contract.and_then(|contract| contract.thread_lane(harness).ok()) {
+        Some("none") => {
+            format!("{head}: it declares no resume form, so no thread lane exists for it - {tail}")
+        }
+        Some(lane) => format!(
+            "{head}: fno has not built this harness's {lane} lane spawn arm yet, and that gap is \
+             in fno, never a harness limitation - {tail}"
+        ),
+        None => format!(
+            "{head}: its thread lane could not be resolved from the capability contract - {tail}"
+        ),
+    }
+}
+/// How a probe declaration says a field can be settled. `declared`: the
+/// vendor states it about its own interface (help/version), and reading that
+/// is not inference. `behavioral`: only a scratch-PTY run checking a
+/// vendor-produced state marker settles it. `unprobeable`: no authority and
+/// no marker, and the declaration must say why.
+const PROBE_KINDS: [&str; 3] = ["declared", "behavioral", "unprobeable"];
+/// The closed feature key set. A feature is what a harness can DO -
+/// a review command, an RPC surface, a plugin system - as opposed to the
+/// keystroke mechanics above, which model how fno PUPPETS a pane. Closed so a
+/// typo is a parse error rather than a silent new dimension.
+const FEATURE_KEYS: [&str; 11] = [
+    "review",
+    "spawn",
+    "attach",
+    "rpc",
+    "server",
+    "plugins",
+    "hooks",
+    "skills_dir",
+    "subagent_dispatch",
+    "mcp",
+    "acp",
+];
+/// The four states a feature claim may DECLARE. `native` means a wired lane
+/// exists TODAY: the harness's own surface where it exposes one, otherwise a
+/// lane fno hosts itself - opencode ships no attach verb and `fno agents
+/// attach` still lands, through the daemon-kept portal. Exposure and
+/// reachability are different answers, and conflating them is the defect
+/// this dimension exists to delete. `capable` is the load-bearing third
+/// state: real on the harness, and fno has NO wired arm for it - the
+/// routing boolean and name tuple this dimension replaced could not say
+/// that.
+const FEATURE_STATES: [&str; 4] = ["native", "capable", "absent", "unmeasured"];
+/// The closed journey-key set: the ten classes the cross-harness audits name.
+/// Closed so a typo is a parse error rather than a silent new dimension.
+pub const JOURNEY_KEYS: [&str; 10] = [
+    "fresh-install",
+    "spawn-turn-resume",
+    "parent-children",
+    "send-during-active-work",
+    "wait-for-ci",
+    "compact-reopen",
+    "restart-viewport",
+    "review-ship",
+    "native-remote-view",
+    "cleanup",
+];
+/// How a live pane session becomes a persistent thread, one value per
+/// `[harness.<name>.conversion]` stanza. Closed so the classifier can branch
+/// on the strategy alone - never on a harness name - and a typo is a parse
+/// error rather than a silent new dimension. Documented beside the stanzas
+/// at the tail of harness_capabilities.toml.
+pub const CONVERSION_STRATEGIES: [&str; 4] = [
+    "keeper-rebind",
+    "server-resume",
+    "client-resume",
+    "unsupported",
+];
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("harness capability contract: {0}")]
 pub struct ContractError(String);
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessContract {
     pub map_version: u32,
     pub harness: BTreeMap<String, HarnessCapabilities>,
+    /// HOW each named field can be settled, keyed by field path.
+    /// `declared` carries an authority command (`{bin}` = the harness's own
+    /// binary) plus the pattern that settles it in the authority's output;
+    /// `behavioral` carries the vendor-produced marker a scratch-PTY run
+    /// must read; `unprobeable` carries the reason no one-shot probe exists.
+    /// A field ABSENT from this table is UNDECLARED, and the probe reports
+    /// it as such instead of guessing an instrument.
+    #[serde(default)]
+    pub probe: BTreeMap<String, ProbeDecl>,
+    /// The ten journey classes, keyed by [`JOURNEY_KEYS`] name. Same
+    /// instrument contract as `probe`; the journeys dimension answers
+    /// whether a complete user journey can be run and observed, beside the
+    /// per-field instruments.
+    #[serde(default)]
+    pub journeys: BTreeMap<String, JourneyDecl>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProbeDecl {
+    /// One of [`PROBE_KINDS`].
+    pub kind: String,
+    #[serde(default)]
+    pub authority: String,
+    #[serde(default)]
+    pub pattern: String,
+    /// The text a correct reader must REJECT. `declared` needs it: a pattern
+    /// that matches its own control also matches a sentence denying the
+    /// capability, so the reader cannot report absence and the load refuses
+    /// it. The other kinds forbid it - a field the kind does not own is a
+    /// rejection, not a silent keep.
+    #[serde(default)]
+    pub control: String,
+    #[serde(default)]
+    pub marker: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// A journey-class declaration: one of the ten user-journey classes the
+/// cross-harness audits name, carrying the same instrument kinds as
+/// [`ProbeDecl`] plus an optional `reader` naming a reader owned by another
+/// surface this journey consumes instead of defining a second one.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JourneyDecl {
+    /// One of [`PROBE_KINDS`].
+    pub kind: String,
+    #[serde(default)]
+    pub authority: String,
+    #[serde(default)]
+    pub pattern: String,
+    /// Same contract as [`ProbeDecl::control`].
+    #[serde(default)]
+    pub control: String,
+    #[serde(default)]
+    pub marker: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub reader: String,
+}
+
+/// One fno hook job's declared state on a harness row. `supported` names the
+/// repo-relative files that implement it in `via`; `impossible` and
+/// `missing` carry the reason instead.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookJob {
+    /// "supported" | "impossible" | "missing"
+    pub state: String,
+    #[serde(default)]
+    pub via: Vec<String>,
+    #[serde(default)]
+    pub reason: String,
+    /// The event wiring for a supported job that native hook events feed
+    /// (session_state): which event reports which state word, and the
+    /// harness's blocked event ("none" = the harness exposes no
+    /// permission-prompt event, so the screen backstop keeps the row).
+    /// Absent on audit-only jobs and unwired rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring: Option<HookWiring>,
+}
+
+/// One wired job's event map: the harness's own event name -> the state
+/// word it reports, plus the harness's blocked event.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HookWiring {
+    pub events: BTreeMap<String, String>,
+    pub blocked: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HarnessCapabilities {
     pub permission_bypass: Vec<String>,
+    /// Which delivered-mail header form this harness's composer tolerates:
+    /// `true` = the `@name` mention form, `false` = plain `name` (a bare
+    /// `@` can open a composer mention picker or read as an address). The
+    /// composer check's verdict, read as data - never a branch in code.
+    pub mail_header_at: bool,
+    /// One of [`BEATS`]. Empty reads `daemon`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub beat: String,
+    /// The mux composer's effort-picker list. `None` = no effort surface at
+    /// all; `Some([])` = the axis exists but values are provider passthrough
+    /// (free text); a filled list is the enumerable choices. Absent on a row
+    /// whose authority names no surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub efforts: Option<Vec<String>>,
+    /// The mux composer's permission-picker list, same three states as
+    /// `efforts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_modes: Option<Vec<String>>,
+    /// The mux composer's Model-tab floor: this harness's own launchable
+    /// model ids, measured off the vendor's published roster or its model
+    /// catalog. Absent where the harness owns a live list (opencode) or
+    /// declares none; configured account records merge in on top at read
+    /// time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    /// The composer's `--` flag picker: this harness's launch flags,
+    /// captured once off its own `--help` (chip- and door-owned flags left
+    /// out). Each entry is the flag spelling plus ` <value>` when the flag
+    /// takes one. Absent where no capture exists (the harness is not
+    /// installed on the capturing machine); a typed flag missing from the
+    /// list still works as a verbatim pill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_flags: Option<Vec<String>>,
     pub resume: String,
-    pub thread: bool,
     pub autonomous_pane: bool,
     pub route_on_pane: bool,
     /// One of [`LOOP_PARTICIPATION`]. Read at the dispatch seam, not at load.
@@ -65,6 +302,13 @@ pub struct HarnessCapabilities {
     /// verb absent from this list; absent means the harness declares none.
     #[serde(default)]
     pub native_verbs: Vec<String>,
+    /// Per-verb teaching metadata keyed by the roster verb: when to reach
+    /// for it and the risk class the raw-mail guard enforces. `use_when`
+    /// lines marked name-derived in the TOML comments say so there; the
+    /// risk class is the guard's authority either way. `default` keeps an
+    /// older packaged copy parseable.
+    #[serde(default)]
+    pub native_verb_meta: BTreeMap<String, VerbMeta>,
     /// The subset the mail lane maps to a structured review RPC on a daemon
     /// thread; empty when the harness has no such transport.
     #[serde(default)]
@@ -87,9 +331,216 @@ pub struct HarnessCapabilities {
     pub permission_response: BTreeMap<String, PermissionResponse>,
     pub resume_strategy: ResumeStrategy,
     pub model_switch_strategy: ModelSwitchStrategy,
+    /// The keeper-lane spawn arm, absent on a harness with no keeper lane.
+    /// One row replaces four hand-written copies of the same spawn block; the
+    /// fields are documented in docs/architecture/thread-lanes.md.
+    #[serde(default)]
+    pub keeper: Option<KeeperArm>,
+    /// The daemon/argv thread lane's carrier row (spawn flag passthrough),
+    /// absent on a keeper-lane harness (whose `keeper` row answers instead).
+    /// `carries` names the launch axes the lane takes in its native form and
+    /// `passthrough` the fenced `--` spellings it maps, or `["*"]` for an
+    /// argv lane; a flag outside both demotes the spawn to the pane.
+    #[serde(default)]
+    pub thread: Option<ThreadArm>,
+    /// What this harness can DO, keyed by [`FEATURE_KEYS`] - a second
+    /// dimension beside the pane mechanics, not a rewrite of them. A key
+    /// ABSENT here reads `unmeasured`, which is legal and renders as a
+    /// visible gap; the refusal lives in the lanes that consume a feature,
+    /// not in the parse. Every key used on any row must carry a
+    /// `[probe.features.<key>]` declaration, enforced in
+    /// [`HarnessContract::validate`].
+    #[serde(default)]
+    pub features: BTreeMap<String, FeatureClaim>,
+    /// Provider-owned action recipes. An absent action means the caller must
+    /// use the identity-pinned pane transaction.
+    #[serde(default)]
+    pub provider_actions: BTreeMap<String, ProviderAction>,
+    /// Which fno hook jobs this harness runs, keyed by [`HOOK_JOBS`]. The
+    /// loop job is derived from loop_participation/loop_extension, not
+    /// declared here. Every row declares every job; validate_row refuses a
+    /// `missing` on a wired row, so a gap is a load failure, never an
+    /// audit-only fact.
+    #[serde(default)]
+    pub hooks: BTreeMap<String, HookJob>,
+    /// The pane-to-thread lifecycle move (`fno agents resume <name>
+    /// --substrate thread`), one stanza per harness. ABSENT reads
+    /// `unsupported` at the accessor with a named refusal - absence is the
+    /// default-off, never a guess - so only rows that measured a conversion
+    /// carry one.
+    #[serde(default)]
+    pub conversion: Option<ConversionRow>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderAction {
+    pub transport: String,
+    pub method: String,
+    pub proof: String,
+}
+
+/// The raw-mail guard's risk vocabulary for a native verb. A
+/// `session-ending` or `context-destroying` verb is refused on
+/// `mail send --raw` unless the send names it with `--ack-verb-risk`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerbRisk {
+    Safe,
+    ContextDestroying,
+    SessionEnding,
+}
+
+impl VerbRisk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VerbRisk::Safe => "safe",
+            VerbRisk::ContextDestroying => "context-destroying",
+            VerbRisk::SessionEnding => "session-ending",
+        }
+    }
+
+    /// True when the raw-mail lane refuses the verb without an explicit ack.
+    pub fn is_guarded(self) -> bool {
+        matches!(self, VerbRisk::ContextDestroying | VerbRisk::SessionEnding)
+    }
+}
+
+/// One verb's row in `[harness.<name>.native_verb_meta]`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VerbMeta {
+    /// One line: when an agent reaches for this verb.
+    pub use_when: String,
+    pub risk: VerbRisk,
+    /// opencode only: a user-defined command can override a built-in by
+    /// name, so the roster names built-ins and a custom override is
+    /// invisible to this table by construction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub built_in: Option<bool>,
+}
+
+/// One harness's `[harness.<name>.conversion]` stanza: HOW a live pane of
+/// this harness becomes a persistent thread under its own session id, and
+/// whether that id survives. `refusal` is required on an `unsupported` row
+/// and refused on a supported one (checked in `validate_row`), so an
+/// unsupported row always answers the operator's why.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversionRow {
+    /// One of [`CONVERSION_STRATEGIES`].
+    pub strategy: String,
+    pub preserves_id: bool,
+    /// Why conversion is refused. Required on `unsupported`, empty
+    /// elsewhere - a supported row's refusal would contradict its strategy.
+    #[serde(default)]
+    pub refusal: String,
+}
+
+/// The conversion contract RESOLVED for the caller: what the row declared,
+/// or the absent-stanza default (`unsupported` + named refusal).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedConversion {
+    /// One of [`CONVERSION_STRATEGIES`].
+    pub strategy: String,
+    pub preserves_id: bool,
+    pub refusal: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeeperArm {
+    /// Why this lane has no one-shot form, in the sentence the operator sees.
+    pub once_refusal: String,
+    /// The launch axes this lane has a measured spelling for. Every other
+    /// axis is refused BY NAME, so one list answers both questions.
+    pub carries: Vec<String>,
+    /// This TUI's own composer-idle paint; empty keeps the seed default.
+    #[serde(default)]
+    pub ready_marker: String,
+    #[serde(default)]
+    pub resume_refusal: String,
+    #[serde(default)]
+    pub headless_refusal: String,
+    /// Refuse `--once` and headless with ONE message, where they name the
+    /// same absent lane.
+    #[serde(default)]
+    pub once_and_headless_together: bool,
+    /// The never-prompt flag, appended under `--yolo` - or always, where an
+    /// unattended keeper has nobody to answer a first approval.
+    #[serde(default)]
+    pub bypass_flag: String,
+    #[serde(default)]
+    pub bypass_always: bool,
+    #[serde(default)]
+    pub takes_model: bool,
+    #[serde(default)]
+    pub takes_effort: bool,
+    #[serde(default)]
+    pub takes_add_dir: bool,
+    /// `[regex, keys]` for a TUI that paints a blocking modal before its
+    /// composer. A TUI behind an unanswered modal runs nothing while holding
+    /// a live registry row.
+    #[serde(default)]
+    pub clear_modal: Vec<String>,
+    /// The fenced `--` spellings the launch argv takes. A keeper lane appends
+    /// every token, so its row always carries `["*"]`.
+    #[serde(default)]
+    pub passthrough: Vec<String>,
+}
+
+/// The thread lane's carrier row (spawn flag passthrough). Kept beside
+/// [`KeeperArm`]: a harness answers its carrier question from `thread` when
+/// it has one and from `keeper` when it does not.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadArm {
+    /// The launch axes this lane has a native form for.
+    pub carries: Vec<String>,
+    /// The fenced `--` spellings this lane maps, or `["*"]` when it appends
+    /// every token to its argv.
+    #[serde(default)]
+    pub passthrough: Vec<String>,
+}
+
+/// One feature claim: `state` is the claim, and `verbs` names the
+/// harness's own verbs that exercise it, measured. The vocabulary and
+/// the probe coupling are the contract.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureClaim {
+    /// One of [`FEATURE_STATES`].
+    pub state: String,
+    /// The harness's own verbs that exercise this feature, measured.
+    /// Absent means the claim has no verb surface (an fno-hosted lane
+    /// included), which the consuming lane states in its refusal
+    /// instead of implying one.
+    #[serde(default)]
+    pub verbs: Vec<String>,
+    /// What settled this claim: the reader that ran, the harness version it
+    /// ran against, and the date. A claim without one keeps its state and
+    /// its comment, and the matrix renders the cell unmeasured rather than
+    /// repeating a word nobody can point at a measurement for.
+    #[serde(default)]
+    pub measured_by: Option<MeasuredBy>,
+}
+
+/// The measurement receipt a feature claim carries inside `measured_by`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MeasuredBy {
+    /// The reader that ran (a journey name, a probe line, or a named
+    /// instrument owned by another surface).
+    pub reader: String,
+    /// ISO date (YYYY-MM-DD) the measurement settled.
+    pub date: String,
+    /// The harness version the reader ran against; empty when the row's
+    /// own comment cites no version.
+    #[serde(default)]
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionResponse {
     pub supported: bool,
@@ -97,14 +548,14 @@ pub struct PermissionResponse {
     pub keys: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestRuleRef {
     pub id: String,
     pub state: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionBinding {
     pub strategy: String,
@@ -112,13 +563,13 @@ pub struct SessionBinding {
     pub timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeStrategy {
     pub forms: BTreeMap<String, ResumeForm>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResumeForm {
     pub kind: String,
@@ -138,7 +589,7 @@ pub struct ResumeForm {
     pub pre_exec: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelSwitchStrategy {
     pub kind: String,
@@ -158,11 +609,41 @@ impl HarnessCapabilities {
     pub fn state_root_stance(&self, substrate: &str) -> Option<&str> {
         self.state_root_grant.get(substrate).map(String::as_str)
     }
+
+    pub fn provider_action(&self, action: &str) -> Option<&ProviderAction> {
+        self.provider_actions.get(action)
+    }
 }
 
 impl HarnessContract {
     pub fn packaged() -> Result<Self, ContractError> {
         Self::parse(CAPABILITY_TOML)
+    }
+
+    /// The delivered-mail header form a harness's composer takes, from its
+    /// contract row: `Some(true)` = the `@name` mention form, `Some(false)` =
+    /// plain `name`. `None` = unknown harness.
+    pub fn mail_header_at(&self, harness: &str) -> Option<bool> {
+        Some(self.harness.get(harness)?.mail_header_at)
+    }
+
+    /// The lead beat a harness's row declares; an absent key reads `daemon`.
+    /// `None` = unknown harness.
+    pub fn beat(&self, harness: &str) -> Option<&str> {
+        let beat = self.harness.get(harness)?.beat.as_str();
+        Some(if beat.is_empty() { "daemon" } else { beat })
+    }
+
+    /// Gate ONE merged candidate row (bundled + config override) through the
+    /// same per-row contract the bundled table ships under. The row
+    /// arrives as generic TOML so an override reader hands over its merged
+    /// candidate without assembling a whole contract. `deny_unknown_fields`
+    /// still applies: a key the row vocabulary does not carry is a
+    /// rejection, not a silent keep.
+    pub fn validate_merged_row(harness: &str, row: &toml::Value) -> Result<(), ContractError> {
+        let caps = HarnessCapabilities::deserialize(row.clone())
+            .map_err(|error| ContractError(error.to_string()))?;
+        validate_row(harness, &caps)
     }
 
     /// [`HarnessCapabilities::state_root_stance`] for an unknown-harness name.
@@ -186,251 +667,36 @@ impl HarnessContract {
                 "harness set diverges from provider::KNOWN_PROVIDERS".into(),
             ));
         }
-        let allowed_keys: BTreeSet<&str> = [
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "enter",
-            "left",
-            "right",
-            "up",
-            "down",
-            "tab",
-            "esc",
-            "y",
-            "a",
-            "d",
-            "unsupported",
-        ]
-        .into_iter()
-        .collect();
         for (harness, caps) in &self.harness {
-            let manifest = crate::manifest::load_manifest(harness, None)
-                .ok_or_else(|| field_error(harness, "ready_marker", "no bundled manifest"))?
-                .map_err(|error| field_error(harness, "ready_marker", &error.to_string()))?;
-            for declared in &caps.manifest_rules {
-                // The declared state vocabulary is idle/blocked ONLY, matching
-                // the Python validator in `fno.agents.harness_map`. A manifest
-                // may carry other states (`working`, and the engine's
-                // skip_state_update), but a capability ROW declaring one would
-                // parse here and be refused there, so a harness would load in
-                // one language and brick the other.
-                if !DECLARABLE_RULE_STATES.contains(&declared.state.as_str()) {
-                    return Err(field_error(
-                        harness,
-                        "manifest_rules",
-                        &format!(
-                            "state {:?} is not declarable here; use idle or blocked",
-                            declared.state
-                        ),
-                    ));
-                }
-                if !manifest
-                    .rules()
-                    .iter()
-                    .any(|rule| rule.id == declared.id && rule.state == declared.state)
-                {
-                    return Err(field_error(
-                        harness,
-                        "manifest_rules",
-                        &format!(
-                            "unknown manifest rule {:?}/{:?}",
-                            declared.id, declared.state
-                        ),
-                    ));
+            validate_row(harness, caps)?;
+        }
+        for (field, decl) in &self.probe {
+            validate_probe_decl(field, decl)?;
+        }
+        for (key, decl) in &self.journeys {
+            validate_journey_decl(key, decl)?;
+        }
+        // A feature declaration may only name a key in the closed set, and a
+        // feature USED on any row may only exist beside a declaration: the
+        // declaration is what makes the claim checkable, so a claim without
+        // one is a guess the table refuses to carry (AC2).
+        for field in self.probe.keys() {
+            if let Some(key) = field.strip_prefix("features.") {
+                if !FEATURE_KEYS.contains(&key) {
+                    return Err(ContractError(format!(
+                        "probe {field:?}: {key:?} is not one of the feature keys"
+                    )));
                 }
             }
-            let actions: BTreeSet<&str> = caps
-                .permission_response
-                .keys()
-                .map(String::as_str)
-                .collect();
-            if actions != RESPONSE_ACTIONS.into_iter().collect() {
-                return Err(field_error(
-                    harness,
-                    "permission_response",
-                    "needs all three actions",
-                ));
-            }
-            for (action, response) in &caps.permission_response {
-                if response
-                    .keys
-                    .iter()
-                    .any(|key| !allowed_keys.contains(key.as_str()))
-                {
-                    return Err(field_error(
-                        harness,
-                        "permission_response",
-                        &format!("bad keys for {action}"),
-                    ));
+        }
+        for (harness, caps) in &self.harness {
+            for key in caps.features.keys() {
+                let path = format!("features.{key}");
+                if !self.probe.contains_key(&path) {
+                    return Err(ContractError(format!(
+                        "harness {harness:?} uses feature {key:?} with no [probe.{path}] declaration"
+                    )));
                 }
-                if response.supported
-                    && (response.keys.is_empty() || response.rule_ids.iter().any(String::is_empty))
-                {
-                    return Err(field_error(
-                        harness,
-                        "permission_response",
-                        &format!("empty supported {action}"),
-                    ));
-                }
-                for rule_id in &response.rule_ids {
-                    if !manifest
-                        .rules()
-                        .iter()
-                        .any(|rule| rule.id == *rule_id && rule.state == "blocked")
-                    {
-                        return Err(field_error(
-                            harness,
-                            "permission_response",
-                            &format!("{action} names unknown blocked rule {rule_id:?}"),
-                        ));
-                    }
-                }
-            }
-            if caps.ready_marker != "unsupported"
-                && !caps.ready_rule_ids.contains(&caps.ready_marker)
-            {
-                return Err(field_error(
-                    harness,
-                    "ready_marker",
-                    &format!("unknown rule {:?}", caps.ready_marker),
-                ));
-            }
-            if caps.ready_marker != "unsupported"
-                && !manifest
-                    .rules()
-                    .iter()
-                    .any(|rule| rule.id == caps.ready_marker && rule.state == "idle")
-            {
-                return Err(field_error(
-                    harness,
-                    "ready_marker",
-                    &format!("unknown positive manifest rule {:?}", caps.ready_marker),
-                ));
-            }
-            if caps.send_keys_enter_delay_ms < 0 {
-                return Err(field_error(
-                    harness,
-                    "send_keys_enter_delay_ms",
-                    "must be non-negative",
-                ));
-            }
-            if caps.submit_keys.is_empty()
-                || caps
-                    .submit_keys
-                    .iter()
-                    .any(|key| !allowed_keys.contains(key.as_str()))
-            {
-                return Err(field_error(harness, "submit_keys", "invalid key token"));
-            }
-            // A lane that never submits must not carry a delay: the number
-            // would describe a wait nothing performs. The CONVERSE does not
-            // hold and was asserted here until codex disproved it. A supported
-            // contract may legitimately need no wait - measured against codex
-            // 0.148.0, a carriage return sent immediately after the text
-            // submits correctly, while claude needs 800ms. Kept identical to
-            // the Python validator in cli/src/fno/agents/harness_map.py so the
-            // two runtimes cannot disagree about which contracts are legal.
-            if caps.submit_keys == ["unsupported"] && caps.send_keys_enter_delay_ms != 0 {
-                return Err(field_error(
-                    harness,
-                    "send_keys_enter_delay_ms",
-                    "an unsupported submit contract cannot carry a nonzero delay",
-                ));
-            }
-            let lanes: BTreeSet<&str> = caps
-                .resume_strategy
-                .forms
-                .keys()
-                .map(String::as_str)
-                .collect();
-            if lanes != SESSION_LANES.into_iter().collect() {
-                return Err(field_error(
-                    harness,
-                    "resume_strategy",
-                    "needs every session lane",
-                ));
-            }
-            for (lane, form) in &caps.resume_strategy.forms {
-                if !RESUME_KINDS.contains(&form.kind.as_str())
-                    || form.tokens.iter().any(String::is_empty)
-                    || (form.kind == "unsupported" && !form.tokens.is_empty())
-                    || (lane.ends_with("resume")
-                        && form.kind != "unsupported"
-                        && !form.tokens.iter().any(|token| token == "{session_id}"))
-                {
-                    return Err(field_error(
-                        harness,
-                        "resume_strategy",
-                        &format!("malformed {lane}"),
-                    ));
-                }
-                // An attach form must name the id its harness's own attach
-                // command takes: claude's short jobId, or a full session id
-                // where a short one would collide (a codex UUIDv7 head-8 is a
-                // ~65.5s clock bucket). A form naming NEITHER cannot address a
-                // session, so it is not one.
-                if lane == "interactive_attach"
-                    && form.kind != "unsupported"
-                    && !form
-                        .tokens
-                        .iter()
-                        .any(|token| token == "{short_id}" || token == "{session_id}")
-                {
-                    return Err(field_error(
-                        harness,
-                        "resume_strategy",
-                        &format!("{lane} drops its attach id"),
-                    ));
-                }
-            }
-            validate_model_switch_strategy(harness, &caps.model_switch_strategy)?;
-            if !LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()) {
-                return Err(field_error(harness, "loop_participation", "unknown member"));
-            }
-            // Only an `extension` row may name an artifact: a `native` row
-            // closes its loop through a shell hook and a `none` row closes it
-            // through nothing, so a path on either is a claim the member
-            // contradicts. The converse is legal and load-bearing - an
-            // `extension` row with an EMPTY path is a harness whose extension
-            // fno has not written yet, and the dispatch seam refuses it.
-            if caps.loop_participation != "extension" && !caps.loop_extension.is_empty() {
-                return Err(field_error(
-                    harness,
-                    "loop_extension",
-                    "only an extension harness may name a loop artifact",
-                ));
-            }
-            if !STOP_STRATEGIES.contains(&caps.stop_strategy.as_str()) {
-                return Err(field_error(harness, "stop_strategy", "unknown strategy"));
-            }
-            if !REMOVE_STRATEGIES.contains(&caps.remove_strategy.as_str()) {
-                return Err(field_error(harness, "remove_strategy", "unknown strategy"));
-            }
-            if ![
-                "preassigned-or-session-start",
-                "rollout-fd-or-daemon",
-                "preassigned",
-                // The caller mints the id AND the harness scopes its lookup by
-                // cwd, so the identity is the PAIR and the id alone addresses
-                // nothing. Distinct from "preassigned", where the id is the
-                // whole handle: a resume issued from the wrong directory finds
-                // no session here and, on pi, CREATES a second one under the
-                // same id rather than failing.
-                "caller-assigned-cwd-scoped",
-                "store-lookup",
-                "unsupported",
-            ]
-            .contains(&caps.session_binding.strategy.as_str())
-                || (caps.session_binding.required && caps.session_binding.timeout_ms == 0)
-            {
-                return Err(field_error(harness, "session_binding", "invalid strategy"));
             }
         }
         Ok(())
@@ -444,6 +710,13 @@ impl HarnessContract {
         })
     }
 
+    /// One harness row's declaration for one fno hook job (`session_state`,
+    /// ...). `None` = the row does not declare the job (a load failure under
+    /// validate_row's every-row-declares-every-job rule).
+    pub fn hook_job(&self, harness: &str, job: &str) -> Option<&HookJob> {
+        self.harness.get(harness)?.hooks.get(job)
+    }
+
     pub fn render_session_argv(
         &self,
         harness: &str,
@@ -453,12 +726,56 @@ impl HarnessContract {
         self.render_session_argv_with_ids(harness, lane, session_id, None)
     }
 
+    fn compose_maybe(&self, form: &ResumeForm, tokens: Vec<String>, compose: bool) -> Vec<String> {
+        if compose {
+            with_pre_exec(form, tokens)
+        } else {
+            tokens
+        }
+    }
+
     pub fn render_session_argv_with_ids(
         &self,
         harness: &str,
         lane: &str,
         session_id: Option<&str>,
         short_id: Option<&str>,
+    ) -> Result<Vec<String>, ContractError> {
+        self.render_session_argv_composed(harness, lane, session_id, short_id, true)
+    }
+
+    /// The raw render: tokens only, `pre_exec` NOT composed ahead. A caller
+    /// that must SPLICE lane-owned tokens into the argv (the codex grant and
+    /// `--cd` ride before the subcommand) renders raw, splices, and composes
+    /// last via [`compose_pre_exec`] - splicing a composed `sh -c` script
+    /// would put the grant outside the codex command.
+    pub fn render_session_argv_raw(
+        &self,
+        harness: &str,
+        lane: &str,
+        session_id: Option<&str>,
+    ) -> Result<Vec<String>, ContractError> {
+        self.render_session_argv_composed(harness, lane, session_id, None, false)
+    }
+
+    /// The declared `pre_exec` for one lane, so a raw-render caller can
+    /// compose after its own splices.
+    pub fn form_pre_exec(&self, harness: &str, lane: &str) -> Result<Vec<String>, ContractError> {
+        let caps = self.capabilities(harness)?;
+        let form =
+            caps.resume_strategy.forms.get(lane).ok_or_else(|| {
+                field_error(harness, "resume_strategy", &format!("no lane {lane:?}"))
+            })?;
+        Ok(form.pre_exec.clone())
+    }
+
+    fn render_session_argv_composed(
+        &self,
+        harness: &str,
+        lane: &str,
+        session_id: Option<&str>,
+        short_id: Option<&str>,
+        compose: bool,
     ) -> Result<Vec<String>, ContractError> {
         let caps = self.capabilities(harness)?;
         let form =
@@ -489,7 +806,7 @@ impl HarnessContract {
             };
             let mut tokens = form.tokens.clone();
             tokens[index] = id.to_string();
-            return Ok(with_pre_exec(form, tokens));
+            return Ok(self.compose_maybe(form, tokens, compose));
         }
         if short_id.is_some_and(|id| !id.is_empty()) {
             return Err(field_error(
@@ -499,12 +816,12 @@ impl HarnessContract {
             ));
         }
         let Some(index) = form.tokens.iter().position(|token| token == "{session_id}") else {
-            return Ok(with_pre_exec(form, form.tokens.clone()));
+            return Ok(self.compose_maybe(form, form.tokens.clone(), compose));
         };
         if let Some(id) = session_id.filter(|id| !id.is_empty()) {
             let mut tokens = form.tokens.clone();
             tokens[index] = id.to_string();
-            return Ok(with_pre_exec(form, tokens));
+            return Ok(self.compose_maybe(form, tokens, compose));
         }
         if lane.ends_with("create") {
             let start = index
@@ -513,7 +830,7 @@ impl HarnessContract {
                 .unwrap_or(index);
             let mut tokens = form.tokens.clone();
             tokens.drain(start..=index);
-            return Ok(with_pre_exec(form, tokens));
+            return Ok(self.compose_maybe(form, tokens, compose));
         }
         Err(field_error(
             harness,
@@ -527,8 +844,27 @@ impl HarnessContract {
     /// no code edit here. Kept identical to `thread_lane` in
     /// `harness_map.py` so the two runtimes cannot disagree about lanes the
     /// way LOOP_PARTICIPATION is pinned across them.
+    ///
+    /// Two independent signals answer `attach`: a declared
+    /// `interactive_attach` form (a CLI attach subcommand fno can shell out
+    /// to), OR `features.attach` reading `native` (fno can reach a live
+    /// session some other way - a daemon-owned process, a keeper-hosted
+    /// portal - even with no such subcommand). This split exists for a
+    /// harness that ships no attach subcommand at all, yet has a real,
+    /// working thread destination reached through the daemon-kept lane - a
+    /// fact its own `features.attach` claim already records. A row
+    /// with no `features.attach` stanza reads as absent, never as a claim,
+    /// so this never promotes a row silently.
     pub fn thread_lane(&self, harness: &str) -> Result<&'static str, ContractError> {
         let caps = self.capabilities(harness)?;
+        if caps
+            .features
+            .get("attach")
+            .map(|claim| claim.state.as_str())
+            == Some("native")
+        {
+            return Ok("attach");
+        }
         let kind = |lane: &str| {
             caps.resume_strategy
                 .forms
@@ -560,6 +896,29 @@ impl HarnessContract {
             .get("interactive_attach")
             .map(|form| !form.pre_exec.is_empty())
             .unwrap_or(false))
+    }
+
+    /// This harness's pane-to-thread conversion contract, resolved for the
+    /// classifier: the strategy, whether the session id survives, and the
+    /// operator-facing refusal. A row with NO stanza reads `unsupported`
+    /// with the named refusal - absence is the declared default-off, so a
+    /// new harness refuses conversion until it measures a strategy instead
+    /// of inheriting claude's path or falling through a derivation. The
+    /// classifier branches on `strategy` alone; it never names a harness.
+    pub fn conversion(&self, harness: &str) -> Result<ResolvedConversion, ContractError> {
+        let caps = self.capabilities(harness)?;
+        Ok(match caps.conversion.as_ref() {
+            Some(row) => ResolvedConversion {
+                strategy: row.strategy.clone(),
+                preserves_id: row.preserves_id,
+                refusal: row.refusal.clone(),
+            },
+            None => ResolvedConversion {
+                strategy: "unsupported".to_string(),
+                preserves_id: false,
+                refusal: format!("no conversion declared for {harness}"),
+            },
+        })
     }
 
     pub fn permission_response_keys(
@@ -729,6 +1088,482 @@ fn validate_model_switch_strategy(
     Ok(())
 }
 
+/// The per-harness half of [`HarnessContract::validate`], extracted so an
+/// override reader can gate ONE merged candidate row through the same
+/// contract the bundled table ships under.
+/// A probe declaration may carry only the instrument its kind names, a
+/// declared pattern must compile, and a declared pattern must REJECT its own
+/// control: the declaration IS an instrument spec, and a spec that cannot run
+/// - or that cannot tell the capability from a sentence denying it - is a
+/// guess with extra steps.
+fn validate_probe_decl(field: &str, decl: &ProbeDecl) -> Result<(), ContractError> {
+    validate_instrument(
+        field,
+        &decl.kind,
+        decl.authority.as_str(),
+        decl.pattern.as_str(),
+        decl.control.as_str(),
+        decl.marker.as_str(),
+        decl.reason.as_str(),
+    )
+}
+
+fn validate_journey_decl(key: &str, decl: &JourneyDecl) -> Result<(), ContractError> {
+    if !JOURNEY_KEYS.contains(&key) {
+        return Err(ContractError(format!(
+            "journey {key:?}: not one of the journey keys"
+        )));
+    }
+    validate_instrument(
+        key,
+        &decl.kind,
+        decl.authority.as_str(),
+        decl.pattern.as_str(),
+        decl.control.as_str(),
+        decl.marker.as_str(),
+        decl.reason.as_str(),
+    )
+}
+
+fn validate_instrument(
+    field: &str,
+    kind: &str,
+    authority: &str,
+    pattern: &str,
+    control: &str,
+    marker: &str,
+    reason: &str,
+) -> Result<(), ContractError> {
+    if !PROBE_KINDS.contains(&kind) {
+        return Err(ContractError(format!(
+            "instrument {field:?}: unknown kind {kind:?}"
+        )));
+    }
+    let (need, forbid): (&[&str], &[&str]) = match kind {
+        "declared" => (&["authority", "pattern", "control"], &["marker", "reason"]),
+        "behavioral" => (&["marker"], &["authority", "pattern", "control", "reason"]),
+        _ => (&["reason"], &["authority", "pattern", "control", "marker"]),
+    };
+    let get = |name: &str| match name {
+        "authority" => authority,
+        "pattern" => pattern,
+        "control" => control,
+        "marker" => marker,
+        _ => reason,
+    };
+    if let Some(missing) = need.iter().find(|name| get(name).is_empty()) {
+        return Err(ContractError(format!(
+            "instrument {field:?}: kind {kind:?} needs {missing}"
+        )));
+    }
+    if let Some(extra) = forbid.iter().find(|name| !get(name).is_empty()) {
+        return Err(ContractError(format!(
+            "instrument {field:?}: kind {kind:?} must not carry {extra}"
+        )));
+    }
+    if kind == "declared" {
+        let regex = Regex::new(pattern).map_err(|error| {
+            ContractError(format!("instrument {field:?}: invalid pattern: {error}"))
+        })?;
+        if let Some(hit) = regex.find(control) {
+            return Err(ContractError(format!(
+                "instrument {field:?}: pattern {pattern:?} matches its own control text \
+                 {:?}; a reader that cannot reject its control cannot report absence. \
+                 Write a pattern that discriminates, or declare the field unprobeable \
+                 with the reason",
+                hit.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), ContractError> {
+    for (action, recipe) in &caps.provider_actions {
+        if !PROVIDER_ACTIONS.contains(&action.as_str()) {
+            return Err(field_error(
+                harness,
+                "provider_actions",
+                &format!("unknown action {action:?}"),
+            ));
+        }
+        if recipe.transport != "app-server" || recipe.method.is_empty() || recipe.proof.is_empty() {
+            return Err(field_error(
+                harness,
+                &format!("provider_actions.{action}"),
+                "needs the implemented app-server transport, method, and proof",
+            ));
+        }
+    }
+    for (key, claim) in &caps.features {
+        if !FEATURE_KEYS.contains(&key.as_str()) {
+            return Err(field_error(
+                harness,
+                "features",
+                &format!("unknown feature key {key:?}"),
+            ));
+        }
+        if !FEATURE_STATES.contains(&claim.state.as_str()) {
+            return Err(field_error(
+                harness,
+                &format!("features.{key}"),
+                &format!("unknown state {:?}", claim.state),
+            ));
+        }
+    }
+    let allowed_keys: BTreeSet<&str> = [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "enter",
+        "left",
+        "right",
+        "up",
+        "down",
+        "tab",
+        "esc",
+        "y",
+        "a",
+        "d",
+        "unsupported",
+    ]
+    .into_iter()
+    .collect();
+    let manifest = crate::manifest::load_manifest(harness, None)
+        .ok_or_else(|| field_error(harness, "ready_marker", "no bundled manifest"))?
+        .map_err(|error| field_error(harness, "ready_marker", &error.to_string()))?;
+    for declared in &caps.manifest_rules {
+        // The declared state vocabulary is idle/blocked ONLY, matching
+        // the Python validator in `fno.agents.harness_map`. A manifest
+        // may carry other states (`working`, and the engine's
+        // skip_state_update), but a capability ROW declaring one would
+        // parse here and be refused there, so a harness would load in
+        // one language and brick the other.
+        if !DECLARABLE_RULE_STATES.contains(&declared.state.as_str()) {
+            return Err(field_error(
+                harness,
+                "manifest_rules",
+                &format!(
+                    "state {:?} is not declarable here; use idle or blocked",
+                    declared.state
+                ),
+            ));
+        }
+        if !manifest
+            .rules()
+            .iter()
+            .any(|rule| rule.id == declared.id && rule.state == declared.state)
+        {
+            return Err(field_error(
+                harness,
+                "manifest_rules",
+                &format!(
+                    "unknown manifest rule {:?}/{:?}",
+                    declared.id, declared.state
+                ),
+            ));
+        }
+    }
+    let actions: BTreeSet<&str> = caps
+        .permission_response
+        .keys()
+        .map(String::as_str)
+        .collect();
+    if actions != RESPONSE_ACTIONS.into_iter().collect() {
+        return Err(field_error(
+            harness,
+            "permission_response",
+            "needs all three actions",
+        ));
+    }
+    for (action, response) in &caps.permission_response {
+        if response
+            .keys
+            .iter()
+            .any(|key| !allowed_keys.contains(key.as_str()))
+        {
+            return Err(field_error(
+                harness,
+                "permission_response",
+                &format!("bad keys for {action}"),
+            ));
+        }
+        if response.supported
+            && (response.keys.is_empty() || response.rule_ids.iter().any(String::is_empty))
+        {
+            return Err(field_error(
+                harness,
+                "permission_response",
+                &format!("empty supported {action}"),
+            ));
+        }
+        for rule_id in &response.rule_ids {
+            if !manifest
+                .rules()
+                .iter()
+                .any(|rule| rule.id == *rule_id && rule.state == "blocked")
+            {
+                return Err(field_error(
+                    harness,
+                    "permission_response",
+                    &format!("{action} names unknown blocked rule {rule_id:?}"),
+                ));
+            }
+        }
+    }
+    if caps.ready_marker != "unsupported" && !caps.ready_rule_ids.contains(&caps.ready_marker) {
+        return Err(field_error(
+            harness,
+            "ready_marker",
+            &format!("unknown rule {:?}", caps.ready_marker),
+        ));
+    }
+    if caps.ready_marker != "unsupported"
+        && !manifest
+            .rules()
+            .iter()
+            .any(|rule| rule.id == caps.ready_marker && rule.state == "idle")
+    {
+        return Err(field_error(
+            harness,
+            "ready_marker",
+            &format!("unknown positive manifest rule {:?}", caps.ready_marker),
+        ));
+    }
+    if caps.send_keys_enter_delay_ms < 0 {
+        return Err(field_error(
+            harness,
+            "send_keys_enter_delay_ms",
+            "must be non-negative",
+        ));
+    }
+    if caps.submit_keys.is_empty()
+        || caps
+            .submit_keys
+            .iter()
+            .any(|key| !allowed_keys.contains(key.as_str()))
+    {
+        return Err(field_error(harness, "submit_keys", "invalid key token"));
+    }
+    // A lane that never submits must not carry a delay: the number
+    // would describe a wait nothing performs. The CONVERSE does not
+    // hold and was asserted here until codex disproved it. A supported
+    // contract may legitimately need no wait - measured against codex
+    // 0.148.0, a carriage return sent immediately after the text
+    // submits correctly, while claude needs 800ms. Kept identical to
+    // the Python validator in cli/src/fno/agents/harness_map.py so the
+    // two runtimes cannot disagree about which contracts are legal.
+    if caps.submit_keys == ["unsupported"] && caps.send_keys_enter_delay_ms != 0 {
+        return Err(field_error(
+            harness,
+            "send_keys_enter_delay_ms",
+            "an unsupported submit contract cannot carry a nonzero delay",
+        ));
+    }
+    let lanes: BTreeSet<&str> = caps
+        .resume_strategy
+        .forms
+        .keys()
+        .map(String::as_str)
+        .collect();
+    if lanes != SESSION_LANES.into_iter().collect() {
+        return Err(field_error(
+            harness,
+            "resume_strategy",
+            "needs every session lane",
+        ));
+    }
+    for (lane, form) in &caps.resume_strategy.forms {
+        if !RESUME_KINDS.contains(&form.kind.as_str())
+            || form.tokens.iter().any(String::is_empty)
+            || (form.kind == "unsupported" && !form.tokens.is_empty())
+            || (lane.ends_with("resume")
+                && form.kind != "unsupported"
+                && !form.tokens.iter().any(|token| token == "{session_id}"))
+        {
+            return Err(field_error(
+                harness,
+                "resume_strategy",
+                &format!("malformed {lane}"),
+            ));
+        }
+        // An attach form must name the id its harness's own attach
+        // command takes: claude's short jobId, or a full session id
+        // where a short one would collide (a codex UUIDv7 head-8 is a
+        // ~65.5s clock bucket). A form naming NEITHER cannot address a
+        // session, so it is not one.
+        if lane == "interactive_attach"
+            && form.kind != "unsupported"
+            && !form
+                .tokens
+                .iter()
+                .any(|token| token == "{short_id}" || token == "{session_id}")
+        {
+            return Err(field_error(
+                harness,
+                "resume_strategy",
+                &format!("{lane} drops its attach id"),
+            ));
+        }
+    }
+    validate_model_switch_strategy(harness, &caps.model_switch_strategy)?;
+    if !LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()) {
+        return Err(field_error(harness, "loop_participation", "unknown member"));
+    }
+    if !caps.beat.is_empty() && !BEATS.contains(&caps.beat.as_str()) {
+        return Err(field_error(harness, "beat", "unknown member"));
+    }
+    // Only an `extension` row may name an artifact: a `native` row
+    // closes its loop through a shell hook and a `none` row closes it
+    // through nothing, so a path on either is a claim the member
+    // contradicts. The converse is legal and load-bearing - an
+    // `extension` row with an EMPTY path is a harness whose extension
+    // fno has not written yet, and the dispatch seam refuses it.
+    if caps.loop_participation != "extension" && !caps.loop_extension.is_empty() {
+        return Err(field_error(
+            harness,
+            "loop_extension",
+            "only an extension harness may name a loop artifact",
+        ));
+    }
+
+    // Hook jobs: a key outside HOOK_JOBS is a typo; every job is declared
+    // on every row; a supported job names its via; an impossible/missing
+    // job names its reason. The GATE is last: once fno wires one job into a
+    // harness (a supported hook job, or a row that loops), a `missing` on
+    // that row is refused, naming the harness, the job and the word
+    // missing - the gap the audit found by hand becomes a load failure.
+    for (job, decl) in &caps.hooks {
+        if !HOOK_JOBS.contains(&job.as_str()) {
+            return Err(field_error(
+                harness,
+                "hooks",
+                &format!(
+                    "unknown hook job {job:?}; declared jobs are lead_guard, lead_reinject, session_state and event_rules"
+                ),
+            ));
+        }
+        match decl.state.as_str() {
+            "supported" => {
+                if decl.via.is_empty() {
+                    return Err(field_error(
+                        harness,
+                        &format!("hooks.{job}.via"),
+                        "a supported job names the files that implement it",
+                    ));
+                }
+            }
+            "impossible" | "missing" => {
+                if decl.reason.is_empty() {
+                    return Err(field_error(
+                        harness,
+                        &format!("hooks.{job}.reason"),
+                        &format!("a {:?} job names its reason", decl.state),
+                    ));
+                }
+            }
+            other => {
+                return Err(field_error(
+                    harness,
+                    &format!("hooks.{job}.state"),
+                    &format!("unknown state {other:?}; use supported, impossible or missing"),
+                ));
+            }
+        }
+    }
+    for job in HOOK_JOBS {
+        if !caps.hooks.contains_key(job) {
+            return Err(field_error(
+                harness,
+                &format!("hooks.{job}"),
+                "every row declares every hook job",
+            ));
+        }
+    }
+    let loop_supported = caps.loop_participation == "native"
+        || (caps.loop_participation == "extension" && !caps.loop_extension.is_empty());
+    if loop_supported || caps.hooks.values().any(|d| d.state == "supported") {
+        for job in HOOK_JOBS {
+            let state = caps.hooks.get(job).map(|d| d.state.as_str());
+            if state == Some("missing") {
+                return Err(field_error(
+                    harness,
+                    &format!("hooks.{job}"),
+                    "missing is refused on a wired row: declare supported with its via, or impossible with the measured reason",
+                ));
+            }
+        }
+    }
+    if !STOP_STRATEGIES.contains(&caps.stop_strategy.as_str()) {
+        return Err(field_error(harness, "stop_strategy", "unknown strategy"));
+    }
+    if !REMOVE_STRATEGIES.contains(&caps.remove_strategy.as_str()) {
+        return Err(field_error(harness, "remove_strategy", "unknown strategy"));
+    }
+    if ![
+        "preassigned-or-session-start",
+        "rollout-fd-or-daemon",
+        "preassigned",
+        // The caller mints the id AND the harness scopes its lookup by
+        // cwd, so the identity is the PAIR and the id alone addresses
+        // nothing. Distinct from "preassigned", where the id is the
+        // whole handle: a resume issued from the wrong directory finds
+        // no session here and, on pi, CREATES a second one under the
+        // same id rather than failing.
+        "caller-assigned-cwd-scoped",
+        "callee-minted-read-back",
+        "store-lookup",
+        "unsupported",
+    ]
+    .contains(&caps.session_binding.strategy.as_str())
+        || (caps.session_binding.required && caps.session_binding.timeout_ms == 0)
+    {
+        return Err(field_error(harness, "session_binding", "invalid strategy"));
+    }
+    if let Some(conversion) = &caps.conversion {
+        if !CONVERSION_STRATEGIES.contains(&conversion.strategy.as_str()) {
+            return Err(field_error(
+                harness,
+                "conversion.strategy",
+                "unknown strategy",
+            ));
+        }
+        // An unsupported row must say WHY in operator-facing text, and a
+        // supported row must not carry a refusal that contradicts its own
+        // strategy. preserves_id rides the same coherence: only an
+        // unsupported row may declare the id does not survive.
+        if conversion.strategy == "unsupported" {
+            if conversion.refusal.is_empty() {
+                return Err(field_error(
+                    harness,
+                    "conversion.refusal",
+                    "an unsupported conversion must name its refusal",
+                ));
+            }
+            if conversion.preserves_id {
+                return Err(field_error(
+                    harness,
+                    "conversion.preserves_id",
+                    "an unsupported conversion cannot preserve the id",
+                ));
+            }
+        } else if !conversion.refusal.is_empty() || !conversion.preserves_id {
+            return Err(field_error(
+                harness,
+                "conversion",
+                "a supported conversion preserves the id and carries no refusal",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn field_error(harness: &str, field: &str, detail: &str) -> ContractError {
     ContractError(format!("harness {harness:?} field {field:?}: {detail}"))
 }
@@ -762,12 +1597,49 @@ fn sh_join(tokens: &[String]) -> String {
         .join(" ")
 }
 
+/// The packaged contract's header-form verdict for `harness`: `Some(true)` =
+/// the `@name` mention form, `Some(false)` = plain, `None` = unknown harness.
+pub fn packaged_mail_header_at(harness: &str) -> Option<bool> {
+    static CONTRACT: std::sync::OnceLock<HarnessContract> = std::sync::OnceLock::new();
+    CONTRACT
+        .get_or_init(|| {
+            HarnessContract::packaged().expect("the packaged capability contract parses")
+        })
+        .mail_header_at(harness)
+}
+
 pub fn render_session_argv(
     harness: &str,
     lane: &str,
     session_id: Option<&str>,
 ) -> Result<Vec<String>, ContractError> {
     HarnessContract::packaged()?.render_session_argv(harness, lane, session_id)
+}
+
+/// The raw tokens (no `pre_exec` composition), for callers that splice
+/// lane-owned tokens into the argv before shipping it.
+pub fn render_session_argv_raw(
+    harness: &str,
+    lane: &str,
+    session_id: Option<&str>,
+) -> Result<Vec<String>, ContractError> {
+    HarnessContract::packaged()?.render_session_argv_raw(harness, lane, session_id)
+}
+
+/// Compose a lane's declared `pre_exec` ahead of a (raw-rendered, spliced)
+/// argv.
+pub fn compose_pre_exec(
+    harness: &str,
+    lane: &str,
+    argv: Vec<String>,
+) -> Result<Vec<String>, ContractError> {
+    let contract = HarnessContract::packaged()?;
+    let pre = contract.form_pre_exec(harness, lane)?;
+    if pre.is_empty() {
+        return Ok(argv);
+    }
+    let script = format!("{}; exec {}", sh_join(&pre), sh_join(&argv));
+    Ok(vec!["sh".to_string(), "-c".to_string(), script])
 }
 
 pub fn render_session_argv_with_ids(
@@ -782,19 +1654,82 @@ pub fn render_session_argv_with_ids(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
+    /// Every harness whose spawn claim reads `native`: fno's own launch arm is
+    /// wired and journey-proven for each. agy joined when its keeper arm
+    /// shipped with cli/tests/agents/test_agy_spawn_journey.py. gemini stays
+    /// `absent`, which is what keeps the unseated leg from being vacuous.
+    const SEATED: &[&str] = &[
+        "claude",
+        "codex",
+        "opencode",
+        "pi",
+        "cursor-agent",
+        "grok",
+        "agy",
+        "zcode",
+    ];
+
+    /// Roster and teaching metadata cannot drift apart: every native verb
+    /// carries a meta row (the render verb promises one line per verb) and
+    /// every meta key names a roster verb (a stale meta row would render a
+    /// verb the harness does not declare).
     #[test]
-    fn packaged_contract_is_complete_for_every_harness() {
+    fn contract_rows() {
         let contract = HarnessContract::packaged().unwrap();
+        for (name, caps) in &contract.harness {
+            for verb in &caps.native_verbs {
+                assert!(
+                    caps.native_verb_meta.contains_key(verb),
+                    "{name}: roster verb {verb} has no native_verb_meta row"
+                );
+            }
+            for verb in caps.native_verb_meta.keys() {
+                assert!(
+                    caps.native_verbs.iter().any(|v| v == verb),
+                    "{name}: native_verb_meta row {verb} is not in the roster"
+                );
+            }
+        }
+        // The mail guard's dangerous classes exist in the packaged table,
+        // so the refusal path is not dead code.
+        let claude = contract.capabilities("claude").unwrap();
+        assert_eq!(
+            claude.native_verb_meta["/clear"].risk,
+            VerbRisk::ContextDestroying
+        );
+        assert!(claude.native_verb_meta["/clear"].risk.is_guarded());
+        assert!(!claude.native_verb_meta["/compact"].risk.is_guarded());
+
+        let mut contract = HarnessContract::packaged().unwrap();
         assert_eq!(
             contract.harness.keys().cloned().collect::<Vec<_>>(),
-            ["agy", "claude", "codex", "gemini", "opencode", "pi"]
+            [
+                "agy",
+                "claude",
+                "codex",
+                "cursor-agent",
+                "footnote",
+                "gemini",
+                "grok",
+                "opencode",
+                "pi",
+                "zcode"
+            ]
         );
         for (name, caps) in &contract.harness {
-            assert_eq!(caps.permission_response.len(), 3, "{name}");
+            // Pane vocabulary invariants hold only where a pane lane exists.
+            // zcode is the first pane-less row (ready_marker unsupported, no
+            // permission prompts and no send-keys on an unbuilt lane), so its
+            // pane-shaped tables read empty on purpose.
+            let pane_lane = caps.ready_marker != "unsupported";
+            if pane_lane {
+                assert_eq!(caps.permission_response.len(), 3, "{name}");
+                assert!(!caps.submit_keys.is_empty(), "{name}");
+            }
             assert_eq!(caps.resume_strategy.forms.len(), 5, "{name}");
             assert!(!caps.model_switch_strategy.kind.is_empty(), "{name}");
-            assert!(!caps.submit_keys.is_empty(), "{name}");
             assert!(
                 LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()),
                 "{name}"
@@ -818,6 +1753,82 @@ mod tests {
                 .kind,
             "menu_walk"
         );
+        let compact = contract
+            .capabilities("codex")
+            .unwrap()
+            .provider_action("compact")
+            .expect("Codex compact must have a declared provider action recipe");
+        assert_eq!(compact.transport, "app-server");
+        assert_eq!(compact.method, "thread/compact/start");
+        assert_eq!(compact.proof, "context-compaction");
+
+        let codex = contract.harness.get_mut("codex").unwrap();
+        codex.provider_actions.get_mut("compact").unwrap().transport = "pane".into();
+        assert!(validate_row("codex", codex).is_err());
+
+        // Hook jobs: every bundled row declares every job; a supported job's
+        // via paths exist under the repo root; the gate refuses a `missing`
+        // on a wired row, naming the harness, the job and the word missing;
+        // an empty via on a supported job and an empty reason on a missing
+        // job refuse naming the field.
+        let contract = HarnessContract::packaged().unwrap();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        for (name, caps) in &contract.harness {
+            assert_eq!(caps.hooks.len(), HOOK_JOBS.len(), "{name}");
+            for (job, decl) in &caps.hooks {
+                match decl.state.as_str() {
+                    "supported" => {
+                        assert!(!decl.via.is_empty(), "{name}.{job}: empty via");
+                        for path in &decl.via {
+                            assert!(
+                                repo_root.join(path).exists(),
+                                "{name}.{job}: via path {path:?} does not exist under the repo root"
+                            );
+                        }
+                    }
+                    "impossible" | "missing" => {
+                        assert!(!decl.reason.is_empty(), "{name}.{job}: empty reason");
+                    }
+                    other => panic!("{name}.{job}: unknown state {other:?}"),
+                }
+            }
+        }
+        let wired = contract.capabilities("claude").unwrap().clone();
+        let mut probe = wired.clone();
+        probe.hooks.insert(
+            "lead_guard".into(),
+            HookJob {
+                state: "missing".into(),
+                via: vec![],
+                reason: "probe: a wired row cannot go back to missing".into(),
+                wiring: None,
+            },
+        );
+        let err = validate_row("claude", &probe).expect_err("missing on a wired row refuses");
+        assert!(err.0.contains("claude"), "{err:?}");
+        assert!(err.0.contains("lead_guard"), "{err:?}");
+        assert!(err.0.contains("missing"), "{err:?}");
+        let mut probe = wired.clone();
+        probe.hooks.get_mut("lead_guard").unwrap().via.clear();
+        let err = validate_row("claude", &probe).expect_err("empty via on a supported job refuses");
+        assert!(err.0.contains("via"), "{err:?}");
+        let mut probe = wired.clone();
+        probe.hooks.remove("lead_reinject");
+        assert!(
+            validate_row("claude", &probe).is_err(),
+            "an undeclared job refuses"
+        );
+        // The session_state job obeys the same gate: an undeclared entry on a
+        // wired row refuses naming the job (AC16's shape).
+        let mut probe = wired.clone();
+        probe.hooks.remove("session_state");
+        let err = validate_row("claude", &probe).expect_err("an undeclared session_state refuses");
+        assert!(err.0.contains("session_state"), "{err:?}");
+        let unwired = contract.capabilities("gemini").unwrap().clone();
+        assert!(
+            validate_row("gemini", &unwired).is_ok(),
+            "a row with no supported job and every job missing with a reason loads"
+        );
     }
 
     /// The lane assignment, pinned per harness: lane A where the attach form
@@ -825,22 +1836,21 @@ mod tests {
     /// itself reads the contract; this table is the measured answer it must
     /// keep producing.
     #[test]
-    fn thread_lane_is_derived_from_the_attach_declaration() {
+    fn derive_rows() {
         let contract = HarnessContract::packaged().unwrap();
         let lane = |h: &str| contract.thread_lane(h).unwrap();
         assert_eq!(lane("claude"), "attach");
         assert_eq!(lane("codex"), "attach");
+        // opencode ships no `opencode attach <id>` subcommand
+        // (interactive_attach reads unsupported), but dispatch_opencode_serve
+        // is a real, working thread destination reached through the
+        // daemon-kept lane - the row's own features.attach claim already
+        // says so.
+        assert_eq!(lane("opencode"), "attach");
         assert_eq!(lane("agy"), "keeper");
         assert_eq!(lane("gemini"), "keeper");
-        assert_eq!(lane("opencode"), "keeper");
         assert_eq!(lane("pi"), "keeper");
-    }
 
-    /// The attach-split answer, pinned per attach-lane harness: the attach
-    /// form's `pre_exec` is the encoding of "a process outside this spawn
-    /// owns the session's life", and this is the measured split.
-    #[test]
-    fn attach_needs_server_is_derived_from_the_pre_exec_declaration() {
         let contract = HarnessContract::packaged().unwrap();
         assert!(
             contract.attach_needs_server("codex").unwrap(),
@@ -854,14 +1864,7 @@ mod tests {
             contract.attach_needs_server("no-such-harness").is_err(),
             "an unknown harness must error, never answer false"
         );
-    }
 
-    /// The measured answer, pinned per harness. `stop_hook` read "native" on
-    /// every row for a year because nothing here would have noticed if it
-    /// stopped being true. A uniform table passes this test only if every row
-    /// is uniform on purpose.
-    #[test]
-    fn loop_participation_is_measured_per_harness_and_not_uniform() {
         let contract = HarnessContract::packaged().unwrap();
         let value = |h: &str| contract.capabilities(h).unwrap().loop_participation.clone();
         assert_eq!(value("claude"), "native");
@@ -879,14 +1882,15 @@ mod tests {
             distinct.len() > 1,
             "one value across every row is an inherited declaration, not a measurement"
         );
-        // Only the shipped extension names an artifact; pi's is empty because
-        // fno has not written it, which is what refuses a looping dispatch there.
+        // Both shipped extensions name an artifact; a native harness names
+        // none, which is what keeps the extension lanes honest about what
+        // actually closes a loop there.
         assert!(!contract
             .capabilities("opencode")
             .unwrap()
             .loop_extension
             .is_empty());
-        assert!(contract
+        assert!(!contract
             .capabilities("pi")
             .unwrap()
             .loop_extension
@@ -896,10 +1900,7 @@ mod tests {
             .unwrap()
             .loop_extension
             .is_empty());
-    }
 
-    #[test]
-    fn an_out_of_enum_loop_participation_is_refused() {
         let text = CAPABILITY_TOML.replacen(
             "loop_participation = \"native\"",
             "loop_participation = \"sometimes\"",
@@ -908,10 +1909,7 @@ mod tests {
         let err = HarnessContract::parse(&text).unwrap_err().to_string();
         assert!(err.contains("loop_participation"), "{err}");
         assert!(err.contains("claude"), "{err}");
-    }
 
-    #[test]
-    fn a_non_extension_harness_may_not_name_a_loop_artifact() {
         let text = CAPABILITY_TOML.replacen(
             "loop_participation = \"native\"\nloop_extension = \"\"",
             "loop_participation = \"native\"\nloop_extension = \"some/plugin.js\"",
@@ -921,8 +1919,17 @@ mod tests {
         assert!(err.contains("loop_extension"), "{err}");
     }
 
+    /// The attach-split answer, pinned per attach-lane harness: the attach
+    /// form's `pre_exec` is the encoding of "a process outside this spawn
+    /// owns the session's life", and this is the measured split.
+
+    /// The measured answer, pinned per harness. `stop_hook` read "native" on
+    /// every row for a year because nothing here would have noticed if it
+    /// stopped being true. A uniform table passes this test only if every row
+    /// is uniform on purpose.
+
     #[test]
-    fn renders_identity_skeletons_from_the_shared_strategy() {
+    fn skeleton_rows() {
         let contract = HarnessContract::packaged().unwrap();
         assert_eq!(
             contract
@@ -951,11 +1958,19 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("short_id"));
+        // The resume row carries the same shared-daemon ownership assertion
+        // as attach: `--remote unix://` makes a daemon-down resume LOUD
+        // instead of silently private, and the render composes the declared
+        // daemon start ahead of the argv.
         assert_eq!(
             contract
                 .render_session_argv("codex", "interactive_resume", Some("cx-1"))
                 .unwrap(),
-            ["codex", "resume", "cx-1"]
+            [
+                "sh",
+                "-c",
+                "'codex' 'app-server' 'daemon' 'start'; exec 'codex' 'resume' 'cx-1' '--remote' 'unix://'",
+            ]
         );
         assert_eq!(
             contract
@@ -979,30 +1994,34 @@ mod tests {
                 .unwrap(),
             ["agy", "--conversation", "cv-1"]
         );
-    }
 
-    #[test]
-    fn contract_exposes_permission_input_and_teardown_differences() {
         let contract = HarnessContract::packaged().unwrap();
         let claude = contract.capabilities("claude").unwrap();
         let codex = contract.capabilities("codex").unwrap();
         let opencode = contract.capabilities("opencode").unwrap();
-        // The thread bit asserts fno's OWN driver for the harness (driver +
-        // unattended journey test), never the harness's resume primitive.
-        // agy and opencode both have measured-working primitives yet read
-        // false: agy has no driver, opencode's serve lane is launch-only
-        // (ask refuses, steering unbuilt). claude and codex are the
-        // journey-proven lanes, and they must stay true so the false bits are
-        // not vacuous.
-        assert!(claude.thread);
-        assert!(codex.thread);
-        assert!(!contract.capabilities("agy").unwrap().thread);
-        assert!(!opencode.thread);
+        // The thread seat derives from the features dimension, never a stored
+        // bit; SEATED names who has one and why.
+        for name in SEATED {
+            let claim = contract
+                .capabilities(name)
+                .unwrap()
+                .features
+                .get("spawn")
+                .unwrap();
+            assert_eq!(claim.state, "native", "{name} is seated");
+        }
+        let gemini = contract
+            .capabilities("gemini")
+            .unwrap()
+            .features
+            .get("spawn")
+            .unwrap();
+        assert_ne!(gemini.state, "native", "gemini is unseated");
         assert_eq!(claude.ready_marker, "live_prompt_box");
         assert_eq!(codex.ready_marker, "idle_prompt");
         assert_eq!(claude.send_keys_enter_delay_ms, 800);
         // codex submits on a carriage return like claude. Measured floor is 0
-        // (short payload, codex 0.148.0; and x-4b0b 2026-08-23: 0.7-2.0 KB
+        // (short payload, codex 0.148.0; and 2026-08-23: 0.7-2.0 KB
         // envelopes, idle and mid-turn, every D in 0..800ms submitted). The
         // table reads 800 as a margin: the operator's queued-envelope pile-up
         // with the table at 0 never reproduced, and 800 matches claude's row
@@ -1020,10 +2039,33 @@ mod tests {
         assert_eq!(codex.session_binding.strategy, "rollout-fd-or-daemon");
         assert!(codex.session_binding.required);
         assert_eq!(codex.session_binding.timeout_ms, 60_000);
-    }
 
-    #[test]
-    fn permission_response_requires_the_matching_manifest_rule() {
+        let contract = HarnessContract::packaged().unwrap();
+        let claude_review = contract
+            .capabilities("claude")
+            .unwrap()
+            .features
+            .get("review")
+            .unwrap();
+        assert_eq!(claude_review.state, "native");
+        assert_eq!(claude_review.verbs, ["/code-review"]);
+        let codex_review = contract
+            .capabilities("codex")
+            .unwrap()
+            .features
+            .get("review")
+            .unwrap();
+        assert!(codex_review.verbs.contains(&"/review".to_string()));
+        // A claim with no single verb surface stays empty rather than
+        // inheriting one: spawn is a lane fno arms, not a TUI verb.
+        let opencode_spawn = contract
+            .capabilities("opencode")
+            .unwrap()
+            .features
+            .get("spawn")
+            .unwrap();
+        assert!(opencode_spawn.verbs.is_empty());
+
         let contract = HarnessContract::packaged().unwrap();
         assert_eq!(
             contract
@@ -1041,10 +2083,7 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unsupported"));
-    }
 
-    #[test]
-    fn malformed_fields_fail_with_harness_and_field() {
         for (needle, replacement, field) in [
             (
                 "ready_marker = \"idle_prompt\"",
@@ -1108,10 +2147,7 @@ mod tests {
             let err = HarnessContract::parse(&bad).unwrap_err().to_string();
             assert!(err.contains(field), "{field}: {err}");
         }
-    }
 
-    #[test]
-    fn ready_marker_must_exist_in_the_real_bundled_manifest() {
         let bad = CAPABILITY_TOML
             .replacen(
                 "ready_marker = \"idle_prompt\"",
@@ -1157,7 +2193,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_exec_composes_sh_exec_with_the_semicolon_intact() {
+    fn preexec_rows() {
         let (form, rendered) = form_with_pre_exec();
         let argv = with_pre_exec(&form, rendered);
         assert_eq!(argv.first().map(String::as_str), Some("sh"));
@@ -1176,10 +2212,7 @@ mod tests {
             script.ends_with("'codex' 'resume' 'SESS' '--remote' 'unix://'"),
             "{script}"
         );
-    }
 
-    #[test]
-    fn pre_exec_single_quotes_each_token_so_one_cannot_escape() {
         let form = ResumeForm {
             kind: "subcommand".into(),
             tokens: vec!["at'tach".into(), "{session_id}".into()],
@@ -1188,10 +2221,7 @@ mod tests {
         let argv = with_pre_exec(&form, vec!["at'tach".into(), "S".into()]);
         let script = &argv[2];
         assert_eq!(script, r"'pre'\''exec'; exec 'at'\''tach' 'S'", "{script}");
-    }
 
-    #[test]
-    fn a_form_without_pre_exec_renders_bare_with_no_shell_in_the_way() {
         let form = ResumeForm {
             kind: "subcommand".into(),
             tokens: vec!["claude".into(), "attach".into(), "{short_id}".into()],
@@ -1202,10 +2232,7 @@ mod tests {
             vec!["claude".into(), "attach".into(), "deadbeef".into()],
         );
         assert_eq!(argv, ["claude", "attach", "deadbeef"]);
-    }
 
-    #[test]
-    fn an_attach_form_may_name_either_id_spelling_but_not_neither() {
         let claude_attach = "tokens = [\"claude\", \"attach\", \"{short_id}\"]";
         // Either spelling is a legal attach id: a full session id where a
         // short one would collide.
@@ -1226,16 +2253,7 @@ mod tests {
         let err = HarnessContract::parse(&idless).unwrap_err().to_string();
         assert!(err.contains("interactive_attach"), "{err}");
         assert!(err.contains("drops its attach id"), "{err}");
-    }
 
-    /// AC3 (x-296f): codex's declared attach form renders action-then-assertion
-    /// (`daemon start`, then the TUI), execs so the pane's child is the
-    /// harness, and substitutes the FULL session id - a codex UUIDv7 head-8 is
-    /// a ~65.5s clock bucket and would attach the wrong sibling. Measured
-    /// 2026-08-29 against 0.149.1: session absent from `thread/loaded/list`
-    /// before the resume, present after.
-    #[test]
-    fn codex_declared_attach_renders_daemon_start_then_exec_with_full_session_id() {
         let contract = HarnessContract::packaged().unwrap();
         let session = "01a04ea5-a473-7872-8137-49ff3cc214e9";
         let argv = contract
@@ -1266,5 +2284,217 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("session_id, not a short_id"), "{err}");
+    }
+
+    /// AC3: codex's declared attach form renders action-then-assertion
+    /// (`daemon start`, then the TUI), execs so the pane's child is the
+    /// harness, and substitutes the FULL session id - a codex UUIDv7 head-8 is
+    /// a ~65.5s clock bucket and would attach the wrong sibling. Measured
+    /// 2026-08-29 against 0.149.1: session absent from `thread/loaded/list`
+    /// before the resume, present after.
+
+    /// The features dimension beside the keystrokes. The measured
+    /// cells are pinned: the spawn set must equal the roster the spawn
+    /// refusal used to hardcode, and the pane-only rows must read absent,
+    /// because a state that silently drifted would put a refusal back in a
+    /// lane that works.
+    #[test]
+    fn feature_rows() {
+        let contract = HarnessContract::packaged().unwrap();
+        let state = |h: &str, k: &str| {
+            contract
+                .capabilities(h)
+                .unwrap()
+                .features
+                .get(k)
+                .map(|claim| claim.state.as_str())
+                .unwrap_or("unmeasured")
+        };
+        for harness in SEATED {
+            assert_eq!(state(harness, "spawn"), "native", "{harness}");
+        }
+        assert_eq!(state("gemini", "spawn"), "absent");
+        // The middle rung, kept asserted: real on the harness, no fno arm.
+        assert_eq!(state("gemini", "subagent_dispatch"), "capable");
+        assert_eq!(state("claude", "review"), "native");
+        assert_eq!(state("codex", "review"), "native");
+        assert_eq!(state("claude", "mcp"), "unmeasured");
+        assert_eq!(state("agy", "acp"), "unmeasured");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "[harness.claude.features.spawn]\nstate = \"native\"",
+            "[harness.claude.features.spawn]\nstate = \"wired\"",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("claude"), "{err}");
+        assert!(err.contains("features.spawn"), "{err}");
+        assert!(err.contains("wired"), "{err}");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "[harness.claude.features.spawn]",
+            "[harness.claude.features.spwan]",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("claude"), "{err}");
+        assert!(err.contains("spwan"), "{err}");
+
+        // Rename the declaration out of the features namespace (a legal
+        // field declaration, so the only remaining defect is the missing
+        // coupling) and the use below it refuses by name.
+        let bad = CAPABILITY_TOML.replacen(
+            "[probe.\"features.spawn\"]",
+            "[probe.\"spawn-decl-removed\"]",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("features.spawn"), "{err}");
+        assert!(err.contains("declaration"), "{err}");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "[probe.\"features.spawn\"]",
+            "[probe.\"features.spwan\"]",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("spwan"), "{err}");
+        assert!(err.contains("feature keys"), "{err}");
+
+        // The stanza is stripped whole, receipt line included: an orphaned
+        // `measured_by` would land at the row level, where it is unknown.
+        let stanza = "[harness.agy.features.spawn]\nstate = \"native\"\nmeasured_by = { reader = \"agy spawn journey\", version = \"1.1.24\", date = \"2026-09-03\" }\n";
+        let stripped = CAPABILITY_TOML.replacen(stanza, "", 1);
+        assert_ne!(
+            stripped, CAPABILITY_TOML,
+            "the agy spawn stanza moved; update the stripped text"
+        );
+        let contract = HarnessContract::parse(&stripped).unwrap();
+        assert!(contract.capabilities("agy").unwrap().features.is_empty());
+    }
+
+    #[test]
+    fn conversion_rows() {
+        let contract = HarnessContract::packaged().unwrap();
+        let want = [
+            ("claude", "client-resume", true),
+            ("codex", "server-resume", true),
+            ("gemini", "unsupported", false),
+            ("agy", "keeper-rebind", true),
+            ("opencode", "unsupported", false),
+            ("pi", "keeper-rebind", true),
+            ("cursor-agent", "keeper-rebind", true),
+            ("grok", "keeper-rebind", true),
+        ];
+        for (harness, strategy, preserves_id) in want {
+            let got = contract.conversion(harness).unwrap();
+            assert_eq!(
+                got.strategy, strategy,
+                "harness {harness} strategy mismatch"
+            );
+            assert_eq!(
+                got.preserves_id, preserves_id,
+                "harness {harness} preserves_id mismatch"
+            );
+        }
+        // The unsupported rows must carry operator-facing why; the supported
+        // rows must not carry a refusal at all.
+        for harness in ["gemini", "opencode"] {
+            let refusal = contract.conversion(harness).unwrap().refusal;
+            assert!(!refusal.is_empty(), "{harness} needs a refusal");
+        }
+        for harness in ["claude", "codex", "agy", "pi", "cursor-agent", "grok"] {
+            let got = contract.conversion(harness).unwrap();
+            assert!(got.refusal.is_empty(), "{harness} carries no refusal");
+        }
+
+        // Every packaged row carries a stanza, so drop one to read the
+        // absent default.
+        let stripped = CAPABILITY_TOML.replacen(
+            "[harness.grok.conversion]\nstrategy = \"keeper-rebind\"\npreserves_id = true\n",
+            "",
+            1,
+        );
+        let contract = HarnessContract::parse(&stripped).unwrap();
+        let got = contract.conversion("grok").unwrap();
+        assert_eq!(got.strategy, "unsupported");
+        assert!(!got.preserves_id);
+        assert_eq!(got.refusal, "no conversion declared for grok");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "refusal = \"gemini is deprecated in favor of agy; there is nothing to convert\"",
+            "",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("gemini"), "{err}");
+        assert!(err.contains("refusal"), "{err}");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "[harness.agy.conversion]\nstrategy = \"keeper-rebind\"\npreserves_id = true",
+            "[harness.agy.conversion]\nstrategy = \"keeper-rebind\"\npreserves_id = true\nrefusal = \"never\"",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("agy"), "{err}");
+        assert!(err.contains("conversion"), "{err}");
+
+        let bad = CAPABILITY_TOML.replacen(
+            "[harness.pi.conversion]\nstrategy = \"keeper-rebind\"",
+            "[harness.pi.conversion]\nstrategy = \"keeper-re-bind\"",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("pi"), "{err}");
+        assert!(err.contains("strategy"), "{err}");
+    }
+
+    #[test]
+    fn instrument_rows() {
+        let bad = CAPABILITY_TOML.replacen(
+            "control = \"no reasoning effort options are available in this build\"",
+            "control = \"\"",
+            1,
+        );
+        let err = HarnessContract::parse(&bad).unwrap_err().to_string();
+        assert!(err.contains("needs control"), "{err}");
+        assert!(err.contains("declared"), "{err}");
+
+        let decl = ProbeDecl {
+            kind: "unprobeable".into(),
+            authority: String::new(),
+            pattern: String::new(),
+            control: "control text".into(),
+            marker: String::new(),
+            reason: "why".into(),
+        };
+        let err = validate_probe_decl("probe.test", &decl)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("must not carry control"), "{err}");
+
+        let decl = ProbeDecl {
+            kind: "declared".into(),
+            authority: "{bin} --help".into(),
+            pattern: r"(?i)\bhooks?\b".into(),
+            control: "no hook support in this build".into(),
+            marker: String::new(),
+            reason: String::new(),
+        };
+        let err = validate_probe_decl("probe.test", &decl)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("matches its own control"),
+            "the refusal names the blindness: {err}"
+        );
+        assert!(
+            err.contains("discriminates"),
+            "the refusal names remedy one: {err}"
+        );
+        assert!(
+            err.contains("unprobeable"),
+            "the refusal names remedy two: {err}"
+        );
     }
 }

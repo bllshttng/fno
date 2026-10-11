@@ -14,7 +14,6 @@ import os
 import shutil
 import socket
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -98,6 +97,59 @@ def test_an_unreadable_registry_leaves_every_keeper() -> None:
     assert "registry unreadable" in reason
 
 
+# --- the legality and size arms ---------------------------------------------
+
+
+def test_a_store_keeper_on_a_sqlite_graph_is_reapable(monkeypatch) -> None:
+    """A resident store keeper whose graph reads sqlite while config reads
+    sqlite must not exist: the clients serve by exec. The verdict is REAP
+    even over a live listener, because the process itself is the fault."""
+    monkeypatch.setattr(kl, "store_backend_of", lambda g: "sqlite")
+    monkeypatch.setattr(kl, "graph_read_source", lambda: "sqlite")
+    verdict, reason = kl.keeper_verdict(
+        _obs(lane="store", graph=Path("/state/graph.json"), sock_state=kl.LISTENER)
+    )
+    assert verdict == kl.REAP
+    assert "backend=sqlite" in reason
+
+
+def test_legality_fails_closed_when_the_default_store_is_unknown(monkeypatch) -> None:
+    """An unreadable default store is never treated as a proven leak."""
+    monkeypatch.setattr(kl, "store_backend_of", lambda g: "sqlite")
+    monkeypatch.setattr(kl, "graph_read_source", lambda: "unknown")
+    verdict, _ = kl.keeper_verdict(
+        _obs(lane="store", graph=Path("/state/graph.json"), sock_state=kl.LISTENER)
+    )
+    assert verdict == kl.LEAVE
+
+
+def test_an_illegal_keeper_yields_to_a_registry_claim(monkeypatch) -> None:
+    """The fail-closed claim arm outranks the legality arm: claimed work is
+    never killed, whatever the keeper holds."""
+    monkeypatch.setattr(kl, "store_backend_of", lambda g: "sqlite")
+    monkeypatch.setattr(kl, "graph_read_source", lambda: "sqlite")
+    verdict, reason = kl.keeper_verdict(
+        _obs(lane="store", graph=Path("/state/graph.json"), claimed_by="worker-x")
+    )
+    assert verdict == kl.LEAVE
+    assert "worker-x" in reason
+
+
+def test_rss_over_the_bound_is_reapable_with_its_size(monkeypatch) -> None:
+    """A keeper ballooning past the documented bound is named with its size -
+    silence is not the only signal (2026-09-17: 1.25 GB at age 7 minutes)."""
+    monkeypatch.setenv("FNO_STORE_KEEPER_RSS_KB", "200000")
+    verdict, reason = kl.keeper_verdict(_obs(rss_kb=300_000, sock_state=kl.LISTENER))
+    assert verdict == kl.REAP
+    assert "0.29 GB" in reason
+    # Under the bound, the socket arm decides again.
+    verdict, _ = kl.keeper_verdict(_obs(rss_kb=100_000, sock_state=kl.LISTENER))
+    assert verdict == kl.LEAVE
+    # An unreadable RSS never reaps on the size arm.
+    verdict, _ = kl.keeper_verdict(_obs(rss_kb=None, sock_state=kl.LISTENER))
+    assert verdict == kl.LEAVE
+
+
 # --- discovery over injected rows -------------------------------------------
 
 
@@ -146,6 +198,25 @@ def test_a_thread_lane_keeper_is_recognized(monkeypatch) -> None:
     result = kl.discover(now_s=time.time())
     assert result.observations[0].lane == "thread"
     assert result.verdicts[4101][0] == kl.REAP
+
+
+def test_a_store_lane_keeper_is_recognized_and_reapable(monkeypatch) -> None:
+    """The store keeper declares `--store-keeper --sock --session` (x-b21e),
+    so the process-table walk finds it and the same three positive arms
+    decide: a dead socket, no claiming row, past grace -> REAP. This is the
+    reapability the 2026-09-01 seven-unreaped-keepers measurement demanded."""
+    monkeypatch.setattr(
+        kl,
+        "iter_processes",
+        lambda *a, **k: iter([_proc_row(4103, "/tmp/g.store.sock", lane_flag="--store-keeper")]),
+    )
+    monkeypatch.setattr(kl, "sock_state_of", lambda sock: kl.NO_LISTENER)
+    monkeypatch.setattr(kl, "REAP_MIN_AGE_S", 0.0)
+    result = kl.discover(now_s=time.time())
+    assert not result.broken
+    assert result.observations[0].lane == "store"
+    assert result.observations[0].session == "fk-9"
+    assert result.verdicts[4103][0] == kl.REAP
 
 
 def test_a_non_keeper_process_is_invisible(monkeypatch) -> None:
@@ -252,7 +323,7 @@ def test_broken_lane_reaps_nothing(monkeypatch) -> None:
 def test_probe_states_off_the_filesystem(tmp_path) -> None:
     # macOS caps AF_UNIX paths at 104 bytes; pytest tmp dirs overflow it, so
     # the fixtures bind directly in the short POSIX /tmp.
-    short = Path(tempfile.gettempdir()) / f"fk-lane-{os.getpid()}-a.sock"
+    short = Path("/tmp") / f"fk-lane-{os.getpid()}-a.sock"
     assert kl.sock_state_of(None) == kl.UNREADABLE
     assert kl.sock_state_of(short.parent / "gone.sock") == kl.ABSENT
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -268,7 +339,7 @@ def test_probe_states_off_the_filesystem(tmp_path) -> None:
 def test_a_permission_denied_connect_is_not_a_death_certificate(tmp_path) -> None:
     """EACCES on connect proves nothing about the listener: a keeper behind a
     socket this uid cannot reach is UNREACHABLE, never reapable."""
-    locked = Path(tempfile.gettempdir()) / f"fk-lane-{os.getpid()}-c.sock"
+    locked = Path("/tmp") / f"fk-lane-{os.getpid()}-c.sock"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(locked))
     srv.listen(1)
@@ -288,7 +359,7 @@ def test_a_permission_denied_connect_is_not_a_death_certificate(tmp_path) -> Non
 def test_a_nonspeaking_listener_reads_silent(tmp_path) -> None:
     """A plain AF_UNIX socket that accepts and never speaks the frame protocol
     is SILENT - the wedged keeper's shape - and silence never reaps."""
-    live = Path(tempfile.gettempdir()) / f"fk-lane-{os.getpid()}-b.sock"
+    live = Path("/tmp") / f"fk-lane-{os.getpid()}-b.sock"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(live))
     srv.listen(1)
@@ -338,7 +409,7 @@ def _spawn_planted_keeper(worker_bin: Path, tmp_path: Path) -> tuple[int, Path, 
     The socket lives in short POSIX /tmp, not the pytest tmp dir: macOS caps
     AF_UNIX paths at 104 bytes and the pytest tree overflows it. The returned
     parent is what a test deletes to produce the measured orphan shape."""
-    sock_dir = Path(tempfile.gettempdir()) / f"fk-lane-{os.getpid()}" / "panes"
+    sock_dir = Path("/tmp") / f"fk-lane-{os.getpid()}" / "panes"
     sock = sock_dir / "fk-test-1.sock"
     sock_dir.mkdir(parents=True)
     proc = subprocess.Popen(
@@ -663,7 +734,6 @@ def test_a_filtered_apply_all_never_collects_keepers(monkeypatch) -> None:
     monkeypatch.setattr(wd, "write_sweep_file", lambda *a, **k: None)
     monkeypatch.setattr(wd, "fresh_non_leave", lambda *a, **k: set())
     monkeypatch.setattr(wd, "emit_event", lambda *a, **k: None)
-    monkeypatch.setattr(wd, "RotationBudget", lambda: object())
     runner = CliRunner()
 
     filtered = runner.invoke(agents_app, ["watchdog", "--only", "ghost", "--apply-all"])

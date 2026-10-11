@@ -13,7 +13,7 @@ a value for it, so every spawn passed nothing. This module computes it.
 
 opencode has no additive CLI dir flag (``--dir`` SETS cwd, verified against
 v1.14.50), so its argv cell stays closed - but its serve-HTTP bg lane
-(x-d9f9) carries the computed set through a native cell of its own: the Rust
+ carries the computed set through a native cell of its own: the Rust
 driver turns ``FNO_WORKER_ADD_DIRS`` into per-session ``external_directory``
 allow rules on the opencode serve (``opencode_serve.rs``). The pane/headless
 opencode lanes keep the stderr note below; the bg lane is the one surface
@@ -89,7 +89,31 @@ __all__ = [
 WORKER_ADD_DIRS_ENV = "FNO_WORKER_ADD_DIRS"
 
 
-ADD_DIR_PROVIDERS = ("claude", "codex", "agy")
+ADD_DIR_PROVIDERS = ("claude", "codex", "agy", "cursor-agent")
+
+
+def strip_remote_add_dirs(argv: list[str]) -> list[str]:
+    """Drop ``--add-dir`` grants from a codex argv that rides ``--remote``; the
+    0.156.1 refusal kills an unstripped pane; the resume lanes trade the same.
+    """
+    if "--remote" not in argv:
+        return argv
+    out: list[str] = []
+    drop = False
+    for tok in argv:
+        if drop:
+            drop = False
+        elif tok == "--add-dir":
+            drop = True
+        elif tok.startswith("--add-dir="):
+            continue
+        else:
+            out.append(tok)
+    if len(out) != len(argv):
+        print("codex pane: dropped --add-dir grants;"
+              " codex >= 0.156.1 refuses them on --remote", file=sys.stderr)
+    return out
+
 
 #: Providers already warned about the skipped grant, once per process.
 _SKIP_NOTED: set[str] = set()
@@ -146,14 +170,7 @@ def add_dir_tokens(
 
 
 def _state_roots() -> list[Path]:
-    """The fno do state directories a worker cannot function without.
-
-    Normally one path (``~/.fno``). Two when they diverge: ``locks_dir`` and the
-    global claims root are deliberately config-free ($HOME / ``$FNO_CLAIMS_ROOT``)
-    while ``state_dir`` honors ``config.paths.state_dir``, so an override moves one
-    and not the other. Granting the root rather than three subdirectories keeps
-    this from drifting the moment ``config.paths.*`` moves again.
-    """
+    """State roots a worker needs, including divergent claims or registry roots."""
     out: list[Path] = []
     try:
         from fno.paths import state_dir
@@ -171,6 +188,18 @@ def _state_roots() -> list[Path]:
         pass
     try:
         out.append(_mail_bus_root())
+    except Exception:
+        pass
+    try:
+        from fno.paths import agents_registry_path, agents_runtime_registry_path
+
+        # The registry write directories; FNO_AGENTS_HOME relocates the Rust runtime independently of state_dir.
+        registry_dir = agents_registry_path().parent
+        if not any(registry_dir.is_relative_to(root) for root in out):
+            out.append(registry_dir)
+        runtime_registry_dir = agents_runtime_registry_path().parent
+        if not any(runtime_registry_dir.is_relative_to(root) for root in out):
+            out.append(runtime_registry_dir)
     except Exception:
         pass
     return out

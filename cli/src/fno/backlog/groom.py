@@ -48,14 +48,14 @@ _GROOM_KEY_PREFIX = "groom"
 
 
 def groom_enabled() -> bool:
-    """Resolve whether the daily grooming worker spawn is armed (x-aaaf wave 2).
+    """Resolve whether the daily grooming worker spawn is armed (wave 2).
 
     ``config.groom.enabled`` defaults True (matches the spawner's prior,
     ungated behavior - it always ran). A malformed value degrades to True
     (GroomBlock's own fail-safe: this was never opt-in, so a typo must not
     silently disable it), but a config that fails to LOAD at all degrades to
     False - the global invariant that an unreadable config resolves every
-    gate to off, never to on (Failure Modes/Errors, x-aaaf design doc).
+    gate to off, never to on (Failure Modes/Errors, design doc).
 
     Also stops when ``config.autonomy.enabled`` (the wave-3 master panic
     switch) is off, checked first.
@@ -94,35 +94,21 @@ def groom_staleness(*, now: Optional[float] = None) -> GroomFreshness:
     """Hours since the last grooming pass, read from its own claim marker.
 
     The daily claim IS the run receipt, so there is no second source of truth to
-    drift from - and none to add. Live markers sit in the claims dir; recovered
-    ones are archived under ``.expired/`` with the same encoded key, so both are
-    scanned. Age comes from the file's mtime (an archive is a rename, which
-    preserves it), never from a shelled ``stat`` whose flags differ BSD vs GNU.
+    drift from - and none to add. Stale rows are read too: a marker past its TTL
+    still dates the last pass until a reap retires it.
     """
-    from fno.claims.io import EXPIRED_SUBDIR, claims_dir, claims_root_for, encode_key
+    from fno.claims.core import list_claims, native_claims_root
 
-    prefix = encode_key(f"{_GROOM_KEY_PREFIX}:")
-    base = claims_dir(claims_root_for(f"{_GROOM_KEY_PREFIX}:probe"))
-
-    newest: Optional[float] = None
-    for directory in (base, base / EXPIRED_SUBDIR):
-        try:
-            names = os.listdir(directory)
-        except FileNotFoundError:
-            # A machine that never groomed has no claims dir at all; that is
-            # "never", not "unreadable".
-            continue
-        except OSError:
-            return ("unknown", None)
-        for name in names:
-            if not name.startswith(prefix):
-                continue
-            try:
-                mtime = (directory / name).stat().st_mtime
-            except OSError:
-                continue
-            if newest is None or mtime > newest:
-                newest = mtime
+    try:
+        rows = list_claims(
+            prefix=f"{_GROOM_KEY_PREFIX}:",
+            include_stale=True,
+            root=native_claims_root(f"{_GROOM_KEY_PREFIX}:probe"),
+        )
+    except Exception:  # noqa: BLE001 - an unreadable claims table is unknown, not never
+        return ("unknown", None)
+    stamps = [row["acquired_at"] for row in rows if isinstance(row.get("acquired_at"), int)]
+    newest: Optional[float] = max(stamps) / 1000.0 if stamps else None
 
     if newest is None:
         return ("never", None)
@@ -198,13 +184,14 @@ def _mechanical_legs(age: int) -> list[tuple[str, list[str]]]:
 
 _ARCHIVE_MOVED_RE = re.compile(r"^Archived (\d+) terminal node\(s\)", re.MULTILINE)
 _ARCHIVE_HELD_RE = re.compile(r"^  held back \([\w-]+\): (\d+)$", re.MULTILINE)
+_REPARENT_RE = re.compile(r"^re-parented (\d+) stranded child", re.MULTILINE)
 
 
 def _archive_leg_outcome(stdout: str) -> str:
     """Turn the archive leg's stdout into a receipt that names counts.
 
     Bare "ok" cannot tell a run that archived 500 nodes apart from one that
-    archived zero (x-a023) - exactly the ambiguity that let "archive: ok"
+    archived zero - exactly the ambiguity that let "archive: ok"
     read green every day since 2026-07-20 while 532 done nodes accumulated in
     the working graph, almost all of them held back rather than moved.
     """
@@ -212,6 +199,16 @@ def _archive_leg_outcome(stdout: str) -> str:
     moved = int(moved_match.group(1)) if moved_match else 0
     held = sum(int(n) for n in _ARCHIVE_HELD_RE.findall(stdout))
     return f"ok (archived {moved}, held back {held})"
+
+
+def _reconcile_leg_outcome(stdout: str) -> str:
+    """Name the strand-heal count, mirroring ``_archive_leg_outcome``.
+
+    Bare "ok" reads the same whether the self-heal re-parented 38 stranded
+    children or none.
+    """
+    match = _REPARENT_RE.search(stdout)
+    return f"ok (re-parented {int(match.group(1)) if match else 0})"
 
 
 def _run_mechanical(age: int) -> dict[str, str]:
@@ -224,7 +221,14 @@ def _run_mechanical(age: int) -> dict[str, str]:
 
     results: dict[str, str] = {}
     for name, args in _mechanical_legs(age):
-        cmd = [*_subprocess_util.fno_py_cmd(), "backlog", *args]
+        # The reconcile leg is native: the Python verb retired with the port,
+        # and the fno mux binary serves the same argv at the native door.
+        prefix = (
+            _subprocess_util.fno_cmd()
+            if name == "reconcile"
+            else _subprocess_util.fno_py_cmd()
+        )
+        cmd = [*prefix, "backlog", *args]
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=_LEG_TIMEOUT_S
@@ -233,9 +237,12 @@ def _run_mechanical(age: int) -> dict[str, str]:
             results[name] = f"failed: {type(exc).__name__}: {str(exc)[:120]}"
             continue
         if proc.returncode == 0:
-            results[name] = (
-                _archive_leg_outcome(proc.stdout or "") if name == "archive" else "ok"
-            )
+            if name == "archive":
+                results[name] = _archive_leg_outcome(proc.stdout or "")
+            elif name == "reconcile":
+                results[name] = _reconcile_leg_outcome(proc.stdout or "")
+            else:
+                results[name] = "ok"
             continue
         detail = (proc.stderr or proc.stdout or "").strip().replace("\n", " ")
         label = "partial" if proc.returncode == _PARTIAL_EXIT else "failed"
@@ -257,22 +264,30 @@ def _spawn_groom_worker(brief: str, cwd: str, model: str, day: str) -> str:
 
     ``--substrate headless`` is explicit and load-bearing: a one-shot pass wants
     no pane and no placement prompt, and `-p` is only ever reachable through the
-    headless verb.
+    headless verb. The worker name is the ``gr-th-backlog-<day>``: the
+    groom source, the think verb, and the typed non-node ``backlog`` identity.
     """
     from fno import _subprocess_util
+    from fno.agents.naming import mint_or_none
+
+    # A naming refusal (stale binary) degrades to the legacy literal rather
+    # than aborting the pass the worker exists to run.
+    worker_name = mint_or_none("gr", "th", "backlog", slug=day) or f"groom-{day}"
 
     cmd = [
         *_subprocess_util.fno_py_cmd(), "agents", "spawn",
         "--harness", "claude", "--substrate", "headless",
         "--model", model, "--cwd", cwd,
         "--timeout", str(_WORKER_TIMEOUT_S),
-        "--name", f"groom-{day}", brief,
+        "--name", worker_name, brief,
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_SPAWN_TIMEOUT_S)
     if proc.returncode != 0:
+        from fno.backlog.advance import _gate_refusal_detail
+
         raise RuntimeError(
             f"fno agents spawn exited {proc.returncode}: "
-            f"{(proc.stderr or proc.stdout or '').strip()[:200]}"
+            f"{_gate_refusal_detail(proc.stderr or proc.stdout or '')}"
         )
     for line in (proc.stdout or "").splitlines():
         if '"short_id"' in line:
@@ -301,7 +316,7 @@ def run_groom(
     them too), then the judgment worker is dispatched. Returns a receipt whose
     ``status`` is one of ``dispatched`` | ``degraded`` (dispatched, but a
     mechanical leg did not come back clean) | ``already-ran`` | ``dry-run`` |
-    ``disabled`` (x-aaaf wave 2: ``config.groom.enabled`` is false) |
+    ``disabled`` (wave 2: ``config.groom.enabled`` is false) |
     ``failed``, carrying a ``mechanical`` map of per-leg outcomes. Never raises:
     a grooming pass is hygiene, so a failed dispatch reports and leaves the day
     retryable.
@@ -312,7 +327,6 @@ def run_groom(
         claim_status,
         release_claim,
     )
-    from fno.claims.io import claims_root_for
 
     key = groom_day_key(today)
     day = key.split(":", 1)[1]
@@ -332,14 +346,13 @@ def run_groom(
         }
 
     holder = f"groom:{os.getpid()}"
-    root = claims_root_for(key)
 
     # Read before acquiring: `acquire_claim` is idempotent for the SAME holder, so
     # a second call from one process would re-acquire and re-dispatch. The status
     # read catches that; the acquire below still catches the cross-process race.
     claim_read_error: Optional[str] = None
     try:
-        if claim_status(key, root=root).get("state") in ("live", "suspect"):
+        if claim_status(key).get("state") in ("live", "suspect"):
             return {"status": "already-ran", "day": day, "key": key}
     except Exception as exc:  # noqa: BLE001 - an unreadable marker falls through to acquire
         # Safe (the acquire below still catches the cross-process race), but a
@@ -353,7 +366,6 @@ def run_groom(
             holder,
             ttl_ms=_GROOM_TTL_MS,
             reason=f"daily grooming pass {day}",
-            root=root,
         )
     except CLAIM_UNAVAILABLE:
         # A normal dedup race (two groom invocations close together), not a
@@ -383,7 +395,7 @@ def run_groom(
             "mechanical": mechanical,
         }
         try:
-            release_claim(key, holder, strict=True, root=root)
+            release_claim(key, holder, strict=True)
             receipt["released"] = True
         except Exception as rexc:  # noqa: BLE001
             receipt["released"] = False
@@ -469,7 +481,7 @@ _GROOM_PLIST = """\
   <false/>
 
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
 
   <!-- A repo root, not $HOME: maintain's validity sweep resolves its git
        evidence root from the cwd, and from a non-repo it records every symbol
@@ -506,8 +518,8 @@ def render_groom_plist(
         home=_xml_escape(home),
         workdir=_xml_escape(workdir or home),
         hour=int(hour),
-        log_out=_xml_escape(str(state / "groom.out.log")),
-        log_err=_xml_escape(str(state / "groom.err.log")),
+        log_out=_xml_escape(str(state / "logs" / "groom.out.log")),
+        log_err=_xml_escape(str(state / "logs" / "groom.err.log")),
     )
 
 
@@ -530,7 +542,8 @@ def install_groom_agent(
     import shutil
     import sys
 
-    from fno.pr_watch._install import bounce
+    from fno.pr_watch._install import _write_if_changed, bounce, default_agent_path
+    from fno.paths import state_dir
 
     if sys.platform != "darwin":
         return {
@@ -541,7 +554,8 @@ def install_groom_agent(
 
     launch_agents_dir = launch_agents_dir or (Path.home() / "Library" / "LaunchAgents")
     fno_binary = fno_binary or shutil.which("fno") or "fno"
-    install_path = install_path if install_path is not None else os.environ.get("PATH", "")
+    install_path = install_path or default_agent_path(fno_binary)
+    (state_dir() / "logs").mkdir(parents=True, exist_ok=True)
 
     # Captured at install time: the scheduled run has no cwd of its own, and
     # maintain's validity sweep needs a real repo to read source evidence from.
@@ -557,16 +571,10 @@ def install_groom_agent(
 
     plist_path = launch_agents_dir / f"{GROOM_LABEL}.plist"
     try:
-        launch_agents_dir.mkdir(parents=True, exist_ok=True)
-        plist_path.write_text(
-            render_groom_plist(
-                fno_binary=fno_binary,
-                install_path=install_path,
-                hour=hour,
-                workdir=workdir,
-            ),
-            encoding="utf-8",
-        )
+        rendered = render_groom_plist(
+            fno_binary=fno_binary, install_path=install_path, hour=hour, workdir=workdir)
+        if not _write_if_changed(plist_path, rendered):
+            return {"status": "unchanged", "detail": "plist matches; not re-registered"}
     except OSError as exc:
         return {"status": "failed", "detail": f"write {plist_path}: {exc}"}
 

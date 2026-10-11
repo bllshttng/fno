@@ -15,7 +15,7 @@ set -euo pipefail
 # documentation and activation logic in AGENTS.md.
 # Raised from 37415 to 38000 by two changes that landed together. The
 # citizens-vs-limbs spawn-primitive contract in skills/using-fno/SKILL.md
-# (x-af92) took 585 bytes: its value IS the SessionStart injection, the long
+# took 585 bytes: its value IS the SessionStart injection, the long
 # form lives out-of-preamble in docs/architecture/coordination.md, and the
 # prior preamble had 8B headroom so any meaningful contract required a raise.
 # The DoneUnreviewed terminal in the ship-vocabulary line took 45 more, since
@@ -120,31 +120,107 @@ set -euo pipefail
 # for the whole-machine lane advisor and status-row meter. The link is index
 # text, not corpus growth, and the floor test above confirms no entry gave it
 # room; the ceiling follows the measurement up, zero spare, per doctrine.
-CEILING_BYTES=38868
+# +43 (38868 -> 38911), measured 2026-09-02: the cargo-target collision note in
+# .claude/rules/worktrees.md. A name-based sweep deleted 66 source dirs across
+# 26 worktrees, so the rule must reach every session before it writes a sweep;
+# compressed from a +451 first draft to +224 net, and this residue is the three
+# source-dir paths plus the incident and the marker recipe, zero spare.
+# +153 (38911 -> 39064), measured 2026-09-02: the `fno do pr status` row in
+# skills/using-fno/SKILL.md grew by the merge_authority and merge_execution
+# projections that surface now reports (recorded grant, claim liveness, live
+# observer). The status table is the one discovery channel every session
+# reads, the clause is compressed to the two names and their three axes, and
+# the ceiling follows the measurement up, zero spare.
+# +98 (39064 -> 39162), measured 2026-09-03: `portal` enters the substrate
+# vocabulary in AGENTS.md and skills/using-fno/SKILL.md. It is a new
+# first-class term beside pane, thread and headless, and a session that does
+# not know it cannot open a second one or read the `◫N` the sideline renders.
+# A +1255 first draft explained the whole mechanic in both files; all of it
+# moved to docs/architecture/portals.md, which is not paid at startup, and
+# this residue is the word, `0-indexed, several at once`, the `--portal N`
+# spelling, and one doc link. The ceiling follows the measurement up, zero
+# spare.
+# +88 (39162 -> 39250), measured 2026-09-03: the enforcement note on the
+# `<repo>/worktrees/` bullet in .claude/rules/worktrees.md. setup-worktree.sh
+# now refuses a WORKTREE nobody created, and the forbidden-locations list is
+# the one session-start surface that must say so. The committed note ran 231
+# bytes; the incident clause (nine littered directories) moved out of the
+# preamble to the guard's own comment block, and the ceiling follows the
+# 88-byte residue up, zero spare.
+# +389 (39162 -> 39551), measured 2026-09-03: one line in
+# skills/using-fno/SKILL.md naming the worktree Bash refusal (heredocs,
+# command substitution, loops) and its remedy (Write + `bash <file>`; Read,
+# Grep, Glob for reads; no leading `cd`), and one AGENTS.md conventions
+# bullet on large-file discipline (read-range, edit, re-read, a test count
+# proved before and after). Both close a gap the census of 64,792 Bash calls
+# named directly: 30% of calls led with a defensive `cd` and 31% were shell
+# reads the free tools already cover, so the rule that would have stopped
+# them was never in the one preamble every harness reads at session start.
+# The ceiling follows the measurement up, zero spare.
+# +89 (39551 -> 39640), measured 2026-09-04: reconciling this rebase's own
+# AGENTS.md "Large files" bullet against the +389 entry above. That
+# entry's math assumed origin's shorter wording for the same bullet; the
+# version this branch already had was 89 bytes longer, and the rebase kept
+# it (no conflict was flagged - the two hunks merged cleanly). Measured from
+# the actual committed AGENTS.md, zero spare.
+# +55 (39640 -> 39695), measured 2026-09-04: the `/fno:lead` row in
+# skills/using-fno/SKILL.md. Lead is a new first-class verb and that table is
+# its only session-start mention, the same shape as the workspace-restore and
+# demand-signal raises. The row was compressed to neighbor idiom first
+# ("Lead as the teamed lead", -22 B). 55 is the measured residue, zero spare.
+# +16 (39695 -> 39711), measured 2026-09-06: the mesh-spawn row in
+# skills/using-fno/SKILL.md gained one clause naming the new unattended
+# `--permission-mode` built-in (agents.defaults.permission_mode collapsed the
+# old spawn_permission_mode key onto it) - the fact a verb-seeded spawn is no
+# longer left in unpinned auto mode belongs on this row, the sole session-start
+# mention of the spawn seam. Trimmed from 265 to 133 measured bytes first
+# (dropped the "seedless seed resolves nothing" clause as inferable); 16 is
+# the residue, zero spare.
+# +279 (39711 -> 39990), measured 2026-09-06: the reach test and the
+# config-before-rule step in .claude/rules/oss-fix-not-memory.md. The ladder
+# there said where a fact lands and never how to pick a tier, so tier 3, a doc
+# or a rule, became the default for work that belonged at tier 1. Compressed
+# from 816 to 276 measured bytes first (the worked example and the argument
+# went; both decisions stayed); 279 is the residue, zero spare.
+# -11 (39990 -> 39979), measured 2026-09-06: the AGENTS.md rank-claim fix
+# freed 11 bytes on this branch. Reclaimed rather than left, because
+# unreclaimed slack is how this file reached 55 bytes of headroom with no
+# commit to blame. Zero spare again.
+# Raised 40150 -> 41630 for: the pitfalls corpus gains the READ-SIDE
+# twin of the assert-a-positive-marker entry (a verdict that did not confirm
+# which store it read) and its graduates-to now names the
+# check-node-occupancy-readers gate. The entry the plan inlines IS the
+# session-start reach channel, so the preamble is its only legal home; the
+# corpus has no tradeable bytes left (see the refusal text), and HEAD sat 8
+# bytes under the old ceiling. Ceiling set at measured + band/2.
+# +109 (41630 -> 41739), measured 2026-09-12: the AGENTS.md file-budget
+# bullet now states the cli/src/fno tree allowance (net +100 per change) and
+# the crates-first remedy. That number decided a roughly 600-line language
+# choice while living only in check-file-budget.sh, absent from every
+# loaded surface. A first draft weighed 68; the style gate split it into four
+# short sentences, and 109 is the measured residue of the version that passes.
+# The raise spends exactly its delta and leaves the bank above intact.
+# +510 (40300 -> 40808), measured 2026-10-02: the "If `fno` is missing" block
+# in skills/using-fno/SKILL.md. A fresh /plugin install leaves every fno verb
+# failing until the background installer finishes, and using-fno is the one
+# preamble a CLI-less session still receives (it is injected by the plugin's
+# own hook, not the CLI), so the installing-vs-failed states, the log path and
+# the locked fix have to live there. The ceiling follows the measurement up,
+# zero spare (the baseline sat 2 under the old ceiling, so 40298 + 510).
+CEILING_BYTES=41128
 # The working band under the ceiling. Spare above this fails the gate and names
 # the value to write, so a cut is banked in the same PR that makes it rather
 # than becoming headroom.
 #
 # Set the ceiling at measured + band/2, so both directions get the same room.
-# EXCEPTION, and it is the current state: 37181 is measured EXACTLY, with zero
-# spare, because the fund-by-trading lever it assumes is exhausted (see the
-# ceiling comment above and the refusal text below). Do not "restore" this to
-# measured + band/2 as a tidy-up; that silently undoes the zero-spare intent
-# and hands back the headroom the measurement was spent to remove.
-#
-# The last 6 bytes came from deleting a false absolute in the corpus header
-# ("never by raising the ceiling"), not from a trade. This ceiling followed
-# that saving DOWN rather than banking it as slack, because zero spare is the
-# whole point: a saving kept as headroom is a saving spent by the next edit.
-# Sitting just under the band instead leaves almost no slack for a cut, and the
-# gate then fires on the very edits it wants to encourage; sitting at
-# measured + band leaves none at all, since any cut at all trips it.
 RATCHET_NUDGE_BYTES=2000
 
 # Second budget: the `description` of every model-invoked skill and agent. These
 # are context pointers the harness holds on every turn to decide what to fire.
-# Measured 14690 B: 6750 across 22 skills and 7940 across 17 agents, against
-# Matt Pocock's 3114 B across 15 skills.
+# At introduction, measured 14690 B: 6750 across 22 skills and 7940 across 17
+# agents, against Matt Pocock's 3114 B across 15 skills. After the descriptions
+# were shortened, 45 model-invoked skills and agents measured 3438 B
+# (2026-10-02); the live Claude plugin reports about 1390 always-on tokens.
 # The agent half was nearly missed three times. It sat outside the file set
 # entirely; four agents write their description as a YAML block scalar, so a
 # reader that measured the `>` marker scores those at 1 byte instead of ~490;
@@ -152,7 +228,9 @@ RATCHET_NUDGE_BYTES=2000
 # line-based reader scores at 114 B while it really carries 704.
 # Two-sided from the start on the same reasoning as the file ceiling above: a
 # one-sided ceiling is the thing that only ever ratchets up.
-DESCRIPTIONS_CEILING_BYTES=15440
+# Reduced from 15440 to the measured 3438 plus half the 1500-byte band so the
+# ratchet now enforces the plugin context target below 2,000 tokens.
+DESCRIPTIONS_CEILING_BYTES=4188
 DESCRIPTIONS_BAND_BYTES=1500
 QUIET=0
 JSON_MODE=0
@@ -253,6 +331,29 @@ for rule in "$REPO_ROOT"/.claude/rules/*.md; do
 done
 shopt -u nullglob
 
+# Reach: which sessions actually pay for a file's bytes. hooks/codex-hooks.json
+# SessionStart runs hooks/session-start.sh, which calls
+# session-start-using-fno.sh, so using-fno is hook-injected (claude plus
+# top-level codex sessions, but not codex subagent threads) rather than absent
+# from codex. CLAUDE.md and the rules directory reach claude only. A byte that
+# must reach a session type none of these cover can live only in AGENTS.md,
+# which is exactly the trade the refusal text below names.
+reach_of() {
+  case "$1" in
+    AGENTS.md) echo "every harness" ;;
+    skills/using-fno/SKILL.md) echo "hook: claude, top-level codex; shipped to every consumer" ;;
+    CLAUDE.md | .claude/rules/*.md) echo "claude only" ;;
+    *)
+      echo "check-preamble-budget: no reach label for file-set path: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+REACH_EVERY=0
+REACH_HOOK=0
+REACH_CLAUDE=0
+
 TOTAL_BYTES=0
 RECORDS=""
 MANIFEST_RECORDS=""
@@ -277,8 +378,16 @@ for path in "${FILES[@]}"; do
   bytes=$((bytes))
   content_hash=$(hash_file "$path")
   TOTAL_BYTES=$((TOTAL_BYTES + bytes))
+  # Not called in command substitution on purpose: a reach-less path must exit
+  # the gate, and an exit inside $() only kills the subshell.
+  reach="$(reach_of "$relative")"
+  case "$reach" in
+    "every harness") REACH_EVERY=$((REACH_EVERY + bytes)) ;;
+    hook:*) REACH_HOOK=$((REACH_HOOK + bytes)) ;;
+    "claude only") REACH_CLAUDE=$((REACH_CLAUDE + bytes)) ;;
+  esac
   RECORDS+="${bytes}"$'\t'"${relative}"$'\n'
-  MANIFEST_RECORDS+="${bytes}"$'\t'"${content_hash}"$'\t'"${relative}"$'\n'
+  MANIFEST_RECORDS+="${bytes}"$'\t'"${content_hash}"$'\t'"${relative}"$'\t'"${reach}"$'\n'
 done
 
 APPROX_TOKENS=$((TOTAL_BYTES / 4))
@@ -380,7 +489,7 @@ while IFS= read -r candidate; do
   EXPECT_DESC=$((EXPECT_DESC + 1))
 done < <(
   { find "$REPO_ROOT/skills" -name 'SKILL.md' -type f 2>/dev/null || true; } \
-  ; { find "$REPO_ROOT/agents" -maxdepth 1 -name '*.md' -type f 2>/dev/null || true; }
+; { find "$REPO_ROOT/agents" -maxdepth 1 -name '*.md' -type f 2>/dev/null || true; }
 )
 
 if (( EXPECT_DESC != DESC_COUNT )); then
@@ -401,18 +510,29 @@ import sys
 total = int(sys.argv[1])
 ceiling = int(sys.argv[2])
 sources = []
+reach_bytes = {}
 for raw in sys.stdin:
     raw = raw.rstrip("\n")
     if not raw:
         continue
-    size, content_hash, path = raw.split("\t", 2)
+    size, content_hash, path, reach = raw.split("\t", 3)
     size = int(size)
     sources.append({
         "path": path,
         "bytes": size,
         "estimated_tokens": (size + 3) // 4,
         "content_hash": content_hash,
+        "reach": reach,
     })
+    if reach == "every harness":
+        key = "every-harness"
+    elif reach == "claude only":
+        key = "claude-only"
+    elif reach.startswith("hook:"):
+        key = "hook"
+    else:
+        raise SystemExit(f"unknown reach label: {reach}")
+    reach_bytes[key] = reach_bytes.get(key, 0) + size
 descriptions = []
 for raw in sys.argv[5].splitlines():
     if not raw.strip():
@@ -424,6 +544,7 @@ print(json.dumps({
     "estimated_tokens": (total + 3) // 4,
     "ceiling_bytes": ceiling,
     "sources": sources,
+    "reach_bytes": reach_bytes,
     "descriptions": {
         "total_bytes": int(sys.argv[3]),
         "ceiling_bytes": int(sys.argv[4]),
@@ -444,10 +565,9 @@ else
 
   while IFS=$'\t' read -r bytes relative; do
     [[ -z "$relative" ]] && continue
-    marker=""
-    [[ "$relative" == "skills/using-fno/SKILL.md" ]] && marker="  [shipped to every consumer]"
-    printf '  %8d  %s%s\n' "$bytes" "$relative" "$marker"
+    printf '  %8d  %s  [%s]\n' "$bytes" "$relative" "$(reach_of "$relative")"
   done < <(printf '%s' "$RECORDS" | LC_ALL=C sort -rn -k1,1)
+  echo "  by reach: every harness ${REACH_EVERY} B, hook ${REACH_HOOK} B, claude only ${REACH_CLAUDE} B"
 
   if (( DESC_COUNT > 0 )); then
     echo
@@ -537,31 +657,86 @@ if (( ! QUIET && ! JSON_MODE )); then
     (( count == 3 )) && break
   done < <(printf '%s' "$RECORDS" | LC_ALL=C sort -rn -k1,1)
 
+  # Pre-change headroom: what the author had before this change, measured
+  # against the merge-base with origin/main so the refusal names the budget
+  # that was actually available, not just the overage it now sits past.
+  BASE_SHA="$(git -C "$REPO_ROOT" merge-base HEAD origin/main 2>/dev/null || true)"
+  HEADROOM_LINE="  Headroom before this change: unmeasured (no merge-base with origin/main)."
+  if [[ -n "$BASE_SHA" ]]; then
+    BASE_TOTAL=0
+    BASE_READ_OK=1
+    base_size() {
+      if git -C "$REPO_ROOT" cat-file -e "${BASE_SHA}:$1" 2>/dev/null; then
+        local sz
+        if sz="$(git -C "$REPO_ROOT" cat-file -s "${BASE_SHA}:$1" 2>/dev/null)"; then
+          echo "$sz"
+        else
+          echo 0
+          return 1
+        fi
+      else
+        echo 0
+      fi
+    }
+    for bpath in AGENTS.md CLAUDE.md skills/using-fno/SKILL.md; do
+      bsz="$(base_size "$bpath")" || BASE_READ_OK=0
+      BASE_TOTAL=$((BASE_TOTAL + bsz))
+    done
+    while IFS= read -r brule; do
+      [[ -z "$brule" ]] && continue
+      case "$brule" in
+        *.md)
+          bsz="$(base_size "$brule")" || BASE_READ_OK=0
+          BASE_TOTAL=$((BASE_TOTAL + bsz))
+          ;;
+      esac
+    done < <(git -C "$REPO_ROOT" ls-tree --name-only "$BASE_SHA" -- .claude/rules/ 2>/dev/null || true)
+    if (( BASE_READ_OK )); then
+      HEADROOM=$((CEILING_BYTES - BASE_TOTAL))
+      DELTA=$((TOTAL_BYTES - BASE_TOTAL))
+      SHORT_SHA="$(printf '%s' "$BASE_SHA" | cut -c1-7)"
+      if (( HEADROOM >= 0 )); then
+        HEADROOM_LINE="  Headroom before this change: ${HEADROOM} B at ${SHORT_SHA}; this change adds ${DELTA} B."
+      else
+        HEADROOM_LINE="  Headroom before this change: already $((-HEADROOM)) B over at ${SHORT_SHA}; this change adds ${DELTA} B."
+      fi
+    else
+      HEADROOM_LINE="  Headroom before this change: unmeasured (a base read failed)."
+    fi
+  fi
+
   {
     echo "check-preamble-budget: ${TOTAL_BYTES} bytes exceeds the ${CEILING_BYTES}-byte ceiling by ${OVERAGE} (~${OVERAGE_TOKENS} tok/turn)."
     echo "  Largest: ${LARGEST}"
+    echo "  by reach: every harness ${REACH_EVERY} B, hook ${REACH_HOOK} B, claude only ${REACH_CLAUDE} B"
+    echo "${HEADROOM_LINE}"
     echo
+    echo "  A line that must reach codex subagent threads or a harness without the"
+    echo "  fno hook can live only in AGENTS.md, so cutting hook or claude-only"
+    echo "  bytes funds it in this gate but removes nothing those sessions read."
     echo "  Every byte here is re-read on every turn of every session on every lane."
     echo "  Fix, in order of preference:"
-    echo "    1. Trade: cut an equivalent amount from the same file."
-    echo "       DO NOT TRY THIS ON THE AGENTS.md PITFALLS CORPUS as it stands."
-    echo "       The entries present on 2026-08-18 were measured at roughly 181"
-    echo "       tradeable bytes in 6089, and those 181 were ALREADY SPENT to set"
-    echo "       the current ceiling. Those entries are at their floor. Entries"
-    echo "       age out at 60 days and get replaced, so re-measure before"
-    echo "       trusting this against a corpus that has turned over."
-    echo "       Getting those 181 took three compression passes and two external"
-    echo "       reviews, which lost and recovered ELEVEN qualifiers - one of them"
-    echo "       reversing an entry's meaning. Everything still in that corpus"
-    echo "       carries a claim, however much it reads like restatement."
-    echo "       The corpus header used to say to fund growth by trading here and"
-    echo "       never by raising this ceiling. That instruction assumed tradeable"
-    echo "       restatement exists, the measurement showed it does not, and the"
-    echo "       header was corrected rather than worked around. Do not reach for"
-    echo "       the corpus again by quietly deleting a qualifier."
-    echo "    2. Move it out of the preamble: docs/ and linked rule files that the"
-    echo "       harness does not auto-load are not paid at startup."
+    echo "    1. Compress the addition itself."
+    echo "    2. Move it out of the preamble, only when no agent needs it at the"
+    echo "       moment it acts: docs/ and linked rule files that the harness does"
+    echo "       not auto-load are not paid at startup."
     echo "    3. Raise CEILING_BYTES in this script, in this PR, with the reason in the PR body."
+    echo
+    echo "  Trading against the AGENTS.md pitfalls corpus is BARRED as it stands."
+    echo "  The entries present on 2026-08-18 were measured at roughly 181"
+    echo "  tradeable bytes in 6089, and those 181 were ALREADY SPENT to set"
+    echo "  the current ceiling. Those entries are at their floor. Entries"
+    echo "  age out at 60 days and get replaced, so re-measure before"
+    echo "  trusting this against a corpus that has turned over."
+    echo "  Getting those 181 took three compression passes and two external"
+    echo "  reviews, which lost and recovered ELEVEN qualifiers - one of them"
+    echo "  reversing an entry's meaning. Everything still in that corpus"
+    echo "  carries a claim, however much it reads like restatement."
+    echo "  The corpus header used to say to fund growth by trading here and"
+    echo "  never by raising this ceiling. That instruction assumed tradeable"
+    echo "  restatement exists, the measurement showed it does not, and the"
+    echo "  header was corrected rather than worked around. Do not reach for"
+    echo "  the corpus again by quietly deleting a qualifier."
   } >&2
 fi
 exit 1

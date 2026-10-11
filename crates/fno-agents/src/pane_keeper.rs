@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// The keeper frame protocol version. Bump on any frame-shape change; a
 /// client reading a NEWER version than it speaks refuses the keeper.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Bounded recent-output retention when `--ring-bytes` is not given. A
 /// re-adopting server replays this, so it bounds how much of the detached
@@ -56,6 +56,16 @@ pub(crate) const TAG_IDENTIFY: u8 = 4;
 pub(crate) const TAG_IDENTIFY_REPLY: u8 = 5;
 pub(crate) const TAG_OUTPUT: u8 = 6;
 pub(crate) const TAG_EXITED: u8 = 7;
+/// Sent AFTER `master.resize()` applies, carrying the same dims the Resize
+/// frame requested. The client applies its own VT resize only on receipt of
+/// this frame (never eagerly when it sends Resize) - it round-trips through
+/// the same `client` write lock as every Output frame, so it lands in the
+/// client's ordered per-pane stream after any output already queued to send
+/// and before any output the child produces once the resize is visible to
+/// it. Without this, a client that flips its local VT size the instant it
+/// ISSUES a resize races trailing pre-resize output still in flight over the
+/// socket, feeding it into the wrong-size grid (byte-exact reattach bug).
+pub(crate) const TAG_RESIZE_ACK: u8 = 8;
 
 /// One keeper-protocol frame.
 #[derive(Debug, PartialEq)]
@@ -67,6 +77,7 @@ pub enum Frame {
     IdentifyReply(Vec<u8>),
     Output(Vec<u8>),
     Exited(i32),
+    ResizeAck(u16, u16),
 }
 
 /// Encode one frame: tag byte + u32 LE length + payload.
@@ -86,6 +97,11 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
         Frame::Exited(code) => {
             owned.extend_from_slice(&code.to_le_bytes());
             (TAG_EXITED, &owned)
+        }
+        Frame::ResizeAck(rows, cols) => {
+            owned.extend_from_slice(&rows.to_le_bytes());
+            owned.extend_from_slice(&cols.to_le_bytes());
+            (TAG_RESIZE_ACK, &owned)
         }
     };
     let mut out = Vec::with_capacity(5 + payload.len());
@@ -130,6 +146,10 @@ pub fn decode(buf: &[u8]) -> Decode {
         TAG_EXITED if payload.len() == 4 => Frame::Exited(i32::from_le_bytes([
             payload[0], payload[1], payload[2], payload[3],
         ])),
+        TAG_RESIZE_ACK if payload.len() == 4 => Frame::ResizeAck(
+            u16::from_le_bytes([payload[0], payload[1]]),
+            u16::from_le_bytes([payload[2], payload[3]]),
+        ),
         _ => {
             return Decode::Violation(format!(
                 "frame tag {tag} with {len} payload byte(s) is not a keeper frame"
@@ -159,21 +179,142 @@ impl Ring {
     fn push(&mut self, chunk: &[u8]) {
         if chunk.len() >= self.cap {
             // One chunk bigger than the whole ring: keep its tail.
-            self.dropped += self.bytes.len() as u64 + (chunk.len() - self.cap) as u64;
-            self.bytes.clear();
-            self.bytes.extend(&chunk[chunk.len() - self.cap..]);
+            let keep_from = chunk.len() - self.cap;
+            let mut dropped_stream: Vec<u8> = std::mem::take(&mut self.bytes).into();
+            self.dropped += dropped_stream.len() as u64 + keep_from as u64;
+            dropped_stream.extend_from_slice(&chunk[..keep_from]);
+            let kept = &chunk[keep_from..];
+            let extra = split_escape_tail(&dropped_stream, kept).min(kept.len());
+            self.dropped += extra as u64;
+            self.bytes.extend(&kept[extra..]);
             return;
         }
         let overflow = (self.bytes.len() + chunk.len()).saturating_sub(self.cap);
-        self.dropped += overflow as u64;
-        for _ in 0..overflow {
+        if overflow == 0 {
+            self.bytes.extend(chunk);
+            return;
+        }
+        // The cut can land inside an escape sequence whose ESC went out with
+        // the dropped prefix; extend the drop through the sequence so a
+        // replay never opens mid-sequence (the raw `[54;3H` bug). The scan
+        // spans the chunk too, since its head may complete the sequence.
+        let dropped: Vec<u8> = self.bytes.iter().take(overflow).copied().collect();
+        let ring_kept = self.bytes.len() - overflow;
+        let mut scan = self
+            .bytes
+            .iter()
+            .skip(overflow)
+            .copied()
+            .collect::<Vec<u8>>();
+        scan.extend_from_slice(chunk);
+        let n = split_escape_tail(&dropped, &scan).min(scan.len());
+        let ring_extra = n.min(ring_kept);
+        let chunk_trim = (n - ring_extra).min(chunk.len());
+        self.dropped += (overflow + ring_extra + chunk_trim) as u64;
+        for _ in 0..overflow + ring_extra {
             self.bytes.pop_front();
         }
-        self.bytes.extend(chunk);
+        self.bytes.extend(&chunk[chunk_trim..]);
     }
 
     fn snapshot(&self) -> Vec<u8> {
         self.bytes.iter().copied().collect()
+    }
+}
+
+/// Leading bytes of `kept` that still belong to an escape sequence whose
+/// start the cut removed: the extra drop so a replay never opens
+/// mid-sequence. Only the sequence the LAST ESC in `dropped` opened can
+/// straddle the cut: anything earlier is closed or was aborted by that
+/// ESC. Forms: CSI (`ESC [` + params/intermediates + one final byte),
+/// OSC (`ESC ]` ... BEL or `ESC \`), intermediates (`ESC ( B`), and the
+/// plain two-byte form (`ESC 7`). A C0 control inside a CSI executes and
+/// the sequence continues, so it does not end the scan. An unterminated
+/// OSC drops the whole kept head: a replayed open OSC would swallow the
+/// replay into its string. ponytail: DCS/APC/PM (`ESC P`, `ESC ^`, `ESC _`)
+/// are not tracked; a cut inside one still replays its tail.
+fn split_escape_tail(dropped: &[u8], kept: &[u8]) -> usize {
+    let Some(i) = dropped.iter().rposition(|&b| b == 0x1b) else {
+        return 0; // no ESC in the dropped prefix: kept opens on a boundary
+    };
+    let tail = &dropped[i + 1..];
+    let total_tail = tail.len();
+    // at(p): the virtual stream (tail ++ kept), indexed from the ESC's end.
+    let at = |p: usize| -> Option<u8> {
+        if p < total_tail {
+            Some(tail[p])
+        } else {
+            kept.get(p - total_tail).copied()
+        }
+    };
+    // The sequence closed inside dropped: nothing of kept belongs to it.
+    let end = |p: usize| -> usize {
+        if p < total_tail {
+            0
+        } else {
+            p - total_tail + 1
+        }
+    };
+    let Some(intro) = at(0) else {
+        // A bare trailing ESC: its final byte is kept[0] when final-shaped.
+        return match kept.first() {
+            Some(&b) if (0x30..=0x7e).contains(&b) => 1,
+            _ => 0,
+        };
+    };
+    match intro {
+        b'[' => {
+            // CSI: params/intermediates (0x20-0x3f) then one final byte.
+            let mut p = 1;
+            while let Some(b) = at(p) {
+                match b {
+                    0x1b => return 0, // a new ESC aborts the open CSI
+                    0x20..=0x3f => p += 1,
+                    0x40..=0x7e => return end(p),
+                    _ => p += 1, // C0 executes, CSI continues
+                }
+            }
+            kept.len()
+        }
+        b']' => {
+            // OSC: until BEL, or ESC-backslash; another ESC aborts.
+            let mut p = 1;
+            while let Some(b) = at(p) {
+                match b {
+                    0x07 => return end(p),
+                    0x1b => {
+                        return match at(p + 1) {
+                            Some(b'\\') => end(p + 1),
+                            Some(_) => 0,
+                            None => kept.len(),
+                        }
+                    }
+                    _ => p += 1,
+                }
+            }
+            kept.len()
+        }
+        b if (0x20..=0x2f).contains(&b) => {
+            // Intermediates then one final byte (`ESC ( B` shape). The final
+            // check runs before the increment so end() gets the final byte's
+            // own index.
+            let mut p = 0;
+            while let Some(b) = at(p) {
+                if b == 0x1b {
+                    return 0;
+                }
+                if (0x30..=0x7e).contains(&b) {
+                    return end(p);
+                }
+                p += 1;
+            }
+            kept.len()
+        }
+        // Two-byte form (`ESC 7`): the intro IS the final byte. It sits in
+        // dropped when total_tail >= 1 (closed, drop nothing); the
+        // total_tail == 0 case is the bare-trailing-ESC arm's kept[0].
+        b if (0x30..=0x7e).contains(&b) => end(0),
+        _ => 0, // DEL/control intro: not a sequence this scanner tracks
     }
 }
 
@@ -271,6 +412,10 @@ struct Keeper {
     /// must know it is a probe, or it wires a pane that never receives
     /// output and never gets input honored.
     identify: OnceLock<serde_json::Value>,
+    /// The build this keeper launched from: drift is merged into the
+    /// Identify reply at answer time, so a binary rewritten after start
+    /// reads drifted in the census while the pane keeps running.
+    startup_fp: Option<crate::drift::ExeFingerprint>,
     /// The child's pid: the Kill frame's target and the Identify reply's
     /// answer. The keeper owns the master; the CHILD is the process every
     /// fleet count and later kill must aim at.
@@ -306,7 +451,18 @@ impl Keeper {
 /// BEFORE launch (`pi --session-id <id>`), so this is a read of state the
 /// keeper already holds, not a second field to keep in sync. `None` when
 /// the argv names no id - never a guess.
-fn session_id_from_argv(argv: &[String]) -> Option<String> {
+/// A full UUID: 36 chars with dashes at 8, 13, 18 and 23. The shape check is
+/// the point: a bare `--resume` opens a picker and a truncated handle
+/// addresses nothing, and neither may ever be read as an identity.
+pub(crate) fn is_full_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.as_bytes()[8] == b'-'
+        && value.as_bytes()[13] == b'-'
+        && value.as_bytes()[18] == b'-'
+        && value.as_bytes()[23] == b'-'
+}
+
+pub(crate) fn session_id_from_argv(argv: &[String]) -> Option<String> {
     let mut it = argv.iter();
     while let Some(arg) = it.next() {
         if arg == "--session-id" {
@@ -318,6 +474,31 @@ fn session_id_from_argv(argv: &[String]) -> Option<String> {
         }
         if let Some(value) = arg.strip_prefix("--session-id=") {
             return (!value.is_empty()).then(|| value.to_string());
+        }
+        // cursor-agent's create form (callee-minted-read-back): the chat id
+        // rides `--resume <uuid>`. The UUID-shape filter keeps a bare
+        // `--resume` (an interactive picker) and a truncated handle answering
+        // None, never a guess.
+        if arg == "--resume" {
+            return it
+                .next()
+                .map(String::as_str)
+                .filter(|s| is_full_uuid(s))
+                .map(str::to_string);
+        }
+        // agy's create form, the other callee-minted-read-back shape: the
+        // conversation id rides `--conversation <uuid>`. Same shape filter,
+        // and for the same reason - agy resumes by EXACT id, so a truncated
+        // one opens a different conversation rather than failing.
+        if arg == "--conversation" {
+            return it
+                .next()
+                .map(String::as_str)
+                .filter(|s| is_full_uuid(s))
+                .map(str::to_string);
+        }
+        if let Some(value) = arg.strip_prefix("--conversation=") {
+            return is_full_uuid(value).then(|| value.to_string());
         }
     }
     None
@@ -334,6 +515,19 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     // single-threadedness, and this runs before any thread exists.
     unsafe {
         libc::setsid();
+    }
+
+    // Block SIGTERM before any thread exists: every later thread inherits
+    // the block, and the sigwait thread below becomes the only place the
+    // signal is received. Done whether or not the spawner (the mux server)
+    // already blocked it, so the outcome never depends on who spawned us.
+    // The hosted child does NOT inherit this: portable-pty resets the mask
+    // in its pre_exec.
+    let mut term_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut term_set);
+        libc::sigaddset(&mut term_set, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &term_set, std::ptr::null_mut());
     }
 
     // The socket must not already be served by a live keeper: connecting
@@ -380,6 +574,7 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env_remove("NO_COLOR");
+    cmd.env("FNO_SERVER", &cfg.session);
     cmd.env("FNO_SESSION", &cfg.session);
     cmd.env("FNO_PANE", &cfg.pane_key);
     let epoch = std::time::SystemTime::now()
@@ -413,6 +608,7 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
         client: Mutex::new(None),
         client_gen: AtomicU64::new(0),
         identify: OnceLock::new(),
+        startup_fp: crate::drift::ExeFingerprint::current(),
         child_pid: AtomicU32::new(child_pid),
         master: Mutex::new(pair.master),
         input: Mutex::new(Some(input)),
@@ -429,6 +625,29 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
         "session_id": session_id_from_argv(&cfg.argv),
     });
     let _ = keeper.identify.set(identify);
+
+    // A test-owned pane (spawned under `fno-agents test-run`, argv carries
+    // FNO_TEST_OWNER_PID/BIRTH) never survives its test run: without a
+    // Drop on the pty type, a wedged/killed test that never sends Kill
+    // leaks this whole pane (five confirmed orphans were traced to
+    // `run_pane_with_worker` at crates/fno/src/server.rs:20282). A
+    // production pane (no such env) is unaffected - this thread never
+    // spawns for one.
+    if let Some((owner_pid, owner_birth)) = crate::test_run::declared_owner_from_env() {
+        crate::test_run::spawn_owner_watchdog(
+            owner_pid,
+            owner_birth,
+            "fno-keeper-test-owner",
+            move || {
+                // SAFETY: same kill(pid, SIGKILL) the explicit Frame::Kill path
+                // already sends to this same child.
+                unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGKILL) };
+                eprintln!(
+                "fno-agents-worker: test_keeper_reaped child_pid={child_pid} owner_pid={owner_pid} owner_birth={owner_birth}"
+            );
+            },
+        );
+    }
 
     // The pty-reader thread: master -> ring + Output frames. Blocking reads
     // live here and only here; EOF/EIO means the child is gone.
@@ -455,7 +674,11 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                 }
             }
         })
-        .map_err(|e| format!("pty reader thread: {e}"))?;
+        .map_err(|e| {
+            end_child(child_pid);
+            let _ = std::fs::remove_file(&cfg.sock);
+            format!("pty reader thread: {e}")
+        })?;
 
     // The accept loop: every connection is served on its own thread, so a
     // `keeper list` probe is answered even while the server holds the
@@ -487,7 +710,96 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
                         .expect("spawn keeper client thread");
                 }
             })
-            .map_err(|e| format!("accept thread: {e}"))?;
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("accept thread: {e}")
+            })?;
+    }
+
+    // The sigwait thread: SIGTERM is blocked on every thread, so delivery
+    // happens only here. end_child ends the child; the main thread's wait
+    // below then runs the normal Exited, unlink and exit path.
+    {
+        let set = term_set;
+        std::thread::Builder::new()
+            .name("fno-keeper-term".into())
+            .spawn(move || {
+                let mut sig: libc::c_int = 0;
+                loop {
+                    // SAFETY: sigwait over a set naming SIGTERM only.
+                    if unsafe { libc::sigwait(&set, &mut sig) } == 0 {
+                        break;
+                    }
+                }
+                end_child(child_pid);
+            })
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("term thread: {e}")
+            })?;
+    }
+
+    // The socket-dir-gone thread. Why the DIRECTORY and not the socket
+    // path: a hand-off renames the socket file out of mux/panes and the
+    // keeper must keep running, while nothing in fno ever removes the
+    // panes/ dir - a gone dir means the whole state root went, so no
+    // server can ever reach us again. Two consecutive gone polls with no
+    // subscriber seated end the child.
+    {
+        let keeper = Arc::clone(&keeper);
+        let sock = cfg.sock.clone();
+        std::thread::Builder::new()
+            .name("fno-keeper-orphan".into())
+            .spawn(move || {
+                let poll = orphan_poll();
+                let dir = sock.parent().map(|p| p.to_path_buf());
+                let mut gone_streak = 0u32;
+                loop {
+                    std::thread::sleep(poll);
+                    let gone = match dir.as_deref().map(std::fs::symlink_metadata) {
+                        Some(Ok(_)) => false,
+                        // Only NotFound counts as gone; a permission or
+                        // other error is never a death reading.
+                        Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => true,
+                        _ => false,
+                    };
+                    let seated = keeper
+                        .client
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_some();
+                    if gone && !seated {
+                        gone_streak += 1;
+                    } else {
+                        gone_streak = 0;
+                    }
+                    if gone_streak >= 2 {
+                        // eprintln! panics on a write error, which would end
+                        // this watcher and leave the keeper running: the
+                        // server that held our stderr pipe is dead. writeln!
+                        // to stderr and ignore the result.
+                        let _ = writeln!(
+                            std::io::stderr(),
+                            "fno-agents-worker: keeper_orphaned sock={} reason=socket_dir_gone child_pid={child_pid}",
+                            sock.display()
+                        );
+                        if child_pid == 0 {
+                            // No child exit will ever wake the main thread;
+                            // exit directly.
+                            std::process::exit(1);
+                        }
+                        end_child(child_pid);
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("orphan thread: {e}")
+            })?;
     }
 
     // The main thread waits on the child (AC5-ERR): on exit, the exit frame,
@@ -501,6 +813,47 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     keeper.send(&Frame::Exited(code));
     let _ = std::fs::remove_file(&cfg.sock);
     std::process::exit(code);
+}
+
+/// End the hosted child: SIGTERM, a 5 s grace, then SIGKILL. Shared by the
+/// Kill frame and the keeper's two self-exit paths (the sigwait thread and
+/// the socket-dir-gone thread). SIGTERM first because a killed-mid-write
+/// claude leaves an orphaned .claude.json.tmp in the config dir; the
+/// endpoint is unchanged for a worker that ignores SIGTERM. Every call
+/// site already runs off the main thread, so the grace never stalls the
+/// frame loop or the waiter.
+fn end_child(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    // SAFETY: kill with a valid pid and SIGTERM, then SIGKILL after the
+    // confirmed grace.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    for _ in 0..50 {
+        if !crate::claude_config_tmp::pid_alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if crate::claude_config_tmp::pid_alive(pid) {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
+
+/// The orphan thread's poll interval: `FNO_KEEPER_ORPHAN_POLL_MS`, a
+/// positive integer of milliseconds; default 30,000. An unset or bad value
+/// means the default.
+fn orphan_poll() -> std::time::Duration {
+    let ms = std::env::var("FNO_KEEPER_ORPHAN_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(30_000);
+    std::time::Duration::from_millis(ms)
 }
 
 /// Serve one accepted connection to completion, then drop it. Only the
@@ -543,13 +896,21 @@ fn serve_client(
                             }
                         }
                         Frame::Resize(rows, cols) => {
-                            let master = keeper.master.lock().unwrap_or_else(|e| e.into_inner());
-                            let _ = master.resize(PtySize {
-                                rows: rows.max(1),
-                                cols: cols.max(1),
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            });
+                            {
+                                let master =
+                                    keeper.master.lock().unwrap_or_else(|e| e.into_inner());
+                                let _ = master.resize(PtySize {
+                                    rows: rows.max(1),
+                                    cols: cols.max(1),
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                });
+                            }
+                            // Tell the client the resize took effect, so it
+                            // can apply its own VT resize at this point in
+                            // the ordered stream rather than the instant it
+                            // sent Resize (see TAG_RESIZE_ACK).
+                            keeper.send(&Frame::ResizeAck(rows, cols));
                         }
                         Frame::Kill => {
                             // A deliberate close kills the CHILD (the keeper
@@ -558,9 +919,7 @@ fn serve_client(
                             // the child handle stays owned by the waiter.
                             let pid = keeper.child_pid.load(Ordering::SeqCst);
                             if pid > 0 {
-                                // SAFETY: kill with a valid pid and SIGKILL
-                                // is the deliberate-close contract.
-                                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                                std::thread::spawn(move || end_child(pid));
                             }
                         }
                         Frame::Identify => {
@@ -579,6 +938,29 @@ fn serve_client(
                             if let Some(value) = keeper.identify.get() {
                                 let mut value = value.clone();
                                 value["subscriber"] = serde_json::json!(is_subscriber);
+                                // Build + drift merged at reply time (
+                                // change 3): live re-stat, not a startup
+                                // snapshot, so a rewritten binary reads
+                                // drifted in the next census while the
+                                // keeper and its child stay alive.
+                                if let (Some(obj), Some(fp)) =
+                                    (value.as_object_mut(), keeper.startup_fp.as_ref())
+                                {
+                                    obj.insert(
+                                        "build".to_string(),
+                                        serde_json::json!({
+                                            "path": fp.path.display().to_string(),
+                                            "mtime_nanos": fp.mtime_nanos,
+                                            "size": fp.size,
+                                        }),
+                                    );
+                                    obj.insert(
+                                        "drift".to_string(),
+                                        serde_json::json!(crate::drift::drift_label(
+                                            &crate::drift::self_drift(fp)
+                                        )),
+                                    );
+                                }
                                 reply_on(&encode(&Frame::IdentifyReply(
                                     value.to_string().into_bytes(),
                                 )));
@@ -640,6 +1022,7 @@ mod tests {
             Frame::IdentifyReply(br#"{"v":1}"#.to_vec()),
             Frame::Output(vec![0u8, 1, 2, 255]),
             Frame::Exited(-1),
+            Frame::ResizeAck(40, 120),
         ] {
             let encoded = encode(&frame);
             match decode(&encoded) {
@@ -653,6 +1036,9 @@ mod tests {
                         (Frame::IdentifyReply(a), Frame::IdentifyReply(b)) => a == b,
                         (Frame::Output(a), Frame::Output(b)) => a == b,
                         (Frame::Exited(a), Frame::Exited(b)) => a == b,
+                        (Frame::ResizeAck(ar, ac), Frame::ResizeAck(br, bc)) => {
+                            ar == br && ac == bc
+                        }
                         _ => false,
                     };
                     assert!(matches, "{frame:?} must round-trip, got {decoded:?}");
@@ -700,6 +1086,38 @@ mod tests {
             ring.dropped, 17,
             "3 old + 4 overflow + 10 displaced, all counted"
         );
+    }
+
+    /// The `[54;3H` bug: a cut whose ESC went out with the dropped prefix
+    /// used to leave the sequence tail as the replay's opening text. The
+    /// drop now extends through the split sequence; a complete sequence
+    /// before the cut replays intact.
+    #[test]
+    fn ring_cut_at_an_escape_sequence_replays_from_the_boundary() {
+        let mut ring = Ring::new(8);
+        ring.push(b"\x1b[54;3");
+        ring.push(b"Hwold");
+        assert_eq!(ring.snapshot(), b"wold");
+        assert_eq!(ring.dropped, 7, "3 prefix + 3 split + the final H, counted");
+        let mut ring = Ring::new(8);
+        ring.push(b"\x1b[2J\x1b[Hok");
+        ring.push(b"XY");
+        assert_eq!(ring.snapshot(), b"\x1b[HokXY");
+        assert_eq!(ring.dropped, 4, "ESC[2J went out whole with the prefix");
+    }
+
+    /// Direct scanner cases: a sequence completing inside `dropped` drops
+    /// nothing of `kept`; an unterminated OSC drops the whole kept head.
+    #[test]
+    fn split_escape_tail_forms() {
+        assert_eq!(split_escape_tail(b"abc\x1b[54;3H", b"rest"), 0);
+        assert_eq!(split_escape_tail(b"\x1b]0;ti", b"tle rest"), 8);
+        assert_eq!(split_escape_tail(b"\x1b]0;t\x07tail", b"kept"), 0);
+        assert_eq!(split_escape_tail(b"abc\x1b", b"7rest"), 1);
+        assert_eq!(split_escape_tail(b"abc", b"kept"), 0);
+        assert_eq!(split_escape_tail(b"\x1b]0;t\x1b", b"\\z"), 1);
+        // The intermediate form drops exactly through its final byte.
+        assert_eq!(split_escape_tail(b"abc\x1b(", b"Brest"), 1);
     }
 
     #[test]
@@ -764,5 +1182,64 @@ mod tests {
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         assert_eq!(session_id_from_argv(&empty_value), None);
+    }
+
+    #[test]
+    fn keeper_lane_reads_the_cursor_resume_shape_as_a_full_uuid_only() {
+        let cursor_shape = [
+            "cursor-agent",
+            "--resume",
+            "0f9e63ed-861d-4f9f-8efa-3e40c5e01266",
+            "--trust",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect::<Vec<_>>();
+        assert_eq!(
+            session_id_from_argv(&cursor_shape),
+            Some("0f9e63ed-861d-4f9f-8efa-3e40c5e01266".to_string()),
+            "the callee-minted create form rides --resume"
+        );
+        // A bare --resume opens an interactive picker: no identity.
+        let picker = ["cursor-agent", "--resume"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(session_id_from_argv(&picker), None);
+
+        // agy's create form: `--conversation <uuid>`, split and glued.
+        let agy_shape: Vec<String> = [
+            "agy",
+            "--conversation",
+            "91b59536-7ea4-4235-9691-4ca8f991a9b2",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            session_id_from_argv(&agy_shape),
+            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
+        );
+        let agy_glued: Vec<String> = ["agy", "--conversation=91b59536-7ea4-4235-9691-4ca8f991a9b2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(
+            session_id_from_argv(&agy_glued),
+            Some("91b59536-7ea4-4235-9691-4ca8f991a9b2".to_string())
+        );
+        // A truncated conversation id addresses a DIFFERENT conversation to
+        // agy, so it answers None rather than being read as an identity.
+        let agy_truncated: Vec<String> = ["agy", "--conversation", "91b59536"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(session_id_from_argv(&agy_truncated), None);
+        // A head-8 is an fno session handle, not a chat id: no identity.
+        let truncated = ["cursor-agent", "--resume", "74db359a"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(session_id_from_argv(&truncated), None);
     }
 }

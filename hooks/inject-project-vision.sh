@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# fno hook: SessionStart - inject project vision
 # SessionStart hook: inject project vision from settings.yaml into context
 #
 # Reads vision and goals from settings.yaml so the agent has semantic
@@ -12,7 +13,7 @@ if command -v fno >/dev/null 2>&1; then
     [[ -f "$_PATHS_SH" ]] && source "$_PATHS_SH" 2>/dev/null || true
     unset _PATHS_SH
 fi
-# GLOBAL_SETTINGS = per-user global; never alias CONFIG_FILE (active=local file). ab-5d6c3d47
+# GLOBAL_SETTINGS = per-user global; never alias CONFIG_FILE (active=local file).
 GLOBAL_SETTINGS="${FNO_GLOBAL_SETTINGS_PATH:-$HOME/.fno/config.toml}"
 
 # Find settings file (local override > global)

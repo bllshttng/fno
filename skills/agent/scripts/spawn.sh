@@ -30,7 +30,7 @@
 # reservation means nobody is building it and nobody will until an operator
 # intervenes: failed, exit 1, and the message carries the clearing command. Both
 # used to exit 0 while launching nothing, so a caller reading the exit code was
-# told the launch worked (x-05be).
+# told the launch worked.
 
 set -uo pipefail
 
@@ -42,29 +42,52 @@ CWD=""
 SELF=""                # caller's own claim holder (target_claim_holder). Lets
                        # the collision pre-check tell a self-held claim (route to
                        # the sanctioned handoff) from a foreign one (refuse).
-# Routing inputs (codex/gemini first-class dispatch, ab-417ab20f). Defaults keep
+# Routing inputs (codex/gemini first-class dispatch). Defaults keep
 # the legacy claude path equivalent: exec + build -> claude resolves to `spawn`
-# (Group 1 ab-8b3e4fe0: ask never creates), so an old caller that passes none
-# of these still launches a persistent claude bg peer.
+# (Group 1: ask never creates), so an old caller that passes none
+# of these still launches a persistent claude thread peer.
 MODE="exec"            # exec | interactive  (-i routes codex/gemini -> host)
 MODEL=""               # exact model name, forwarded as `spawn --model` (each
                        # provider's own --model). Empty = provider default.
 EFFORT=""              # reasoning effort forwarded as `spawn --effort`.
 PAYLOAD_MODE="build"   # build (node-id /target) | seed | handoff | passthrough
-SUBSTRATE=""           # x-2c27: ""|pane|bg|headless. bg -> claude --bg thread
-                       # (JSON receipt); headless -> one-shot (reply receipt).
+SUBSTRATE=""           # ""|pane|thread|headless. The retired `bg` spelling
+                       # refuses (redirect to thread); headless -> one-shot.
 YOLO=0                 # 1 appends --yolo to the spawn/host argv
-PERMISSION_MODE=""     # x-dfa4: forwarded as --permission-mode to the spawn verb
-ROLE=""                # x-d2fe: forwarded as --role to the spawn verb (model routing)
+PERMISSION_MODE=""     # forwarded as --permission-mode to the spawn verb
+ROLE=""                # forwarded as --role to the spawn verb (model routing)
 TIMEOUT=""             # forwarded as --timeout to the spawn verb (per-spawn seconds)
 FRESH=0                # 1 appends --fresh (canonical-root cwd) to the spawn argv
 HERE=0                 # 1 appends --here (opt out of --fresh) to the spawn argv
-ADD_DIR=""             # x-b6e2: forwarded as --add-dir to the spawn verb
-AGENT=""               # x-b6e2: forwarded as --agent to the spawn verb
-TOOLS=""               # x-b6e2: forwarded as --tools to the spawn verb
-DENY_TOOLS=""          # x-b6e2: forwarded as --deny-tools to the spawn verb
+ADD_DIR=""             # forwarded as --add-dir to the spawn verb
+AGENT=""               # forwarded as --agent to the spawn verb
+TOOLS=""               # forwarded as --tools to the spawn verb
+DENY_TOOLS=""          # forwarded as --deny-tools to the spawn verb
 
 fail() { printf 'result=failed reason="%s"\n' "$1"; exit 1; }
+
+thread_receipt_field() {
+  local capabilities
+  capabilities="$(fno agents capabilities "$PROVIDER" --json 2>/dev/null)" || return 1
+  printf '%s' "$capabilities" | jq -r '
+    if .keeper? != null then "short_id"
+    elif ((.resume_strategy.forms.interactive_attach.tokens // []) | index("{short_id}")) != null then "short_id"
+    else "session_id"
+    end
+  ' 2>/dev/null
+}
+
+valid_receipt_identity() {
+  local identity="$1"
+  [[ -n "$identity" && ! "$identity" =~ [[:space:]] ]] || return 1
+  [[ "$identity" =~ ^[0-9a-f]{8}$ \
+     || "$identity" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ \
+     || "$identity" =~ ^ses_[A-Za-z0-9]+$ ]]
+}
+
+valid_pane_identity() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]{1,64}$ ]]
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -89,7 +112,7 @@ while [[ $# -gt 0 ]]; do
     --agent)        AGENT="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
     --tools)        TOOLS="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
     --deny-tools)   DENY_TOOLS="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
-    # Pass-through cwd flags: forwarded verbatim to `fno agents spawn`. x-85fe
+    # Pass-through cwd flags: forwarded verbatim to `fno agents spawn`.
     # inverted the runtime default -- a spawn with NO cwd source now lands on
     # canonical, so this script defaults NOTHING and behavior follows the runtime:
     # --here keeps the caller cwd, --fresh is an accepted no-op alias. A code
@@ -104,7 +127,7 @@ done
 command -v fno >/dev/null 2>&1 || fail "fno not on PATH"
 command -v jq  >/dev/null 2>&1 || fail "jq not on PATH"
 [[ -n "$NAME" ]]     || fail "missing --name"
-# x-de9d US8: --provider may be omitted when config.agents.defaults.provider is
+# US8: --provider may be omitted when config.agents.defaults.provider is
 # set; adopt the config default here so verb selection and the receipt check
 # both have a concrete provider (the seam then sees it as an explicit flag with
 # the same value). With neither flag nor config default, fail early with today's
@@ -117,12 +140,12 @@ if [[ -z "$PROVIDER" ]]; then
   printf 'spawn.sh: provider from config.agents.defaults.provider=%s\n' "$PROVIDER" >&2
 fi
 
-# ---- Verb selection (Locked Decisions 1 + 2; Group 1 ab-8b3e4fe0) -------
+# ---- Verb selection (Locked Decisions 1 + 2; Group 1) -------
 # Creation is always spawn/host. claude routes to `spawn` (client-side `claude
 # --bg --name`, subscription lane, JSON receipt); a codex/gemini build/seed
 # routes to `spawn` (exec, autonomous) by default and `host` (interactive,
 # human-driven) under `-i`. A one-shot exchange is the `headless` substrate
-# (x-cbb0: subsumes the retired `ask` verb) -> `spawn --substrate headless`
+# (: subsumes the retired `ask` verb) -> `spawn --substrate headless`
 # (reply on stdout). A codex/gemini passthrough never reaches here (normalize.sh
 # refuses it); a claude passthrough runs the slash command via `spawn`.
 if [[ "$PROVIDER" == "claude" ]]; then
@@ -133,10 +156,10 @@ else
   VERB="spawn"
 fi
 
-# x-2c27: an explicit --substrate (bg|headless) always selects the spawn verb
-# (never host). `headless` yields a one-shot reply receipt; `bg` (and pane/
-# default) yield the JSON short-id receipt. REPLY drives the receipt-family
-# branch below.
+# an explicit --substrate (thread|headless) always selects
+# the spawn verb (never host). `headless` yields a one-shot reply receipt;
+# `thread` (and pane/default) yields the JSON short-id receipt. REPLY drives
+# the receipt-family branch below.
 REPLY=0
 if [[ -n "$SUBSTRATE" ]]; then
   VERB="spawn"
@@ -151,7 +174,24 @@ fi
 
 sanitize() { printf '%s' "$1" | tr '\n\r' '  ' | sed 's/"/'"'"'/g' | cut -c1-300; }
 
-# ---- Read-only early receipt; cmd_spawn owns the real guard (x-5c08) ------
+# A payload writes code when it is a node-id build dispatch or an explicit
+# /target|/execute|/fix passthrough. The shared predicate also controls the
+# automatic worktree path below.
+is_code_payload() {
+  case "$PAYLOAD_MODE" in
+    build) return 0 ;;
+    passthrough)
+      case "$MESSAGE" in
+        /target|/target\ *|/execute|/execute\ *|/do|/do\ *|/fix|/fix\ *) return 0 ;;
+        /fno:target|/fno:target\ *|/fno:execute|/fno:execute\ *|/fno:do|/fno:do\ *|/fno:fix|/fno:fix\ *) return 0 ;;
+        '$fno:target'|'$fno:target '*|'$fno:execute'|'$fno:execute '*|'$fno:do'|'$fno:do '*|'$fno:fix'|'$fno:fix '*) return 0 ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---- Read-only early receipt; cmd_spawn owns the real guard ------
 # Preserve /agent's self-handoff and contested-worker receipts without taking a
 # reservation here. The actual `fno agents spawn --node` below reruns the same
 # family-2 decision with side effects and reserves dispatch:<node> at the one
@@ -193,7 +233,7 @@ if [[ -n "$NODE" ]]; then
         # release the claim here. A node claim can be released ONLY by the two
         # sanctioned sites (handoff.sh / `fno backlog unclaim`, holder-verified);
         # a helper subprocess release is a locked-down authority violation
-        # (ab-588326a7). And a bg spawn cannot emit the `delegated` event a clean
+        #. And a thread spawn cannot emit the `delegated` event a clean
         # takeover needs (it does not control the successor's session id), so
         # merely proceeding would spawn a worker that is born contested while the
         # caller still holds a live claim. The honest move is to route the caller
@@ -209,6 +249,19 @@ if [[ -n "$NODE" ]]; then
         else
           printf 'result=already-running name=%s reason="live worker holds node:%s (%s)"\n' "$NAME" "$NODE" "$holder"
         fi
+      elif [[ "$reason" == "worker-row" ]]; then
+        # The worker ROW is the occupant, not the claim. Naming the claim here
+        # sent the caller after a release that frees nothing; peeking the row
+        # and stopping it if its run is finished is what frees the node.
+        worker="$(printf '%s' "$guard_json" | jq -r '.worker // empty' 2>/dev/null)"
+        # An unmeasured row blocks dispatch without proving anything is running,
+        # so the receipt says which of the two it is; peek can come back empty
+        # for the unmeasured one.
+        if [[ "$(printf '%s' "$guard_json" | jq -r '.worker_unmeasured // empty' 2>/dev/null)" == "true" ]]; then
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agents claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${worker:-unmeasured}" "$NODE" "$NODE"
+        else
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s; peek it, and stop it if its run is finished"\n' "$NAME" "${worker:-unmeasured}" "$NODE"
+        fi
       else
         # NO suspect-claim arm here, and the omission is load-bearing. This call
         # is a probe, a probe reports every wedge as recovery not-attempted, and
@@ -220,6 +273,12 @@ if [[ -n "$NODE" ]]; then
         fail "family-2 guard blocked node:$NODE; no worker launched"
       fi
       exit 0 ;;
+    unknown)
+      # The guard could not check (worked authority unavailable). NOT
+      # occupancy: no worker was found and none may be assumed, so the only
+      # honest receipt says the check itself failed and names the reader.
+      detail="$(printf '%s' "$guard_json" | jq -r '.detail // empty' 2>/dev/null)"
+      fail "could not check node:$NODE (${detail:-worked authority unavailable}); no worker launched, retry" ;;
     corrupted)
       fail "node:$NODE claim is corrupted; force-release or repair before dispatching" ;;
     refused)
@@ -268,10 +327,10 @@ case "$existing_status" in
     exit 0 ;;
 esac
 
-# ---- Auto-worktree for code-implementing payloads (x-9c4c) --------------
-# A bg /target|/execute|/fix launched into a repo's MAIN checkout lands on the
+# ---- Auto-worktree for code-implementing payloads --------------
+# A thread /target|/execute|/fix launched into a repo's MAIN checkout lands on the
 # canonical (often protected) branch and relies on the soft skill instruction
-# "a bg /target self-creates its worktree before building." Do it
+# "a thread /target self-creates its worktree before building." Do it
 # deterministically here instead: `fno agents workspace worktree ensure` (policy-resolved base,
 # see the call below) on a fresh feature branch, launching THERE so it is born isolated
 # (location verdict ok from line one) regardless of whether the cwd came from
@@ -296,19 +355,6 @@ AUTO_WT=""
 # isolate. seed (verbatim conversational pane) and handoff (a doc continuation)
 # and a non-code claude slash command (/think writes a design doc) are NOT code
 # payloads.
-is_code_payload() {
-  case "$PAYLOAD_MODE" in
-    build) return 0 ;;  # node-id dispatch: /target|/fno:target|$fno:target <id>
-    passthrough)        # explicit slash command; isolate only code verbs
-      case "$MESSAGE" in
-        /target|/target\ *|/execute|/execute\ *|/do|/do\ *|/fix|/fix\ *) return 0 ;;
-        /fno:target|/fno:target\ *|/fno:execute|/fno:execute\ *|/fno:do|/fno:do\ *|/fno:fix|/fno:fix\ *) return 0 ;;
-        '$fno:target'|'$fno:target '*|'$fno:execute'|'$fno:execute '*|'$fno:do'|'$fno:do '*|'$fno:fix'|'$fno:fix '*) return 0 ;;
-        *) return 1 ;;
-      esac ;;
-    *) return 1 ;;      # seed | handoff
-  esac
-}
 # A claude `/target <node>` worker isolates ITSELF at cold-start (`fno do target
 # start` -> `fno agents workspace worktree ensure` -> the harness `EnterWorktree` tool), which
 # moves the session's cwd while leaving its PROJECT at the launch dir. Pre-
@@ -358,7 +404,7 @@ maybe_auto_worktree() {
   fi
   # The git/worktree mechanism (main-checkout-only gate, idempotent reuse,
   # stray-dir non-clobber, origin/main base, best-effort setup-worktree.sh)
-  # lives in the `fno agents workspace worktree ensure` verb (x-73ca) so all three code-dispatch
+  # lives in the `fno agents workspace worktree ensure` verb so all three code-dispatch
   # paths share ONE implementation. On any failure it prints nothing on stdout,
   # so $wt is empty and we launch in the original CWD -- isolation is best-effort
   # and never blocks the spawn. (NOTE: ensure bases the branch on origin/main,
@@ -370,7 +416,7 @@ maybe_auto_worktree() {
   # --harness: ensure lands a claude payload harness-native at <repo>/.claude/
   # worktrees/, degrades any non-claude (or unexpected) harness to the external base.
   local wt
-  wt="$( (fno agents workspace worktree ensure --repo "$top" --name "$NAME" --harness "$PROVIDER" 2>/dev/null || fno workspace worktree ensure --repo "$top" --name "$NAME" --harness "$PROVIDER" 2>/dev/null) )"
+  wt="$( (fno agents workspace worktree ensure --repo "$top" --name "${NODE:-$NAME}" --harness "$PROVIDER" 2>/dev/null || fno workspace worktree ensure --repo "$top" --name "${NODE:-$NAME}" --harness "$PROVIDER" 2>/dev/null) )"
   if [[ -n "$wt" ]]; then
     CWD="$wt"; AUTO_WT="$wt"
     # policy=never launches in place: ensure prints the repo main checkout itself.
@@ -399,11 +445,11 @@ maybe_auto_worktree   # self-gating: no-op unless code payload + main checkout
 
 # ---- Spawn (subscription lane only) -------------------------------------
 # Run the GENUINE verb. claude `spawn` builds `claude --bg --name <name> <msg>`
-# client-side (Group 1 ab-8b3e4fe0 moved the create off `ask`); codex/gemini
+# client-side (Group 1 moved the create off `ask`); codex/gemini
 # `spawn`/`host` are daemon-managed PTY workers (Locked Decision 1) and
 # `spawn --once` is the ephemeral one-shot. Name is POSITIONAL (Locked
-# Decision 8). Never default to claude `-p`/`--bare` (x-2c27, amended from
-# "never -p"): `pane`/`bg` use owned-PTY / `claude --bg`, never `-p`; `-p` is
+# Decision 8). Never default to claude `-p`/`--bare` (amended from
+# "never -p"): `pane`/`thread` use owned-PTY / `claude --bg`, never `-p`; `-p` is
 # reachable only via the explicit `--substrate headless` verb (which the Rust
 # client, not this script, translates to `claude -p`). --yolo is appended only
 # when the user explicitly passed it (normalize.sh strips it for claude). A bare interactive
@@ -429,43 +475,34 @@ cmd=(agents "$VERB" --harness "$PROVIDER")
 [[ -n "$AGENT" ]] && cmd+=(--agent "$AGENT")
 [[ -n "$TOOLS" ]] && cmd+=(--tools "$TOOLS")
 [[ -n "$DENY_TOOLS" ]] && cmd+=(--deny-tools "$DENY_TOOLS")
-# x-2c27: an explicit substrate emits --substrate (the canonical selector); the
+# an explicit substrate emits --substrate (the canonical selector); the
 # `headless` value carries the one-shot lane the retired `ask` verb used to.
 [[ -n "$SUBSTRATE" ]] && cmd+=(--substrate "$SUBSTRATE")
-# x-84a8: forward the node so a node-driven pane spawn exports FNO_NODE/SLUG/PLAN
+# forward the node so a node-driven pane spawn exports FNO_NODE/SLUG/PLAN
 # provenance (the verb resolves slug/plan from the graph). Ad-hoc spawns have no
-# --node and export nothing new. Harmless on bg/headless (the verb ignores it).
+# --node and export nothing new. Harmless on thread/headless (the verb ignores it).
 [[ -n "$NODE" ]] && cmd+=(--node "$NODE")
 cmd+=(--name "$NAME")
 [[ -n "$MESSAGE" ]] && cmd+=("$MESSAGE")
-# x-9d11 mechanical refusal carrier: when the spawn message itself carries the
-# --no-merge posture flag (normalize.sh or harness_map injected it), export the
-# env var too so the worker's init folds the refusal even if it never passes
-# the flag through to `fno do target start/init` (post-compaction, thin skill
-# layer). The flag stays the attributable carrier; the env is the backstop.
-# Scoped to /target-family first tokens (same vocabulary as harness_map's
-# message_carries_no_merge): a /think or /review prompt that MENTIONS the flag
-# arms nothing, and the message is authoritative over any inherited carrier.
-# A non-family message clears NOTHING: an operator's exported TARGET_NO_MERGE is
-# a documented control input, and a leaked carrier surviving a prose worker errs
-# toward refusing merges, the safe side (round 8; mirrors the cli.py edit).
-case "${MESSAGE%% *}" in
-  /target|/fno:target|\$fno:target)
-    case " $MESSAGE " in
-      *" --no-merge "*) export TARGET_NO_MERGE=1 ;;
-      *" no-merge "*)
-        # Bare token outside flag position: ambiguous (legacy FLAGS-then-token
-        # spelling, or a description that mentions the word). Neither arm nor
-        # clear - dropping an operator's exported refusal here would err toward
-        # granting merges. The worker's init prints the loud no-op note.
-        ;;
-      *)
-        [[ -n "${TARGET_NO_MERGE:-}" ]] && echo "spawn: inherited TARGET_NO_MERGE cleared; /target-family message carries no --no-merge flag and the message is authoritative" >&2
-        unset TARGET_NO_MERGE 2>/dev/null || true
-        ;;
+
+# Resolve the receipt field before launch. A capability read after a successful
+# spawn can turn infrastructure drift into a false failure with a live worker.
+THREAD_RECEIPT_FIELD=""
+case "$SUBSTRATE" in
+  thread)
+    THREAD_RECEIPT_FIELD="$(thread_receipt_field)" || fail "thread receipt capability lookup failed for harness '$PROVIDER'; no worker launched"
+    case "$THREAD_RECEIPT_FIELD" in
+      short_id|session_id) : ;;
+      *) fail "no receipt field in harness map for thread substrate '$PROVIDER'; no worker launched" ;;
     esac
     ;;
 esac
+
+# the refusal-carrier case block that lived here is deleted.
+# This wrapper's `fno agents spawn` call re-derives the identical verdict one
+# process later (cmd_spawn in-process, or the fno-agents binary's own spawn
+# handler once the front door execs it) from the one carrier table - one
+# owner, three copies retired.
 
 err_file="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/agents-spawn-$$.err")"
 # EXIT trap guarantees cleanup even if interrupted (SIGINT) mid-spawn; the manual
@@ -490,12 +527,20 @@ if [[ "$spawn_rc" -ne 0 ]]; then
         # a benign dedup skip becomes result=failed with exit 1.
         printf 'result=already-running name=%s action=%s reason="node:%s is held but no target init took that claim; no worker has reached target init"\n' "$NAME" "$guard_reason" "$NODE"
         exit 0 ;;
+      worker-row)
+        guard_worker="$(printf '%s' "$spawn_err" | sed -n 's/.* worker=\([^ ;]*\).*/\1/p;q')"
+        if printf '%s' "$spawn_err" | grep -qF 'worker_unmeasured=true'; then
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agents claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${guard_worker:-unmeasured}" "$NODE" "$NODE"
+        else
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s; peek it, and stop it if its run is finished"\n' "$NAME" "${guard_worker:-unmeasured}" "$NODE"
+        fi
+        exit 0 ;;
       suspect-claim)
         # THE wedge, and this is the arm that fires on one. Recovery ran here,
         # inside the real spawn, and could not prove the holder dead, so nobody
         # is building this node and nobody will until an operator intervenes.
         # `already-running` plus exit 0 told a caller reading the exit code that
-        # the launch worked, which is the x-05be defect on the one path that
+        # the launch worked, which is the defect on the one path that
         # actually reaches it. The remedy goes to stderr; this file's contract
         # is ONE line on stdout.
         printf '%s' "$spawn_err" | grep -E '^  (Clear it|Override): ' >&2 || true
@@ -515,7 +560,7 @@ fi
 # Receipt family is keyed by the VERB/mode the skill ran (never by sniffing
 # the output - Locked Decision 3):
 #   --substrate headless -> a CLIENT-SIDE one-shot (`codex exec` / `gemini -p`,
-#                          the lane the retired `ask` verb used, x-cbb0):
+#                          the lane the retired `ask` verb used):
 #                          stdout is the model REPLY verbatim, NOT a short-id
 #                          (the teardown receipt rides stderr). Success = rc==0
 #                          (checked above) AND a non-empty reply; the reply IS
@@ -541,6 +586,7 @@ if [[ "$REPLY" -eq 1 ]]; then
 else
   short_id="$(printf '%s' "$spawn_out" | jq -r '.short_id // empty' 2>/dev/null)"
   session_id="$(printf '%s' "$spawn_out" | jq -r '.session_id // empty' 2>/dev/null)"
+  harness_session_id="$(printf '%s' "$spawn_out" | jq -r '.harness_session_id // empty' 2>/dev/null)"
   PANE_SESSION=""; PANE_ID=""; PANE_STATUS=""
   # Set below only for a matched Python mux-pane receipt.
   # Python-authored pane rows have no worker socket, so their genuine receipt
@@ -593,23 +639,29 @@ else
   # anchors `^...$` to the whole string, so any embedded newline or stray byte
   # fails (parity with the one-shot path's single-line requirement). bash 3.2 safe.
   #
-  # The valid SHAPE depends on the substrate (x-61b7). Only `bg`/`headless` return
-  # a real 8-hex session-id prefix (client-side `claude --bg` / one-shot). The
-  # default/`pane` owned-PTY lane is addressed by an identifier-shaped registry
-  # handle: Rust derives a non-empty name-slug short_id; Python supplies the
-  # verified receipt name above because mux panes own no worker socket. The
-  # 8-hex rule wrongly rejects both shapes, so accept a single-line identifier
-  # there (empty/torn receipts still fail - the cardinal guard remains intact).
+  # The harness capability map owns the canonical receipt field. Keeper lanes
+  # and Claude attach use `.short_id`; Codex/OpenCode attach lanes use the full
+  # session identity. Validate that selected identity generically, so a valid
+  # OpenCode `ses_*` id is accepted while a torn short-id-only receipt fails.
   case "$SUBSTRATE" in
-    bg|headless) short_id_shape='^[0-9a-f]{8}$' ;;
-    # 64, not 40: the pane handle is the derived agent name (<verb>-<node-id>-<slug>),
-    # which normalize builds up to ~50 chars (verb + id + a 32-char slug). A 40-cap
-    # rejected a real long-slug codex pane launch as FAILED (name 43 > 40).
-    *)           short_id_shape='^[A-Za-z0-9_-]{1,64}$' ;;
+    thread|bg)
+      receipt_field="$THREAD_RECEIPT_FIELD"
+      case "$receipt_field" in
+        short_id) short_id="$short_id" ;;
+        session_id)
+          if [[ -n "$harness_session_id" || -n "$session_id" ]]; then
+            short_id="${harness_session_id:-$session_id}"
+          elif [[ "$short_id" =~ ^[0-9a-f]{8}$ ]]; then
+            fail "no valid receipt (thread session field missing; short_id is only a torn 8-hex value): $(sanitize "${spawn_out:-$spawn_err}")"
+          fi
+          ;;
+        *) fail "no receipt field in harness map for thread substrate '$PROVIDER'" ;;
+      esac
+      valid_receipt_identity "$short_id" || fail "no valid receipt ($VERB JSON canonical identity empty/malformed for substrate '${SUBSTRATE:-pane}'): $(sanitize "${spawn_out:-$spawn_err}")"
+      ;;
+    headless) : ;;
+    *) valid_pane_identity "$short_id" || fail "no valid short-id receipt ($VERB JSON .short_id empty/malformed for substrate '${SUBSTRATE:-pane}'): $(sanitize "${spawn_out:-$spawn_err}")" ;;
   esac
-  if [[ ! "$short_id" =~ $short_id_shape ]]; then
-    fail "no valid short-id receipt ($VERB JSON .short_id empty/malformed for substrate '${SUBSTRATE:-pane}'): $(sanitize "${spawn_out:-$spawn_err}")"
-  fi
 fi
 
 # ---- Report (mode-aware) ------------------------------------------------
@@ -637,7 +689,7 @@ else
     printf 'result=%s short_id=%s name=%s mode=%s%s pane="%s:%s" hint="fno mux attach %s"\n' \
       "$pane_result" "$short_id" "$NAME" "$report_mode" "$wt_field" "$PANE_SESSION" "$PANE_ID" "$(printf '%q' "$PANE_SESSION")"
   else
-    # Address the hint by short_id on bg/headless, where it is the session-id
+    # Address the hint by short_id on thread/headless, where it is the session-id
     # prefix: registration can silently fail (the receipt only validates the
     # short_id's shape, never that a row landed), and a session-shaped token
     # heals from the harness store on a registry miss while a bare name never
@@ -645,7 +697,7 @@ else
     # trade one refusal for another. Other substrates keep the name: their
     # short_id is a name-slug, not session-shaped, so it gains nothing.
     hint_token="$NAME"
-    case "$SUBSTRATE" in bg|headless) hint_token="$short_id" ;; esac
+    case "$SUBSTRATE" in thread|headless) hint_token="$short_id" ;; esac
     printf 'result=launched short_id=%s name=%s mode=%s%s hint="fno agents logs %s" trace="fno agents trace %s"\n' \
       "$short_id" "$NAME" "$report_mode" "$wt_field" "$hint_token" "$NAME"
   fi

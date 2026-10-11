@@ -27,6 +27,11 @@ const LOCAL_HEAD: &str = "cafebabecafebabecafebabecafebabe00000001";
 /// bot at HEAD (counts as reviewed), no inline comments. git: HEAD echo, with
 /// `diff --raw` failing so freshness never fabricates a carry (same discipline
 /// as the loop_check suite's green() mock).
+#[path = "space_paths.rs"]
+mod space_paths;
+
+use space_paths::project_events;
+
 fn green_bins(dir: &Path) -> (PathBuf, PathBuf) {
     let gh = make_script(
         dir,
@@ -108,7 +113,7 @@ fn attestation_line(reviewer: &str, head: &str, attester: &str) -> String {
 
 /// The last `review_coverage` data object in one events log, or None.
 fn last_coverage(path: &Path) -> Option<serde_json::Value> {
-    let text = fs::read_to_string(path).ok()?;
+    let text = fno_agents::event_store::journal_text(path, &[]);
     let mut last = None;
     for line in text.lines() {
         if !line.contains("review_coverage") {
@@ -128,7 +133,7 @@ fn explicit_head_rejects_an_abbreviated_sha_without_writing_an_event() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().join("short-head");
     fs::create_dir_all(cwd.join(".fno")).unwrap();
-    let project = cwd.join(".fno/events.jsonl");
+    let project = project_events(&cwd);
     let global = tmp.path().join("global.jsonl");
     let short = "7e7dc390";
     let args = vec![
@@ -155,6 +160,7 @@ fn explicit_head_rejects_an_abbreviated_sha_without_writing_an_event() {
     assert!(!global.exists(), "the refused head wrote a global event");
 
     let output = Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
         .args(args)
         .output()
         .unwrap();
@@ -177,7 +183,7 @@ fn fixture(parent: &Path, name: &str) -> (PathBuf, PathBuf, PathBuf) {
         "[review]\nrequired_bots = [\"chatgpt-codex-connector\"]\n",
     )
     .unwrap();
-    let project = cwd.join(".fno/events.jsonl");
+    let project = project_events(&cwd);
     let global = parent.join(format!("{name}-global-events.jsonl"));
     (cwd, project, global)
 }
@@ -376,6 +382,249 @@ exit 1"#,
     // read rather than nothing.
     assert_eq!(last_coverage(&project).as_ref(), Some(&row));
     assert_eq!(last_coverage(&global).as_ref(), Some(&row));
+}
+
+/// A pass attested at the exact head survives a failed gh read: the failed
+/// read classifies the local axis instead of reporting unknown on sight.
+/// Exit stays 4 - the gh read did fail - but the emitted row
+/// carries the pass.
+#[test]
+fn failed_gh_read_rescues_a_pass_attested_at_this_head() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "rescue");
+    fs::write(
+        &project,
+        serde_json::json!({
+            "type": "review_attestation",
+            "data": {"reviewer": "code-review",
+                     "head_sha": HEAD,
+                     "verdict": "pass",
+                     "attester_session_id": "sess-x",
+                     "branch": "feature/x",
+                     "reviewed_line_count": 12,
+                     "reviewed_file_count": 3}
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let bins = TempDir::new().unwrap();
+    let gh = make_script(
+        bins.path(),
+        "gh",
+        r#"if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
+echo 'gh: network unreachable' >&2
+exit 1"#,
+    );
+    let git = make_script(bins.path(), "git", &format!("echo {HEAD}"));
+    let (code, json) = run_review_coverage_capture(&vec![
+        "review-coverage".to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--pr".to_string(),
+        "842".to_string(),
+        "--head".to_string(),
+        HEAD.to_string(),
+        "--session-id".to_string(),
+        "sess-x".to_string(),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--global-settings".to_string(),
+        "/nonexistent/global-settings.yaml".to_string(),
+        "--author-harness".to_string(),
+        "none".to_string(),
+    ]);
+    assert_eq!(code, 4, "the gh read still failed: {json}");
+    let data: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(data["coverage"], serde_json::json!("covered"));
+    assert_eq!(data["reviewed_count"], serde_json::json!(1));
+    let verdicts = data["verdicts"].as_array().expect("verdicts present");
+    let local = verdicts
+        .iter()
+        .find(|v| v["producer"] == serde_json::json!("local_attestation"))
+        .expect("the local attestation is a verdict");
+    assert_eq!(local["verdict"], serde_json::json!("reviewed"));
+    assert_eq!(local["reviewed_sha"], serde_json::json!(HEAD));
+    // The quota diagnostic rides stdout only; the persisted row keeps the
+    // bare schema.
+    let mut row = data.clone();
+    if let Some(obj) = row.as_object_mut() {
+        obj.remove("graphql_remaining");
+        obj.remove("graphql_exhausted");
+        obj.remove("reason");
+    }
+    assert_eq!(last_coverage(&project).as_ref(), Some(&row));
+    assert_eq!(last_coverage(&global).as_ref(), Some(&row));
+}
+
+/// The failed read with an explicit head and no local pass answers exactly
+/// today's row: unknown, no verdicts. The rescue adds nothing when the
+/// journal holds no pass at this head.
+#[test]
+fn failed_gh_read_with_head_and_no_local_pass_stays_unknown() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "ghfail-head");
+    let bins = TempDir::new().unwrap();
+    let gh = make_script(
+        bins.path(),
+        "gh",
+        r#"if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
+echo 'gh: network unreachable' >&2
+exit 1"#,
+    );
+    let git = make_script(bins.path(), "git", &format!("echo {HEAD}"));
+    let (code, json) = run_review_coverage_capture(&vec![
+        "review-coverage".to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--pr".to_string(),
+        "842".to_string(),
+        "--head".to_string(),
+        HEAD.to_string(),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--global-settings".to_string(),
+        "/nonexistent/global-settings.yaml".to_string(),
+        "--author-harness".to_string(),
+        "none".to_string(),
+    ]);
+    assert_eq!(code, 4, "a failed read is exit 4: {json}");
+    let data: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(data["coverage"], serde_json::json!("unknown"));
+    assert_eq!(data["reviewed_count"], serde_json::json!(0));
+    assert_eq!(data["verdicts"], serde_json::json!([]));
+    assert_eq!(data["head_sha"], serde_json::json!(HEAD));
+}
+
+/// A refused invocation at the exact head surfaces on a failed-read row the
+/// same way a healthy read emits it: coverage stays unknown (a refusal
+/// never counts toward coverage), and the verdict names the attempt rather
+/// than dropping it.
+#[test]
+fn failed_gh_read_surfaces_a_refused_invocation_at_this_head() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "rescue-refused");
+    fs::write(
+        &project,
+        serde_json::json!({
+            "type": "review_invocation",
+            "data": {"stage": "refused", "head_sha": HEAD,
+                     "reason": "empty_diff", "reviewer": "code-review"}
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let bins = TempDir::new().unwrap();
+    let gh = make_script(
+        bins.path(),
+        "gh",
+        r#"if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
+echo 'gh: network unreachable' >&2
+exit 1"#,
+    );
+    let git = make_script(bins.path(), "git", &format!("echo {HEAD}"));
+    let (code, json) = run_review_coverage_capture(&vec![
+        "review-coverage".to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--pr".to_string(),
+        "842".to_string(),
+        "--head".to_string(),
+        HEAD.to_string(),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--global-settings".to_string(),
+        "/nonexistent/global-settings.yaml".to_string(),
+        "--author-harness".to_string(),
+        "none".to_string(),
+    ]);
+    assert_eq!(code, 4, "a failed read is exit 4: {json}");
+    let data: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(data["coverage"], serde_json::json!("unknown"));
+    let verdicts = data["verdicts"].as_array().expect("verdicts present");
+    let refused = verdicts
+        .iter()
+        .find(|v| v["verdict"] == serde_json::json!("refused"))
+        .expect("the refused invocation is a verdict");
+    assert_eq!(refused["reviewed_sha"], serde_json::json!(HEAD));
+    assert_eq!(refused["refusal_reason"], serde_json::json!("empty_diff"));
+    let mut row = data.clone();
+    if let Some(obj) = row.as_object_mut() {
+        obj.remove("graphql_remaining");
+        obj.remove("graphql_exhausted");
+        obj.remove("reason");
+    }
+    assert_eq!(last_coverage(&project).as_ref(), Some(&row));
+    assert_eq!(last_coverage(&global).as_ref(), Some(&row));
+}
+/// A pass attested at an OLDER head stays unknown on a failed read: with no
+/// base ref the rescue cannot prove a carry across the head move, so it
+/// fails closed.
+#[test]
+fn failed_gh_read_pass_at_older_head_stays_unknown() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "rescue-stale");
+    fs::write(
+        &project,
+        serde_json::json!({
+            "type": "review_attestation",
+            "data": {"reviewer": "code-review",
+                     "head_sha": "oldhead0000000000000000000000000000000",
+                     "verdict": "pass",
+                     "attester_session_id": "sess-x",
+                     "branch": "feature/x",
+                     "reviewed_line_count": 12,
+                     "reviewed_file_count": 3}
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let bins = TempDir::new().unwrap();
+    let gh = make_script(
+        bins.path(),
+        "gh",
+        r#"if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
+echo 'gh: network unreachable' >&2
+exit 1"#,
+    );
+    let git = make_script(bins.path(), "git", &format!("echo {HEAD}"));
+    let (code, json) = run_review_coverage_capture(&vec![
+        "review-coverage".to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--pr".to_string(),
+        "842".to_string(),
+        "--head".to_string(),
+        HEAD.to_string(),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--global-settings".to_string(),
+        "/nonexistent/global-settings.yaml".to_string(),
+        "--author-harness".to_string(),
+        "none".to_string(),
+    ]);
+    assert_eq!(code, 4, "a failed read is exit 4: {json}");
+    let data: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(data["coverage"], serde_json::json!("unknown"));
+    assert_eq!(data["verdicts"], serde_json::json!([]));
 }
 
 /// An attestation pinned to a superseded sha -> verdict `stale`, never
@@ -638,4 +887,131 @@ esac"#,
     assert_eq!(out["reason"], "no PR for the selector");
     assert!(out["selector"].is_null());
     assert_eq!(out["branch"], "main");
+}
+
+// ── 2. spent budget (d-0fa92eb9) ─────────────────────────────────────────────
+
+const OLDER_ONE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const OLDER_TWO: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/// gh: OPEN PR #1 at HEAD, green CI, and the configured required bot's ONLY
+/// reviews are COMMENTED at two distinct OLDER commits. git: HEAD echo, with
+/// `diff --raw` failing, so both reviews read stale - the PR 1717 shape.
+fn spent_bins(dir: &Path) -> (PathBuf, PathBuf) {
+    let gh = make_script(
+        dir,
+        "gh",
+        &format!(
+            r#"
+if echo "$*" | grep -q -- "--version"; then echo 'gh version 2.x'; exit 0; fi
+if echo "$*" | grep -q "headRefName"; then
+  echo '{{"state":"OPEN","number":1,"headRefName":"main","headRefOid":"{HEAD}","mergeable":"MERGEABLE","baseRefName":"main"}}'
+  exit 0
+fi
+if echo "$*" | grep -q "checks"; then
+  echo '[{{"name":"ci","state":"SUCCESS","bucket":"pass"}}]'
+  exit 0
+fi
+if echo "$*" | grep -q "pulls/"; then echo '[]'; exit 0; fi
+if echo "$*" | grep -q "reviews"; then
+  echo '{{"reviews":[{{"author":{{"login":"chatgpt-codex-connector"}},"state":"COMMENTED","submittedAt":"2026-08-14T00:10:00Z","commit":{{"oid":"{OLDER_ONE}"}}}},{{"author":{{"login":"chatgpt-codex-connector"}},"state":"COMMENTED","submittedAt":"2026-08-14T00:20:00Z","commit":{{"oid":"{OLDER_TWO}"}}}}],"comments":[]}}'
+  exit 0
+fi
+exit 1
+"#,
+        ),
+    );
+    let git = make_script(
+        dir,
+        "git",
+        r#"case "$*" in
+  *--raw*) exit 1 ;;
+  *) echo "deadbeefdeadbeefdeadbeefdeadbeef00000001" ;;
+esac"#,
+    );
+    (gh, git)
+}
+
+/// AC3-HP, the row: two stale rounds against a budget of two leave the
+/// emitted row covered, rounds_exhausted, and REVIEWED - the state word no
+/// longer folds back to unreviewed just because every verdict is stale.
+#[test]
+fn spent_budget_row_reads_reviewed_with_a_stale_required_bot() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "spent-row");
+    let bins = TempDir::new().unwrap();
+    let (gh, git) = spent_bins(bins.path());
+    let (code, json) = run_review_coverage_capture(&vec![
+        "review-coverage".to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--global-settings".to_string(),
+        "/nonexistent/global-settings.yaml".to_string(),
+        "--author-harness".to_string(),
+        "none".to_string(),
+    ]);
+    assert_eq!(code, 0, "{json}");
+    let row = last_coverage(&project).expect("the verb emitted a row");
+    assert_eq!(row["rounds_exhausted"], serde_json::json!(true), "{row}");
+    assert_eq!(row["coverage"], serde_json::json!("covered"), "{row}");
+    assert_eq!(row["review_state"], serde_json::json!("reviewed"), "{row}");
+}
+
+/// AC3-HP, the loop: the same spent-budget shape terminates DonePRGreen -
+/// at the cap the stale required bot no longer holds the reviewed conjunct.
+#[test]
+fn spent_budget_with_a_stale_required_bot_terminates_green() {
+    let parent = TempDir::new().unwrap();
+    let (cwd, project, global) = fixture(parent.path(), "spent-loop");
+    let manifest = cwd.join("target-state.md");
+    fs::write(
+        &manifest,
+        "---\nsession_id: sess-spent\nharness_session_id: sess-spent\ncreated_at: 2026-08-14T00:00:00Z\nattended: true\n---\n",
+    )
+    .unwrap();
+    let transcript = cwd.join("transcript.jsonl");
+    fs::write(
+        &transcript,
+        serde_json::json!({"message": {"role": "assistant",
+            "content": "Done! <promise>MISSION COMPLETE</promise>"}})
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let bins = TempDir::new().unwrap();
+    let (gh, git) = spent_bins(bins.path());
+    let mut args: Vec<String> = vec![
+        "loop-check".to_string(),
+        "--state".to_string(),
+        manifest.display().to_string(),
+        "--transcript".to_string(),
+        transcript.display().to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--now".to_string(),
+        "2026-08-14T00:30:00Z".to_string(),
+        format!("--gh-bin={}", gh.display()),
+        format!("--git-bin={}", git.display()),
+        "--events".to_string(),
+        project.display().to_string(),
+        "--global-events".to_string(),
+        global.display().to_string(),
+    ];
+    args.extend(hermetic_tail());
+    std::env::set_var("FNO_NUDGE_DISABLED", "1");
+    std::env::set_var("FNO_LOOPCHECK_MIN_FIRE_GAP_SECS", "0");
+    let (code, json_str) = run_loop_check_capture(&args);
+    assert_eq!(code, 0, "loop-check must allow: {json_str}");
+    let payload: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(
+        payload["termination_reason"].as_str(),
+        Some("DonePRGreen"),
+        "expected DonePRGreen at the spent budget: {json_str}"
+    );
 }

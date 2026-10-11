@@ -1,19 +1,19 @@
-"""enumerated_scope: the one-way ratchet that withdraws the cheap exit (x-cbab AC3).
+"""enumerated_scope and the deliverables derivation.
 
-Detection of multi-deliverable scope from prose is impossible - proven on three
-real specimens, pinned here as controls. enumerated_scope fires ONLY on
-unambiguous enumerations; a non-fire asserts nothing (it is never read as
-"singular"), because x-0707's real ask is a coordinated noun phrase that no prose
-predicate catches, and the structural denominator_absent predicate protects it.
+Detection of multi-deliverable scope from prose is impossible with high recall -
+proven on three real specimens, pinned here as controls. enumerated_scope fires
+ONLY on unambiguous enumerations; a non-fire asserts nothing, because one real
+ask is a coordinated noun phrase that no prose predicate catches. That node
+derives a count of 1, which is the honest floor, not a missed detection.
 """
 from __future__ import annotations
 
 from fno.target.denominator import (
     _cardinal_governs_plural,
+    _ordinal_numbers,
     _ordinal_run,
-    denominator_absent,
+    derive_deliverables,
     enumerated_scope,
-    is_code_payload,
 )
 
 # Positive control: the node that DID get a plan, whose shortfall stayed
@@ -34,9 +34,11 @@ NEG_DETAILS = (
     "Same-size peers 0 vs 14, Operator portfolio 0 vs 15."
 )
 
-# Pinned miss: x-0707's ACTUAL ask - the coordinated noun phrase. Four
-# deliverables, zero numerals. No prose predicate catches it; this is the proof
-# that count is a declaration, never a detection. denominator_absent protects it.
+# Pinned miss: the coordinated noun phrase. Four deliverables, zero numerals.
+# No prose predicate catches it; the derivation answers 1, and the init echo
+# tells the caller they can override with --deliverables. Pinning the miss
+# stops a later contributor tightening the regex until the negative control
+# breaks.
 MISS_DETAILS = (
     "We need to compare across other facilities in CA. Other facilities that "
     "have similar ranges of beds, etc. maybe against the county, the state, AND "
@@ -82,52 +84,86 @@ def test_negative_control_no_cardinal_governs_plural():
 
 
 def test_pinned_miss_does_not_fire():
-    """The coordinated-noun-phrase ask does not fire, and that is correct. The
-    structural gate (denominator_absent) is what protects this node, not this
-    ratchet: pinning the miss stops a later contributor tightening the regex
+    """The coordinated-noun-phrase ask does not fire, and that is correct: the
+    derivation answers 1 for it, and the init echo names the --deliverables
+    override. Pinning the miss stops a later contributor tightening the regex
     until the negative control breaks."""
     assert enumerated_scope("compare across facilities", MISS_DETAILS) is False
+    assert derive_deliverables("compare across facilities", MISS_DETAILS) == 1
 
 
-# --- structural predicate: denominator_absent + is_code_payload ---------------
+# --- negative control: measured incident narrative does NOT fire --------------
+
+# A singular bug report whose measurement prose recounts a two-node incident:
+# cardinals ("two PRs") and a both-and ("both rewrite ... and reap") in the
+# details body fired the old full-text scan and withdrew the cheap exit from a
+# one-line fix. The weak detectors read the title only; the title here carries
+# no cardinal past "one".
+NARRATIVE_TITLE = (
+    "a contained subtask still appears in the undispatched queue, whose own "
+    "note tells a lead to put one worker on each row"
+)
+NARRATIVE_DETAILS = (
+    "MEASURED on the board, one beat after containing the node. x-b7f8 and "
+    "x-58a5 both rewrite the reaper's keep and reap decision rules and would "
+    "have collided as two PRs. Two workers on one plan means two branches, and "
+    "the collision surfaces at review or at merge."
+)
 
 
-def test_code_payload_with_no_plan_and_no_deliverables_is_absent():
-    assert denominator_absent(
-        plan_path="", deliverables=None, payload_is_code=True
-    ) is True
+def test_narrative_incident_does_not_fire():
+    """Cardinals and both-and describing an incident are not a scope enumeration."""
+    assert enumerated_scope(NARRATIVE_TITLE, NARRATIVE_DETAILS) is False
 
 
-def test_plan_present_is_not_absent():
-    assert denominator_absent(
-        plan_path="/x/plan.md", deliverables=None, payload_is_code=True
-    ) is False
+def test_weak_detectors_still_fire_on_title_enumeration():
+    """The demotion is to title scope, not a removal: a title that really does
+    declare two deliverables still withdraws the cheap exit."""
+    assert _cardinal_governs_plural("cohort benchmarking across four bands") is True
+    assert enumerated_scope("ship both the CLI and the TUI", "") is True
 
 
-def test_deliverables_declared_is_not_absent():
-    # The cheap N=1 exit creates the denominator; it is never a hole.
-    assert denominator_absent(
-        plan_path="", deliverables=1, payload_is_code=True
-    ) is False
+def test_ordinal_run_in_details_still_fires():
+    """Ordinals keep the full text: a details-body numbered enumeration fires."""
+    assert enumerated_scope("single-line title", "THE ASK: (1) alpha; (2) beta") is True
 
 
-def test_non_code_payload_is_not_absent():
-    # A plan-only/think run needs no deliverable denominator.
-    assert denominator_absent(
-        plan_path="", deliverables=None, payload_is_code=False
-    ) is False
+# --- the deliverables derivation ----------------------------------------------
 
 
-def test_is_code_payload_plan_only_is_false():
-    assert is_code_payload(["think", "plan"]) is False
+def test_derivation_counts_the_highest_ordinal():
+    """Gaps count: (1)..(4) with (3) unstated still reads as four."""
+    assert (
+        derive_deliverables(
+            "four bands", "THE ASK: (1) county; (2) state; (4) portfolio"
+        )
+        == 4
+    )
 
 
-def test_is_code_payload_with_do_is_true():
-    assert is_code_payload(["think", "plan", "do"]) is True
+def test_derivation_counts_numbered_list_markers():
+    assert derive_deliverables("ship it", "1. alpha\n2. beta\n") == 2
 
 
-def test_is_code_payload_unresolved_is_true():
-    # Fail closed: the common case is a build, and the cost of a false positive
-    # is "name a denominator", not "ship untracked scope".
-    assert is_code_payload(None) is True
-    assert is_code_payload([]) is True
+def test_derivation_reads_a_two_member_title_as_two():
+    assert derive_deliverables("ship both the CLI and the TUI", "") == 2
+
+
+def test_derivation_reads_a_cardinal_title_as_two():
+    assert derive_deliverables("cohort benchmarking across four bands", "") == 2
+
+
+def test_derivation_answers_one_for_a_singular_node():
+    assert derive_deliverables("fix one thing", "build it out") == 1
+
+
+def test_derivation_matches_enumerated_scope_on_the_controls():
+    """The two predicates cannot drift apart: every pinned control agrees."""
+    assert derive_deliverables(POS_TITLE, POS_DETAILS) == 4
+    assert enumerated_scope(POS_TITLE, POS_DETAILS) is True
+    assert derive_deliverables("band counts", NEG_DETAILS) == 1
+    assert enumerated_scope("band counts", NEG_DETAILS) is False
+
+
+def test_ordinal_numbers_dedupes_and_keeps_line_and_paren_forms():
+    assert _ordinal_numbers("(1) a\n2. b\n(2) c") == {1, 2}

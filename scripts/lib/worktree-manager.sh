@@ -51,6 +51,24 @@ _WTM_SELF="${BASH_SOURCE[0]:-$0}"
 WTM_SCRIPT_DIR="$(cd "$(dirname "$_WTM_SELF")" && pwd)"
 WTM_PLUGIN_ROOT="$(cd "$WTM_SCRIPT_DIR/../.." && pwd)"
 
+# The build hash dir outlives git's removal; reclaim it while the manifest
+# can still answer. A partial deploy without the lib leaves the dir to the
+# sweep.
+if [[ -f "$WTM_SCRIPT_DIR/cargo-build-dir.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$WTM_SCRIPT_DIR/cargo-build-dir.sh"
+fi
+
+# The one worktree.* reader (wt_config) and linker call (wt_link), shared with
+# the plugin WorktreeCreate hook.
+if [[ -f "$WTM_SCRIPT_DIR/worktree-config.sh" ]]; then
+    # shellcheck source=worktree-config.sh
+    source "$WTM_SCRIPT_DIR/worktree-config.sh"
+else
+    wt_config() { echo "$2"; }
+    wt_link() { _wtm_log "worktree-config.sh missing; shared state not linked"; }
+fi
+
 # Memoize the calling repo root. `setup` is a hot path for every cross-
 # project worker and every target worktree creation, and the verbs each call
 # `git rev-parse` for the same answer 2-3 times. One subprocess per script
@@ -221,25 +239,6 @@ _wtm_detect_setup_cmd() {
     elif [[ -f "$dir/Cargo.toml" ]]; then echo "cargo build"
     else
         echo ""
-    fi
-}
-
-# Read worktree config from settings.yaml. Returns a default if unset.
-# Usage: _wtm_config_value <key> <default>
-_wtm_config_value() {
-    local key="$1" default="$2"
-    local settings
-    settings=$(_wtm_settings_files | head -1)
-    if [[ -z "$settings" ]] || ! command -v yq >/dev/null 2>&1; then
-        echo "$default"
-        return 0
-    fi
-    local val
-    val=$(yq -p toml -r ".worktree.$key // \"\"" "$settings" 2>/dev/null)
-    if [[ -z "$val" || "$val" == "null" ]]; then
-        echo "$default"
-    else
-        echo "$val"
     fi
 }
 
@@ -417,6 +416,12 @@ _wtm_cmd_setup() {
         done < <(_wtm_env_files)
     fi
 
+    # Link shared state every run: links are idempotent and must not wait on
+    # a dependency-cache miss.
+    if [[ -n "$main_repo" ]]; then
+        wt_link "$worktree_path" "$main_repo"
+    fi
+
     mkdir -p "$worktree_path/.fno"
     local cache_file="$worktree_path/.fno/setup-cache.txt"
 
@@ -437,9 +442,13 @@ _wtm_cmd_setup() {
 
     # Run the configured setup command, or auto-detect.
     local setup_cmd
-    setup_cmd=$(_wtm_config_value setup_command "")
+    setup_cmd=$(wt_config setup_command "")
     if [[ -z "$setup_cmd" ]]; then
-        setup_cmd=$(_wtm_detect_setup_cmd "$worktree_path")
+        if [[ "$(wt_config auto_install true)" == "false" ]]; then
+            _wtm_log "skipping dep install (worktree.auto_install = false)"
+        else
+            setup_cmd=$(_wtm_detect_setup_cmd "$worktree_path")
+        fi
     fi
 
     local install_status="skipped"
@@ -620,6 +629,7 @@ _wtm_cmd_migrate() {
         if [[ $stale_count -gt 0 ]]; then
             for wt in "${stale[@]}"; do
                 _wtm_log "removing stale worktree: $wt"
+                declare -F cargo_build_dir_remove_for_wt >/dev/null 2>&1 && cargo_build_dir_remove_for_wt "$wt" || true
                 git -C "$repo_root" worktree remove --force "$wt" 2>/dev/null \
                     && removed=$((removed + 1)) \
                     || _wtm_log "failed to remove $wt (try git worktree prune)"

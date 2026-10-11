@@ -124,21 +124,90 @@ def _raw_payload_at_word_cap() -> str:
         tokens[-1] += "."
         sentences.append(" ".join(tokens))
     payload = " ".join(sentences)
-    from fno import style
+    from fno import rust_binary
 
-    assert style.word_count(payload) == 80
-    assert style.check(payload, surface="mail") == []
+    assert rust_binary.style_word_count(payload) == 80
+    err, receipt = rust_binary.style_receipt(payload, "mail")
+    assert not err and not receipt.get("violations")
     return payload
 
 
-def test_raw_refuses_payload_without_leading_slash(mailbox, monkeypatch, capsys):
+def test_raw_delivers_command_and_refuses_plain_word(mailbox, monkeypatch, capsys):
+    """Law d-f6570dc9 (amending d-5976045c): raw runs a command only. A slash
+    or dollar command reaches the inject unchanged; a plain word is a message
+    and is refused with the wrapped-send hint."""
+    from fno.mail.cli import _raw_send
+
+    injected = _seed_claude(mailbox, monkeypatch)
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("claudepeer", "$fno:lead x-4d9b", self_ok=False)
+    assert exc.value.exit_code == 0
+    assert [t for (_s, t, _sender) in injected] == ["$fno:lead x-4d9b"]
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("claudepeer", "hello", self_ok=False)
+    assert exc.value.exit_code != 0
+    assert "send the message wrapped" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "Law repair landed on PR 2209 through the review lane; ready for your look.",
+        "PR 2219 open for the worktree work; CI is running now.",
+    ],
+)
+def test_raw_refuses_worker_status_reports(mailbox, monkeypatch, capsys, payload):
+    """The measured incident payloads: a worker status report over --raw reads
+    as the operator typing. Each is refused at the door."""
     from fno.mail.cli import _raw_send
 
     _seed_claude(mailbox, monkeypatch)
     with pytest.raises(typer.Exit) as exc:
-        _raw_send("claudepeer", "code-review medium --fix", self_ok=False)
+        _raw_send("claudepeer", payload, self_ok=False)
     assert exc.value.exit_code != 0
-    assert "must start with /" in capsys.readouterr().err
+    assert "send the message wrapped" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "/code-review <level> --comment",
+        "/compact",
+        "/loop 30m watch the merge slot",
+        "$fno:review",
+    ],
+)
+def test_raw_delivers_any_harness_command(mailbox, monkeypatch, capsys, payload):
+    """Raw is command-only across harnesses, not fno-only: slash commands,
+    compact, loop, and codex dollar verbs all ride the lane verbatim."""
+    from fno.mail.cli import _raw_send
+
+    injected = _seed_claude(mailbox, monkeypatch)
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("claudepeer", payload, self_ok=False)
+    assert exc.value.exit_code == 0
+    assert [t for (_s, t, _sender) in injected] == [payload]
+
+
+def test_raw_refuses_an_empty_payload(mailbox, monkeypatch, capsys):
+    from fno.mail.cli import _raw_send
+
+    _seed_claude(mailbox, monkeypatch)
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("claudepeer", "   ", self_ok=False)
+    assert exc.value.exit_code != 0
+    assert "payload is empty" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bare", ["/", "$"])
+def test_raw_refuses_a_bare_marker(mailbox, monkeypatch, capsys, bare):
+    from fno.mail.cli import _raw_send
+
+    _seed_claude(mailbox, monkeypatch)
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("claudepeer", bare, self_ok=False)
+    assert exc.value.exit_code != 0
+    assert "bare marker" in capsys.readouterr().err
 
 
 def test_raw_refuses_multiline_payload(mailbox, monkeypatch, capsys):
@@ -407,7 +476,7 @@ def test_raw_codex_review_passes_sender_and_original_payload_to_transport_audit(
         "fno.events.append_event",
         lambda event, *_a, **_k: python_events.append(event),
     )
-    payload = "/code-review focus on concurrency"
+    payload = "/code-review --uncommitted"
     with pytest.raises(typer.Exit) as exc:
         _raw_send("codexpeer", payload, self_ok=False)
     assert exc.value.exit_code == 0
@@ -415,15 +484,16 @@ def test_raw_codex_review_passes_sender_and_original_payload_to_transport_audit(
         (
             SID_CODEX,
             "uncommittedChanges",
-            {
-                "audit_payload": payload,
-                "audit_sender": SID_CLAUDE[:8],
-                "audit_target_cwd": entry.cwd,
-            },
+                {
+                    "audit_payload": payload,
+                    "audit_sender": SID_CLAUDE[:8],
+                    "audit_target_cwd": entry.cwd,
+                    "self_send": False,
+                },
         )
     ]
     assert not python_events, "the Rust transport owns the sole audit event"
-    assert "unrecognized remainder ignored" in capsys.readouterr().out
+    assert "unrecognized remainder ignored" not in capsys.readouterr().out
 
 
 def test_raw_codex_review_uses_process_owned_sender_with_inherited_marker(
@@ -455,7 +525,61 @@ def test_raw_codex_review_uses_process_owned_sender_with_inherited_marker(
     assert calls[0]["audit_sender"] == SID_CLAUDE[:8]
 
 
-def test_raw_unparsed_codex_review_remainder_defaults_without_custom_rewrite(
+def test_codex_review_target_parser_has_a_named_module():
+    from fno.mail.codex_review_target import (
+        explicit_review_pr_number,
+        resolve_codex_review_target,
+    )
+
+    assert resolve_codex_review_target(
+        "/review medium --comment 1427 HEAD abc1234 against origin/main"
+    ) == ("baseBranch:origin/main", False)
+    assert explicit_review_pr_number(
+        "medium --comment 1427 HEAD abc1234 against origin/main"
+    ) == 1427
+
+
+def test_codex_review_target_parser_accepts_the_prepush_branch_form():
+    from fno.mail.codex_review_target import (
+        explicit_review_pr_number,
+        resolve_codex_review_target,
+    )
+
+    # The pre-push default names the local branch in the target slot and
+    # carries no --comment; it scopes to the same base the recipient sits on.
+    assert resolve_codex_review_target(
+        "/review high feature/x-98ac HEAD abc1234 against origin/main"
+    ) == ("baseBranch:origin/main", False)
+    assert explicit_review_pr_number(
+        "high feature/x-98ac HEAD abc1234 against origin/main"
+    ) is None
+
+
+def test_raw_accepts_target_self_review_codex_payload(
+    mailbox, monkeypatch, capsys
+):
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_app_server(mailbox, monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._review_start_codex",
+        lambda session, target, **_audit: calls.append((session, target))
+        or {
+            "delivered": True,
+            "turn_id": "turn-self-review",
+            "review_thread_id": "review-self-review",
+        },
+    )
+    payload = "/review medium --comment 1427 HEAD abc1234 against origin/main"
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpeer", payload, self_ok=False)
+    assert exc.value.exit_code == 0
+    assert calls == [(SID_CODEX, "baseBranch:origin/main")]
+    assert "target=baseBranch:origin/main" in capsys.readouterr().out
+
+
+def test_raw_refuses_unparsed_codex_review_remainder_before_rpc(
     mailbox, monkeypatch, capsys
 ):
     from fno.mail.cli import _raw_send
@@ -471,39 +595,77 @@ def test_raw_unparsed_codex_review_remainder_defaults_without_custom_rewrite(
             "review_thread_id": "review-3",
         },
     )
+    payload = "/review focus on concurrency"
     with pytest.raises(typer.Exit) as exc:
-        _raw_send("codexpeer", "/review focus on concurrency", self_ok=False)
-    assert exc.value.exit_code == 0
-    assert calls == [(SID_CODEX, "uncommittedChanges")]
-    out = capsys.readouterr().out
-    assert "target=uncommittedChanges" in out
-    assert "unrecognized remainder ignored" in out
-    assert "custom:" not in out
+        _raw_send("codexpeer", payload, self_ok=False)
+    assert exc.value.exit_code == 2
+    assert calls == []
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "arguments after the verb do not parse" in err
+    assert "unrecognized remainder ignored" not in err
 
 
 @pytest.mark.parametrize("payload", ["/compact", "/reviewboard"])
-def test_raw_refuses_non_review_payload_on_codex_daemon(
+def test_raw_delivers_non_review_payload_to_codex_daemon(
     mailbox, monkeypatch, capsys, payload
 ):
+    """A codex app-server thread takes any payload over turn/start (x-4a68);
+    only review verbs keep review/start."""
     from fno.mail.cli import _raw_send
 
     _seed_codex_app_server(mailbox, monkeypatch)
-    called = []
+    calls = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_codex",
+        lambda session, text, **_k: calls.append((session, text)) or True,
+    )
+    review_calls = []
     monkeypatch.setattr(
         "fno.agents.dispatch._review_start_codex",
-        lambda *_a, **_k: called.append(True),
+        lambda *_a, **_k: review_calls.append(True),
     )
     with pytest.raises(typer.Exit) as exc:
         _raw_send("codexpeer", payload, self_ok=False)
+    assert exc.value.exit_code == 0
+    assert capsys.readouterr().out.strip() == "injected"
+    assert calls == [(SID_CODEX, payload)]
+    assert not review_calls
+
+
+def test_raw_delivers_codex_verb_to_codex_daemon(mailbox, monkeypatch, capsys):
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_app_server(mailbox, monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_codex",
+        lambda session, text, **_k: calls.append((session, text)) or True,
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpeer", "$fno:lead x-4d9b", self_ok=False)
+    assert exc.value.exit_code == 0
+    assert capsys.readouterr().out.strip() == "injected"
+    assert calls == [(SID_CODEX, "$fno:lead x-4d9b")]
+
+
+def test_raw_codex_turn_start_miss_refuses_and_releases_budget(
+    mailbox, monkeypatch, capsys
+):
+    from fno.mail.cli import _raw_send
+    import fno.mail.cli as mail_cli
+
+    _seed_codex_app_server(mailbox, monkeypatch)
+    monkeypatch.setattr("fno.agents.dispatch._mail_inject_codex", lambda *a, **k: False)
+    released = []
+    monkeypatch.setattr(
+        mail_cli, "_release_budget", lambda reservation: released.append(reservation)
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpeer", "$fno:lead x-4d9b", self_ok=False)
     assert exc.value.exit_code != 0
-    err = capsys.readouterr().err
-    assert "codex app-server thread" in err
-    assert "has no prompt line" in err
-    assert "turn/start" in err
-    assert "review/start" in err
-    assert "drop --raw" in err
-    assert "mux pane" in err
-    assert not called
+    assert "turn/start not delivered" in capsys.readouterr().err
+    assert len(released) == 1
 
 
 def test_raw_codex_review_no_daemon_names_start_command(mailbox, monkeypatch, capsys):
@@ -629,16 +791,133 @@ def test_raw_check_codex_review_answers_the_send_refusals(
     assert "injectable" in capsys.readouterr().out
 
 
-def test_raw_check_non_review_verb_on_codex_daemon_still_not_injectable(
+def test_raw_check_non_review_verb_on_codex_daemon_injectable_turn_start(
     mailbox, monkeypatch, capsys
 ):
     from fno.mail.cli import _raw_send
 
     _seed_codex_app_server(mailbox, monkeypatch)
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda: Path("/bin/fno-agents")
+    )
     with pytest.raises(typer.Exit) as exc:
-        _raw_send("codexpeer", "/compact", self_ok=False, check=True)
+        _raw_send("codexpeer", "$fno:lead x-4d9b", self_ok=False, check=True)
+    assert exc.value.exit_code == 0
+    assert "injectable: codex-daemon turn/start" in capsys.readouterr().out
+
+
+def _seed_codex_pane(mailbox, monkeypatch):
+    """A codex row bound to mux pane 2179 (the dead-pane specimen)."""
+    _clear_harness_markers(monkeypatch)
+    from fno.agents.registry import AgentEntry
+
+    entry = AgentEntry(
+        name="codexpane",
+        harness="codex",
+        harness_session_id=SID_CODEX,
+        cwd=str(mailbox),
+        log_path="",
+        status="live",
+        mux={"session": "main", "pane_id": 2179},
+    )
+    monkeypatch.setattr(
+        "fno.agents.registry.resolve_agent",
+        lambda _name: type("R", (), {"entry": entry})(),
+    )
+    return entry
+
+
+def test_raw_check_dead_pane_thread_not_loaded_answers_not_injectable(
+    mailbox, monkeypatch, capsys
+):
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_pane(mailbox, monkeypatch)
+    monkeypatch.setattr(
+        "fno.agents.lane_heal.lane_heal",
+        lambda sid: (
+            "dead-pane",
+            "thread-not-loaded",
+            {"session": "main", "pane_id": 2179},
+        ),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpane", "$fno:lead x-4d9b", self_ok=False, check=True)
     assert exc.value.exit_code == 1
-    assert "no prompt line" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "not-injectable" in out
+    assert "main:2179" in out
+    assert "fno agents resume codexpane" in out
+
+
+def test_raw_check_unmeasurable_heal_answers_exit_3(mailbox, monkeypatch, capsys):
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_pane(mailbox, monkeypatch)
+    monkeypatch.setattr(
+        "fno.agents.lane_heal.lane_heal",
+        lambda sid: ("unmeasurable", "binary-absent", None),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpane", "$fno:lead x-4d9b", self_ok=False, check=True)
+    assert exc.value.exit_code == 3
+    assert "unmeasurable" in capsys.readouterr().out
+
+
+def test_raw_check_live_mux_pane_answers_probed_live(mailbox, monkeypatch, capsys):
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_pane(mailbox, monkeypatch)
+    monkeypatch.setattr(
+        "fno.agents.lane_heal.lane_heal",
+        lambda sid: ("live-pane", None, {"session": "main", "pane_id": 2179}),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpane", "$fno:lead x-4d9b", self_ok=False, check=True)
+    assert exc.value.exit_code == 0
+    assert "injectable: mux-pane" in capsys.readouterr().out
+
+
+def test_raw_rebound_thread_re_resolves_and_delivers_over_the_daemon(
+    mailbox, monkeypatch, capsys
+):
+    from fno.mail.cli import _raw_send
+    from fno.agents.registry import AgentEntry
+
+    pane_entry = _seed_codex_pane(mailbox, monkeypatch)
+    rebound = AgentEntry(
+        name="codexpane",
+        harness="codex",
+        harness_session_id=SID_CODEX,
+        cwd=str(mailbox),
+        log_path="",
+        status="live",
+        mux=None,
+    )
+    monkeypatch.setattr(
+        "fno.agents.lane_heal.lane_heal",
+        lambda sid: ("rebound-thread", None, None),
+    )
+    monkeypatch.setattr(
+        "fno.agents.registry.resolve_agent",
+        lambda _name: type("R", (), {"entry": rebound})(),
+    )
+    calls = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_codex",
+        lambda session, text, **_k: calls.append((session, text)) or True,
+    )
+    pane_paste = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mux_pane_send",
+        lambda *a, **k: pane_paste.append(True),
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send("codexpane", "$fno:lead x-4d9b", self_ok=False)
+    assert exc.value.exit_code == 0
+    assert calls == [(SID_CODEX, "$fno:lead x-4d9b")]
+    assert not pane_paste
+    assert pane_entry is not None
 
 
 def test_review_start_codex_flags_stale_deployed_binary(monkeypatch):
@@ -737,7 +1016,36 @@ def test_raw_codex_review_refuses_empty_diff_subject(mailbox, monkeypatch, capsy
     assert "empty diff" in err
     assert entry.cwd in err, "the refusal names the checkout so the remedy is obvious"
     assert "request-self-review" in err
+    assert "$fno:review" in err
+    assert "--cwd <worktree>" not in err
     assert not fired, "the RPC must not fire on a refused subject"
+
+
+def test_raw_codex_fno_review_skips_the_empty_diff_guard(mailbox, monkeypatch, capsys):
+    import fno.mail.cli as mail_cli
+    from fno.mail.cli import _raw_send
+
+    _seed_codex_app_server(mailbox, monkeypatch)
+    checked = []
+
+    def reject_guard(*_args):
+        checked.append(True)
+        raise AssertionError("the prompt-line fno review must skip the RPC guard")
+
+    monkeypatch.setattr(mail_cli, "_codex_review_subject_nonempty", reject_guard)
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_codex", lambda *_args, **_kwargs: True
+    )
+    with pytest.raises(typer.Exit) as exc:
+        _raw_send(
+            "codexpeer",
+            "$fno:review high branch HEAD abc1234 against origin/main",
+            self_ok=False,
+        )
+
+    assert exc.value.exit_code == 0
+    assert "injected" in capsys.readouterr().out
+    assert not checked
 
 
 def test_raw_check_codex_review_answers_empty_diff_subject(mailbox, monkeypatch, capsys):
@@ -938,6 +1246,33 @@ def test_raw_generic_daemon_lane_keeps_its_refusal(mailbox, monkeypatch, capsys,
     assert "injected" in capsys.readouterr().out
 
 
+def test_mail_inject_codex_preserves_rust_refusal_reason(monkeypatch):
+    from fno.agents import dispatch
+
+    expected = (
+        "native-command: use fno mux command <selector> --text <verb> "
+        "--proof <compact|goal-active|screen>"
+    )
+    monkeypatch.setattr(
+        "fno.rust_binary.resolve_installed_binary", lambda: Path("/bin/fno-agents")
+    )
+    monkeypatch.setattr(dispatch, "_delivery_policy_refusal", lambda *_a: None)
+    monkeypatch.setattr(
+        dispatch.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(
+            argv,
+            1,
+            stdout=json.dumps({"delivered": False, "reason": expected}),
+            stderr="",
+        ),
+    )
+    reason = []
+
+    assert not dispatch._mail_inject_codex(SID_CODEX, "/compact", reason_out=reason)
+    assert reason == [expected]
+
+
 def test_review_start_codex_uses_structured_binary_argv(monkeypatch):
     from fno.agents import dispatch
 
@@ -1096,15 +1431,15 @@ def test_raw_injects_unwrapped_on_claude_keystroke_lane(mailbox, monkeypatch, ca
     assert receipt == "injected"
     assert injected == [(SID_CLAUDE, "/code-review <level> --comment --fix", None)]
     assert not durable, "AC18: --raw never writes durable on any transport result"
-    from fno import style
+    from fno import rust_binary
     from fno.bus.log import iter_messages
 
     rows = list(iter_messages(warn=False))
     assert len(rows) == 1
-    assert rows[0].id.startswith("msg-")
+    assert rows[0].id.startswith("fmail-")
     assert rows[0].delivery == "hosted"
     assert rows[0].body == "/code-review <level> --comment --fix"
-    assert rows[0].word_count == style.word_count(rows[0].body)
+    assert rows[0].word_count == rust_binary.style_word_count(rows[0].body)
 
 
 def test_raw_review_emits_started_transport_observation_with_literal_receipt(
@@ -1181,9 +1516,9 @@ def test_raw_hosted_audit_uses_stable_sender_without_ambient_identity(
     rows = list(iter_messages(warn=False))
     assert len(rows) == 1
     assert rows[0].from_ == "fno"
-    ledger = budget._ledger_path("fno -> 9a063cd3")
-    state = json.loads(ledger.read_text())
-    assert state["pair"] == "fno -> 9a063cd3"
+    assert not budget._ledger_path("fno -> 9a063cd3").exists(), (
+        "a raw send reserves nothing"
+    )
 
 
 def test_raw_check_writes_nothing_and_does_not_reserve(
@@ -1213,22 +1548,21 @@ def test_raw_check_writes_nothing_and_does_not_reserve(
 
     rows = list(iter_messages(warn=False))
     assert len(rows) == 1
-    ledger = budget._ledger_path(f"{rows[0].from_} -> {rows[0].to}")
-    state = json.loads(ledger.read_text())
-    assert len(state["entries"]) == 1
-    assert state["entries"][0]["words"] == 80
+    assert not budget._ledger_path(f"{rows[0].from_} -> {rows[0].to}").exists(), (
+        "a raw send reserves nothing"
+    )
 
 
-def test_raw_style_exception_permits_overage_and_still_charges_it(
+def test_raw_style_exception_permits_overage_and_writes_no_ledger(
     runner, mailbox, monkeypatch
 ):
-    from fno import style
+    from fno import rust_binary
     from fno.bus.log import iter_messages
     from fno.mail import budget
 
     _seed_claude(mailbox, monkeypatch)
     payload = _raw_payload_at_word_cap() + " extra."
-    assert style.word_count(payload) == 81
+    assert rust_binary.style_word_count(payload) == 81
 
     result = runner.invoke(
         app,
@@ -1250,10 +1584,9 @@ def test_raw_style_exception_permits_overage_and_still_charges_it(
     assert rows[0].delivery == "hosted"
     assert rows[0].body == payload
     assert rows[0].word_count == 81
-    ledger = budget._ledger_path(f"{rows[0].from_} -> {rows[0].to}")
-    state = json.loads(ledger.read_text())
-    assert len(state["entries"]) == 1
-    assert state["entries"][0]["words"] == 81
+    assert not budget._ledger_path(f"{rows[0].from_} -> {rows[0].to}").exists(), (
+        "an exception permits the overage but reserves nothing"
+    )
 
 
 def test_raw_unconfirmed_never_durable(mailbox, monkeypatch, capsys):
@@ -1279,6 +1612,33 @@ def test_raw_unconfirmed_never_durable(mailbox, monkeypatch, capsys):
     assert "unconfirmed" in out
     assert "fail" not in out.lower()
     assert not durable, "AC30: unconfirmed never queues durable"
+
+
+def test_run_mail_inject_lets_crate_stderr_reach_the_sender(mailbox, monkeypatch, capsys):
+    """AC1-HP: the crate authors the route hint
+    on stderr for an unconfirmed thread-row inject; the runner inherits stderr
+    so it reaches the sender beside the receipt."""
+    import subprocess as sp
+    from fno.agents.dispatch import _run_mail_inject
+
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen.update(kwargs)
+        return sp.CompletedProcess(
+            argv,
+            1,
+            stdout=json.dumps({"delivered": False, "reason": "not-confirmed"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr("fno.agents.dispatch.subprocess.run", fake_run)
+    recorded = []
+    ok = _run_mail_inject(["mail-inject"], "x", 5.0, recorded.append)
+    assert ok is False
+    assert seen.get("stdout") == sp.PIPE, "stdout is the parsed verdict channel"
+    assert "capture_output" not in seen, "capturing stderr would swallow the crate's hint"
+    assert "stderr" not in seen, "stderr inherits so the hint reaches the sender"
 
 
 def test_raw_refuses_self_send_without_self_flag(mailbox, monkeypatch, capsys):
@@ -1315,7 +1675,7 @@ def test_raw_self_ok_lifts_the_self_refusal(mailbox, monkeypatch, capsys):
 
 
 def test_raw_self_refusal_fires_on_the_canonical_handle(mailbox, monkeypatch, capsys):
-    """The king-mediated flow addresses by the 8-char canonical handle, not the
+    """The lead-mediated flow addresses by the 8-char canonical handle, not the
     full session id; the refusal must fire on that alias path too."""
     from fno.mail.cli import _raw_send
 
@@ -1476,3 +1836,83 @@ def test_raw_refuses_from_self(runner, mailbox, monkeypatch):
     )
     assert res.exit_code == 2
     assert "envelope" in (res.output + (res.stderr or ""))
+
+
+def _seed_codex_pane_self(mailbox, monkeypatch, attested: str):
+    """This process IS a pane-spawned codex worker: the fno name_only stamp
+    (no session id - the pane row is written after the child starts), both
+    codex markers, and the family proven through the launcher shape (the init
+    CLI's own walk) with the attester witnessing the marker from process
+    ancestry - the independent ground that lets a name_only worker resolve
+    its own id. A runner's real ancestry is machine-dependent, so both the
+    walk and the witness are pinned: a dev shell under a codex process would
+    carry a DIFFERENT CODEX_THREAD_ID, and the answer must not depend on
+    that."""
+    _clear_harness_markers(monkeypatch)
+    # The canonical pair is scrubbed too: a session-id left over from the
+    # runner's own environment would complete the name_only stamp into a
+    # COMPLETE one naming a stranger, the exact contamination the spawn scrub
+    # (AMBIENT_IDENTITY_ENV) exists to prevent.
+    monkeypatch.delenv("FNO_HARNESS_SESSION_ID", raising=False)
+    monkeypatch.setenv("FNO_HARNESS_NAME", "codex")
+    monkeypatch.setenv("CODEX_THREAD_ID", SID_CODEX)
+    monkeypatch.setenv("CODEX_SESSION_ID", SID_CODEX)
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: "codex"
+    )
+    monkeypatch.setattr(
+        "fno.claims.self_identity.resolve_attester_identity",
+        lambda env=None: (attested, "process"),
+    )
+    register_existing_session(
+        provider="codex", session_id=SID_CODEX, cwd=str(mailbox), name="codexself"
+    )
+    # The claude PEER, seeded without the marker scrub (_seed_claude clears the
+    # very env this seeder just wrote): only the recipient row + inject seam.
+    register_existing_session(
+        provider="claude", session_id=SID_CLAUDE, cwd=str(mailbox), name="claudepeer"
+    )
+    injected = []
+    monkeypatch.setattr(
+        "fno.agents.dispatch._mail_inject_claude",
+        lambda s, t, sender=None, **_kwargs: injected.append((s, t, sender)) or True,
+    )
+    return injected
+
+
+def test_from_self_resolves_a_pane_codex_worker(runner, mailbox, monkeypatch):
+    """Regression (pane identity): a codex pane worker's stamp is name_only by
+    construction, its own registry row already holds its id, and the walk is
+    silent in the sandbox - the exact shape that refused --from-self and drove
+    the worker to report without a stamp. It now resolves and the header names
+    the worker's own registry row (which binds the codex session id)."""
+    injected = _seed_codex_pane_self(mailbox, monkeypatch, SID_CODEX)
+    res = runner.invoke(
+        app, ["agents", "mail", "send", "claudepeer", "status: ok", "--from-self"]
+    )
+    assert res.exit_code == 0, res.output + (res.stderr or "")
+    assert injected, "send never reached the claude transport"
+    assert injected[0][1].splitlines()[0].startswith("`@codexself · fmail-")
+
+
+def test_from_self_still_refuses_a_codex_disagreement(runner, mailbox, monkeypatch):
+    """Two DIFFERENT codex ids with no proof: the resolution refuses at exit 2
+    and the message still names every marker to strip - the degrade is a
+    refusal, never a silent pick of the durable-looking id (x-0992)."""
+    _clear_harness_markers(monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_ID", "019fc973-aaaa-4abc-9def-0123456789ab")
+    monkeypatch.setenv("CODEX_SESSION_ID", "019fc973-bbbb-4abc-9def-0123456789ab")
+    monkeypatch.setattr(
+        "fno.claims.session_pid.resolve_session_harness", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "fno.claims.self_identity.resolve_attester_identity",
+        lambda env=None: ("", "env_only"),
+    )
+    res = runner.invoke(
+        app, ["agents", "mail", "send", "claudepeer", "status: ok", "--from-self"]
+    )
+    assert res.exit_code == 2
+    out = res.output + (res.stderr or "")
+    assert "cannot decide which session is 'self'" in out
+    assert "CODEX_THREAD_ID" in out and "CODEX_SESSION_ID" in out

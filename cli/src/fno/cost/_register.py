@@ -17,16 +17,42 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fno import paths as _paths
-from fno.terminals import DELIVERED_TERMINALS as _DELIVERED_TERMINALS
+from fno.graph._constants import NODE_ID_BODY
+from fno.rust_binary import delivered_terminals as _delivered_terminals
 
 # The recorded value when no harness session id resolves. A row that omits
 # `sessions` is indistinguishable from a run that had no session at all; this
 # says "we looked and found nothing", which is a different fact.
 LEDGER_SESSION_UNRESOLVED = "unresolved:no-harness-session"
+
+# The canonical node id grammar, anchored for whole-token matches.
+GRAPH_NODE_ID_SHAPE = re.compile(rf"^{NODE_ID_BODY}$")
+
+
+def _utc_iso(value: datetime | str | None) -> str | None:
+    """One clock for every `started` / `completed` this writer stamps :
+    aware UTC with a `+00:00` suffix. The old writer mixed a naive-local
+    `completed` with a `Z` `started`, so any reader subtracting the two was off
+    by the UTC offset. Accepts a datetime or an ISO string (GitHub `merged_at`,
+    a `Z` target-state `created_at`); a naive input is read as UTC and an
+    unparseable string is stored verbatim rather than losing the row to a
+    crash. Rows before 2026-09-03 keep their old shapes - readers normalize,
+    no backfill."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = value
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return raw  # junk in, junk out: the old writer stored it verbatim
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def sessions_or_unresolved(*candidates: object) -> list[str]:
@@ -113,7 +139,6 @@ def parse_target_state(state_path: str) -> dict:
     # poisoning the
     # entry with a parenthetical-laden ID. Comment lines (`# ...`) are
     # already excluded by the leading-whitespace anchor `^\s*`.
-    _GRAPH_NODE_ID_SHAPE = re.compile(r"^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$")
     if "graph_node_id" not in result or result.get("graph_node_id") is None:
         for line in content.splitlines():
             m = re.match(r"^\s*graph_node_id:\s*(.*?)\s*$", line)
@@ -124,7 +149,7 @@ def parse_target_state(state_path: str) -> dict:
                 raw = raw[1:-1]
             elif raw.startswith("'") and raw.endswith("'"):
                 raw = raw[1:-1]
-            if raw and raw != "null" and _GRAPH_NODE_ID_SHAPE.match(raw):
+            if raw and raw != "null" and GRAPH_NODE_ID_SHAPE.match(raw):
                 result["graph_node_id"] = raw
             break
 
@@ -177,7 +202,7 @@ def _pr_number_from_ship_artifact(root_path: str, session_id: str) -> int | None
 
     The post-wedge immutable manifest (target-state.md) no longer carries
     ``pr_number``; the ship phase records it at
-    ``{root}/.fno/artifacts/handoff/ship-{session_id}.md`` (ab-a933adf4).
+    ``{root}/.fno/artifacts/handoff/ship-{session_id}.md``.
     Worktree /target runs therefore lost the node->PR auto-link because
     build_entry only read the manifest. The artifact basename matches the
     manifest ``session_id`` exactly, so it is deterministically locatable.
@@ -217,43 +242,35 @@ def _pr_number_from_gh(cwd: str) -> int | None:
     return int(out) if out.isdigit() else None
 
 
-def derive_phases(state: dict) -> tuple[list[str], list[str]]:
-    """Derive completed and skipped phases from gates and skip flags."""
-    gates = state.get("_gates", {})
+def derive_phases(state: dict, pr_number: int | None = None) -> tuple[list[str], list[str]]:
+    """Derive completed and skipped phases from what the run did.
 
-    phase_map = {
-        "do": ("quality_check_passed", None),  # if we got to gates, do ran
-        "review": ("quality_check_passed", None),
-        "validate": ("output_validated", None),
-        "ship": ("artifact_shipped", None),
-        "external": ("external_review_passed", "no_external"),
-        "browser": ("browser_testing_passed", "no_browser"),
-        "docs": ("docs_generated", "no_docs"),
-    }
-
-    completed = []
-    skipped = []
-
-    # Think and plan: check input_type
-    input_type = state.get("input_type", "idea")
-    if input_type == "idea":
-        completed.extend(["think", "plan"])
-    else:
-        # Plan input skips think/blueprint
+    The control-plane collapse removed the completion-gate booleans and the
+    input_type key this read, so every gate fell to "false" and every run
+    defaulted to idea: a do/review/ship run recorded ["think", "plan"], the
+    fold's plan-only discriminator read the row planned, and the fidelity gate
+    wedged the stop gate until merge. Phases now derive from the manifest's
+    input shape and skip flags plus the resolved PR; no evidence, no entry.
+    """
+    completed = ["execute"]  # this path registers only a target run's terminal
+    skipped: list[str] = []
+    # Think/plan ran in-session only for a bare-idea input; a plan or node
+    # input binds planning that happened before this session.
+    if state.get("plan_path") or GRAPH_NODE_ID_SHAPE.match(str(state.get("input") or "")):
         skipped.extend(["think", "plan"])
-
-    for phase, (gate_key, skip_flag) in phase_map.items():
-        gate_value = gates.get(gate_key, state.get(gate_key, "false"))
-        skip_value = state.get(skip_flag) if skip_flag else False
-
-        if gate_value == "true":
-            completed.append(phase)
-        elif gate_value == "skipped" or skip_value is True:
+    else:
+        completed.extend(["think", "plan"])
+    # The spine runs the review lane before the PR opens, so a resolved PR
+    # is the evidence both ship phases happened.
+    if pr_number:
+        completed.extend(["review", "ship"])
+    elif state.get("no_ship") is True:
+        skipped.append("ship")
+    for phase, flag in (
+        ("external", "no_external"), ("browser", "no_browser"), ("docs", "no_docs"),
+    ):
+        if state.get(flag) is True:
             skipped.append(phase)
-        else:
-            # Not completed and not skipped — omit from both
-            pass
-
     return completed, skipped
 
 
@@ -312,7 +329,7 @@ def build_entry(
 ) -> dict:
     """Build a ledger.json entry from target-state and git.
 
-    `termination_reason` (step 6, ab-f8e5f214) records WHY the session ended;
+    `termination_reason` (step 6, x-aaaa) records WHY the session ended;
     `cost_json` carries session-cost.py output so cost lands without the
     immutable manifest having to hold it. Both are optional so the legacy
     stop-hook callers stay byte-identical when they pass neither.
@@ -338,7 +355,7 @@ def build_entry(
     canonical_root_path = str((canonical_root or Path(root_path)).resolve()) if root_path else None
     cwd = os.getcwd()
 
-    # PR number (ab-a933adf4). The immutable manifest no longer carries
+    # PR number. The immutable manifest no longer carries
     # pr_number post-wedge, so a worktree /target run used to record pr=None and
     # never auto-link the node to its PR (reconcile then found "no drift" and the
     # node had to be closed by hand). Prefer the manifest (legacy/back-compat),
@@ -355,7 +372,7 @@ def build_entry(
     pr_url = _pr_url_for(pr_number, remote_url, cwd)
 
     # Phases
-    phases_completed, phases_skipped = derive_phases(state)
+    phases_completed, phases_skipped = derive_phases(state, pr_number)
 
     # Plan points
     plan_path = state.get("plan_path") or state.get("plan_dir")
@@ -372,7 +389,7 @@ def build_entry(
     # (the LLM wrote them during pre-promise). Step 6's immutable manifest
     # carries no cost, so `finalize` passes session-cost.py's JSON via
     # --cost-json and these fields come straight from it. cost_json wins when
-    # present; otherwise fall back to the manifest values (ab-f8e5f214).
+    # present; otherwise fall back to the manifest values.
     cj = cost_json if isinstance(cost_json, dict) else {}
     # Contract guard: a provider that breaches the tokens shape (list/str) must
     # not reach the `"total" in cj_tokens` / subscript logic below (gemini review).
@@ -490,8 +507,8 @@ def build_entry(
         # worktree key kept (rendered as null) for legacy JSON readers that
         # still look it up; root_path is now the authoritative worktree path.
         "worktree": None,
-        "started": state.get("created_at"),
-        "completed": datetime.now().isoformat(),
+        "started": _utc_iso(state.get("created_at")),
+        "completed": _utc_iso(datetime.now(timezone.utc)),
         "duration_minutes": round(duration, 1) if duration else None,
         "iterations": iteration,
         "compactions": compactions,
@@ -527,7 +544,7 @@ def build_entry(
     # in target-state.md frontmatter (set by the loop walker, not here).
     # provider_id: prefer the rotation-written provider_id; fall back to the
     # provider CLI family from target-state.md so EVERY terminal session leaves
-    # a provider-attributed ledger row (US7, ab-f8e5f214 - the per-node paper
+    # a provider-attributed ledger row (US7, x-aaaa - the per-node paper
     # trail needs provider_id present even on standard, non-rotation runs).
     provider_id = state.get("provider_id") or state.get("provider")
     account_id = state.get("account_id")
@@ -614,49 +631,46 @@ def append_to_tasks_json(tasks_path: Path, entry: dict) -> None:
                 if (existing.get("fno_id") or existing.get("session_id")) == new_scalar:
                     old_reason = existing.get("termination_reason")
                     new_reason = entry.get("termination_reason")
-                    if (
-                        isinstance(new_reason, str)
-                        and new_reason in _DELIVERED_TERMINALS
-                        and not (
+                    if isinstance(new_reason, str) and new_reason in _delivered_terminals():
+                        if not (
                             isinstance(old_reason, str)
-                            and old_reason in _DELIVERED_TERMINALS
-                        )
-                    ):
-                        promoted = dict(existing)
-                        promoted.update(
-                            {key: value for key, value in entry.items() if value is not None}
-                        )
-                        aliases = []
-                        for values in (existing.get("sessions"), entry.get("sessions")):
-                            if not isinstance(values, list):
-                                continue
-                            for value in values:
-                                if value not in aliases:
-                                    aliases.append(value)
-                        if aliases:
-                            promoted["sessions"] = aliases
-                        data["entries"][index] = promoted
-                        # Promotion bypasses the append path below, so apply
-                        # the same collapse rule: a promoted full-fidelity row
-                        # must never coexist with the node's backstop row.
-                        promoted_node = promoted.get("graph_node_id")
-                        if promoted_node:
-                            data["entries"] = [
-                                e
-                                for j, e in enumerate(data["entries"])
-                                if j == index
-                                or not (
-                                    e.get("backstop")
-                                    and e.get("graph_node_id") == promoted_node
-                                )
-                            ]
-                        _write_ledger_data(tasks_path, data)
-                        print(
-                            f"Promoted target fno_id {new_scalar} "
-                            f"from {old_reason} to {new_reason}",
-                            file=sys.stderr,
-                        )
-                        return
+                            and old_reason in _delivered_terminals()
+                        ):
+                            promoted = dict(existing)
+                            promoted.update(
+                                {key: value for key, value in entry.items() if value is not None}
+                            )
+                            aliases = []
+                            for values in (existing.get("sessions"), entry.get("sessions")):
+                                if not isinstance(values, list):
+                                    continue
+                                for value in values:
+                                    if value not in aliases:
+                                        aliases.append(value)
+                            if aliases:
+                                promoted["sessions"] = aliases
+                            data["entries"][index] = promoted
+                            # Promotion bypasses the append path below, so apply
+                            # the same collapse rule: a promoted full-fidelity row
+                            # must never coexist with the node's backstop row.
+                            promoted_node = promoted.get("graph_node_id")
+                            if promoted_node:
+                                data["entries"] = [
+                                    e
+                                    for j, e in enumerate(data["entries"])
+                                    if j == index
+                                    or not (
+                                        e.get("backstop")
+                                        and e.get("graph_node_id") == promoted_node
+                                    )
+                                ]
+                            _write_ledger_data(tasks_path, data)
+                            print(
+                                f"Promoted target fno_id {new_scalar} "
+                                f"from {old_reason} to {new_reason}",
+                                file=sys.stderr,
+                            )
+                            return
                     print(
                         f"Skipping duplicate entry for target fno_id: {new_scalar}",
                         file=sys.stderr,
@@ -685,14 +699,15 @@ def append_to_tasks_json(tasks_path: Path, entry: dict) -> None:
     print(f"Appended entry #{len(data['entries'])} to {tasks_path}", file=sys.stderr)
 
 
-# Terminal reasons that mark a NON-delivery ledger row (a failed/aborted
-# attempt). A resumed node can carry one of these from an earlier attempt whose
-# shipping successor later lost its ledger write; the merged PR must never be
-# stamped onto such a row (it would corrupt ship attribution keyed on
-# termination_reason). upsert_ledger_pr stamps only a delivery-eligible row.
-_NON_DELIVERY_TERMINALS = frozenset(
-    {"Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"}
-)
+def ledger_project_for(node: dict | None) -> str | None:
+    """The project key the plan-fidelity gate joins on: the checkout's remote
+    slug, exactly what the register path stamps and the gate reads. The node's
+    ``project`` field is a different key ('fno' vs the remote slug), so it is
+    only the fallback when no remote resolves."""
+    from fno.graph._intake import repo_root
+    from fno.paths import _slug_from_git_remote
+
+    return _slug_from_git_remote(Path(repo_root())) or (node or {}).get("project")
 
 
 def upsert_ledger_pr(
@@ -702,81 +717,56 @@ def upsert_ledger_pr(
     project: str | None,
     merged_at: str | None,
     node_sessions: list[str] | None = None,
+    plan_path: str | None = None,
 ) -> str:
     """Stamp or create a ledger row for a merged node, keyed on ``graph_node_id``.
 
-    Reconcile-side backstop for the transcript-gone tail: the
-    merge event knows ``(node, pr, project, merged_at)`` but no ``finalize`` ran.
-    Under the SAME ``/tmp/fno-ledger.lock`` flock the register path uses:
+    One keeper request into the Rust port
+    (crates/fno-agents/src/ledger_axes.rs), which owns the three branches
+    (``created`` / ``stamped`` / ``already-present``) and the whole-ledger
+    axis fill, under the same ``/tmp/fno-ledger.lock`` the append path
+    holds. The stamp rule survives the port: a merged PR never lands on a
+    Budget/NoProgress/Interrupted/Aborted/NoWork row, and a ``created``
+    backstop is dropped by :func:`append_to_tasks_json`'s collapse rule if a
+    full finalize row later lands for the node.
 
-    - existing execution row with ``pr_number`` null -> stamp pr_number/pr_url
-      WITHOUT touching its full-fidelity fields -> returns ``"stamped"``
-    - existing execution row with a ``pr_number``     -> no-op -> ``"already-present"``
-    - no row for the node                             -> minimal backstop row
-      (``backstop: true``, ``termination_reason: reconcile-backstop``) -> ``"created"``
-
-    A ``"created"`` backstop is dropped by :func:`append_to_tasks_json`'s collapse
-    rule if a full finalize row later lands for the node.
+    A keeper that answers ``unknown store method`` is an OLD binary still
+    holding the socket (a rebuild the running keeper never picked up). That
+    refusal degrades LOUDLY: one stderr line names the stale keeper and the
+    rows it misses, the close is unaffected, and the next merge served by a
+    current keeper runs the whole-ledger fill, which backfills the axes this
+    row would have carried. Any OTHER keeper error propagates to the
+    caller's warning.
     """
-    ledger_path = _paths.ledger_json()
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = Path("/tmp/fno-ledger.lock")
+    import sys
 
-    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+    from fno.graph.store import GRAPH_JSON, _client_for
+
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-
-        data = _load_ledger_data(ledger_path)
-
-        rows = [
-            e for e in data["entries"]
-            if e.get("type") == "execution" and e.get("graph_node_id") == node_id
-        ]
-        # Already correctly attributed to THIS merge.
-        if any(e.get("pr_number") == pr_number for e in rows):
-            return "already-present"
-        # Stamp a DELIVERY row that finalized without resolving its PR - never a
-        # failed attempt. A resumed node can carry an earlier Budget/NoProgress
-        # row plus the real (ledger-lost) delivery; stamping the merged PR onto
-        # the failed attempt would mis-key ship metrics, so those rows are
-        # excluded and the delivery gets a fresh backstop instead.
-        row = next(
-            (
-                e for e in rows
-                if not e.get("pr_number")
-                and e.get("termination_reason") not in _NON_DELIVERY_TERMINALS
-            ),
-            None,
-        )
-        if row is not None:
-            # Stamp the PR only; the finalize record's cost/phases/completed
-            # stay untouched (AC2-EDGE: the stamp adds the PR, never clobbers).
-            row["pr_number"] = pr_number
-            if pr_url:
-                row["pr_url"] = pr_url
-            outcome = "stamped"
-        else:
-            data["entries"].append({
-                "type": "execution",
-                "status": "done",
-                "graph_node_id": node_id,
+        return _client_for(GRAPH_JSON).request(
+            "ledger_backstop",
+            {
+                "ledger_path": str(_paths.ledger_json()),
+                "registry_path": str(_paths.agents_registry_path()),
+                "node_id": node_id,
                 "pr_number": pr_number,
                 "pr_url": pr_url,
                 "project": project,
-                "completed": merged_at,
-                "backstop": True,
-                "termination_reason": "reconcile-backstop",
-                "session_id": None,
-                "sessions": sessions_or_unresolved(*(node_sessions or ())),
-            })
-            outcome = "created"
-
-        _write_ledger_data(ledger_path, data)
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
-
-    return outcome
+                "merged_at": merged_at,
+                "plan_path": plan_path,
+                "node_sessions": list(node_sessions or []),
+            },
+        )["outcome"]
+    except RuntimeError as exc:
+        if "unknown store method" in str(exc) and "ledger_backstop" in str(exc):
+            print(
+                f"warning: ledger backstop skipped: the answering keeper predates "
+                f"ledger_backstop; rows for {node_id} (PR #{pr_number}) are missed "
+                f"until a current keeper serves a merge - redeploy fno-agents",
+                file=sys.stderr,
+            )
+            return "skipped-version-skew"
+        raise
 
 
 def harvest_ledger_sessions(nodes_by_id: dict, *, dry_run: bool) -> tuple[int, int]:
@@ -935,7 +925,7 @@ def build_quick_entry(
         "root_path": root_path or None,
         "worktree": None,
         "started": None,
-        "completed": datetime.now().isoformat(),
+        "completed": _utc_iso(datetime.now(timezone.utc)),
         "duration_minutes": safe_number(cost.get("duration_minutes"), decimals=1),
         "iterations": None,
         "compactions": None,
@@ -1065,7 +1055,7 @@ def main():
     parser.add_argument(
         "--termination-reason",
         dest="termination_reason",
-        help="Terminal reason recorded on the ledger row (step 6, ab-f8e5f214)",
+        help="Terminal reason recorded on the ledger row (step 6, x-aaaa)",
     )
 
     args = parser.parse_args()

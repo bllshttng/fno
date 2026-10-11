@@ -81,7 +81,8 @@ def test_force_receipt_says_typed_with_the_pane_and_never_delivered(
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 0, result.output
@@ -90,26 +91,78 @@ def test_force_receipt_says_typed_with_the_pane_and_never_delivered(
     assert sent, "the pane write must actually be attempted"
 
 
+def test_force_thread_uses_the_logical_thread_identity(_tmp_state, monkeypatch):
+    entry, sent = _install(monkeypatch)
+    entry.substrate = "thread"
+    entry.fno_id = entry.harness_session_id
+    entry.mux = None
+    monkeypatch.setattr(
+        "fno.agents.retask.resolve_thread_viewport",
+        lambda _entry: ("main", 993),
+    )
+
+    result = runner.invoke(
+        mail_app,
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "typed (thread viewport main:993)" in result.output
+    assert sent[0][0].mux == {"session": "main", "pane_id": 993}
+
+
+def test_force_thread_without_a_reference_names_the_logical_ref(
+    _tmp_state, monkeypatch
+):
+    entry, _sent = _install(monkeypatch)
+    entry.substrate = "thread"
+    entry.fno_id = None
+    entry.mux = None
+
+    result = runner.invoke(
+        mail_app,
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
+    )
+
+    assert result.exit_code != 0
+    assert "logical thread reference" in result.output
+    assert "types into a mux pane" not in result.output
+
+
 def test_force_types_the_wrapped_body_not_the_bare_text(_tmp_state, monkeypatch):
     """`--force` keeps the mail semantics: the recipient sees an envelope with a
     sender, a msg-id to reply to, and the authority trailer.
 
-    Crowned topology: x-2dfa gates the trailer on the crown, and the subject
+    Promoted topology: x-2dfa gates the trailer on the role, and the subject
     here is that ``--force`` types the WRAPPED body rather than bare text.
     """
-    monkeypatch.setattr("fno.mail.envelope.fleet_has_crown", lambda: True)
     _entry_row, sent = _install(monkeypatch)
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
     assert result.exit_code == 0, result.output
 
     _e, text, kwargs = sent[0]
-    assert text.startswith("<fno_mail from=")
-    assert "status?" in text
-    assert "peer mail" in text
+    assert text.splitlines()[0].startswith("`@lead · fmail-"), text[:80]
+    # The typed turn is the header line, then the body.
+    lines = text.splitlines()
+    assert len(lines) == 2, text
+    assert lines[0].startswith("`@lead · fmail-")
+    assert lines[1] == "status?"
+    # The record plane keeps the body: the outbox row stores the full-body
+    # envelope, so the id the read line names resolves to the message.
+    from fno.bus.log import iter_messages
+
+    rows = list(iter_messages())
+    assert rows and "status?" in rows[-1].body, rows
+    # The wrappedness marker is the delivered header line; the
+    # retired peer-mail footer no longer renders.
+    assert "peer mail" not in text
     assert kwargs.get("raw") is not True, (
         "the forced send must cross the read-back gate, so it cannot be raw"
     )
@@ -127,7 +180,8 @@ def test_force_writes_an_outbox_row_naming_the_pane(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
     assert result.exit_code == 0, result.output
 
@@ -189,7 +243,8 @@ def test_force_writes_the_full_sender_session_on_the_row(_tmp_state, monkeypatch
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "0199bbbb-2222-7000-8000-bbbbbbbbbbbb"],
     )
     assert result.exit_code == 0, result.output
 
@@ -234,7 +289,8 @@ def test_force_accepts_every_non_terminal_status(_tmp_state, monkeypatch, status
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 0, (status, result.output, result.stderr)
@@ -256,7 +312,8 @@ def test_force_refuses_a_row_that_is_not_live(_tmp_state, monkeypatch, status):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 1
@@ -279,7 +336,8 @@ def test_force_refuses_a_send_to_this_session(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "note to self", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "note to self", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 2
@@ -328,7 +386,9 @@ def test_force_reaches_a_registered_agent_by_name(_tmp_state, monkeypatch):
     entry, sent = _install(monkeypatch)
     entry.name = "blueprint-x-ce6e"
 
-    result = runner.invoke(mail_app, ["send", "blueprint-x-ce6e", "status?", "--force"])
+    result = runner.invoke(
+        mail_app, ["send", "blueprint-x-ce6e", "status?", "--force", "--from-name", "lead"]
+    )
 
     assert result.exit_code == 0, (result.output, result.stderr)
     assert "typed (pane 45)" in result.output
@@ -352,7 +412,8 @@ def test_force_refuses_a_bus_only_recipient_up_front(_tmp_state, monkeypatch):
 
     result = runner.invoke(
         mail_app,
-        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force"],
+        ["send", "0199aaaa-1111-7000-8000-aaaaaaaaaaaa", "status?", "--force",
+         "--from-name", "lead"],
     )
 
     assert result.exit_code == 1

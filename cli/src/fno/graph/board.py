@@ -1,11 +1,10 @@
 """``fno backlog board`` - three sections, one line each, zero GitHub reads.
 
 Sources are on disk only: the graph (``read_graph``) and the pr-status cache
-(``newest_row_offline``). This module must never import ``fno.pr._status``,
-``fno.pr._rest``, or ``fno.pr._cache.cached_status`` - any of those reaches a
-live GitHub read, and a verb whose job is showing the board must never be the
-thing that exhausts the GraphQL quota (test_board.py pins both the raising-
-subprocess probe and this import list).
+(``newest_row_offline``). This module must never import the status REST
+reader or any cache helper that reaches a live read - showing the board must
+never exhaust the quota (test_board.py pins both the raising-subprocess
+probe and this import list).
 
 An unreadable source resolves to unknown, never to an empty section: an empty
 Just-finished section must mean nothing landed, not that the read failed.
@@ -258,3 +257,42 @@ def compute_board(
     )
 
     return {"just_finished": just_finished, "in_progress": in_progress, "on_deck": on_deck}
+
+
+# The board's render vocabulary moved here from the CLI module (which is over
+# the shrink-only line budget) together with the degrade path that uses it: a
+# module named by the question it answers, not a server2.py.
+BOARD_SECTIONS = (
+    ("just_finished", "Just finished"),
+    ("in_progress", "In progress"),
+    ("on_deck", "On deck"),
+)
+
+
+def board_unreadable_payload(reason: str) -> dict:
+    return {
+        key: {"rows": [], "more": 0, "note": None, "unknown": reason} for key, _ in BOARD_SECTIONS
+    }
+
+
+def print_board(board: dict, echo) -> None:
+    for key, title in BOARD_SECTIONS:
+        section = board.get(key) or {}
+        echo(title)
+        unknown = section.get("unknown")
+        if unknown:
+            echo(f"  (unknown: {unknown})")
+            echo("")
+            continue
+        note = section.get("note")
+        if note:
+            echo(f"  ({note})")
+        rows = section.get("rows") or []
+        if not rows:
+            echo("  (none)")
+        for row in rows:
+            echo(f"  {row['id']}  {row['title']}   {row['fact']}")
+        more = section.get("more") or 0
+        if more:
+            echo(f"  ... and {more} more")
+        echo("")

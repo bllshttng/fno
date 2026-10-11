@@ -17,6 +17,12 @@
 #     device+inode, which a string equality test on the two roots would miss.
 #  3. Distinct roots: links as it does today, so the guard changes nothing for
 #     the real invocation.
+#  4. A WORKTREE that does not exist: refuses non-zero and creates nothing.
+#     The script's `mkdir -p` used to build the whole path, so a caller naming
+#     a location nobody made got a fully linked directory conjured at it. On
+#     2026-09-03 nine of those sat under <repo>/worktrees/, a location
+#     .claude/rules/worktrees.md forbids. The assertion that matters is the
+#     absence of the directory afterwards, not the exit code alone.
 #
 # Bash 3.2 compatible; hermetic mktemp sandboxes.
 
@@ -108,19 +114,53 @@ OUT3="$(CANONICAL="$SBX3/canonical" WORKTREE="$SBX3/worktree" bash "$SETUP" 2>&1
 RC3=$?
 
 check_eq "T3: exits 0 on a genuine worktree" "0" "$RC3"
-if [ -L "$SBX3/worktree/.fno/codemap.md" ]; then
-  echo "PASS: T3: codemap.md was linked into the worktree"
-  pass=$((pass+1))
-else
-  echo "FAIL: T3: codemap.md was NOT linked (guard over-fired): $OUT3"
+# State links are retired: project state lives in the repo's space under
+# ~/.fno/spaces/<slug>/, keyed on the canonical root, so every worktree
+# resolves it without a link. .fno/ gets NOTHING linked now (config.toml is
+# found by the config loader's climb to canonical; the only link into a
+# checkout left is internal/ and .claude/).
+if [ -L "$SBX3/worktree/.fno" ] || [ -L "$SBX3/worktree/.fno/codemap.md" ] || [ -L "$SBX3/worktree/.fno/config.toml" ]; then
+  echo "FAIL: T3: an .fno state link was created (retired in x-b1ee): $OUT3"
   fail=$((fail+1))
+else
+  echo "PASS: T3: no .fno state link (project state resolves through the space)"
+  pass=$((pass+1))
 fi
-check_eq "T3: the link reads through to canonical" \
-  "CODEMAP-ORIGINAL" "$(cat "$SBX3/worktree/.fno/codemap.md" 2>/dev/null)"
-check_eq "T3: canonical is untouched" \
+check_eq "T3: canonical codemap is untouched" \
   "CODEMAP-ORIGINAL" "$(cat "$SBX3/canonical/.fno/codemap.md" 2>/dev/null)"
+check_eq "T3: canonical config.toml is untouched" \
+  "CONFIG-ORIGINAL" "$(cat "$SBX3/canonical/.fno/config.toml" 2>/dev/null)"
 
-rm -rf "$SBX1" "$SBX2" "$SBX3"
+# ---------------------------------------------------------------------------
+# T4: a WORKTREE nobody created - refuse, and leave the path absent
+# ---------------------------------------------------------------------------
+SBX4="$(mktemp -d)"
+make_canonical "$SBX4/canonical"
+ABSENT="$SBX4/canonical/worktrees/target-ab-aaaa1111"
+OUT4="$(CANONICAL="$SBX4/canonical" WORKTREE="$ABSENT" bash "$SETUP" 2>&1)"
+RC4=$?
+
+check_eq "T4: exits non-zero on a worktree that does not exist" "1" "$RC4"
+check_contains "T4: refusal names the missing path" "$ABSENT" "$OUT4"
+check_contains "T4: refusal says how to fix it" "git worktree add" "$OUT4"
+if [ -d "$ABSENT" ]; then
+  echo "FAIL: T4: the refused path was created anyway (the litter bug)"
+  fail=$((fail+1))
+else
+  echo "PASS: T4: nothing was created at the refused path"
+  pass=$((pass+1))
+fi
+if [ -d "$SBX4/canonical/worktrees" ]; then
+  echo "FAIL: T4: the parent worktrees/ dir was created anyway"
+  fail=$((fail+1))
+else
+  echo "PASS: T4: no parent worktrees/ dir either"
+  pass=$((pass+1))
+fi
+check_eq "T4: canonical is untouched" \
+  "CODEMAP-ORIGINAL" "$(cat "$SBX4/canonical/.fno/codemap.md" 2>/dev/null)"
+
+rm -rf "$SBX1" "$SBX2" "$SBX3" "$SBX4"
 
 # ---------------------------------------------------------------------------
 # Summary

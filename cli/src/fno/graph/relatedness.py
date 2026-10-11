@@ -2,7 +2,7 @@
 
 Computes a lightweight relatedness map from signals already in ``graph.json``
 - shared domain, shared epic (roadmap_id/parent), and token overlap over
-title+slug+details - and persists it to a sidecar the offer path (x-9ed6) and
+title+slug+details - and persists it to a sidecar the offer path and
 ``/triage`` read. Pure logic here; CLI wiring lives in ``graph/cli.py``.
 
 The map is a regenerable artifact (like codemap): last-writer-wins, atomic
@@ -13,10 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import tarfile
 import tempfile
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
@@ -31,7 +28,6 @@ _STOPWORDS = frozenset({
 })
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-_FULL_SHA_RE = re.compile(r"[0-9a-f]{40}", re.IGNORECASE)
 
 # Below this combined score a pair is dropped as unrelated.
 _MIN_SCORE = 0.15
@@ -39,183 +35,17 @@ _DOMAIN_BONUS = 0.10
 _EPIC_BONUS = 0.25
 
 # Filing-time dedup floor: above this an existing node is surfaced as a likely
-# duplicate when a new node is born. Evidence-based (plan x-6ac7 Overview):
+# duplicate when a new node is born. Evidence-based (plan Overview):
 # real specimen duplicates score 0.568 and 0.447, the epic-sibling noise pair
 # sits at 0.234, and the floor is 0/1558 false positives on the live graph.
 _DEDUP_MIN_SCORE = 0.30
-
-
-def _resolve_main_sha(repo: Path) -> str | None:
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    fields = result.stdout.strip().split()
-    if (
-        result.returncode != 0
-        or len(fields) != 2
-        or fields[1] != "refs/heads/main"
-        or _FULL_SHA_RE.fullmatch(fields[0]) is None
-    ):
-        return None
-    return fields[0].lower()
-
-
-def _commit_on_main(repo: Path, commit: str, main_sha: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", commit, main_sha],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
-
-
-def _run_main_probe(repo: Path, main_sha: str, command: list[str]) -> dict[str, Any] | None:
-    if (
-        not command
-        or len(command) > 128
-        or not all(isinstance(arg, str) and arg and len(arg) <= 4096 for arg in command)
-    ):
-        return None
-    runner = Path(command[0])
-    if runner.is_absolute() or ".." in runner.parts:
-        return None
-    try:
-        archive = subprocess.run(
-            ["git", "archive", "--format=tar", main_sha],
-            cwd=repo,
-            capture_output=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if archive.returncode != 0:
-        return None
-    try:
-        with tempfile.TemporaryDirectory(prefix="fno-closure-") as temp_dir:
-            with tarfile.open(fileobj=BytesIO(archive.stdout), mode="r:") as snapshot:
-                snapshot.extractall(temp_dir, filter="data")
-            snapshot_root = Path(temp_dir).resolve()
-            executable = (snapshot_root / runner).resolve()
-            if (
-                snapshot_root not in executable.parents
-                or not executable.is_file()
-                or not os.access(executable, os.X_OK)
-            ):
-                return None
-            observed = subprocess.run(
-                [str(executable), *command[1:]],
-                cwd=temp_dir,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-    except (OSError, subprocess.TimeoutExpired, tarfile.TarError):
-        return None
-    return {
-        "status": "passed" if observed.returncode == 0 else "failed",
-        "exit_code": observed.returncode,
-    }
-
-
-def _commit_names_behavior(repo: Path, commit: str, behavior: str) -> bool:
-    try:
-        result = subprocess.run(
-            ["git", "show", "-s", "--format=%B", commit],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and behavior.casefold() in result.stdout.casefold()
-
-
-def classify_closure(
-    *,
-    behavior: str,
-    repo: Path | None = None,
-    probe_command: list[str] | None = None,
-    merged_commit: str | None = None,
-) -> dict[str, Any]:
-    """Classify pre-design closure without treating carriers as evidence.
-
-    A current-main observation takes precedence over history. Positive and
-    negative probe results both bind the named behavior, command, and full HEAD;
-    every incomplete or unresolved specimen remains ``unknown``.
-    """
-    behavior = behavior.strip()
-    unknown = {
-        "state": "unknown",
-        "behavior": behavior or None,
-        "proof": None,
-    }
-    if not behavior:
-        return unknown
-    if repo is None:
-        return unknown
-    main_sha = _resolve_main_sha(repo)
-    if main_sha is None:
-        return unknown
-
-    if probe_command is not None:
-        observation = _run_main_probe(repo, main_sha, probe_command)
-        if observation is None:
-            return unknown
-        status = observation["status"]
-        return {
-            "state": "already_shipped" if status == "passed" else "live",
-            "behavior": behavior,
-            "proof": {
-                "kind": "current_main_probe",
-                "command": list(probe_command),
-                "head": main_sha,
-                "result": status,
-                "exit_code": observation["exit_code"],
-                "main_head": main_sha,
-            },
-        }
-
-    if merged_commit is not None:
-        if (
-            not isinstance(merged_commit, str)
-            or _FULL_SHA_RE.fullmatch(merged_commit) is None
-            or not _commit_on_main(repo, merged_commit, main_sha)
-            or not _commit_names_behavior(repo, merged_commit, behavior)
-        ):
-            return unknown
-        return {
-            "state": "already_shipped",
-            "behavior": behavior,
-            "proof": {
-                "kind": "merged_commit",
-                "commit": merged_commit.lower(),
-                "observed": behavior,
-                "on_current_main": True,
-                "main_head": main_sha,
-            },
-        }
-
-    return unknown
 
 
 class NoMapError(Exception):
     """The relatedness sidecar does not exist / could not be read.
 
     Distinct from "node has no related edges" (a valid empty list) so callers
-    (x-9ed6's offer path) can fall back correctly.
+    (offer path) can fall back correctly.
     """
 
 
@@ -250,6 +80,7 @@ def _score(
     tb: frozenset[str],
     *,
     include_epic: bool = True,
+    minimum: float = _MIN_SCORE,
 ) -> tuple[float, str]:
     """Combined relatedness score for a pair + a one-line reason. 0 => drop.
 
@@ -279,9 +110,28 @@ def _score(
             combined += _EPIC_BONUS
             reasons.append(f"same epic ({ea})")
 
-    if combined < _MIN_SCORE:
+    if combined < minimum:
         return 0.0, ""
     return round(combined, 4), "; ".join(reasons)
+
+
+def score_pair(
+    a: Entry, b: Entry, *, include_epic: bool = False
+) -> tuple[float, str]:
+    """Return the raw relatedness score without applying a caller's floor.
+
+    Filing keeps ``_DEDUP_MIN_SCORE``.  Discovery needs the measured score for
+    an FTS-only hit even when that score falls below the filing floor, so this
+    public seam shares the same token and bonus logic without retuning it.
+    """
+    return _score(
+        a,
+        b,
+        _tokens(a),
+        _tokens(b),
+        include_epic=include_epic,
+        minimum=0.0,
+    )
 
 
 # An epic in one of these states is no longer a rollup target.
@@ -289,17 +139,21 @@ _RETIRED_EPIC_STATUSES = frozenset({"done", "superseded", "deferred"})
 
 
 def epic_candidates(
-    entry: Entry, entries: list[Entry], k: int = 3
+    entry: Entry, entries: list[Entry], k: int = 3, *, floor: float | None = None
 ) -> list[tuple[str, float, str]]:
     """Score ``entry`` against the live epics only, best-first, top-K.
 
     The rollup counterpart to ``build_map``: same ``_score``, narrowed to
     candidate parents so intake, ``maintain``, and ``/think`` cannot drift into
     a second similarity implementation. Ties break on id so a run is
-    reproducible. Pairs below ``_MIN_SCORE`` are absent (``_score`` drops them).
+    reproducible. Pairs below ``floor`` (default ``_MIN_SCORE``) are absent
+    (``_score`` drops them). ``floor`` is the same caller-narrowed escape hatch
+    ``similar_nodes`` takes, for a domain-less seed probe that can never earn
+    ``_DOMAIN_BONUS``.
     """
     ta = _tokens(entry)
     nid = entry.get("id")
+    minimum = _MIN_SCORE if floor is None else floor
     scored: list[tuple[str, float, str]] = []
     for e in entries:
         if not isinstance(e, dict) or e.get("type") != "epic":
@@ -309,15 +163,35 @@ def epic_candidates(
             continue
         if e.get("status") in _RETIRED_EPIC_STATUSES:
             continue
-        score, reason = _score(entry, e, ta, _tokens(e))
+        score, reason = _score(entry, e, ta, _tokens(e), minimum=minimum)
         if score > 0.0:
             scored.append((eid, score, reason))
     scored.sort(key=lambda r: (-r[1], r[0]))
     return scored[:k]
 
 
+def lineage_ids(entry: Entry, by_id: dict[str, Entry]) -> set[str]:
+    """Ancestor ids of ``entry`` following parent links inside ``by_id``.
+
+    Shared with readers that score through the same substrate but must not
+    flag a node's own lineage as a match: the think inspect duplicates payload
+    would otherwise recommend superseding the node's own epic.
+    """
+    lineage: set[str] = set()
+    cur = entry.get("parent")
+    while isinstance(cur, str) and cur in by_id and cur not in lineage:
+        lineage.add(cur)
+        cur = by_id[cur].get("parent")
+    return lineage
+
+
 def similar_nodes(
-    entry: Entry, entries: list[Entry], k: int = 3, *, floor: float | None = None
+    entry: Entry,
+    entries: list[Entry],
+    k: int = 3,
+    *,
+    floor: float | None = None,
+    token_cache: dict[str, frozenset[str]] | None = None,
 ) -> list[tuple[str, float, str]]:
     """Score ``entry`` against every live node for filing-time dedup, top-K.
 
@@ -337,25 +211,24 @@ def similar_nodes(
     judgment is the full-context reader's. The default stays
     ``_DEDUP_MIN_SCORE`` so intake's tuned 0.30 behavior is unchanged. One
     scorer, one parameter (the ``include_epic`` precedent), never a second
-    implementation.
+    implementation. ``floor`` is passed to ``_score`` as its ``minimum``, so a
+    floor below ``_MIN_SCORE`` (0.15) is honored rather than clamped there.
     """
     threshold = _DEDUP_MIN_SCORE if floor is None else floor
-    ta = _tokens(entry)
+    entry_id = entry.get("id")
+    cached_entry_tokens = token_cache.get(entry_id) if token_cache and isinstance(entry_id, str) else None
+    ta = cached_entry_tokens if cached_entry_tokens is not None else _tokens(entry)
     nid = entry.get("id")
-    by_id = {
-        e.get("id"): e
+    by_id: dict[str, Entry] = {
+        node_id: e
         for e in entries
-        if isinstance(e, dict) and isinstance(e.get("id"), str)
+        if isinstance(e, dict) and isinstance((node_id := e.get("id")), str)
     }
     # Exclude the node's own lineage: a child legitimately resembles its parent
     # (rollup parented it there for exactly that reason), so flagging an
     # ancestor as a duplicate would cry wolf on most filings and recommend
     # superseding the node's own epic (codex P2).
-    lineage: set[str] = set()
-    cur = entry.get("parent")
-    while isinstance(cur, str) and cur in by_id and cur not in lineage:
-        lineage.add(cur)
-        cur = by_id[cur].get("parent")
+    lineage = lineage_ids(entry, by_id)
     scored: list[tuple[str, float, str]] = []
     for e in entries:
         if not isinstance(e, dict):
@@ -365,7 +238,14 @@ def similar_nodes(
             continue
         if e.get("status") == "superseded":
             continue
-        score, reason = _score(entry, e, ta, _tokens(e), include_epic=False)
+        candidate_id = e.get("id")
+        cached_candidate_tokens = (
+            token_cache.get(candidate_id)
+            if token_cache and isinstance(candidate_id, str)
+            else None
+        )
+        tb = cached_candidate_tokens if cached_candidate_tokens is not None else _tokens(e)
+        score, reason = _score(entry, e, ta, tb, include_epic=False, minimum=threshold)
         if score >= threshold:
             scored.append((eid, score, reason))
     scored.sort(key=lambda r: (-r[1], r[0]))
@@ -439,53 +319,3 @@ def get_related(path: Path, node_id: str, k: Optional[int] = None) -> list[dict[
     return edges[:k] if k is not None else edges
 
 
-def filing_candidates(entries: list[Entry], sidecar: Path) -> tuple[list[Entry], str]:
-    """Return live filing candidates from the last sidecar plus today's delta.
-
-    A missing or malformed sidecar is an evidence failure, not an empty result:
-    the caller receives every live row and a source marker naming the fallback.
-    """
-    live = [
-        e for e in entries
-        if isinstance(e, dict)
-        and not e.get("completed_at")
-        and e.get("status") not in {"done", "superseded", "deferred"}
-        and isinstance(e.get("id"), str)
-    ]
-    try:
-        mapping = json.loads(sidecar.read_text(encoding="utf-8"))
-        if not isinstance(mapping, dict):
-            raise ValueError("relatedness sidecar is not an object")
-        snapshot_ids: set[str] = set()
-        for key, edges in mapping.items():
-            if isinstance(key, str):
-                snapshot_ids.add(key)
-            if isinstance(edges, list):
-                snapshot_ids.update(
-                    [
-                        edge["id"]
-                        for edge in edges
-                        if isinstance(edge, dict) and isinstance(edge.get("id"), str)
-                    ]
-                )
-        groom_mtime = sidecar.stat().st_mtime
-    except (OSError, ValueError, TypeError):
-        return live, "fallback:all-live"
-
-    def newer_than_groom(entry: Entry) -> bool:
-        raw = entry.get("touched_at") or entry.get("created_at")
-        if not isinstance(raw, str):
-            return False
-        try:
-            from datetime import datetime
-
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp() > groom_mtime
-        except (TypeError, ValueError, OverflowError):
-            return False
-
-    by_id = {e["id"]: e for e in live}
-    selected = [by_id[nid] for nid in snapshot_ids if nid in by_id]
-    selected_ids = {e["id"] for e in selected}
-    selected.extend(e for e in live if e["id"] not in selected_ids and newer_than_groom(e))
-    selected.sort(key=lambda e: str(e.get("id")))
-    return selected, "sidecar+since-groom"

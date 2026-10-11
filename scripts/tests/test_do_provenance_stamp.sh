@@ -43,6 +43,12 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/repo/.fno" "$T/home"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$CAPTURE"\n' > "$T/bin/fno"
 chmod +x "$T/bin/fno"
+# The init run mints its run id through `fno-agents state mint-id`, which used
+# to fall out of the ambient binary. The test double rides PATH under its own
+# name; each init case pins FNO_TEST_SPACE to the manifest dir its assertions
+# read, so the run passes with or without a real fno-agents on the machine.
+cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$T/bin/fno-agents"
+chmod +x "$T/bin/fno-agents"
 # HOME is sandboxed: finalize's ledger step runs the real fno.cost._register,
 # which writes ~/.fno/ledger.json. Without this the suite appends fixture rows
 # to the developer's own ledger, and then DEDUPES against it -- so a rerun takes
@@ -143,7 +149,7 @@ commit_at "my own work" 1800000001 1800000001
 OUT=$(run_finalize DonePRGreen)
 CAP=$(cat "$CAPTURE")
 assert_not_contains "AC1-HP: no guard skip" "skipped" "$OUT"
-assert_contains "AC1-HP: stamps the node with phase do" "session add ab-e2e0001 --phase do" "$CAP"
+assert_contains "AC1-HP: stamps the node with phase execute" "session add ab-e2e0001 --phase execute" "$CAP"
 assert_contains "AC1-HP: passes the identity guard" "--require-session SESSION-LIVE" "$CAP"
 assert_contains "AC1-HP: passes the plan guard" "--guard-plan $T/repo/plan.md" "$CAP"
 # The binding a unit test cannot reach: started_at is the manifest's created_at,
@@ -168,7 +174,7 @@ printf -- '---\nfno_id: run-3\ncreated_at: %s\ninitial_head: %s\nharness_session
 : > "$CAPTURE"
 "$BIN" finalize --state "$M3" --cwd "$T/repo" --reason DoneAwaitingMerge >/dev/null 2>&1
 assert_contains "resumed: DoneAwaitingMerge still stamps after a Budget fire" \
-    "session add ab-e2e0001 --phase do" "$(cat "$CAPTURE")"
+    "session add ab-e2e0001 --phase execute" "$(cat "$CAPTURE")"
 
 # ---- AC7-EDGE: a legacy manifest without initial_head fails closed ----
 echo ""
@@ -189,7 +195,7 @@ mkdir -p "$P/.fno" "$P/.home"
 git -C "$P" init -q 2>/dev/null
 git -C "$P" config user.email t@t && git -C "$P" config user.name t
 git -C "$P" commit -q --allow-empty -m base
-(cd "$P" && HOME="$P/.home" TARGET_START=1 TARGET_INPUT="x" \
+(cd "$P" && HOME="$P/.home" FNO_TEST_SPACE="$P/.fno" TARGET_START=1 TARGET_INPUT="x" \
     TARGET_LOCATION_OK=main-acknowledged bash "$INIT_SCRIPT") >/dev/null 2>&1
 STATE=$(cat "$P/.fno/target-state.md" 2>/dev/null || echo "")
 EXPECTED_HEAD=$(git -C "$P" rev-parse HEAD)
@@ -204,7 +210,7 @@ E="$T/empty"
 mkdir -p "$E/.fno" "$E/.home"
 git -C "$E" init -q 2>/dev/null
 git -C "$E" config user.email t@t && git -C "$E" config user.name t
-(cd "$E" && HOME="$E/.home" TARGET_START=1 TARGET_INPUT="x" \
+(cd "$E" && HOME="$E/.home" FNO_TEST_SPACE="$E/.fno" TARGET_START=1 TARGET_INPUT="x" \
     TARGET_LOCATION_OK=main-acknowledged bash "$INIT_SCRIPT") >/dev/null 2>&1
 ESTATE=$(cat "$E/.fno/target-state.md" 2>/dev/null || echo "")
 if [[ -n "$ESTATE" ]]; then

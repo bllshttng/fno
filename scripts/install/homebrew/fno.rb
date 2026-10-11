@@ -1,4 +1,4 @@
-# Homebrew formula for the `fno` CLI - the brew install channel (ab-d59d219a).
+# Homebrew formula for the `fno` CLI - the brew install channel.
 #
 # This is the canonical source of the formula. It is copied verbatim into the
 # own tap repo (github.com/<owner>/homebrew-fno) so `brew install <owner>/fno/fno`
@@ -6,17 +6,17 @@
 # brew clean-machine smoke (cli/tests/smoke/brew_formula_smoke.sh) prove the
 # install + symlink mechanism against a freshly built local wheel.
 #
-# The "py-wheel flywheel" (shared with the cargo + fno.sh channels): `fno` is the
-# Python Typer CLI and only `fno-agents{,-daemon,-worker}` are Rust, so the
-# formula installs the published PyPI *platform wheel* (which already bundles all
-# three binaries as wheel `shared_scripts`) into a brew-managed venv. brew
-# provides Python (depends_on "python@3.13"); the wheel is the single artifact
-# source. brew owns the venv + symlinks, so `brew uninstall`/`brew upgrade` are
-# clean (Locked Decisions 2 + 3).
+# The "py-wheel flywheel" (shared with the cargo + fno.sh channels): the formula
+# installs the published PyPI *platform wheel* (which bundles the Rust `fno`
+# front door, the three `fno-agents{,-daemon,-worker}` binaries, and the
+# `fno-py` console script as wheel `shared_scripts`) into a brew-managed venv.
+# brew provides Python (depends_on "python@3.13"); the wheel is the single
+# artifact source. brew owns the venv + symlinks, so `brew uninstall`/`brew
+# upgrade` are clean (Locked Decisions 2 + 3).
 #
 # NOTE: this is the SEED snapshot. The live tap (bllshttng/homebrew-fno, what
 # `brew install` reads) is auto-bumped on every release by
-# scripts/release/update-homebrew-formula.py (x-0afe); these values are just the
+# scripts/release/update-homebrew-formula.py ; these values are just the
 # last-release snapshot, not the source of truth.
 #
 # LAUNCH GATE: satisfied for 0.2.1 on both macOS arches. `fno` 0.2.1 is
@@ -74,7 +74,7 @@ class Fno < Formula
   def install
     # Build the venv from the python@3.13 dependency (never the host python,
     # which may be older on a clean machine).
-    system Formula["python@3.13"].opt_bin/"python3.13", "-m", "venv", libexec
+    system formula_opt_bin("python@3.13")/"python3.13", "-m", "venv", libexec
 
     # The wheel is a FILE in buildpath (url's :nounzip - an unpacked wheel dir is
     # not pip-installable), so pip-install the wheel file directly. pip resolves
@@ -82,25 +82,32 @@ class Fno < Formula
     # smoke exercises end to end.
     system libexec/"bin/pip", "install", "--disable-pip-version-check", Dir["*.whl"].first
 
-    # The `fno` console_script plus the three Rust binaries (which ride in the
-    # wheel as `shared_scripts`) all land in the venv bin; pip links none of them
-    # into the keg bin, so symlink them explicitly. The fno-agents* symlink is
-    # the load-bearing step (Locked Decision 4): the CLI invokes the binaries by
-    # name on PATH. Arch-agnostic via libexec.
-    # The wheel's Python CLI console script is `fno-py` (the Rust mux binary owns
-    # `fno`); symlink that, plus the three fno-agents* shared_scripts.
+    # The Rust front door, the `fno-py` console_script, and the three agent
+    # binaries (which ride in the wheel as `shared_scripts`) all land in the
+    # venv bin; pip links none of them into the keg bin, so symlink them
+    # explicitly. The fno-agents* symlink is the load-bearing step (Locked
+    # Decision 4): the CLI invokes the binaries by name on PATH. The `fno`
+    # symlink is the advertised front door : the Rust mux that owns
+    # `fno` on PATH and forwards non-mux verbs to the `fno-py` beside it.
+    # Arch-agnostic via libexec.
+    bin.install_symlink libexec/"bin/fno"
     bin.install_symlink libexec/"bin/fno-py"
     bin.install_symlink Dir[libexec/"bin/fno-agents*"]
   end
 
   test do
-    # The CLI runs from the keg bin.
+    # The front door runs from the keg bin: `mux ls --json` is native (no
+    # Python needed), and an empty session list is exactly `[]` - a stable
+    # marker on a clean runner where `mux ls` would print "no sessions".
+    assert_match "[]", shell_output("#{bin}/fno mux ls --json")
+
+    # The Python component answers beside it.
     assert_match "fno", shell_output("#{bin}/fno-py --version")
 
-    # All three binaries must be present + executable on the keg bin, or a
-    # daemon/loop verb would 127 at runtime. Fail the test on any miss
-    # (no silent success for a half-installed CLI).
-    %w[fno-agents fno-agents-daemon fno-agents-worker].each do |b|
+    # All four Rust/Python executables must be present + executable on the keg
+    # bin, or the front door or a daemon/loop verb would 127 at runtime. Fail
+    # the test on any miss (no silent success for a half-installed CLI).
+    %w[fno fno-py fno-agents fno-agents-daemon fno-agents-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end

@@ -91,6 +91,7 @@ def test_reap_rows_refuses_when_not_merged(tmp_path: Path) -> None:
 
     assert seen == [("reap-rows", "skipped", "not-merged (state=OPEN)")]
     assert not any(c[:2] == ["agents", "stop"] for c in runner.calls)
+    assert not any(c[:2] == ["agents", "rm"] for c in runner.calls)
 
 
 def test_the_gh_call_actually_asks_for_state(tmp_path: Path) -> None:
@@ -155,18 +156,18 @@ def test_inside_own_worktree_defers_rather_than_advising(tmp_path: Path) -> None
     """
     runner = _Recorder(state="MERGED")
     r = _ritual_for(runner, tmp_path)
-    r._find_worktree = lambda branch: str(tmp_path)  # type: ignore[method-assign]
     seen = _emits(r)
 
     r.leg_archive()
 
     # The receipt still defers (never `skipped`), and the detail now also
-    # carries the minted reap order that makes the deferral collectable.
+    # carries the durable cleanup request that makes the deferral collectable.
     assert len(seen) == 1
     assert seen[0][0] == "archive"
     assert seen[0][1] == "deferred"
-    assert seen[0][2].startswith("sweep-will-reap; ")
-    assert "reap-order" in seen[0][2]
+    assert seen[0][2].startswith("cleanup-requested request_id=")
+    assert "daemon resolves the tree from feature/x-dead" in seen[0][2]
+    assert "merged-pr" in seen[0][2]
 
 
 def test_deferred_is_a_distinct_status_from_skipped() -> None:

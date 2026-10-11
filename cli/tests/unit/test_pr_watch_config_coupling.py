@@ -17,7 +17,6 @@ def tmp_home(tmp_path, monkeypatch):
     (tmp_path / ".fno").mkdir()
     try:
         from fno.config import load_settings
-        load_settings.cache_clear()
     except Exception:
         pass
     return tmp_path
@@ -58,7 +57,74 @@ def test_disable_triggers_unload(tmp_home, monkeypatch):
     r = CliRunner().invoke(app, ["set", "config.pr_watch.enabled", "false"])
     assert r.exit_code == 0, r.output
     assert calls.get("deactivate") is True
-    assert "disabled" in r.output
+
+
+# ---------------------------------------------------------------------------
+# The durable-grant coupling: arming the dispatch grant implies a live watcher
+# ---------------------------------------------------------------------------
+
+
+def _stub_grant_coupling(monkeypatch):
+    """Stub the watcher-activation seam the grant coupling calls (its own
+    import path, distinct from the enabled-coupling stubs above)."""
+    import fno.pr_watch.cli as pwcli
+
+    calls = {"activate": 0}
+
+    def _act() -> str:
+        calls["activate"] += 1
+        return "activated"
+
+    monkeypatch.setattr(pwcli, "ensure_watcher_activated", _act)
+    return calls
+
+
+def test_armed_dispatch_grant_activates_the_watcher(tmp_home, monkeypatch):
+    calls = _stub_grant_coupling(monkeypatch)
+    from fno.config_cli import app
+
+    runner = CliRunner()
+    r = runner.invoke(app, ["set", "config.auto_merge.enabled", "true"])
+    assert r.exit_code == 0, r.output
+    # enabled alone (grant defaults to none) arms nothing: a standing grant is
+    # enabled AND grant=dispatch.
+    assert calls["activate"] == 0
+    r = runner.invoke(app, ["set", "config.auto_merge.grant", "dispatch"])
+    assert r.exit_code == 0, r.output
+    assert calls["activate"] == 1
+    assert "activated to serve the standing dispatch grant" in r.output
+
+
+def test_revoking_the_grant_never_deactivates(tmp_home, monkeypatch):
+    """The coupling is one-way: pr_watch.enabled owns the off switch, and the
+    watcher serves review dispatch beyond grants."""
+    calls = _stub_grant_coupling(monkeypatch)
+    import fno.pr_watch.cli as pwcli
+
+    monkeypatch.setattr(pwcli, "deactivate_watcher", lambda: "unloaded")
+    from fno.config_cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, ["set", "config.auto_merge.enabled", "true"])
+    runner.invoke(app, ["set", "config.auto_merge.grant", "dispatch"])
+    calls["activate"] = 0
+    r = runner.invoke(app, ["set", "config.auto_merge.grant", "none"])
+    assert r.exit_code == 0, r.output
+    assert calls["activate"] == 0
+
+
+def test_panic_switch_blocks_grant_activation(tmp_home, monkeypatch):
+    """Subordinate to autonomy.enabled: with the panic switch off, arming the
+    grant must not bring an autonomous merger to life behind its back."""
+    calls = _stub_grant_coupling(monkeypatch)
+    from fno.config_cli import app
+
+    runner = CliRunner()
+    runner.invoke(app, ["set", "config.autonomy.enabled", "false"])
+    runner.invoke(app, ["set", "config.auto_merge.enabled", "true"])
+    r = runner.invoke(app, ["set", "config.auto_merge.grant", "dispatch"])
+    assert r.exit_code == 0, r.output
+    assert calls["activate"] == 0
 
 
 def test_activation_failure_is_loud_and_keeps_config(tmp_home, monkeypatch):
@@ -73,7 +139,6 @@ def test_activation_failure_is_loud_and_keeps_config(tmp_home, monkeypatch):
 
     # Config value stuck despite the activation failure.
     from fno.config import load_settings
-    load_settings.cache_clear()
     assert load_settings().pr_watch.enabled is True
 
 
@@ -119,3 +184,16 @@ def test_unrelated_key_does_not_touch_watcher(tmp_home, monkeypatch):
     r = CliRunner().invoke(app, ["set", "config.pr_watch.interval_seconds", "300"])
     assert r.exit_code == 0, r.output
     assert "activate" not in calls and "deactivate" not in calls
+
+
+def test_is_node_live_sees_global_claim(tmp_path, monkeypatch):
+    """Regression (x-74aa): the node read routes by key to the global root, so
+    a claim held there reads live from any cwd instead of free off the empty
+    repo space."""
+    from fno.claims import acquire_claim
+    from fno.pr_watch.cli import ClaimAdapter
+
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(tmp_path / "global"))
+    monkeypatch.setattr("fno.paths.space_dir", lambda: tmp_path / "space")
+    acquire_claim("node:ab-1234", holder="target-session:sid-x")
+    assert ClaimAdapter().is_node_live("ab-1234") is True

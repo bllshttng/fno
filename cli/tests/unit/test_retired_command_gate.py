@@ -82,17 +82,24 @@ def test_clean_tree_passes_and_reports_what_it_inspected(repo: Path) -> None:
     assert "inspected 1 runnable-form site(s)" in result.stdout
 
 
-def test_runnable_form_in_a_python_string_fails(repo: Path) -> None:
-    _add(repo, "cli/src/fno/new.py", 'HELP = "Clean up with claude rm <short_id>."\n')
-    result = _run(repo)
-    assert result.returncode == 1
-    assert "cli/src/fno/new.py" in result.stderr
+def _register_leaf(repo: Path, leaf: str) -> None:
+    """Register one leaf AND aim the canary at it.
+
+    The gate refuses a scan whose canary names a leaf nobody registered, so a
+    test that writes only the registry inherits whichever leaf the repo happens
+    to carry. That coupling broke the moment the repo registered a different
+    one. Both files move together here.
+    """
+    (repo / "scripts/ci/retired-config-leaves.txt").write_text(
+        f"{leaf}|deleted|use one-shot review evidence\n"
+    )
+    (repo / "scripts/ci/fixtures/retired-config-leaf-canary.py").write_text(
+        f'CONFIG_LEAF_CANARY = "{leaf}"  # retired-config-ok: scanner control only\n'
+    )
 
 
 def test_retired_config_key_in_caller_surface_fails(repo: Path) -> None:
-    (repo / "scripts/ci/retired-config-leaves.txt").write_text(
-        "review.github_apps|deleted|use one-shot review evidence\n"
-    )
+    _register_leaf(repo, "review.github_apps")
     _add(repo, "cli/src/fno/config.py", 'HELP = "set review.github_apps"\n')
     result = _run(repo)
     assert result.returncode == 1
@@ -100,9 +107,7 @@ def test_retired_config_key_in_caller_surface_fails(repo: Path) -> None:
 
 
 def test_retired_config_key_in_nested_toml_fails(repo: Path) -> None:
-    (repo / "scripts/ci/retired-config-leaves.txt").write_text(
-        "review.github_apps|deleted|use one-shot review evidence\n"
-    )
+    _register_leaf(repo, "review.github_apps")
     _add(repo, "docs/config.toml", "[review]\ngithub_apps = []\n")
     result = _run(repo)
     assert result.returncode == 1
@@ -120,6 +125,8 @@ def test_missing_config_canary_fails_closed(repo: Path) -> None:
 def test_failure_message_names_command_replacement_and_ruling(repo: Path) -> None:
     _add(repo, "cli/src/fno/new.py", 'HELP = "Clean up with claude rm <short_id>."\n')
     result = _run(repo)
+    assert result.returncode == 1
+    assert "cli/src/fno/new.py" in result.stderr
     assert "claude rm" in result.stderr
     assert "fno agents rm" in result.stderr
     assert "d-1900e419" in result.stderr
@@ -177,11 +184,6 @@ def test_rust_runtime_string_is_reported(repo: Path) -> None:
         "crates/fno-agents/src/new.rs",
         'fn f() { eprintln!("tear it down with claude rm {short}"); }\n',
     )
-    assert _run(repo).returncode == 1
-
-
-def test_markdown_prose_is_reported(repo: Path) -> None:
-    _add(repo, "skills/k/new.md", "Run `claude stop <short_id>` first.\n")
     assert _run(repo).returncode == 1
 
 
@@ -258,12 +260,6 @@ def test_a_wrapped_format_string_is_reported(repo: Path) -> None:
     assert "cli/src/fno/new.py" in result.stderr
 
 
-def test_docs_are_scanned(repo: Path) -> None:
-    """The operator guide is the most caller-facing surface there is."""
-    _add(repo, "docs/new.md", "Run `claude stop <short_id>` by hand first.\n")
-    assert _run(repo).returncode == 1
-
-
 def test_a_shell_comment_is_never_reported(repo: Path) -> None:
     _add(repo, "hooks/new.sh", "# reaps with claude rm <short_id> internally\ntrue\n")
     assert _run(repo).returncode == 0
@@ -317,3 +313,21 @@ def test_a_malformed_allowlist_line_names_its_line_number(repo: Path) -> None:
     result = _run(repo)
     assert result.returncode == 1
     assert ":2:" in result.stderr and "malformed" in result.stderr
+
+
+def test_absent_question_verb_with_placeholder_fails(repo: Path) -> None:
+    _add(repo, "skills/k/new.md", "File it with `fno inbox ask <question> --node <id>`.\n")
+    result = _run(repo)
+    assert result.returncode == 1
+    assert "skills/k/new.md" in result.stderr
+    assert "fno inbox outstanding ask" in result.stderr
+
+
+def test_real_question_verb_passes(repo: Path) -> None:
+    _add(
+        repo,
+        "skills/k/new.md",
+        'File it with `fno inbox outstanding ask "<question>" --node <id>`.\n',
+    )
+    result = _run(repo)
+    assert result.returncode == 0, result.stderr

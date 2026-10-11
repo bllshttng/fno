@@ -1,35 +1,14 @@
 """Pydantic settings schema for the fno CLI.
 
-Settings are DEEP-MERGED across every candidate file that exists, with
-higher-priority files overriding lower-priority ones key-by-key (nested
-dicts merge recursively; scalars and lists replace wholesale). Candidate
-priority, highest first:
-  1. $FNO_CONFIG env var (explicit path; when set, the ONLY candidate)
-  2. <worktree_root>/.fno/settings.yaml  (project-local to this checkout)
-  3. <canonical_root>/.fno/settings.yaml  (the main checkout's config,
-     reached via the main worktree from `git worktree list`; lets a linked
-     worktree read shared project config with zero per-worktree setup;
-     deduped when 2 == 3)
-  4. ~/.fno/settings.yaml  (per-user global; shared defaults)
+Settings are DEEP-MERGED across every candidate file that exists, higher
+priority overriding lower key-by-key (nested dicts merge recursively,
+scalars and lists replace wholesale). The candidate priority list, the per-key fallthrough, and the design decisions are locked in docs/path-config.md.
 
-A key absent from a higher-priority file falls through to the next file
-down, so the per-user global can hold shared defaults (e.g.
-config.obsidian.vault) while each project sets only its deltas (e.g.
-config.post_merge.parking_lot_path). When no file exists, built-in defaults apply.
-This mirrors the shell reader (scripts/lib/config.sh, per-key local->global
-fallback) and the provider loader, both of which already merge project-local
-over global.
-
-Cache: load_settings() is cached per-process via functools.lru_cache.
-Mid-process edits to settings.yaml do not take effect; the next
-subprocess sees the new value.
-
-Design decisions (locked in 2026-05-14-path-config.md):
-  - extra='ignore' for forward compatibility (do NOT change to 'forbid')
-  - Emit a startup WARNING for unknown keys (not an error)
-  - Reject glob chars (*?[) at validation time, not at resolve time
-  - Reject {vault} when obsidian.enabled is False
-  - PATH_MAX = 4096 bytes enforced on state_dir / plans_dir
+Cache: load_settings() is an uncached wrapper over _load_settings_at(),
+keyed on the declaration (_settings_key: env overrides + HOME + resolved
+repo root) PLUS a stat fingerprint of every candidate file. A same-key
+settings rewrite changes the fingerprint, so the cache reparses on its
+own; no cache_clear is needed to see an edit in-process.
 """
 from __future__ import annotations
 
@@ -40,26 +19,47 @@ import os
 import re
 import tempfile
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, cast
 
-import tomli_w
 import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     ValidationInfo,
+    ValidationError as _PydValidationError,
     field_validator,
     model_validator,
 )
-from pydantic import ValidationError as _PydValidationError
 
-# Pure file-reader leaf, extracted to break the config<->graph cycle. Re-exported
-# here so every existing `from fno.config import read_config_flat` (etc.) caller
-# keeps working unchanged. The redundant `X as X` aliases are the explicit-reexport
-# idiom mypy's --no-implicit-reexport requires (these names used to be defined here).
+from fno.user import UserBlock
+from fno.config.split_block import SplitBlock as SplitBlock
+
+# Pure file-reader leaf, extracted to break the config<->graph cycle and re-exported
+# here; the redundant `X as X` aliases are the explicit-reexport idiom mypy's
+# --no-implicit-reexport requires (these names used to be defined here).
+from fno.config import _watchdog
+from fno.config._active_backlog import ActiveBacklogConfig as ActiveBacklogConfig
+from fno.config._auto_heal import AutoHealBlock
+from fno.config._dispatch_verbs import DEFAULT_DISPATCH_VERBS as _DEFAULT_DISPATCH_VERBS
+from fno.config._dispatch_verbs import DispatchVerbDescriptor as DispatchVerbDescriptor
+from fno.config._dispatch_verbs import resolvable_verbs as resolvable_verbs
+from fno.config._lead import LEAD_CHECKIN_TEXT as LEAD_CHECKIN_TEXT
+from fno.config._lead import LeadBlock
+from fno.config._evals import EvalsBlock
+from fno.config.status_sinks import StatusFanoutConfig as StatusFanoutConfig
+from fno.config.status_sinks import StatusSinkConfig as StatusSinkConfig
+# The keyed settings loader lives in fno.config._loader (this file is
+# shrink-only); re-exported under the names every caller and test imports.
+from fno.config._loader import _load_settings_at as _load_settings_at
+from fno.config.source_attribution import resolve_source as resolve_source
+from fno.config._loader import _settings_key as _settings_key
+from fno.config._sweeps import ReapBlock, ReapReceiptsBlock, StateReapBlock, SweepKeys
+from fno.config._guards import GuardsBlock
+from fno.config._store import StoreBlock
+from fno.config._test import TestBlock
+from fno.config._watchdog import WatchdogBlock
 from fno.config_io import _apply_search_ceiling as _apply_search_ceiling
 from fno.config_io import _deep_merge as _deep_merge
 from fno.config_io import _global_settings_path as _global_settings_path
@@ -111,52 +111,48 @@ def _check_path_max(value: str, field_name: str) -> None:
 
 
 class PathsBlock(BaseModel):
-    """Per-resource path overrides.
-
-    Every field is optional; omitting it causes the resolver to derive
-    the path from state_dir instead.
-    """
+    """Per-resource path overrides; an omitted field derives from state_dir."""
 
     model_config = ConfigDict(extra="ignore")
 
-    graph_json: Optional[str] = None
     ledger_json: Optional[str] = None
     evals_history: Optional[str] = None
     briefs_dir: Optional[str] = None
     fleet_dir: Optional[str] = None
     postmortems_dir: Optional[str] = None
     worktrees_base: Optional[str] = None
+    cargo_targets_base: Optional[str] = None
     memory_dir: Optional[str] = None
     hook_logs_dir: Optional[str] = None
     inbox_dir: Optional[str] = None
     inbox_path: Optional[str] = None
-    agents_registry_path: Optional[str] = None
     handoffs_dir: Optional[str] = None
     retro_pending_dir: Optional[str] = None
     bus_dir: Optional[str] = None
-    loops_paused_json: Optional[str] = None
+    chats: Optional[str] = None
     observer_reports_dir: Optional[str] = None
     operator_lane: Optional[str] = None
+    spaces_dir: Optional[str] = None
 
     @field_validator(
-        "graph_json",
         "ledger_json",
         "evals_history",
         "briefs_dir",
         "fleet_dir",
         "postmortems_dir",
         "worktrees_base",
+        "cargo_targets_base",
         "memory_dir",
         "hook_logs_dir",
         "inbox_dir",
         "inbox_path",
-        "agents_registry_path",
         "handoffs_dir",
         "retro_pending_dir",
         "bus_dir",
-        "loops_paused_json",
+        "chats",
         "observer_reports_dir",
         "operator_lane",
+        "spaces_dir",
         mode="before",
     )
     @classmethod
@@ -232,6 +228,8 @@ class BlueprintBlock(BaseModel):
 
     max_prs_per_epic: int = 4
 
+    python_repair_added_lines: int = Field(default=30, ge=0)
+
     @field_validator("max_prs_per_epic")
     @classmethod
     def max_prs_per_epic_positive(cls, v: int) -> int:
@@ -248,30 +246,29 @@ class MaintainBlock(BaseModel):
 
     staleness_days: int = 30
     max_failed_attempts: int = 3
-    # Validity sweep. No raising validators: a nonpositive/oversized
-    # value degrades to a bounded default IN THE LEG (per Failure Modes) so a bad
-    # config never breaks the whole `maintain` command.
-    validity_days: int = 60
+    abandoned_do_row_hours: int = 24  # transcript-quiet hours before the do-row leg reaps
+    # Wall-clock budget for one pass (checked between legs); a short pass exits 4.
+    budget_seconds: int = 300
+    validity_days: int = 60  # validity sweep degrades to bounded defaults in-leg
     validity_batch_size: int = 25
 
-    @field_validator("staleness_days")
+    @field_validator(
+        "staleness_days", "max_failed_attempts", "abandoned_do_row_hours", "budget_seconds"
+    )
     @classmethod
-    def staleness_days_positive(cls, v: int) -> int:
-        """An idea cannot be 'older than N days' for N < 1."""
+    def _positive_counts(cls, v: int, info: ValidationInfo) -> int:
+        """A threshold below 1 cannot bound anything."""
         if v < 1:
-            raise ValueError("config.backlog.maintain.staleness_days must be >= 1")
+            raise ValueError(f"config.backlog.maintain.{info.field_name} must be >= 1")
         return v
 
-    @field_validator("max_failed_attempts")
-    @classmethod
-    def max_failed_attempts_positive(cls, v: int) -> int:
-        """A consecutive-failure threshold below 1 would auto-defer every node
-        on its first failure (or with zero failures), so N must be >= 1."""
-        if v < 1:
-            raise ValueError(
-                "config.backlog.maintain.max_failed_attempts must be >= 1"
-            )
-        return v
+
+class PlanBlock(BaseModel):
+    """Plan budgets (config.plan): default_diff_budget is the commit-time diff-budget ceiling (hooks/diff-budget-commit.sh), 0 is off; a plan's frontmatter diff_budget overrides."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    default_diff_budget: int = Field(default=300, ge=0)
 
 
 _RENDER_PROJECTIONS = ("backlog", "roadmap", "local")
@@ -288,9 +285,10 @@ RENDER_TARGETS_TABLE_TYPO_MSG = (
 class RenderTargetConfig(BaseModel):
     """One auto-rendered backlog projection (``config.backlog.render_targets[]``).
 
-    Public projections use the shared title leak gate; ``local`` is explicitly
-    private and retains full-detail links. ``scope`` names one project or
-    ``all``. ``project`` remains accepted as a compatibility spelling.
+    ``local`` (the default) renders the unified board page; ``backlog`` and
+    ``roadmap`` name retired public HTML projections and warn-skip. ``scope``
+    names one project or ``all``. ``project`` remains accepted as a
+    compatibility spelling.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -298,7 +296,7 @@ class RenderTargetConfig(BaseModel):
     path: str
     project: str | None = None
     scope: str | None = None
-    projection: str = "backlog"
+    projection: str = "local"
 
     @model_validator(mode="before")
     @classmethod
@@ -408,7 +406,13 @@ class BacklogBlock(BaseModel):
     # maintain.staleness_days (30, for idea-stage rows) - ready work goes stale
     # faster than an untriaged idea, so it defaults tighter (21).
     staleness_days: int = 21
+    epic_max_open_children: Optional[int] = Field(default=None, ge=1)
+    # Enforced by the Rust idea cap (idea_cap.rs); 0 turns the cap off.
+    max_open_ideas: int = Field(default=25, ge=0)
     render_targets: list[RenderTargetConfig] = Field(default_factory=list)
+    # Seconds an open local board or lead.html tab waits, visible and
+    # untouched, before it reloads itself (0 is off).
+    page_reload_s: int = 60
 
     @field_validator("render_targets", mode="before")
     @classmethod
@@ -477,7 +481,7 @@ class BacklogBlock(BaseModel):
 class PostMergeBlock(BaseModel):
     """Post-merge ritual settings (nested under 'config.post_merge').
 
-    Drives the /fno:pr merged skill: where to write prose follow-up
+    Drives the /fno:ship pr merged skill: where to write prose follow-up
     todos after a PR merges, and whether the ritual is enabled for this repo.
 
     `parking_lot_path` is repo-relative. The vault-area name does NOT equal the
@@ -490,19 +494,15 @@ class PostMergeBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     parking_lot_path: Optional[str] = None
-    # Maintainer-only action marker (e.g. "#maintainer"): a discriminator appended to
-    # decision / sign-off / manual-setup items so they stand out in a SHARED
-    # vault parking lot that already carries thousands of unrelated checkboxes.
-    # Default empty: a dedicated maintainer file (or an unconfigured shared one)
-    # needs no discriminator, so a fresh install tags nobody's todos with someone
-    # else's initials. Opt in by setting the marker; it is honored by both the
-    # post-merge ritual (skills/pr/references/merged.md) and the capture parser
-    # (cli/src/fno/backlog/capture.py) - the producer and consumer of
-    # maintainer-only items share one key, mirroring parking_lot_path above.
+    # Maintainer-only action marker (e.g. "#maintainer"): a discriminator
+    # appended to decision / sign-off items so they stand out in a SHARED vault
+    # parking lot. Default empty so a fresh install tags nobody's todos with
+    # someone else's initials. Honored by both the post-merge ritual and the
+    # capture parser - producer and consumer share one key, like parking_lot_path.
     maintainer_marker: Optional[str] = None
     enabled: bool = True
     self_reap: bool = False
-    # Canonical-sync (x-47be): all three default to the feature-off state so a
+    # Canonical-sync: all three default to the feature-off state so a
     # fresh install does nothing. sync_command is the project's whole sync
     # incantation (run via `bash -lc` from the canonical checkout); sync_paths
     # gates it on the merged file list (empty = always run); auto_run arms the
@@ -576,7 +576,7 @@ class PostMergeBlock(BaseModel):
     def _coerce_self_reap(cls, v: object) -> bool:
         """Fail-safe to false on any non-boolean value.
 
-        self_reap lets a finished /fno:pr merged background worker remove its
+        self_reap lets a finished /fno:ship pr merged background worker remove its
         own agent-view row (``fno agents rm <name>``, which the ritual calls
         in-process) at the end of the ritual.
         Default off: the ritual prints the one-keystroke reap command instead,
@@ -653,14 +653,15 @@ class ResearchBlock(BaseModel):
 class CrossModelBlock(BaseModel):
     """Cross-model review opt-in (nested under 'config.review.cross_model').
 
-    Gates the provider-rotated sigma-review panel (ab-6c8f4c61): when
-    `enabled` is true the internal review panel may route correctness agents
-    to a different provider (codex/gemini) than wrote the code, catching
-    model-specific blind spots. Default False: existing all-claude review is
-    byte-for-byte unchanged until the operator turns it on (Locked Decision 7).
-    An explicit `config.review.agent_providers` map ALSO engages cross-model
-    (the selector treats either signal as opt-in); this flag is the
-    no-map-needed switch.
+    Gates the diversity axis of review (; the sigma panel it once
+    routed is removed): when `enabled` is true, reviewer capacity
+    may include a different provider (codex/gemini) than wrote the code,
+    catching model-specific blind spots - the peer rung's substrate and the
+    assurance resolver's effective kinds. Default False: existing all-claude
+    review is byte-for-byte unchanged until the operator turns it on (Locked
+    Decision 7). An explicit `config.review.agent_providers` map ALSO engages
+    cross-model (the selector treats either signal as opt-in); this flag is
+    the no-map-needed switch.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -733,18 +734,15 @@ class ReviewerDescriptor:
     invocations: Optional[Mapping[str, str]] = None
 
 
-# Reviewer names that have a `review_attestation` emit path (x-e703 Change 4).
-# config.review.reviewers entries must resolve to one of these keys; a leading
-# '/' is stripped first (so `/code-review` == `code-review`). Kept in sync with
-# the emit surfaces in skills/review, the loop-check attestation read, and the
-# Rust-side invocation table - the last of those by
+# Reviewer names that have a `review_attestation` emit path (Change 4).
+# config.review.reviewers must resolve to one of these keys ('/' stripped).
+# Kept in sync with the emit surfaces and the Rust-side invocation table by
 # scripts/ci/check-reviewer-descriptor-parity.sh, not by remembering.
 #
-# This table is exactly the reviewers footnote AUTHORS. A project registers its
-# own via `config.review.reviewer_registry`, which is unioned in at lookup time
-# by `resolvable_reviewers()` and is never written back here: the parity script
-# AST-parses this literal, so a config-dependent table would turn a build-time
-# CI check into one whose verdict varies per machine.
+# Exactly the reviewers footnote AUTHORS: project-owned reviewers live in
+# `reviewer_registry`, unioned at lookup by `resolvable_reviewers()` and never
+# written back here (the parity script AST-parses this literal, so a
+# config-dependent table would make the CI verdict vary per machine).
 _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
     # RETIRED. The six-agent panel is gone; the fno review lane (bare
     # /fno:review) is the default reviewer on every harness. A config still
@@ -757,18 +755,13 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
         invocation="/fno:review",
         asserts="review-evidence",
     ),
-    # `/code-review` is a self-serve local-attestation reviewer: the session
-    # that wrote the diff runs the fno review lane (the skill behind this
-    # invocation) and the lane's emit step records the classified attestation.
-    # `requires="none"` rather than "operator" is load-bearing - the operator
-    # variant made `blocks_autonomy` true and refused every unattended run at
-    # init, which is the opposite of a gate whose point is that the session
-    # serves itself. No per-harness map: the owned lane is the invocation on
-    # every harness, which is the portability the recharter bought. The native
-    # verbs (/code-review on claude, /review on codex) remain the operator's
-    # explicit choice, documented in docs/architecture/review-lanes.md; the
-    # machinery never recommends them, because a recommendation that depends
-    # on a harness transport is the fragile part this table no longer encodes.
+    # `/code-review` is self-serve: the session that wrote the diff runs the fno
+    # review lane and its emit step records the classified attestation.
+    # `requires="none"` is load-bearing ("operator" made `blocks_autonomy` true
+    # and refused every unattended run at init). No per-harness map: the lane is
+    # the invocation on every harness. The native verbs (/code-review on claude,
+    # /review on codex) stay the operator's explicit choice; the machinery never
+    # recommends them (docs/architecture/review-lanes.md).
     "code-review": ReviewerDescriptor(
         kind="local-attestation",
         requires="none",
@@ -786,7 +779,7 @@ _RESOLVABLE_REVIEWERS: dict[str, ReviewerDescriptor] = {
 def provider_limits_table(agents: object) -> Mapping[str, object]:
     """The per-provider budget table off an AgentsBlock-shaped object.
 
-    `provider_limits` since x-3f84 W5, with the legacy `max_lanes` spelling
+    `provider_limits` since x-aaaa W5, with the legacy `max_lanes` spelling
     honored for a pre-rename embedded settings object - without the fallback
     such an object reads as no table and silently un-caps. ONE accessor, not
     a getattr chain per reader: a chain per reader is how the scoreboard
@@ -810,7 +803,7 @@ def provider_subagent_budget(
     settings could not be read at all. Every one of them has to FAIL OPEN - the
     reader is route resolution, and refusing a review route because a config
     file was unreadable would wedge every session on the machine over a
-    resource question that only ever applied to one shared account (x-c703 LD3).
+    resource question that only ever applied to one shared account (LD3).
     """
     if not provider or provider == "unknown":
         return None
@@ -897,12 +890,258 @@ def resolvable_reviewers(
     return {**registry, **_RESOLVABLE_REVIEWERS}
 
 
+# ── review.posture ──────────────────────────────────────────────────
+#
+# One leaf naming how much review a code PR must have before it may merge. The
+# posture names the rung; the merge grant refuses below the floor (the old
+# separate tables let `auto_merge.enabled=true` with no review gate pass
+# silently). Rank is the ladder position (1 worst, 9 best); every descriptor
+# field is exactly what the merge receipt prints.
+#
+# PARITY SOURCE: the Rust coverage reader mirrors the ranks and component
+# vocabulary, and check-reviewer-descriptor-parity.sh AST-parses this literal.
+@dataclass(frozen=True)
+class ReviewPostureDescriptor:
+    """One rung of the review-posture ladder, immutable.
+
+    `components` names the evidence lanes coverage must satisfy, using the
+    vocabulary the Rust coverage reader shares: `self` (a real final-head
+    review, author context allowed), `independent` (the same, plus positive
+    fresh-context provenance that the reviewing context never authored the
+    diff), `github` (a configured App review at the final head), and `peer`
+    (a cross-model peer verdict at the final head).
+    """
+
+    value: str
+    rank: int
+    components: tuple[str, ...]
+    freshness: str
+    diversity: str
+    cost: str
+    summary: str
+
+
+REVIEW_POSTURES: dict[str, ReviewPostureDescriptor] = {
+    "no_review": ReviewPostureDescriptor(
+        value="no_review",
+        rank=1,
+        components=(),
+        freshness="none",
+        diversity="none",
+        cost="zero reviews",
+        summary="no review at all",
+    ),
+    "tests_pass": ReviewPostureDescriptor(
+        value="tests_pass",
+        rank=2,
+        components=(),
+        freshness="none",
+        diversity="none",
+        cost="zero reviews",
+        summary="settled green checks only, no review",
+    ),
+    "self_review": ReviewPostureDescriptor(
+        value="self_review",
+        rank=3,
+        components=("self",),
+        freshness="same context sufficient",
+        diversity="same model allowed",
+        cost="one review",
+        summary="one real final-head review, author context allowed",
+    ),
+    "independent_review": ReviewPostureDescriptor(
+        value="independent_review",
+        rank=4,
+        components=("independent",),
+        freshness="fresh reviewer context required",
+        diversity="same model allowed",
+        cost="one fresh reviewer",
+        summary="one final-head review with positive fresh-context provenance",
+    ),
+    "github_review": ReviewPostureDescriptor(
+        value="github_review",
+        rank=5,
+        components=("github",),
+        freshness="external",
+        diversity="configured App",
+        cost="one App review",
+        summary="a configured GitHub App review at the final head",
+    ),
+    "peer_review": ReviewPostureDescriptor(
+        value="peer_review",
+        rank=6,
+        components=("peer",),
+        freshness="fresh reviewer context required",
+        diversity="different model family required",
+        cost="one peer review",
+        summary="a cross-model peer verdict at the final head",
+    ),
+    "self_and_github": ReviewPostureDescriptor(
+        value="self_and_github",
+        rank=7,
+        components=("self", "github"),
+        freshness="mixed",
+        diversity="mixed",
+        cost="two reviews",
+        summary="self review plus a configured GitHub App review",
+    ),
+    "self_and_peer": ReviewPostureDescriptor(
+        value="self_and_peer",
+        rank=8,
+        components=("self", "peer"),
+        freshness="mixed",
+        diversity="mixed",
+        cost="two reviews",
+        summary="self review plus a cross-model peer verdict",
+    ),
+    "self_github_and_peer": ReviewPostureDescriptor(
+        value="self_github_and_peer",
+        rank=9,
+        components=("self", "github", "peer"),
+        freshness="mixed",
+        diversity="mixed",
+        cost="three reviews",
+        summary="self review, a GitHub App review, and a cross-model peer",
+    ),
+}
+
+# The floor the merge grant refuses below: auto-merge, per-run merge grants,
+# and GitHub-native arming all require a REAL review (rung 3), and the refusal
+# names this rung plus the remedy. `declare` satisfies no code-review rung and
+# can never clear this floor by assertion.
+MIN_AUTOMERGE_RANK = REVIEW_POSTURES["self_review"].rank
+
+# The reviewer names that contribute a `self` lane to legacy inference. sigma
+# is retired (a config naming it refuses at init) and `declare` is a self-cert
+# that satisfies no rung, so neither can make a legacy config LOOK reviewed.
+_SELF_LANE_EXCLUDED_REVIEWERS = frozenset({"declare", "sigma"})
+
+
+@dataclass(frozen=True)
+class ResolvedReviewPosture:
+    """The one posture a review block resolves to, with its provenance.
+
+    `source` is `explicit` (the leaf was set), `legacy` (inferred from the
+    pre-posture settings, migration command attached), or `default` (a bare
+    install; the shipped floor). `legacy` never silently hardens or weakens a
+    config: the inferred value and the exact command that makes it permanent
+    travel together on every surface that prints a posture.
+    """
+
+    value: str
+    descriptor: ReviewPostureDescriptor
+    source: str  # explicit | legacy | default
+    migration: Optional[str] = None  # exact command, when source == "legacy"
+    signals: tuple[str, ...] = ()  # what legacy inference read
+
+    @property
+    def rank(self) -> int:
+        return self.descriptor.rank
+
+    @property
+    def automerge_blocked(self) -> bool:
+        return self.rank < MIN_AUTOMERGE_RANK
+
+    def line(self) -> str:
+        detail = f" ({self.descriptor.summary}, {self.descriptor.cost})"
+        src = self.source
+        tail = f" [inferred from legacy settings; make it explicit: {self.migration}]" if src == "legacy" else ""
+        return f"posture={self.value} rank={self.rank} source={src}{detail}{tail}"
+
+
+def resolve_review_posture(review: "ReviewBlock") -> ResolvedReviewPosture:
+    """Resolve `review.posture` for one validated ReviewBlock. Total.
+
+    Explicit leaf wins. Absent, infer ONE visible posture from the legacy
+    settings (the shipped `self_review_required` floor, the github_apps gate,
+    peers, and an explicit opt-out), preserving each: an
+    explicit `self_review_required=false` with nothing else reads `no_review`
+    today and must keep reading that, while a declared-empty github_apps list
+    (PR + CI only) reads `tests_pass`. Nothing configured at all is NOT
+    legacy - it is the shipped default floor, `self_review`, because the
+    default must not be rung 1.
+    """
+    if review.posture is not None:
+        return ResolvedReviewPosture(
+            value=review.posture,
+            descriptor=REVIEW_POSTURES[review.posture],
+            source="explicit",
+        )
+
+    github = bool(review.github_apps)
+    # required_bots is folded into github_apps by the validator only when
+    # github_apps itself is unset, so the resolved field is the whole signal.
+    declared_none = review.github_apps == []
+    peers = bool(review.peers)
+    explicit_sets: frozenset[str] = getattr(review, "model_fields_set", frozenset())
+    floor_off = (
+        not review.self_review_required
+        and "self_review_required" in explicit_sets
+    )
+    self_named = any(
+        name.strip().lstrip("/") not in _SELF_LANE_EXCLUDED_REVIEWERS
+        for name in review.reviewers
+    )
+
+    signals: list[str] = []
+    if declared_none:
+        signals.append("github_apps=[]")
+    if github:
+        signals.append("github_apps")
+    if peers:
+        signals.append("peers")
+    if floor_off:
+        signals.append("self_review_required=false")
+    if self_named:
+        signals.append("reviewers")
+
+    if declared_none and not github and not peers:
+        value = "tests_pass"
+    elif github and peers:
+        value = "self_github_and_peer" if not floor_off else "github_review"
+    elif github:
+        value = "self_and_github" if not floor_off else "github_review"
+    elif peers:
+        value = "self_and_peer" if not floor_off else "peer_review"
+    elif self_named:
+        value = "self_review"
+    elif floor_off:
+        # An explicit opt-out with no other lane: the legacy effective state
+        # was no review gate. Preserve it visibly, never silently.
+        value = "no_review"
+    else:
+        # Bare install: no legacy signal anywhere. This is the shipped DEFAULT
+        # floor, not an inference, so no migration command is printed.
+        return ResolvedReviewPosture(
+            value="self_review",
+            descriptor=REVIEW_POSTURES["self_review"],
+            source="default",
+        )
+
+    # Name the floor when it is what supplied a self lane, so the signals
+    # tuple never claims a `reviewers` entry the config does not carry.
+    if (
+        "self" in REVIEW_POSTURES[value].components
+        and not floor_off
+        and not self_named
+    ):
+        signals.append("self_review_required")
+
+    return ResolvedReviewPosture(
+        value=value,
+        descriptor=REVIEW_POSTURES[value],
+        source="legacy",
+        migration=f"fno config set review.posture {value} --local",
+        signals=tuple(signals),
+    )
+
+
 # The reviewer vocabulary of the ADJACENT key: `config.review.external_reviewers`
 # names AI reviewers /pr requests a PR review from, and is the key an operator
 # writing `reviewers: [coderabbit]` almost always meant. Checked BEFORE difflib,
 # because `codex` is a valid value there and fuzzy matching would offer a worse
 # guess. A literal frozenset beside the validator, rather than a runtime read of
-# skills/pr/scripts/list-reviewers.sh, keeps this from becoming a second
+# skills/ship/scripts/list-reviewers.sh, keeps this from becoming a second
 # cross-language parity obligation - drift here degrades a hint, not a gate.
 _EXTERNAL_REVIEWER_VOCABULARY: frozenset[str] = frozenset(
     {"gemini", "codex", "coderabbit", "claude"}
@@ -925,36 +1164,6 @@ def _reviewer_hint(name: str, known: Mapping[str, ReviewerDescriptor]) -> str:
         )
     close = difflib.get_close_matches(name, sorted(known), n=1)
     return f". Did you mean {close[0]!r}?" if close else ""
-
-
-_SIGMA_AGENT_NAMES = frozenset(
-    {
-        "code_reviewer",
-        "integration_test_analyzer",
-        "multi_device_checker",
-        "silent_failure_hunter",
-        "type_design_analyzer",
-        "ux_flow_tester",
-    }
-)
-
-
-class AgentRouteBlock(BaseModel):
-    """Explicit, opt-in named-session route for one sigma panel agent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    harness: Literal["claude"]
-    provider: str = Field(min_length=1)
-    model: str = Field(min_length=1)
-
-    @field_validator("provider", "model")
-    @classmethod
-    def strip_nonempty(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("agent route provider/model must not be empty")
-        return stripped
 
 
 class ApprovalsBlock(BaseModel):
@@ -1011,8 +1220,9 @@ class WordCapBlock(BaseModel):
     """Per-surface masked-word caps for style rule 7.
 
     One number per surface that is read MID-TURN. The surface set itself lives
-    in `fno.style.CAPPED_SURFACES` and is not configurable: a project may move a
-    number here, and may never cap a surface the checker says is uncapped.
+    in the style gate (crates/fno-agents/src/backlog/style_check.rs) and is not
+    configurable: a project may move a number here, and may never cap a surface
+    the checker says is uncapped.
 
     Bounds come from a validator, not from `Field(80, ge=1)`. A positional
     default plus a constraint makes mypy resolve this class's `default_factory`
@@ -1040,20 +1250,6 @@ class StyleBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     word_cap: WordCapBlock = Field(default_factory=WordCapBlock)
-    # The rolling pair budget is a WINDOW instrument, not a per-text cap, so it
-    # is a sibling of word_cap rather than one of its surfaces. It moves WITH
-    # the per-message cap or it silently binds first: a project that raises
-    # word_cap.mail to 200 would still be refused at the 80-word window total,
-    # and the refusal would name a number the sender never set. That coupling is
-    # why the budget's cap became configurable at all.
-    pair_budget_words: int = 80
-
-    @field_validator("pair_budget_words")
-    @classmethod
-    def budget_is_positive(cls, v: int) -> int:
-        if v < 1:
-            raise ValueError("config.style.pair_budget_words must be >= 1")
-        return v
 
 
 class ReviewBlock(BaseModel):
@@ -1061,7 +1257,7 @@ class ReviewBlock(BaseModel):
 
     `github_apps` is the must-have-reviewed list of GitHub App bot logins
     consumed by the `fno-agents loop-check` review gate (control-plane step 2,
-    ab-f1c5a9ed): a session terminates DonePRGreen only when every listed login
+): a session terminates DonePRGreen only when every listed login
     has at least one completed review pass and no unaddressed blocking finding.
 
     Semantics (mirrors the Rust-side parser in loopcheck.rs):
@@ -1089,6 +1285,14 @@ class ReviewBlock(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # The LADDER: one leaf naming how much review a code PR needs
+    # before it may merge. One of the nine REVIEW_POSTURES values; None (the
+    # default) means "infer one visible posture from the legacy settings, or
+    # fall to the shipped self_review floor", which `resolve_review_posture`
+    # does and every posture-printing surface reports with its migration
+    # command. Auto-merge refuses below `self_review` (rung 3).
+    posture: Optional[str] = None
+
     # The GATE: GitHub App bot logins that must have reviewed (canonical).
     github_apps: Optional[list[str]] = None
     # Legacy alias for github_apps; resolved into github_apps by the validator
@@ -1101,40 +1305,33 @@ class ReviewBlock(BaseModel):
     # the env var holding that identity's PAT.
     peer_identity: Optional[str] = None
     peer_token_env: Optional[str] = None
-    # Reviewer logins honored-if-present but NOT required (x-4baa): the gate
-    # never waits for them (their absence never blocks - kills the App-bot
-    # usage-limit wedge), but a blocking finding from one still holds the gate.
-    # None (unset) resolves to DEFAULT_OPTIONAL_APPS via resolved_optional_apps;
-    # an explicit [] is a real opt-out and wins over the default; a non-empty
-    # list EXTENDS the default rather than replacing it. The RAW field
-    # stays None-vs-list because truthiness of it doubles as the "is a review
-    # lane configured" probe in the merge path, which the default must not flip.
+    # Reviewer logins honored-if-present but NOT required: the gate
+    # never waits for them, but a blocking finding from one still holds it.
+    # None resolves to DEFAULT_OPTIONAL_APPS via resolved_optional_apps;
+    # explicit [] is a real opt-out; a non-empty list EXTENDS the default.
+    # The RAW field stays None-vs-list because its truthiness doubles as the
+    # "is a review lane configured" probe in the merge path.
     optional_apps: Optional[list[str]] = None
     # Per-login bot-review nudge overrides, as `[review.nudge.<login>]` tables
     # ({review_handle, wait_minutes, ceiling, enabled}). Consumed by the Rust
-    # stop gate (loop-check), which resolves it against its built-in bot
-    # profiles; kept permissively typed here (parity with the Rust parser, which
-    # degrades a malformed entry to non-nudgeable rather than rejecting the file)
-    # so this model documents the key without adding validation that could
-    # diverge. Absent = the built-in profiles alone decide nudgeability.
+    # stop gate (loop-check) against its built-in bot profiles. Kept
+    # permissively typed for parity: the Rust parser degrades a malformed
+    # entry to non-nudgeable rather than rejecting the file. Absent lets the
+    # built-in profiles alone decide nudgeability.
     nudge: dict[str, Any] = Field(default_factory=dict)
-    # Project-registered reviewers: name -> the same ReviewerDescriptor field
-    # vocabulary the built-ins use. Declared as `[review.reviewer_registry.<name>]`
-    # in the flat config.toml. Unioned with the built-ins at lookup time by
-    # `resolvable_reviewers()`; NEVER merged into `_RESOLVABLE_REVIEWERS`, and
-    # built-ins win a name collision so a project cannot weaken a shipped gate.
-    #
-    # Declared BEFORE `reviewers` on purpose: `coerce_and_resolve_reviewers`
-    # reads it off `ValidationInfo.data`, which only carries fields already
-    # validated, and pydantic validates in declaration order.
+    # Project-registered reviewers: name -> ReviewerDescriptor fields, as
+    # `[review.reviewer_registry.<name>]` tables. Unioned with the built-ins
+    # at lookup by `resolvable_reviewers()`; NEVER merged into
+    # `_RESOLVABLE_REVIEWERS`, and built-ins win a name collision so a project
+    # cannot weaken a shipped gate. Declared BEFORE `reviewers` on purpose:
+    # `coerce_and_resolve_reviewers` reads it off `ValidationInfo.data`,
+    # which only carries fields pydantic has already validated.
     reviewer_registry: dict[str, ReviewerDescriptor] = Field(default_factory=dict)
-    # Local-attestation reviewers (x-e703, Phase 2): skill/agent/command names
-    # (sigma | /code-review | declare) that produce NO GitHub review object, so
-    # loop-check accepts a head-pinned `review_attestation` event as gate
-    # evidence instead of a login match. A leading '/' is stripped so
-    # `/code-review` and `code-review` name the same reviewer. An unresolvable
-    # name fails LOUD here (a typo must never silently become no-gate) and is
-    # unsatisfiable at loop-check (Rust, fail closed).
+    # Local-attestation reviewers (Phase 2): skill/agent/command names
+    # (sigma | /code-review | declare) that produce NO GitHub review object,
+    # so loop-check accepts a head-pinned `review_attestation` event as gate
+    # evidence. A leading '/' is stripped. An unresolvable name fails LOUD
+    # here, and is unsatisfiable at loop-check (Rust, fail closed).
     reviewers: list[str] = Field(default_factory=list)
     # Whether a code payload floors the harness-resolved self-review reviewer
     # onto `reviewers` on a stock install (no lane configured). Default true:
@@ -1142,29 +1339,27 @@ class ReviewBlock(BaseModel):
     # documented escape hatch. Read by the stop gate (loopcheck.rs) and mirrored
     # into the merge primitive so the two agree.
     self_review_required: bool = True
-    # When true, a PR whose only coverage is the author's own (self_attested)
-    # local attestation reads as uncovered; a second session's attestation or a
-    # GitHub App review satisfies it. DEFAULT FALSE so no existing install
-    # changes behavior - flip it only with the doctor's self-attestation report
-    # in hand.
+    # Deprecated and ignored since 2026-09-05: origin never gates, so the
+    # field is kept only so an existing config still loads. Setting it
+    # changes nothing.
     require_corroboration: bool = False
     # Whether a non-author human GitHub APPROVED review satisfies coverage on
-    # its own (and the corroboration term). DEFAULT TRUE: this is the one
+    # its own. DEFAULT TRUE: this is the one
     # producer a stranger's GitHub project emits with no footnote machinery
     # at all. GitHub refuses an author's approval of their own PR
     # server-side; the gate still asserts it (an unreadable PR author
     # excludes fail-closed). The limit: GitHub's refusal is per identity, not
     # per human - a second account with its own token can still self-approve.
     github_approval_satisfies: bool = True
-    # The review-round budget before the gate reports IMPOSSIBLE: with more
-    # review rounds than this across the whole life of the PR AND blocking
-    # findings still non-terminal, re-reviewing cannot clear the gate, and
-    # the refusal says so instead of teaching one more round (the PR-1170
-    # eleven-round shape). A round is one reviewed HEAD, so two verdicts at
-    # one unchanged head are one round. CI failures, lint failures and
-    # rebases are not rounds, and a pass refunds nothing: it is one round
-    # like any other verdict. Validated at parse: at least 1.
+    # The review-round budget, and the whole review gate: a PR gets AT MOST
+    # this many rounds, and reaching the number satisfies the review
+    # obligation - the PR merges on green CI with open findings left in the
+    # PR conversation. A round is one reviewed HEAD; CI, lint and rebases are
+    # not rounds, a pass refunds nothing, and the parse floor is 1.
     max_rounds: int = Field(default=2, ge=1)
+    # The attestation law's budgets (registry has the prose for both).
+    carry_interdiff_lines: int = Field(default=100, ge=0)
+    invocation_ttl_minutes: int = Field(default=15, ge=1)
     # Categories a CONFIRMED-free finding may carry and still be non-blocking.
     # A configured list EXTENDS the shipped default rather than replacing it,
     # so a project cannot silently narrow the gate by naming one category. The
@@ -1188,9 +1383,9 @@ class ReviewBlock(BaseModel):
     # the loader aliases the legacy config.external_reviewers (list) and the
     # singular config.external_reviewer (scalar) to it. Empty == external review
     # disabled (callers treat no entries / all-"none" as off). read by
-    # skills/pr/scripts/list-reviewers.sh.
+    # skills/ship/scripts/list-reviewers.sh.
     external_reviewers: list[str] = Field(default_factory=list)
-    # Per-agent HARNESS routing for the cross-model review panel (ab-6c8f4c61).
+    # Per-agent HARNESS routing for the cross-model review panel.
     # Map of agent-name -> harness (claude | codex | gemini | alternate).
     # Default empty: the curated correctness-subset default is computed in the
     # T2.1 resolver, NOT baked here, so an empty map stays a faithful empty map.
@@ -1202,8 +1397,31 @@ class ReviewBlock(BaseModel):
     agent_providers: dict[str, str] = Field(default_factory=dict)
     # Full route tuple. Unlike agent_harnesses, each configured entry spends a
     # separate named SessionStart and therefore remains explicit and opt-in.
-    agent_routes: dict[str, AgentRouteBlock] = Field(default_factory=dict)
+    agent_routes: dict[str, object] = Field(default_factory=dict)
     cross_model: CrossModelBlock = Field(default_factory=CrossModelBlock)
+
+    @field_validator("posture", mode="before")
+    @classmethod
+    def validate_posture(cls, v: object) -> object:
+        """Fail loud on a posture name the ladder does not carry.
+
+        A misspelled rung must never read as "unset": unset infers from legacy
+        and can only ever match a real rung, while a typo that fell through to
+        unset would silently ship under a different rung than the operator
+        wrote. None stays None (the infer-then-default path).
+        """
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped in REVIEW_POSTURES:
+                return stripped
+            raise ValueError(
+                f"review.posture {v!r} is not one of {sorted(REVIEW_POSTURES)}"
+            )
+        raise ValueError(
+            f"review.posture must be a posture name or be unset, got {v!r}"
+        )
 
     @field_validator("github_apps", "required_bots", mode="before")
     @classmethod
@@ -1346,24 +1564,14 @@ class ReviewBlock(BaseModel):
             self.github_apps = self.required_bots
         # Keep the alias readable and consistent with the canonical field.
         self.required_bots = self.github_apps
-        # Identity-free peers deliberately use the local head-pinned attestation
-        # carrier. A per-entry or shared identity remains an explicit opt-in to
-        # the legacy GitHub-posting carrier.
-        # A `claude` peer is only a real cross-model reviewer when it names a
-        # model route (e.g. {provider: claude, model: "zai,glm-5.3"}): the claude
-        # CLI is only transport, and the routed model (GLM) is genuinely distinct
-        # from the Claude author. A bare `claude` peer (no route) IS the author's
-        # own model, which defeats the "distinct model" trust invariant - reject
-        # it at load, fail-closed, rather than let it masquerade as a peer.
-        # This is a universal but Claude-CENTRIC static restriction: it rejects a
-        # bare claude peer for EVERY author (it has no authorship input), which is
-        # correct only for the dominant claude author. For a codex/gemini author,
-        # claude IS cross-model, so this over-rejects a legitimate claude peer -
-        # the known inverse limitation (see the peers Open Question). The config is
-        # harness-agnostic, so load time cannot know the author; the SYMMETRIC,
-        # author-aware coverage lives at gate time: loop-check resolves the
-        # invoking harness and holds the gate for any same-model peer
-        # (crates/fno-agents/src/loopcheck.rs, the same-model guard, x-c2e7).
+        # Identity-free peers use the local head-pinned attestation carrier; a
+        # per-entry or shared identity is the legacy GitHub-posting opt-in.
+        # A `claude` peer is cross-model only when it names a model route: the
+        # claude CLI is transport, so a bare `claude` peer IS the author's own
+        # model - reject it at load, fail-closed. This static check is
+        # Claude-centric (it over-rejects a claude peer for a codex/gemini
+        # author); the symmetric author-aware coverage lives at gate time in
+        # loopcheck's same-model guard.
         for e in self.peers:
             prov: object
             model: object
@@ -1476,17 +1684,17 @@ class ReviewBlock(BaseModel):
     @field_validator("agent_routes", mode="before")
     @classmethod
     def validate_agent_routes(cls, value: object) -> object:
-        if value is None:
+        """The key retired with the sigma panel it routed. Empty stays legal
+        (the common case: nobody ever set it); any configured route refuses
+        with the replacement named, so a stale config fails loud instead of
+        silently routing nothing (AC8-ERR)."""
+        if not value:
             return {}
-        if not isinstance(value, dict):
-            raise ValueError("config.review.agent_routes must be a mapping")
-        unknown = sorted(str(name) for name in value if name not in _SIGMA_AGENT_NAMES)
-        if unknown:
-            raise ValueError(
-                "config.review.agent_routes names unknown sigma agent(s): "
-                f"{unknown}; known agents: {sorted(_SIGMA_AGENT_NAMES)}"
-            )
-        return value
+        raise ValueError(
+            "config.review.agent_routes retired with the sigma panel; the "
+            "review-posture ladder (config.review.posture) replaced per-agent "
+            "review routing. Remove the key."
+        )
 
     @field_validator("cross_model", mode="before")
     @classmethod
@@ -1516,7 +1724,7 @@ class HandoffBlock(BaseModel):
 
     enabled: bool = True
     used_pct_trigger: int = 50
-    king_used_pct_trigger: int = 40
+    lead_used_pct_trigger: int = 40
 
     @field_validator("used_pct_trigger")
     @classmethod
@@ -1529,49 +1737,49 @@ class HandoffBlock(BaseModel):
             )
         return v
 
-    @field_validator("king_used_pct_trigger")
+    @field_validator("lead_used_pct_trigger")
     @classmethod
-    def king_used_pct_trigger_range(cls, v: int) -> int:
+    def lead_used_pct_trigger_range(cls, v: int) -> int:
         """Percentage must be 1-100; the cross-field upper bound is below."""
         if not (1 <= v <= 100):
             raise ValueError(
-                "config.target.handoff.king_used_pct_trigger must be in range 1-100; "
+                "config.target.handoff.lead_used_pct_trigger must be in range 1-100; "
                 f"got {v}"
             )
         return v
 
     @model_validator(mode="after")
-    def king_trigger_below_teammate_trigger(self) -> "HandoffBlock":
-        """A king compacts EARLIER than a teammate, so an EXPLICITLY-set
-        king_used_pct_trigger must stay strictly below used_pct_trigger. The
+    def lead_trigger_below_teammate_trigger(self) -> "HandoffBlock":
+        """A lead compacts EARLIER than a teammate, so an EXPLICITLY-set
+        lead_used_pct_trigger must stay strictly below used_pct_trigger. The
         refusal MESSAGE is the deliverable: the failure mode this prevents is a
         future reader "tidying" 40 up to 50, and the rationale lands in front of
         the exact person trying to delete it.
 
-        The rule fires only when king_used_pct_trigger was EXPLICITLY set. A
+        The rule fires only when lead_used_pct_trigger was EXPLICITLY set. A
         DEFAULT silently invalidating an otherwise-valid explicit setting is a
-        trap: a user who sets used_pct_trigger low and never touches the king
-        knob would be refused for a value they never wrote. So a defaulted king
+        trap: a user who sets used_pct_trigger low and never touches the lead
+        knob would be refused for a value they never wrote. So a defaulted lead
         (40) leaves the config valid even when the teammate trigger dips below
-        it; the user who wants king < teammate sets king explicitly.
+        it; the user who wants lead < teammate sets lead explicitly.
         """
         if (
-            "king_used_pct_trigger" in self.model_fields_set
-            and self.king_used_pct_trigger >= self.used_pct_trigger
+            "lead_used_pct_trigger" in self.model_fields_set
+            and self.lead_used_pct_trigger >= self.used_pct_trigger
         ):
             raise ValueError(
-                "config.target.handoff.king_used_pct_trigger must be BELOW "
+                "config.target.handoff.lead_used_pct_trigger must be BELOW "
                 "used_pct_trigger "
-                f"(got {self.king_used_pct_trigger}, teammate trigger "
-                f"{self.used_pct_trigger}). A king compacts earlier than a "
+                f"(got {self.lead_used_pct_trigger}, teammate trigger "
+                f"{self.used_pct_trigger}). A lead compacts earlier than a "
                 "teammate on purpose: a worker's degradation costs one node, "
-                "a king's propagates into every ruling it issues and every "
+                "a lead's propagates into every ruling it issues and every "
                 "worker it routes, and the handoff itself costs context."
             )
         return self
 
 class BlastConfig(BaseModel):
-    """Blast-radius router settings (nested under 'config.target.blast', x-518f).
+    """Blast-radius router settings (nested under 'config.target.blast').
 
     A deterministic blast read at `/target` init modulates the size profile
     BEFORE the immutable manifest is written: a high-blast surface can only
@@ -1645,7 +1853,7 @@ class TargetDefaultsBlock(BaseModel):
 class TargetConfig(BaseModel):
     """Target pipeline settings (nested under 'config.target').
 
-    `dedupe_dead_duplicates` (ab-f6625d1c, Component B) gates the stop hook's
+    `dedupe_dead_duplicates` (Component B) gates the stop hook's
     opt-in cleanup of provably-dead duplicate sibling target-state.md files.
     When two worktrees of one repo carry an IN_PROGRESS state bound to the same
     claude_transcript_id, enabling this lets the stop hook rename the
@@ -1659,9 +1867,6 @@ class TargetConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     dedupe_dead_duplicates: bool = False
-    # Whether a node reaching `ready` (via /blueprint) auto-launches a bg /target
-    # worker. Read by skills/blueprint/scripts/autolaunch-on-ready.sh. Default OFF.
-    auto_launch_on_blueprint: bool = False
     handoff: HandoffBlock = Field(default_factory=HandoffBlock)
     blast: BlastConfig = Field(default_factory=BlastConfig)
     defaults: TargetDefaultsBlock = Field(default_factory=TargetDefaultsBlock)
@@ -1685,23 +1890,23 @@ class TargetConfig(BaseModel):
 class InboxBlock(BaseModel):
     """Cross-session mail delivery-honesty settings (nested under 'config.inbox').
 
-    ``unclaimed_ttl`` is the age (seconds) past which a sent-but-unclaimed bus
-    message is surfaced back to its sender (turn-boundary nudge + ``fno agents mail
-    status``). Advisory-only, so a short default is low-harm; 1800s (30m) is the
-    locked default (x-39a4). Non-negative.
+    ``unclaimed_ttl`` (seconds, default 1800/30m, locked) is the age
+    past which a sent-but-unclaimed bus message is surfaced back to its
+    sender. ``landed_abandon_ttl`` (seconds, default 21600/6h) is the age past
+    which an outstanding message drops off that nag entirely and is never
+    grepped again. Both non-negative.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     unclaimed_ttl: int = 1800
+    landed_abandon_ttl: int = 21600
 
-    @field_validator("unclaimed_ttl")
+    @field_validator("unclaimed_ttl", "landed_abandon_ttl")
     @classmethod
-    def ttl_is_non_negative(cls, v: int) -> int:
+    def ttl_is_non_negative(cls, v: int, info: ValidationInfo) -> int:
         if v < 0:
-            raise ValueError(
-                f"config.inbox.unclaimed_ttl must be >= 0; got {v}"
-            )
+            raise ValueError(f"config.inbox.{info.field_name} must be >= 0; got {v}")
         return v
 
 
@@ -1716,7 +1921,7 @@ class SandboxBlock(BaseModel):
 class A2aBlock(BaseModel):
     """Agent-to-agent switchboard settings (nested under 'config.agents.a2a').
 
-    Governs the stream-json session-to-session switchboard (epic ab-d3a1ae3e,
+    Governs the stream-json session-to-session switchboard (epic,
     Group 2). `auto` is the A2A toggle: when true (the default), a switchboard
     `send A->B` runs the bounded literal-injection relay (B's reply becomes a
     user turn in A, A's reply relays back to B, ...) up to `turn_ceiling` total
@@ -1747,7 +1952,7 @@ class A2aBlock(BaseModel):
 class AgentProviderBlock(BaseModel):
     """Per-provider agent-runtime settings (nested under 'config.agents.<provider>').
 
-    `headless_yolo` (ab-994222ee, redefined by the bounded-posture amendment)
+    `headless_yolo` (redefined by the bounded-posture amendment)
     selects FULL yolo vs the BOUNDED posture for an autonomous (headless,
     MODE==exec) codex/gemini worker. Both postures never prompt (no hang); they
     differ on the sandbox:
@@ -1764,8 +1969,7 @@ class AgentProviderBlock(BaseModel):
     dropping the sandbox - strictly safer than the full bypass. A malformed
     block fails safe to bounded. Only the autonomous exec lane consults it; an
     interactive `host`/`drive` launch and claude (yolo is a no-op) are never
-    affected. (The old "sandboxed-but-prompting" meaning of `false` is removed;
-    it was strictly worse than bounded - sandboxed AND hangs.)
+    affected.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1773,140 +1977,87 @@ class AgentProviderBlock(BaseModel):
     headless_yolo: bool = False
 
 
-class SpawnDefaultsBlock(BaseModel):
-    """Default spawn routing (nested under 'config.agents.defaults').
+class AgentBeatBlock(BaseModel):
+    """`config.agents.<harness>.beat`; `auto` reads the harness capability row."""
 
-    The bottom-most operator rung of the spawn precedence chain: an explicit
-    CLI flag > these defaults > the built-in (provider: harness-inference then
-    claude). Every bare `fno agents spawn` / `/agent spawn` inherits any field
-    set here, injected field-by-field at the Python dispatch seam. Empty string
-    = unset (the `spawn_permission_mode` convention); an unset field falls
-    through to the built-in exactly as today.
+    beat: str = "auto"
 
-    These defaults reach every spawn that has not pinned a field, including
-    autonomous dispatch (`/target`, think dispatch, backlog advance); an explicit
-    flag always wins. Autonomous dispatch pins its harness and substrate, so
-    setting `provider` here cannot silently reroute the fleet's binary - but a
-    `model` or `effort` set here DOES reach an autonomous worker that left it
-    unpinned, which is the per-stage coordinate the stage table exists to carry.
 
-    No value validation here: config stays a leaf module (x-7fdd, no import
-    from agents/harnesses at load time). Provider is checked against the known
-    set at the spawn seam; effort against the per-provider surface.
+class CodexAgentBlock(AgentProviderBlock, AgentBeatBlock):
+    """The codex block: the provider settings plus its lead beat."""
+
+
+# The routing schema block lives in routing_blocks (the hub is shrink-only).
+from fno.config.routing_blocks import RoutingBlock as RoutingBlock  # noqa: E402
+
+
+# The spawn-defaults schema blocks live in spawn_blocks (the config hub is
+# over the file budget and shrink-only); re-exported for every reader.
+from fno.config.spawn_blocks import (  # noqa: E402
+    HarnessOverlayBlock as HarnessOverlayBlock,
+    SpawnDefaultsBlock as SpawnDefaultsBlock,
+    SpawnProfileBlock as SpawnProfileBlock,
+)
+
+
+class SidelineColorsBlock(BaseModel):
+    """Lane-color tables for the mux sideline (nested under 'config.sideline.colors').
+
+ Every key names its axis explicitly - ``harness.<name>``,
+    ``route.<name>``, ``model."<model string>"``, ``row.<routing-row name>`` -
+    because a bare key is ambiguous between account, route and model, and an
+    axis is never inferred from a value. ``extra='forbid'`` is the refusal: a
+    bare ``zai = "green"`` under this table is a config ERROR naming the four
+    legal axis tables, not a silently ignored guess.
+
+    Values are color names the Rust reader parses (ANSI-16 names,
+    ``indexed(<n>)``, ``#rrggbb``). Resolution happens in
+    ``crates/fno/src/sideline_color.rs`` through one fixed cascade - routing
+    row, then model, then route, then harness, then the built-in table - and
+    an unknown color name falls THROUGH the cascade rather than blanking a
+    row, so a typo here can never mis-color the sideline.
     """
+
+    model_config = ConfigDict(extra="forbid")
+
+    harness: dict[str, str] = Field(default_factory=dict)
+    route: dict[str, str] = Field(default_factory=dict)
+    model: dict[str, str] = Field(default_factory=dict)
+    row: dict[str, str] = Field(default_factory=dict)
+
+
+class SidelineBlock(BaseModel):
+    """Sideline render config (nested under 'config.sideline')."""
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: str = ""
-    model: str = ""
-    effort: str = ""
-    # substrate/permission_mode join the defaultable set (x-3d5b): config-sourced
-    # values degrade open with a warning on provider incompatibility at the spawn
-    # seam; an explicit flag stays fail-closed. Empty = unset, as above.
-    substrate: str = ""
-    permission_mode: str = ""
-    # route/account sit BESIDE the legacy provider field (ruling 4): nothing is
-    # renamed and the legacy field keeps meaning harness. provider could never
-    # carry the full coordinate because it is allowlisted as a harness literal,
-    # so a stage that needed to say zai had no field. route carries vendor/model
-    # as vendor/model (position-carried, forwarded as --route) and so fails
-    # closed on an unknown vendor or a missing key downstream rather than silently
-    # billing the primary; account forwards --account. The names carry no axis
-    # word, so the four-axis guard never reads them as bindings.
-    route: str = ""
-    account: str = ""
+    colors: SidelineColorsBlock = Field(default_factory=SidelineColorsBlock)
+    # The row-shape switch the Rust sideline reads. Mirrors the Rust reader's
+    # tolerance: the card is the default, and an unknown value reads as the
+    # card default (crates/fno sideline_color).
+    layout: Literal["card", "list"] = "card"
 
-
-class SpawnProfileBlock(SpawnDefaultsBlock):
-    """Per-verb overlay plus its strict ordered delivery-lane vocabulary."""
-
-    pane_group: str = ""
-    # Keep lanes raw so a malformed routing list does not make every config
-    # read fail; the spawn seam validates and refuses before launching anything.
-    lanes: Any = Field(default_factory=list)
-
-
-class RoutingModelBlock(BaseModel):
-    """One declared model row (nested under 'config.routing.models').
-
-    The row carries the invocation facts a benchmark snapshot cannot: how to
-    reach the model on THIS machine (harness + --model value), which band it
-    runs in, and what effort surface it takes. ``name`` is the join key; the
-    same name may appear more than once and later rows override per field
-    (unset fields keep the earlier row's value), so a base row plus a one-field
-    override is a legal declaration. Cost belongs to the ACCESS PATH, never
-    to the model: the same model reached two ways (subscription credits vs API
-    dollars) is TWO rows with two cost profiles, never one averaged number -
-    the measured ratio between the two paths for one pair is 6x on identical
-    inference. No value validation here: config stays a leaf module (x-7fdd);
-    the spawn seam and the resolver validate.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str = ""
-    harness: str = ""
-    model: str = ""
-    # route names a vendor lane (``zai/glm-5.3``), account names a provider
-    # record id; both identify which ACCOUNT'S quota a row spends, which is how
-    # capacity expands a harness to its accounts.
-    route: str = ""
-    account: str = ""
-    band: str = ""
-    effort: str = ""
-    cost_per_mtok_in: Optional[float] = None
-    context: Optional[int] = None
-
-
-class RoutingBlock(BaseModel):
-    """Config-first model routing inventory (nested under 'config.routing').
-
-    Config is the PRIMARY routing surface. A small built-in table is a
-    FALLBACK under it, never the authority: config OVERRIDES it per model and
-    per field and EXTENDS it with models it never named, so adding a model is
-    a config edit and never a Python edit. A stranger's install can therefore
-    declare its own models (local, ollama, gemini-only) and every one of them
-    outranks the built-in row of the same name.
-
-    The fallback keeps a tier request answerable on an install that declares
-    nothing: review level resolves a model for every level. The GRID stays
-    config-first regardless - a virgin install records
-    ``no-inventory-declared`` and injects nothing, because the grid reads
-    whether config DECLARED a row, not whether any row exists.
-
-    ``fno/routing_sample.toml`` ships as a labelled sample (inside the
-    package, so a wheel finds it) that no code path reads. The objective is
-    itself a config key because users differ (cheapest vs strongest vs
-    stay-in-a-harness).
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    objective: str = "cheapest-that-clears"
-    prefer_harness: str = ""
-    models: list[RoutingModelBlock] = Field(default_factory=list)
-
-    @field_validator("objective", mode="before")
+    @field_validator("layout", mode="before")
     @classmethod
-    def _coerce_objective(cls, v: object) -> object:
-        """Only the three literals are honored; anything else degrades to the
-        default. Same degrade-toward-safety stance as DispatchBlock: a typo can
-        never select an objective the operator did not name."""
-        return v if v in ("cheapest-that-clears", "best-available", "prefer-harness") else (
-            "cheapest-that-clears"
-        )
+    def _coerce_layout(cls, v: object) -> object:
+        """Unknown or wrong-shaped values degrade to the card default, never error."""
+        if v is None:
+            return "card"
+        if isinstance(v, str) and v.strip().lower() == "list":
+            return "list"
+        return "card"
 
 
 class DispatchBlock(BaseModel):
     """Autonomous-dispatch profile (nested under 'config.dispatch').
 
     Per-environment overlay of the in-tree harness-capability map
-    (`fno.agents.harness_map`): the shared `fno agents dispatch resolve` resolver reads
+    (`fno.agents.harness_map`): the shared `resolve_node_spawn` resolver reads
     these as the config rung between an explicit flag and the built-in default.
     All three are empty ("") = unset, so a fresh install resolves exactly as the
     built-ins (harness=claude, per-harness substrate, `/target --no-merge {id}`).
 
-    No value validation here (config stays a leaf module, x-7fdd): the resolver
+    No value validation here (config stays a leaf module): the resolver
     validates the harness against the map and the substrate against the harness's
     capabilities at resolve time, fail-loud.
 
@@ -1918,39 +2069,38 @@ class DispatchBlock(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    # DEPRECATED (x-b2c7): the harness axis lives in the stage table
-    # (`agents.profiles.<verb>.provider`), which AGENTS.md already documents as
-    # reaching autonomous dispatch. This key reads as the fallback rung beneath
-    # the stage table for one release, so an installation setting only it is
-    # unchanged. No config-load alias: the fold runs at resolution time
-    # (`fno.agents.harness_map`), because materializing a profile here would
-    # change the attended spawn door's rung occupancy, not only dispatch. The
-    # operator-facing deprecation surface is `fno config doctor`.
+    # DEPRECATED: the harness axis lives in the stage table
+    # (`agents.profiles.<verb>.provider`); this key reads as the fallback rung
+    # beneath it for one release. The fold runs at resolution time
+    # (fno.agents.harness_map); the operator-facing surface is `fno config doctor`.
     harness: str = ""
     substrate: str = ""
     command: str = ""
-    # US3 verb allowlist: a node-supplied dispatch verb must match one of these
-    # or the resolver refuses (no worker). Empty = the built-in default set.
-    allowed_verbs: list[str] = Field(default_factory=lambda: ["/target", "/think"])
-    # DEPRECATED (x-4391/x-4be1): the per-project merge posture for AUTONOMOUS
-    # dispatch, formerly read by every dispatch path. Reads as
-    # `auto_merge.grant` ("dispatch" when true): the alias folds it per layer,
-    # and each path (dispatch-node.sh / normalize.sh / advance.py / the Rust
-    # reader) now reads the grant key. Kept one release so nothing breaks on
-    # upgrade; no consumer reads this field. An explicit
-    # --allow-merge/--no-merge flag always wins.
+    # Registered verbs from outside fno (unioned with allowed_verbs at resolve;
+    # a shipped or allowlisted spelling cannot be redefined here).
+    verb_registry: dict[str, DispatchVerbDescriptor] = Field(default_factory=dict)
+    # US3 verb allowlist: a node dispatch_verb must match or the resolver refuses.
+    allowed_verbs: list[str] = Field(default_factory=lambda: list(_DEFAULT_DISPATCH_VERBS))
+    # DEPRECATED (/): reads as `auto_merge.grant` for one release;
+    # every dispatch path reads the grant key now, no consumer reads this field.
+    # An explicit --allow-merge/--no-merge flag always wins.
     auto_merge: bool = False
-    # x-0676: on provider exhaustion, defer (today's floor) or fail over to the
-    # next healthy provider in the active combo. Default "defer" = byte-identical
-    # to today (no combo read). An unknown value degrades to "defer" (a typo never
-    # silently enables failover).
+    # defer (default, byte-identical to today) or fail over to the next
+    # healthy provider in the active combo; an unknown value degrades to "defer".
     on_exhaustion: str = "defer"
-    # Proactive LOW cutover, opt-in and OFF by default (0). Minutes: a LOW
-    # window resetting FARTHER out than this is a reason to leave the harness
-    # now, because waiting is the only alternative. Deliberately not
-    # defer_horizon_minutes - that predicate answers the opposite question
-    # (a near reset means wait), so reusing it would route backwards.
+    # Proactive LOW cutover, opt-in, default 0 = off. Deliberately inverted from
+    # defer_horizon_minutes: a distant reset means leave now, not wait.
     cutover_low_after_minutes: int = 0
+    # The blueprint floor for a plan-less node (lean dispatch): "high" (the
+    # default) routes a plan-less node to /blueprint only when its difficulty
+    # is high, its size is L, or an open premise question blocks it (the
+    # `premise-question` tag). Every other plan-less node goes straight to
+    # /target, which states its own scope. "medium" restores the pre-lean
+    # table (blueprint for medium and up). "low" blueprints every plan-less
+    # node; "never" targets everything. Read by the lifecycle verb table
+    # (fno-agents effective_verb) through the dispatch doors, and by the
+    # lead check-in's blueprint reading.
+    blueprint_floor: str = "high"
 
     @field_validator("auto_merge", mode="before")
     @classmethod
@@ -1978,6 +2128,18 @@ class DispatchBlock(BaseModel):
         above: a config typo can never arm automatic rerouting."""
         return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
 
+    @field_validator("blueprint_floor", mode="before")
+    @classmethod
+    def _coerce_blueprint_floor(cls, v: object) -> object:
+        """Only the four literals are honored; anything else degrades to "high",
+        the lean default. Case and surrounding space are normalized like the
+        Rust reader lowercases them, so both surfaces answer one value. Same
+        stance as the validators above: a typo can never widen blueprint
+        ceremony past the lean-dispatch ruling."""
+        if isinstance(v, str) and v.strip().lower() in ("high", "medium", "low", "never"):
+            return v.strip().lower()
+        return "high"
+
 
 def _positive_int(v: object) -> bool:
     """A budget dimension is a count, so `True`, `0` and `-1` are all malformed."""
@@ -1987,7 +2149,7 @@ def _positive_int(v: object) -> bool:
 # The per-provider budgets footnote ships. A provider absent from this table is
 # unbounded in every dimension, which is today's behavior for a dedicated
 # account. zai is here because the account is SHARED: `subagents = 1` is what
-# makes route resolution refuse to hand it a review panel (x-c703).
+# makes route resolution refuse to hand it a review panel.
 _BUILTIN_PROVIDER_BUDGETS: dict[str, dict[str, int]] = {
     "zai": {"lanes": 5, "subagents": 1},
 }
@@ -2000,7 +2162,7 @@ class ProviderBudget(BaseModel):
     a bare integer capping concurrent spawned workers. It carried one dimension
     while the account is spent on two - a worker also fans out subagents inside
     its own session, and a shared-quota account was spent eight subagents deep
-    on one review that returned nothing (x-c703).
+    on one review that returned nothing.
 
     `subagents` is that second dimension, and it is consumed by ROUTE
     RESOLUTION rather than by a guard: a native subagent is a harness-internal
@@ -2042,7 +2204,7 @@ class ProviderBudget(BaseModel):
 
 
 class ProcessAdmissionBlock(BaseModel):
-    """Fail-closed native process admission, expressed only in OS processes."""
+    """The agent-spawn door's process ceiling, expressed only in OS processes."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -2052,18 +2214,21 @@ class ProcessAdmissionBlock(BaseModel):
     @classmethod
     def _coerce_max_processes(cls, v: object) -> int:
         """Invalid values keep the measured process-unit default; never disable."""
-        if isinstance(v, bool):
-            return 400
-        if isinstance(v, int) and v >= 1:
-            return v
-        if isinstance(v, str):
-            try:
-                parsed = int(v.strip())
-            except ValueError:
-                return 400
-            return parsed if parsed >= 1 else 400
-        return 400
+        return cast(int, _coerce_positive_int(v, 400))
 
+
+def _coerce_positive_int(v: object, default: Optional[int]) -> Optional[int]:
+    if isinstance(v, bool):
+        return default
+    if isinstance(v, int) and v >= 1:
+        return v
+    if isinstance(v, str):
+        try:
+            n = int(v.strip())
+        except ValueError:
+            return default
+        return n if n >= 1 else default
+    return default
 
 
 def _finite_or(value: object, default: float) -> float:
@@ -2089,144 +2254,45 @@ def _finite_or(value: object, default: float) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
-class ReapReceiptsBlock(BaseModel):
-    """Retention for the reap-receipt store (nested under 'config.agents').
-
-    A reaped row's resume handle lives at ``~/.fno/reap-receipts/`` for this
-    many days, then the GC sweep expires it. A receipt whose ``reaped_at``
-    cannot be read is kept and named in the sweep summary - a failed read is
-    not evidence of age.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    retain_days: int = 7
-
-
-class AgentsBlock(BaseModel):
+class AgentsBlock(SweepKeys):
     """Agent-runtime settings (nested under 'config.agents').
 
-    `confirm` drives the /fno:agent spawn-verb confirm gate
-    (ab-27541df5; namespace moved from `config.dispatch.confirm` to
-    `config.agents.confirm` in ab-f1b0ccd1). It selects when the
-    billed-launch confirm prompt is shown:
-
-      - always: confirm every billed build (the pre-amendment behavior)
-      - auto:   skip the confirm only for a resolved node-id build on a
-                caveat-free lane; confirm free-form features, codex/gemini
-                exec builds, --yolo, and merge grants
-      - never:  skip the confirm; any caveats print as warnings alongside
-                the receipt
-
-    Model default is "auto" so a skill reading `config.agents.confirm`
-    resolves even when settings.yaml has no agents block. An invalid value
-    raises a ValidationError (the read fails); the skill's read path treats
-    any failed read as "always" - less capability never means less safety
-    (degrade toward the confirm, never toward a silent launch).
+    `confirm` is always, auto (skip only resolved caveat-free node builds), or never. The default is auto; invalid values fail the read and callers degrade toward confirmation.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     a2a: A2aBlock = Field(default_factory=A2aBlock)
     defaults: SpawnDefaultsBlock = Field(default_factory=SpawnDefaultsBlock)
-    # x-3d5b: per-verb overlay of `defaults`, keyed by the seed's leading
-    # slash-verb (`profiles.blueprint`, `profiles.target`, ...). Same block, one
-    # rung above defaults in precedence. Resolved at the spawn seam.
+    # Per-verb overlays of defaults, one precedence rung above them.
     profiles: dict[str, SpawnProfileBlock] = Field(default_factory=dict)
-    # The operator's own simple-versus-complex split, written where a daemon can
-    # read it: an ordered fallback chain per node size, consulted only when a
-    # provider refuses and the account queue cannot answer. Keys are S, M, L and
-    # `default`; each value is an ordered list of partial axis bundles reusing
-    # `SpawnDefaultsBlock`, so no new axis vocabulary enters the codebase.
-    #
-    # Every size wants MORE THAN ONE link. A chain with one link is not a chain:
-    # a claude weekly cap and a z.ai five-hour cap are different meters with
-    # different periods, and either can be the one that is down.
-    # Held RAW, and typed loosely on purpose. The strict check lives in
-    # ``spawn_defaults.validate_fallback``, which the failover path calls.
-    # Raising in a field validator here would fail ``load_settings()`` for the
-    # whole process: one typo would make every ``fno`` command raise and kill
-    # the pr-watch tick at its settings phase, which is the opposite of the
-    # bounded stop Locked Decision 11 asks for. Refuse on the path that reads
-    # it, not on the path that loads it.
+    # Ordered per-size fallback chains, consulted only after provider and account refusal.
+    # Values stay raw so the consuming verb can name malformed links without making every
+    # settings load fail.
     fallback: dict[str, Any] = Field(default_factory=dict)
-    # Seconds of transcript silence after which `fno agents sweep` reports a
-    # worker as silent. A REPORT, never an action - nothing is stopped, spawned
-    # or unclaimed on this signal.
+    # Silence only reports; it never stops, spawns, or unclaims.
     silence_deadline_seconds: int = 600
     confirm: str = "auto"
-    # When true, the SessionStart register hook auto-joins EVERY hand-started
-    # session to the roster (discoverable + mail-addressable). Default false is
-    # opt-in: a session joins deliberately via `/fno-me` (`fno agents register`),
-    # so the roster stays the workers you coordinate with, not every terminal you
-    # opened. Spawned workers register at spawn regardless of this knob. Flip to
-    # true if your workflow is many hand-started sessions cross-talking.
+    # Hand-started sessions opt in; spawned workers always register.
     auto_register_sessions: bool = False
-    # Opt in per machine after happy is installed and paired. Only routed claude
-    # panes use it; primary claude, every other harness, and bg stay unchanged.
+    # Only routed Claude panes use this machine-local integration.
     happy_routed_panes: bool = False
-    # Dead-row GC grace window in SECONDS (x-b1aa). A finished agent-view row
-    # stays visible this long after the daemon GC first observes its process gone,
-    # before it is reaped. Default 3600 (1h). The Rust daemon + `fno agents reap`
-    # read the same `config.agents.dead_row_grace` key (agents_config.rs), so a
-    # non-default here changes both the automatic sweep and the manual verb.
-    #
-    # Also accepts a per-harness table, `agents.dead_row_grace.<harness> =
-    # <seconds>` (x-9de7 task 6): a codex worker's working session runs 6-8h,
-    # so the single global default reads its normal silence as staleness.
-    # A harness absent from the table falls back to this default, not to a
-    # sibling harness's number -- see `agents_config::dead_row_grace_secs`,
-    # the resolver this type mirrors.
-    dead_row_grace: int | dict[str, int] = 3600
-    # Reap-receipt retention (x-6db9). The Rust daemon expires receipts past
-    # this window in the same GC sweep that writes new ones; the Pydantic
-    # mirror keeps `fno config get` honest. A receipt whose reaped_at cannot
-    # be read is kept, never deleted on a failed read.
+    first_check_minutes: int = Field(default=10, ge=1, le=60)
+    retire_grace_s: int = Field(default=900, ge=0)
+    retire_interval_s: int = Field(default=300, ge=0)
+    hold_escalate_after_s: int = Field(default=5400, ge=0)
     reap_receipts: ReapReceiptsBlock = Field(default_factory=ReapReceiptsBlock)
-    codex: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
+    reap: ReapBlock = Field(default_factory=ReapBlock)
+    state_reap: StateReapBlock = Field(default_factory=StateReapBlock)
+    claude: AgentBeatBlock = Field(default_factory=AgentBeatBlock)
+    codex: CodexAgentBlock = Field(default_factory=CodexAgentBlock)
     gemini: AgentProviderBlock = Field(default_factory=AgentProviderBlock)
-    # Spawn-gate knobs (x-c5cc). Scalar guards retain their fail-open defaults;
-    # provider_limits keeps its safe default on invalid input because dropping
-    # zai's cap would fail open exactly when the fleet is busiest.
-    #   max_live    — cap on concurrent live worker processes (union of the fno
-    #                 registry and claude's daemon roster). Spawn queues at cap.
-    #   provider_limits — the per-provider budget record
-    #                 (:class:`ProviderBudget`): `lanes` is the
-    #                 immediate-refusal spawn cap, `subagents` is the
-    #                 in-session fan-out width route resolution reads.
-    #                 Unlisted providers are uncapped in both dimensions; the
-    #                 built-in zai budget is lanes 5, subagents 1. A bare
-    #                 integer is still legal and coerces to `lanes`. Renamed
-    #                 from `max_lanes` (x-3f84 W5) so no two config leaves
-    #                 share that name with `parallel.max_lanes`; the legacy
-    #                 spelling still parses, with one deprecation line.
-    #   min_free_gb — available-RAM floor for spawn preflight; <= 0 disables.
-    #   max_load_per_cpu — the load at which the gate STOPS TRUSTING LOAD and
-    #                 consults fleet attribution: `factor x cpu count` on the
-    #                 1-min loadavg (x-3f84 W3). This is a TRIGGER, not a
-    #                 refusal. It was a refusal until x-7c0f, and it refused
-    #                 twice on load the fleet did not cause. Load average
-    #                 counts blocked processes, so it measures neither CPU nor
-    #                 anyone's share of it. Measured 2026-08-22: load 309 on 12
-    #                 CPUs while the RAM floor held ten times its margin - the
-    #                 one machine guard read the one resource that was never
-    #                 scarce. <= 0 disables the whole check.
-    #   max_fleet_cpu_share — the GOVERNOR: above the trigger, refuse when
-    #                 footprint attributes more than this share of CPU capacity
-    #                 to the fleet (0.5 = half the box). This is the number the
-    #                 refusal always printed and never decided on. When
-    #                 attribution is unreadable the gate refuses, because an
-    #                 unknown share is not evidence of headroom (x-e040).
-    #   hard_max_load_per_cpu — the absolute machine backstop: refuse above
-    #                 `factor x cpu count` no matter whose load it is. Pure
-    #                 fleet-share would admit onto a box already thrashing from
-    #                 foreign work. Must stay well above max_load_per_cpu or it
-    #                 silently restores the defect x-7c0f removed.
-    #                 All three are machine dimensions, so scalars on agents.*
-    #                 and never fields on ProviderBudget (a machine is not an
-    #                 account).
-    #   worker_qos  — utility (demote workers to background QoS) | off.
+    # Spawn-gate scalars degrade to safe defaults: max_live caps the roster
+    # union as the BACKSTOP behind the RAM floor (min_free_gb) and the CPU
+    # axis (LD1); provider_limits caps lanes and fan-out; admission
+    # decides on max_fleet_cpu_share every spawn (max_load_per_cpu: deprecated LD2).
     max_live: int = 3
+    max_live_per_territory: int = 4  # team cap; contract in the registry
     provider_limits: dict[str, ProviderBudget] = Field(
         default_factory=lambda: {
             k: ProviderBudget(**v) for k, v in _BUILTIN_PROVIDER_BUDGETS.items()
@@ -2234,36 +2300,15 @@ class AgentsBlock(BaseModel):
     )
     pane_group_max: int = 4
     min_free_gb: float = 4.0
+    # swap ceiling (percent used) beside min_free_gb; <= 0 disables.
+    max_swap_pct: float = 90.0
+    # Deprecated and ignored since 2026-09-09: admission decides on the
+    # fleet's CPU share (max_fleet_cpu_share), never on a load trigger.
     max_load_per_cpu: float = 8.0
     max_fleet_cpu_share: float = 0.5
-    hard_max_load_per_cpu: float = 40.0
     worker_qos: str = "utility"
-    # Absolute override for footprint's sustained-CPU threshold, in cores. Set
-    # it to pin a small box; unset, the threshold derives from measured CPU
-    # capacity (a fraction per core) instead of the old hardcoded 1.0, which
-    # asked a 12-core machine's fleet to idle at 8% utilisation.
+    # Unset derives the sustained-CPU threshold from measured capacity.
     footprint_sustained_cpu_cores: Optional[float] = None
-    # Default permission/approval mode for AUTONOMOUS dispatchers only
-    # (dispatch-node.sh / `fno backlog advance` / `/think dispatch`). Defaults to
-    # bypass so a fire-and-forget worker enters its worktree without a prompt
-    # nobody attends. An explicit --permission-mode flag wins. Opt out with an
-    # explicit "" (forward nothing -> claude's normal prompting) or "default"
-    # (prompting, expressed positively). Interactive `fno agents spawn` does NOT
-    # read this. Claude-native value, fail-closed at the spawn seam, never here.
-    spawn_permission_mode: str = "bypassPermissions"
-
-    @field_validator("dead_row_grace")
-    @classmethod
-    def dead_row_grace_nonneg(cls, v: int | dict[str, int]) -> int | dict[str, int]:
-        """Grace is a duration; a negative value is a config error (would reap
-        instantly, defeating the visibility window). Checks every value when
-        `v` is a per-harness table (x-9de7 task 6), not just the shape."""
-        for secs in v.values() if isinstance(v, dict) else (v,):
-            if secs < 0:
-                raise ValueError(
-                    f"config.agents.dead_row_grace must be >= 0 seconds; got {secs}"
-                )
-        return v
 
     @field_validator("profiles", mode="before")
     @classmethod
@@ -2284,8 +2329,8 @@ class AgentsBlock(BaseModel):
         A non-mapping value cannot be a chain, so it reads as no chain and the
         pre-existing no-failover behavior stands. Everything else passes
         through untouched, INCLUDING a malformed link, because the failover
-        path has to be able to see the mistake and name it. The strict check is
-        ``spawn_defaults.validate_fallback``.
+        path has to be able to see the mistake and name it. The strict check
+        lives in the ``fallback-chain`` verb (crates/fno-agents).
         """
         return v if isinstance(v, dict) else {}
 
@@ -2305,17 +2350,13 @@ class AgentsBlock(BaseModel):
     @classmethod
     def _coerce_max_live(cls, v: object) -> object:
         """Drop a non-positive / non-int max_live to the default (3); never raise."""
-        if isinstance(v, bool):
-            return 3
-        if isinstance(v, int) and v >= 1:
-            return v
-        if isinstance(v, str):
-            try:
-                n = int(v.strip())
-            except ValueError:
-                return 3
-            return n if n >= 1 else 3
-        return 3
+        return _coerce_positive_int(v, 3)
+
+    @field_validator("max_live_per_territory", mode="before")
+    @classmethod
+    def _coerce_max_live_per_territory(cls, v: object) -> object:
+        """Drop a non-positive / non-int cap to the default (4)."""
+        return _coerce_positive_int(v, 4)
 
     @field_validator("pane_group_max", mode="before")
     @classmethod
@@ -2329,7 +2370,7 @@ class AgentsBlock(BaseModel):
     def _accept_legacy_max_lanes(cls, data: object) -> object:
         """Rename a legacy `[agents] max_lanes` table onto `provider_limits`.
 
-        The rename (x-3f84 W5) kills the leaf-name collision with
+        The rename (x-aaaa W5) kills the leaf-name collision with
         `parallel.max_lanes`, but a hard break would silently uncap a live
         provider budget - a billing failure, not a config failure - so the old
         spelling parses forever and prints ONE deprecation line naming the new
@@ -2354,12 +2395,20 @@ class AgentsBlock(BaseModel):
         else:
             print(
                 "fno config: [agents] max_lanes is renamed provider_limits; "
-                "the legacy spelling still parses (x-3f84)",
+                "the legacy spelling still parses ",
                 file=_sys.stderr,
             )
             data = {**data, "provider_limits": data["max_lanes"]}
             data.pop("max_lanes")
         return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_spawn_permission_mode(cls, data: object) -> object:
+        """Migrate a retired `agents.spawn_permission_mode`; body in `_legacy_permission_mode.py`."""
+        from fno.config._legacy_permission_mode import accept_legacy_spawn_permission_mode
+
+        return accept_legacy_spawn_permission_mode(data)
 
     @field_validator("provider_limits", mode="before")
     @classmethod
@@ -2407,44 +2456,35 @@ class AgentsBlock(BaseModel):
         return out
 
     @model_validator(mode="after")
-    def _backstop_must_sit_above_the_trigger(self) -> "AgentsBlock":
-        """The backstop must be REACHED after the trigger, never before it.
+    def _warn_max_load_per_cpu_deprecated(self) -> "AgentsBlock":
+        """The retired trigger prints one deprecation line when set (LD2).
 
-        `max_load_per_cpu` is the load at which the gate consults fleet
-        attribution; `hard_max_load_per_cpu` refuses without consulting. Set
-        the backstop at or below the trigger and every load that would have
-        been attributed is refused blindly instead, which silently restores
-        the exact defect the governor removed. Four docstrings said so and
-        nothing enforced it, so one config line was enough to undo it.
-
-        Coerced, not raised: this block's contract is that a config typo can
-        never brick the spawn primitive. An incoherent PAIR restores the
-        default pair, because clamping only one of them cannot know which
-        number the operator meant.
-        """
-        if self.hard_max_load_per_cpu > 0 and (
-            self.hard_max_load_per_cpu <= self.max_load_per_cpu
-        ):
-            self.max_load_per_cpu = 8.0
-            self.hard_max_load_per_cpu = 40.0
+        The key parses so one release can pass, but nothing reads it: the
+        value is IGNORED, never clamped, and the line names the decider so
+        the operator learns the migration in the same breath as the news."""
+        if self.max_load_per_cpu != 8.0:
+            _warn_legacy_once(
+                "agents.max_load_per_cpu",
+                "fno config: agents.max_load_per_cpu is deprecated and "
+                "ignored: admission decides on the fleet's CPU share "
+                "(agents.max_fleet_cpu_share); delete the key",
+            )
         return self
 
-    @field_validator("min_free_gb", mode="before")
+    @field_validator("min_free_gb", "max_swap_pct", mode="before")
     @classmethod
-    def _coerce_min_free_gb(cls, v: object) -> object:
-        """Coerce a non-numeric min_free_gb to the default (4.0); never raise.
-
+    def _coerce_ram_floor_terms(cls, v: object, info: ValidationInfo) -> object:
+        """Coerce a non-numeric RAM-floor term to its default; never raise.
         <= 0 is a VALID value (guard disabled), so only unparseable input
-        falls back to the default.
-        """
-        return _finite_or(v, 4.0)
+        falls back to the default (4.0 floor, 90.0 swap ceiling)."""
+        return _finite_or(v, 4.0 if info.field_name == "min_free_gb" else 90.0)
 
     @field_validator("max_load_per_cpu", mode="before")
     @classmethod
     def _coerce_max_load_per_cpu(cls, v: object) -> object:
         """Coerce a non-numeric max_load_per_cpu to the default (8.0); never
-        raise. Same contract as :meth:`_coerce_min_free_gb`: <= 0 is a VALID
-        value (guard disabled), so only unparseable input falls back."""
+        raise. The key is deprecated and ignored (LD2); it only needs
+        to PARSE so one release can pass, so the coercion stays minimal."""
         return _finite_or(v, 8.0)
 
     @field_validator("max_fleet_cpu_share", mode="before")
@@ -2453,18 +2493,10 @@ class AgentsBlock(BaseModel):
         """Coerce an unparseable share to the default (0.5); never raise.
 
         Same contract as :meth:`_coerce_max_load_per_cpu`. <= 0 is VALID and
-        means the governor refuses on any fleet attribution at all, which is
-        the strictest setting rather than a disabled one; `max_load_per_cpu`
-        is the knob that turns the whole check off.
+        means the gate refuses on any fleet attribution at all, which is
+        the strictest setting rather than a disabled one.
         """
         return _finite_or(v, 0.5)
-
-    @field_validator("hard_max_load_per_cpu", mode="before")
-    @classmethod
-    def _coerce_hard_max_load_per_cpu(cls, v: object) -> object:
-        """Coerce an unparseable backstop to the default (40.0); never raise.
-        <= 0 disables the backstop and leaves the governor alone in charge."""
-        return _finite_or(v, 40.0)
 
     @field_validator("worker_qos", mode="before")
     @classmethod
@@ -2474,7 +2506,7 @@ class AgentsBlock(BaseModel):
             return v.strip().lower()
         return "utility"
 
-    @field_validator("codex", "gemini", mode="before")
+    @field_validator("claude", "codex", "gemini", mode="before")
     @classmethod
     def _coerce_provider_block(cls, v: object) -> object:
         """Fail-safe: a non-mapping provider block degrades to defaults.
@@ -2485,7 +2517,7 @@ class AgentsBlock(BaseModel):
         passes through so an explicit ``headless_yolo: false`` opt-out still
         takes effect. Mirrors ``ConfigBlock._coerce_auto_continue``.
         """
-        if isinstance(v, (dict, AgentProviderBlock)):
+        if isinstance(v, (dict, BaseModel)):
             return v
         return {}
 
@@ -2504,8 +2536,8 @@ class AgentsBlock(BaseModel):
 
 
 def _coerce_bool_default_true(v: object) -> bool:
-    """Shared body for the four wave-2/3 "never opt-in" gates below
-    (AutonomyBlock, GroomBlock, RestartBlock, EvalsBlock): a garbage value
+    """Shared body for the wave-2/3 "never opt-in" gates below
+    (AutonomyBlock, GroomBlock, EvalsBlock): a garbage value
     fails safe to True (each block's own default), since these spawners ran
     unconditionally before their gate existed and a malformed config value
     must not silently disable one. A config that fails to LOAD at all still
@@ -2522,11 +2554,11 @@ def _coerce_bool_default_true(v: object) -> bool:
 
 class AutonomyBlock(BaseModel):
     """The one master switch over every autonomous session-starting spawner
-    (nested under 'config.autonomy'). x-aaaf wave 3.
+    (nested under 'config.autonomy'). wave 3.
 
     ``enabled=False`` stops EVERY spawner - the merge-triggered ones
     (advance, dispatch_lanes, epic converge, reconcile_dispatch), spawn_think,
-    post-merge ritual, pr_watch, keep_going, blueprint auto-launch, and the
+    post-merge ritual, pr_watch, keep_going, and the
     wave-2 ones (groom, restart, evals) - regardless of that spawner's own
     gate. It is checked BEFORE any other precedence rank, even an explicit env
     override: the whole point of a panic switch is that nothing overrides it.
@@ -2558,8 +2590,8 @@ class AutonomyBlock(BaseModel):
 class AutoContinueBlock(BaseModel):
     """Merge-triggered auto-continue settings (nested under 'config.auto_continue').
 
-    The opt-in for merge-triggered auto-continue (node ab-3cd195b6): when
-    enabled, a merge-detector (``fno backlog reconcile`` / the /pr merged skill)
+    The opt-in for merge-triggered auto-continue (node): when
+    enabled, a merge-detector (``fno backlog reconcile`` / the /fno:ship pr merged skill)
     dispatches a fresh background ``/target --no-merge`` worker for the next
     now-unblocked backlog node after a PR merges, so a merge-gated epic walks
     itself group-by-group with no manual re-invocation.
@@ -2603,8 +2635,8 @@ class AutoContinueBlock(BaseModel):
 class KeepGoingBlock(BaseModel):
     """Autonomous keep-going engine settings (nested under 'config.keep_going').
 
-    The opt-in for the autonomous keep-going engine (x-3360): when enabled, the
-    autonomous ``/fno:pr merged`` ritual classifies each surviving carve-out
+    The opt-in for the autonomous keep-going engine : when enabled, the
+    autonomous ``/fno:ship pr merged`` ritual classifies each surviving carve-out
     follow-up and DISPATCHES the next unit of work (a ``/think``, a ``/target``,
     or just a filed node) instead of only closing the merged node. This is what
     keeps the autonomous loop moving without a human in the seat.
@@ -2648,9 +2680,9 @@ class KeepGoingBlock(BaseModel):
 class ThinkSpawnBlock(BaseModel):
     """Context-carrying /think spawn settings (nested under 'config.think_spawn').
 
-    The opt-in for node x-6a10: when enabled, the node-birth path (``fno backlog
+    The opt-in for node : when enabled, the node-birth path (``fno backlog
     idea``) OFFERS a context-carrying ``/think`` thread for a generated organic
-    node (a birth trigger never auto-spawns - x-42c5), handing it the *resolved*
+    node (a birth trigger never auto-spawns -), handing it the *resolved*
     origin transcript pointer (not a paraphrase) so a later pickup starts from
     ground truth. A real spawn still happens for the explicit conversational
     verb, an armed lifecycle trigger (``on_work_start``/``on_retro``), or a
@@ -2680,7 +2712,7 @@ class ThinkSpawnBlock(BaseModel):
     enabled: bool = False
     max_per_run: int = 5
     idle_threshold_s: int = 0
-    # --- A2 lifecycle triggers (x-122a) ---
+    # --- A2 lifecycle triggers ---
     # Two non-birth dispatch moments, each behind its OWN sub-flag, default OFF
     # even when ``enabled`` is on (Open Question 1): ``on_work_start`` fires when
     # /target claims a node to work it; ``on_retro`` fires when ``fno backlog
@@ -2689,7 +2721,7 @@ class ThinkSpawnBlock(BaseModel):
     on_work_start: bool = False
     on_retro: bool = False
     daily_cap: int = 20
-    # x-3571: a third trigger of the same shape - fire at `fno backlog
+    # a third trigger of the same shape - fire at `fno backlog
     # decompose` for the epic's WAVE-0 children (those with no intra-epic
     # blocker). Default OFF and deliberately not on by `enabled` alone: one warm
     # context writing several coherent children is cheaper and more consistent
@@ -2702,8 +2734,8 @@ class ThinkSpawnBlock(BaseModel):
     # config.dispatch.substrate; this value is consulted only when that shared
     # setting is absent so upgrades preserve an operator's prior launch shape.
     substrate: Optional[str] = None
-    # B (x-5d51): how an attended session handles a born node. ``offer`` (default,
-    # byte-for-byte x-6a10) prints a copy-pasteable handoff line; ``spawn`` opts
+    # B: how an attended session handles a born node. ``offer`` (default,
+    # byte-for-byte) prints a copy-pasteable handoff line; ``spawn`` opts
     # into a real bg /think dispatch. Fail-safe to ``offer`` so a garbage value
     # never auto-spawns against operator intent.
     attended: str = "offer"
@@ -2841,7 +2873,7 @@ class AutoMergeBlock(BaseModel):
 
     The typed reader for what the bash ``scripts/lib/config.sh`` auto_merge
     helpers used to parse (``is_auto_merge_allowed_for`` / ``get_auto_merge_*``).
-    The ``fno do pr`` port (ab-d4c98550) reads these via :func:`load_settings`
+    The ``fno do pr`` port reads these via :func:`load_settings`
     instead of re-parsing settings.yaml in a subprocess, so the 4-tier
     precedence + caching live in one place.
 
@@ -2854,7 +2886,7 @@ class AutoMergeBlock(BaseModel):
 
     Scope-ordered to read like the AND chain ``fno do pr merge`` enforces:
     ``enabled`` is PROJECT scope (the standing arm, re-read live at merge and
-    arm time so an operator disarm mid-flight still withholds, x-2270);
+    arm time so an operator disarm mid-flight still withholds);
     ``grant`` is ACTOR scope (who may merge once ``enabled`` passes); the
     policy keys below only matter once both do.
 
@@ -2865,7 +2897,7 @@ class AutoMergeBlock(BaseModel):
     The fold withholds and it grants: a per-run refusal (``false``) outranks
     every grant at the merge gate (``pr/_merge.py``), and a
     ``TARGET_AUTO_MERGE=1`` grant (``env-target-auto-merge``) satisfies the
-    standing arm on its own (x-01b9). Scrubbed on runs carrying a mesh
+    standing arm on its own. Scrubbed on runs carrying a mesh
     identity (``FNO_AGENT_SELF``) or an unattended marker; an interactive
     session the operator launched carries neither and is the documented
     carrier of the grant, inside the operator's trust boundary, with the
@@ -2878,15 +2910,15 @@ class AutoMergeBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     # MIRROR NOTE (posture readers): the Rust reader at
-    # crates/fno-agents/src/agents_config.rs `auto_merge_enabled` accepts only
-    # a real TOML boolean for this key - deliberately stricter at the
-    # irreversible native-arm - while this coercer also accepts the string
-    # spellings. A config carrying `enabled = "true"` arms the merge verb and
-    # the git-protection hook (both resolve through this tolerant reader) but
-    # not the finalize arm. Any change to either spelling set must move all
-    # three readers, or the gates split on exactly that spelling.
+    # crates/fno-agents/src/agents_config.rs `auto_merge_enabled` accepts the
+    # same affirmative set this coercer does. It was stricter while it read
+    # only for the native arm. `fno do pr merge` now resolves its standing
+    # switch through that reader too, and a split would have refused
+    # `enabled = "true"` at the very verb that honored it a release ago. Any
+    # change to either spelling set must move both readers and the
+    # git-protection hook, or the gates split on exactly that spelling.
     enabled: bool = False
-    # ACTOR scope (x-4be1): who may merge once `enabled` passes. Replaces
+    # ACTOR scope: who may merge once `enabled` passes. Replaces
     # `dispatch.auto_merge`, which spelled the same decision in another table.
     #   none     - humans only, via `fno do pr merge`
     #   dispatch - autonomously dispatched /target workers may merge too
@@ -2894,6 +2926,7 @@ class AutoMergeBlock(BaseModel):
     merge_strategy: str = "merge"
     delete_branch_on_merge: bool = True
     require_checks_pass: bool = True
+    require_fresh_ci: bool = True
     conflict_resolution: str = "opus"
     remediation: str = "attempt"
 
@@ -2915,7 +2948,9 @@ class AutoMergeBlock(BaseModel):
             v = v.strip()
         return v if v in ("none", "dispatch") else "none"
 
-    @field_validator("delete_branch_on_merge", "require_checks_pass", mode="before")
+    @field_validator(
+        "delete_branch_on_merge", "require_checks_pass", "require_fresh_ci", mode="before"
+    )
     @classmethod
     def _coerce_flag(cls, v: object) -> bool:
         return _coerce_affirmative(v, default=True)
@@ -2942,35 +2977,22 @@ class AutoMergeBlock(BaseModel):
         return "attempt"
 
 
-
 class PrWatchBlock(BaseModel):
     """PR-state watcher settings (nested under 'config.pr_watch').
 
     Controls the global launchd watcher that polls open-PR backlog nodes
-    and fires headless /fno:pr check / /fno:pr merged.
+    and fires headless /fno:ship pr check / /fno:ship pr merged.
 
-    Fields
-    ------
-    enabled:
-        True to activate the watcher (default False; operator opt-in).
-    interval_seconds:
-        ``StartInterval`` for the LaunchAgent plist (default 600 = 10 min).
-    retries:
-        Maximum consecutive dispatch failures before a PR is parked
-        (default 3).
-    max_age_days:
-        PRs older than this many days are parked without dispatch (default 14).
-    model:
-        The claude model used for headless skill fires (default haiku-4-5;
-        cheap mechanical task).
-    tick_timeout_seconds:
-        Wall-clock ceiling for one tick. Unset (None) derives at the tick
-        boundary as max(60, 0.8 * interval_seconds), so the deadline stays
-        under StartInterval and launchd never suppresses the next tick.
-    graphql_min_remaining:
-        Floor on the shared per-user GraphQL budget: below it the tick's
-        per-PR dispatch pass is skipped loudly rather than issuing queries
-        that stall (default 200).
+    Fields: enabled (operator opt-in, default False); interval_seconds
+    (plist StartInterval, default 600); retries (consecutive dispatch
+    failures before a PR parks, default 3); max_age_days (default 14);
+    model (headless skill-fire model, default claude-haiku-4-5);
+    tick_timeout_seconds (wall clock per tick; unset derives
+    max(60, 0.8 * interval_seconds) so launchd never suppresses the next
+    tick); graphql_min_remaining (dispatch-pass skip floor on the shared
+    GraphQL budget, default 200); wedged_after_ticks (consecutive broken
+    tick ends at a fresh watermark before liveness reads wedged, default
+    3; one broken tick is transient).
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -2982,12 +3004,13 @@ class PrWatchBlock(BaseModel):
     model: str = Field(default="claude-haiku-4-5", min_length=1)
     tick_timeout_seconds: Optional[int] = Field(default=None, gt=0)
     graphql_min_remaining: int = Field(default=200, ge=0)
+    wedged_after_ticks: int = Field(default=3, ge=1)
 
 
 class GroomBlock(BaseModel):
     """Daily backlog-grooming pass settings (nested under 'config.groom').
 
-    x-aaaf wave 2: `fno backlog groom` (`_spawn_groom_worker`,
+ wave 2: `fno backlog groom` (`_spawn_groom_worker`,
     backlog/groom.py:204) previously spawned with no enable key at all, so it
     could not be turned off. Default ``True`` matches the spawner's CURRENT
     effective behavior (it always ran) - shipping this gate changes nothing
@@ -3004,51 +3027,11 @@ class GroomBlock(BaseModel):
         return _coerce_bool_default_true(v)
 
 
-class RestartBlock(BaseModel):
-    """`fno agents restart` worker-revival settings (nested under 'config.restart').
-
-    x-aaaf wave 2: `_revive_orphans` (restart.py:90) - respawning claude
-    workers orphaned by a killed mux server - previously had only a per-run
-    `--revive/--no-revive` CLI flag and no durable config gate, so it could
-    not be turned off once and forgotten. Default ``True`` matches the
-    spawner's CURRENT effective behavior: a legitimately unconditional
-    trigger (crash recovery) still gets a gate, it just defaults on.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = True
-
-    @field_validator("enabled", mode="before")
-    @classmethod
-    def _coerce_enabled(cls, v: object) -> bool:
-        return _coerce_bool_default_true(v)
-
-
-class EvalsBlock(BaseModel):
-    """Eval-suite worker settings (nested under 'config.evals').
-
-    x-aaaf wave 2: `evals/runner.py`'s `run_task` spawns a headless grading
-    worker with no enable key at all. Default ``True`` matches its CURRENT
-    effective behavior (it always ran when invoked) - shipping this gate
-    changes nothing until an operator explicitly disables it.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = True
-
-    @field_validator("enabled", mode="before")
-    @classmethod
-    def _coerce_enabled(cls, v: object) -> bool:
-        return _coerce_bool_default_true(v)
-
-
 class RecoveryBlock(BaseModel):
     """Bg-session recovery sweep settings (nested under 'config.recovery').
 
-    Controls the Layer-2 sweep (x-f47c) that rides the ``pr_watch`` launchd
-    tick over footnote-launched bg sessions. Two actions survive the x-d93d
+    Controls the Layer-2 sweep that rides the ``pr_watch`` launchd
+    tick over footnote-launched bg sessions. Two actions survive the
     removal of the held socket nudge: provider failover on a swap-class death
     (rate-limit / quota / auth / 5xx; respawns a fresh ``claude --bg``), and
     close-surfacing for a session whose mission finished but whose process
@@ -3065,46 +3048,14 @@ class RecoveryBlock(BaseModel):
     idle_threshold_seconds:
         How old family-1 transcript activity may be before recovery acts on a
         session (default 900 = 15 min). Keep it above the longest expected
-        single-tool runtime because a long build can legitimately produce no
-        transcript turn while it runs.
+        single-tool runtime: a long build legitimately produces no turn.
     max_nudges:
-        Per-session cap on held-by-design surfaces before the sweep gives up and
-        emits ``recovery_capped`` (default 3) so a genuinely wedged session
-        surfaces instead of looping forever. Close notifications are once-only,
-        tracked separately.
+        Per-session cap on held-by-design surfaces before the sweep gives up
+        and emits ``recovery_capped`` (default 3). Close notifications are
+        once-only, tracked separately.
     watchdog:
-        The external fleet watchdog lane riding the same tick (x-55c3):
-        ``off`` (default) is a no-op, ``report`` publishes the
-        unfinished-work report (in_progress nodes with free claims, done
-        branches ahead of ``origin/main``, dirty ownerless worktrees, and
-        ownerless PRs older than 24h; every finding names its clearing
-        verb), ``wake`` additionally resumes positively stalled sessions.
-        No tick value ever reaps or reroutes: those stop a session and stay
-        behind an operator running ``fno agents watchdog --apply-all`` by
-        hand.
-    watchdog_mail_to:
-        Mail handle the unfinished-work digest is pushed to (agent name,
-        short id, or ``project:<slug>``). Empty (default) mails nobody. A
-        digest is sent only when the finding set changed since the previous
-        sweep, so a finding stuck for a day reads once, not every tick.
-    watchdog_reap:
-        Whether ``--apply-all`` may execute the REAP lane (default ``false``).
-        Wake, reroute and ghost are recoverable; reap runs ``stop`` then
-        ``rm``, which deletes the session's WORKTREE, and work that lives
-        only on that machine is gone with it. Off by default is not a
-        statement about the classifier's accuracy: it is that a wrong reap
-        cannot be undone and a wrong wake can. Classification is unaffected -
-        reap verdicts are still computed, reported and mailed, they just do
-        not execute until an operator turns this on.
-    retire_grace_s:
-        How long a finished worker stays parked before ``--apply-all`` stops
-        it (default 900). A worker that declares itself done and never exits
-        holds a live slot against ``config.agents.max_live`` forever; this is
-        the follow-up window before the retire lane takes the slot back, so a
-        worker that just delivered can still be asked one more thing. ``0``
-        turns the lane off entirely. Unlike reap this ships ARMED, because
-        retire only runs ``stop``: the worktree, the transcript and the
-        registry row all survive and ``fno agents resume`` undoes it.
+        The fleet watchdog lane, as a nested block. See
+        :mod:`fno.config._watchdog`.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3112,11 +3063,23 @@ class RecoveryBlock(BaseModel):
     enabled: bool = True
     idle_threshold_seconds: int = Field(default=900, gt=0)
     max_nudges: int = Field(default=3, ge=1)
-    watchdog: Literal["off", "report", "wake"] = "off"
-    watchdog_mail_to: str = ""
-    watchdog_reap: bool = False
+    watchdog: WatchdogBlock = Field(default_factory=WatchdogBlock)
     startup_destructive: bool = False
-    retire_grace_s: int = Field(default=900, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_watchdog(cls, data: object) -> object:
+        return _watchdog.coerce_legacy(data)
+
+    provider_outage_quorum: int = Field(default=2, ge=1)
+    provider_outage_fup_window_seconds: int = Field(default=300, ge=300)
+    provider_outage_529_count: int = Field(default=3, ge=3)
+    provider_outage_529_span_seconds: int = Field(default=120, ge=120)
+    provider_outage_529_cross_session_window_seconds: int = Field(default=600, ge=600)
+    provider_outage_pane_freshness_seconds: int = Field(default=120, ge=120)
+    provider_outage_evidence_freshness_seconds: int = Field(default=600, ge=600)
+    provider_outage_reset_grace_seconds: int = Field(default=120, ge=120)
+    provider_health_marker_ttl_seconds: int = Field(default=120, ge=120)
 
 
 class HealthThresholdsBlock(BaseModel):
@@ -3404,191 +3367,10 @@ class WorkBlock(BaseModel):
         return {}
 
 
-_DURATION_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
-_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-
-
-def _parse_duration_to_seconds(v: object) -> Optional[int]:
-    """Parse a duration string (``"5m"``/``"30s"``/``"2h"``/``"1d"``) to seconds.
-
-    A bare int/float is interpreted as seconds. Returns ``None`` for anything
-    unparseable, zero, or negative, so callers can fail safe to disabled rather
-    than spin a 0-sleep hot loop (active-backlog Boundaries).
-    """
-    if isinstance(v, bool):
-        return None
-    if isinstance(v, (int, float)):
-        secs = int(v)
-        return secs if secs > 0 else None
-    if isinstance(v, str):
-        s = v.strip()
-        # A bare digit string ("300") is interpreted as seconds, matching the
-        # bare-int path so `interval: "300"` and `interval: 300` agree (instead
-        # of the quoted form silently disabling the feature).
-        if s.isdigit():
-            secs = int(s)
-            return secs if secs > 0 else None
-        m = _DURATION_RE.match(s)
-        if not m:
-            return None
-        secs = int(m.group(1)) * _DURATION_UNITS[m.group(2)]
-        return secs if secs > 0 else None
-    return None
-
-
-class ActiveBacklogConfig(BaseModel):
-    """Active backlog dispatcher settings (nested under 'config.active_backlog').
-
-    The opt-in for the always-on backlog drain daemon (node x-c070): when
-    enabled for a project, the per-user supervisor daemon continuously claims
-    ready backlog nodes for that project and dispatches them one at a time
-    through the existing megawalk loop primitive, sleeping between drains with
-    an event nudge for low latency.
-
-    Default OFF (footnote convention): a disabled block is byte-for-byte
-    today's behavior. The fail-safe posture mirrors ``config.auto_continue`` /
-    ``config.target.blast``: a malformed block degrades to disabled rather than
-    raising out of the whole settings load, a bad scalar field is dropped to its
-    default (never raised), and an invalid ``interval`` (zero, negative, or
-    unparseable) disables the feature rather than spinning a 0-sleep hot loop
-    (Boundaries).
-
-    Fields
-    ------
-    enabled:
-        ``True`` to drain every project, or a per-project map
-        ``{<project>: bool}`` to scope the daemon to specific projects.
-        Default ``False``. A scalar typo fails safe to disabled; in a map, only
-        a clear affirmative (``true``/``yes``/``on``/``1``) enables a project.
-    interval:
-        Poll-floor cadence as a duration string (``"5m"``, ``"30s"``, ``"2h"``,
-        ``"1d"``) or a bare integer (seconds). Default ``"5m"``. The poll floor
-        is the correctness guarantee; the event nudge is a latency optimization
-        layered on top.
-    failure_limit:
-        Consecutive dispatch failures before a node is parked (the circuit
-        breaker). Default 3. Reset to zero only on a successful close.
-    max_concurrent:
-        In-flight nodes per project per tick. Default 1 (serial, v1). Defined
-        now so v2 parallelism needs no config migration; v1 asserts == 1.
-    mission:
-        Optional mission id; when set, the daemon drains only that mission's
-        nodes and never drifts into the general backlog.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool | dict[str, bool] = False
-    interval: str = "5m"
-    failure_limit: int = Field(default=3, ge=1)
-    max_concurrent: int = Field(default=1, ge=1)
-    mission: Optional[str] = None
-
-    @field_validator("enabled", mode="before")
-    @classmethod
-    def _coerce_enabled(cls, v: object) -> object:
-        """Fail-safe coercion for ``enabled`` (bool or per-project map).
-
-        A bool passes through. A mapping is coerced per-value with the strict
-        affirmative truth table (only ``true``/``yes``/``on``/``1`` enable a
-        project; an ambiguous value disables that project, never guesses on).
-        Any other scalar (``enabled: banana``) fails safe to ``False`` - the
-        dangerous direction for an autonomous-dispatch opt-in is false-enabled.
-        """
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, dict):
-            return {str(k): _coerce_affirmative(val, False) for k, val in v.items()}
-        return _coerce_affirmative(v, False)
-
-    @field_validator("interval", mode="before")
-    @classmethod
-    def _coerce_interval(cls, v: object) -> object:
-        """Drop a non-string/non-int interval to the default; never raise.
-
-        Whether the value parses to a *positive* duration is decided by the
-        consumer accessors (:meth:`interval_seconds` / :meth:`is_enabled_for`),
-        which fail closed on a bad interval rather than raising (Boundaries).
-        """
-        if isinstance(v, bool):
-            return "5m"
-        if isinstance(v, str):
-            return v
-        if isinstance(v, (int, float)):
-            return f"{int(v)}s"
-        return "5m"
-
-    @field_validator("failure_limit", mode="before")
-    @classmethod
-    def _coerce_failure_limit(cls, v: object) -> object:
-        """Drop a non-positive-int failure_limit to the default (3); never raise."""
-        if isinstance(v, bool):
-            return 3
-        if isinstance(v, int) and v >= 1:
-            return v
-        if isinstance(v, str):
-            try:
-                n = int(v.strip())
-            except ValueError:
-                return 3
-            return n if n >= 1 else 3
-        return 3
-
-    @field_validator("max_concurrent", mode="before")
-    @classmethod
-    def _coerce_max_concurrent(cls, v: object) -> object:
-        """Drop a non-positive-int max_concurrent to the default (1); never raise."""
-        if isinstance(v, bool):
-            return 1
-        if isinstance(v, int) and v >= 1:
-            return v
-        if isinstance(v, str):
-            try:
-                n = int(v.strip())
-            except ValueError:
-                return 1
-            return n if n >= 1 else 1
-        return 1
-
-    def interval_seconds(self) -> Optional[int]:
-        """Parsed poll-floor in seconds, or ``None`` if the interval is invalid."""
-        return _parse_duration_to_seconds(self.interval)
-
-    def is_enabled_for(self, project: Optional[str]) -> bool:
-        """Whether the daemon should drain ``project``.
-
-        Fail-closed: an invalid interval disables the feature entirely (no
-        0-sleep hot loop). ``enabled: true`` enables every project; a
-        per-project map enables only its truthy keys.
-        """
-        if self.interval_seconds() is None:
-            return False
-        en = self.enabled
-        if isinstance(en, dict):
-            if project is None:
-                return False
-            return bool(en.get(project, False))
-        return bool(en)
-
-    def enabled_projects(self) -> list[str]:
-        """The explicitly-enabled project names (per-project map mode only)."""
-        if isinstance(self.enabled, dict):
-            return [p for p, on in self.enabled.items() if on]
-        return []
-
-    def any_enabled(self) -> bool:
-        """Whether the feature is on for >=1 project (and the interval is valid)."""
-        if self.interval_seconds() is None:
-            return False
-        if isinstance(self.enabled, dict):
-            return any(self.enabled.values())
-        return bool(self.enabled)
-
-
 class ParallelBlock(BaseModel):
     """Parallel-mode dispatch settings (nested under 'config.parallel').
 
-    Parallel mode (epic x-42d5) runs up to ``max_lanes`` independent bg
+    Parallel mode (epic) runs up to ``max_lanes`` independent bg
     worktree lanes concurrently, one per distinct backlog domain, to compress
     wall-clock time. The cap is the sole cost-bound lever (design Locked
     Decision #3): it trades CI minutes for throughput, never the reverse.
@@ -3597,7 +3379,7 @@ class ParallelBlock(BaseModel):
     ``config.local.toml`` override allowlist (:data:`WORKTREE_LOCAL_KEYS`,
     Locked Decision #10): a per-lane cap is meaningless - every lane must see
     one global ceiling or the cap does not bound anything. The allowlist is an
-    exact-match frozenset of ``{project.id}`` (x-071c narrowed it to this sole
+    exact-match frozenset of ``{project.id}`` (narrowed it to this sole
     key), so this key is excluded by construction; do NOT add
     ``config.parallel.max_lanes`` to it.
 
@@ -3641,14 +3423,10 @@ class ParallelBlock(BaseModel):
 class ModelProvider(BaseModel):
     """One secondary model provider for role-based routing (z.ai, DeepSeek, ...).
 
-    ``protocol`` is how a worker talks to it: a ``claude --bg`` worker speaks the
-    Anthropic Messages API, so only ``anthropic``-protocol providers are usable
-    for the claude lane (use the vendor's Anthropic-compatible endpoint, e.g.
-    ``https://api.z.ai/api/anthropic`` or ``https://api.deepseek.com/anthropic``,
-    NOT its OpenAI ``/v4`` path). The API key is read from the process env var
-    named by ``api_key_env`` (falling back to ``api_key_file``); it never lives
-    in settings.yaml. ``zai`` is built in by default; list a provider here to
-    override it or to add another (e.g. ``deepseek``).
+    Anthropic-protocol only for the claude lane (the vendor's compatible
+    endpoint, not its OpenAI ``/v4`` path); the key comes from
+    ``api_key_env`` / ``api_key_file``, never settings.yaml. ``zai`` is built
+    in; list a provider here to override it or add another.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3657,27 +3435,30 @@ class ModelProvider(BaseModel):
     base_url: str = ""
     api_key_env: str = ""
     api_key_file: Optional[str] = None
-    # Cheaper model for the background (haiku) tier so judgment-light background
-    # traffic runs cheap while opus/sonnet stay on the role model. Unset (None)
-    # keeps the role model on every tier. The built-in zai provider defaults it
-    # to glm-4.7; set it here to override or to give another provider a
-    # cheap background model.
+    # Cheaper model for the background (haiku) tier so judgment-light traffic
+    # runs cheap; unset keeps the role model there. Built-in zai: glm-4.7.
     haiku_model: Optional[str] = None
-    # Codex/OpenAI-lane only (protocol == "openai"): the codex wire protocol for
-    # this provider's endpoint. Third-party OpenAI-compatible endpoints (e.g.
-    # z.ai's paas/v4) speak Chat Completions -> "chat"; leave unset to default
-    # to "chat" when routing a codex-lane spawn. Ignored on the anthropic lane.
+    # Model per Claude tier ({opus = "glm-5.3[1m]"}) so /model offers a real
+    # choice; undeclared tiers keep the spawn model. Rules beside TIER_ALIASES.
+    tier_models: Optional[dict[str, str]] = None
+
+    @field_validator("tier_models")
+    @classmethod
+    def _validate_tier_models(cls, v: Optional[dict[str, str]]) -> Optional[dict[str, str]]:
+        from fno.config._tiers import validate_tier_models
+        return validate_tier_models(v)
+    # Codex/OpenAI-lane only (protocol == "openai"): the codex wire protocol
+    # for this provider's endpoint ("chat" for Chat Completions, the default;
+    # ignored on the anthropic lane).
     wire_api: Optional[str] = None
 
 
 class ModelRoutingBlock(BaseModel):
     """Role-based per-spawn model routing (config.model_routing in settings.yaml).
 
-    Routes auxiliary coordination roles (coordinate / tidy / orient /
-    consolidate) to a secondary provider (z.ai GLM by default) at spawn time
-    while production roles stay on the primary Anthropic model. Keys live in env
-    vars / .env files named per provider, never here. See
-    fno.agents.model_routing.
+    Routes auxiliary coordination roles to a secondary provider (z.ai GLM by
+    default) while production roles stay primary; provider keys live in env
+    vars / .env files, never here. See fno.agents.model_routing.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -3700,7 +3481,7 @@ _LOOP_LEVELS = ("report", "assisted", "unattended")
 
 
 class LoopEntry(BaseModel):
-    """One named loop's level (``config.loops.<name>``, x-ce71).
+    """One named loop's level (``config.loops.<name>``).
 
     ``report`` (observe only) is the safest default, so a malformed or
     unrecognized level fails safe to it rather than raising - a standing
@@ -3710,7 +3491,7 @@ class LoopEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     level: Literal["report", "assisted", "unattended"] = "report"
-    # Aggregate per-run spend ceiling (x-57a5's observer harness is the first
+    # Aggregate per-run spend ceiling (observer harness is the first
     # consumer: config.loops.observer_harness.budget_usd_per_run). Generic on
     # LoopEntry rather than observer-specific so any future loop with its own
     # spend can reuse the same key. A non-positive/malformed value fails safe
@@ -3739,7 +3520,7 @@ class LoopEntry(BaseModel):
 
 
 class BatchBlock(BaseModel):
-    """Batch-lane settings (nested under 'config.batch', x-8cae).
+    """Batch-lane settings (nested under 'config.batch').
 
     The auto-target runner can coalesce N same-domain ready nodes onto one
     branch and open ONE PR per batch instead of one-per-node, cutting GitHub
@@ -3813,10 +3594,10 @@ class BatchBlock(BaseModel):
 
 
 class BranchBlock(BaseModel):
-    """Dispatch branch naming (nested under 'config.branch', x-ff83 W3).
+    """Dispatch branch naming (nested under 'config.branch', W3).
 
     ``prefix`` is the leading segment of a dispatched worktree branch:
-    ``<prefix>/<slug>-<node>`` (e.g. ``fno/plan-docs-...-x-ff83``). A legible
+    ``<prefix>/<slug>-<node>`` (e.g. ``fno/plan-docs-...-x-aaaa``). A legible
     branch that round-trips back to its node beats the opaque ``feature/<hex>``.
     """
 
@@ -3852,7 +3633,7 @@ class MuxRestoreBlock(BaseModel):
 class MuxBlock(BaseModel):
     """fno mux (terminal multiplexer) settings (nested under 'config.mux').
 
-    ``shell_integration`` (x-b63b) controls whether the mux auto-injects the
+    ``shell_integration`` controls whether the mux auto-injects the
     OSC 133 block-marker snippet into the shells it spawns, so command-block
     capture works with zero user config and WITHOUT touching the user's global
     shell rc. The injection happens ONLY in mux-spawned pane shells (temp
@@ -3872,10 +3653,10 @@ class MuxBlock(BaseModel):
     structural ``1``-``9`` tab range, or collides with another action, saying so
     in a notice rather than silently running the shipped default.
 
-    ``notify_on_blocked`` / ``notify_on_done`` (x-dd84) fire an OS notification
+    ``notify_on_blocked`` / ``notify_on_done`` fire an OS notification
     when a badge enters blocked / done. The Rust daemon reads these straight from
-    settings.yaml (``agents_config.rs``, the same split-brain as
-    ``config.agents.dead_row_grace``); modeling them here keeps every mux key
+    config.toml (``agents_config.rs``, the same split-brain as
+    ``config.agents.retire_grace_s``); modeling them here keeps every mux key
     discoverable via ``fno config get/set``, the wizard, and the generated docs.
 
     Fields
@@ -3891,17 +3672,16 @@ class MuxBlock(BaseModel):
 
     shell_integration: str = "mux-panes"
     restore: MuxRestoreBlock = Field(default_factory=MuxRestoreBlock)
-    # Which projects the backlog board renders (x-20f1). The graph is ONE store
-    # tagged by project, so an unscoped board shows every project's work to
-    # someone sitting in one checkout. `repo` (the default) scopes to this
-    # checkout's `project.id`, which resolves through git and so answers the
-    # same for every worktree layout; `all` is the historical board;
-    # `workspace:<name>` takes the project set `work.workspaces.<name>` already
-    # declares rather than inventing a second place to list projects. Read by
-    # the Rust mux CLIENT at server birth and passed in on the env, never by the
-    # server itself (a subprocess on its startup path wedged shutdown). A scope
-    # that cannot resolve falls back to every project; `fno mux doctor` is where
-    # that is visible.
+    # Which projects the backlog board renders. The graph is ONE
+    # store tagged by project, so an unscoped board shows every project's
+    # work. `repo` (the default) scopes to this checkout's `project.id`,
+    # resolved through git so every worktree layout agrees. `all` is the
+    # historical board. `workspace:<name>` reuses the set
+    # `work.workspaces.<name>` already declares. Read by the Rust mux CLIENT
+    # at server birth and passed in on the env, never by the server itself
+    # (a subprocess on its startup path wedged shutdown). A scope that
+    # cannot resolve falls back to every project. `fno mux doctor` shows
+    # that.
     board_scope: str = "repo"
     # The prefix key, as a spec the Rust client parses (`C-a`, `Ctrl-a`, `^a`, or
     # a bare printable char). None keeps the built-in Ctrl-b.
@@ -3915,7 +3695,7 @@ class MuxBlock(BaseModel):
     notify_on_blocked: bool = True
     # Also notify on a terminal `done` hook transition. Off by default.
     notify_on_done: bool = False
-    # Catch-up digest on attach (x-4e2d): when a client attaches to a session it
+    # Catch-up digest on attach: when a client attaches to a session it
     # last left more than `attach_digest_threshold_min` ago, render a
     # "while you were gone" overlay (fold of events + ledger) instead of raw
     # scrollback. Read straight from settings.yaml by the interactive Rust mux
@@ -3926,20 +3706,27 @@ class MuxBlock(BaseModel):
     # attach (and the Rust reader parses it as u64, silently rejecting negatives
     # to the default), so pin the floor at 1 minute here.
     attach_digest_threshold_min: int = Field(default=10, ge=1)
-    # Focus-follows-mouse over coding panes (x-a496): hovering a pane makes it the
-    # keyboard focus after a short settle. Read straight from settings.yaml by the
-    # interactive Rust client (same split-brain as attach_digest); modeled here so
-    # the off-switch is discoverable via `fno config get/set`.
+    # Focus-follows-mouse over coding panes: a hover makes the pane the keyboard
+    # focus after a short settle; read by the Rust client like `hover_focus`'s
+    # off-switch door, `fno config get/set`.
     hover_focus: bool = True
-    # Show the mux status row. The interactive Rust client reads this directly
-    # from config.toml, matching the `hover_focus` startup path.
+    # Show the mux status row; the Rust client reads it from config.toml, like `hover_focus`.
     status_row: bool = True
-    # The mux chrome theme name (x-f75e): one of the shipped palettes the modal
-    # chrome reads (`terminal`, `catppuccin`, `tokyo-night`, `gruvbox`). Read by
-    # the interactive Rust client via the same config ladder as `hover_focus`;
-    # an unknown name falls back to `terminal` WITH a notice, never silently.
-    # `terminal` (the default, None) inherits the emulator's own colors.
+    load_readout: Literal["simple", "detailed"] = "simple"
+    # The mux chrome theme name: one of the shipped palettes the modal
+    # chrome reads (`footnote-superscript`, `footnote-paper`, `terminal`,
+    # `catppuccin`, `tokyo-night`, `gruvbox`). Read by the interactive Rust
+    # client via the same config ladder as `hover_focus`; an unknown name
+    # falls back to the default `footnote-superscript` WITH a notice, never
+    # silently. None resolves to the default too, or `footnote-paper` when
+    # the terminal reports a light background (COLORFGBG). Role overrides
+    # `mux.theme.brand` / `mux.theme.needs_you` (#rrggbb quoted dotted keys
+    # in [mux], read by the Rust client) pin those two roles under any theme.
     theme: Optional[str] = None
+    # While a theme is active, paint the terminal's own palette from it (OSC 11/10/4); restore on exit.
+    paint_background: bool = True
+    # The card's graph slot: activity ramp (default) or the context fill bar.
+    card_graph: Literal["activity", "context"] = "activity"
 
     @field_validator("shell_integration", mode="before")
     @classmethod
@@ -3956,120 +3743,12 @@ class MuxBlock(BaseModel):
         return "off" if isinstance(v, str) and v.strip() == "off" else "mux-panes"
 
 
-_STATUS_SINK_TYPES = ("json-webhook", "text-webhook", "backlog-progress")
-
-# The protocol-family envelope whitelist minus `data` (a nested object, not an
-# equality target). Sourced from events/schema.yaml at validation time so it
-# cannot drift; this literal is the fallback for a smoke venv where the schema
-# file is absent.
-_MATCH_KEYS_FALLBACK = frozenset(
-    {"ts", "v", "type", "source", "from", "model", "host",
-     "project", "node", "task", "run", "parent", "outcome"}
-)
-
-
-def _status_sink_match_keys() -> frozenset[str]:
-    try:
-        from fno.events import PROTOCOL_ENVELOPE_ALLOWED
-
-        allowed = set(PROTOCOL_ENVELOPE_ALLOWED)
-        if allowed:
-            return frozenset(allowed - {"data"})
-    except Exception:
-        pass
-    return _MATCH_KEYS_FALLBACK
-
-
-class StatusFanoutConfig(BaseModel):
-    """Fanout dispatcher tuning (config.status_fanout).
-
-    Non-positive tuning values fail loud at config load (matching this file's
-    convention) rather than reaching ``urllib`` as a negative timeout - which
-    raises deep inside a per-sink try/except and silently drops every event.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    interval_secs: int = Field(default=5, ge=1)
-    http_timeout_secs: int = Field(default=5, ge=1)
-    retries: int = Field(default=2, ge=0)
-
-
-class StatusSinkConfig(BaseModel):
-    """One status sink (``config.status_sinks[]``, x-2057).
-
-    Semantic errors (unknown type, out-of-whitelist ``match`` key, both/neither
-    of ``url``/``url_env``, duplicate ``name`` across the list) RAISE at config
-    load - a misconfigured sink fails loud rather than silently not delivering.
-    A container-level type mismatch (a scalar where the list belongs) still
-    fails safe to ``[]`` in ``ConfigBlock`` so a typo never bricks settings load.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    name: str
-    type: str
-    events: list[str] = Field(default_factory=list)
-    match: dict[str, str] = Field(default_factory=dict)
-    url: Optional[str] = None
-    url_env: Optional[str] = None
-    template: Optional[str] = None
-    field: str = "content"
-    cloudevents: bool = False
-    enabled: bool = True
-
-    @field_validator("name")
-    @classmethod
-    def _safe_name(cls, v: str) -> str:
-        # name keys the cursor/errors filenames (`<name>.cursor`), so it must be
-        # a bare filesystem-safe token - no separators, no leading dot - to keep
-        # a sink from ever resolving a path outside `.fno/status-sinks/`.
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", v):
-            raise ValueError(
-                f"status sink name {v!r} must match [A-Za-z0-9][A-Za-z0-9._-]* "
-                "(it keys the cursor filename; no path separators or leading dot)"
-            )
-        return v
-
-    @field_validator("type")
-    @classmethod
-    def _known_type(cls, v: str) -> str:
-        if v not in _STATUS_SINK_TYPES:
-            raise ValueError(
-                f"unknown status sink type {v!r} "
-                f"(allowed: {', '.join(_STATUS_SINK_TYPES)})"
-            )
-        return v
-
-    @field_validator("match")
-    @classmethod
-    def _match_keys_in_whitelist(cls, v: dict[str, str]) -> dict[str, str]:
-        allowed = _status_sink_match_keys()
-        bad = [k for k in v if k not in allowed]
-        if bad:
-            raise ValueError(
-                f"status sink match key(s) {bad} not in the protocol envelope "
-                f"whitelist (allowed: {', '.join(sorted(allowed))})"
-            )
-        return v
-
-    @model_validator(mode="after")
-    def _url_xor_url_env(self) -> "StatusSinkConfig":
-        if self.type in ("json-webhook", "text-webhook"):
-            if bool(self.url) == bool(self.url_env):
-                raise ValueError(
-                    f"status sink {self.name!r} ({self.type}) requires exactly "
-                    f"one of url / url_env"
-                )
-        return self
-
-
 class DevBlock(BaseModel):
     """Maintainer local-dev settings (nested under 'config.dev').
 
     ``source`` is the machine-local pin the Rust bootstrap reads to re-provision
     from a checkout instead of the published PyPI wheel when its uv tool venv is
-    wiped (x-88b9). Unset (the default) keeps the frictionless PyPI self-provision
+    wiped. Unset (the default) keeps the frictionless PyPI self-provision
     for end users; a maintainer sets it to their checkout root to make recovery
     source-first, matching the repo's "unset = OSS-neutral, set = maintainer
     choice" pattern (``paths.worktrees_base``).
@@ -4098,6 +3777,17 @@ class WorktreeBlock(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     policy: Optional[str] = None
+    # The worktree.* leaves below are read through `fno config get` by
+    # scripts/lib/worktree-config.sh (wt_config) and by the
+    # done-node gate (prune_done, in Rust), so the model carries them but
+    # never enforces their values.
+    auto_install: bool = True
+    setup_command: str = ""
+    skip_verification: bool = False
+    test_command: str = ""
+    # balanced (default) keeps a done tree holding modified tracked files;
+    # aggressive salvages the tracked diff to a salvage ref, then prunes.
+    prune_done: str = "balanced"
 
 
 class ArtifactConfig(BaseModel):
@@ -4136,7 +3826,7 @@ class QuotaBlock(BaseModel):
     """Quota-aware dispatch configuration (nested under 'config.accounts.quota').
 
     ``observe`` and ``defer_dispatch`` are two decisions, not one: looking at
-    quota and acting on it (x-763a). ``defer_dispatch`` implies ``observe``.
+    quota and acting on it. ``defer_dispatch`` implies ``observe``.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -4195,39 +3885,6 @@ class AccountsBlock(BaseModel):
         return None
 
 
-class KingBlock(BaseModel):
-    """The king loop (nested under 'config.king').
-
-    Both base keys default OFF. ``enabled`` arms the loop that holds a king
-    session open while its board names work it can shrink. ``autonomous_merge``
-    is separate and stricter: merging is outward and hard to reverse, so a
-    mergeable PR is reported to the king and never counted as its work until an
-    operator opts in.
-
-    The ``wake_*`` keys arm the pr-watch tick's wake phase, which respawns a
-    king whose holder is gone and whose scope still has work or undrained mail.
-    Sizes are derived, not guessed: ceiling 32 is ~1.5x the worst measured day
-    (21 wakes at a 15m debounce over 114 messages) and ~1.8x the p90; the
-    debounce is 15m because a king woken inside it is still working under its
-    own in-session arm, so a second wake buys nothing. The ceiling is a ROLLING
-    24h window per scope, never a lifetime constant: a lifetime cap of any size
-    strands a long-lived reign.
-
-    ``RunAtLoad`` is false for the pr-watcher LaunchAgent by design (the
-    operator loads it by hand), so a machine that never ran ``launchctl load``
-    has no waker at all. Turning ``wake_enabled`` on does not change that.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    enabled: bool = False
-    autonomous_merge: bool = False
-    wake_enabled: bool = False
-    wake_ceiling: int = 32
-    wake_debounce_seconds: int = 900
-    wake_backstop_seconds: int = 1800
-
-
 class PreflightBlock(BaseModel):
     """Local preflight policy (nested under 'config.preflight').
 
@@ -4257,8 +3914,10 @@ class ConfigBlock(BaseModel):
     obsidian: ObsidianBlock = Field(default_factory=ObsidianBlock)
     project: ProjectBlock = Field(default_factory=ProjectBlock)
     inbox: InboxBlock = Field(default_factory=InboxBlock)
+    user: UserBlock = Field(default_factory=UserBlock)
     sandbox: SandboxBlock = Field(default_factory=SandboxBlock)
     blueprint: BlueprintBlock = Field(default_factory=BlueprintBlock)
+    plan: PlanBlock = Field(default_factory=PlanBlock)
     backlog: BacklogBlock = Field(default_factory=BacklogBlock)
     batch: BatchBlock = Field(default_factory=BatchBlock)
     post_merge: PostMergeBlock = Field(default_factory=PostMergeBlock)
@@ -4268,25 +3927,19 @@ class ConfigBlock(BaseModel):
     preflight: PreflightBlock = Field(default_factory=PreflightBlock)
     approvals: ApprovalsBlock = Field(default_factory=ApprovalsBlock)
     context: ContextBlock = Field(default_factory=ContextBlock)
-    # The repo-wide ship-gate probe list, TOP-LEVEL because the file is flat.
-    # ENFORCED by the Rust loop-check gate (crates/fno-agents/src/loopcheck.rs),
-    # which runs it alongside a plan's own `done_probes` and refuses DonePRGreen
-    # unless both pass. Declared here so the Python side is not blind to a key
-    # the gate enforces - `fno config doctor` reports it, and a wrong-typed
-    # value raises here just as it blocks there.
-    #
-    # A probe is an OBSERVATION. It runs `sh -c` in the session cwd, so the
-    # source must stay a gitignored, operator-authored file: a tracked probe
-    # list would make cloning a repo remote code execution on the next
-    # loop-check fire.
+    # Repo-wide ship-gate probes join plan `done_probes`; both must pass. Each runs `sh -c`
+    # in the session cwd, so the list stays gitignored: a tracked one runs code on clone.
     done_probes: list[str] = Field(default_factory=list)
     target: TargetConfig = Field(default_factory=TargetConfig)
+    test: TestBlock = Field(default_factory=TestBlock)
+    guards: GuardsBlock = Field(default_factory=GuardsBlock)
+    store: StoreBlock = Field(default_factory=StoreBlock)
     agents: AgentsBlock = Field(default_factory=AgentsBlock)
-    process_admission: ProcessAdmissionBlock = Field(
-        default_factory=ProcessAdmissionBlock
-    )
+    process_admission: ProcessAdmissionBlock = Field(default_factory=ProcessAdmissionBlock)
     dispatch: DispatchBlock = Field(default_factory=DispatchBlock)
     routing: RoutingBlock = Field(default_factory=RoutingBlock)
+    sideline: SidelineBlock = Field(default_factory=SidelineBlock)
+    split: SplitBlock = Field(default_factory=SplitBlock)
     autonomy: AutonomyBlock = Field(default_factory=AutonomyBlock)
     auto_continue: AutoContinueBlock = Field(default_factory=AutoContinueBlock)
     keep_going: KeepGoingBlock = Field(default_factory=KeepGoingBlock)
@@ -4294,9 +3947,9 @@ class ConfigBlock(BaseModel):
     active_backlog: ActiveBacklogConfig = Field(default_factory=ActiveBacklogConfig)
     parallel: ParallelBlock = Field(default_factory=ParallelBlock)
     auto_merge: AutoMergeBlock = Field(default_factory=AutoMergeBlock)
+    auto_heal: AutoHealBlock = Field(default_factory=AutoHealBlock)
     pr_watch: PrWatchBlock = Field(default_factory=PrWatchBlock)
     groom: GroomBlock = Field(default_factory=GroomBlock)
-    restart: RestartBlock = Field(default_factory=RestartBlock)
     evals: EvalsBlock = Field(default_factory=EvalsBlock)
     recovery: RecoveryBlock = Field(default_factory=RecoveryBlock)
     health_monitor: HealthMonitorBlock = Field(default_factory=HealthMonitorBlock)
@@ -4311,8 +3964,13 @@ class ConfigBlock(BaseModel):
     loops: dict[str, LoopEntry] = Field(default_factory=dict)
     status_sinks: list[StatusSinkConfig] = Field(default_factory=list)
     status_fanout: StatusFanoutConfig = Field(default_factory=StatusFanoutConfig)
-    king: KingBlock = Field(default_factory=KingBlock)
+    lead: LeadBlock = Field(default_factory=LeadBlock)
     accounts: AccountsBlock = Field(default_factory=AccountsBlock)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_keys(cls, data: object) -> object:
+        return _watchdog.lift_retire_grace(data)
 
     @field_validator("status_sinks", mode="before")
     @classmethod
@@ -4323,7 +3981,7 @@ class ConfigBlock(BaseModel):
         array) is WARNED, not silently dropped - that shape mistake is exactly
         the misconfiguration an operator most needs surfaced (they'd otherwise
         believe their sinks are wired). A well-formed list with a semantically-
-        invalid sink still raises (x-2057: loud config error)."""
+        invalid sink still raises (: loud config error)."""
         if isinstance(v, list):
             return v
         if v is not None:
@@ -4695,12 +4353,9 @@ class SettingsModel(ConfigBlock):
 # config.local.toml is flat, so no `config.` prefix.
 WORKTREE_LOCAL_KEYS: frozenset[str] = frozenset(
     {
-        # post_merge.parking_lot_path was removed (x-071c): the post-merge ritual
-        # is a serial one-shot durable write, and its two write vehicles (capture
-        # add under a file lock, narrative append under the per-PR reconcile mutex
-        # with O_APPEND) are already safe on the shared canonical file. Redirecting
-        # it per-lane only orphaned the prose into an untracked file archive-worktree
-        # deletes. The ritual now always resolves against the canonical root.
+        # post_merge.parking_lot_path was removed: the ritual is a
+        # serial one-shot durable write, already safe on the shared canonical
+        # file; a per-lane redirect only orphaned the prose.
         "project.id",
     }
 )
@@ -4750,6 +4405,11 @@ def _atomic_write_toml(target: Path, data: dict[str, object]) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             clean = cast("dict[str, Any]", _strip_none(data))
+            # Lazy: only config WRITERS pay this dependency. A module-level
+            # import made a bare `import fno.events` (receipt emission from a
+            # bare python3) fail on machines without tomli_w installed.
+            import tomli_w
+
             f.write(tomli_w.dumps(clean).encode("utf-8"))
         os.replace(str(tmp), str(target))
     except BaseException:
@@ -4957,41 +4617,6 @@ def loaded_from() -> Optional[Path]:
     return _loaded_from
 
 
-def _warn_unknown_keys(data: dict[str, object], model: type[BaseModel], prefix: str = "") -> None:
-    """Emit a DEBUG-level WARNING for keys not in the model's field set.
-
-    Only emits when the FNO_DEBUG environment variable is set (any non-empty
-    value).  This keeps the default UX quiet while still letting power users
-    see the detail with ``FNO_DEBUG=1 fno ...``.
-    """
-    if not os.environ.get("FNO_DEBUG"):
-        return
-    known = set(model.model_fields.keys())
-    for key in data:
-        qualified = f"{prefix}.{key}" if prefix else key
-        if key not in known:
-            _LOG.warning(
-                "settings.yaml: unknown key %r (ignored for forward compatibility)",
-                qualified,
-            )
-        else:
-            # Recurse into nested dicts if the field is itself a BaseModel
-            sub_value = data[key]
-            field_info = model.model_fields[key]
-            annotation = field_info.annotation
-            # For Optional[X] the annotation may be a Union; unwrap it
-            args = getattr(annotation, "__args__", ())
-            inner = None
-            for arg in args:
-                if arg is not type(None) and isinstance(arg, type) and issubclass(arg, BaseModel):
-                    inner = arg
-                    break
-            if inner is None and isinstance(annotation, type) and issubclass(annotation, BaseModel):
-                inner = annotation
-            if inner is not None and isinstance(sub_value, dict):
-                _warn_unknown_keys(sub_value, inner, prefix=qualified)
-
-
 def _flatten_leaf_paths(
     data: dict[str, object], prefix: str = ""
 ) -> list[tuple[str, object]]:
@@ -5164,18 +4789,16 @@ def _alias_legacy_keys(raw: dict[str, object]) -> dict[str, object]:
             "use 'config.work' instead.",
         )
 
-    # --- dispatch.auto_merge -> auto_merge.grant (x-4be1) -------------------
-    # Same concept, one table: the actor-scope grant moves into the [auto_merge]
-    # block. Runs PER LAYER (the caller merges after), so precedence between a
-    # legacy and a canonical spelling across files is file-ordered, not
-    # last-merged. Canonical wins silently. Deliberately NO warning here, unlike
-    # the arms above: this key sits in real config files on real machines, and
-    # the warning fires from every settings load - including subprocesses whose
-    # single-line stdout other tools parse (dispatch-node.sh's agent-name
-    # bridge rejects any stderr noise). The operator-facing deprecation surface
-    # is `fno config doctor`, which names the file and the migration command.
-    # Both shapes carry the tables: flat config.toml at top level, a
-    # settings.yaml-era file wrapped under `config:` (flattened after this pass).
+    # --- dispatch.auto_merge -> auto_merge.grant -------------------
+    # Same concept, one table: the actor-scope grant moves into the
+    # [auto_merge] block. Runs PER LAYER (the caller merges after), so
+    # legacy-vs-canonical precedence across files is file-ordered, not
+    # last-merged. Canonical wins silently. Deliberately NO warning here,
+    # unlike the arms above: the warning fires from every settings load,
+    # including subprocesses whose single-line stdout other tools parse.
+    # `fno config doctor` is the deprecation surface. Both shapes carry the
+    # tables: flat config.toml at top level, or a settings.yaml-era file
+    # wrapped under `config:` (flattened after this pass).
     if _alias_am_grant(raw) or (had_config and _alias_am_grant(config)):
         if had_config:
             raw["config"] = config
@@ -5227,7 +4850,7 @@ def _aliased_layers(
     (``_warn_legacy_once``), so the only thing a cache would buy is one
     redundant file walk per consumer - and caching by path would serve a stale
     parse to a test (or tool) that rewrites a config file mid-process, exactly
-    the freshness load_settings' own cache_clear contract promises."""
+    the staleness load_settings' keyed cache shows a same-key rewrite."""
     layers: list[tuple[Path, dict[str, object]]] = []
     for candidate in candidates:
         if candidate.is_file():
@@ -5256,71 +4879,15 @@ def _revoke_unbacked_optouts(raw: dict[str, object]) -> dict[str, object]:
     return result if isinstance(result, dict) else raw
 
 
-@lru_cache(maxsize=1)
 def load_settings() -> SettingsModel:
-    """Load, deep-merge, and cache the settings for the lifetime of this process.
+    """Load the settings for the caller's declaration.
 
-    Every existing candidate is read and deep-merged, highest priority winning
-    key-by-key: $FNO_CONFIG (when set, the only candidate) ->
-    <worktree>/.fno/settings.yaml -> <canonical>/.fno/settings.yaml
-    -> ~/.fno/settings.yaml -> built-in defaults. See _candidate_paths for
-    the canonical (main worktree from `git worktree list`) step that lets a
-    linked worktree read shared config. A key absent from a higher-priority file
-    falls through to the next file down, so global can hold shared defaults
-    while each project sets only its deltas.
-
-    Raises ValidationError on invalid values (glob chars, PATH_MAX, etc.).
-    Emits WARNING for unknown keys.
+    Uncached wrapper: the cache is :func:`fno.config._loader._load_settings_at`,
+    keyed on :func:`fno.config._loader._settings_key`. Reading the declaration
+    at call time is what makes a changed ``FNO_CONFIG`` (or any other key
+    component) resolve fresh without a cache_clear.
     """
-    global _loaded_from
-
-    # Collect every candidate that exists and parses, in priority order
-    # (project-local highest, global lowest). Files that fail to parse are
-    # skipped (a WARNING is already emitted by _load_raw) so a corrupt
-    # higher-priority file still falls through to a valid lower-priority one.
-    # The walk (parse + per-layer legacy alias) is the ONE shared collector:
-    # resolve_source replays the same layers, so the chain, its order, and the
-    # alias pass (whose deprecation warnings fire once per process per chain,
-    # not once per consumer) live in exactly one place.
-    candidates = _candidate_paths()
-    layers = list(_aliased_layers(tuple(candidates)))
-
-    # Deep-merge lowest priority first so the highest-priority file wins per
-    # key. config.obsidian.vault can come from global while
-    # config.post_merge.parking_lot_path comes from the project file.
-    # Legacy keys were aliased PER LAYER inside _aliased_layers, before this
-    # merge, so a higher-priority file's legacy value still wins over a
-    # lower-priority file's canonical value (and vice-versa). Aliasing only the
-    # merged result would let a low-priority canonical key mask a high-priority
-    # legacy key.
-    raw: dict[str, object] = {}
-    for _path, parsed in reversed(layers):
-        raw = _deep_merge(raw, parsed)
-
-    # Per-worktree local override (x-cbce). A real, non-symlinked local file is
-    # layered only for the allowlisted collision keys.
-    if candidates:
-        raw = _layer_worktree_local_override(raw, candidates[0].parent)
-
-    # _loaded_from records the PRIMARY (highest-priority) file present, for
-    # `fno config doctor` and paths.config_file(). With layering there is no
-    # single source; the highest-priority file is the most meaningful anchor
-    # (Finding 3: paths.config_file must agree with the loader, not re-derive).
-    _loaded_from = layers[0][0] if layers else None
-
-    # Flatten the legacy config:-wrapped shape to the canonical top-level shape
-    # before warning/validation so unknown-key warnings key off real block names
-    # (the model is flat; a residual `config` key would look "unknown").
-    raw = _unwrap_config_dict(raw)
-
-    # Warn about unknown top-level and nested keys BEFORE model construction
-    # so the message appears even if validation later raises.
-    # The recursive walker handles nested blocks (paths, review, etc.) automatically;
-    # there is no need for an additional explicit nested call (which caused duplicate emission).
-    _warn_unknown_keys(raw, SettingsModel)
-
-    raw = _revoke_unbacked_optouts(raw)
-    return SettingsModel.model_validate(raw)
+    return _load_settings_at(_settings_key())
 
 
 def settings_from_files(paths: list[Path]) -> SettingsModel:
@@ -5385,88 +4952,6 @@ def describe_settings_for_repo(root: Optional[Path] = None) -> list[Path]:
     return _candidate_paths(Path(root) if root is not None else None)
 
 
-def resolve_source(
-    key: str, root: Optional[Path] = None
-) -> Optional[tuple[Path, list[Path]]]:
-    """Which config file decided ``key``: ``(decider, overridden)`` or None.
-
-    Consumes the SAME aliased layers :func:`load_settings` merges (via
-    :func:`_aliased_layers`), in the same order, and attributes the key by
-    REPLAYING the loader's merge: the decider is the file whose merge changed
-    the key's value under the loader's own semantics - deep-merge
-    highest-wins-per-key plus the post-merge ``_unwrap_config_dict`` flatten,
-    where a ``config:``-wrapped block beats flat top-level keys. Presence per
-    layer alone would mis-attribute exactly there: a flat project key that the
-    wrapped global's block overrides at unwrap would name the project as
-    decider while the model serves the global's value.
-
-    The worktree-local ``config.local.toml`` enters as the highest layer
-    through the same allowlist filter the loader applies, so a dropped
-    non-allowlisted key can never masquerade as a source. A value that arrived
-    through the legacy spelling reports the file that actually holds it (the
-    alias ran per layer inside the shared collector).
-
-    None = no file sets the key (the value is a built-in default).
-    """
-    candidates = _candidate_paths(root)
-    layers = list(_aliased_layers(tuple(candidates)))
-    if candidates:
-        local_path = candidates[0].parent / "config.local.toml"
-        if local_path.is_file() and not local_path.is_symlink():
-            local_parsed, lok = _load_raw(local_path)
-            if lok:
-                override = _worktree_local_override(local_parsed)
-                if override:
-                    layers.insert(0, (local_path.resolve(), override))
-
-    _MISSING = object()
-
-    def _get(dotted: str, data: object) -> object:
-        node: object = data
-        for part in dotted.split("."):
-            if not isinstance(node, dict) or part not in node:
-                return _MISSING
-            node = node[part]
-        return node
-
-    def _value(data: object) -> object:
-        for v in variants:
-            got = _get(v, data)
-            if got is not _MISSING:
-                return got
-        return _MISSING
-
-    # The same prefix tolerance get_cmd applies to lookups: a bare
-    # `review.required_bots` and a legacy `config.`-prefixed spelling are one key.
-    variants = [key, key[len("config.") :]] if key.startswith("config.") else [key, f"config.{key}"]
-
-    # Replay lowest precedence first, loader order. A worktree's .fno/config.toml
-    # is often a symlink to the canonical checkout's; candidate.resolve()
-    # collapses both chain tiers onto one path, and the same file must not
-    # replay twice and "override" itself.
-    seen: set[Path] = set()
-    setters: list[Path] = []
-    decider: Optional[Path] = None
-    merged: dict[str, object] = {}
-    prev: object = _MISSING
-    for path, parsed in reversed(layers):
-        if path in seen:
-            continue
-        seen.add(path)
-        if _value(_unwrap_config_dict(parsed)) is not _MISSING:
-            setters.append(path)
-        merged = _deep_merge(merged, parsed)
-        now = _value(_unwrap_config_dict(merged))
-        if now is not _MISSING and now != prev:
-            decider = path
-        if now is not _MISSING:
-            prev = now
-    if not setters:
-        return None
-    assert decider is not None  # the first setter introduces the value: a change
-    return (decider, [p for p in setters if p != decider])
-
-
 def agents_headless_yolo(provider: str) -> bool:
     """Resolve ``config.agents.<provider>.headless_yolo`` (bounded-posture amendment).
 
@@ -5492,12 +4977,12 @@ def agents_headless_yolo(provider: str) -> bool:
 
 def autonomy_master_enabled(project_root: Optional[Path] = None) -> bool:
     """Resolve ``config.autonomy.enabled``, the ONE panic switch over every
-    autonomous session-starting spawner (x-aaaf wave 3).
+    autonomous session-starting spawner (wave 3).
 
     Every spawner-specific resolver (``auto_continue_enabled``,
     ``think_spawn_enabled``, ``keep_going_enabled``, ``groom_enabled``,
-    ``_revive_enabled``, ``evals_enabled``, and the post-merge / pr_watch /
-    blueprint-auto-launch config reads) calls this FIRST, before its own env
+    ``evals_enabled``, and the post-merge / pr_watch
+    config reads) calls this FIRST, before its own env
     override even - a panic switch that something else can still bypass is
     not a panic switch. Callers that skip because of this return rank
     ``"autonomy"`` on their decision event rather than falling through to

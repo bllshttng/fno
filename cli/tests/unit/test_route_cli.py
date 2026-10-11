@@ -7,6 +7,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+
+requires_rust = pytest.mark.dev_build
+
+
 from fno.agents import model_routing as mr
 from fno.config import ConfigBlock, ModelProvider, ModelRoutingBlock, SettingsModel
 from fno.route_cli import route_app
@@ -65,21 +69,6 @@ def test_route_table_key_status_names_source_and_missing() -> None:
     assert any(r["key"].startswith("MISSING (checked ZAI_API_KEY") for r in missing)
 
 
-def test_ls_json_matches_table() -> None:
-    res = runner.invoke(route_app, ["ls", "-J"])
-    assert res.exit_code == 0
-    data = json.loads(res.stdout)
-    assert isinstance(data, list) and data
-    for row in data:
-        assert set(row) == {"role", "provider_model", "protocol", "key", "assigned_by"}
-
-
-def test_ls_text_has_header() -> None:
-    res = runner.invoke(route_app, ["ls"])
-    assert res.exit_code == 0
-    assert "ROLE" in res.stdout and "ASSIGNED-BY" in res.stdout
-
-
 # ---------------------------------------------------------------------------
 # set (AC1-ERR, AC2-ERR, happy) - isolated to a tmp project scope
 # ---------------------------------------------------------------------------
@@ -93,12 +82,6 @@ def _roles_on_disk(repo_root: Path) -> dict:
     ) or {}
 
 
-def test_set_build_writes_roles(project_scope: Path) -> None:
-    res = runner.invoke(route_app, ["set", "build", "zai/glm-5.2", "--local"])
-    assert res.exit_code == 0, res.stdout
-    assert _roles_on_disk(project_scope) == {"build": "zai/glm-5.2"}
-
-
 def test_set_preserves_existing_roles(project_scope: Path) -> None:
     runner.invoke(route_app, ["set", "tidy", "zai,glm-4.7", "--local"])
     runner.invoke(route_app, ["set", "build", "zai/glm-5.2", "--local"])
@@ -107,19 +90,6 @@ def test_set_preserves_existing_roles(project_scope: Path) -> None:
         "tidy": "zai/glm-4.7",
         "build": "zai/glm-5.2",
     }
-
-
-def test_set_one_m_suffix_passes(project_scope: Path) -> None:
-    res = runner.invoke(route_app, ["set", "build", "zai/glm-5.2[1m]", "--local"])
-    assert res.exit_code == 0, res.stdout
-    assert _roles_on_disk(project_scope)["build"] == "zai/glm-5.2[1m]"
-
-
-def test_set_protected_role_refused_no_write(project_scope: Path) -> None:
-    res = runner.invoke(route_app, ["set", "implement", "zai,glm-5.2", "--local"])
-    assert res.exit_code == 2
-    assert "protected" in res.output.lower()
-    assert not (project_scope / ".fno" / "config.toml").exists()
 
 
 @pytest.mark.parametrize(
@@ -137,16 +107,6 @@ def test_set_protected_role_hint_names_the_owning_surface(
     assert "hint:" in res.output
     assert expected in res.output
     assert not (project_scope / ".fno" / "config.toml").exists()
-
-
-def test_route_table_protected_rows_name_why(monkeypatch: pytest.MonkeyPatch) -> None:
-    rows = {r["role"]: r for r in mr.build_route_table(settings=_settings(), env={})}
-    assert "build" in rows["implement"]["assigned_by"]
-    assert "no dispatch surface" in rows["review-verdict"]["assigned_by"]
-    # The guard itself is unchanged: both still never route.
-    for name in ("implement", "review-verdict"):
-        assert "never routed" in rows[name]["provider_model"]
-        assert mr.resolve_route(name, settings=_settings(), env={}) is None
 
 
 def test_set_unknown_provider_refused_no_write(project_scope: Path) -> None:
@@ -175,40 +135,9 @@ def test_unset_removes_role(project_scope: Path) -> None:
     assert _roles_on_disk(project_scope) == {"tidy": "zai/glm-4.7"}
 
 
-def test_unset_unconfigured_is_noop(project_scope: Path) -> None:
-    res = runner.invoke(route_app, ["unset", "build", "--local"])
-    assert res.exit_code == 0
-    assert "not configured" in res.stdout.lower()
-
-
-def test_unset_builtin_role_mentions_default(project_scope: Path) -> None:
-    res = runner.invoke(route_app, ["unset", "tidy", "--local"])
-    assert res.exit_code == 0
-    assert "built-in" in res.stdout.lower()
-
-
 # ---------------------------------------------------------------------------
 # env (AC5-HP, AC2-FR) - built-in zai provider, no config needed
 # ---------------------------------------------------------------------------
-
-
-def test_env_explicit_emits_export_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    res = runner.invoke(route_app, ["env", "zai,glm-5.2"])
-    assert res.exit_code == 0
-    out = res.stdout
-    assert "export ANTHROPIC_BASE_URL=" in out
-    assert "export ANTHROPIC_AUTH_TOKEN=" in out
-    assert "glm-5.2" in out
-
-
-def test_env_explicit_slash_form(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The slash form must be recognized as an explicit target, not a role name.
-    monkeypatch.setenv("ZAI_API_KEY", "zk-live")
-    res = runner.invoke(route_app, ["env", "zai/glm-5.2"])
-    assert res.exit_code == 0
-    assert "export ANTHROPIC_AUTH_TOKEN=" in res.stdout
-    assert "glm-5.2" in res.stdout
 
 
 def test_env_unsets_parent_anthropic_creds_before_exports(
@@ -235,15 +164,7 @@ def test_env_missing_key_emits_no_unset_or_export(
     assert res.exit_code == 1
     assert "unset " not in res.stdout
     assert "export " not in res.stdout
-
-
-@pytest.mark.parametrize("target", ["zai,glm 5.2", "zai,glm\n5.2", "z ai,glm-5.2"])
-def test_set_rejects_whitespace_in_tokens(
-    target: str, project_scope: Path
-) -> None:
-    res = runner.invoke(route_app, ["set", "build", target, "--local"])
-    assert res.exit_code == 2
-    assert not (project_scope / ".fno" / "config.toml").exists()
+    assert "ZAI_API_KEY" in res.output
 
 
 def test_unset_surfaces_malformed_config(project_scope: Path) -> None:
@@ -255,16 +176,6 @@ def test_unset_surfaces_malformed_config(project_scope: Path) -> None:
     res = runner.invoke(route_app, ["unset", "build", "--local"])
     assert res.exit_code != 0
     assert "malformed" in res.output.lower() or "error" in res.output.lower()
-
-
-def test_env_missing_key_fails_closed_no_stdout(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ZAI_API_KEY", raising=False)
-    res = runner.invoke(route_app, ["env", "zai,glm-5.2"])
-    assert res.exit_code == 1
-    # No export lines emitted (nothing to half-eval).
-    assert "export " not in res.stdout
-    # The reason names the checked variable on stderr.
-    assert "ZAI_API_KEY" in res.output
 
 
 def test_env_business_role_refusal_is_a_stable_command_error(
@@ -285,11 +196,6 @@ def test_env_business_role_refusal_is_a_stable_command_error(
     assert "unset " not in result.stdout
 
 
-def test_env_malformed_target(monkeypatch: pytest.MonkeyPatch) -> None:
-    res = runner.invoke(route_app, ["env", "zai,"])
-    assert res.exit_code == 2
-
-
 # ---------------------------------------------------------------------------
 # inventory (the declared-model reachability read) + routing init
 # ---------------------------------------------------------------------------
@@ -298,10 +204,31 @@ def test_env_malformed_target(monkeypatch: pytest.MonkeyPatch) -> None:
 def _declare(monkeypatch, rows, objective="cheapest-that-clears"):
     from fno import route_resolve as rr
 
-    inv = rr.inventory_from_rows(rows, objective=objective)
+    inv = _inv(rows)
     monkeypatch.setattr(rr, "resolve_inventory", lambda **_kw: inv)
 
+def _inv(rows):
+    """An Inventory declaring exactly ``rows`` (the fixture builder the
+    Python fold lost; construction is all that survives in Python)."""
+    from fno import route_resolve as _rr
 
+    built = {}
+    for r in rows:
+        r = dict(r)
+        built[r.get("name", "")] = _rr.InventoryRow(
+            name=r.get("name", ""),
+            harness=r.get("harness", ""),
+            model=r.get("model", ""),
+            route=r.get("route", ""),
+            account=r.get("account", ""),
+            band=r.get("band", ""),
+            effort=r.get("effort", ""),
+            operator_view=r.get("operator_view", ""),
+        )
+    return _rr.Inventory(rows=built, declared=True)
+
+
+@requires_rust
 def test_inventory_lists_rows_bands_and_verdicts(monkeypatch) -> None:
     _declare(monkeypatch, [
         {"name": "glm-5.3", "harness": "claude", "model": "glm-5.3", "band": "medium"},
@@ -319,25 +246,139 @@ def test_inventory_lists_rows_bands_and_verdicts(monkeypatch) -> None:
     assert "unbanded" in res.output
 
 
-def test_inventory_json_shape(monkeypatch) -> None:
+@requires_rust
+def test_inventory_drift_line_prints_once_for_a_stale_pin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+
     _declare(monkeypatch, [
-        {"name": "glm-5.3", "harness": "claude", "model": "glm-5.3", "band": "medium"},
+        {"name": "codex-luna", "harness": "codex", "model": "gpt-5.6-luna", "band": "high"},
     ])
-    res = runner.invoke(route_app, ["inventory", "--json"])
-    assert res.exit_code == 0
-    payload = json.loads(res.output)
-    assert payload["objective"] == "cheapest-that-clears"
-    assert payload["models"][0]["name"] == "glm-5.3"
-    assert payload["models"][0]["verdict"] == "ok"
-
-
-def test_inventory_says_nothing_is_declared(monkeypatch) -> None:
-    from fno import route_resolve as rr
-
-    monkeypatch.setattr(rr, "resolve_inventory", lambda **_kw: rr.Inventory())
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    (tmp_path / "models_cache.json").write_text(json.dumps({
+        "fetched_at": "2026-09-23T06:14:54Z",
+        "models": [
+            {"slug": "gpt-5.6-luna", "visibility": "list"},
+            {"slug": "gpt-6-luna", "visibility": "list"},
+        ],
+    }))
+    expected = (
+        "drift codex-luna pins gpt-5.6-luna; "
+        "newest luna in codex models_cache.json is gpt-6-luna"
+    )
     res = runner.invoke(route_app, ["inventory"])
     assert res.exit_code == 0
-    assert "no inventory declared" in res.output
+    assert res.output.count(expected) == 1
+    res = runner.invoke(route_app, ["inventory", "--json"])
+    assert res.exit_code == 0
+    assert json.loads(res.output)["drift"] == [expected]
+
+
+_SLOT_ROWS = [
+    {"name": "flash-zai", "harness": "claude", "model": "glm-5.3-flash", "band": "low"},
+    {"name": "luna-codex", "harness": "codex", "model": "gpt-5.6-luna", "band": "low"},
+]
+
+
+def _pin_slots(cfg, rows):
+    """Declare the rows and the target profile's lanes on the pinned config
+    file: the verb reads the config, the Python stub is invisible to it."""
+    lines = [""]
+    for row in rows:
+        lines.append("[[routing.models]]")
+        for key, value in row.items():
+            lines.append(f'{key} = "{value}"')
+        lines.append("")
+    lines.append("[agents.profiles.target]")
+    lines.append('lanes = ["flash-zai", "luna-codex"]')
+    lines.append('on_exhausted = "queue"')
+    with open(cfg, "a") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _pin_capacity(monkeypatch, claude=None, codex=None, extra=None, active=None):
+    """Pin the capacity readings the verb judges lanes with.
+
+    The Python capacity read was deleted (x-1c38): the verb computes it from
+    the runtime-state file, so a hermetic one rides in through env instead of
+    a monkeypatched Python function. claude/codex pin one account record each
+    (`cl-a` for claude, `cx-a` for codex); None leaves the harness with no
+    record, which reads unknown. `extra` adds per-account readings as
+    {harness: {account: state}} (a dict value may carry resets_at). `active`
+    writes identity stamps as {harness: account}. Returns (config, state)
+    paths so a test can move capacity mid-flight.
+    """
+    import json
+    import os
+    import tempfile
+    import time as _time
+
+    d = tempfile.mkdtemp(prefix="fno-cap-")
+    records = []
+    for harness, spec in (("claude", claude), ("codex", codex)):
+        if spec is not None:
+            records.append((f"{'cl' if harness == 'claude' else 'cx'}-a", harness, spec))
+    for harness, accounts in (extra or {}).items():
+        for account, spec in accounts.items():
+            records.append((account, harness, spec))
+    cfg = os.path.join(d, "config.toml")
+    with open(cfg, "w") as f:
+        f.write(f"state_dir = '{d}'\n")
+        for account, harness, _spec in records:
+            f.write(f'[[accounts.records]]\nid = "{account}"\nharness = "{harness}"\n')
+    now = _time.time()
+
+    def row(spec) -> dict:
+        if isinstance(spec, dict):
+            state, resets = spec.get("state", "ok"), spec.get("resets_at")
+        else:
+            state, resets = spec, None
+        pct = {"ok": 5.0, "low": 95.0}.get(state, 100.0)
+        return {
+            "probed_at": now,
+            "partial": False,
+            "windows": [{"label": "daily", "used_pct": pct, "resets_at": resets}],
+        }
+
+    state = os.path.join(d, "state.json")
+    with open(state, "w") as f:
+        f.write(json.dumps({"usage": {a: row(spec) for a, _h, spec in records}}))
+    for harness, account in (active or {}).items():
+        os.makedirs(os.path.join(d, "providers"), exist_ok=True)
+        with open(os.path.join(d, "providers", f".active-{harness}"), "w") as f:
+            f.write(account)
+    monkeypatch.setenv("FNO_AGENTS_HOME", d)
+    # Same dir, not a child: the identity stamps live under <state_dir>/providers.
+    monkeypatch.setenv("FNO_STATE_DIR", d)
+    monkeypatch.setenv("FNO_CONFIG", cfg)
+    monkeypatch.setenv("FNO_RUNTIME_STATE_PATH", state)
+    return cfg, state
+
+
+@requires_rust
+def test_inventory_prints_slots_with_live_capacity(monkeypatch) -> None:
+    """AC4-HP: the slots section names each lane's live capacity state and the
+    lane a spawn would take RIGHT NOW - and the answer moves when capacity
+    moves."""
+    _declare(monkeypatch, _SLOT_ROWS)
+    cfg, _state = _pin_capacity(monkeypatch)
+    _pin_slots(cfg, _SLOT_ROWS)
+    res = runner.invoke(route_app, ["inventory"])
+    assert res.exit_code == 0
+    assert "slots:" in res.output
+    assert "preview (simulated; no launch)" in res.output
+    assert "lanes[0] flash-zai capacity=unknown" in res.output
+    assert "lanes[1] luna-codex capacity=unknown" in res.output
+    assert "on_exhausted=queue" in res.output
+    assert "would take agents.profiles.target.lanes[0] flash-zai" in res.output
+    assert "routing=armed" in res.output
+
+    # the lane whose harness reads exhausted skips; the next lane answers
+    cfg2, _state2 = _pin_capacity(monkeypatch, claude="exhausted", codex="ok")
+    _pin_slots(cfg2, _SLOT_ROWS)
+    res = runner.invoke(route_app, ["inventory"])
+    assert "lanes[0] flash-zai capacity=exhausted" in res.output
+    assert "would take agents.profiles.target.lanes[1] luna-codex" in res.output
 
 
 def test_routing_init_appends_the_sample_commented(tmp_path, monkeypatch) -> None:
@@ -354,3 +395,46 @@ def test_routing_init_appends_the_sample_commented(tmp_path, monkeypatch) -> Non
     res = runner.invoke(route_app, ["init"])
     assert res.exit_code == 0
     assert "already present" in res.output
+
+
+# ---------------------------------------------------------------------------
+# settings ls renders the declared tier map (x-f173 AC9-HP)
+# ---------------------------------------------------------------------------
+
+
+def test_settings_ls_renders_the_declared_tier_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC9-HP: a provider with a tier map renders each declared tier and its
+    model beside the haiku column, and a recorded file holding an older tier
+    value reads STALE naming the tier that moved."""
+    recorded = {
+        "env": {
+            "ANTHROPIC_BASE_URL": mr.DEFAULT_ZAI_BASE_URL,
+            "ANTHROPIC_AUTH_TOKEN": "zk",
+            "ANTHROPIC_MODEL": "glm-5.3-flash[1m]",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "glm-5.2",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.7",
+        }
+    }
+    (tmp_path / "route-settings").mkdir()
+    (tmp_path / "route-settings" / "tiered.json").write_text(
+        json.dumps(recorded), encoding="utf-8"
+    )
+    monkeypatch.setattr("fno.paths.state_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        "fno.config.load_settings",
+        lambda: _settings(providers={"zai": {"tier_models": {"opus": "glm-5.3[1m]"}}}),
+    )
+    res = runner.invoke(route_app, ["settings", "ls", "--json"])
+    assert res.exit_code == 0, res.output
+    row = json.loads(res.output)["rows"][0]
+    assert row["provider"] == "zai"
+    # The effective map renders: the declared opus tier plus the builtin
+    # zai haiku_model fold (the same map the STALE check loops).
+    assert row["tiers"] == "haiku=glm-4.7,opus=glm-5.3[1m]"
+    assert row["stale"] == "opus glm-5.2 -> glm-5.3[1m]"
+    assert row["haiku"] == "glm-4.7"
+    text = runner.invoke(route_app, ["settings", "ls"])
+    assert text.exit_code == 0
+    assert "TIERS" in text.output

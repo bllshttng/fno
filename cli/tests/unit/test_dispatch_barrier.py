@@ -15,6 +15,13 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
+# Import the claims CLI module BEFORE any test patches fno.claims.core. Its
+# module-level `from .core import acquire_claim` binds whatever core carries at
+# first import, so a patch that lands first (as xdist worker ordering can do)
+# bakes the stub into the CLI module for the rest of the process, and a later
+# handover test in the same worker calls the stub instead of the real acquire.
+import fno.claims.cli  # noqa: F401
+
 from fno.agents.cli import _spawn_guard_decision, agents_app
 from fno.agents.harness_map import resolve_dispatch
 
@@ -31,8 +38,18 @@ def _last_json(out: str) -> dict:
 
 def _route_to(monkeypatch, root):
     # Route every claim key (node:/dispatch:) to an isolated tmp root so the real
-    # acquire/claim_status machinery runs hermetically.
-    monkeypatch.setattr("fno.claims.io.claims_root_for", lambda key: root)
+    # acquire/claim_status machinery runs hermetically: FNO_CLAIMS_ROOT (the
+    # documented global-root override) is the one door. It covers anything that
+    # resolves through the env at call time, so a module-identity or import-order
+    # pathology can never route a CLI acquire to the real shared root.
+    monkeypatch.setenv("FNO_CLAIMS_ROOT", str(root))
+    # Scrub this process's harness identity, so a fixture acquire stamps no
+    # session id: the suite seeds dead-pid holders, and a stamp from the LIVE
+    # pytest session lets the classifier's witness leg answer `live` for them.
+    from fno.harness_identity import AMBIENT_IDENTITY_ENV
+
+    for name in AMBIENT_IDENTITY_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 def test_spawn_guard_serializes_two_callers(monkeypatch, tmp_path):
@@ -479,8 +496,57 @@ def test_a_wrong_handover_holder_cannot_take_a_live_claim(monkeypatch, tmp_path)
             "--handover-from", "spawn-handover:t-guessed",
         ],
     )
-    assert r.exit_code == 1, r.output
-    assert claim_status("node:N", root=tmp_path)["holder"] == "target-session:incumbent"
+    assert r.exit_code == 1, f"{r.output}\n{_barrier_diag(tmp_path)}"
+    status = claim_status("node:N", root=tmp_path)
+    assert status.get("holder") == "target-session:incumbent", (
+        f"{status}\n{_barrier_diag(tmp_path)}"
+    )
+
+
+def _barrier_diag(tmp_path) -> str:
+    """What the failure needs to name: where the CLI's root actually pointed.
+
+    x-c319: under the CI changed-packet the acquire has been observed to win
+    where the seeded incumbent should refuse it, and the root the test seeded
+    is the first suspect. Resolve the SAME doors the test set up, read the
+    value NOW, and put the answer in the assertion message.
+    """
+    import os
+
+    from fno.claims.io import claim_path
+    from fno.claims.io import global_claims_dir
+
+    def _seen(label: str, root) -> str:
+        """Does a claim FILE exist where this door points, and what holds it?"""
+        try:
+            path = claim_path("node:N", root=root)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic never raises
+            return f"{label}=<unresolvable: {type(exc).__name__}>"
+        if not path.exists():
+            return f"{label}={path}:ABSENT"
+        try:
+            from fno.claims.core import claim_status
+            from fno.claims.staleness import classify
+
+            info = claim_status("node:N", root=root)
+            return f"{label}={path}:holder={info.get('holder')}:state={info.get('state')}"
+        except Exception as exc:  # noqa: BLE001
+            return f"{label}={path}:PRESENT:<unreadable: {type(exc).__name__}>"
+
+    # The doors, each answered SEPARATELY. The earlier version printed the
+    # roots and stopped, so a failure could not say whether the seeded claim was
+    # missing, in another directory, or present and read as free - three causes
+    # with one appearance. A path plus its holder separates them in one run.
+    return (
+        f"[diag] global={global_claims_dir()} "
+        f"env={os.environ.get('FNO_CLAIMS_ROOT')!r} tmp={tmp_path} "
+        + " ".join(
+            (
+                _seen("seeded", tmp_path),
+                _seen("default", None),
+            )
+        )
+    )
 
 
 def test_handover_from_with_no_claim_on_disk_acquires_normally(monkeypatch, tmp_path):
@@ -505,8 +571,11 @@ def test_handover_from_with_no_claim_on_disk_acquires_normally(monkeypatch, tmp_
             "--handover-from", "spawn-handover:t-never-was",
         ],
     )
-    assert r.exit_code == 0, r.output
-    assert claim_status("node:N", root=tmp_path)["holder"] == "target-session:sid-2"
+    assert r.exit_code == 0, f"{r.output}\n{_barrier_diag(tmp_path)}"
+    status = claim_status("node:N", root=tmp_path)
+    assert status.get("holder") == "target-session:sid-2", (
+        f"{status}\n{_barrier_diag(tmp_path)}"
+    )
 
 
 def test_a_launch_window_claim_is_never_probed_as_abandoned(monkeypatch, tmp_path):
@@ -720,8 +789,8 @@ def test_a_resume_registry_failure_never_took_the_reservation(monkeypatch, tmp_p
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi",
-            "--harness", "claude", "--substrate", "bg",
+            "spawn", "--name", "w1", "/fix hi",
+            "--harness", "claude", "--substrate", "thread",
             "--node", "x-abcd", "--resume", "11111111-2222-3333-4444-555555555555",
         ],
     )
@@ -750,8 +819,8 @@ def test_a_resume_route_without_a_provider_never_took_the_reservation(
     result = runner.invoke(
         agents_app,
         [
-            "spawn", "--name", "w1", "hi",
-            "--harness", "claude", "--substrate", "bg",
+            "spawn", "--name", "w1", "/fix hi",
+            "--harness", "claude", "--substrate", "thread",
             "--node", "x-abcd", "--resume", "11111111-2222-3333-4444-555555555555",
         ],
     )
@@ -805,7 +874,7 @@ def test_a_one_shot_releases_the_reservation_in_seconds_not_at_ttl(
         # pre-existing `not spawn_succeeded` arm and prove nothing about the
         # one-shot split. The stub hid that. codex + --once is a path a caller
         # can actually reach.
-        ["spawn", "--name", "w1", "hi", "--harness", "codex", "--once",
+        ["spawn", "--name", "w1", "/fix hi", "--harness", "codex", "--once",
          "--node", "x-abcd"],
     )
     elapsed = time.monotonic() - started
@@ -827,7 +896,7 @@ def test_a_headless_substrate_releases_the_reservation(monkeypatch, tmp_path):
 
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude",
+        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
          "--substrate", "headless", "--node", "x-abcd"],
     )
     assert result.exit_code == 0, result.output
@@ -849,7 +918,7 @@ def test_a_pane_spawn_still_holds_the_reservation_for_its_worker(
 
     monkeypatch.setattr(
         mux_spawn,
-        "dispatch_spawn_pane",
+        "dispatch_spawn_bounded_pane",
         lambda **kw: MuxSpawnResult(
             name="w1",
             provider=_FIXTURE_HARNESS,
@@ -863,7 +932,7 @@ def test_a_pane_spawn_still_holds_the_reservation_for_its_worker(
     )
     result = runner.invoke(
         agents_app,
-        ["spawn", "--name", "w1", "hi", "--harness", "claude",
+        ["spawn", "--name", "w1", "/fix hi", "--harness", "claude",
          "--substrate", "pane", "--node", "x-abcd"],
     )
     assert result.exit_code == 0, result.output

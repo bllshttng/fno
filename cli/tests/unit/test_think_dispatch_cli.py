@@ -5,6 +5,7 @@ logic: live-session-id resolution, node resolution, exit codes, and that the
 LIVE (session_id, cwd) pointer is what flows into the dispatch core.
 """
 from __future__ import annotations
+from tests.fixtures.graph_seed import seed_graph
 
 import json
 import os
@@ -36,7 +37,7 @@ def graph(monkeypatch, tmp_path):
     """A one-node graph + a captured dispatch seam. Returns the capture dict."""
     entries = [{"id": "x-0a9c", "slug": "conv-think", "title": "conversational verb",
                 "source_session_id": "stored", "source_cwd": "/birth"}]
-    monkeypatch.setattr("fno.graph.store.read_graph", lambda p: entries)
+    monkeypatch.setattr("fno.graph.api.wire_rows", lambda path=None, **k: entries)
     monkeypatch.setattr("fno.graph.cli._graph_path", lambda: tmp_path / "graph.json")
     cap: dict = {}
 
@@ -184,8 +185,7 @@ def test_skipped_exits_1(graph, monkeypatch):
 
 def _subprocess_journey(tmp_path: Path, monkeypatch):
     graph_path = tmp_path / "graph.json"
-    graph_path.write_text(
-        json.dumps(
+    seed_graph(graph_path, json.dumps(
             {
                 "entries": [
                     {
@@ -196,8 +196,7 @@ def _subprocess_journey(tmp_path: Path, monkeypatch):
                     }
                 ]
             }
-        )
-    )
+        ))
     # The think-dispatch resolver reads through the guarded metadata seam,
     # which resolves paths.graph_json at call time (not graph.cli._graph_path).
     monkeypatch.setattr("fno.paths.graph_json", lambda: graph_path)

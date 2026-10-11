@@ -5,6 +5,8 @@ supervisor daemon that continuously converges ACTIVE MISSIONS - epics with
 `mission_active=true` - by dispatching their ready leaf children across all
 projects, sleeping between drains. Config-gated, default-off, fail-safe.
 
+Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a role grant over an epic (`fno agents org promote`, `fno agents spawn --promote`). The grant sets the flag at grant time. A titled epic is never invisible to the drain.
+
 > **Mission-scoped drains (K2).** The daemon originally ran one drain
 > loop **per enabled project**, each acquiring `walker:<cwd>` and dispatching one
 > node per tick through a local `drain_tick`. That per-project interval arm is
@@ -16,25 +18,19 @@ projects, sleeping between drains. Config-gated, default-off, fail-safe.
 > `max_lanes` cap, and claim dedup. The fire-and-forget reconcile machinery
 > (`reconcile_pending` / `map_outcome` / crash floor) and the `CircuitBreaker`
 > are unchanged. Sections below are updated to this model; a few cross-cutting
-> ones (Why, circuit breaker, nudge, megawalk relationship) are unaffected.
+> ones (Why, circuit breaker, nudge) are unaffected.
+
+> **Worker names.** Daemon-dispatched workers are named
+> `ab-<verb>-<node>-<slug>`. The `ab` source says the active-backlog drain
+> launched them. The full vocabulary lives in
+> [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md).
+> `fno agents autonomy provenance` prints the ratcheted inventory.
 
 ## Why
 
-Footnote's headless loop is already a deterministic dispatcher: `run_loop`
-pulls `queue.next()`, hands the unit to `dispatcher.run(unit)`, and moves on.
-Selection is a pure rule (status, dependencies, priority lane key, claim lease)
-with no relatedness judgment anywhere on the path. The gap was that the loop is
-*invocation-scoped*: a human starts `/megawalk`, or arms merge-triggered
-auto-continue, and the loop terminates on `NoWork`. This feature adds the
-**always-on** behavior so the board drains itself.
+Footnote's headless loop is already a deterministic dispatcher: `run_loop` pulls `queue.next()`, hands the unit to `dispatcher.run(unit)`, and moves on. Selection is a pure rule (status, dependencies, priority lane key, claim lease) with no relatedness judgment anywhere on the path. The gap was that the loop is *invocation-scoped*: a human starts a target run, or arms merge-triggered auto-continue, and the loop terminates on `NoWork`. This feature adds the **always-on** behavior so the board drains itself.
 
-The motivating defect: when a foreground reasoning agent sits in the dispatcher
-seat ("work the backlog"), it invents an unprompted thematic-coherence filter
-("this node has nothing to do with the last one, I won't fire it") that fires
-inconsistently and sometimes wrongly. This design removes the reasoning agent
-from the firing decision entirely: firing becomes a rule the daemon executes,
-and any legitimate scoping is a **deterministic** gate (project scope,
-`--mission`, `blocked_by` edges), never an LLM inference.
+The motivating defect: a foreground reasoning agent in the dispatcher seat ("work the backlog") invents an unprompted thematic-coherence filter. One shape: "this node has nothing to do with the last one, so I will not fire it." The filter fires inconsistently and sometimes wrongly. This design removes the reasoning agent from the firing decision entirely. Firing becomes a rule the daemon executes. Any legitimate scoping is a **deterministic** gate (project scope, `--mission`, `blocked_by` edges), never an LLM inference.
 
 ## Shape
 
@@ -49,25 +45,23 @@ config.active_backlog (master switch) + epics with mission_active=true
      reconcile prior fire-and-forget dispatches from events -> feed breaker
        -> Closed: active_backlog_dispatched; Parked: breaker++ (defer at limit)
        -> worker died with no termination event: crash floor -> failure
-     dispatch: fno backlog advance --epic <id> --continuation --json
+     dispatch: fno backlog advance --epic <id> --continuation --source ab --json
        -> deactivated / all_done: active_backlog_mission_retired, loop exits
-       -> dispatched: [nodes] recorded in `pending` for a later reconcile
+       -> children[] is the enqueue authority:
+            decision=dispatched + substrate=headless: SYNCHRONOUS - the
+              one-shot worker already ran, so resolve on the spot from graph
+              state (active_backlog_sync_resolved); never enters `pending`
+            decision=dispatched, any other substrate: recorded in `pending`
+              for a later reconcile
+            decision=failed: a real spawn failure -> feeds map_outcome
+              (breaker; defer at limit). decision=skipped never touches it.
         |
    wait poll floor (interval), waking early on the nudge sentinel mtime
 ```
 
 ## Components
 
-- **Config schema** (`cli/src/fno/config/__init__.py`, `ActiveBacklogConfig`).
-  `config.active_backlog`: `enabled` (bool or per-project map), `interval`
-  (duration string, default `5m`), `failure_limit` (default 3), `max_concurrent`
-  (default 1; v1 asserts 1, defined now so v2 parallelism needs no migration),
-  `mission` (optional). Mirrors the `config.auto_continue` / `config.target.blast`
-  fail-safe posture: a malformed block degrades to disabled, a bad scalar is
-  dropped to its default, and an invalid `interval` fails *closed* (the feature
-  disables) rather than spinning a 0-sleep hot loop. Accessors `is_enabled_for`,
-  `any_enabled`, `enabled_projects`, and `interval_seconds` centralize the
-  fail-closed rule.
+- **Config schema** (`cli/src/fno/config/__init__.py`, `ActiveBacklogConfig`). `config.active_backlog`: `enabled` (bool or per-project map), `interval` (duration string, default `5m`), `failure_limit` (default 3), `max_concurrent` (default 1). v1 asserts one concurrent dispatch. The field is defined now so v2 needs no migration. `mission` is IGNORED: missions are per-epic graph state (`mission_active`), never a config value. The key stays parseable for one release. When it is set, `fno config doctor` warns. The fail-safe posture mirrors `config.auto_continue` / `config.target.blast`. A malformed block degrades to disabled. A bad scalar drops to its default. An invalid `interval` fails *closed*: the feature disables, rather than spinning a 0-sleep hot loop. Accessors `is_enabled_for`, `any_enabled`, `enabled_projects`, and `interval_seconds` centralize the fail-closed rule.
 
 - **Target resolver** (`cli/src/fno/active_backlog.py`, surfaced as
   `fno config active-backlog --json`). The daemon is a per-user global process
@@ -81,15 +75,7 @@ config.active_backlog (master switch) + epics with mission_active=true
   `is_enabled_for(epic project)`, so an explicitly-disabled project's mission
   does not drain.
 
-- **Mission drain tick** (`crates/fno-agents/src/active_backlog.rs`,
-  `mission_drain_tick` / `dispatch_mission`). Reconciles prior fire-and-forget
-  dispatches from events (feeding the breaker) and then dispatches by shelling
-  `fno backlog advance --epic <id> --continuation --json`. The converge core owns
-  all dispatch policy (cross-project fan-out, per-root `walker:` respect,
-  `max_lanes`, claim dedup), so it is never forked. `--continuation` means the
-  daemon never (re)activates a mission and retires an already-inactive one, so an
-  operator `--stop` between ticks sticks. A `deactivated`/`all_done` receipt
-  retires the loop (`active_backlog_mission_retired`).
+- **Mission drain tick** (`crates/fno-agents/src/active_backlog.rs`, `mission_drain_tick` / `dispatch_mission`). Reconciles prior fire-and-forget dispatches from events (feeding the breaker) and then dispatches by shelling `fno backlog advance --epic <id> --continuation --json`. The converge core owns all dispatch policy, so this tick never forks it. Policy covers cross-project fan-out, per-root `walker:` respect, spawn-gate headroom width, and claim dedup. The walker probe runs per child, against that child's own root. One live walker in the epic repo refuses only its own repo's children. The rest of the pass still dispatches. `--continuation` means the daemon never reactivates a mission and retires an already-inactive one. An operator `--stop` between ticks sticks. A `deactivated`/`all_done` receipt retires the loop (`active_backlog_mission_retired`).
 
 - **Circuit breaker** (`CircuitBreaker`). A pure, cross-tick per-node
   consecutive-failure counter with Hermes semantics: increment on a failed
@@ -121,40 +107,28 @@ config.active_backlog (master switch) + epics with mission_active=true
 
 ## The single-owner contract
 
-Walker exclusion is now enforced **per dependent root, inside the converge core**,
-not at the daemon tick. `fno backlog advance --epic` calls `_walker_live_at(root)`
-for each child before dispatching it, so a manual `/megawalk` owning a given
-project's `walker:<root>` makes the converge core skip that project's children
-while other projects keep dispatching. The daemon mission tick holds no
-project-level walker singleton of its own (the old per-project `drain_tick`
-acquire/release is deleted). Node/dispatch claim dedup (`node:<id>` /
-`dispatch:<id>`) inside the converge core keeps the daemon and a manual walk from
-both launching the same node.
+Walker exclusion is now enforced **per dependent root, inside the converge core**, not at the daemon tick. `fno backlog advance --epic` calls `_walker_live_at(root)` for each child before dispatching it. A live `walker:<root>` claim on a project makes the converge core skip that project's children while other projects keep dispatching. The retired `/megawalk` walker was the claim's original writer. With it gone the check stands as a defensive guard. Node/dispatch claim dedup (`node:<id>` / `dispatch:<id>`) inside the converge core keeps the daemon and a manual dispatch from both launching the same node.
 
-> **Coarseness note (tracked follow-up).** `advance_epic` also checks the *epic
-> repo's* walker once before enumerating children, so a `/megawalk` in the epic's
-> own repo can pause the whole mission. Refining this to per-root only is a
-> deferred item; see the mission-drain hardening follow-up.
+> **Coarseness note (tracked follow-up).** `advance_epic` also checks the *epic repo's* walker once before enumerating children. A live `walker:` claim in the epic's own repo can pause the whole mission. Refining this to per-root only is a deferred item. See the mission-drain hardening follow-up.
 
-## Relationship to megawalk
+## Relationship to the retired megawalk walker
 
-The daemon does not replace megawalk; it changes which layer owns the *trigger*.
-The `run_loop` primitive and the `MegawalkQueue` engine (selection, live-claims
-filter, park-exclusion, lane order, `--mission`, and the v2 parallel scheduler)
-are reused unchanged; the daemon depends on the engine, never deletes it. What
-consolidates is the trigger layer: `/megawalk`, `fno backlog advance`, headless
-`loop run`, and now the resident daemon all spin up the same engine and all grab
-the same `walker:<cwd>` singleton, so they are mutually exclusive.
+The daemon inherits the trigger layer the retired megawalk walker used to own. The walker's engine (selection, live-claims filter, park-exclusion, lane order) is gone with `loop_megawalk.rs`. What survives is the same outcome through composable pieces. `fno backlog next` owns selection (the same rule the walker shelled). Merge-triggered `fno backlog advance` and headless `loop run` cover the invocation-scoped triggers. The resident daemon is the always-on owner of the drain. The manual board-wide trigger is `/fno:target bg --all-ready`. The `walker:<cwd>` claim family stays honored so a stale claim can never double-fire a dispatch.
+
+## Operator receipts
+
+An exhausted mission tick keeps the stable `skip_reason=no_work` token. It adds `stranded=N` to its detail. The value comes from `fno backlog undispatched --json`. That command counts finalized ready leaf plans with no execution claim outside the exhausted mission. A failed or malformed observer read reports `stranded=unknown`. It never fabricates zero. The mission remains pinned, so visibility improves without releasing the drain to the general queue.
+
+To change only the node's board rank, an operator runs `fno backlog rank <id> --top`. The verb refuses a session carrying a harness stamp and names `fno backlog encounter` as the agent's vote. When the node is outside every resolved active mission scope, the receipt says `no live dispatcher will take it`. If scope cannot be read, the receipt says `dispatcher scope unavailable`. A node inside a mission keeps the normal rank receipt. Ranking never broadens mission membership.
 
 ## Events
 
-All transitions are emitted through the loop `Journal` (project journal fatal,
-global mirror best-effort), so an auditor can reconstruct the full drain history
-from `events.jsonl` alone:
+All transitions are emitted through the loop `Journal` (project journal fatal, global mirror best-effort), committed into the `events.db` beside each journal (event-log-storage.md). An auditor can reconstruct the full drain history from that store alone:
 
 | Event | When |
 |-------|------|
-| `active_backlog_dispatched{mission, dispatched}` | the mission tick fire-and-forgot one or more ready children |
+| `active_backlog_dispatched{mission, dispatched}` | the mission tick fire-and-forgot one or more ready children (detached only) |
+| `active_backlog_sync_resolved{node_id, resolution}` | a SYNCHRONOUS (`headless`) child was resolved on the spot instead of being held open |
 | `active_backlog_parked{node_id, consecutive_failures}` | a node tripped the circuit breaker (reconcile auto-defer) |
 | `active_backlog_skip{reason, ...}` | an `advance --epic` failure/unparseable receipt, or a node that failed without yet tripping the breaker |
 | `active_backlog_mission_retired{mission}` | the mission deactivated / all children done; the loop exits |
@@ -164,23 +138,20 @@ from `events.jsonl` alone:
 
 | Scenario | Handling |
 |----------|----------|
-| Manual `/megawalk` starts mid-drain | the converge core's per-child `_walker_live_at(root)` skips that project's children; other projects keep dispatching |
+| A live `walker:<root>` claim appears mid-drain | the converge core's per-child `_walker_live_at(root)` skips that project's children; other projects keep dispatching |
 | Daemon crashes mid-dispatch | each worker owns `node:<id>` independently; a dispatched node closes at merge via `fno backlog reconcile`; a restarted mission loop rebuilds its `pending` set from events |
 | Node crash-loops | per-node consecutive-failure counter (fed by the reconcile of the dispatched worker's termination); at `failure_limit` the node is `fno backlog defer`red (recoverable via `fno backlog undefer`) while independent branches keep dispatching |
 | One mission converges slowly | each active mission has its own independent loop, so other missions keep dispatching concurrently |
 | Backlog mutated many times quickly | the nudge is coalesced to one pending drain |
 | Operator `--stop` between ticks | `--continuation` never reactivates; the tick returns `deactivated` and the loop retires (no zombie ticks) |
+| Mission has no ready child while other planned work exists | the tick keeps `no_work` and names the mission plus board-wide `stranded=N` count; an unavailable observer reads `stranded=unknown` |
 | Empty / all-done mission | `advance --epic` reports `all_done`; the loop emits `active_backlog_mission_retired` and exits |
 | Invalid `interval` | config fails closed: the feature disables (no 0-sleep loop) |
 
 ## Scope (v1) and deferred work
 
-- **Serial**: one in-flight node per project per tick. `max_concurrent` is
-  defined (default 1) but v1 asserts 1; parallel, dependency-aware drain reuses
-  megawalk's parallel scheduler in v2.
-- **Deferred (D1)**: re-point the `/megawalk` skill body from a peer dispatcher
-  to a daemon client. v1 already yields to a live manual walk via the shared
-  claim, so this does not block v1.
+- **Serial**: one in-flight node per project per tick. `max_concurrent` is defined (default 1) but v1 asserts 1. A parallel, dependency-aware drain is future work (the retired megawalk walker's scheduler is not carried over).
+- **Retired (D1)**: re-pointing the `/megawalk` skill body at the daemon is moot - the skill was removed. The daemon client surface is `fno config active-backlog`.
 
 ## Code map
 
