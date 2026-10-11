@@ -1070,7 +1070,9 @@ fn reopen_held_reason(node: &Value, pr_number: i64) -> String {
     )
 }
 
-/// One held-open row: (node_id, first reason line, outcome).
+/// One held-open row: (node_id, refusal reason, outcome). The reason is
+/// the full refusal text; the human roll prints its first line and the
+/// --json rows carry all of it.
 type HeldRow = (String, String, String);
 
 /// The promise gate over the closeable set: reopen guard first, then the
@@ -1133,13 +1135,15 @@ fn promise_gate_leg(
         if verdict.satisfied() {
             gated.push(record.clone());
         } else {
+            // The FULL refusal rides the row: the notice router puts the
+            // reason and the remedy verb in the question body, so a lead
+            // reads why the node held without re-running the verb.
             let reason = verdict.reason.unwrap_or_default();
-            let first_line = reason.lines().next().unwrap_or("").to_string();
             let outcome = match verdict.outcome {
                 PromiseOutcome::Unmet => "promise_unmet",
                 _ => "promise_unknown",
             };
-            held.push((record.node_id.clone(), first_line, outcome.into()));
+            held.push((record.node_id.clone(), reason, outcome.into()));
         }
     }
     (gated, held, warnings, reopen_expired)
@@ -1175,7 +1179,10 @@ fn summarize_promise_held(held: &[HeldRow], dry_run: bool) -> String {
             .unwrap_or(outcome);
         lines.push(format!("{verb} {} node(s) open ({headline}):", rows.len()));
         for (nid, reason, _) in rows {
-            lines.push(format!("  {nid}: {reason}"));
+            // The roll stays a summary: the first line of the refusal.
+            // The full text rides the --json rows for the notice router.
+            let first = reason.lines().next().unwrap_or("");
+            lines.push(format!("  {nid}: {first}"));
         }
     }
     lines.join("\n")
@@ -2856,6 +2863,16 @@ mod tests {
         assert!(text.contains("  ab-a: short one ship"));
         let dry = summarize_promise_held(&held, true);
         assert!(dry.starts_with("Holding 1 node(s) open"));
+        // A multi-line refusal prints its first line only in the roll; the
+        // full text is the --json row's, for the notice router.
+        let multiline = vec![(
+            "ab-d".to_string(),
+            "Refused: ab-d promised 2 ships; only 1 merged.\n  Two legal exits:\n    ship the rest, then close".to_string(),
+            "promise_unmet".to_string(),
+        )];
+        let rolled = summarize_promise_held(&multiline, false);
+        assert!(rolled.contains("  ab-d: Refused: ab-d promised 2 ships; only 1 merged."));
+        assert!(!rolled.contains("Two legal exits"));
     }
 
     #[test]

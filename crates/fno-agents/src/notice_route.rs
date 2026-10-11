@@ -217,38 +217,57 @@ pub(crate) struct Warning {
 
 /// Read `.fno/.reconcile-result.json` into warnings. The same buckets the
 /// deleted hook render block surfaced, so the cause text the lead's mail
-/// carries is the text the hook printed.
+/// carries is the text the hook printed. A held-node row that carries the
+/// reconcile refusal line keeps it verbatim as the cause: the lead reads
+/// node, reason, and remedy instead of a pointer to a command.
 pub(crate) fn read_reconcile(raw: &str) -> Vec<Warning> {
     let Ok(v) = serde_json::from_str::<Value>(raw) else {
         return Vec::new();
     };
-    let node_list = |key: &str| -> Vec<String> {
+    let held_rows = |key: &str| -> Vec<(String, String)> {
         v.get(key)
             .and_then(Value::as_array)
             .map(|rows| {
                 rows.iter()
-                    .filter_map(|r| r.get("node_id").and_then(Value::as_str).map(str::to_string))
+                    .filter_map(|r| {
+                        let node = r
+                            .get("node_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)?;
+                        let reason = r.get("reason").and_then(Value::as_str).unwrap_or("");
+                        Some((node, reason.to_string()))
+                    })
                     .collect()
             })
             .unwrap_or_default()
     };
     let mut out = Vec::new();
-    for node in node_list("promise_unmet") {
+    for (node, reason) in held_rows("promise_unmet") {
+        let cause = if reason.trim().is_empty() {
+            format!(
+                "last sweep held 1 node open on the promise gate ({node}). Run `fno backlog reconcile` for the per-node cause (unharvested carve-out / failed close_probe / short ship count); resolve, or close with --force --reason."
+            )
+        } else {
+            format!("last sweep held {node} open on the promise gate: {reason}")
+        };
         out.push(Warning {
             kind: "promise_unmet",
-            node: Some(node.clone()),
-            cause: format!(
-                "last sweep held 1 node open on the promise gate ({node}). Run `fno backlog reconcile` for the per-node cause (unharvested carve-out / failed close_probe / short ship count); resolve, or close with --force --reason."
-            ),
+            node: Some(node),
+            cause,
         });
     }
-    for node in node_list("promise_unknown") {
+    for (node, reason) in held_rows("promise_unknown") {
+        let cause = if reason.trim().is_empty() {
+            format!(
+                "last sweep could not read the ship count for 1 node ({node}); they stay open. The read failed retryably, so a later sweep clears them by itself. Do not force these closed - the count is unconfirmed, not short."
+            )
+        } else {
+            format!("last sweep could not read the ship count for 1 node ({node}): {reason}")
+        };
         out.push(Warning {
             kind: "promise_unknown",
-            node: Some(node.clone()),
-            cause: format!(
-                "last sweep could not read the ship count for 1 node ({node}); they stay open. The read failed retryably, so a later sweep clears them by itself. Do not force these closed - the count is unconfirmed, not short."
-            ),
+            node: Some(node),
+            cause,
         });
     }
     let sync = v.get("sync_catchup");
@@ -342,6 +361,7 @@ fn route_groups(
     groups: BTreeMap<String, OwnerGroup>,
     now: i64,
     detail: &mut Vec<String>,
+    index: &Path,
 ) -> (u64, std::collections::BTreeSet<String>) {
     let mut acted = 0u64;
     let mut terminal = std::collections::BTreeSet::new();
@@ -353,7 +373,7 @@ fn route_groups(
         }
         let delivered = match group.owner.session.as_deref() {
             Some(sid) if !sid.trim().is_empty() => mail_owner(sid, &group, &fingerprint, now),
-            _ => file_question_page(&group, &fingerprint, now),
+            _ => file_question_page(&group, &fingerprint, now, index),
         };
         if delivered {
             acted += 1;
@@ -407,6 +427,55 @@ fn sent_recently(fingerprint: &str) -> bool {
     }
 }
 
+/// The question-page dedupe subject: the first warning's cause flattened
+/// to one capped line. It carries the node, the reason, and the remedy
+/// verb (the reconcile refusal text), which is what question-intake
+/// stores as the question, and it is the dedupe subject: a repeat pass
+/// over the same held node and reason matches the open page instead of
+/// filing a fresh one.
+fn refusal_subject(group: &OwnerGroup) -> String {
+    let cause = group
+        .warnings
+        .first()
+        .map(|w| w.cause.as_str())
+        .unwrap_or("reconcile held nodes open");
+    let mut flat = String::new();
+    for word in cause.split_whitespace() {
+        if flat.chars().count() + word.len() + 1 > 280 {
+            break;
+        }
+        if !flat.is_empty() {
+            flat.push(' ');
+        }
+        flat.push_str(word);
+    }
+    flat
+}
+
+/// The open question already filed for this subject and node, if any. The
+/// dedupe reads the machine question index the intake door writes, so the
+/// window is the question's OPEN lifetime, not the 24h sent window: a
+/// repeat pass finds the page until a lead answers or clears it. The row
+/// shape mirrors question_intake's own fold (subject and node live under
+/// `data`).
+fn open_ask_id(index: &Path, subject: &str, node: &str) -> Option<String> {
+    let (asked, closed) = crate::question_intake::question_rows(index);
+    asked
+        .into_iter()
+        .filter(|(id, _)| !closed.contains(id))
+        .find(|(_, v)| {
+            let field = |k: &str| {
+                v.get("data")
+                    .and_then(|d| d.get(k))
+                    .or_else(|| v.get(k))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+            };
+            field("subject") == Some(subject) && field("node") == Some(node)
+        })
+        .map(|(id, _)| id)
+}
+
 /// One mail per owner through the system-sender lane with the resume
 /// fallback. Records the fingerprint only on a delivered mail.
 fn mail_owner(sid: &str, group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
@@ -433,20 +502,16 @@ fn mail_owner(sid: &str, group: &OwnerGroup, fingerprint: &str, now: i64) -> boo
     sent
 }
 
-/// The user-rung leg: one question page per warning group, filed through
-/// `fno inbox outstanding ask --question-file`. The page carries the same
-/// cause text and the required intake sections.
-fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
-    let dir = match notice_route_dir() {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    if std::fs::create_dir_all(&dir).is_err() {
-        return false;
-    }
-    let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
+/// The page body: the refusal subject as the `# ` heading (question-intake
+/// stores a question file's title as the question, so this is what the
+/// lead reads on the board), then the fixed intake sections and the
+/// warnings.
+fn question_page_body(group: &OwnerGroup, subject: &str) -> String {
     let mut body = String::new();
     body.push_str("---\nrecommend: 1\n---\n\n");
+    body.push_str("# ");
+    body.push_str(subject);
+    body.push_str("\n\n");
     body.push_str("Reconcile warnings your territory needs a ruling on.\n\n");
     body.push_str("## Options\n1. I will resolve the named nodes this beat.\n");
     body.push_str("    What happens next: the warnings stop re-surfacing\n");
@@ -476,22 +541,67 @@ fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64) -> bool {
     }
     body.push_str("## Warnings\n\n");
     body.push_str(&causes);
+    body
+}
+
+/// The user-rung leg: one question page per warning group, filed through
+/// `fno inbox outstanding ask --question-file`. A repeat pass over the
+/// same held node and reason updates the open page instead of filing a
+/// new one: the dedupe reads the question index the intake door writes
+/// (the page's OPEN lifetime), and the subject it keys on carries the
+/// refusal line.
+fn file_question_page(group: &OwnerGroup, fingerprint: &str, now: i64, index: &Path) -> bool {
+    let dir = match notice_route_dir() {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let page_path = dir.join(format!("q-{}.md", &fingerprint[..8]));
+    let subject = refusal_subject(group);
+    let body = question_page_body(group, &subject);
+    // Dedupe first: an open page for this node and reason is updated in
+    // place (the file rewrite carries the current causes) and the pass
+    // counts as delivered - the question is already on the board.
+    let node = group.warnings.iter().find_map(|w| w.node.as_deref());
+    if let Some(node) = node {
+        if open_ask_id(index, &subject, node).is_some() {
+            let _ = std::fs::write(&page_path, body);
+            record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+            return true;
+        }
+    }
     if std::fs::write(&page_path, body).is_err() {
         return false;
     }
     let mut cmd = crate::loop_dispatch::fno_cmd("fno");
     cmd.args(["inbox", "outstanding", "ask", "--question-file"]);
     cmd.arg(&page_path);
-    if let Some(node) = group.warnings.iter().find_map(|w| w.node.as_deref()) {
+    cmd.args(["--subject"]);
+    cmd.arg(&subject);
+    if let Some(node) = node {
         cmd.arg("--node");
         cmd.arg(node);
     }
     let ran = crate::bounded_cmd::output_with_timeout_result(cmd, 30);
-    let ok = ran.map(|o| o.status.success()).unwrap_or(false);
-    if ok {
+    let ran = match ran {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    if ran.status.success() {
         record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        return true;
     }
-    ok
+    // The intake's own subject+node dedup refused a second ask (a race
+    // with a parallel pass or a hand ask): the page is already open, so
+    // this pass counts as delivered rather than retrying forever.
+    let stderr = String::from_utf8_lossy(&ran.stderr);
+    if stderr.contains("already waits") {
+        record_sent(fingerprint, group.owner.scope.as_deref().unwrap_or(""), now);
+        return true;
+    }
+    false
 }
 
 /// The pass: read the world once, walk the workspace project roots'
@@ -536,7 +646,8 @@ pub(crate) fn run_pass(
             consumed.push((path, fed));
         }
     }
-    let (acted, terminal) = route_groups(groups, now, &mut detail);
+    let index = crate::provider_cap::questions_path(&home);
+    let (acted, terminal) = route_groups(groups, now, &mut detail, &index);
     // A result file is consumed only when every owner group it fed is
     // terminal (delivered now, or inside the dedupe window): one
     // undelivered group keeps the file on disk for the next tick, and the
@@ -1544,5 +1655,91 @@ mod tests {
                 .any(|a| matches!(a, FoldAction::FileNode { .. })),
             "a spike past three times the 7-day average files: {actions:?}"
         );
+    }
+
+    #[test]
+    fn held_node_refusal_rides_the_page_and_dedupes_by_node_and_reason() {
+        // The result row's reason (node, reason, remedy) verbatim; a row
+        // without one keeps the generic bucket text.
+        let reason = "Refused: ab-d327 promised 11 ships; only 4 merged.\n  plan: internal/fno/p.md\n\n  Two legal exits:\n    ship the rest, then close; or\n    file the remainder (`fno backlog idea`) and close with\n      --force --reason \"remaining ships filed as <id>\"";
+        let raw = serde_json::json!({
+            "promise_unmet": [{"node_id": "ab-d327", "reason": reason}]
+        })
+        .to_string();
+        let warnings = read_reconcile(&raw);
+        assert!(warnings[0]
+            .cause
+            .contains("promised 11 ships; only 4 merged"));
+        assert!(warnings[0].cause.contains("Two legal exits"));
+        assert!(warnings[0].cause.contains("fno backlog idea"));
+
+        let bare = read_reconcile(
+            serde_json::json!({"promise_unmet": [{"node_id": "ab-d327"}]})
+                .to_string()
+                .as_str(),
+        );
+        assert!(bare[0].cause.contains("promise gate"));
+        assert!(bare[0].cause.contains("--force --reason"));
+
+        // The page subject flattens the refusal to one capped line, and
+        // the page body carries it as the title the intake stores.
+        let group = OwnerGroup {
+            owner: crate::owner_ladder::Owner {
+                rung: crate::owner_ladder::Rung::NodeLead,
+                scope: Some("scope-a".to_string()),
+                holder: None,
+                session: None,
+            },
+            warnings,
+        };
+        let subject = refusal_subject(&group);
+        assert!(!subject.contains('\n'));
+        assert!(subject.contains("ab-d327"));
+        assert!(subject.contains("fno backlog idea"));
+        assert!(subject.chars().count() <= 280);
+        let body = question_page_body(&group, &subject);
+        let title_line = body
+            .lines()
+            .find(|l| l.starts_with("# "))
+            .expect("page carries a title heading");
+        assert!(title_line.contains("ab-d327"));
+
+        // Two passes over one held node: the first ask is open, so the
+        // second pass finds it by subject+node and updates instead of
+        // filing a new one. A different node or reason never matches.
+        let dir = std::env::temp_dir().join(format!("notice-route-dedupe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let index = dir.join("questions.jsonl");
+        let subject_str = subject.as_str();
+        let row = serde_json::json!({
+            "ts": "2026-10-10T00:00:00Z",
+            "type": "operator_question",
+            "source": "target",
+            "data": {
+                "question_id": "q-dedup01",
+                "question": subject_str,
+                "subject": subject_str,
+                "node": "ab-d327",
+                "blocks": [],
+                "options": [],
+                "ask": "resolve the named nodes"
+            }
+        });
+        use std::io::Write;
+        let mut handle = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&index)
+            .unwrap();
+        writeln!(handle, "{row}").unwrap();
+        drop(handle);
+        assert_eq!(
+            open_ask_id(&index, &subject, "ab-d327").as_deref(),
+            Some("q-dedup01")
+        );
+        assert_eq!(open_ask_id(&index, &subject, "x-other"), None);
+        assert_eq!(open_ask_id(&index, "other reason", "ab-d327"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
