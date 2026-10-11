@@ -227,7 +227,7 @@ fn cmd_send(args: &[OsString]) -> i32 {
         }
     };
     let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(host) == local_host {
+    if mail_bus::normalize_host(&host) == local_host {
         // A same-host target needs no bus row and no ssh hop: forward the
         // stripped argv to the local verb, every flag the caller passed
         // intact.
@@ -264,7 +264,7 @@ fn cmd_send(args: &[OsString]) -> i32 {
             relay_words.extend(tail.rest.iter().cloned());
             // The original message arg: everything after the target that is
             // not a flag was kept in rest in order, so the message is there.
-            relay(host, &relay_words)
+            relay(&host, &relay_words)
         }
         StorePath::Primary(remote) => {
             let from_name = match resolve_from_name(&tail) {
@@ -276,7 +276,7 @@ fn cmd_send(args: &[OsString]) -> i32 {
             };
             let name_part = match &from_name {
                 FromName::Given(v) | FromName::SelfName(v) => v.clone(),
-                FromName::OsUser(v) => v,
+                FromName::OsUser(v) => v.clone(),
             };
             let payload = match payload_of(&tail) {
                 Some(p) if !p.is_empty() => p,
@@ -436,7 +436,7 @@ fn cmd_peek(args: &[OsString]) -> i32 {
         return 2;
     };
     let local_host = mail_bus::normalize_host(&crate::claims::hostname());
-    if mail_bus::normalize_host(host) == local_host {
+    if mail_bus::normalize_host(&host) == local_host {
         let mut argv = vec![fno_binary()];
         argv.push(OsString::from("agents"));
         argv.push(OsString::from("peek"));
@@ -448,7 +448,7 @@ fn cmd_peek(args: &[OsString]) -> i32 {
     }
     let mut relay_words = vec!["agents".to_string(), "peek".to_string(), name];
     relay_words.extend(words[1..].iter().cloned());
-    relay(host, &relay_words)
+    relay(&host, &relay_words)
 }
 
 fn cmd_status(_args: &[OsString]) -> i32 {
