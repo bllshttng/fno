@@ -739,8 +739,12 @@ mod tests {
         assert_eq!(out["vacate"], json!([]));
         assert!(out["refusal"].is_null());
 
+        // slot_probe: these answer occupancy only. A parallel test may set
+        // FNO_AGENTS_HOME without holding the env lock, and a draw fired on
+        // a leaked home would decline this answer and burn a name.
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": true, "proposed_name": "Taylor",
+            "slot_probe": true,
             "caller": {"kind": "agent", "name": "lead-a"},
             "rows": [row("lead-a", "fno", "busy")],
         }))
@@ -750,6 +754,7 @@ mod tests {
 
         let out = resolve(&json!({
             "kind": "role-settle", "scope": "fno", "succession": true, "proposed_name": "Taylor",
+            "slot_probe": true,
             "caller": {"kind": "human"},
             "rows": [row("lead-a", "fno", "busy")],
         }))

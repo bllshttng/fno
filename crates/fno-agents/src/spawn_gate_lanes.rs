@@ -833,7 +833,6 @@ pub(crate) fn succession_replaces(
     live: &[RegistryEntry],
     caller: Option<&str>,
     scope: &str,
-    proposed_name: &str,
 ) -> Result<String, &'static str> {
     let caller = caller
         .filter(|session| !session.is_empty())
@@ -847,11 +846,15 @@ pub(crate) fn succession_replaces(
         return Err("caller_ambiguous");
     }
     let rows = serde_json::to_value(live).map_err(|_| "settle_unreadable")?;
+    // Occupancy probe only: an empty proposal skips the name contract and
+    // slot_probe keeps the settle from drawing, so a gate retry never burns
+    // a name. The successor's name settles on the spawn path.
     let answer = crate::team_settle::resolve(&serde_json::json!({
         "scope": scope,
         "rows": rows,
         "succession": true,
-        "proposed_name": proposed_name,
+        "proposed_name": "",
+        "slot_probe": true,
         "caller": {"kind": "agent", "name": row.name.clone()},
     }))
     .map_err(|_| "settle_unreadable")?;
@@ -861,15 +864,6 @@ pub(crate) fn succession_replaces(
         .is_some_and(|vacate| vacate.len() == 1 && vacate[0].as_str() == Some(row.name.as_str()));
     if answer.get("outcome").and_then(Value::as_str) == Some("succeeded") && vacates_caller {
         Ok(row.name.clone())
-    } else if answer
-        .get("refusal")
-        .and_then(Value::as_str)
-        .is_some_and(|text| text.contains("the machine draws successor names"))
-    {
-        // This lane settles occupancy only: it never carries a draw, so a
-        // hand-off here refuses with the teaching text instead of the
-        // misleading not-sole-holder.
-        Err("the machine draws successor names and this lane does not draw: hand the team over from a seam that draws (spawn --promote --hand-off with no --name, or --name redraw)")
     } else {
         Err("caller_not_sole_holder")
     }

@@ -485,6 +485,16 @@ pub fn settle_draw(payload: &Value, answer: &mut Value, store: &std::path::Path)
     if payload.get("plan").is_some() {
         return;
     }
+    if payload
+        .get("slot_probe")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        // A gate occupancy probe: it asks whether a succession would
+        // replace the caller, never for a name. Drawing here would burn a
+        // name on every gate retry.
+        return;
+    }
     let succession = payload
         .get("succession")
         .and_then(Value::as_bool)
@@ -652,6 +662,11 @@ mod tests {
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": []})
                 .to_string(),
         );
+        // A pending draw exists, so the hand-typed mismatch names the
+        // machine-draw contract; with no pending draw the same input gets
+        // the no-draw arm instead.
+        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
+            .unwrap();
         let mut answer = json!({"outcome": "succeeded"});
         let payload = json!({
             "succession": true, "scope": "x-aaaa",
@@ -663,6 +678,7 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("the machine draws successor names"));
+        assert!(answer["refusal"].as_str().unwrap().contains(&drawn));
         // The apply pass (a plan in the payload) never redraws.
         let mut answer = json!({"outcome": "succeeded"});
         let payload = json!({

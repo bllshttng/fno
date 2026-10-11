@@ -614,15 +614,21 @@ fn check_duplicate_name(
         ));
     }
     // A name is used once, fleet-wide and forever: any earlier lead, worker,
-    // draw or peer host's claim refuses here. Renaming a team to its own
-    // current name stays legal - the own record is excluded below.
+    // draw or peer host's claim refuses here. Two exemptions: the team's own
+    // record (a rename to the current name), and the live holder row's own
+    // name (a checkin or rename that spells the team what its row already
+    // carries is not a reuse - it is the same person).
     let lowered = name.to_ascii_lowercase();
     let own = store
         .teams
         .get(canon)
         .map(|rec| rec.name.to_ascii_lowercase())
         .unwrap_or_default();
-    if own.as_str() != lowered && used.contains(&lowered) {
+    let holder_row = live
+        .get(canon)
+        .map(|team| team.holder.to_ascii_lowercase())
+        .unwrap_or_default();
+    if own.as_str() != lowered && holder_row.as_str() != lowered && used.contains(&lowered) {
         return Err(format!(
             "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Pick (or draw) a fresh name",
             display(name, 1)
@@ -2088,8 +2094,10 @@ mod tests {
         assert!(refused.contains("retired"), "{refused}");
 
         write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
+        // The refusal fired before any store write, so the retry is a fresh
+        // naming; display preserves the caller's casing past the first letter.
         assert_eq!(
-            name_team(&store, &registry, "fno", "BARNABY").unwrap(),
+            name_team(&store, &registry, "fno", "barnaby").unwrap(),
             "Barnaby"
         );
         let registry = crate::state::load_registry(&registry).unwrap();
