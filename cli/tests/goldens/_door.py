@@ -66,6 +66,15 @@ def door(
     }
     if path_prepend:
         env["PATH"] = f"{path_prepend}:{os.environ['PATH']}"
+    if "FNO_BIN" not in env:
+        # The door execs the front binary for board-render; CI builds it in
+        # this checkout but never puts it on PATH.
+        from fno.events.store_client import EventStoreUnavailable, resolve_native_bin
+
+        try:
+            env["FNO_BIN"] = resolve_native_bin()
+        except EventStoreUnavailable:
+            pass
     env.update(env_override or {})
     proc = subprocess.run(
         [str(binary), "backlog", *args],
