@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Iterable, Iterator, Optional
 
 from fno.rust_binary import VerbUnavailable, chats_verb
 from fno.time_budget import validate_timeout_budget
@@ -604,7 +604,7 @@ def withdrawn_ids(msgs: list[Envelope]) -> set[str]:
     return out
 
 
-def dedupe_by_id(msgs: list[Envelope], *, last: bool = False) -> list[Envelope]:
+def dedupe_by_id(msgs: Iterable[Envelope], *, last: bool = False) -> list[Envelope]:
     """One row per id. A staged body row and its receipt or durable-fallback
     twin share an id. First wins unless ``last``: a typed receipt must not
     swallow its staged recovery row, while the outbox and unclaimed scans read
