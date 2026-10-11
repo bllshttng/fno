@@ -17,13 +17,14 @@ Provenance wire format: the relay rides the ONE delivered shape, the
 delivered-mail header (:func:`fno.mail.envelope.wrap_fno_mail`) collapsed to a
 single physical line with the transcript newline glyph::
 
-    `@<sender> · <fmail-id> · <subject>` ⏎ <message>
+    `@<sender> · <fmail-id>` ⏎ <message>
 
-The PTY Enter submits on newline so the turn boundary is the delimiter; the
-glyph keeps the header framing on one line, and the Rust door reads it as the
-header framing. The renderer refuses a body carrying its own tag or a
-header-shaped line, and the sender self-stamps (an unknown session renders as
-its own address, no registry dependency).
+User law d-b720d23c drops the header's third field when a body is present,
+so the header names sender and id only. The glyph here is the relay hop's
+one-line WIRE separator (a machine lane, not a typed delivery); the live
+pane path types a real newline instead. The renderer refuses a body
+carrying its own tag or a header-shaped line, and the sender self-stamps
+(an unknown session renders as its own address, no registry dependency).
 """
 from __future__ import annotations
 

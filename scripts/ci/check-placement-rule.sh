@@ -297,7 +297,9 @@ crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/claude_vault.rs
 crates/fno-agents/src/capability_leaves.rs
 crates/fno-agents/src/slot_cutover.rs
-cli/src/fno/backlog/advance.py
+crates/fno-agents/src/backlog/dispatch_resolve.rs
+crates/fno-agents/src/backlog/autobrief.rs
+crates/fno-agents/src/backlog/advance_join.rs
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py

@@ -36,7 +36,9 @@ failover, or exhaustion auto-switch (lock).
 """
 from __future__ import annotations
 
+import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -297,6 +299,23 @@ def compose_worker_credentials(
     return composed, _credential_decision(
         composed, account_id=account_id, route_env=route_env
     )
+
+
+def login_probe_refusal(account_id: str, config_dir: str | None = None) -> str | None:
+    """Refusal detail when the gate's last login probe refused this account; None otherwise."""
+    from fno import paths
+    try:
+        raw = (paths.agents_home_dir() / "login-probes.json").read_text()
+        row = json.loads(raw)["probes"][account_id]
+        refused = bool(
+            row.get("verdict") == "logged_out"
+            and isinstance(at := row.get("at_epoch"), (int, float))
+            and time.time() - at < 900
+            and (config_dir is None or row.get("config_dir") in (None, config_dir))
+        )
+        return (row.get("detail") or "login probe refused") if refused else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
 
 
 def _login_present(config_dir: Path) -> bool:

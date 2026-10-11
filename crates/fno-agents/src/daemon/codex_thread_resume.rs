@@ -57,8 +57,7 @@ pub(super) async fn ensure_codex_thread_handle(
         entry.requested_permission_mode.as_deref(),
         entry.sandbox_posture.as_deref(),
     );
-    let mut config = carry.config;
-    super::codex_thread_lane::worker_retry_config(&mut config);
+    let config = carry.config;
     let driver = crate::codex_thread::CodexThread::resume_with_state_dirs(
         cwd,
         &session_id,

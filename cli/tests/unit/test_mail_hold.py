@@ -597,8 +597,8 @@ def test_release_delivers_held_release_frame_without_synthetic_sender(monkeypatc
         is_release = (
             text.startswith("1 held messages · sent ")
             and (
-                "`@worker · fmail-123456789abc · the held report`" in text
-                or "`worker · fmail-123456789abc · the held report`" in text
+                "`@worker · fmail-123456789abc`" in text
+                or "`worker · fmail-123456789abc`" in text
             )
             and "<fno_mail" not in text
         )
@@ -619,8 +619,8 @@ def test_release_delivers_held_release_frame_without_synthetic_sender(monkeypatc
     assert len(injected) == 1
     assert injected[0].startswith("1 held messages · sent ")
     assert (
-        "`@worker · fmail-123456789abc · the held report`" in injected[0]
-        or "`worker · fmail-123456789abc · the held report`" in injected[0]
+        "`@worker · fmail-123456789abc`" in injected[0]
+        or "`worker · fmail-123456789abc`" in injected[0]
     )
     assert "<fno_mail" not in injected[0]
     assert scan_unread(HANDLE) == []

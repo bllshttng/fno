@@ -176,7 +176,7 @@ def test_dispatch_send_happy_path_live_claude(
     # minted id as the receipt, so the recipient can reply --to it and a
     # bounded-duplicate is dedupable (codex P1 - _deliver_live is the 2nd choke
     # point, not just _name_lane_send).
-    assert f" · {result.msg_id} · " in header, f"missing envelope id: {header!r}"
+    assert f" · {result.msg_id}`" in header, f"missing envelope id: {header!r}"
 
     # Bus demotion: a hosted delivery is NOT also written to the durable store.
     from fno.inbox.store import read_all_threads

@@ -61,6 +61,7 @@ const SUPERVISOR_WIDE_FNO_KEYS: &[&str] = &[
     "FNO_KILLCHECK_GIT_BIN",
     "FNO_LOOPCHECK_FNO_BIN",
     "FNO_OPENCODE_BIN",
+    "FNO_OPENCODE_STORAGE_DIR",
     "FNO_LOOPCHECK_GH_BIN",
     "FNO_LOOPCHECK_GIT_BIN",
     "FNO_LOOPS_MAIL_BIN",
@@ -383,7 +384,7 @@ pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) {
 
 /// The seed provenance group, by name. The Rust side never imports the Python
 /// tuple; the names are the wire contract (cli/src/fno/mail/seed_provenance.py).
-const SEED_PROVENANCE_KEYS: [&str; 6] = [
+pub(crate) const SEED_PROVENANCE_KEYS: [&str; 6] = [
     "FNO_SEED_PROV_SEED_B64",
     "FNO_SEED_PROV_FROM",
     "FNO_SEED_PROV_FROM_SESSION",

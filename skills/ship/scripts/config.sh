@@ -42,32 +42,23 @@ if [[ -z "${LOCAL_SETTINGS:-}" ]]; then
     fi
 fi
 LEGACY_CONFIG="${LEGACY_CONFIG:-.fno/config.yaml}"
-# Claude Code native project settings (JSON)
-CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-.claude/settings.json}"
-CLAUDE_SETTINGS_LOCAL="${CLAUDE_SETTINGS_LOCAL:-.claude/settings.local.json}"
 
-# Extract a value from Claude Code's .claude/settings.json or settings.local.json
-# Maps Claude Code native keys to fno config keys:
-#   plansDirectory → plans.focused_path, plans.full_path
-_get_from_claude_settings() {
-    local file="$1" key="$2"
-    [[ -f "$file" ]] || return 1
-    command -v jq &>/dev/null || return 1
-
-    # Map fno config keys → Claude Code JSON keys
-    local json_key=""
-    case "$key" in
-        plans.focused_path|plans.full_path) json_key="plansDirectory" ;;
-        *) return 1 ;;  # Only mapped keys are supported
-    esac
-
-    local value
-    value=$(jq -r ".${json_key} // empty" "$file" 2>/dev/null)
-    if [[ -n "$value" ]]; then
-        echo "$value"
-        return 0
-    fi
-    return 1
+# The plans-dir keys (plans.focused_path, plans.full_path) answer from the Rust
+# plans_path chain, not a bash tier walk: `fno do plan path` renders one probe
+# path through that chain (plansDirectory -> plans_dir, the single owner of
+# where plans live - see hooks/helpers/plans-dir.sh, which rides the same verb)
+# and we take its dirname. Both keys name the one dir the chain resolves; the
+# flat/full split is a legacy spelling. Prints nothing and returns non-zero
+# when fno is absent or the chain cannot answer, so the caller falls back to
+# the default rather than guessing.
+_plans_dir_via_chain() {
+    local probe
+    command -v fno >/dev/null 2>&1 || return 1
+    # Config-parse notices go to stderr; tail -1 also drops a stray stdout
+    # preamble. The probe slug never touches disk.
+    probe="$(fno do plan path --slug _config_plans_probe 2>/dev/null | tail -1)" || return 1
+    [[ "$probe" == /* ]] || return 1
+    dirname "$probe"
 }
 
 # Extract a value from the config: section of a settings.yaml file
@@ -163,31 +154,33 @@ get_config() {
 
     local value
 
-    # 1. Claude Code settings.local.json (highest priority — user overrides)
-    if value=$(_get_from_claude_settings "$CLAUDE_SETTINGS_LOCAL" "$key"); then
-        echo "$value"
-        return 0
-    fi
+    # The plans-dir keys never reach the tiers below: the Rust plans_path chain
+    # is the one answerer for where plans live, and an unresolvable chain
+    # answers the default rather than a second opinion from the bash tiers.
+    case "$key" in
+        plans.focused_path|plans.full_path)
+            if value="$(_plans_dir_via_chain)"; then
+                echo "$value"
+            else
+                echo "$default"
+            fi
+            return 0
+            ;;
+    esac
 
-    # 2. Claude Code settings.json (project-level, checked into repo)
-    if value=$(_get_from_claude_settings "$CLAUDE_SETTINGS" "$key"); then
-        echo "$value"
-        return 0
-    fi
-
-    # 3. Local settings.yaml
+    # 1. Local settings.yaml
     if value=$(_get_from_settings "$LOCAL_SETTINGS" "$key"); then
         echo "$value"
         return 0
     fi
 
-    # 4. Global settings.yaml
+    # 2. Global settings.yaml
     if value=$(_get_from_settings "$GLOBAL_SETTINGS" "$key"); then
         echo "$value"
         return 0
     fi
 
-    # 5. Legacy .fno/config.yaml (backwards compat)
+    # 3. Legacy .fno/config.yaml (backwards compat)
     if value=$(_get_from_legacy "$LEGACY_CONFIG" "$key"); then
         echo "$value"
         return 0
@@ -372,14 +365,14 @@ domain_exists() {
 
 # ── Config keys reference ──────────────────────────────────────
 # Lookup order (first match wins):
-#   1. .claude/settings.local.json   (user overrides, not committed)
-#   2. .claude/settings.json         (project-level, committed)
-#   3. .fno/settings.yaml      (fno config, local override)
-#   4. ~/.fno/settings.yaml  (fno config, global)
-#   5. .fno/config.yaml        (legacy, backwards compat)
+#   1. .fno/settings.yaml      (fno config, local override)
+#   2. ~/.fno/settings.yaml  (fno config, global)
+#   3. .fno/config.yaml        (legacy, backwards compat)
 #
-# Claude Code settings.json key mapping:
-#   "plansDirectory" → plans.focused_path, plans.full_path
+# plans.focused_path / plans.full_path skip the tiers above: they answer from
+# the Rust plans_path chain (`fno do plan path`, the one owner of where plans
+# live). The chain already reads plansDirectory in .claude/settings.local.json
+# and .claude/settings.json, then plans_dir in config.toml.
 #
 # config.expertise: ""              # Default expertise injection
 # config.max_iterations: 40         # Iteration cap
@@ -394,8 +387,7 @@ domain_exists() {
 # config.autonomous_budget: 25      # Budget per session (autonomous/claw)
 # config.external_reviewer: gemini  # gemini | coderabbit | claude | codex | none
 #
-# config.plans.focused_path: ""  # Flat plan save location (prefer .claude/settings.json plansDirectory)
-# config.plans.full_path: ""    # Folder plan save location (prefer .claude/settings.json plansDirectory)
+# plans.focused_path / plans.full_path  # Plan save location (legacy spellings; both resolve to the one plans_dir the chain names)
 #
 # config.docs.how_to_guides: false             # How-to generation (off by default)
 # config.docs.how_to_path: "docs/howto"        # How-to save location

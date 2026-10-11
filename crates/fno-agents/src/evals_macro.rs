@@ -225,7 +225,7 @@ use crate::client_verbs::parse_iso8601 as parse_loose_ts;
 /// stamp. A refusal names the offending value like the Python shell did.
 /// The duration arm splits on CHARS: a byte-index slice would panic on a
 /// non-ASCII final character.
-fn parse_since(raw: &str) -> Result<DateTime<Utc>, String> {
+pub(crate) fn parse_since(raw: &str) -> Result<DateTime<Utc>, String> {
     let t = raw.trim().to_lowercase();
     let mut chars = t.chars();
     let unit = chars.next_back();

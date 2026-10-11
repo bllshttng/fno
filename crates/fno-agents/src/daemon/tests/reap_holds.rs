@@ -1457,9 +1457,10 @@ fn open_pr_verdict_asks_only_a_quiet_candidate_and_folds_the_answer() {
 }
 
 /// The sweep asks: a quiet candidate whose PR reads closed retires, an open
-/// answer keeps the row with the hold named, an unread answer holds under
-/// `pr state contradicts`, and a candidate inside the grace window is kept
-/// without its staged answer ever being consulted.
+/// answer keeps the row with the hold named, an unread answer is not
+/// evidence - the row keeps under its transcript-only open-work window and
+/// the retire basis names the unread read - and a candidate inside the
+/// grace window is kept without its staged answer ever being consulted.
 #[test]
 fn the_sweep_asks_the_pr_once_the_row_is_quiet() {
     let home = tmp_home("gc-openpr-ask");
@@ -1540,15 +1541,20 @@ fn the_sweep_asks_the_pr_once_the_row_is_quiet() {
     let h = find_hold(&summary, "openrow");
     assert_eq!(h.reason, "open pr");
     assert_eq!(h.detail, "NO #102");
-    assert_eq!(
-        summary.kept_pr_contradicts,
-        vec![(
-            "failedrow".to_string(),
-            "NF".to_string(),
-            "pr 103 state unread".to_string()
-        )],
-        "{:?}",
+    assert!(
+        summary.kept_pr_contradicts.is_empty(),
+        "a failed read is not evidence: {:?}",
         summary.kept_pr_contradicts
+    );
+    // The unread answer leaves failedrow under its transcript-only
+    // open-work window (7200s quiet, 24h window), not a PR keep.
+    assert!(
+        summary
+            .kept_open_work_stale
+            .iter()
+            .any(|(id, node, _, _)| id == "failedrow" && node == "NF"),
+        "failedrow keeps under open work: {:?}",
+        summary.kept_open_work_stale
     );
     std::fs::remove_dir_all(home.root()).ok();
 }

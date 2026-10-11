@@ -58,6 +58,7 @@ pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
+pub mod agy_mint;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;
@@ -112,6 +113,7 @@ pub mod claude_stream_entry;
 pub mod claude_supervisor;
 pub mod claude_transcript_paths;
 pub mod claude_vault;
+pub mod claude_workspace_trust;
 pub mod cli_args;
 pub mod client;
 pub mod client_render;
@@ -212,6 +214,7 @@ pub mod harness_roster;
 pub mod harness_verbs;
 pub mod heal;
 pub mod heal_pid;
+pub mod heal_sweep;
 pub mod help_router;
 pub mod hold_label;
 pub mod honesty_sweep;
@@ -456,6 +459,7 @@ pub mod spawn_payload;
 pub mod spawn_phase;
 pub mod spawn_transaction;
 pub mod stale_spaces;
+pub mod stalls;
 pub mod state;
 pub mod state_layout;
 pub mod state_layout_sqlite;
@@ -1495,10 +1499,19 @@ mod tests {
 /// output; only include kinds that appear as the first string argument to an
 /// emit call in non-test production code.
 pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // The sandbox-denial ingester: codex transcript refusals -> one row per
+    // (session, class, path) with a hit count, plus the pass summary row.
+    // The claude half rides another node; harness is the seam.
+    "sandbox_denial",
+    "sandbox_ingest",
     // Reconcile's post-close emits (the Python twins declared both in
     // events/schema.yaml; session_satisfied carries the pr_merge data source).
     "session_satisfied",
     "human_touch",
+    // Triage apply telemetry (the native triage engine): one row per
+    // committed apply, carrying the applied counts, the priority moves and
+    // the dropped-entry count.
+    "triage_applied",
     // The pr-watch sweep flipped an open fno-bound draft PR back to ready
     // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
     "pr_watch_draft_flip",
@@ -1622,10 +1635,11 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // nothing, because a reaper that speaks only when it kills cannot be told
     // apart from a reaper that never ran.
     "orphan_reap_sweep",
-    // Worktree report sweep (daemon-emitted): one line per repo per 24h
-    // saying what `fno agents workspace worktree cleanup --merged` WOULD archive. Report-only by
-    // construction, because a timer tick is not proof that work landed; removal
-    // stays on the merge-triggered path. Emitted even when the counts are zero,
+    // Worktree sweep (daemon-emitted): one line per repo per 6h saying what
+    // `fno agents workspace worktree cleanup --merged` WOULD archive, or what
+    // its --apply pass archived once a merge proof stands (a minted cleanup
+    // request, or the pass's own dry-run judgment for an outside merge).
+    // Emitted even when the counts are zero,
     // so a quiet repo cannot be mistaken for a sweep that never ran.
     "worktree_sweep",
     // Stale-question reconcile (daemon-emitted): `fno agents stale-escalate`

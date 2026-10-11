@@ -489,41 +489,10 @@ def _capture_spawn(monkeypatch, module):
     return captured
 
 
-def test_advance_worker_reads_config_default(monkeypatch):
-    """AC8-FR: an autonomous /target dispatch picks up the config default."""
-    from fno.backlog import advance
-
-    captured = _capture_spawn(monkeypatch, advance)
-    monkeypatch.setattr(
-        "fno.config.load_settings", lambda: _fake_settings("acceptEdits")
-    )
-    advance._spawn_worker("x-test", None, "slug", node=_node_row("x-test"))
-    assert "--permission-mode" in captured["cmd"]
-    i = captured["cmd"].index("--permission-mode")
-    assert captured["cmd"][i + 1] == "acceptEdits"
 
 
-def test_advance_worker_explicit_flag_wins_over_config(monkeypatch):
-    from fno.backlog import advance
-
-    captured = _capture_spawn(monkeypatch, advance)
-    monkeypatch.setattr("fno.config.load_settings", lambda: _fake_settings("plan"))
-    advance._spawn_worker("x-test", None, "slug", permission_mode="acceptEdits", node=_node_row("x-test"))
-    i = captured["cmd"].index("--permission-mode")
-    assert captured["cmd"][i + 1] == "acceptEdits"
 
 
-def test_advance_worker_unset_config_falls_to_builtin(monkeypatch):
-    """AC3-HP (x-7198): no config at all still resolves the built-in answer,
-    byte-identical to the old spawn_permission_mode default."""
-    from fno.backlog import advance
-    from fno.agents.spawn_defaults import SPAWN_PERMISSION_BUILTIN
-
-    captured = _capture_spawn(monkeypatch, advance)
-    monkeypatch.setattr("fno.config.load_settings", lambda: _fake_settings(""))
-    advance._spawn_worker("x-test", None, "slug", node=_node_row("x-test"))
-    i = captured["cmd"].index("--permission-mode")
-    assert captured["cmd"][i + 1] == SPAWN_PERMISSION_BUILTIN
 
 
 def test_think_worker_reads_config_default(monkeypatch):

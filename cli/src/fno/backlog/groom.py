@@ -283,11 +283,16 @@ def _spawn_groom_worker(brief: str, cwd: str, model: str, day: str) -> str:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_SPAWN_TIMEOUT_S)
     if proc.returncode != 0:
-        from fno.backlog.advance import _gate_refusal_detail
+        from fno.rust_binary import VerbUnavailable, verb_call
 
+        raw = proc.stderr or proc.stdout or ""
+        try:
+            detail = verb_call(['backlog', 'advance', '--stdin'], {'op': 'gate-detail', 'stderr': raw})['detail']
+        except VerbUnavailable as exc:
+            detail = f"{raw} (gate detail unavailable: {exc})"
         raise RuntimeError(
             f"fno agents spawn exited {proc.returncode}: "
-            f"{_gate_refusal_detail(proc.stderr or proc.stdout or '')}"
+            f"{detail}"
         )
     for line in (proc.stdout or "").splitlines():
         if '"short_id"' in line:

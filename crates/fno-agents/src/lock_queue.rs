@@ -159,6 +159,21 @@ mod tests {
             .spawn()
             .expect("sleep spawns");
         unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGKILL) };
+        // Becoming a zombie takes a scheduler tick: until the kernel
+        // processes the SIGKILL the child still reads alive with a matching
+        // start, so a scan would call its ticket live. Poll the same flag
+        // the prune reads (process_bsd's zombie bit) like the daemon's
+        // pid_zombie_tests fixture does.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline
+            && !crate::process_probe::process_bsd(child.id()).is_some_and(|(_, zombie)| zombie)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            crate::process_probe::process_bsd(child.id()).is_some_and(|(_, zombie)| zombie),
+            "fixture: the child must be a zombie"
+        );
         child
     }
 

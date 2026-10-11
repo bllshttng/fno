@@ -87,8 +87,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CODEX_ASK_WAIT_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:56 |
 | `FNO_CODEX_BIN` | rs | Overrides the codex CLI the readiness and upgrade paths resolve, for private roots and tests; PATH order otherwise. |
 | `FNO_CODEX_INTERRUPT_BOUND_MS` | rs | unclear: crates/fno-agents/src/codex_thread.rs:80 |
-| `FNO_CODEX_VERSION` | py+rs | Pins the codex version the hook-trust gate reads, so tests and private roots skip the `codex --version` probe. |
 | `FNO_CODEX_SESSIONS_DIR` | rs | Overrides the codex sessions root the announce status scan reads. |
+| `FNO_CODEX_VERSION` | py+rs | Pins the codex version the hook-trust gate reads, so tests and private roots skip the `codex --version` probe. |
 | `FNO_CONFIG` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:436 |
 | `FNO_CONFIG_SEARCH_ROOT` | py | unclear: cli/src/fno/config_io.py:66 |
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agents/src/context_run.rs |
@@ -106,8 +106,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_E2E_DROP_RESIZE_FRAME` | rs | E2E fault seam: with `FNO_E2E` set, drops the first n (default 1) keeper resize frames the server sends, holding panes at their pre-change sizes the way a full keeper frame queue or a pre-ResizeAck keeper build would; the 1s grid reconciliation pass then converges the diff. |
 | `FNO_E2E_PTY_OUTPUT_DELAY_MS` | rs | unclear: crates/fno/src/pty.rs:1873 |
 | `FNO_EVENTS_PATH` | py+rs | Redirects the agents journal (events.jsonl) to one file; the hermetic guard honors it on both legs. |
-| `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
 | `FNO_FLIGHT_BUDGET_S` | py | Overrides the seconds a live single-flight holder tolerates before its watchdog releases the flight and exits 124; the default trips a minute before the 30-minute TTL. |
+| `FNO_FOOTNOTE_BIN` | rs | The `footnote` harness binary `-H footnote` launches, built from bllshttng/fnh; unset, fno-agents looks beside its own executable, then on PATH. |
 | `FNO_GH_BUDGET_POINTS_PER_MIN` | rs | Overrides the fleet GitHub request budget cap in points per 60s window (default 450). |
 | `FNO_GH_FACTS_DIR` | rs | Overrides the directory the `gh-cache` verb reads and writes its permanent fact rows from; default `<state_dir>/cache/gh-facts`. |
 | `FNO_GLOBAL_SETTINGS_PATH` | py+rs | unclear: cli/src/fno/adapters/providers/loader.py:48 |
@@ -116,7 +116,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HARNESS` | py+rs | unclear: cli/src/fno/lead/state.py:268 |
 | `FNO_HARNESS_NAME` | rs | The caller's harness name in the canonical identity stamp; the hold gate's direct read pairs it with FNO_HARNESS_SESSION_ID to answer whether the caller is the recipient. |
 | `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
-| `FNO_HEALTH_HISTORY` | py | unclear: cli/src/fno/graph/triage.py:2038 |
+| `FNO_HEALTH_HISTORY` | rs | crates/fno-agents/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | py+rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/server.rs:14324 |
 | `FNO_INBOX_ROOT` | py+rs | unclear: cli/src/fno/inbox/store.py:218 |
@@ -124,7 +124,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_KEEPER_ORPHAN_POLL_MS` | rs | Pane keeper poll interval in ms for the socket-dir-gone check; default 30000. Tests set it low. |
 | `FNO_KILLCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/kill_criteria.rs:58 |
 | `FNO_LAUNCH_ACCOUNT` | py | unclear: cli/src/fno/agents/rust_runtime.py:1204 |
-| `FNO_LLM_STUB` | py | unclear: cli/src/fno/llm.py:38 |
+| `FNO_LLM_STUB` | py+rs | unclear: cli/src/fno/llm.py:38; crates/fno-agents/src/backlog/triage_cli.rs (llm_one_shot) |
 | `FNO_LOOPCHECK_FNO_BIN` | rs | Overrides the fno path the loopcheck shim calls. |
 | `FNO_LOOPCHECK_GH_BIN` | rs | unclear: crates/fno-agents/src/loopcheck.rs:7891 |
 | `FNO_LOOPCHECK_GIT_BIN` | rs | unclear: crates/fno-agents/src/loopcheck.rs:7892 |
@@ -161,6 +161,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_OPENCODE_BIN` | rs | Names the opencode binary an install classifies and asks for its config root; unset or empty falls back to `opencode` on PATH. |
 | `FNO_OPENCODE_LIVE_TOKEN` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:340 |
 | `FNO_OPENCODE_LIVE_URL` | rs | unclear: crates/fno-agents/src/opencode_archive_tests.rs:338 |
+| `FNO_OPENCODE_STORAGE_DIR` | rs | Moves opencode's storage root, and with it the sibling `opencode.db` session store: the discover default and the dispatch brief's transcript tail read the store beside it. |
 | `FNO_OPERATOR_CAPTURE_DIR` | py+rs | unclear: cli/src/fno/inbox/operator_turns.py:87 |
 | `FNO_OPERATOR_HARNESS` | py | unclear: cli/src/fno/inbox/operator_turns.py:103 |
 | `FNO_OPERATOR_SESSION_ID` | py | unclear: cli/src/fno/inbox/operator_turns.py:102 |
@@ -287,8 +288,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `PYTHONPATH` | rs | unclear: crates/fno-agents/src/finalize.rs:1090 |
 | `REDUCED_MOTION` | rs | A reduced-motion request (`1`/`true`/`yes`/`on`); the mux launch splash then prints its last frame only, once, instead of animating, and a Working row's status glyph stays a still `●` instead of spinning. |
 | `RUSTC_WRAPPER` | rs | Cargo's own rustc wrapper. `fno update` sets it to the cargo admission wrapper for its compile fallback, since `cargo install` skips the checkout's `.cargo/config.toml`; a value already set is kept. |
-| `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
 | `SCCACHE_DIR` | rs | Where sccache keeps its compile cache; `fill_sccache_env` pins the fleet cache to `<fno build base>/sccache` when unset and sccache is installed, beside the build-dir shards the same lane sweeps. The footnote rustc wrapper sets the same default for an opted-in build. fno never exports it to a shell rc or harness env, so other Rust projects keep their own cache. |
+| `SCCACHE_DISABLE` | rs | Set to `1` to force bare rustc everywhere; the rustc wrapper reads it ahead of every opt-in, and the daemon's sccache server keep-alive reads it the same way, so a disabled machine runs no server even with `build.sccache = true` or `FNO_SCCACHE=1` set. |
 | `SCCACHE_IDLE_TIMEOUT` | rs | `fill_sccache_env` and the rustc wrapper default this to `0` (never stop on idle): a server that exits on idle mid-build fell compiles back to local rustc under fleet load. A shorter operator-set value survives both defaults. The daemon's `ensure_sccache_server` starts a replacement with `0` when it finds no live server on an opted-in machine. |
 | `SHELL` | py+rs | The user's login shell. |
 | `SMOKE_CHANGED_RECEIPT` | py | unclear: cli/src/fno/test_cmd.py:1726 |

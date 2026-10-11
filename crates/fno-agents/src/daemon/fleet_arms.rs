@@ -59,6 +59,20 @@ pub(super) struct FleetArms {
     // store nobody touched, so an extra run is a no-op; the gate exists so a
     // slow head probe never stacks.
     park_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Sandbox-denial ingest: same one-in-flight discipline. The pass reads
+    // only new transcript bytes since its offset state, so an extra run is
+    // cheap; the gate exists so a large first-contact scan never stacks.
+    sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The merged-cleanup verb command the sweep arm runs, shared by the apply
+/// pass and the orders probe's dry-run read.
+fn cleanup_command(home: &crate::paths::AgentsHome, root: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    cmd.current_dir(root)
+        .env("FNO_AGENTS_HOME", home.root())
+        .args(["agents", "workspace", "worktree", "cleanup", "--merged"]);
+    cmd
 }
 
 impl FleetArms {
@@ -100,6 +114,7 @@ impl FleetArms {
             gc_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             stale_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -159,6 +174,14 @@ impl FleetArms {
                 let _gate = SweepGate(flag);
                 let roots = worktree_sweep::registry_repo_roots(&home);
                 let now = now_epoch_secs();
+                // The orders probe and the report pass read the same repo in
+                // the same window: the probe's output replays as the report
+                // instead of the verb running twice. Misses (a probe that
+                // never ran the verb) and apply passes still execute.
+                let probe_runs: std::cell::RefCell<
+                    std::collections::HashMap<String, (Option<i32>, String, String)>,
+                > = std::cell::RefCell::new(Default::default());
+                let probe_runs = &probe_runs;
                 worktree_sweep::worktree_sweep(
                     &home,
                     &emitter,
@@ -167,13 +190,50 @@ impl FleetArms {
                     &|root| {
                         // A pending merge-cleanup request is the standing
                         // order: the pass applies while one waits.
-                        crate::merge_reap::merge_cleanup_requested(&home, root).into()
+                        if crate::merge_reap::merge_cleanup_requested(&home, root) {
+                            return true.into();
+                        }
+                        // An outside merge (`gh pr merge`, the web button)
+                        // mints no request. The verb's own dry-run judgment
+                        // is the same merge proof in git form: an eligible
+                        // tree reads merged-or-done and clean, and the
+                        // --apply pass re-judges every guard per tree.
+                        match cleanup_command(&home, root).output() {
+                            Ok(output) => {
+                                let out = (
+                                    output.status.code(),
+                                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                                    String::from_utf8_lossy(&output.stderr).into_owned(),
+                                );
+                                probe_runs
+                                    .borrow_mut()
+                                    .insert(root.to_string(), out.clone());
+                                worktree_sweep::apply_authority(false, Some(out.1.as_str())).into()
+                            }
+                            // A probe that cannot run the verb is an
+                            // unreadable order probe: skip the repo and let
+                            // the sweep emit, never collapse into report-only.
+                            Err(error) => worktree_sweep::WorktreeSweepOrderRead {
+                                standing: None,
+                                exit_code: None,
+                                stderr: error.to_string(),
+                            },
+                        }
                     },
                     &|root, apply| {
-                        let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
-                        cmd.current_dir(root)
-                            .env("FNO_AGENTS_HOME", home.root())
-                            .args(["agents", "workspace", "worktree", "cleanup", "--merged"]);
+                        let cached = if apply {
+                            None
+                        } else {
+                            probe_runs.borrow_mut().remove(root)
+                        };
+                        if let Some((code, stdout, stderr)) = cached {
+                            return worktree_sweep::WorktreeSweepOutput {
+                                exit_code: code,
+                                stdout,
+                                stderr,
+                            };
+                        }
+                        let mut cmd = cleanup_command(&home, root);
                         if apply {
                             cmd.arg("--apply");
                         }
@@ -317,6 +377,21 @@ impl FleetArms {
                 park_sweep(&home, &emitter, now_epoch_secs(), &|| {
                     sweeps::sweep_all_roots(&home)
                 });
+            });
+        }
+        // Sandbox-denial ingest: codex transcripts -> sandbox_denial rows,
+        // hourly, off-loop. The claude half rides another node; the row
+        // shape's harness field is the seam.
+        if !self
+            .sandbox_ingest_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.sandbox_ingest_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sandbox_ingest::sandbox_ingest(&home, &emitter, now_epoch_secs());
             });
         }
         crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());

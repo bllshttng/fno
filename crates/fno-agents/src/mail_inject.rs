@@ -11,8 +11,9 @@
 //! Reuses the G1 substrate for roster resolution ([`crate::claude_roster`]) ->
 //! `control.sock` + `control.key` and the attach handshake
 //! ([`crate::claude_attach`]). Post-attach the socket is a RAW keystroke pipe, so
-//! the turn is TYPED as one flattened line ([`one_line`], C17: mail is a
-//! delivery, never a paste) and submitted with a wire-level CR --
+//! the turn is TYPED as ordinary keystrokes ([`one_line`], C17: mail is a
+//! delivery, never a paste; line breaks ride as LF bytes, the node's spike
+//! proved LF submits nothing on any harness) and submitted with a wire-level CR --
 //! NOT an `op:'reply'` JSON frame, which would land (auth key included) as literal
 //! text in the recipient input box, unsent (node x-aaaa). The `<fno_mail>` envelope is
 //! rendered Python-side (the single renderer, shared by the codex/gemini + relay
@@ -566,18 +567,25 @@ fn emit(delivered: bool, reason: &str) -> i32 {
     outcome_exit(delivered)
 }
 
-/// The glyph every newline in a mail delivery is typed as (C17, team ruling
-/// d-9187ccf6): one constant, so the user can change the glyph on one line.
-/// Space-padded so the surrounding words survive the flattening.
+/// The glyph legacy stored turns use as their one-line body separator
+/// ("header ⏎ body" on ONE physical line). The live delivery no longer
+/// types it: user law d-b720d23c puts a real newline between header and
+/// body. The readers still parse the stored form, and the relay hop's
+/// one-line wire keeps it.
 pub(crate) const NEWLINE_GLYPH: &str = " ⏎ ";
 
-/// Flatten a mail body to ONE typable line (C17: mail is a delivery, never a
-/// paste). Every newline run (`\r\n`, `\n`, `\r`) becomes [`NEWLINE_GLYPH`], a
-/// tab becomes one space, and every other control char -- ESC included -- is
-/// dropped, so nothing the raw-keystroke path would act on survives: no byte
-/// submits line-by-line, no ESC opens an escape sequence. The durable bus copy
-/// keeps the real newlines; only the typed keystrokes are flattened.
+/// Flatten a mail body to its typable keystrokes (C17: mail is a delivery,
+/// never a paste). Every newline run (`\r\n`, `\n`, `\r`) becomes ONE LF
+/// byte (0x0a): the node's spike (2026-10-10, proof by delivery in real
+/// panes) showed every harness - claude, codex, opencode, pi, agy - takes
+/// LF as a line break that does NOT submit, and a separate CR then submits
+/// one turn. A trailing newline run is stripped, so the submit CR lands
+/// against the body's last line, not an empty one. A tab becomes one
+/// space, and every other control char - ESC included - is dropped, so
+/// nothing else the raw-keystroke path would act on survives: no ESC opens
+/// an escape sequence. The durable bus copy keeps the real newlines.
 fn one_line(text: &str) -> String {
+    let text = text.trim_end_matches(['\r', '\n']);
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -586,9 +594,9 @@ fn one_line(text: &str) -> String {
                 if chars.peek() == Some(&'\n') {
                     chars.next();
                 }
-                out.push_str(NEWLINE_GLYPH);
+                out.push('\n');
             }
-            '\n' => out.push_str(NEWLINE_GLYPH),
+            '\n' => out.push('\n'),
             '\t' => out.push(' '),
             other if other.is_control() => {}
             other => out.push(other),
@@ -597,29 +605,27 @@ fn one_line(text: &str) -> String {
     out
 }
 
-/// The content-confirm marker for a typed inject: the typed text up to its
-/// first [`NEWLINE_GLYPH`]. That is the same first line `text.lines().next()`
-/// gave when multi-line bodies were bracketed pastes -- the open tag carries
-/// no newline, so flattening never moves it.
+/// The content-confirm marker for a typed inject: the typed text up to its first line break.
 fn typed_marker(text: &str) -> String {
     let typed = one_line(text);
-    match typed.find(NEWLINE_GLYPH) {
+    match typed.find('\n') {
         Some(idx) => typed[..idx].to_string(),
         None => typed,
     }
 }
 
-/// Type the envelope as RAW BYTES on the ATTACHED transport -- flattened to
-/// one line by [`one_line`] (C17: a delivery is typed as ordinary keystrokes
-/// and never wears the operator-clipboard paste label; a paste is only the
-/// user's own) -- settle, then send a separate raw `\r` byte as the Enter.
-/// Post-attach the `control.sock` is a raw keystroke pipe (node x-aaaa): an
-/// `op:'reply'` JSON write here lands its frames -- auth key included -- as
-/// literal text in the recipient input box, unsent. So we type the turn
-/// exactly as a human would: one line, then a wire-level CR. The CR is a
-/// distinct write, NOT `\r` appended to the line. Refuses text carrying a
-/// detach sentinel before any write. Extracted so the raw sequence is
-/// unit-testable against a `Fake` transport (settle=ZERO).
+/// Type the envelope as RAW BYTES on the ATTACHED transport -- line breaks
+/// typed as LF bytes by [`one_line`] (C17: a delivery is typed as ordinary
+/// keystrokes and never wears the operator-clipboard paste label; a paste
+/// is only the user's own) -- settle, then send a separate raw `\r` byte
+/// as the Enter. Post-attach the `control.sock` is a raw keystroke pipe
+/// (node x-aaaa): an `op:'reply'` JSON write here lands its frames -- auth
+/// key included -- as literal text in the recipient input box, unsent. So
+/// we type the turn exactly as a human would: the lines (LF breaks do not
+/// submit; the node's spike proved that per harness), then a wire-level
+/// CR. The CR is a distinct write, NOT `\r` appended to the text. Refuses
+/// text carrying a detach sentinel before any write. Extracted so the raw
+/// sequence is unit-testable against a `Fake` transport (settle=ZERO).
 fn inject_with_submit<T: crate::claude_attach::ControlTransport>(
     transport: &mut T,
     text: &str,
@@ -900,7 +906,7 @@ fn resolve_target(session: &str) -> Result<(PathBuf, String, PathBuf), &'static 
 }
 
 /// Deliver `text` to `session` over the daemon `control.sock`: resolve the
-/// recipient on the roster, attach, type the flattened envelope + wire-level CR submit, and
+/// recipient on the roster, attach, type the envelope (LF line breaks) + wire-level CR submit, and
 /// confirm by CONTENT that the injected turn landed in the recipient transcript.
 /// `Ok(())` == delivered (the `<fno_mail>` marker appeared after the inject);
 /// `Err(reason)` is a clean not-delivered signal whose value IS the `mail-inject`
@@ -1166,7 +1172,7 @@ fn resolve_confirm(
 }
 
 /// Deliver `text` to a keeper-hosted lane-B thread: resolve the row,
-/// connect to its keeper socket, type the envelope as one flattened line in
+/// connect to its keeper socket, type the envelope (LF line breaks) in
 /// an `Input` frame, settle the hosted harness's own delay, then
 /// send the wire-level CR - and confirm by CONTENT in the hosted harness's
 /// accepted-turn records, withdrawing on total silence like the claude lane
@@ -1494,8 +1500,8 @@ fn single_line_decision(text: &str) -> Option<i32> {
     }
     let trimmed = text.trim();
     // A trailing terminator (the newline `echo` appends) was always harmless;
-    // genuine second-line content is flattened into the one submitted turn by
-    // the typing layer, so multi-line no longer refuses at all.
+    // genuine second-line content rides the LF-typed lines of the ONE
+    // submitted turn (the typing layer), so multi-line no longer refuses at all.
     if trimmed.contains('\n') || trimmed.contains('\r') {
         return None;
     }
@@ -2627,18 +2633,18 @@ mod tests {
     }
 
     #[test]
-    fn inject_with_submit_types_a_multi_line_envelope_as_one_flattened_line() {
+    fn inject_with_submit_types_a_multi_line_envelope_with_lf_breaks() {
         let mut t = Fake { sent: Vec::new() };
         let envelope = "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\">\nhi MARKER\n</fno_mail>";
         inject_with_submit(&mut t, envelope, Duration::ZERO).unwrap();
-        // The multi-line envelope is ONE write with its newlines typed as the
-        // return glyph, then a SEPARATE wire-level CR -- never a bracketed
-        // paste, and never `\r` appended to the line.
+        // The multi-line envelope is ONE write with its line breaks typed as
+        // LF bytes (the spike proved LF does not submit on any harness),
+        // then a SEPARATE wire-level CR -- never a paste, and never `\r`
+        // appended to the text.
         assert_eq!(
             t.sent,
             vec![
-                "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\"> ⏎ hi MARKER ⏎ </fno_mail>"
-                    .to_string(),
+                "<fno_mail from=\"a1b2c3d4\" node=\"x-aaaa\">\nhi MARKER\n</fno_mail>".to_string(),
                 "\r".to_string()
             ]
         );
@@ -2673,24 +2679,23 @@ mod tests {
 
     #[test]
     fn inject_with_submit_flattens_tabs_and_drops_escape_bytes() {
-        // A lone CR inside a one-line body is the Enter keystroke on this
-        // transport, and the CLI preserves it in bodies by design, so it is
-        // flattened to the glyph; a tab widens to one space; an ESC byte is
-        // dropped outright. Nothing control-shaped is ever typed.
+        // A lone CR inside a body joins the LF line-break stream (the spike:
+        // LF does not submit; only the separate CR does), a tab widens to one
+        // space, an ESC byte is dropped outright, and a trailing newline run
+        // is stripped so the submit CR lands on the body's last line.
         let mut t = Fake { sent: Vec::new() };
         let payload = "one\rline\ttwo\x1b[2J MARKER";
         inject_with_submit(&mut t, payload, Duration::ZERO).unwrap();
         assert_eq!(
             t.sent,
-            vec![["one ⏎ line two[2J MARKER"].join(""), "\r".to_string()]
+            vec![["one\nline two[2J MARKER"].join(""), "\r".to_string()]
         );
     }
 
     #[test]
     fn typed_marker_is_the_first_line_unchanged_by_flattening() {
-        // The confirm marker comes from the TYPED text up to the first glyph,
-        // so flattening a multi-line body never moves the open tag the
-        // transcript grep matches.
+        // The confirm marker comes from the TYPED text up to the first line
+        // break, so a multi-line body never moves the open tag the grep matches.
         let envelope = "<fno_mail from=\"a1b2c3d4\" id=\"msg-1\">\nbody one\nbody two\n</fno_mail>";
         assert_eq!(
             typed_marker(envelope),
@@ -2698,8 +2703,11 @@ mod tests {
         );
         // A single-line payload keeps its whole text as the marker.
         assert_eq!(typed_marker("plain MARKER"), "plain MARKER");
-        // A \\r\\n run is one newline, not two glyphs.
-        assert_eq!(one_line("a\r\nb\nc"), "a ⏎ b ⏎ c");
+        // A \\r\\n run is one LF, not two; a trailing newline run is stripped
+        // so the submit CR lands on the body's last line.
+        assert_eq!(one_line("a\r\nb\nc"), "a\nb\nc");
+        assert_eq!(one_line("a\n"), "a");
+        assert_eq!(one_line("body\n\n"), "body");
     }
 
     #[test]
@@ -2820,8 +2828,8 @@ mod tests {
     #[test]
     fn multi_line_unwrapped_types_flattened_after_c17() {
         // The old refusal ("a second line rides in as a second submitted
-        // turn") died with the bracketed paste: the typing layer flattens
-        // every newline run into ONE submitted line, so a multi-line
+        // turn") died with the bracketed paste: the typing layer types
+        // every newline run as LF inside ONE submitted turn, so a multi-line
         // unframed payload delivers. The held-mail drain's digest is the
         // caller this door was stranding.
         assert_eq!(single_line_decision("/cmd\nsecond line"), None);
@@ -3934,10 +3942,10 @@ mod tests {
 
     #[test]
     fn content_confirm_matches_a_transcript_recording_the_flattened_text() {
-        // C17: the typed keystrokes carry the return glyph, so a hosted
-        // harness records the FLATTENED line, not the multi-line body. The
-        // marker (the open tag) is unchanged by flattening, so the confirm
-        // still matches the recorded turn.
+        // C17: the typed keystrokes carry LF line breaks, so a hosted harness
+        // records the typed (LF-joined) text, not a paste. The marker (the
+        // first line) is unchanged by the flattening, so the confirm still
+        // matches the recorded turn.
         let path = tmp_transcript("flattened");
         let mut f = File::create(&path).unwrap();
         writeln!(
@@ -4744,14 +4752,14 @@ mod tests {
         assert_eq!(outcome, Ok(()), "the envelope lands and confirms");
 
         let frames = handle.join().unwrap();
-        assert_eq!(frames.len(), 2, "one typed line, one CR frame");
+        assert_eq!(frames.len(), 2, "one typed frame, one CR frame");
         assert!(
             matches!(&frames[0], Frame::Input(b)
                 if !b.contains(&0x1b)
                     && std::str::from_utf8(b)
-                        .is_ok_and(|s| s.contains("<fno_mail") && !s.contains('\n'))
+                        .is_ok_and(|s| s.contains("<fno_mail") && s.contains('\n'))
                     && b.windows(6).any(|w| w == b"<fno_m")),
-            "the first frame is the typed one-line envelope, no paste guards"
+            "the first frame is the typed envelope with LF line breaks, no paste guards"
         );
         assert!(
             matches!(&frames[1], Frame::Input(b) if b.as_slice() == b"\r"),

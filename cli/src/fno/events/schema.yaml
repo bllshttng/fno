@@ -1254,6 +1254,62 @@ event_types:
           description: "The refusing session's id, when ambient identity is present. Pairs a refusal with a later passing send for the retry-rate query."
     consumers: [operator]
 
+  - name: sandbox_denial
+    description: "One harness sandbox/permission refusal ingested from a transcript into the event store (the stalls report's raw material; transcripts alone were invisible to every reader). One row per (session, class, refused path) per ingest pass, with a hit count. Only the errno-bearing runtime shape counts; a transcript quoting a denial is prose, not a refusal."
+    sources: [daemon]
+    data:
+      required: [harness, session_id, class, rule, hits]
+      properties:
+        harness:
+          type: string
+          enum: [codex, claude]
+          description: "Which harness's transcript the refusal came from; codex is ingested today, claude rides another node."
+        session_id:
+          type: string
+          description: "The transcript's harness session id (the rollout uuid for codex)."
+        class:
+          type: string
+          enum: [git_write, claim_lock, readonly_db, home_config, daemon_io, other]
+          description: "What the refusal hit, derived from the refused path: canonical .git writes, claim node locks, the read-only backlog store, codex home config, a blocked command with no path, or other."
+        rule:
+          type: string
+          enum: [operation_not_permitted, read_only_file_system, readonly_database]
+          description: "The refusing marker: the errno-suffixed runtime shape or SQLite's own sentence."
+        path:
+          type: [string, "null"]
+          description: "The refused path when the output named one; null when it did not. A pathless refusal still counts."
+        hits:
+          type: integer
+          description: "How many tool-output lines matched this (rule, path) in the ingested byte range."
+        transcript:
+          type: [string, "null"]
+          description: "The transcript file the denial came from."
+    consumers: [operator]
+
+  - name: sandbox_ingest
+    description: "One sandbox-denial ingest pass, INCLUDING a quiet one: a tick that stays silent cannot be told from a tick that never ran. The claude half rides another node."
+    sources: [daemon]
+    data:
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [ok, skipped]
+          description: "ok on a completed pass; skipped when a dispatch pause suspends the pass."
+        files_scanned:
+          type: integer
+          description: "Transcripts read this pass (bounded: newest first, capped count and bytes)."
+        denials:
+          type: integer
+          description: "Total refusal hits found this pass."
+        rows:
+          type: integer
+          description: "sandbox_denial rows emitted this pass (one per (session, class, path) bucket)."
+        reason:
+          type: [string, "null"]
+          description: "On a skipped pass: the dispatch pause's skip reason."
+    consumers: [operator]
+
   - name: backlog_freshness_verdict
     description: "One row per fno backlog freshness run: the premise and plan verdicts it read against current main, so the false-positive rate is measurable before any verdict is ever allowed to block (v1 warns only)."
     sources: [backlog]
@@ -3425,7 +3481,7 @@ event_types:
           type: [string, "null"]
 
   - name: worktree_sweep
-    description: "One repo's reading from the daemon's 24h worktree report sweep : what `fno agents workspace worktree cleanup --merged` WOULD archive. Report-only by construction, because a merged PR is external proof that work landed and a timer tick is not; removal stays on the merge-triggered path gated by post_merge.self_reap. Emitted for every repo including those reading zero, so a quiet repo is never mistaken for a sweep that did not run. `error: unreadable-summary` when the verb's Summary line could not be parsed, since a zeroed report is indistinguishable from a clean machine."
+    description: "One repo's reading from the daemon's 6h worktree sweep: what `fno agents workspace worktree cleanup --merged` WOULD archive, and what its `--apply` pass archived. Report-only until a merge proof stands (a minted cleanup request, or the pass's own dry-run judgment finding an eligible tree when an outside merge minted none); a timer tick alone removes nothing. Emitted for every repo including those reading zero, so a quiet repo is never mistaken for a sweep that did not run. `error: unreadable-summary` when the verb's Summary line could not be parsed, since a zeroed report is indistinguishable from a clean machine."
     sources: [daemon]
     data:
       required: []
@@ -4198,6 +4254,15 @@ event_types:
         cancel_reason:
           type: string
           description: "Reason read from the cancel sentinel payload; absent when the sentinel carried none."
+        pr_state:
+          type: [string, "null"]
+          description: "The fire's last PR state (OPEN, CLOSED, MERGED, unknown). Present on NoProgress rows."
+        ci:
+          type: [string, "null"]
+          description: "The fire's last CI conclusion (SUCCESS, FAILURE:<check>, PENDING, none, unknown). Present on NoProgress rows."
+        red_check:
+          type: [string, "null"]
+          description: "The first failing check name when CI is red, else null. Present on NoProgress rows."
         driver:
           type: string
           enum: [target, lead]
@@ -5046,6 +5111,13 @@ event_types:
         stderr_tail:
           type: string
           description: "Last few lines of gh stderr, or empty string if unavailable."
+        elapsed_s:
+          type: [number, "null"]
+          description: "Seconds the read ran before it failed; null when unmeasured. A bounded-read timeout always carries it."
+        waited_on:
+          type: string
+          enum: [budget_lock, network, github, unknown]
+          description: "What the failed call waited on, from row evidence only: the local fleet budget gate (its own refusal text), GitHub's refusal wording, the network's resolve/connect/TLS markers, or unknown when no evidence exists. The stall report groups on this and never guesses past it."
     consumers: [operator]
 
   - name: loop_check_config
@@ -6295,6 +6367,12 @@ event_types:
         skip_deadline:
           type: integer
           description: "PRs past the root's slice of the 480s drive budget; they wait for the next tick."
+        skip_unchanged:
+          type: integer
+          description: "PRs whose head sha and checks digest both match the last sweep's record; skipped after the one checks read, before the pulls read and the job logs."
+        pr_states:
+          type: object
+          description: "Per-PR (head sha, checks digest) this sweep recorded for the root; the next sweep's unchanged-skip baseline."
         still_red:
           type: integer
           description: "PRs acted on that remain red (escalations or read errors after apply)."

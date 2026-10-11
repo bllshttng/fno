@@ -91,6 +91,10 @@ _PROBE_FAILED = -1
 #: proceed-with-a-breadcrumb path.
 _PROBE_TIMEOUT_S = 30
 
+#: How long the cached default-branch answer stays fresh: the branch moves
+#: only when an operator renames it, so an hour of staleness is cheap.
+_REPO_META_TTL_S = 3600
+
 
 def _probe(args: list, cwd: str):
     """Run a bounded probe; None when it could not run at all.
@@ -115,6 +119,22 @@ def _repo_slug(cwd: str) -> Optional[str]:
 
 
 def _default_branch(slug: str, cwd: str) -> Optional[str]:
+    """The repository's default branch, gh-cache first.
+
+    23 of 830 measured gh reads in a 10-minute sample were the ``gh api
+    repos/{slug}`` probe. A missing, stale or corrupt repo-meta row (or an
+    unavailable binary) falls through to the live read, which stays the truth.
+    """
+    try:
+        from fno.rust_binary import VerbUnavailable, verb_call
+
+        ask = {"op": "read", "kind": "repo-meta", "slug": slug, "ttl_s": _REPO_META_TTL_S}
+        row = verb_call("gh-cache", ask).get("row")
+        value = row.get("default_branch") if isinstance(row, dict) else None
+        if isinstance(value, str) and value:
+            return value
+    except VerbUnavailable:
+        pass
     res = _probe(["gh", "api", f"repos/{slug}"], cwd)
     if res is None or not res.ok:
         return None
@@ -122,7 +142,16 @@ def _default_branch(slug: str, cwd: str) -> Optional[str]:
         value = json.loads(res.stdout).get("default_branch")
     except (json.JSONDecodeError, AttributeError):
         return None
-    return value if isinstance(value, str) and value else None
+    if not (isinstance(value, str) and value):
+        return None
+    try:
+        from fno.rust_binary import verb_call
+
+        ask = {"op": "write", "kind": "repo-meta", "slug": slug, "row": {"default_branch": value}}
+        verb_call("gh-cache", ask)
+    except VerbUnavailable:
+        pass
+    return value
 
 
 def _base_ref(pr_number, slug: str, cwd: str) -> Optional[str]:

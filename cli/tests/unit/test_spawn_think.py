@@ -1651,7 +1651,7 @@ def test_a_nonzero_exit_still_raises_on_every_substrate(monkeypatch, tmp_path):
         if _is_naming_verb(cmd)
         else _Proc(),
     )
-    with pytest.raises(st.SpawnError):
+    with pytest.raises(st.SpawnError, match="substrate unavailable.*gate detail unavailable"):
         st._spawn_think_worker(
             "x-1", "prompt", str(tmp_path), "slug", provider="codex"
         )

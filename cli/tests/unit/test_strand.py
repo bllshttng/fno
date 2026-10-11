@@ -16,7 +16,6 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from fno.backlog.advance import first_dead_ancestor, selection_guards
 from fno.cli import app
 from fno.graph.strand import (
     _is_live,
@@ -147,28 +146,8 @@ def test_live_child_ids_still_feeds_the_supersede_guard():
     assert _live_child_ids(entries, "x-parent") == ["x-kid"]
 
 
-def test_selection_exclusion_predicate_is_unchanged():
-    """x-7190 boundary: done ancestors never gate selection, superseded do."""
-    now = datetime.now(timezone.utc)
-    sup = _node("x-sup", status="superseded", superseded_by="x-other")
-    kid = _node("x-kid", parent="x-sup")
-    assert selection_guards(kid, _by_id([sup, kid]), now) == "dead-ancestor:x-sup"
-
-    done = _node("x-donep", completed_at=DONE, status="done")
-    kid2 = _node("x-kid2", parent="x-donep")
-    result = selection_guards(kid2, _by_id([done, kid2]), now)
-    # The done ancestor itself never gates selection (other guards may fire).
-    assert not (result or "").startswith("dead-ancestor")
 
 
-def test_first_dead_ancestor_takes_the_predicate():
-    by_id = _by_id(_strand_world())
-    kid = by_id["x-kid"]
-    assert (
-        first_dead_ancestor(kid, by_id, is_dead=lambda a: not _is_live(a))
-        == "x-parent"
-    )
-    assert first_dead_ancestor(kid, by_id, is_dead=lambda a: False) is None
 
 
 # ---------------------------------------------------------------------------

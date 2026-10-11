@@ -151,8 +151,8 @@ annotate resolve	T1	annotate resolve	5
 approvals decide	T1	approvals decide	2
 approvals ls	T1	approvals ls	2
 approvals show	T1	approvals show	3
-backlog contain	T1	backlog contain	3
 backlog advance	KEEP	backlog advance	43	deliberate readability slack for a high-traffic distinct operation
+backlog contain	T1	backlog contain	3
 backlog album	T1	backlog album	0
 backlog annotate add	T1	backlog annotate add	7
 backlog annotate list	T1	backlog annotate list	0
@@ -186,15 +186,15 @@ backlog cost	T1	backlog cost	1
 backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
-backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog discover	T1	backlog discover	0
+backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog done	KEEP	backlog done	42	deliberate readability slack for a high-traffic distinct operation
 backlog encounter	T1	backlog encounter	0
 backlog epic status	T1	backlog epic status	7
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
+backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
 backlog intake	T1	backlog intake	32
-backlog join	T1	backlog join	1
 backlog lane-fill	T1	backlog lane-fill	2
 backlog lanes	T1	backlog lanes	2
 backlog maintain	T1	backlog maintain	7
@@ -233,15 +233,7 @@ backlog status	T1	backlog status	1
 backlog supersede	T1	backlog supersede	10
 backlog task list	T1	backlog task list	0
 backlog task update	T1	backlog task update	2
-backlog triage apply	T1	backlog triage apply	3
-backlog triage consistency	T1	backlog triage consistency	2
-backlog triage context	T1	backlog triage context	7
-backlog triage health	T1	backlog triage health	19
-backlog triage projects	T1	backlog triage projects	2
-backlog triage propose	T1	backlog triage propose	1
-backlog triage rank	T1	backlog triage rank	2
-backlog triage trend	T1	backlog triage trend	2
-backlog triage validate	T1	backlog triage validate	1
+backlog triage	T1	backlog triage	39	
 backlog unarchive	T1	backlog unarchive	2
 backlog unclaim	T1	backlog unclaim	8
 backlog requeue	T1	backlog requeue	3
@@ -400,6 +392,7 @@ doctor scratch report	T1	doctor scratch report	0
 doctor scratch sweep	T1	doctor scratch sweep	1
 doctor skill-diff reconcile	T1	doctor skill-diff reconcile	1
 doctor skill-diff tick	T1	doctor skill-diff tick	4
+doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
 done	KEEP	done	48	single-leaf group

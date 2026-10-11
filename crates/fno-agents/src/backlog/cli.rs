@@ -126,6 +126,14 @@ pub fn run(args: &[String]) -> i32 {
     // the whole argv rides the compat forward verbatim, exactly the shape
     // the Python app has always parsed.
     if is_app_option_head(args) {
+        if let Some(pos) = args
+            .iter()
+            .position(|a| matches!(a.as_str(), "advance" | "join" | "dispatch-lanes"))
+        {
+            let mut native = args[pos..].to_vec();
+            native.extend_from_slice(&args[..pos]);
+            return run(&native);
+        }
         return forward_verbatim(args);
     }
     let resolved = match resolve_head(args) {
@@ -236,6 +244,9 @@ pub fn run(args: &[String]) -> i32 {
         // locked close, the self-heals, and the shelled legs (auto-continue
         // rides the wheel until the advance port).
         "reconcile" => super::reconcile_cli::run(resolved.tail),
+        "advance" => super::advance_cli::run(resolved.tail),
+        "join" => super::advance_join::run(resolved.tail),
+        "dispatch-lanes" => super::advance_lanes::run_lanes(resolved.tail),
         // The parallel fill: native selection over the lane world (peer
         // slots, domain annotation, the file-collision gate).
         "lane-fill" => super::advance_fill::run_lane_fill(resolved.tail),
@@ -247,6 +258,11 @@ pub fn run(args: &[String]) -> i32 {
         "provenance" if super::provenance_cli::owns(resolved.tail) => {
             super::provenance_cli::run(resolved.tail)
         }
+        // The triage diagnostics group is native end to end: the nine
+        // actions over the engine, health, and the locked apply. The door
+        // owns every triage tail: the wheel's triage route forwards here,
+        // so a forward back would loop.
+        "triage" => super::triage_cli::run(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

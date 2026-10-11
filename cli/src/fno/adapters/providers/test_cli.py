@@ -1633,6 +1633,77 @@ class TestPick:
         verdict = _pick_verdict(tmp_path, exclude=("readyrule",))
         assert verdict.account == "makers"
 
+    def _plant_login_refusal(
+        self,
+        account: str,
+        config_dir: str,
+        *,
+        at_epoch: float | None = None,
+        detail: str = "Login expired",
+    ) -> None:
+        import json as _json
+        import time as _time
+
+        from fno import paths
+
+        if at_epoch is None:
+            at_epoch = _time.time()
+        path = paths.agents_home_dir() / "login-probes.json"
+        probes: dict = {}
+        if path.exists():
+            probes = _json.loads(path.read_text()).get("probes", {})
+        probes[account] = {
+            "verdict": "logged_out",
+            "detail": detail,
+            "config_dir": config_dir,
+            "at_epoch": at_epoch,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"probes": probes}))
+
+    def test_login_refusals_govern_the_pick(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The refusal skip honors freshness and the dir binding, lands on the
+        live account, and refuses only when no live account is left."""
+        import time as _time
+
+        _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
+
+        # Two planted accounts, one login-refused: the pick lands on the live one.
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-alt"))
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "makers"
+        assert (
+            dict(verdict.candidates)["readyrule"].startswith("login probe refused")
+        ), verdict.candidates
+        assert verdict.exit_code == 0
+
+        # A stale record reads healthy again.
+        self._plant_login_refusal(
+            "readyrule",
+            str(tmp_path / "claude-alt"),
+            at_epoch=_time.time() - 1800,
+        )
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "readyrule"
+        assert verdict.exit_code == 0
+
+        # A record naming another config dir is ignored.
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-main"))
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "readyrule"
+
+        # All refused: exit 4, and the reason names the login remedy.
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-alt"))
+        self._plant_login_refusal("makers", str(tmp_path / "claude-main"))
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account is None
+        assert verdict.exit_code == 4
+        assert "claude /login" in verdict.reason
+        refused_rows = [s for _, s in verdict.candidates if s.startswith("login probe")]
+        assert len(refused_rows) == 2
+
     def test_print_env_emits_the_picked_config_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
