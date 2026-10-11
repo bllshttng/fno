@@ -1168,6 +1168,7 @@ def pick_account(
     from fno.adapters.providers.runtime_state import headroom, refresh_usage
     from fno.agents.account_env import (
         AccountResolutionError,
+        login_probe_refusal,
         resolve_account_overlay,
     )
 
@@ -1208,6 +1209,14 @@ def pick_account(
                 pid,
                 "not a picker candidate: managed, rides the shared ~/.claude slot",
             ))
+            continue
+        refusal = login_probe_refusal(pid, overlay.config_dir)
+        if refusal is not None:
+            # The spawn gate's last probe refused this account's login:
+            # picking it again would only reproduce the gate's exit-78 refusal
+            # and strand the node as skip-for-now. Skip it; pick the next live
+            # one; refuse only when no live account is left.
+            rows.append((pid, f"login probe refused: {refusal}"))
             continue
         launchable.append(pid)
 

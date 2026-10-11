@@ -1633,6 +1633,82 @@ class TestPick:
         verdict = _pick_verdict(tmp_path, exclude=("readyrule",))
         assert verdict.account == "makers"
 
+    def _plant_login_refusal(
+        self,
+        account: str,
+        config_dir: str,
+        *,
+        at_epoch: float | None = None,
+        detail: str = "Login expired",
+    ) -> None:
+        import json as _json
+        import time as _time
+
+        from fno import paths
+
+        if at_epoch is None:
+            at_epoch = _time.time()
+        path = paths.agents_home_dir() / "login-probes.json"
+        probes: dict = {}
+        if path.exists():
+            probes = _json.loads(path.read_text()).get("probes", {})
+        probes[account] = {
+            "verdict": "logged_out",
+            "detail": detail,
+            "config_dir": config_dir,
+            "at_epoch": at_epoch,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"probes": probes}))
+
+    def test_a_fresh_login_refusal_skips_to_the_live_account(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two planted accounts, one login-refused: the pick lands on the live one."""
+        _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-alt"))
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "makers"
+        assert (
+            dict(verdict.candidates)["readyrule"].startswith("login probe refused")
+        ), verdict.candidates
+        assert verdict.exit_code == 0
+
+    def test_a_stale_refusal_is_picked_again(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time as _time
+
+        from fno.agents.account_env import LOGIN_PROBE_FRESH_SECS
+
+        _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
+        self._plant_login_refusal(
+            "readyrule",
+            str(tmp_path / "claude-alt"),
+            at_epoch=_time.time() - 2 * LOGIN_PROBE_FRESH_SECS,
+        )
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "readyrule"
+        assert verdict.exit_code == 0
+
+    def test_a_refusal_for_another_config_dir_is_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-main"))
+        verdict = _pick_verdict(tmp_path)
+        assert verdict.account == "readyrule"
+
+    def test_every_account_login_refused_exits_4(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
+        self._plant_login_refusal("readyrule", str(tmp_path / "claude-alt"))
+        self._plant_login_refusal("makers", str(tmp_path / "claude-main"))
+        result = _invoke(["pick"], cwd=tmp_path, home=tmp_path)
+        assert result.exit_code == 4, result.output
+        assert result.output.count("login probe refused") == 2
+
     def test_print_env_emits_the_picked_config_dir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -36,7 +36,9 @@ failover, or exhaustion auto-switch (lock).
 """
 from __future__ import annotations
 
+import json
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -50,6 +52,14 @@ from fno.agents.model_routing import MODEL_ENV_KEYS
 
 class AccountResolutionError(ValueError):
     """`--account` could not be resolved to a safe overlay; message is a receipt."""
+
+
+# How long a persisted login-probe refusal stays trusted by launch-time
+# account picking. The gate re-probes on every named spawn, so this bounds
+# only how long picking avoids a dead login (and how long a post-/login
+# account stays skipped until the window passes or any named spawn records
+# a fresh live verdict).
+LOGIN_PROBE_FRESH_SECS = 15 * 60
 
 
 # Inherited auth vars that would override an account's own login and bill the
@@ -297,6 +307,47 @@ def compose_worker_credentials(
     return composed, _credential_decision(
         composed, account_id=account_id, route_env=route_env
     )
+
+
+def login_probe_refusal(
+    account_id: str,
+    config_dir: str | None = None,
+    now: float | None = None,
+) -> str | None:
+    """Return the refusal detail when this account's last claude login probe
+    refused, inside the freshness window; else None.
+
+    The spawn gate (crates/fno-agents/src/spawn_gate_lanes.rs) probes the
+    config dir of every named claude account at spawn and persists the verdict
+    to ``<agents home>/login-probes.json``. The rotation reads it here so
+    launch-time picking skips an account the probe just refused instead of
+    picking it again on every attempt. A stale or logged-in record
+    reads as healthy, so the rotation returns to an account after
+    ``claude /login`` once the window passes; a record naming a different
+    config dir is ignored, so re-registering an account to a fresh dir is not
+    shadowed by its old refusal.
+
+    Best-effort: a missing, unreadable or malformed file reads as healthy.
+    """
+    from fno import paths
+
+    try:
+        raw = (paths.agents_home_dir() / "login-probes.json").read_text()
+        row = json.loads(raw)["probes"][account_id]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if row.get("verdict") != "logged_out":
+        return None
+    at = row.get("at_epoch")
+    if not isinstance(at, (int, float)):
+        return None
+    if now is None:
+        now = time.time()
+    if now - at >= LOGIN_PROBE_FRESH_SECS:
+        return None
+    if config_dir is not None and row.get("config_dir") not in (None, config_dir):
+        return None
+    return row.get("detail") or "login probe refused"
 
 
 def _login_present(config_dir: Path) -> bool:
