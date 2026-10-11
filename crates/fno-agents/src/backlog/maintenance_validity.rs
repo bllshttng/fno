@@ -427,14 +427,21 @@ impl EvidencePacket {
     }
 }
 
+/// A repo path probe rooted at one node's cwd.
+pub(crate) type PathProbe = Box<dyn Fn(&str) -> bool>;
+/// A bounded match count for one symbol.
+pub(crate) type Search<'a> = &'a dyn Fn(&str) -> Option<usize>;
+/// Retro enrichment: (key, text) evidence pairs for one node.
+pub(crate) type Retro<'a> = &'a dyn Fn(&Value) -> Vec<(String, String)>;
+
 /// The evidence sources, injectable so the leg is hermetic under test.
 pub(crate) struct EvidenceSources<'a> {
     /// Repo path probe under the node's cwd; None records `path` unavailable.
     pub exists: Option<&'a dyn Fn(&str) -> bool>,
     /// Bounded match count; None records `git` unavailable.
-    pub search: Option<&'a dyn Fn(&str) -> Option<usize>>,
+    pub search: Option<Search<'a>>,
     /// Retro-only enrichment (review comment + merged region).
-    pub retro: Option<&'a dyn Fn(&Value) -> Vec<(String, String)>>,
+    pub retro: Option<Retro<'a>>,
 }
 
 pub(crate) fn collect_evidence(
@@ -1020,7 +1027,7 @@ pub(crate) type Analyzer<'a> =
 /// The sweep's injected sources: production wires the git, gh and claude
 /// seams; tests pass stubs.
 pub(crate) struct SweepSeams<'a> {
-    pub exists_for: &'a dyn Fn(&Value) -> Option<Box<dyn Fn(&str) -> bool>>,
+    pub exists_for: &'a dyn Fn(&Value) -> Option<PathProbe>,
     pub search: &'a dyn Fn(&str) -> Option<usize>,
     pub retro: &'a dyn Fn(&Value) -> Vec<(String, String)>,
     pub analyze: Analyzer<'a>,
@@ -1201,7 +1208,7 @@ pub(crate) fn validity_search(symbol: &str) -> Option<usize> {
 
 /// The repo path probe for a node with a real cwd, else None (path evidence
 /// recorded unavailable).
-pub(crate) fn validity_exists_for(node: &Value) -> Option<Box<dyn Fn(&str) -> bool>> {
+pub(crate) fn validity_exists_for(node: &Value) -> Option<PathProbe> {
     let root = node.get("cwd").and_then(Value::as_str)?;
     if !Path::new(root).is_dir() {
         return None;
@@ -1627,7 +1634,7 @@ mod tests {
             search: None,
             retro: Some(&retro),
         };
-        let pkt = collect_evidence(&node, &[node.clone()], NOW_MS, &sources);
+        let pkt = collect_evidence(&node, std::slice::from_ref(&node), NOW_MS, &sources);
         assert!(pkt.size() <= PACKET_MAX_BYTES);
         assert!(pkt.item("git:merged-region:cli/src/fno/ui.py").is_none());
         assert!(pkt.item("graph:evil").is_none());
@@ -1642,12 +1649,13 @@ mod tests {
             search: None,
             retro: Some(&empty),
         };
-        let pkt = collect_evidence(&node, &[node.clone()], NOW_MS, &sources);
+        let pkt = collect_evidence(&node, std::slice::from_ref(&node), NOW_MS, &sources);
         assert!(pkt.unavailable.contains(&"retro".to_string()));
         assert_eq!(pkt.item("path:cli/src/fno/ui.py"), Some("exists"));
         let huge = idea("ab-big", 90, json!({"details": "x".repeat(100_000)}));
         assert!(
-            collect_evidence(&huge, &[huge.clone()], NOW_MS, &none()).size() <= PACKET_MAX_BYTES
+            collect_evidence(&huge, std::slice::from_ref(&huge), NOW_MS, &none()).size()
+                <= PACKET_MAX_BYTES
         );
     }
 
@@ -1748,7 +1756,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let node = idea("ab-race", 90, json!({}));
         let entries = vec![node.clone()];
-        let no_exists = |_: &Value| -> Option<Box<dyn Fn(&str) -> bool>> { None };
+        let no_exists = |_: &Value| -> Option<PathProbe> { None };
         let search = |_: &str| -> Option<usize> { None };
         let retro = |_: &Value| -> Vec<(String, String)> { Vec::new() };
         let keep =

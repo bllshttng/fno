@@ -577,7 +577,7 @@ impl Run<'_> {
         let events = || self.events.clone();
         let slug = |cwd: Option<&str>| cwd.and_then(|c| self.slugs.get(c).cloned());
         let roster = || -> Result<BTreeMap<String, Vec<String>>, String> { Ok(BTreeMap::new()) };
-        let no_exists = |_: &Value| -> Option<Box<dyn Fn(&str) -> bool>> { None };
+        let no_exists = |_: &Value| -> Option<validity::PathProbe> { None };
         let no_search = |_: &str| -> Option<usize> { None };
         let no_retro = |_: &Value| -> Vec<(String, String)> { Vec::new() };
         let seams = Seams {

@@ -168,7 +168,7 @@ impl Board {
     }
 
     /// Stable sort into board order.
-    pub(crate) fn sort<'a>(&self, rows: &mut Vec<&'a Value>) {
+    pub(crate) fn sort(&self, rows: &mut Vec<&Value>) {
         rows.sort_by_cached_key(|e| self.order_key(e));
     }
 }

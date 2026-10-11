@@ -262,7 +262,7 @@ pub(crate) fn retire_stale_postmortems(rows: &mut [Value], now: DateTime<Utc>) -
         if !details.contains(POSTMORTEM_TRAILER) {
             continue;
         }
-        if !parse_ts(row.get("created_at")).is_some_and(|dt| dt.timestamp() < cutoff) {
+        if parse_ts(row.get("created_at")).is_none_or(|dt| dt.timestamp() >= cutoff) {
             continue;
         }
         if let Some(obj) = row.as_object_mut() {
