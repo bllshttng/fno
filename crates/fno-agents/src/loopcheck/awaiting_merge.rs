@@ -212,6 +212,7 @@ fn ruling_hold_at(node_id: &str, graph_path: &Path) -> Option<String> {
                 [
                     "id",
                     "slug",
+                    "status",
                     "parent",
                     "contained_in",
                     "plan_path",

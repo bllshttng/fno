@@ -370,6 +370,14 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
         Ok(ids) => ids,
         Err(err) => return err.to_string(),
     };
+    if exempt.iter().any(|x| x.eq_ignore_ascii_case(node_id)) {
+        return receipt(
+            "refused",
+            2,
+            "exempt frees a child of the hold, never the held node itself",
+        )
+        .to_string();
+    }
     let probe = match resolve_plan(entry, node_id) {
         Ok(p) => p,
         // A hold no longer needs a plan file. The node row carries
@@ -469,6 +477,14 @@ fn set_node_hold(
     review_on: &str,
     exempt: &[String],
 ) -> String {
+    if exempt.iter().any(|x| x.eq_ignore_ascii_case(node_id)) {
+        return receipt(
+            "refused",
+            2,
+            "exempt frees a child of the hold, never the held node itself",
+        )
+        .to_string();
+    }
     if !matches!(dispatch_hold(entry), HoldState::Absent) {
         let obj = entry.get("dispatch_hold").and_then(Value::as_object);
         let say = |k: &str| {
@@ -1320,10 +1336,8 @@ mod tests {
         assert_eq!(receipt["outcome"], "held", "{out}");
         assert_eq!(receipt["owner"], "t-parent", "{out}");
         assert_eq!(receipt["exempt"], "t-child", "{out}");
-    }
 
-    #[test]
-    fn a_non_list_exempt_refuses_the_set() {
+        // A non-list exempt refuses the set and writes nothing.
         let fx = fixture(json!({}));
         let mut payload = set_payload(fx.graph.display().to_string());
         payload["exempt"] = json!("t-af4e");
@@ -1331,6 +1345,18 @@ mod tests {
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["exit_code"], 2, "{out}");
         assert!(out.contains("exempt must be a list of node ids"), "{out}");
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+
+        // A self-id refuses: a hold cannot exempt its own node.
+        let fx = fixture(json!({}));
+        let mut payload = set_payload(fx.graph.display().to_string());
+        payload["exempt"] = json!(["t-0001"]);
+        let out = run("hold-set", &payload);
+        assert_eq!(
+            serde_json::from_str::<Value>(&out).unwrap()["exit_code"],
+            2,
+            "{out}"
+        );
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
     }
 

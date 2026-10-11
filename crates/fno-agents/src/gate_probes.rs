@@ -577,6 +577,7 @@ pub(crate) fn dispatch_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
                 [
                     "id",
                     "slug",
+                    "status",
                     "parent",
                     "contained_in",
                     "plan_path",

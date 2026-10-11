@@ -1191,7 +1191,7 @@ fn plan_mutation(
 /// Whole-word check for a node id in a hold's free text, the way
 /// `named_question_ids` matches `q-` ids: word boundaries, case-insensitive.
 fn hold_text_names_id(haystack: &str, id: &str) -> bool {
-    match regex::Regex::new(&format!(r"(?i)\b{}\b", regex::Regex::escape(id))) {
+    match regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(id))) {
         Ok(re) => re.is_match(haystack),
         Err(_) => false,
     }
@@ -1222,9 +1222,10 @@ fn hold_names_blockers(
         return Ok(());
     }
     let text = format!("{}\n{}", receipt.reason, receipt.release_when);
-    let named: Vec<&String> = removing
+    let named: Vec<String> = removing
         .iter()
         .filter(|b| hold_text_names_id(&text, b))
+        .cloned()
         .collect();
     if named.is_empty() {
         return Ok(());

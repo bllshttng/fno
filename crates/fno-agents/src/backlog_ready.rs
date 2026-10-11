@@ -985,8 +985,12 @@ pub(crate) fn hold_verdict_receipt(
         }
         seen.insert(node_id.clone());
         let read = hold_read(&current);
-        let exempted =
-            !for_id.is_empty() && read.exempt.iter().any(|x| x.eq_ignore_ascii_case(&for_id));
+        // An exemption frees a CHILD from an ANCESTOR's hold, never the
+        // holder from its own: a mistyped self-id must not neutralize the
+        // hold set at the node itself.
+        let exempted = !for_id.is_empty()
+            && !node_id.eq_ignore_ascii_case(&for_id)
+            && read.exempt.iter().any(|x| x.eq_ignore_ascii_case(&for_id));
         if !matches!(read.state, HoldState::Absent) && !exempted {
             let held = matches!(read.state, HoldState::Held);
             let prefix = if held {
@@ -2167,45 +2171,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn exempt_parses_only_as_a_list_of_node_ids() {
-        // A valid list rides the read; a non-list or a non-string entry
-        // fails closed like every other malformed field.
-        let (_d, root) = hold_dir("hold-plan-exempt");
-        let plan = root.join("held.md");
-        std::fs::write(
-            &plan,
-            "---\nstatus: ready\ndispatch_hold:\n  reason: Blocking finding\n  release_when: Finding fixed\n  review_on: 2099-08-20\n  set_by: lead\n  exempt: [t-af4e, t-b2c3]\n---\n",
-        )
-        .unwrap();
-        let read = hold_read(&serde_json::json!({
-            "id": "x-held", "plan_path": plan.display().to_string(),
-        }));
-        assert!(matches!(read.state, HoldState::Held));
-        assert_eq!(
-            read.exempt,
-            vec!["t-af4e".to_string(), "t-b2c3".to_string()]
-        );
-
-        for shape in [
-            serde_json::json!({
-                "reason": "why", "release_when": "fixed",
-                "review_on": "2099-08-20", "set_by": "lead", "exempt": "t-af4e",
-            }),
-            serde_json::json!({
-                "reason": "why", "release_when": "fixed",
-                "review_on": "2099-08-20", "set_by": "lead", "exempt": [7],
-            }),
-            serde_json::json!({
-                "reason": "why", "release_when": "fixed",
-                "review_on": "2099-08-20", "set_by": "lead", "exempt": [" "],
-            }),
-        ] {
-            let read = hold_block_read(&shape);
-            assert!(matches!(read.state, HoldState::Invalid), "{shape}");
-        }
-    }
-
     fn past_review_note_contract() {
         let (_d, root) = hold_dir("hold-plan-past");
         let plan = held_plan(&root, "held.md", "2020-01-01");
@@ -2224,6 +2189,19 @@ mod tests {
             serde_json::json!({"reason": "why", "release_when": "fixed", "review_on": "soon", "set_by": "lead"}),
             serde_json::json!({"reason": "   ", "release_when": "fixed", "review_on": "2026-08-20", "set_by": "lead"}),
             serde_json::json!({"reason": "why", "release_when": "fixed", "review_on": "2026-08-20", "set_by": "   "}),
+            // The optional exempt field fails closed on any non-list shape.
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": "t-af4e",
+            }),
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": [7],
+            }),
+            serde_json::json!({
+                "reason": "why", "release_when": "fixed",
+                "review_on": "2099-08-20", "set_by": "lead", "exempt": [" "],
+            }),
         ];
         for shape in shapes {
             assert!(
