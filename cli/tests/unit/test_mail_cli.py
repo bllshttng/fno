@@ -919,7 +919,7 @@ def test_plain_send_delivers_header_and_body(
     header = lines[0]
     assert header.startswith("`@web · fmail-")
     assert lines[1] == "secret body words", injected[0]
-    msg_id = header.split(" · ")[1]
+    msg_id = header.split(" · ")[1].rstrip("`")
 
     # The bus copy the id points at holds the full body.
     from fno.bus.log import iter_messages
@@ -946,7 +946,7 @@ def test_interrupted_live_send_keeps_the_stored_copy(
         app, ["mail", "send", "9a063cd3", "kept body words", "--from-name", "web"]
     )
     assert len(typed) == 1
-    msg_id = typed[0].split(" · ")[1]
+    msg_id = typed[0].split(" · ")[1].rstrip("`")
 
     from fno.rust_binary import chats_verb
 

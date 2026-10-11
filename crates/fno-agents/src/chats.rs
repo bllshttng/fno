@@ -2480,7 +2480,7 @@ mod tests {
         let rec: Value = serde_json::from_str(migrated.trim()).unwrap();
         assert_eq!(
             rec["body"].as_str().unwrap(),
-            "`@candor \u{b7} msg-1 \u{b7} Build green.`\nBuild green. Details."
+            "`@candor \u{b7} msg-1`\nBuild green. Details."
         );
         // The backup holds the original bytes.
         let backup_dir = receipt
