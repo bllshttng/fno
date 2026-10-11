@@ -198,7 +198,7 @@ def test_default_branch_served_from_the_repo_meta_row(patch_run, monkeypatch):
         {
             "op": "read",
             "kind": "repo-meta",
-            "slug": "Owner/Repo",
+            "slug": "owner/repo",
             "ttl_s": _base_lineage._REPO_META_TTL_S,
         }
     ]
@@ -221,7 +221,7 @@ def test_default_branch_miss_goes_live_and_writes_the_row(patch_run, monkeypatch
         {
             "op": "write",
             "kind": "repo-meta",
-            "slug": "Owner/Repo",
+            "slug": "owner/repo",
             "row": {"default_branch": "main"},
         }
     ]
