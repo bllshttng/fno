@@ -46,27 +46,20 @@ mod tests {
     }
 
     #[test]
-    fn mail_send_target_with_at_is_claimed() {
+    fn classify_claims_only_at_host_targets() {
+        // A mail send with an @host target is claimed; the tail runs from
+        // the target onward.
         let argv = classify(&os(&["agents", "mail", "send", "nemo@mbp3", "hello"]))
             .expect("@host send is claimed");
         assert_eq!(argv, os(&["send", "nemo@mbp3", "hello"]));
-    }
-
-    #[test]
-    fn peek_target_with_at_is_claimed() {
+        // A peek with an @host handle is claimed.
         let argv = classify(&os(&["agents", "peek", "nemo@mbp3", "-n", "5"]))
             .expect("@host peek is claimed");
         assert_eq!(argv, os(&["peek", "nemo@mbp3", "-n", "5"]));
-    }
-
-    #[test]
-    fn bare_targets_forward() {
+        // Bare targets forward byte-verbatim.
         assert!(classify(&os(&["agents", "mail", "send", "nemo", "hello"])).is_none());
         assert!(classify(&os(&["agents", "peek", "nemo"])).is_none());
-    }
-
-    #[test]
-    fn other_agents_verbs_forward() {
+        // Other agents verbs and other mail subcommands forward.
         assert!(classify(&os(&["agents", "claim", "status"])).is_none());
         assert!(classify(&os(&["agents", "mail", "list"])).is_none());
     }

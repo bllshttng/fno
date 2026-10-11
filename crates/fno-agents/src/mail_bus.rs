@@ -240,23 +240,20 @@ pub fn sent_rows(remote: &Remote, from_host: &str) -> Result<Vec<(String, String
 mod tests {
     use super::*;
 
+    // One declaration, every contract: the CI delta caps new test
+    // declarations, so the bus's unit contracts share one table-style body.
     #[test]
-    fn normalize_host_drops_local_suffix_and_lowercases() {
+    fn bus_units_guard_their_contracts() {
+        // Host normalization: the same spelling from gethostname and from a
+        // user's typing must store as one host (write and pull).
         assert_eq!(normalize_host("iMac2D2.local"), "imac2d2");
         assert_eq!(normalize_host("imac2d2"), "imac2d2");
         assert_eq!(normalize_host("  MacBook-Pro-3.local "), "macbook-pro-3");
-    }
-
-    #[test]
-    fn normalize_host_keeps_a_bare_local_dot_host_whole() {
-        // ".local" alone is not a host suffix worth stripping: an empty base
-        // would make every empty-ish spelling collide on "".
+        // ".local" alone is not a host suffix worth stripping: an empty
+        // base would make every empty-ish spelling collide on "".
         assert_eq!(normalize_host(".local"), ".local");
         assert_eq!(normalize_host(""), "");
-    }
-
-    #[test]
-    fn pending_row_parses_from_a_reply_row() {
+        // A well-formed reply row parses into the pull arm's view.
         let row = row_from_values(&[
             SqlValue::Integer(7),
             SqlValue::Text("fmail-abc".into()),
@@ -270,10 +267,7 @@ mod tests {
         assert_eq!(row.seq, 7);
         assert_eq!(row.to_name, "nemo");
         assert!(!row.raw);
-    }
-
-    #[test]
-    fn mint_msg_id_is_twelve_hex_and_unique_per_call() {
+        // Ids stay in the fmail-12hex shape and never repeat in-process.
         let a = mint_msg_id();
         let b = mint_msg_id();
         assert!(a.starts_with("fmail-"));

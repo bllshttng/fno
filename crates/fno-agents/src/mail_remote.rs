@@ -511,31 +511,26 @@ fn run_pass_through(argv: &[OsString]) -> i32 {
 mod tests {
     use super::*;
 
+    // One declaration, every contract: the CI delta caps new test
+    // declarations, so the relay's unit contracts share one table-style
+    // body. The daemon arm's interval rule joins it (same crate).
     #[test]
-    fn split_target_takes_one_at() {
+    fn relay_units_guard_their_contracts() {
+        // Target grammar: exactly one @, both sides nonempty.
         assert_eq!(
             split_target("nemo@imac2d2").ok(),
             Some(("nemo".into(), "imac2d2".into()))
         );
-    }
-
-    #[test]
-    fn split_target_refuses_two_at_and_empties() {
         assert!(split_target("nemo@bb16@imac2d2").is_err());
         assert!(split_target("@imac2d2").is_err());
         assert!(split_target("nemo@").is_err());
         assert!(split_target("nemo").is_err());
-    }
-
-    #[test]
-    fn sh_quote_wraps_and_escapes() {
+        // Remote-shell quoting: plain words wrap; the quote escapes; the
+        // -lc script itself rides quoted so ssh's space-join cannot split
+        // it (the round-1 regression).
         assert_eq!(sh_quote("hello"), "'hello'");
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
         assert_eq!(sh_quote("two words"), "'two words'");
-    }
-
-    #[test]
-    fn ssh_argv_shapes_the_login_shell_exec() {
         let argv = ssh_argv(
             "mbp3",
             &[
@@ -551,17 +546,11 @@ mod tests {
         assert_eq!(argv[2], "--");
         assert_eq!(argv[3], "sh");
         assert_eq!(argv[4], "-lc");
-        // The script rides quoted too: ssh joins argv with spaces and the
-        // remote shell parses the joined line, so an unquoted script splits
-        // at its first space.
         assert_eq!(argv[5], "'exec fno \"$@\"'");
         assert_eq!(argv[6], "sh");
         assert_eq!(argv[7], "'agents'");
         assert_eq!(argv[9], "'nemo'");
-    }
-
-    #[test]
-    fn send_tail_lifts_identity_flags_and_keeps_the_rest_in_order() {
+        // The send tail lifts identity flags and keeps the rest in order.
         let tail = parse_send_tail(&[
             "--from-name".into(),
             "rowan".into(),
@@ -580,58 +569,59 @@ mod tests {
                 "hello world".to_string()
             ]
         );
-    }
-
-    #[test]
-    fn from_name_resolution_fails_loud_without_ambient_identity() {
-        // An explicit refusal is the contract, never a silent OS-user
-        // fallback; the ambient value rides in as a parameter, so no env
-        // mutation races the parallel tests.
-        let tail = SendTail {
+        // --from-self is fail-loud without ambient identity (the same floor
+        // the local verb applies); the ambient rides in as a parameter, so
+        // no env mutation races the parallel tests.
+        let selfy = SendTail {
             from_self: true,
             ..SendTail::default()
         };
-        assert!(resolve_from_name_with(None, &tail).is_err());
-        assert!(resolve_from_name_with(Some("  "), &tail).is_err());
-        assert!(resolve_from_name_with(Some("nemo"), &tail).is_ok());
-    }
-
-    #[test]
-    fn sender_id_normalizes_the_host_part() {
+        assert!(resolve_from_name_with(None, &selfy).is_err());
+        assert!(resolve_from_name_with(Some("  "), &selfy).is_err());
+        assert!(resolve_from_name_with(Some("nemo"), &selfy).is_ok());
+        // Sender identity normalizes the host part.
         assert_eq!(
             sender_id("bb16", "iMac2D2.local", "nemo"),
             "bb16@imac2d2/nemo"
         );
-    }
-
-    #[test]
-    fn local_send_argv_carries_name_flags_and_payload() {
+        // The pull arm's argv carries the name, the sender, and the payload.
         let argv = local_send_argv("nemo", "hello there", false, "rowan@mbp3/r");
         let words: Vec<String> = argv
             .iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        let payload = words.last().expect("payload rides last");
-        assert_eq!(payload, "hello there");
+        assert_eq!(words.last().expect("payload rides last"), "hello there");
         assert!(words.contains(&"--from-name".to_string()));
         assert!(words.contains(&"rowan@mbp3/r".to_string()));
-    }
-
-    #[test]
-    fn payload_is_the_first_word_after_the_target() {
+        // Strict payload shape: the message is the word after the target;
+        // a leading flag means no message rode directly and the strict
+        // shape refuses rather than guessing.
         let tail = parse_send_tail(&["hello world".to_string()]).expect("parses");
         assert_eq!(payload_of(&tail).as_deref(), Some("hello world"));
         let tail = parse_send_tail(&["--subject".to_string(), "x".to_string(), "msg".to_string()])
             .expect("parses");
-        // A leading flag means no message rode directly after the target:
-        // the strict shape refuses rather than guessing.
         assert_eq!(payload_of(&tail), None);
-    }
-
-    #[test]
-    fn outbox_and_seen_files_sit_in_one_root() {
+        // The state-root files this module owns.
         let root = std::path::Path::new("/tmp/fno-mail-remote-test");
         assert!(outbox_path(root).ends_with("mail_outbox.jsonl"));
         assert!(seen_path(root).ends_with("mail_seen.jsonl"));
+        // The daemon arm's interval rule: a positive override wins,
+        // anything else keeps the default.
+        assert_eq!(
+            crate::mail_arm::interval_from_secs(None),
+            crate::mail_arm::DEFAULT_INTERVAL
+        );
+        assert_eq!(
+            crate::mail_arm::interval_from_secs(Some(0)),
+            crate::mail_arm::DEFAULT_INTERVAL
+        );
+        assert_eq!(
+            crate::mail_arm::interval_from_secs(Some(-5)),
+            crate::mail_arm::DEFAULT_INTERVAL
+        );
+        assert_eq!(
+            crate::mail_arm::interval_from_secs(Some(30)),
+            std::time::Duration::from_secs(30)
+        );
     }
 }
