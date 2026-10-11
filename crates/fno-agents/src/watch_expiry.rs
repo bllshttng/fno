@@ -159,6 +159,15 @@ pub(crate) fn watch_blockers(evidence: &[Evidence]) -> BTreeMap<String, String> 
     for watch in watches(evidence) {
         if !SEAT_WAIT_BLOCKERS.contains(&watch.blocker.as_str())
             || !is_current_watch(&watch, evidence)
+            // A delivered wake ends the park even before the session's next
+            // loop_check row: the seat is about to work again, and a wake
+            // whose session never resumes must not hold the seat either.
+            || evidence.iter().any(|row| {
+                row.session_id.as_deref() == Some(watch.session_id.as_str())
+                    && row.kind == WAKE_EVENT
+                    && row.data.get("watch_event_id").and_then(Value::as_str)
+                        == Some(watch.event_id.as_str())
+            })
         {
             continue;
         }
@@ -268,7 +277,7 @@ pub(crate) fn read_evidence_since(
             }))
         })
         .filter_map(|row| match row {
-            Ok(Some(row)) if row.ts_ms >= now_ms.saturating_sub(WINDOW_MS) => Some(Ok(row)),
+            Ok(Some(row)) if row.ts_ms >= now_ms.saturating_sub(window_ms) => Some(Ok(row)),
             Ok(Some(_)) | Ok(None) => None,
             Err(error) => Some(Err(error)),
         })
