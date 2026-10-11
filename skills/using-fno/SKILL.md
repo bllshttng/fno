@@ -74,10 +74,6 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 
 **Sending with a reply address.** `send <name>` self-stamps your handle; `--to-project` stamps the project (add `--from-self` to hold for the answer). Only `fno whoami`'s `mail:` line is a valid `--from-name`.
 
-**Cross-host (`<name>@<host>`).** `fno agents mail send <name>@<host> <msg>` writes one row on the shared primary (`store.remote_url`). The target host's daemon injects it through the receiver's own local send, holds intact. The row waits up to 7 days. The sender reads outcomes with `fno-agents mail-remote status`. Cross-host `--raw` refuses unless the receiver lists the sender in `agents.remote.raw_senders`. No store configured means the send relays over ssh. `--from-self` refuses there, so pass `--from-name`.
-
-**Cross-host peek.** `fno agents peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there.
-
 **Observing = `fno agents peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents logs <name>` is registry-scoped.
 
 **You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail: pull work with `fno backlog next`, spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"` (the `--cwd` is load-bearing - never do another project's work inline), coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens; a hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-verb seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in `bypassPermissions`).
