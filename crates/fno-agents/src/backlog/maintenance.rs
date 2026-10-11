@@ -1302,8 +1302,14 @@ fn live_claims(seams: &Seams, strict: bool, out: &mut Out) -> Result<BTreeSet<St
     }
 }
 
+/// The working graph: archive residents are history, never a maintenance
+/// candidate.
 fn read_graph(graph: &Path) -> Result<Vec<Value>, StoreError> {
-    let mut rows = crate::graph_store::read_rows_strict(graph)?;
+    let live = super::RowQuery {
+        include_archived: false,
+        ..Default::default()
+    };
+    let mut rows = crate::graph_store::read_rows_where_strict(graph, &live)?;
     crate::graph_store::recompute_statuses(&mut rows);
     Ok(rows)
 }

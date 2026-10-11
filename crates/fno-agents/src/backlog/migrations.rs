@@ -445,7 +445,19 @@ fn apply_receipt(
         None,
         None,
         |working| {
-            let outcome = migrate(working);
+            // Archive residents are history: the migration sees the live
+            // rows only, the same slice the dry run reads.
+            let live_pos: Vec<usize> = (0..working.len())
+                .filter(|i| !truthy(working[*i].get("archived_at")))
+                .collect();
+            let mut live: Vec<Value> = live_pos
+                .iter()
+                .map(|i| std::mem::take(&mut working[*i]))
+                .collect();
+            let outcome = migrate(&mut live);
+            for (row, pos) in live.into_iter().zip(live_pos) {
+                working[pos] = row;
+            }
             let ok = outcome.is_ok();
             receipt = Some(outcome);
             Ok(ok)

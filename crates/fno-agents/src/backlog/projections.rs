@@ -295,15 +295,21 @@ fn kanban_card(e: &Value, by_id: &BTreeMap<String, Value>, board: &Board) -> Str
 }
 
 /// The branch-provenance section: every non-clean branch row the pr-watch
-/// stranded leg cached under each node cwd.
+/// stranded leg cached under each node cwd and each configured workspace
+/// project, so a repo whose nodes are all archived still reports.
 fn provenance_lines(entries: &[Value]) -> Vec<String> {
-    let roots: BTreeSet<&str> = entries
+    let mut roots: BTreeSet<String> = entries
         .iter()
         .filter_map(|e| get_str(e, "cwd"))
         .filter(|c| !c.is_empty())
+        .map(str::to_string)
         .collect();
+    if !cfg!(test) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        roots.extend(crate::territory::workspace_paths(&cwd).into_values());
+    }
     let mut lines = Vec::new();
-    for root in roots {
+    for root in &roots {
         if !Path::new(root).is_dir() {
             continue;
         }
@@ -575,9 +581,29 @@ fn parse_target(row: &Value) -> Result<RenderTarget, String> {
         ));
     }
     let text = |key: &str| map.get(key).and_then(Value::as_str).map(str::to_string);
-    let scope = text("scope")
-        .or_else(|| text("project"))
-        .unwrap_or_else(|| "all".to_string());
+    // An empty scope would read as no scope and publish every project.
+    let named = |key: &str| -> Result<Option<String>, String> {
+        match map.get(key).and_then(Value::as_str).map(str::trim) {
+            None => Ok(None),
+            Some("") => Err(format!(
+                "skipping malformed backlog.render_targets row '{path_label}': {key} must \
+                 not be empty"
+            )),
+            Some("*") if key == "scope" => Ok(Some("all".to_string())),
+            Some(v) => Ok(Some(v.to_string())),
+        }
+    };
+    let scope = match (named("scope")?, named("project")?) {
+        (Some(s), Some(p)) if s != p => {
+            return Err(format!(
+                "skipping malformed backlog.render_targets row '{path_label}': scope and \
+                 project must name the same value"
+            ))
+        }
+        (Some(s), _) => s,
+        (None, Some(p)) => p,
+        (None, None) => "all".to_string(),
+    };
     Ok(RenderTarget {
         path: path.to_string(),
         scope,
@@ -683,20 +709,11 @@ fn warn_shadowed_local_rows(honored: &[RenderTarget]) {
     );
 }
 
-/// The native front binary: the `FNO_BIN` pin, else the installed `fno`.
-fn front_binary() -> Option<PathBuf> {
-    std::env::var_os("FNO_BIN")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(crate::census::resolve_fno)
-}
-
 const BOARD_RENDER_TIMEOUT_SECS: u64 = 600;
 
 fn board_render(request: &Value) -> Result<std::process::Output, String> {
-    let binary =
-        front_binary().ok_or("no fno front binary: FNO_BIN is unset and no fno is installed")?;
-    let mut cmd = std::process::Command::new(binary);
+    // The front binary: the `FNO_BIN` pin, else the sibling or installed `fno`.
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.arg("board-render");
     crate::bounded_cmd::output_with_timeout_stdin(
         cmd,
@@ -1971,5 +1988,11 @@ mod tests {
         let target = parse_target(&json!({"path": "/tmp/b.html", "project": "fno"})).unwrap();
         assert_eq!(target.scope, "fno");
         assert_eq!(target.projection, "local");
+        // An empty scope would widen to every project; it refuses instead.
+        assert!(parse_target(&json!({"path": "/tmp/b.html", "scope": " "}))
+            .unwrap_err()
+            .contains("scope must not be empty"));
+        let star = parse_target(&json!({"path": "/tmp/b.html", "scope": "*"})).unwrap();
+        assert_eq!(star.scope, "all");
     }
 }
