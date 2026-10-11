@@ -431,7 +431,7 @@ pub fn draw_successor_name(
     ))
     .map_err(|e| e.to_string())?;
     let drawn = (|| -> Result<String, String> {
-        let mut used = crate::team_names::used_names(store_path, registry_path)?;
+        let used = crate::team_names::used_names(store_path, registry_path)?;
         let pool: Vec<&str> = NAME_POOL
             .iter()
             .copied()
