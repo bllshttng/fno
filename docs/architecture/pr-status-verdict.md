@@ -1,6 +1,6 @@
 # PR status verdict: the narrative behind `fno do pr status`
 
-Ownership since the 2026-09-25 port: the reader, the verdict, the failure detail, the composer, the coalescing cache and the wait/logs verbs are Rust, in `crates/fno-agents/src/pr_status.rs` and `pr_status/{cache,compose,reviews,seams,wait,logs}.rs`. Python reaches them through the `authorized-merge` status door (`status-read`, `status-wait`, `status-logs`, `status-ci`, `status-rerun`); `cli/src/fno/pr/cli.py` forwards. The offline row read the board renders from is `pr_status::cache::newest_row`, called by `backlog/projections.rs`. This file holds the reasoning the code used to restate. The tree number and the reasoning both survive.
+Since the 2026-09-25 port, the reader, verdict, failure detail, composer, coalescing cache and wait/logs verbs are Rust. They live in `crates/fno-agents/src/pr_status.rs` and `pr_status/{cache,compose,reviews,seams,wait,logs}.rs`. Python reaches them through the `authorized-merge` status door (`status-read`, `status-wait`, `status-logs`, `status-ci`, `status-rerun`). `cli/src/fno/pr/cli.py` forwards. The offline row read the board renders from is `pr_status::cache::newest_row`, called by `backlog/projections.rs`. This file holds the reasoning the code used to restate. The tree number and the reasoning both survive.
 
 ## `verdict_for`: pure verdict computation
 

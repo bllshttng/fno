@@ -694,7 +694,8 @@ fn front_binary() -> Option<PathBuf> {
 const BOARD_RENDER_TIMEOUT_SECS: u64 = 600;
 
 fn board_render(request: &Value) -> Result<std::process::Output, String> {
-    let binary = front_binary().ok_or("the native fno binary was not found")?;
+    let binary =
+        front_binary().ok_or("no fno front binary: FNO_BIN is unset and no fno is installed")?;
     let mut cmd = std::process::Command::new(binary);
     cmd.arg("board-render");
     crate::bounded_cmd::output_with_timeout_stdin(
@@ -1844,7 +1845,7 @@ mod tests {
         std::fs::write(&cache, "{not json").unwrap();
         assert!(provenance_lines(&entries).is_empty());
         let rows = json!([
-            {"branch": "feature/x-04ce", "node": "x-04ce", "has_remote": false,
+            {"branch": "feature/x-1", "node": "x-1", "has_remote": false,
              "unpushed": 23, "pr_number": null, "live": false, "age": "33 hours ago"},
             {"branch": "fix/loose", "node": null, "has_remote": null, "unpushed": 0,
              "live": true, "age": "12 hours ago"},
@@ -1855,7 +1856,7 @@ mod tests {
             vec![
                 "## Branch Provenance",
                 "",
-                "- **x-04ce** (feature/x-04ce): no remote, 23 unpushed, no PR, newest commit 33 hours ago",
+                "- **x-1** (feature/x-1): no remote, 23 unpushed, no PR, newest commit 33 hours ago",
                 "- *(unmapped)* (fix/loose): remote unknown, 0 unpushed, no PR, LIVE, newest commit 12 hours ago",
                 "",
             ]
