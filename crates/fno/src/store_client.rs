@@ -692,7 +692,7 @@ mod tests {
     #[test]
     fn a_slow_exec_child_dies_at_the_deadline_with_a_timed_out_error() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-store-exec-test-{}", std::process::pid()));
+        let dir = std::env::temp_dir().join(format!("fno-store-exec-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let graph = dir.join("graph.json");

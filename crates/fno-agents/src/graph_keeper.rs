@@ -412,9 +412,9 @@ fn flush_gate_metrics(state: &StoreState) {
 /// incumbent instead of failing the spawn.
 pub const EXIT_SEAT_OWNED: i32 = 3;
 
-/// How long the store must stay quiet after a write burst before the view
-/// pass runs: a burst of writes renders once, not once per write. The const
-/// moved to board_render_arm with the pass; the backoff doubles from here.
+// How long the store must stay quiet after a write burst before the view
+// pass runs: a burst of writes renders once, not once per write. The const
+// moved to board_render_arm with the pass; the backoff doubles from here.
 use crate::board_render_arm::RENDER_SETTLE;
 
 /// Whether the canonical view pass is owed right now: the store's version
