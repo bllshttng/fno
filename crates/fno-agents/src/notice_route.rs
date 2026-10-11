@@ -466,14 +466,8 @@ fn open_ask_id(index: &Path, subject: &str, node: &str) -> Option<String> {
         .into_iter()
         .filter(|(id, _)| !closed.contains(id))
         .find(|(_, v)| {
-            let field = |k: &str| {
-                v.get("data")
-                    .and_then(|d| d.get(k))
-                    .or_else(|| v.get(k))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-            };
-            field("subject") == Some(subject) && field("node") == Some(node)
+            crate::question_intake::str_field(v, "subject").map(str::trim) == Some(subject)
+                && crate::question_intake::str_field(v, "node").map(str::trim) == Some(node)
         })
         .map(|(id, _)| id)
 }
