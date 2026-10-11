@@ -310,7 +310,11 @@ fn push_ghpages_tree(root: &Path, page: &Path) -> Result<bool, String> {
         entries.push(format!("100644 blob {empty}\t.nojekyll"));
     }
     entries.push(format!("040000 tree {subtree}\tbacklog"));
-    entries.sort_by_key(|l| name_of(l).to_string());
+    // git's canonical tree order compares a tree's name as `name/`, so a
+    // plain name sort can emit a tree fsck calls malformed when a tree's
+    // name prefixes a sibling file's name (`lib-thing` sorts before `lib/`
+    // in git, after `lib` in plain byte order). mktree writes what it reads.
+    entries.sort_by_key(|l| tree_sort_key(l.as_str()));
     let tree = mktree(root, &entries)?;
     if let Some(p) = &parent {
         let parent_tree = git(root, &["rev-parse", &format!("{p}^{{tree}}")])?;
@@ -340,9 +344,16 @@ fn push_ghpages_tree(root: &Path, page: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// The tree line's name: everything after the first TAB.
-fn name_of(line: &str) -> &str {
-    line.split_once('\t').map(|(_, n)| n).unwrap_or(line)
+/// The tree line's git sort key: the name, with `/` appended when the
+/// entry is a tree (the mode's second field), which is git's own
+/// base-name comparison for tree objects.
+fn tree_sort_key(line: &str) -> String {
+    let (meta, name) = line.split_once('\t').unwrap_or((line, line));
+    if meta.split_whitespace().nth(1) == Some("tree") {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    }
 }
 
 fn mktree(root: &Path, lines: &[String]) -> Result<String, String> {
@@ -617,6 +628,19 @@ mod tests {
         let page = dir.0.join("index.html");
         std::fs::write(&page, body).unwrap();
         (dir, page)
+    }
+
+    /// git orders a tree's name as `name/`, so `lib-thing` sorts before
+    /// the `lib` tree. mktree writes what it reads; the key must match.
+    #[test]
+    fn tree_entries_sort_in_git_order() {
+        let mut lines = vec![
+            "040000 tree b\tlib".to_string(),
+            "100644 blob a\tlib-thing".to_string(),
+        ];
+        lines.sort_by_key(tree_sort_key);
+        assert_eq!(lines[0], "100644 blob a\tlib-thing");
+        assert_eq!(lines[1], "040000 tree b\tlib");
     }
 
     #[test]
