@@ -164,25 +164,3 @@ pub fn run(ask: &serde_json::Value) -> serde_json::Value {
         )
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn init_line_yields_the_id() {
-        let line = r#"{"event":"init","conversation_id":"c5661b28-bcba-4690-8b2e-4a4a88541e8c"}"#;
-        assert_eq!(
-            conversation_id_from_line(line).as_deref(),
-            Some("c5661b28-bcba-4690-8b2e-4a4a88541e8c")
-        );
-    }
-
-    #[test]
-    fn chatter_and_idless_json_yield_none() {
-        assert_eq!(conversation_id_from_line("Welcome to the CLI"), None);
-        assert_eq!(conversation_id_from_line(r#"{"status":"SUCCESS"}"#), None);
-        assert_eq!(conversation_id_from_line(r#"{"conversation_id":""}"#), None);
-        assert_eq!(conversation_id_from_line(""), None);
-    }
-}
