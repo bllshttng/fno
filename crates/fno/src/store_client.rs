@@ -198,6 +198,7 @@ fn exec_call_within(
     deadline: Duration,
 ) -> Result<Value, String> {
     use std::io::{Read as _, Write as _};
+    use std::os::unix::process::CommandExt;
 
     let binary = worker_binary().ok_or_else(crate::product_boundary::graph_worker_missing_error)?;
     let request = json!({"id": 1, "method": method, "params": params});
@@ -207,6 +208,10 @@ fn exec_call_within(
             "--graph",
             graph.to_str().unwrap_or_default(),
         ])
+        // Own process group: the deadline kill takes the worker's
+        // descendants with it, or a grandchild holding the stdout pipe
+        // keeps the drain joined past the caller's bound.
+        .process_group(0)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -255,9 +260,14 @@ fn exec_call_within(
         }
     };
     let Some(status) = status else {
-        // Deadline fired: kill and reap, or a long-lived mux server
-        // accumulates one zombie per timed-out read.
-        let _ = child.kill();
+        // Deadline fired: take down the whole group and reap, or a
+        // long-lived mux server accumulates one zombie per timed-out read.
+        // SAFETY: process_group(0) made the child a group leader, so its
+        // pid is the pgid; killpg signals that group and cannot fail on a
+        // live leader.
+        unsafe {
+            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        }
         let _ = child.wait();
         let _ = reader.join();
         return Err(format!(

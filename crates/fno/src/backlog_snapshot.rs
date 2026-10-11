@@ -126,11 +126,12 @@ fn render_request_within(request: &Request, deadline: Duration) -> Result<Receip
     // The deadline arms the gather alone: it is the leg that hung (four
     // sequential store reads). Target writes after it stay unbounded - each
     // is one atomic file write. `shutdown_background` lets the drop skip the
-    // stuck blocking reads, which finish or die on their own deadlines.
-    let gathered = match runtime.block_on(tokio::time::timeout(
-        deadline,
-        backlog_model::gather(&graph, agents),
-    )) {
+    // stuck blocking reads, which finish or die on their own deadlines. The
+    // timeout arms inside the async block: the timer registration belongs to
+    // the runtime block_on is about to enter.
+    let gathered = match runtime.block_on(async {
+        tokio::time::timeout(deadline, backlog_model::gather(&graph, agents)).await
+    }) {
         Ok(gathered) => gathered,
         Err(_elapsed) => {
             runtime.shutdown_background();
