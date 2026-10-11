@@ -1668,8 +1668,6 @@ class TestPick:
         live account, and refuses only when no live account is left."""
         import time as _time
 
-        from fno.agents.account_env import LOGIN_PROBE_FRESH_SECS
-
         _pick_env(tmp_path, monkeypatch, _config_dir_pair(tmp_path))
 
         # Two planted accounts, one login-refused: the pick lands on the live one.
@@ -1685,7 +1683,7 @@ class TestPick:
         self._plant_login_refusal(
             "readyrule",
             str(tmp_path / "claude-alt"),
-            at_epoch=_time.time() - 2 * LOGIN_PROBE_FRESH_SECS,
+            at_epoch=_time.time() - 1800,
         )
         verdict = _pick_verdict(tmp_path)
         assert verdict.account == "readyrule"

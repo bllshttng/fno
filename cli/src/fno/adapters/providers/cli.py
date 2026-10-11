@@ -1190,7 +1190,6 @@ def pick_account(
     ordered = _pick_candidate_ids(config, combo_name)
     rows: list[tuple[str, str]] = []
     launchable: list[str] = []
-    refused_dirs: dict[str, Optional[str]] = {}
     for pid in ordered:
         if pid in excluded:
             rows.append((pid, "excluded"))
@@ -1211,14 +1210,9 @@ def pick_account(
                 "not a picker candidate: managed, rides the shared ~/.claude slot",
             ))
             continue
-        refusal = login_probe_refusal(pid, overlay.config_dir)
-        if refusal is not None:
-            # The spawn gate's last probe refused this account's login:
-            # picking it again would only reproduce the gate's exit-78 refusal
-            # and strand the node as skip-for-now. Skip it; pick the next live
-            # one; refuse only when no live account is left.
+        if (refusal := login_probe_refusal(pid, overlay.env.get("CLAUDE_CONFIG_DIR"))) is not None:
+            # The gate already refused this login; skip, pick the next live one.
             rows.append((pid, f"login probe refused: {refusal}"))
-            refused_dirs[pid] = overlay.config_dir
             continue
         launchable.append(pid)
 
@@ -1230,15 +1224,8 @@ def pick_account(
             "`fno config accounts register <id> --config-dir <path>` (a full second "
             "login in its own dir)"
         )
-        if refused_dirs:
-            # The register instruction is the wrong remedy for a dead login;
-            # name the login command so an automated reader (the loop parses
-            # this reason) sees the fix the refusal actually wants.
-            remedies = "; ".join(
-                f"CLAUDE_CONFIG_DIR={refused_dirs[pid]} claude /login ({pid})"
-                for pid in refused_dirs
-            )
-            reason += f" login refused; remedy: {remedies}"
+        if any(s.startswith("login probe refused") for _, s in rows):
+            reason += " login refused; remedy: CLAUDE_CONFIG_DIR=<config dir> claude /login"
         return PickVerdict(None, reason, rows, PICK_EXIT_NO_CANDIDATE)
 
     # Fill the TTL cache once per candidate before reading headroom, so a pick

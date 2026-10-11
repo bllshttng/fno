@@ -54,14 +54,6 @@ class AccountResolutionError(ValueError):
     """`--account` could not be resolved to a safe overlay; message is a receipt."""
 
 
-# How long a persisted login-probe refusal stays trusted by launch-time
-# account picking. The gate re-probes on every named spawn, so this bounds
-# only how long picking avoids a dead login (and how long a post-/login
-# account stays skipped until the window passes or any named spawn records
-# a fresh live verdict).
-LOGIN_PROBE_FRESH_SECS = 15 * 60
-
-
 # Inherited auth vars that would override an account's own login and bill the
 # wrong account (a parent shell or routed worker may export any of them). Every
 # --account spawn scrubs these at the substrate apply site before layering the
@@ -309,47 +301,21 @@ def compose_worker_credentials(
     )
 
 
-def login_probe_refusal(
-    account_id: str,
-    config_dir: str | None = None,
-    now: float | None = None,
-) -> str | None:
-    """Return the refusal detail when this account's last claude login probe
-    refused, inside the freshness window; else None.
-
-    The spawn gate (crates/fno-agents/src/spawn_gate_lanes.rs) probes the
-    config dir of every named claude account at spawn and persists the verdict
-    to ``<agents home>/login-probes.json``. The rotation reads it here so
-    launch-time picking skips an account the probe just refused instead of
-    picking it again on every attempt. A stale or logged-in record
-    reads as healthy, so the rotation returns to an account after
-    ``claude /login`` once the window passes; a record naming a different
-    config dir is ignored, so re-registering an account to a fresh dir is not
-    shadowed by its old refusal.
-
-    Best-effort: a missing, unreadable or malformed file reads as healthy.
-    """
+def login_probe_refusal(account_id: str, config_dir: str | None = None) -> str | None:
+    """Refusal detail when the gate's last login probe refused this account; None otherwise."""
     from fno import paths
-
     try:
         raw = (paths.agents_home_dir() / "login-probes.json").read_text()
         row = json.loads(raw)["probes"][account_id]
-        if not isinstance(row, dict):
-            return None
-    except (OSError, ValueError, KeyError, TypeError):
+        refused = bool(
+            row.get("verdict") == "logged_out"
+            and isinstance(at := row.get("at_epoch"), (int, float))
+            and time.time() - at < 900
+            and (config_dir is None or row.get("config_dir") in (None, config_dir))
+        )
+        return (row.get("detail") or "login probe refused") if refused else None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
-    if row.get("verdict") != "logged_out":
-        return None
-    at = row.get("at_epoch")
-    if not isinstance(at, (int, float)):
-        return None
-    if now is None:
-        now = time.time()
-    if now - at >= LOGIN_PROBE_FRESH_SECS:
-        return None
-    if config_dir is not None and row.get("config_dir") not in (None, config_dir):
-        return None
-    return row.get("detail") or "login probe refused"
 
 
 def _login_present(config_dir: Path) -> bool:
