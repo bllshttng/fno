@@ -31,6 +31,86 @@ pub(super) struct SpawnOrder {
 /// (short-lived `/bin/cat` children can exit before a keeper answers).
 pub(super) const KEEPER_ROAD: bool = cfg!(not(test));
 
+/// One run of the shell-candidate walk. The ROADS own everything after it:
+/// the synchronous road (`spawn_pane_kept`) registers inline with its own
+/// notice and no unkept mark; the attach road (`AttachShellJob`) defers
+/// registration and marks the fallback unkept.
+pub(crate) enum ShellWalk {
+    Kept {
+        shell: PtyShell,
+        ring: Vec<u8>,
+        rc_dir: std::path::PathBuf,
+    },
+    /// Every candidate that produced a keeper argv failed its spawn; `last`
+    /// is the final error, for the road's own notice.
+    AllFailed { last: String },
+    /// No candidate produced a keeper argv at all (integration off, unknown
+    /// shells); the road goes straight inline, silently.
+    NoCandidate,
+}
+
+/// The shell-candidate walk shared by both roads: per candidate, a keeper
+/// argv, a fleet permit, and one bounded keeper handshake. Returns at the
+/// first success; a candidate that produced no argv is skipped, not attempted.
+#[cfg_attr(test, allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn walk_shell_candidates(
+    shells: &[OsString],
+    session: &str,
+    id: u64,
+    rows: u16,
+    cols: u16,
+    dir: Option<&std::path::Path>,
+    out_tx: &mpsc::Sender<(u64, PaneChunk)>,
+    exit_tx: &mpsc::Sender<u64>,
+) -> Result<ShellWalk, String> {
+    let mut last = String::from("no shell candidate produced a keeper argv");
+    let mut attempted = false;
+    for cand in shells {
+        let Some((argv, rc_dir)) = crate::pty::keeper_shell_argv(cand.as_os_str(), session, id)
+        else {
+            continue;
+        };
+        attempted = true;
+        let permit = match crate::process_admission::admit_fleet() {
+            Ok(permit) => permit,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&rc_dir);
+                return Err(e.to_string());
+            }
+        };
+        match PtyShell::spawn_cmd_keeper_with_permit(
+            &keeper_worker_bin(),
+            &argv,
+            rows,
+            cols,
+            dir,
+            session,
+            id,
+            out_tx.clone(),
+            exit_tx.clone(),
+            permit,
+        ) {
+            Ok((shell, ring)) => {
+                return Ok(ShellWalk::Kept {
+                    shell,
+                    ring,
+                    rc_dir,
+                })
+            }
+            Err(e) => {
+                last = e.to_string();
+                let _ = std::fs::remove_dir_all(&rc_dir);
+            }
+        }
+    }
+    Ok(if attempted {
+        ShellWalk::AllFailed { last }
+    } else {
+        ShellWalk::NoCandidate
+    })
+}
+
 struct SpawnJob {
     id: u64,
     order: SpawnOrder,
@@ -72,58 +152,40 @@ impl AttachShellJob {
     fn run(self) -> Result<SpawnedPane, String> {
         #[cfg(not(test))]
         {
-            let mut last = String::from("no shell candidate produced a keeper argv");
-            let mut attempted = false;
-            for cand in &self.shells {
-                let Some((argv, rc_dir)) =
-                    crate::pty::keeper_shell_argv(cand.as_os_str(), &self.session, self.id)
-                else {
-                    continue;
-                };
-                attempted = true;
-                let permit = match crate::process_admission::admit_fleet() {
-                    Ok(permit) => permit,
-                    Err(e) => {
-                        let _ = std::fs::remove_dir_all(&rc_dir);
-                        return Err(e.to_string());
-                    }
-                };
-                match PtyShell::spawn_cmd_keeper_with_permit(
-                    &keeper_worker_bin(),
-                    &argv,
-                    self.rows,
-                    self.cols,
-                    self.dir().as_deref(),
-                    &self.session,
-                    self.id,
-                    self.out_tx.clone(),
-                    self.exit_tx.clone(),
-                    permit,
-                ) {
-                    Ok((shell, ring)) => {
-                        return Ok(SpawnedPane {
-                            shell,
-                            ring,
-                            fell_back: None,
-                            rc_dir: Some(rc_dir),
-                        });
-                    }
-                    Err(e) => {
-                        last = e.to_string();
-                        let _ = std::fs::remove_dir_all(&rc_dir);
-                    }
+            match walk_shell_candidates(
+                &self.shells,
+                &self.session,
+                self.id,
+                self.rows,
+                self.cols,
+                self.dir().as_deref(),
+                &self.out_tx,
+                &self.exit_tx,
+            )? {
+                ShellWalk::Kept {
+                    shell,
+                    ring,
+                    rc_dir,
+                } => {
+                    return Ok(SpawnedPane {
+                        shell,
+                        ring,
+                        fell_back: None,
+                        rc_dir: Some(rc_dir),
+                    });
                 }
-            }
-            if attempted {
-                // Carried to the loop in `fell_back`: registration marks the
-                // pane unkept and notices, the same shape the `pane run` road
-                // uses for a keeper that cannot start.
-                return Ok(SpawnedPane {
-                    shell: self.inline_spawn()?,
-                    ring: Vec::new(),
-                    fell_back: Some(last),
-                    rc_dir: None,
-                });
+                ShellWalk::AllFailed { last } => {
+                    // Carried to the loop in `fell_back`: registration marks
+                    // the pane unkept and notices, the same shape the `pane
+                    // run` road uses for a keeper that cannot start.
+                    return Ok(SpawnedPane {
+                        shell: self.inline_spawn()?,
+                        ring: Vec::new(),
+                        fell_back: Some(last),
+                        rc_dir: None,
+                    });
+                }
+                ShellWalk::NoCandidate => {}
             }
         }
         Ok(SpawnedPane {
