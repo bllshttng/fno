@@ -122,8 +122,8 @@ pub fn render_held_release(release: &HeldRelease) -> String {
         let body = unwrap_held_body(&message.body);
         let (body, existing_header) = strip_leading_header(&body);
         // The law form: a bodied message's header names sender and id, and
-        // the body rides whole. Only a header-only message keeps a third
-        // field, and a legacy header's own summary beats a fresh cut there.
+        // the body rides whole. A header-only message keeps a third field;
+        // a legacy header's own summary beats a fresh cut there.
         let third = header_third_field(None, &body).map(|summary| {
             existing_header
                 .as_deref()
