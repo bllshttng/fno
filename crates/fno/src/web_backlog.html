@@ -859,6 +859,11 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     snapEl.remove();
   }
   const SNAPSHOT = !!snap && !snap.failed;
+  // A public board: the embedded payload was the public projection, so the
+  // roster facts (the lead column and filter) and every write control stay
+  // off. The payload's allowlists already stripped them; this reads the
+  // same flag the writer stamped.
+  const PUBLIC = SNAPSHOT && snap.public === true;
   const state = {
     lanes: initial.get("lanes") || "project",
     view: initial.get("view") || "kanban",
@@ -906,7 +911,9 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   const searchInput = document.getElementById("f-q");
   const searchClear = document.getElementById("f-q-clear");
   const sheetEl = document.getElementById("sheet");
-  const FILTER_KEYS = ["project", "epic", "status", "priority", "size", "lead", "kind"];
+  const FILTER_KEYS = PUBLIC
+    ? ["project", "epic", "status", "priority", "size", "kind"]
+    : ["project", "epic", "status", "priority", "size", "lead", "kind"];
   // The remembered board: a bare URL (the usual open) comes back to the
   // last used filters, search, view, lanes and selection. A URL that
   // carries filters (shared, bookmarked) wins as-is, and a snapshot page
@@ -1178,7 +1185,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (!board) return;
     const line = document.createElement("div");
     let text = "backend: " + board.backend + " · scope: " + board.scope;
-    if (SNAPSHOT) {
+    if (SNAPSHOT && !PUBLIC) {
       text += board.leads_at
         ? " · leads as of " + new Date(board.leads_at * 1000).toLocaleTimeString()
         : " · leads unavailable";
@@ -1423,7 +1430,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     th("lstatus", "status", "each status reads with spaces");
     th("lprio", "priority", "prio");
     th("lsize", "size", "size");
-    th("lking", "lead", "lead");
+    if (!PUBLIC) th("lking", "lead", "lead");
     th("lcreated", "created_at", "created");
     th("lupdated", "updated_at", "updated");
     return row;
@@ -1501,7 +1508,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     col("lstatus", statusLabel(card.status));
     col("lprio", card.priority || "");
     col("lsize", card.size || "");
-    col("lking", (card.lead && card.lead.name) || "");
+    if (!PUBLIC) col("lking", (card.lead && card.lead.name) || "");
     col("lcreated", card.created_at ? card.created_at.slice(0, 10) : "");
     col("lupdated", card.updated_at ? card.updated_at.slice(0, 10) : "");
     addKindTag(b, card.kind);
