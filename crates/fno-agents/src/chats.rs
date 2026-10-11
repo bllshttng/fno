@@ -1228,14 +1228,15 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                     .unwrap_or("unknown")
                     .to_string();
                 // The whole inner rides under the header: display and
-                // render_message regenerate their own view of the body, so a
-                // delivered-body sentence drop here would lose the sentence.
+                // render_message regenerate their own view of the body at
+                // read time, so nothing is dropped here.
+                let third = crate::mail_header::header_third_field(None, &inner);
                 Some((
                     crate::mail_header::render_header(
                         crate::mail_header::HeaderForm::Mention,
                         &sender,
                         &id,
-                        &crate::mail_header::header_subject(None, &inner),
+                        third.as_deref(),
                     ),
                     inner,
                 ))
@@ -1340,9 +1341,10 @@ fn message_body(line: &Value) -> &str {
 }
 
 /// One message as the reader sees it: the delivered header line, then the
-/// full body. The header carries the sender, the id - what the receiver
-/// answers and resolves with - and the row's subject, else the body's first
-/// sentence.
+/// full body. The header carries the sender and the id - what the receiver
+/// answers and resolves with. User law d-b720d23c: a bodied message's
+/// header carries no subject; a header-only one keeps the row's subject,
+/// else the summary.
 fn render_message(line: &Value) -> String {
     let raw = message_body(line);
     let subject = line
@@ -1350,12 +1352,11 @@ fn render_message(line: &Value) -> String {
         .and_then(|m| m.get("subject"))
         .and_then(Value::as_str);
     // The read/show surface renders the same body the Messages tab does:
-    // legacy framed rows are cleaned, and a subjectless whole first sentence
-    // is not printed twice under the header's echo of it. The header's third
+    // legacy framed rows are cleaned, and a stored three-field header's
+    // summary echo is stripped at read time. The header's optional third
     // field reads the pre-strip body, exactly as the envelope render does.
     let cleaned = crate::mail_header::display_body(raw);
-    let third = crate::mail_header::header_subject(subject, &cleaned);
-    let body = crate::mail_header::delivered_body(subject, &cleaned);
+    let third = crate::mail_header::header_third_field(subject, &cleaned);
     format!(
         "{}\n{}",
         crate::mail_header::render_header(
@@ -1364,9 +1365,9 @@ fn render_message(line: &Value) -> String {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown"),
             line.get("id").and_then(Value::as_str).unwrap_or(""),
-            &third,
+            third.as_deref(),
         ),
-        body,
+        cleaned,
     )
 }
 
@@ -2023,17 +2024,16 @@ mod tests {
 
     #[test]
     fn chats_store_contracts() {
-        // The read/show surface renders what the Messages tab delivers: a
-        // subjectless whole first sentence shows once, under the header's
-        // echo of it; a sentence the summary cut stays whole; a legacy
-        // framed body is cleaned before render.
+        // The read/show surface renders what the Messages tab delivers: the
+        // law form shows the body once, whole, under a two-field header; a
+        // legacy framed body is cleaned before render.
         let dup = render_message(&serde_json::json!({
             "type": "message", "from": "folio", "id": "fmail-0badc0de1234",
             "body": "Fix the gate. Details follow."
         }));
         assert_eq!(
             dup,
-            "`@folio \u{b7} fmail-0badc0de1234 \u{b7} Fix the gate.`\nDetails follow."
+            "`@folio · fmail-0badc0de1234`\nFix the gate. Details follow."
         );
         let cut = render_message(&serde_json::json!({
             "type": "message", "from": "folio", "id": "fmail-0badc0de1234",
@@ -2305,7 +2305,7 @@ mod tests {
         };
         let shown = show_at(&chats, &db, "fmail-444444444444", &q(Some("sess-a"), false)).unwrap();
         assert!(
-            shown.starts_with("`@sess-a · fmail-444444444444 · "),
+            shown.starts_with("`@sess-a · fmail-444444444444`\n"),
             "{shown}"
         );
         assert!(
@@ -2480,7 +2480,7 @@ mod tests {
         let rec: Value = serde_json::from_str(migrated.trim()).unwrap();
         assert_eq!(
             rec["body"].as_str().unwrap(),
-            "`@candor \u{b7} msg-1 \u{b7} Build green.`\nBuild green. Details."
+            "`@candor \u{b7} msg-1`\nBuild green. Details."
         );
         // The backup holds the original bytes.
         let backup_dir = receipt
