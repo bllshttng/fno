@@ -79,7 +79,11 @@ fn maybe_tick_with(
     let state = Arc::clone(&arm.state);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        emit_one(&home, &state, run);
+        // The graph resolves here, once, on the blocking thread: tests pass
+        // their own path through emit_one, so no test depends on process
+        // env another test module may flip mid-run.
+        let graph = crate::backlog::settings::graph_path();
+        emit_one(&home, &graph, &state, run);
     });
 }
 
@@ -90,13 +94,17 @@ fn maybe_tick_with(
 /// every interval would flood the journal on a store-less machine. The
 /// runner is a parameter so tests drive the body without shelling out (the
 /// merge_close closure pattern).
-fn emit_one(home: &AgentsHome, state: &ArmState, run: impl FnOnce() -> Result<(), (i32, String)>) {
+fn emit_one(
+    home: &AgentsHome,
+    graph: &Path,
+    state: &ArmState,
+    run: impl FnOnce() -> Result<(), (i32, String)>,
+) {
     use Ordering::SeqCst;
-    let graph = crate::backlog::settings::graph_path();
-    let Ok(current) = crate::backlog::version(&graph) else {
+    let Ok(current) = crate::backlog::version(graph) else {
         return;
     };
-    let rendered = crate::backlog::rendered_version(&graph).ok().flatten();
+    let rendered = crate::backlog::rendered_version(graph).ok().flatten();
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
         crate::daemon::global_events_path(home),
@@ -139,7 +147,7 @@ fn emit_one(home: &AgentsHome, state: &ArmState, run: impl FnOnce() -> Result<()
     *state.last_attempt.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
     match run() {
         Ok(()) => {
-            if let Err(error) = crate::backlog::set_rendered_version(&graph, &current) {
+            if let Err(error) = crate::backlog::set_rendered_version(graph, &current) {
                 state.failures.fetch_add(1, SeqCst);
                 render_failed(
                     home,
@@ -248,9 +256,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::path::Path;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// One published row, so the store carries a version counter (the
     /// graph_keeper seed pattern).
@@ -288,16 +293,13 @@ mod tests {
     /// window shows the stamp landing.
     #[test]
     fn the_arm_renders_a_moved_version_once_and_backs_off_failures() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (arm, home, dir) = arm_home();
-        std::env::set_var("FNO_STATE_DIR", &dir);
-        let graph = crate::backlog::settings::graph_path();
-        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        let graph = dir.join("graph.json");
         seed_render_store(&graph);
         // The failing phase: the pass errs, nothing stamps, the failure
         // journals, and the retry waits out the backoff window.
         let mut runs = 0;
-        emit_one(&home, &arm.state, || {
+        emit_one(&home, &graph, &arm.state, || {
             runs += 1;
             Err((-1, "boom".to_string()))
         });
@@ -307,7 +309,7 @@ mod tests {
             None,
             "a failed pass stamps nothing"
         );
-        emit_one(&home, &arm.state, || {
+        emit_one(&home, &graph, &arm.state, || {
             runs += 1;
             Ok(())
         });
@@ -327,7 +329,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner()) =
             Some(Instant::now() - render_backoff(1) - Duration::from_secs(1));
-        emit_one(&home, &arm.state, || {
+        emit_one(&home, &graph, &arm.state, || {
             runs += 1;
             Ok(())
         });
@@ -341,7 +343,7 @@ mod tests {
             Some(current.as_str()),
             "the stamp rode the current version"
         );
-        emit_one(&home, &arm.state, || {
+        emit_one(&home, &graph, &arm.state, || {
             runs += 1;
             Ok(())
         });
@@ -349,7 +351,6 @@ mod tests {
         let log = crate::events::committed_journal_text(&home.events_jsonl());
         assert!(log.contains("\"arm\":\"board_render\""), "log: {log}");
         assert!(log.contains("\"acted\":1"), "log: {log}");
-        std::env::remove_var("FNO_STATE_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
