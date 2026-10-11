@@ -58,7 +58,9 @@ pub fn sh_quote(word: &str) -> String {
 
 /// The ssh relay command: the remote login shell resolves `fno` via its
 /// profile (the cargo bin dir), then execs the verb with the words as
-/// positional arguments. `$0` is `sh`, so `"$@"` is the verb tail.
+/// positional arguments. `$0` is `sh`, so `"$@"` is the verb tail. Every
+/// element rides sh-quoted, including the script itself: ssh joins argv
+/// with spaces and the remote shell parses the joined line.
 pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
     let mut argv = vec![
         "ssh".to_string(),
@@ -66,7 +68,7 @@ pub fn ssh_argv(host: &str, words: &[String]) -> Vec<String> {
         "--".to_string(),
         "sh".to_string(),
         "-lc".to_string(),
-        "exec fno \"$@\"".to_string(),
+        sh_quote("exec fno \"$@\""),
         "sh".to_string(),
     ];
     argv.extend(words.iter().map(|w| sh_quote(w)));
@@ -286,6 +288,18 @@ the message directly after the target; none was found"
                     return 2;
                 }
             };
+            if tail.rest.len() > 1 {
+                // A store row carries the payload, the raw bit, and the
+                // sender identity - nothing else. Refuse rather than drop:
+                // the other flags (--subject, --harness, --origin) belong to
+                // the local and fallback lanes.
+                eprintln!(
+                    "fno agents mail send: a cross-host store send carries only \
+--from-name/--from-self/--raw and the message; found extra words after it: {:?}",
+                    &tail.rest[1..]
+                );
+                return 2;
+            }
             let from_id = sender_id(&os_user(), &local_host, &name_part);
             send_via_store(
                 &remote,
@@ -542,7 +556,10 @@ mod tests {
         assert_eq!(argv[2], "--");
         assert_eq!(argv[3], "sh");
         assert_eq!(argv[4], "-lc");
-        assert_eq!(argv[5], "exec fno \"$@\"");
+        // The script rides quoted too: ssh joins argv with spaces and the
+        // remote shell parses the joined line, so an unquoted script splits
+        // at its first space.
+        assert_eq!(argv[5], "'exec fno \"$@\"'");
         assert_eq!(argv[6], "sh");
         assert_eq!(argv[7], "'agents'");
         assert_eq!(argv[9], "'nemo'");

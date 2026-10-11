@@ -71,12 +71,16 @@ pub fn maybe_tick(arm: &Arm) {
     let flag = Arc::clone(&arm.in_flight);
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
-        let outcome = beat(&remote);
-        if outcome.delivered + outcome.flushed + outcome.expired as usize > 0 {
-            eprintln!(
-                "mail-arm: delivered {} flushed {} expired {}",
-                outcome.delivered, outcome.flushed, outcome.expired
-            );
+        match beat(&remote) {
+            Ok(outcome) => {
+                if outcome.delivered + outcome.flushed + outcome.expired as usize > 0 {
+                    eprintln!(
+                        "mail-arm: delivered {} flushed {} expired {}",
+                        outcome.delivered, outcome.flushed, outcome.expired
+                    );
+                }
+            }
+            Err(error) => eprintln!("mail-arm: {error}"),
         }
     });
 }
@@ -91,15 +95,19 @@ pub struct PullOutcome {
 
 /// One beat: pull, then flush, then expire. The legs are independent: a
 /// pull failure does not stop the flush from draining the local outbox.
-pub fn beat(remote: &Remote) -> PullOutcome {
+pub fn beat(remote: &Remote) -> Result<PullOutcome, String> {
     let host = mail_bus::normalize_host(&crate::claims::hostname());
     let mut outcome = PullOutcome {
         delivered: 0,
         flushed: 0,
         expired: 0,
     };
-    if mail_bus::ensure_schema(remote).is_err() {
-        return outcome;
+    // One DDL per process, not one per beat: the table outlives the daemon,
+    // and a failed create is surfaced, never swallowed.
+    static SCHEMA: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    let schema = SCHEMA.get_or_init(|| mail_bus::ensure_schema(remote));
+    if let Err(e) = schema {
+        return Err(e.clone());
     }
     match mail_bus::fetch_pending(remote, &host) {
         Ok(rows) => outcome.delivered = pull_rows(remote, rows, &home_root()),
@@ -113,7 +121,7 @@ pub fn beat(remote: &Remote) -> PullOutcome {
         Ok(n) => outcome.expired = n,
         Err(e) => eprintln!("mail-arm: expire: {e}"),
     }
-    outcome
+    Ok(outcome)
 }
 
 fn home_root() -> PathBuf {
