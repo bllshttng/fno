@@ -1024,9 +1024,20 @@ fn generated_target(t: &str, payload_cwd: &str) -> Option<String> {
                 }
                 if bash_glob_match(fields[0], &rel) {
                     let (source, regen) = (fields[1], fields[2]);
-                    return Some(format!(
+                    let mut message = format!(
                         "{rel} is generated from {source}. The next `{regen}` run overwrites an edit here. Edit {source}, then run `{regen}`."
-                    ));
+                    );
+                    // The plain-copy .rs twins also rebuild without a
+                    // compile, so a session under a build freeze can still
+                    // regen-and-commit a drifted twin.
+                    if rel.ends_with(".rs")
+                        && regen.contains("cargo build --manifest-path crates/fno-agents")
+                    {
+                        message.push_str(
+                            " Without a build: python3 scripts/regen-generated-copies.py.",
+                        );
+                    }
+                    return Some(message);
                 }
             }
         }
