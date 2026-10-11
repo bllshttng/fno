@@ -1216,10 +1216,10 @@ def _validate_company_work(entries: list[dict]) -> None:
 def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     """Everything that follows a landed publish, shared by the commit cycle
     and the typed-op cycle: the dropped-row warning, the closure claim
-    releases, the readiness overlay, the board renders, and the drain-daemon
-    nudge. The file leg ran all of these after its lock dropped; the client
-    runs them after the keeper's publish lands, which is the same position
-    relative to other writers."""
+    releases, the readiness overlay, and the drain-daemon nudge. The file leg
+    ran all of these after its lock dropped; the client runs them after the
+    keeper's publish lands, which is the same position relative to other
+    writers."""
     path = Path(path)
     dropped = outcome.get("dropped", 0)
     backup = outcome.get("backup")
@@ -1243,9 +1243,10 @@ def _finish_mutation(path: Path, outcome: dict) -> list[dict]:
     for release in outcome.get("closure_releases", []):
         release_node_claim_at_closure(release["id"], rung=release["rung"])
 
-    # The client renders in-call when the write landed on the configured
-    # store; the keeper's trigger replays the pass for native writers and
-    # retries failures. A scratch graph renders only its own siblings.
+    # The client renders graph.md in process; the board targets render
+    # through the daemon's board_render arm, so a contended render never
+    # holds a caller that only wanted the write (law d-bad5a42f). A scratch
+    # graph renders only its own siblings.
     from fno import paths as _paths
 
     try:
@@ -1318,16 +1319,6 @@ def render_view_projections(
         render_graph_md(entries, md_target, obsidian=_obsidian)
     except OSError as e:
         _fail(f"graph.md render failed: {e}")
-    _archived = entries_with_archive(entries)
-    if is_canonical:
-        try:
-            from fno.graph.roadmap_public import render_local_targets
-
-            failed = render_local_targets()
-            if failed:
-                _fail(f"local board render: {failed} target(s) failed")
-        except Exception as e:
-            _fail(f"local board render failed: {e}")
     return entries
 
 

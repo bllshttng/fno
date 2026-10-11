@@ -356,6 +356,9 @@ def test_regression_view_pass_renders_the_store_not_global(tmp_path, monkeypatch
 
     commit_rows_via_store(path, mutator)
     render_canonical_views()
+    import fno.graph.roadmap_public as rp
+
+    rp.render_local_targets()
 
     # Renders land beside the canonical store the pass read.
     assert (graph_dir / "graph.html").exists()
@@ -394,6 +397,9 @@ def test_canonical_graph_renders_to_board_targets(tmp_path, monkeypatch, native_
 
     commit_rows_via_store(graph_json, mutator)
     render_canonical_views()
+    import fno.graph.roadmap_public as rp
+
+    rp.render_local_targets()
 
     # Board targets (state_dir) get the render, not graph.json's siblings.
     assert (state_dir / "graph.html").exists()

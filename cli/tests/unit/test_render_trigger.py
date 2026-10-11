@@ -72,11 +72,11 @@ def _seed(graph, title):
     )
 
 
-def test_write_path_renders_the_configured_store_inline(paths, monkeypatch, native_board_render):
-    """A write against the configured store renders the configured targets
-    in the same call, so CLI consumers read a fresh board without waiting
-    out the trigger's settle. The trigger exists for the writers that bypass
-    this client (mux native ops, Rust mutations) and to retry failures."""
+def test_write_path_leaves_the_board_target_to_the_render_pass(paths, monkeypatch, native_board_render):
+    """A write against the configured store returns without touching the
+    board targets: the write path renders graph.md in process, and the
+    board render is background work (law d-bad5a42f) the daemon's
+    board_render arm owns. A CLI consumer waits out the arm's tick now."""
     graph = paths["graph"]
     target = paths["target"]
     _config(monkeypatch, target)
@@ -88,12 +88,15 @@ def test_write_path_renders_the_configured_store_inline(paths, monkeypatch, nati
     assert any(e["title"] == "Render follows write inline" for e in read_graph_strict(graph)), (
         "the store write landed"
     )
-    assert "Render follows write inline" in target.read_text(encoding="utf-8")
+    assert not target.exists(), "the write spawned no board render"
+    import fno.graph._constants as gc
+
+    assert "Render follows write inline" in gc.GRAPH_MD.read_text(encoding="utf-8")
 
 
 def test_render_pass_renders_configured_targets(paths, monkeypatch, native_board_render):
-    """The pass the trigger invokes renders every configured target from a
-    fresh store read, so a write's change reaches the target on the next
+    """The pass the daemon arm invokes renders every configured target from
+    a fresh store read, so a write's change reaches the target on the next
     settled tick (AC17-HP's budget, asserted without a sleep here)."""
     graph = paths["graph"]
     target = paths["target"]
@@ -101,6 +104,9 @@ def test_render_pass_renders_configured_targets(paths, monkeypatch, native_board
     _seed(graph, "Render follows write")
 
     render_canonical_views()
+    import fno.graph.roadmap_public as rp
+
+    assert rp.render_local_targets() == 0
 
     text = target.read_text(encoding="utf-8")
     assert "Render follows write" in text
@@ -114,15 +120,20 @@ def test_failing_target_never_blocks_the_next_write(paths, monkeypatch, native_b
     _config(monkeypatch, target)
     _seed(graph, "First write")
     render_canonical_views()
+    import fno.graph.roadmap_public as rp
+
+    assert rp.render_local_targets() == 0
 
     # Break the target: its parent becomes a file, so the atomic write fails.
     target.unlink()
     target.parent.rmdir()
     target.parent.write_text("not a directory")
     render_canonical_views()  # must not raise
+    rp.render_local_targets()  # must not raise either; the failure counts, never raises
 
     _seed(graph, "Second write")
     render_canonical_views()  # must not raise either
+    rp.render_local_targets()  # must not raise either
     from fno.graph.store import read_graph_strict
 
     assert any(e["title"] == "Second write" for e in read_graph_strict(graph))

@@ -111,9 +111,12 @@ def _mutate(graph: Path, entries: list[dict], new_title: str) -> None:
         graph,
         lambda nodes: nodes[0].__setitem__("title", new_title) or nodes,
     )
-    # The write no longer renders inline (task 8.3): the keeper trigger's
-    # pass is what renders, so the tests run it explicitly.
+    # The write no longer renders the board inline: the daemon arm's pass
+    # is what renders, so the tests run the two passes explicitly.
     render_canonical_views()
+    import fno.graph.roadmap_public as rp
+
+    rp.render_local_targets()
 
 
 # ---------------------------------------------------------------------------
@@ -331,22 +334,6 @@ def test_render_targets_table_typo_degrades_to_empty(caplog):
 # ---------------------------------------------------------------------------
 # Auto-render on mutation
 # ---------------------------------------------------------------------------
-
-
-def test_configured_target_written_on_mutation(_isolate, tmp_path, monkeypatch, capsys, native_board_render):
-    _write_config(
-        f'[[backlog.render_targets]]\npath = "{_isolate["target"]}"\nproject = "fno"',
-        tmp_path,
-        monkeypatch,
-    )
-    _mutate(
-        _isolate["graph"],
-        [_entry("ab-writeme0", title="first title", status="ready")],
-        "second title",
-    )
-    text = _isolate["target"].read_text(encoding="utf-8")
-    assert "second title" in text
-    assert 'id="stats"' in text
 
 
 def test_target_mtime_advances_with_each_view_pass(_isolate, tmp_path, monkeypatch, native_board_render):

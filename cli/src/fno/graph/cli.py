@@ -2982,9 +2982,10 @@ def cmd_board(
 @cli.command("render-views", hidden=True)
 def cmd_render_views() -> None:
     """Replay the canonical post-publish views after a native store write:
-    a fresh read renders the same graph.md and configured board targets a
-    CLI write would. A failed view exits nonzero, so the keeper withholds
-    the rendered_version stamp and its backoff retries the pass.
+    a fresh read renders the same graph.md a CLI write would. A failed view
+    exits nonzero, so the keeper withholds the rendered_version stamp and its
+    backoff retries the pass. The board targets render through the daemon's
+    board_render arm, which runs `fno backlog view` with FNO_NO_OPEN=1.
     """
     from fno.graph.store import render_canonical_views
 
