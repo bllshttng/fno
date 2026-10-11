@@ -548,19 +548,23 @@ pub(crate) fn watched_ids(
     registry_path: &Path,
     warnings: &mut Vec<String>,
 ) -> BTreeMap<String, String> {
+    const SEAT_WATCH_WINDOW_MS: i64 = 2 * 60 * 60 * 1000;
     let Some(home) = registry_path.parent().map(crate::paths::AgentsHome::at) else {
         return BTreeMap::new();
     };
-    let evidence =
-        match crate::watch_expiry::read_evidence(&home, crate::watch_expiry::millis_now()) {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                warnings.push(format!(
-                    "watch idles unreadable ({error}); watched workers counted"
-                ));
-                return BTreeMap::new();
-            }
-        };
+    let evidence = match crate::watch_expiry::read_evidence_since(
+        &home,
+        crate::watch_expiry::millis_now(),
+        SEAT_WATCH_WINDOW_MS,
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            warnings.push(format!(
+                "watch idles unreadable ({error}); watched workers counted"
+            ));
+            return BTreeMap::new();
+        }
+    };
     crate::watch_expiry::watch_blockers(&evidence)
 }
 
@@ -621,10 +625,7 @@ pub(crate) fn provider_live_count_with_questions(
     let watch_parked: BTreeMap<&str, &str> = candidates
         .iter()
         .filter_map(|row| {
-            let id = row
-                .harness_session_id
-                .as_deref()
-                .or(row.session_id.as_deref())?;
+            let id = crate::watch_expiry::registry_session_id(row)?;
             watched.get(id).map(|b| (row.name.as_str(), b.as_str()))
         })
         .collect();

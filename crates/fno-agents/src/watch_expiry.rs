@@ -181,10 +181,20 @@ fn event_id(line: &str) -> String {
 }
 
 pub(crate) fn read_evidence(home: &AgentsHome, now_ms: i64) -> Result<Vec<Evidence>, String> {
+    read_evidence_since(home, now_ms, WINDOW_MS)
+}
+
+/// The same fold over a caller-chosen window: a seat-park reader bounds its
+/// read to the watch-episode scale instead of the whole 24h journal.
+pub(crate) fn read_evidence_since(
+    home: &AgentsHome,
+    now_ms: i64,
+    window_ms: i64,
+) -> Result<Vec<Evidence>, String> {
     let mut types = vec![WATCH_IDLE, WAKE_EVENT];
     types.extend_from_slice(ACTIVITY_AND_TERMINAL);
     let query = crate::event_store::EventQuery {
-        since_ms: Some(now_ms.saturating_sub(WINDOW_MS)),
+        since_ms: Some(now_ms.saturating_sub(window_ms)),
         limit: Some(MAX_EVENTS + 1),
         ..crate::event_store::EventQuery::of_types(&types)
     };
@@ -427,7 +437,7 @@ pub(crate) fn current_node_claims(
     Ok(claims)
 }
 
-fn registry_session_id(entry: &crate::state::RegistryEntry) -> Option<&str> {
+pub(crate) fn registry_session_id(entry: &crate::state::RegistryEntry) -> Option<&str> {
     entry
         .harness_session_id
         .as_deref()
