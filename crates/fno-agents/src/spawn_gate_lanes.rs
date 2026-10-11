@@ -1667,13 +1667,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A stage for the watch-park tests: the agents home at `dir/agents` with
-    /// its registry, the events journal the evidence reader folds at
-    /// `dir/events.jsonl`, and the claims root at `dir/claims-root`. Returns
-    /// the registry path and a watch-row renderer.
-    fn stage_watch_home(
-        dir: &std::path::PathBuf,
-    ) -> (std::path::PathBuf, impl Fn(&str, &str, i64) -> String) {
+    /// Stages the watch-park home: agents home at `dir/agents`, events
+    /// journal at `dir/events.jsonl`, claims root at `dir/claims-root`.
+    fn stage_watch_home(dir: &Path) -> (PathBuf, impl Fn(&str, &str, i64) -> String) {
         std::fs::create_dir_all(dir.join("agents")).unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
         let reg = dir.join("agents").join("registry.json");
@@ -1722,10 +1718,7 @@ mod tests {
         );
         let mut warnings = Vec::new();
         let reading = provider_live_count(&reg, "zai", None, &mut warnings).unwrap();
-        assert_eq!(
-            reading.count, 1,
-            "the watch-parked row frees its seat; the working row holds one"
-        );
+        assert_eq!(reading.count, 1, "the watch-parked row frees its seat");
         assert_eq!(reading.counted, vec!["good".to_string()]);
         assert_eq!(
             reading.parked,
