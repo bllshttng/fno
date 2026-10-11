@@ -2857,7 +2857,7 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
     assert_eq!(code, 16);
 }
 
-/// x-0270: the exact-id detector names a stored id only at the FULL tier.
+/// The exact-id detector names a stored id only at the FULL tier.
 /// The primary returns itself; a related or predecessor full id returns the
 /// stored id the caller spelled (case-insensitively, the uuid family's
 /// contract); a name, a short, or a predecessor's retired short form
@@ -2895,7 +2895,7 @@ fn exact_id_detector_matches_full_ids_only() {
     assert!(matched("w1").is_none(), "a name never names a session");
 }
 
-/// x-0270: `resume <predecessor uuid>` on a live claude row refuses with
+/// `resume <predecessor uuid>` on a live claude row refuses with
 /// the spawn --resume remedy and launches nothing - it never re-enters the
 /// row's current session. The refusal precedes the route and PATH work, so
 /// no stub is needed; the codex runtime test above covers the dispatch
