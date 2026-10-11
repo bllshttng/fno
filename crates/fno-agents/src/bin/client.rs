@@ -941,6 +941,12 @@ async fn run(args: Vec<String>) -> i32 {
     if verb == "evals-macro" {
         return fno_agents::evals_macro::run_evals_macro(&args[1..]);
     }
+    // `stalls`: the weekly stall-cause table, daemon-free read, == dispatch
+    // like evals-macro: never registered in ALL_CLIENT_ACTIONS; `fno doctor
+    // stalls` shells HERE through resolve_binary.
+    if verb == "stalls" {
+        return fno_agents::stalls::run_stalls(&args[1..]);
+    }
     // `lead-rundown`: the lead ledger page for `fno agents lead ledger`.
     // Same split as lead-history: Python resolves the org and the paths,
     // the native side owns the page assembly, and the fold's scope_nodes ride

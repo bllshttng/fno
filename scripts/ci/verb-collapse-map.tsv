@@ -392,6 +392,7 @@ doctor scratch report	T1	doctor scratch report	0
 doctor scratch sweep	T1	doctor scratch sweep	1
 doctor skill-diff reconcile	T1	doctor skill-diff reconcile	1
 doctor skill-diff tick	T1	doctor skill-diff tick	4
+doctor stalls	T1	doctor stalls	0
 doctor test	T1	doctor test	107
 doctor update	T1	doctor update	109
 done	KEEP	done	48	single-leaf group
