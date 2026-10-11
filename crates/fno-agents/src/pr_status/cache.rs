@@ -204,13 +204,15 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// `cached_status`: the coalescing chokepoint. Head-keyed rows, one live
 /// read per TTL under the per-key flock, a zero-network backoff pre-check,
 /// and the fail-closed stale serve when the head read itself refuses.
-/// `require_head` guards the fresh serves for callers that already know the
-/// head (the wait): a row minted for a different head never answers.
+/// `head_read` is the caller's own light head read (the wait's per tick):
+/// a complete block is both the fresh-serve guard and the key material, so
+/// the tick spends the read once; a refused read (empty sha) guards with a
+/// sha no row can carry; None is the self-reading status verb.
 pub(crate) fn cached_status(
     cwd_str: &str,
     pr: u64,
     refresh: bool,
-    require_head: Option<&str>,
+    head_read: Option<&Value>,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
@@ -233,10 +235,13 @@ pub(crate) fn cached_status(
     // answers with ZERO gh calls, the key-minting head read included. The
     // per-tick head check it replaces was the read that kept a cache "hit"
     // at ~6 calls; a head that moves mid-window is noticed one TTL late,
-    // which is the freshness contract the TTL already sells. A caller that
-    // names a head is answered only by a row minted for that head, so a
-    // push never hands the wait the old head's settled record. `refresh`
-    // is the escape hatch.
+    // which is the freshness contract the TTL already sells. `refresh` is
+    // the escape hatch. A caller that names a head is answered only by a
+    // row minted for that head, so a push never hands the wait the old
+    // head's settled record; a refused caller read names an empty sha,
+    // which no row carries.
+    let require_head =
+        head_read.map(|block| block.get("head_sha").and_then(Value::as_str).unwrap_or(""));
     if !refresh {
         if let Some(answer) = fresh_serve(&dir, &slug_key, &pr.to_string(), now, require_head) {
             return into_answer(answer, 0);
@@ -262,9 +267,14 @@ pub(crate) fn cached_status(
         }
     }
     // The light head read that mints the key. A refusal fails CLOSED: the
-    // newest row degraded, or the loud live read when there is no row.
+    // newest row degraded, or the loud live read when there is no row. A
+    // complete caller block is the same read fetched seconds earlier; the
+    // reuse keeps the tick at one head call instead of two.
     let probe = fresh_probe();
-    let head = read_head(&probe, cwd, &slug, pr);
+    let head = match head_read {
+        Some(block) if require_head.is_some_and(|sha| !sha.is_empty()) => Ok(block.clone()),
+        _ => read_head(&probe, cwd, &slug, pr),
+    };
     let (head_sha, pr_state, pulls) = match &head {
         Ok(info) => (
             info.get("head_sha")
@@ -436,22 +446,17 @@ fn fresh_serve(
     serve(&row, false)
 }
 
-/// The light head read behind the wait's cache guard: the PR's current
-/// head sha with the gh calls it spent, or None when the read refuses
-/// (the caller then guards with an impossible head and rides the degraded
-/// serve until the read recovers).
-pub(crate) fn current_head(cwd: &Path, pr: u64) -> (Option<String>, usize) {
+/// The light head read behind the wait's cache guard: `read_head`'s block
+/// (head sha, state, pulls) with the gh calls it spent, or None when the
+/// read refuses (the caller then guards with an empty sha and rides the
+/// degraded serve until the read recovers).
+pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
     let Some(slug) = git_slug(cwd) else {
         return (None, 0);
     };
     let probe = fresh_probe();
-    let head = read_head(&probe, cwd, &slug, pr).ok().and_then(|info| {
-        info.get("head_sha")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-    });
-    (head, probe.calls.load(Ordering::SeqCst))
+    let block = read_head(&probe, cwd, &slug, pr).ok();
+    (block, probe.calls.load(Ordering::SeqCst))
 }
 
 /// The light read that mints the key: the PR's head sha and state, one call.
