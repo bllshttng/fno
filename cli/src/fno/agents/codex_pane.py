@@ -229,28 +229,6 @@ def _make_codex_bind_probe(
         if condition is not None:
             condition[:] = [text]
 
-    def _answer_hook_modal() -> None:
-        # Codex 0.148+ parks a fresh pane on a Hooks need review modal that
-        # can paint after the readiness gate's single read; unanswered it
-        # holds the pane for the whole window (measured on codex 0.156.1).
-        # Answer with the modal's option 3, continue WITHOUT trusting:
-        # untrusted hooks do not run, which a bounded pane already implies.
-        # Once only - a raised send may still have landed, and a second `3`
-        # into a closed modal would type a turn.
-        if not _CODEX_HOOK_REVIEW_MODAL_RE.search(_read_pane_tail(mux, runner)):
-            return
-        if modal_answered[0]:
-            _note("hooks-review modal still parked after the option-3 answer")
-            return
-        modal_answered[0] = True
-        try:
-            _run_mux(["mux", "pane", "send", "--server", str(mux["session"]),
-                      str(mux["pane_id"]), "--text", "3", "--submit", "--raw"],
-                     runner)
-            _note("hooks-review modal answered once (option 3, continue without trusting)")
-        except DispatchAskError as exc:
-            _note(f"hooks-review modal answer send failed: {exc}")
-
     def _probe() -> Optional[str]:
         # Lazy: mux_spawn imports this module; a top-level import loops.
         from fno.agents.mux_spawn import (
@@ -260,6 +238,28 @@ def _make_codex_bind_probe(
             _read_pane_tail,
             _run_mux,
         )
+
+        def _answer_hook_modal() -> None:
+            # Codex 0.148+ parks a fresh pane on a Hooks need review modal
+            # that can paint after the readiness gate's single read;
+            # unanswered it holds the pane for the whole window (measured on
+            # codex 0.156.1). Answer with the modal's option 3, continue
+            # WITHOUT trusting: untrusted hooks do not run, which a bounded
+            # pane already implies. Once only - a raised send may still have
+            # landed, and a second `3` into a closed modal would type a turn.
+            if not _CODEX_HOOK_REVIEW_MODAL_RE.search(_read_pane_tail(mux, runner)):
+                return
+            if modal_answered[0]:
+                _note("hooks-review modal still parked after the option-3 answer")
+                return
+            modal_answered[0] = True
+            try:
+                _run_mux(["mux", "pane", "send", "--server", str(mux["session"]),
+                          str(mux["pane_id"]), "--text", "3", "--submit", "--raw"],
+                         runner)
+                _note("hooks-review modal answered once (option 3, continue without trusting)")
+            except DispatchAskError as exc:
+                _note(f"hooks-review modal answer send failed: {exc}")
 
         sid = _backfill_codex_session_id(
             cwd,
