@@ -4,7 +4,7 @@
 //! the exit prints the gh spend, so a caller re-arms on truth.
 
 use crate::pr_status_facts::{GhProbe, RealGhProbe};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -254,8 +254,17 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
     let mut poll = || {
-        let (code, payload, lines, tick_calls) = super::cache::cached_status(cwd_str, pr, false);
-        (code, payload, lines, tick_calls)
+        // The head guard: one light read per tick, and its block rides into
+        // the cache as both the fresh-serve guard and the key material, so
+        // the tick spends the read once. After a push the newest row is the
+        // old head's settled record; serving it exited this wait at once
+        // having watched nothing. A refused head read guards with an empty
+        // sha, so only the degraded ride-out remains until it recovers.
+        let (head, head_calls) = super::cache::head_read(cwd, pr);
+        let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
+        let (code, payload, lines, tick_calls) =
+            super::cache::cached_status(cwd_str, pr, false, Some(&block));
+        (code, payload, lines, tick_calls + head_calls)
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");
