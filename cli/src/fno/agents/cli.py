@@ -4893,7 +4893,7 @@ from fno.agents import (  # noqa: E402,F401
 def incident(ctx: typer.Context) -> None:
     """Durable fleet incident breaker.
 
-    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S].
+    stop --reason T [--by X] | clear --reason T [--by X] | status [--json] | check [--scope S] | cutover save|restore.
     """
     import subprocess
 

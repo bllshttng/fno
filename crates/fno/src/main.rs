@@ -186,6 +186,11 @@ enum Role {
     /// classified beside agents_history. The Python CLI keeps the rest of
     /// the mail tree; the carried tail runs `fno-agents chats show`.
     MailShow(Vec<OsString>),
+    /// `fno agents mail send <name>@<host> ...` and `agents peek
+    /// <handle>@<host> ...`: the cross-host relay. The carried
+    /// tail runs `fno-agents mail-remote`; every other argv forwards
+    /// byte-verbatim.
+    RemoteMail(Vec<OsString>),
     /// `fno agents mail view`: refused by name; the verb is now `show`
     /// (no compat shell, the same rule as a removed mux verb).
     MailViewRenamed,
@@ -379,6 +384,12 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     // for the alias release.
     if let Some(out) = fno::agents_alias::classify(args) {
         return Role::AgentsAlias(out);
+    }
+    // The cross-host intercept claims an `@host` target before the agents
+    // tree forwards: `mail send`/`peek` with a remote target is a different
+    // transport, not a local verb with a funny name.
+    if let Some(rest) = fno::remote_target::classify(args) {
+        return Role::RemoteMail(rest);
     }
     // The backlog namespace claims itself lexically, like doctor-event: the
     // sibling dispatcher owns the whole namespace's spelling (grouped and
@@ -612,6 +623,11 @@ fn main() {
         Role::MailShow(rest) => std::process::exit(fno_agents_exec(
             "fno agents mail show",
             &["chats", "show"],
+            &rest,
+        )),
+        Role::RemoteMail(rest) => std::process::exit(fno_agents_exec(
+            "fno agents mail send|peek <name>@<host>",
+            &["mail-remote"],
             &rest,
         )),
         Role::AgentsTop(rest) => std::process::exit(fno_agents_exec(
