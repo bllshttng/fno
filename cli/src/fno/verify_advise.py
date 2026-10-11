@@ -106,9 +106,8 @@ def run_verifier(prompt: str, cwd: Path, session_id: str, timeout: int = SPAWN_T
     if out.returncode != 0:
         from fno.rust_binary import verb_call
 
-        raise RuntimeError(
-            f"verifier spawn exit {out.returncode}: {verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": out.stderr})["detail"]}"
-        )
+        detail = verb_call(["backlog", "advance", "--stdin"], {"op": "gate-detail", "stderr": out.stderr})["detail"]
+        raise RuntimeError(f"verifier spawn exit {out.returncode}: {detail}")
     return out.stdout
 
 

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
-import os
 import sys
 from pathlib import Path
 from typing import Optional
 
-from fno.config._dispatch_verbs import canonical_verb_key, parse_verb_token
 
 
 @dataclasses.dataclass

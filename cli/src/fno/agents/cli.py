@@ -396,12 +396,10 @@ def _spawn_guard_decision(
             )
             if prior is not None:
                 _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = _observe_node_claim(
-                    node_id,
-                    cwd,
-                    enforce_failure_limit=not no_reserve,
-                    emit=False,
-                )
+                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+                    "op": "claim", "node_id": node_id, "cwd": cwd,
+                    "enforce_failure_limit": not no_reserve, "emit_events": False,
+                }))
                 common = {
                     "holder": observation.holder,
                     "truth_status": observation.truth_status,

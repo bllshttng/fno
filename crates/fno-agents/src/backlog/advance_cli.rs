@@ -367,7 +367,7 @@ fn priced_lane(child: &Value, model: Option<&str>, provider: Option<&str>) -> Op
     }
     crate::spawn_overlay::resolve(
         json!({"kind":"lane-vendor","argv_tail":argv_tail,"harness":args.resolved_harness,"env_harness":null,"argv_head":"fno"}),
-    )
+    ).ok().and_then(|answer|answer["vendor"].as_str().map(str::to_string))
 }
 pub(super) fn cap_verdict(
     child: &Value,

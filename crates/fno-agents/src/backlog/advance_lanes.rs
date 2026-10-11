@@ -127,7 +127,7 @@ fn lanes(
                 &key,
                 &holder,
                 crate::claims::AcquireOpts {
-                    ttl_ms: Some(advance::DISPATCH_TTL_MS),
+                    ttl_ms: Some(advance::DISPATCH_TTL_MS as i64),
                     reason: Some(format!("parallel lane dispatch for {id}")),
                     ..Default::default()
                 },

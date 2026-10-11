@@ -23,7 +23,6 @@ from typing import Any, List, Literal, Optional
 
 import typer
 
-from fno.loops import refuse_if_paused
 from fno.tombstones import tombstone_group_cls
 # the external-backend verb classification lives beside its data
 from fno.graph._verb_classification import (
@@ -2490,7 +2489,6 @@ def cmd_next(
         container_ids = _container_ids(source_entries)
         from fno.rust_binary import verb_call
 
-        guard_now = datetime.now(timezone.utc)
         guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
         safe_rows = []
         for row in current_observer["rows"]:

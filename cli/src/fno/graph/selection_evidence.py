@@ -71,7 +71,6 @@ def _starvation_receipts(
         _has_unmerged_open_pr,
         _is_batched_member,
     )
-    from fno.graph.strand import _is_live
 
     container_ids = _container_ids(entries)
     # One pass, guarding against a non-dict row (codebase convention: a malformed

@@ -256,7 +256,7 @@ fn live_joiners(node: &str) -> Vec<String> {
         format!("jn-t-{hex}-"),
     ];
     let candidates = reg
-        .agents
+        .entries
         .iter()
         .filter(|r| prefixes.iter().any(|p| r.name.starts_with(p)))
         .filter_map(|r| serde_json::to_value(r).ok())
