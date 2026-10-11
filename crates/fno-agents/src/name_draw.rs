@@ -519,19 +519,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn seed_history(store: &Path, scope: &str, name: &str, kind: &str) {
-        crate::team_names::history_append(
-            store,
-            crate::team_names::NameHistoryEntry {
-                name: name.to_string(),
-                scope: scope.to_string(),
-                session: None,
-                kind: kind.to_string(),
-                ts: crate::daemon::now_rfc3339_like(),
-            },
-        );
-    }
-
     // Folded to hold the net-3 test cap; one test per distinct contract:
     // (1) a fresh draw answers a pooled never-used name, consumes it, and
     // the used-name filter is absolute; (2) an explicit name must match the
