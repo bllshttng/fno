@@ -141,6 +141,17 @@ def _entries(probe) -> list[dict]:
     return read_graph_strict(probe.graph)
 
 
+def _render_board(probe) -> bytes:
+    """graph.md as the native view pass writes it; a write no longer renders in-call."""
+    from tests.goldens._door import door
+
+    root = probe.state.parent
+    (root / "config.toml").write_text(f'state_dir = "{probe.state}"\n', encoding="utf-8")
+    code, out, err = door(root, ["render-views"])
+    assert code == 0, out + err
+    return probe.md.read_bytes()
+
+
 def _encounters(probe, node_id: str = "zz-0001") -> list[dict]:
     for entry in _entries(probe):
         if entry["id"] == node_id:
@@ -439,15 +450,13 @@ def test_the_board_does_not_move(probe):
         _node("zz-0002", priority="p0"),
         _node("zz-0003", priority="p2"),
     )
-    # Render the board through a real mutation on an unrelated node.
-    assert probe("backlog", "encounter", "zz-0003", "--evidence", "seeded.").returncode == 0
-    before = hashlib.sha256(probe.md.read_bytes()).hexdigest()
+    before = hashlib.sha256(_render_board(probe)).hexdigest()
     ranks_before = {e["id"]: e.get("rank") for e in _entries(probe)}
     columns_before = {e["id"]: e.get("_kanban_column") for e in _entries(probe)}
 
     assert probe("backlog", "encounter", "zz-0001", "--evidence", "cost a wrong fix.").returncode == 0
 
-    after = hashlib.sha256(probe.md.read_bytes()).hexdigest()
+    after = hashlib.sha256(_render_board(probe)).hexdigest()
     assert after == before
     assert {e["id"]: e.get("rank") for e in _entries(probe)} == ranks_before
     assert {e["id"]: e.get("_kanban_column") for e in _entries(probe)} == columns_before

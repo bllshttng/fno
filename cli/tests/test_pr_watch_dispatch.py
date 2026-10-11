@@ -3159,10 +3159,7 @@ class TestTickRecordsAndDeadline:
         monkeypatch.setattr("fno.worktree_stranded.sweep", lambda **kw: rows)
         monkeypatch.setattr("fno.worktree_stranded.apply_sweep", lambda *a, **kw: [])
         renders = []
-        monkeypatch.setattr(
-            "fno.graph.render.render_graph_md",
-            lambda *a, **kw: renders.append(a),
-        )
+        monkeypatch.setattr(prcli, "_replay_views", lambda: renders.append(1))
 
         app = typer.Typer()
         app.command()(prcli.tick)
@@ -3202,7 +3199,7 @@ class TestTickRecordsAndDeadline:
             "fno.worktree_stranded.apply_sweep",
             lambda rows, *, wake: applied.append(wake) or [],
         )
-        monkeypatch.setattr("fno.graph.render.render_graph_md", lambda *a, **kw: None)
+        monkeypatch.setattr(prcli, "_replay_views", lambda: None)
         monkeypatch.setattr(
             "fno.worktree_stranded.sweep",
             lambda **kw: [

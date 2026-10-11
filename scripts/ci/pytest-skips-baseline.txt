@@ -123,7 +123,7 @@ cli/tests/scoreboard/test_scoreboard.py::test_live_ledger_shape_folds_without_cr
 cli/tests/test_autonomy_status.py::test_name_codes_check_prints_rows_and_marker::pytest.skip  # on main before this ratchet
 cli/tests/test_review_locking.py::<module>::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_agent_naming.py::test_max_len_matches_the_daemon_contract::pytest.skip  # on main before this ratchet
-cli/tests/unit/test_archive_sweep.py::_native_backlog::pytest.skip  # on main before this ratchet
+cli/tests/unit/test_archive_reads.py::_native_backlog::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_backlog_single_flight.py::iso::pytest.skip  # on main before this ratchet
 cli/tests/unit/test_blueprint_batching_rule.py::test_behavioral_dispatch_plan_batches_the_shape_pair::mark.skipif  # on main before this ratchet
 cli/tests/unit/test_claim_rebind.py::test_rebind_live_different_pid_refuses_concurrent_writer::pytest.skip  # on main before this ratchet

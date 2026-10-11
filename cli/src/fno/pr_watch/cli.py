@@ -511,6 +511,21 @@ def _tick_outcome(result, tick_failed: Optional[str], timed_out: bool) -> str:
     return "ok"
 
 
+
+def _replay_views() -> None:
+    """Replay the native view pass. The provenance cache moves no store
+    version, so the keeper's render pass would never see the change."""
+    import subprocess
+
+    from fno.rust_binary import resolve_binary
+
+    binary = resolve_binary()
+    if binary is not None:
+        subprocess.run(
+            [str(binary), "backlog", "render-views"],
+            capture_output=True, check=False, timeout=600,
+        )
+
 @cli.command()
 def tick() -> None:
     """Poll open-PR backlog nodes and fire /fno:ship pr check or /fno:ship pr merged.
@@ -1433,9 +1448,7 @@ def tick() -> None:
                     f"acted={acted_n} failed={failed_n}"
                 )
                 if changed:
-                    from fno.graph.render import render_graph_md
-                    from fno.graph.store import read_graph_strict
-                    render_graph_md(read_graph_strict())
+                    _replay_views()
             except _WatchdogBudgetSpent as exc:
                 log.info("pr-watch: stranded leg skipped: %s", exc)
             except Exception as exc:  # noqa: BLE001 - never let the stranded sweep break pr-watch

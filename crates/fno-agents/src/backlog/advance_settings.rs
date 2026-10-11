@@ -158,6 +158,37 @@ pub fn load_merged(project_root: Option<&Path>) -> serde_json::Value {
     unwrap_config_dict(serde_json::Value::Object(merged))
 }
 
+/// The GLOBAL config files alone, config.toml winning per leaf
+/// (`config_io._global_merged_config`), plus every candidate that exists but
+/// failed to parse. The graph renders read their keys here so a project-local
+/// file never makes a global artifact depend on the cwd.
+pub fn load_global_merged() -> (serde_json::Value, Vec<PathBuf>) {
+    let candidates: Vec<PathBuf> =
+        match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH").filter(|v| !v.is_empty()) {
+            Some(gp) => vec![PathBuf::from(gp)],
+            None => match std::env::var_os("HOME") {
+                Some(home) => {
+                    let dir = PathBuf::from(home).join(".fno");
+                    vec![dir.join("config.toml"), dir.join("settings.yaml")]
+                }
+                None => Vec::new(),
+            },
+        };
+    let mut merged = serde_json::Map::new();
+    let mut unreadable = Vec::new();
+    for path in candidates.iter().rev() {
+        if !path.is_file() {
+            continue;
+        }
+        match parse_file(path) {
+            Some(doc) => deep_merge(&mut merged, unwrap_config_dict(doc)),
+            None => unreadable.push(path.clone()),
+        }
+    }
+    unreadable.reverse();
+    (serde_json::Value::Object(merged), unreadable)
+}
+
 fn coerce_bool(value: Option<&serde_json::Value>, default: bool) -> bool {
     match value {
         Some(serde_json::Value::Bool(b)) => *b,

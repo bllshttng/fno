@@ -214,6 +214,38 @@ def _refused(head: str, readings: Iterable[str] = ()) -> Refused:
     return Refused(f"{head}so nothing was written.{trail}\n{_QUIET_HINT}", 3)
 
 
+def archived_entry(node_id: str) -> Optional[dict[str, Any]]:
+    """The node's archived row from the store, or None. Never raises.
+
+    Tells "archived" apart from "absent": both would otherwise refuse with
+    the not-found text a typo gets. The archive is default-backend storage,
+    so an external tracker selection never consults it.
+    """
+    from fno.graph._intake import _find_node
+    from fno.graph.store import read_archive_entries
+
+    try:
+        from fno.tracker import active_backend_name
+
+        if active_backend_name() != "graph":
+            return None
+        return _find_node(read_archive_entries(), node_id)
+    except Exception:  # noqa: BLE001 - a bad archive read must not mask the real refusal
+        return None
+
+
+def archived_refusal(node_id: str) -> Optional[str]:
+    """The update refusal for an archived node, or None when it is not archived."""
+    entry = archived_entry(node_id)
+    if entry is None:
+        return None
+    aid = entry.get("id") or node_id
+    return (
+        f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
+        " to restore it before updating."
+    )
+
+
 def readers_before_append(task_id: str, graph_path: Path) -> NoteReaders | Refused:
     """Resolve the readers BEFORE the append; surface any Refused verbatim."""
     from fno.agents.registry import load_registry
@@ -239,16 +271,9 @@ def readers_before_append(task_id: str, graph_path: Path) -> NoteReaders | Refus
                 None,
             )
         if entry is None:
-            from fno.graph._archive_lookup import archived_entry
-
-            archived = archived_entry(task_id)
-            if archived is not None:
-                aid = archived.get("id") or task_id
-                return Refused(
-                    f"Error: node {aid} is archived; run `fno backlog unarchive {aid}`"
-                    " to restore it before updating.",
-                    1,
-                )
+            refusal = archived_refusal(task_id)
+            if refusal is not None:
+                return Refused(refusal, 1)
             return Refused(f"Error: no node resolves to '{task_id}'", 1)
         if rows is not None:
             index = {str(e.get("id")): e for e in rows if isinstance(e.get("id"), str)}
