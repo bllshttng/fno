@@ -1741,6 +1741,7 @@ mod tests {
             .as_millis() as i64;
         let lock = dir
             .join("claims-root")
+            .join(".fno")
             .join("claims")
             .join(format!("{}.lock", claims::encode_key("worker:a")));
         crate::claim_store::seed_yaml_at_path(&lock, &format!("schema_version: {}\nkey: worker:a\nholder: h\nacquired_at: {now}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n", claims::SCHEMA_VERSION, std::process::id()));
