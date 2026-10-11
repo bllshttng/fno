@@ -512,7 +512,7 @@ Three targets:
 fno backlog publish --project fno --exec 'npx wrangler kv key put --binding ROADMAP fno-backlog --path {file} --remote' --url https://footnote.sh/backlog
 ```
 
-- With neither flag, the board publishes a `backlog/` subtree to the project repo's `gh-pages` branch through git plumbing: your checkout never moves, the first publish enables Pages (`gh-pages`, `/`), and an unchanged board pushes nothing (`unchanged: <url>`). A repo whose origin is not GitHub, and a project with no path in `work.workspaces`, refuse naming `--out` and `--exec`.
+- With neither flag, the board publishes a `backlog/` subtree to the project repo's `gh-pages` branch through git plumbing. Your checkout never moves. The first publish enables Pages (`gh-pages`, `/`). An unchanged board pushes nothing (`unchanged: <url>`). A repo whose origin is not GitHub, and a project with no path in `work.workspaces`, refuse naming `--out` and `--exec`.
 
 Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-identical output, so a scheduler can run the command as often as it wants.
 
