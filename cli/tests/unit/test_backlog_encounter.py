@@ -143,18 +143,12 @@ def _entries(probe) -> list[dict]:
 
 def _render_board(probe) -> bytes:
     """graph.md as the native view pass writes it; a write no longer renders in-call."""
-    from fno.rust_binary import find_dev_binary, resolve_binary
+    from tests.goldens._door import door
 
-    binary = find_dev_binary() or resolve_binary()
-    if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    config = probe.state.parent / "config.toml"
-    config.write_text(f'state_dir = "{probe.state}"\n', encoding="utf-8")
-    env = {**os.environ, "FNO_CONFIG": str(config)}
-    subprocess.run(
-        [str(binary), "backlog", "render-views"],
-        env=env, capture_output=True, check=True, cwd=str(probe.state.parent),
-    )
+    root = probe.state.parent
+    (root / "config.toml").write_text(f'state_dir = "{probe.state}"\n', encoding="utf-8")
+    code, out, err = door(root, ["render-views"])
+    assert code == 0, out + err
     return probe.md.read_bytes()
 
 
