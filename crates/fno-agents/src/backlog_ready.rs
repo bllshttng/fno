@@ -1641,6 +1641,8 @@ pub(crate) fn dispatch_node_summary(e: &Value) -> Value {
         "difficulty",
         "plan_path",
         "model",
+        "provider",
+        "effort",
         "dispatch_verb",
         "dispatch_brief",
         "mission_id",

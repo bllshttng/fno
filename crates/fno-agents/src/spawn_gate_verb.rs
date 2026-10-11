@@ -335,7 +335,7 @@ fn opt_str_of(payload: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn probe_answer(_payload: &Value) -> Value {
+pub(crate) fn probe_answer(_payload: &Value) -> Value {
     probe::answer(_payload)
 }
 

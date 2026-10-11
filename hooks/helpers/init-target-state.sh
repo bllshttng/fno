@@ -1871,7 +1871,7 @@ PYEOF
     # opt-in - absent or `manual` waits for a person or a lead
     # session to run the verb and does nothing here, so plans written before
     # the key keep their behavior. Both facts come from the canonical probes
-    # in fno.backlog.join_trigger: bash re-implementing the auto-continue
+    # in the native join probes: bash re-implementing the auto-continue
     # precedence chain (autonomy master, env, config, default) is how the
     # two drift. Every failure mode is non-fatal and named: an unmeasured
     # width never fires join, and a parked trigger names the measured width
@@ -1908,9 +1908,9 @@ PYEOF
         fi
         _jt_width=""
         _jt_armed_line=""
-        if [[ -n "${FNO_PYTHON:-}" && -d "$_jt_root/cli/src" ]]; then
-          _jt_width="$(PYTHONPATH="$_jt_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" "$FNO_PYTHON" -m fno.backlog.join_trigger width "$_jt_plan" 2>/dev/null)" || _jt_width=""
-          _jt_armed_line="$(PYTHONPATH="$_jt_root/cli/src${PYTHONPATH:+:$PYTHONPATH}" "$FNO_PYTHON" -m fno.backlog.join_trigger armed "$REPO_ROOT" 2>/dev/null)" || _jt_armed_line=""
+        if command -v fno >/dev/null 2>&1; then
+          _jt_width="$(fno backlog join width "$_jt_plan" 2>/dev/null)" || _jt_width=""
+          _jt_armed_line="$(fno backlog join armed "$REPO_ROOT" 2>/dev/null)" || _jt_armed_line=""
         fi
         case "$_jt_armed_line" in
           armed=true*) _jt_armed=1 ;;

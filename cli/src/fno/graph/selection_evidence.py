@@ -63,7 +63,7 @@ def _starvation_receipts(
 
     Full contract: docs/architecture/backlog-graph-verb-contracts.md
     """
-    from fno.backlog.advance import first_dead_ancestor, selection_guards
+    from fno.rust_binary import verb_call
     from fno.graph._intake import filter_by_project
     # Lazy: cli imports this module, so a module-level import would cycle.
     from fno.graph.cli import (
@@ -71,7 +71,6 @@ def _starvation_receipts(
         _has_unmerged_open_pr,
         _is_batched_member,
     )
-    from fno.graph.strand import _is_live
 
     container_ids = _container_ids(entries)
     # One pass, guarding against a non-dict row (codebase convention: a malformed
@@ -98,6 +97,7 @@ def _starvation_receipts(
     ready_ish = filter_by_project(ready_ish_rows, project_filter, all_)
     if scope_ids is not None:
         ready_ish = [e for e in ready_ish if e.get("id") in scope_ids]
+    guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": entries, "staleness_days": staleness_days})["guards"]
     out: list[tuple[str, str]] = []
     for e in ready_ish:
         nid = e.get("id")
@@ -107,12 +107,10 @@ def _starvation_receipts(
         # container and a descendant may carry no plan of its own, but the
         # actionable reason every dispatcher must report is the attributable
         # hold on their shared delivery ancestry.
-        hold_guard = selection_guards(e, by_id, now, staleness_days=staleness_days)
+        hold_guard = guards.get(nid, {}).get("reason")
         if hold_guard and hold_guard.startswith("dispatch-hold"):
             reason = hold_guard
-        elif first_dead_ancestor(
-            e, by_id, is_dead=lambda anc: not _is_live(anc)
-        ) and not (
+        elif guards.get(nid, {}).get("dead_ancestor") and not (
             e.get("contained_in") or _has_unmerged_open_pr(e) or _is_batched_member(e)
         ):
             # Terminal-ancestor arm: the structural cause outranks

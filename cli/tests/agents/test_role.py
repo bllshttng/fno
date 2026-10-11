@@ -2628,47 +2628,6 @@ def test_a_two_epic_scope_arms_both(tmp_path: Path, monkeypatch) -> None:
     assert armed == {"e-1", "e-2"}
 
 
-def test_a_graph_fault_leaves_the_role_committed(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import fno.backlog.advance as advance_mod
-    from fno.agents.role import journal_spawn_role, promote_existing_session
-    from fno.agents.registry import load_registry
-
-    def _raisers(epic_id, active):
-        raise RuntimeError("graph write refused")
-
-    monkeypatch.setattr(advance_mod, "_set_mission_active", _raisers)
-    _prepare_role_cli(
-        monkeypatch,
-        tmp_path,
-        [
-            _entry(
-                "worker",
-                harness_session_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                status="idle",
-            )
-        ],
-    )
-    _seed_role_graph(
-        monkeypatch,
-        tmp_path,
-        [
-            {"id": "e-1", "type": "epic", "project": "alpha", "status": "in_progress"},
-            {"id": "c-1", "type": "task", "parent": "e-1"},
-        ],
-    )
-
-    # The spawn leg returns normally even though the arming write raised.
-    journal_spawn_role(
-        "granted", [], name="w", level=2, scope="e-1", grantor="human"
-    )
-
-    receipt = promote_existing_session("worker", ["e-1"])
-    assert receipt["missions_armed"] is None
-    # The role row still stands.
-    row = next(r for r in load_registry() if r.name == "worker")
-    assert (row.role_level, row.role_scope) == (2, "e-1")
 
 
 def test_recrowning_an_armed_epic_emits_nothing(

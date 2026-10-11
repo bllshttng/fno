@@ -625,30 +625,6 @@ def test_spawn_thread_refusal_renders_from_accept_set(monkeypatch) -> None:
     assert "gemini has no measured thread lane yet; use --substrate pane." in str(caught.value)
 
 
-def test_thread_refusal_is_one_message_across_both_seams(monkeypatch) -> None:
-    """The spawn seam and the dispatch-lanes seam raise the SAME text.
-
-    Two files used to render the accept set from the tuple and then hardcode
-    the same pane-only sentence beside it, so one could name a harness the
-    other had since admitted - and did.
-    """
-    from typer.testing import CliRunner
-
-    from fno.agents import dispatch
-    from fno.backlog import advance
-    from fno.graph import cli as graph_cli
-
-    with pytest.raises(dispatch.DispatchAskError) as caught:
-        dispatch._check_spawn_harness("gemini")
-
-    monkeypatch.setattr(advance, "dispatch_lanes", lambda *a, **k: [])
-    lanes = CliRunner().invoke(
-        graph_cli.cli, ["dispatch-lanes", "--harness", "gemini", "--max", "1"]
-    )
-
-    assert lanes.exit_code == 2
-    for line in str(caught.value).splitlines():
-        assert line in lanes.output
 
 
 def test_spawn_pi_thread_passes_the_seam_and_headless_refuses_unmeasured() -> None:

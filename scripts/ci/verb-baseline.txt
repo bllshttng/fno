@@ -50,7 +50,7 @@ annotate list
 approvals
 autonomy status
 backlog
-backlog advance !--continuation
+backlog advance
 backlog done
 backlog get
 backlog next

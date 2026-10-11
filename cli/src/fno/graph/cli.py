@@ -23,7 +23,6 @@ from typing import Any, List, Literal, Optional
 
 import typer
 
-from fno.loops import refuse_if_paused
 from fno.tombstones import tombstone_group_cls
 # the external-backend verb classification lives beside its data
 from fno.graph._verb_classification import (
@@ -88,7 +87,6 @@ cli.add_typer(_capture_cli, name="capture", hidden=True)
 # Nested batch sub-app: `fno backlog batch <verb>`. Batch-lane state
 # (.fno/batches/<domain>.json) — coalesce same-domain nodes into one PR.
 from fno.backlog.batch import cli as _batch_cli  # noqa: E402
-from fno.backlog.advance import refuse_unknown_source as _refuse_unknown_source  # noqa: E402
 
 cli.add_typer(_batch_cli, name="batch", hidden=True)
 
@@ -2489,10 +2487,9 @@ def cmd_next(
     ) -> list[dict]:
         by_id = {entry.get("id"): entry for entry in source_entries}
         container_ids = _container_ids(source_entries)
-        from fno.backlog.advance import _guard_staleness_days, selection_guards
+        from fno.rust_binary import verb_call
 
-        guard_now = datetime.now(timezone.utc)
-        guard_stale = _guard_staleness_days()
+        guards = verb_call(["backlog", "advance", "--stdin"], {"op": "selection-guards", "entries": source_entries})["guards"]
         safe_rows = []
         for row in current_observer["rows"]:
             entry = by_id.get(row.get("id"))
@@ -2502,12 +2499,7 @@ def cmd_next(
                 continue
             if entry.get("id") in container_ids or _is_batched_member(entry):
                 continue
-            if selection_guards(
-                entry,
-                by_id,
-                guard_now,
-                staleness_days=guard_stale,
-            ):
+            if guards.get(entry.get("id"), {}).get("reason"):
                 continue
             safe_rows.append(entry)
         safe_observer = {**current_observer, "rows": safe_rows}
@@ -2573,7 +2565,7 @@ def cmd_next(
     # failure never breaks dispatch. Under an external backend the receipts
     # explain the ACTUAL joined denominator, never the local graph.
     try:
-        from fno.backlog.advance import _guard_staleness_days
+        from fno.rust_binary import verb_call
 
         recv_entries = pre_entries or []
         scope_ids = (
@@ -2588,7 +2580,7 @@ def cmd_next(
             scope_ids,
             selection_claimed[0],
             datetime.now(timezone.utc),
-            _guard_staleness_days(),
+            verb_call(["backlog", "advance", "--stdin"], {"op": "staleness"})["days"],
             mission=mission,
             roadmap_id=roadmap_id,
         )
@@ -2754,152 +2746,11 @@ def cmd_lane_fill(
     raise typer.Exit(code=2)
 
 
-@cli.command("dispatch-lanes", hidden=True)
-def cmd_dispatch_lanes(
-    max_lanes: Optional[int] = typer.Option(
-        None, "--max", help="Max lanes (default: config.parallel.max_lanes)."
-    ),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Filter by project name"),
-    mission: Optional[str] = typer.Option(
-        None, "--mission", help="Restrict dispatch to this mission's nodes."
-    ),
-    model: Optional[str] = typer.Option(
-        None,
-        "--model",
-        "-m",
-        help="Pin a model for every lane spawned this run, overriding node annotations.",
-    ),
-    harness: Optional[str] = typer.Option(
-        None,
-        "--harness",
-        "-H",
-        help="Pin the CLI harness for every lane.",
-    ),
-    provider: Optional[str] = typer.Option(
-        None,
-        "--provider",
-        "-P",
-        help="Pin the model vendor for every lane.",
-    ),
-    source: Optional[str] = typer.Option(
-        None,
-        "--source",
-        help="Dispatch origin for every lane worker's name : the daemon passes ab; an attended run passes nothing.",
-    ),
-) -> None:
-    """Spawn up to max_lanes isolated background lanes (parallel mode, group 3).
-
-    Selects collision-clean ready nodes (like ``lane-fill``), then for each one
-    isolates a worktree off origin/main, seeds its per-lane
-    ``.fno/config.local.toml``, and spawns a detached ``/target`` worker rooted
-    there. Prints one JSON object: ``lanes`` plus a ``fill`` summary.
-    ``max_lanes < 1`` spawns nothing (a single lane is the daemon's path).
-    """
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        reject_empty_model,
-    )
-    from fno.backlog.advance import dispatch_lanes
-
-    _refuse_unknown_source("dispatch-lanes", source)
-
-    try:
-        model = reject_empty_model(model)
-        if harness is not None:
-            harness = harness.strip()
-            if not harness:
-                raise DispatchFlagError("--harness must not be empty")
-            from fno.harness_names import SPAWN_HARNESSES
-            from fno.harness_names import unknown_thread_harness_message
-
-            if harness not in SPAWN_HARNESSES:
-                # The builder the spawn seam raises, rendered from the tuples
-                # beside it - so this seam needs no capability-table read.
-                raise DispatchFlagError(unknown_thread_harness_message(harness))
-        if provider is not None:
-            provider = provider.strip()
-            if not provider:
-                raise DispatchFlagError("--provider must not be empty")
-            from fno.harness_names import KNOWN_HARNESSES
-
-            if provider in KNOWN_HARNESSES:
-                raise DispatchFlagError(
-                    f"--provider names the model VENDOR axis; {provider!r} is a "
-                    f"HARNESS. Use -H/--harness {provider}."
-                )
-    except DispatchFlagError as exc:
-        typer.echo(f"dispatch-lanes: {exc}", err=True)
-        raise typer.Exit(code=2)
-
-    if max_lanes is None:
-        from fno.config import load_settings
-
-        max_lanes = load_settings().parallel.max_lanes
-
-    fill: dict = {}
-    receipts = dispatch_lanes(
-        max_lanes,
-        project,
-        mission=mission,
-        model=model,
-        harness=harness,
-        vendor=provider,
-        report=fill,
-        source=source,
-    )
-    # dispatch_lanes fills every key before returning (both the no-selection and
-    # completion paths write the report), so the shape is read directly.
-    fill_output = {
-        "requested": fill["requested"],
-        "selected": fill["filled"],
-        "dispatched": fill["dispatched"],
-        "skipped": fill["skipped"],
-        "stop": fill["stop"],
-        "excluded": fill["excluded"],
-    }
-    typer.echo(json.dumps({"lanes": receipts, "fill": fill_output}, indent=2))
-    if receipts and not any(
-        receipt.get("status") == "dispatched" for receipt in receipts
-    ):
-        raise typer.Exit(code=1)
 
 
 # -- join --
 
 
-@cli.command("join", hidden=True)
-def cmd_join(
-    node: str = typer.Argument(..., help="Node id (slug / bare hex resolve)."),
-    workers: Optional[int] = typer.Option(
-        None, "--workers",
-        help="Requested joiner count. Empty derives it from the node priority "
-        "and the plan's highest wave band; the plan's ready-graph width "
-        "bounds it either way.",
-    ),
-    model: Optional[str] = typer.Option(
-        None, "--model", "-m",
-        help="Explicit model for the joiner spawns ( shape); empty "
-        "leaves the spawn CLI's own default resolution.",
-    ),
-) -> None:
-    """Spawn execute-waves joiners into a held node's worktree .
-    Full contract: docs/architecture/backlog-graph-verb-contracts.md
-    """
-    from fno.backlog.advance import JoinRefuse, join_node
-    from fno.graph.fuzzy import resolve_node
-
-    entries = _display_entries("backlog.join")
-    match = resolve_node(node, entries)
-    if match.kind != "exact" or not match.id:
-        typer.echo(f"backlog join: no node matches '{node}'", err=True)
-        raise typer.Exit(code=2)
-
-    try:
-        receipt = join_node(match.id, workers, model=model)
-    except JoinRefuse as exc:
-        typer.echo(f"backlog join: {exc.message}", err=True)
-        raise typer.Exit(code=exc.code)
-    typer.echo(json.dumps(receipt, indent=2))
 
 
 # -- groom --
@@ -5884,240 +5735,6 @@ def _canonical_post_close(
 # native now, owned by the door's lifecycle module.
 
 
-@cli.command("advance", hidden=True)
-def cmd_advance(
-    closed: Optional[str] = typer.Option(
-        None,
-        "--closed",
-        help="The just-merged node id whose close triggered this advance (AC1-RACE keying).",
-    ),
-    epic: Optional[str] = typer.Option(
-        None, "--epic", help="Advance (converge) an epic mission: fan out its ready leaf children across all projects ( K1). Mutually exclusive with --closed.",
-    ),
-    stop: bool = typer.Option(
-        False, "--stop", help="With --epic: deactivate the mission (clear mission_active) and dispatch nothing.",
-    ),
-    loose: bool = typer.Option(False, "--loose", help="With --project: drain the territory's loose ready nodes."),
-    continuation: bool = typer.Option(
-        False, "--continuation", hidden=True,
-        help="With --epic: K2 daemon-drain mode - never (re)activate the mission; retire an already-inactive one (dispatches nothing, reports deactivated).",
-    ),
-    max_dispatch: Optional[int] = typer.Option(
-        None, "--max", help="With --epic: cap the total workers this epic advance dispatches (width derives from spawn-gate headroom).",
-    ),
-    project: Optional[str] = typer.Option(None, "--project", "-p", help="Restrict next-node selection to this project."),
-    explain: bool = typer.Option(
-        False,
-        "--explain",
-        help=(
-            "Dry run: report why this node and not another - the refusing gate "
-            "or cap with its measured value, and the grid's resolve. Dispatches "
-            "nothing, claims nothing, ignores config.auto_continue."
-        ),
-    ),
-    explain_node: Optional[str] = typer.Option(
-        None,
-        "--explain-node",
-        help="With --explain: answer for THIS node - the filter that dropped it, or its rank.",
-    ),
-    explain_top: int = typer.Option(
-        5, "--explain-top", help="With --explain: how many ranked candidates to show."
-    ),
-    json_out: bool = typer.Option(False, "--json", "-J", help="Emit the decision as JSON."),
-    verbose: bool = typer.Option(False, "--verbose", help="Print the dispatch decision to stderr."),
-    model: Optional[str] = typer.Option(
-        None, "--model", "-m", help="Pin a model for the dispatched worker(s), overriding node annotations.",
-    ),
-    provider: Optional[str] = typer.Option(
-        None, "--provider", help="Pin a provider for the dispatched worker(s). (No -p short: it is --project here.)",
-    ),
-    source: Optional[str] = typer.Option(
-        None,
-        "--source",
-        help="Dispatch origin for the worker name: ab daemon, ac merge continuation. Omit when attended.",
-    ),
-) -> None:
-    """Dispatch a fresh /target --no-merge worker for the next now-unblocked node.
-
-    Merge-triggered auto-continue (). Opt-in and non-fatal; driven by the
-    merge event (reconcile / post-merge). Always exits 0 (a dispatch decision
-    is never an error to the host op). ``--epic <id>`` switches to the epic
-    advance / converge path ( K1): mark the mission active and fan out every
-    ready LEAF child across all projects; ``--stop`` deactivates instead.
-    """
-    from fno.dispatch_flags import (
-        DispatchFlagError,
-        reject_empty_model,
-        resolve_dispatch_harness,
-    )
-    from fno.backlog.advance import advance as _advance
-    from fno.backlog.advance import advance_dependents as _advance_deps
-
-    _refuse_unknown_source("advance", source)  # refuse, never default.
-
-    # --explain returns BEFORE every dispatch path, including the pin validation
-    # below: it is a read, so an unparseable --model must not stop it from
-    # reporting why a node did not launch. A graph read that fails exits
-    # non-zero naming the read rather than printing a partial verdict.
-    if explain:
-        from fno.backlog.explain import build_report, render_report
-
-        # --explain --epic models the DAEMON's drain (the --epic fan-out through the
-        # converge gates), never the next cascade whose answer is the second-selector lie.
-        if epic is not None:
-            from fno.backlog.explain import build_lane_fill_report, render_lane_fill_report
-
-            try:
-                report = build_lane_fill_report(
-                    epic=epic, project=project, node_id=explain_node, top=explain_top,
-                    max_dispatch=max_dispatch, provider=provider, model=model,
-                )
-            except Exception as exc:  # noqa: BLE001 - never a partial verdict
-                typer.echo(f"advance --explain --epic: {exc}", err=True)
-                raise typer.Exit(code=1)
-            typer.echo(
-                json.dumps(report, indent=2, default=str)
-                if json_out
-                else render_lane_fill_report(report)
-            )
-            return
-        try:
-            report = build_report(
-                project=project, node_id=explain_node, top=explain_top
-            )
-        except Exception as exc:  # noqa: BLE001 - never a partial verdict
-            typer.echo(f"advance --explain: {exc}", err=True)
-            raise typer.Exit(code=1)
-        typer.echo(json.dumps(report, indent=2, default=str) if json_out else render_report(report))
-        return
-    if explain_node is not None or explain_top != 5:
-        typer.echo("advance: --explain-node / --explain-top require --explain", err=True)
-        raise typer.Exit(code=2)
-
-    refuse_if_paused(json_out=json_out)
-    # Validate dispatch pins before spawn; absent pins keep per-node defaults.
-    # `--provider` names its flag in refusals rather than the resolved axis.
-    try:
-        model = reject_empty_model(model)
-        provider = (
-            resolve_dispatch_harness(provider, flag="--provider")[0]
-            if provider is not None
-            else None
-        )
-    except DispatchFlagError as exc:
-        typer.echo(f"advance: {exc}", err=True)
-        raise typer.Exit(code=2)
-
-    from contextlib import nullcontext
-
-    from fno.backlog.advance import run_advance_epic, run_advance_loose
-    from fno.backlog.single_flight import advance_flight_scope
-
-    # --epic routes to the epic-advance path; it is a distinct trigger from the
-    # merge-advance --closed path (they never combine on one call).
-    if epic is not None:
-        if closed is not None or loose:
-            typer.echo("advance: --epic is mutually exclusive with --closed/--loose", err=True)
-            raise typer.Exit(code=2)
-        # One in flight per mission; the key uses the CANONICAL id so
-        # both spellings of an epic are one scope. --stop is a control action
-        # and never queues behind its own drain.
-        canonical_epic = epic
-        try:
-            from fno.graph._intake import _find_node
-
-            _epic_node = _find_node(wire_rows(path=_graph_path()), epic)
-            if _epic_node and _epic_node.get("id"):
-                canonical_epic = _epic_node["id"]
-        except Exception:  # noqa: BLE001 - an unreadable graph keys on the raw arg
-            pass
-        scope_cm = nullcontext(True) if stop else advance_flight_scope(canonical_epic, json_out=json_out)
-        with scope_cm as ok:
-            if not ok:
-                return
-            run_advance_epic(
-                epic,
-                stop=stop,
-                max_dispatch=max_dispatch,
-                json_out=json_out,
-                verbose=verbose,
-                model=model,
-                provider=provider,
-                continuation=continuation,
-                source=source,
-            )
-        return
-    if loose:
-        run_advance_loose(project, closed=closed, max_dispatch=max_dispatch,
-                          json_out=json_out, verbose=verbose, model=model,
-                          provider=provider)
-        return
-    if stop or max_dispatch is not None or continuation:
-        typer.echo("advance: --stop / --max / --continuation require --epic", err=True)
-        raise typer.Exit(code=2)
-
-    # RC2: closed_project is the CLOSED NODE's own project from the graph -
-    # NEVER the --project next-selection flag (which is normally OMITTED on a
-    # manual `advance --closed A`; see docs/architecture/backlog-board-ordering).
-    closed_project: Optional[str] = None
-    if closed:
-        try:
-            from fno.graph._intake import _find_node
-
-            _cn = _find_node(wire_rows(path=_graph_path()), closed)
-            closed_project = _cn.get("project") if _cn else None
-        except Exception:  # noqa: BLE001 - non-fatal; advance_deps fails closed on None
-            closed_project = None
-
-    # One in flight for the board advance: the merge event, a groom
-    # leg and a manual run all fire this verb, and nothing used to stop two
-    # of them from running at once.
-    with advance_flight_scope(None, json_out=json_out) as ok:
-        if not ok:
-            return
-        try:
-            result = _advance(
-                closed_node_id=closed,
-                project=project,
-                verbose=verbose,
-                model=model,
-                provider=provider,
-                source=source,
-            )
-            # G1 (AC5-FR): follow this node's blocked_by edges into OTHER projects.
-            # Only meaningful with --closed (an edge source); the project-scoped
-            # next selection above never reaches a foreign dependent. Shares the
-            # dispatch:<id> dedup with reconcile's call so a node seen by both the
-            # reconcile sweep and this explicit verb dispatches at most once.
-            if closed:
-                _advance_deps(
-                    closed_node_id=closed,
-                    closed_project=closed_project,
-                    verbose=verbose,
-                    model=model,
-                    provider=provider,
-                    source=source,
-                )
-                # G4: route the closed node's contract dependents to a reconcile pass
-                # (or a pending sentinel). Shares the dispatch:<id> dedup with the two
-                # advance paths so a node seen by all three dispatches at most once.
-                from fno.backlog.reconcile_dispatch import dispatch_reconcile_for_blocker
-
-                dispatch_reconcile_for_blocker(closed_node_id=closed, verbose=verbose)
-        except Exception as exc:  # noqa: BLE001 - the contract is "always exits 0"
-            # advance() is designed non-fatal (every path emits + returns), but the
-            # CLI entrypoint must never traceback on an unforeseen escape: a dispatch
-            # decision is not an error to whoever invoked the verb. Report on stderr
-            # and exit 0.: stdout also gets one verdict line - the detail
-            # alone left stdout empty, byte-identical to a swallowed crash.
-            typer.echo(f"advance: unexpected error (non-fatal): {exc}", err=True)
-            typer.echo("advance: failed reason=unexpected-error")
-            return
-    if json_out:
-        typer.echo(json.dumps(result.json_receipt(), indent=2))
-    else:
-        for line in result.render():
-            typer.echo(line)
 
 
 @cli.command("reconcile-findings", hidden=True)

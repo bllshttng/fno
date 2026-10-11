@@ -328,14 +328,15 @@ def _spawn_guard_decision(
             ),
         }, 0
 
-    from fno.backlog.advance import _observe_node_claim
+    from fno.rust_binary import verb_call
+    from types import SimpleNamespace
 
-    observation = _observe_node_claim(
-        node_id,
-        cwd,
-        enforce_failure_limit=not no_reserve,
-        emit=not no_reserve,
-    )
+    observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+        "op": "claim", "node_id": node_id, "cwd": cwd,
+        "enforce_failure_limit": not no_reserve, "emit_events": not no_reserve,
+    }))
+    if getattr(observation, "warning", None):
+        print(f"advance: WARNING: {observation.warning}", file=sys.stderr)
     common = {
         "holder": observation.holder,
         "truth_status": observation.truth_status,
@@ -397,12 +398,10 @@ def _spawn_guard_decision(
             )
             if prior is not None:
                 _emit_reaped_abandoned(node_id, prior, observation.truth_status)
-                observation = _observe_node_claim(
-                    node_id,
-                    cwd,
-                    enforce_failure_limit=not no_reserve,
-                    emit=False,
-                )
+                observation = SimpleNamespace(**verb_call(["backlog", "advance", "--stdin"], {
+                    "op": "claim", "node_id": node_id, "cwd": cwd,
+                    "enforce_failure_limit": not no_reserve, "emit_events": False,
+                }))
                 common = {
                     "holder": observation.holder,
                     "truth_status": observation.truth_status,
@@ -746,10 +745,9 @@ def _emit_reaped_abandoned(node_id: str, prior_holder: str, truth_status: str) -
     """
     try:
         from fno.agents import events as agent_events
-        from fno.backlog.advance import EVENT_CLAIM_OBSERVED
 
         agent_events.emit(
-            EVENT_CLAIM_OBSERVED,
+            "dispatch_claim_observed",
             node_id=node_id,
             claim_verdict="dead_predecessor",
             claim_state="suspect",

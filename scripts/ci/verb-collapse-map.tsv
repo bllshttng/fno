@@ -151,8 +151,8 @@ annotate resolve	T1	annotate resolve	5
 approvals decide	T1	approvals decide	2
 approvals ls	T1	approvals ls	2
 approvals show	T1	approvals show	3
-backlog contain	T1	backlog contain	3
 backlog advance	KEEP	backlog advance	43	deliberate readability slack for a high-traffic distinct operation
+backlog contain	T1	backlog contain	3
 backlog album	T1	backlog album	0
 backlog annotate add	T1	backlog annotate add	7
 backlog annotate list	T1	backlog annotate list	0
@@ -186,15 +186,15 @@ backlog cost	T1	backlog cost	1
 backlog decompose	T1	backlog decompose	8
 backlog defer	T1	backlog defer	14
 backlog demand	T1	backlog demand	0
-backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog discover	T1	backlog discover	0
+backlog dispatch-lanes	T1	backlog dispatch-lanes	1
 backlog done	KEEP	backlog done	42	deliberate readability slack for a high-traffic distinct operation
 backlog encounter	T1	backlog encounter	0
 backlog epic status	T1	backlog epic status	7
 backlog get	KEEP	backlog get	87	deliberate readability slack for a high-traffic distinct operation
+backlog join	T1	backlog join	1
 backlog groom	T1	backlog groom	20
 backlog intake	T1	backlog intake	32
-backlog join	T1	backlog join	1
 backlog lane-fill	T1	backlog lane-fill	2
 backlog lanes	T1	backlog lanes	2
 backlog maintain	T1	backlog maintain	7

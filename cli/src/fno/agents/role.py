@@ -787,11 +787,8 @@ def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
     Returns the epic ids newly armed, or None when the graph write failed."""
     armed: list[str] = []
     try:
-        from fno.backlog.advance import (
-            EVENT_MISSION_ACTIVATED,
-            _emit,
-            _set_mission_active,
-        )
+        from fno.rust_binary import verb_call
+        from fno.agents import events
         from fno.graph.cli import _container_ids
 
         # ONE graph parse serves every member: a graph this rung could not
@@ -811,11 +808,10 @@ def arm_promoted_missions(scope: Optional[str]) -> Optional[list[str]]:
                 # leaves the flag standing, which the drain then polls forever.
                 # The dispatch lever arms it once children exist.
                 continue
-            if _set_mission_active(member, True):
-                _emit(
-                    EVENT_MISSION_ACTIVATED,
-                    {"epic_id": member, "source": "role"},
-                    None,
+            if verb_call(["backlog", "advance", "--stdin"], {"op": "mission", "node_id": member, "active": True})["changed"]:
+                events.emit(
+                    "mission_activated",
+                    epic_id=member, source="role",
                 )
                 armed.append(member)
     except Exception as exc:  # noqa: BLE001 - the role already committed

@@ -300,7 +300,6 @@ crates/fno-agents/src/slot_cutover.rs
 crates/fno-agents/src/backlog/dispatch_resolve.rs
 crates/fno-agents/src/backlog/autobrief.rs
 crates/fno-agents/src/backlog/advance_join.rs
-cli/src/fno/backlog/advance.py
 cli/src/fno/backlog/batch.py
 cli/src/fno/claims/session_pid.py
 cli/src/fno/cost/_register.py
