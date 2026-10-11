@@ -2794,6 +2794,14 @@ impl Drop for ResumeEnvGuard {
     }
 }
 
+/// Serializes the env-mutating resume tests inside THIS test binary. The
+/// lib-side helper (`claims::test_env_lock`) is cfg(test) of the lib crate,
+/// so the bin's test build cannot see it.
+fn resume_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// main block_ons `run`, and a codex thread row's wake builds its own
 /// runtime and block_ons again (`resume_wake.rs`). Drive the verb through
 /// the same entry main uses, inside a tokio runtime: it must refuse 16
@@ -2801,6 +2809,9 @@ impl Drop for ResumeEnvGuard {
 /// runtime".
 #[test]
 fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
+    // Serializes against the other env-mutating resume tests (shared
+    // FNO_AGENTS_HOME / CODEX_HOME / PATH mutation, parallel threads).
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
@@ -2855,6 +2866,60 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
         .unwrap()
         .block_on(run(vec!["resume".into(), "w1".into()]));
     assert_eq!(code, 16);
+}
+
+/// `resume <predecessor uuid>` on a live claude row refuses with
+/// the spawn --resume remedy and launches nothing - it never re-enters the
+/// row's current session. The refusal precedes the route and PATH work, so
+/// no stub is needed; the codex runtime test above covers the dispatch
+/// path this rides. The detector's scoping contract is tested beside it,
+/// in resolve_tier's exact_id_tests.
+#[test]
+fn resume_by_predecessor_full_id_refuses_13() {
+    // Serialize against the sibling resume tests that mutate the same env
+    // vars: parallel threads swapping FNO_AGENTS_HOME read each other's
+    // registries mid-test.
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let temp = tempfile::tempdir().unwrap();
+    let home_dir = temp.path().join("agents-home");
+    std::fs::create_dir_all(&home_dir).unwrap();
+    let cwd_dir = temp.path().join("cwd");
+    std::fs::create_dir_all(&cwd_dir).unwrap();
+    std::fs::write(
+        home_dir.join("registry.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "agents": [
+                {
+                    "name": "w1",
+                    "harness": "claude",
+                    "substrate": "pane",
+                    "cwd": cwd_dir.display().to_string(),
+                    "log_path": "w1.log",
+                    "harness_session_id": "77770001-2222-3333-4444-555555555555",
+                    "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let _restore = ResumeEnvGuard {
+        home: std::env::var_os("FNO_AGENTS_HOME"),
+        codex_home: std::env::var_os("CODEX_HOME"),
+        path: std::env::var_os("PATH"),
+    };
+    std::env::set_var("FNO_AGENTS_HOME", &home_dir);
+    let code = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run(vec![
+            "resume".into(),
+            "77770003-2222-3333-4444-555555555555".into(),
+        ]));
+    assert_eq!(code, 13);
 }
 
 mod tier_remap_guard {
