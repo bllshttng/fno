@@ -13,10 +13,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::node_ref::has_node_id_prefix;
+use super::projections::project_key;
 use super::settings;
 use crate::backlog_ready::{
     descendants_of, epics_with_child_progress, get_str, in_progress_epic_ids, is_dict,
-    live_epic_for, make_effective_priority, priority_name, rank_band, truthy,
+    live_epic_for, make_effective_priority, rank_band,
 };
 use crate::graph_store::entry_id;
 use crate::paths::AgentsHome;
@@ -127,9 +128,7 @@ fn agent_rank_refusal(task_id: &str, harness: &str) -> String {
     )
 }
 
-/// The kanban column (`render._kanban_column`): roadmap/deferred/superseded
-/// are off-board, done/queued/claimed-route and the promoted priority decide
-/// the rest.
+/// The lane's column, owned by the shared board classifier.
 fn kanban_column(
     e: &Value,
     in_progress_epics: &BTreeSet<String>,
@@ -137,59 +136,8 @@ fn kanban_column(
     by_id: &BTreeMap<String, Value>,
     child_progress: &BTreeSet<String>,
 ) -> Option<String> {
-    if get_str(e, "type") == Some("roadmap") {
-        return None;
-    }
-    if truthy(e.get("completed_at")) {
-        return Some("Done".to_string());
-    }
-    let status = get_str(e, "status");
-    if status == Some("done") {
-        return Some("Done".to_string());
-    }
-    if matches!(status, Some("deferred") | Some("superseded")) {
-        return None;
-    }
-    if status == Some("in_progress") {
-        return Some("In Progress".to_string());
-    }
-    if let Some(id) = entry_id(e) {
-        if in_progress_epics.contains(id) {
-            return Some("In Progress".to_string());
-        }
-    }
-    if truthy(e.get("queued_at")) {
-        return Some("Triage".to_string());
-    }
-    // make_kanban_column always binds the effective-priority projection, so
-    // the row's own priority only answers for rows outside the id map.
-    let priority = match entry_id(e).and_then(|id| effective.get(id)) {
-        Some(p) => p.clone(),
-        None => match live_epic_for(e, by_id, child_progress) {
-            Some(epic) => {
-                let child = priority_name(e);
-                let epic_p = priority_name(&epic);
-                if epic_p < child {
-                    epic_p
-                } else {
-                    child
-                }
-            }
-            None => priority_name(e),
-        },
-    };
-    match priority.as_str() {
-        "p0" | "p1" => Some("Now".to_string()),
-        "p3" => Some("Later".to_string()),
-        _ => Some("Next".to_string()),
-    }
-}
-
-fn project_key(e: &Value) -> String {
-    match get_str(e, "project") {
-        Some(p) if !p.trim().is_empty() => p.to_string(),
-        _ => "(unscoped)".to_string(),
-    }
+    super::projections::kanban_column(e, in_progress_epics, effective, by_id, child_progress)
+        .map(str::to_string)
 }
 
 /// python float repr: a whole f64 prints `4.0`, not `4`; the exponent bands

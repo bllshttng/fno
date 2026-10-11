@@ -345,27 +345,6 @@ def test_container_ids_counts_a_free_child():
 # ---------------------------------------------------------------------------
 
 
-def test_kanban_column_and_card_for_a_contained_row(tmp_graph):
-    from fno.graph.render import _kanban_column, render_graph_md
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    kid_row = _by_id(tmp_graph)[kids[0]]
-    assert _kanban_column(kid_row) is not None
-    card = tmp_graph.with_name("card.md")
-    render_graph_md(_read_entries(tmp_graph), card, obsidian=False)
-    assert f"ships inside: {owner}" in card.read_text()
-
-
-def test_kanban_column_hides_a_deferred_row(tmp_graph):
-    from fno.graph.render import _kanban_column
-
-    owner, kids = _seed_owner_with_children(tmp_graph, 1)
-    assert _native_contain(tmp_graph, owner, *kids)[0] == 0
-    _invoke("backlog", "defer", kids[0], "--reason", "parked")
-    assert _kanban_column(_by_id(tmp_graph)[kids[0]]) is None
-
-
 # ---------------------------------------------------------------------------
 # The named-dispatch redirect
 # ---------------------------------------------------------------------------

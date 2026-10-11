@@ -309,7 +309,7 @@ class RenderTargetConfig(BaseModel):
                     # load_settings(), so raising here turns one typo in one
                     # render-target row into a ValidationError out of every
                     # settings-loading fno command. The row is REFUSED instead
-                    # at the point of use, in roadmap_public._configured_targets,
+                    # at the point of use, by the native render-target read,
                     # where skipping it costs one board and nothing else.
                     _LOG.warning(
                         "config.backlog.render_targets: unknown key %r in row "
@@ -3010,8 +3010,8 @@ class PrWatchBlock(BaseModel):
 class GroomBlock(BaseModel):
     """Daily backlog-grooming pass settings (nested under 'config.groom').
 
- wave 2: `fno backlog groom` (`_spawn_groom_worker`,
-    backlog/groom.py:204) previously spawned with no enable key at all, so it
+ wave 2: `fno backlog groom` (`spawn_worker` in
+    crates/fno-agents/src/backlog/groom.rs) previously spawned with no enable key at all, so it
     could not be turned off. Default ``True`` matches the spawner's CURRENT
     effective behavior (it always ran) - shipping this gate changes nothing
     for an existing user until they explicitly disable it.

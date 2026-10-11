@@ -163,18 +163,6 @@ def test_roadmap_includes_archive_only_shipped_row(tmp_graph, tmp_path):
     assert "Archive shipped marker" in result.stdout
 
 
-def test_view_refuses_when_the_board_render_fails(tmp_graph, monkeypatch):
-    def _failing():
-        return 1
-
-    monkeypatch.setattr("fno.graph.roadmap_public.render_local_targets", _failing)
-
-    result = runner.invoke(app, ["backlog", "view"])
-
-    assert result.exit_code != 0
-    assert "local board render failed" in (result.stdout + (result.stderr or ""))
-
-
 @pytest.mark.parametrize(
     "argv",
     [

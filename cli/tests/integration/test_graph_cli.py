@@ -531,32 +531,6 @@ def test_done_no_audit_tag_when_not_driving(tmp_graph, monkeypatch):
 
 # --- view ---
 
-def test_ac1_hp_graph_view_renders_html_and_prints_path(tmp_graph, tmp_path, monkeypatch, native_board_render):
-    """AC1-HP: fno graph view rerenders HTML and echoes the path."""
-    monkeypatch.setenv("FNO_NO_OPEN", "1")
-    html_path = tmp_path / "graph.html"
-
-    _native_verb("add", "ViewTarget")
-    r = _invoke("backlog", "view")
-    assert r.exit_code == 0, r.output
-    assert str(html_path) in r.output
-    assert html_path.exists()
-    text = html_path.read_text(encoding="utf-8")
-    assert "ViewTarget" in text
-    assert "<html" in text
-
-
-def test_ac2_err_graph_view_empty_graph_still_renders(tmp_graph, tmp_path, monkeypatch, native_board_render):
-    """AC2-ERR: view on an empty graph produces an HTML shell, not an error."""
-    monkeypatch.setenv("FNO_NO_OPEN", "1")
-    html_path = tmp_path / "graph.html"
-
-    r = _invoke("backlog", "view")
-    assert r.exit_code == 0, r.output
-    assert html_path.exists()
-    assert "<html" in html_path.read_text(encoding="utf-8")
-
-
 # --- tree ---
 
 # --- status ---
@@ -715,14 +689,6 @@ def _rank(*args: str):
     )
 
 
-def _render_board(g: Path) -> None:
-    """The board render is the keeper's async job after a native write; render
-    explicitly so the ordering assertions read the fresh pin."""
-    from fno.graph.render import render_graph_md
-
-    render_graph_md(_read_graph(g), g.parent / "graph.md")
-
-
 def test_ac1_hp_rank_top_pins_to_lane_front(tmp_graph):
     """AC1-HP: `rank A --top` pins A's rank and leaves unranked peers alone."""
     a = _add("AlphaCard", project="fno", priority="p1")  # Now/fno
@@ -735,20 +701,6 @@ def test_ac1_hp_rank_top_pins_to_lane_front(tmp_graph):
     # A is now ranked, B remains unranked.
     assert _rank_of(tmp_graph, a) is not None
     assert _rank_of(tmp_graph, b) is None
-
-
-def test_ac1_ui_ranked_card_leads_lane_after_before(tmp_graph):
-    """AC1-UI: --before a ranked anchor places the card ahead of it on the board."""
-    a = _add("FirstCard", project="fno", priority="p1")
-    b = _add("SecondCard", project="fno", priority="p1")
-    assert _rank(a, "--top", "--operator").returncode == 0
-    r = _rank(b, "--before", a, "--operator")
-    assert r.returncode == 0, r.stderr
-    assert _rank_of(tmp_graph, b) < _rank_of(tmp_graph, a)
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    now_body = md.split("## Now", 1)[1].split("\n## ", 1)[0]
-    assert now_body.index("SecondCard") < now_body.index("FirstCard")
 
 
 def test_rank_child_defaults_to_within_epic_scope(tmp_graph):
@@ -823,27 +775,6 @@ def test_rank_within_epic_refused_without_live_epic_parent(tmp_graph):
         assert _rank_of(tmp_graph, target) is None
 
 
-def test_rank_within_epic_orders_children_on_board(tmp_graph):
-    """AC1-HP end to end: a child rank reorders cards inside its epic group."""
-    entries = [
-        {"id": "ab-epic004", "title": "Epic", "type": "epic",
-         "status": "ready", "priority": "p1", "project": "fno"},
-        {"id": "ab-later1", "title": "LaterCard", "status": "ready",
-         "priority": "p2", "project": "fno", "parent": "ab-epic004"},
-        {"id": "ab-first1", "title": "FirstCard", "status": "ready",
-         "priority": "p2", "project": "fno", "parent": "ab-epic004"},
-    ]
-    _seed_graph_text(tmp_graph, json.dumps({"entries": entries}) + "\n")
-
-    r = _rank("ab-first1", "--top", "--within-epic", "--operator")
-    assert r.returncode == 0, r.stderr
-    assert "epic ab-epic004" in r.stdout
-
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    assert md.index("FirstCard") < md.index("LaterCard")
-
-
 def test_rank_uses_in_progress_epic_board_lane(tmp_graph):
     entries = [
         {"id": "ab-epic002", "title": "Epic", "type": "epic",
@@ -861,20 +792,6 @@ def test_rank_uses_in_progress_epic_board_lane(tmp_graph):
     assert result.returncode == 0, result.stderr
     assert "In Progress/fno" in result.stdout
     assert _rank_of(tmp_graph, "ab-epic002") < _rank_of(tmp_graph, "ab-anchor2")
-
-
-def test_ac1_after_ranked_anchor_places_behind(tmp_graph):
-    """--after a ranked anchor places the card behind it (own midpoint branch)."""
-    a = _add("LeadCard", project="fno", priority="p1")
-    b = _add("TrailCard", project="fno", priority="p1")
-    assert _rank(a, "--top", "--operator").returncode == 0
-    r = _rank(b, "--after", a, "--operator")
-    assert r.returncode == 0, r.stderr
-    assert _rank_of(tmp_graph, b) > _rank_of(tmp_graph, a)
-    _render_board(tmp_graph)
-    md = (tmp_graph.parent / "graph.md").read_text()
-    now_body = md.split("## Now", 1)[1].split("\n## ", 1)[0]
-    assert now_body.index("LeadCard") < now_body.index("TrailCard")
 
 
 def test_rank_self_anchor_rejected(tmp_graph):
@@ -1261,31 +1178,6 @@ def test_legacy_entry_without_additional_prs_loads_with_default(tmp_graph):
     ]}))
     data = json.loads(_native_get("ab-12345678"))
     assert not data.get("additional_prs")
-
-
-def test_render_md_includes_additional_prs_on_done_nodes(tmp_graph):
-    """Tree rendering surfaces additional_prs URLs for done nodes."""
-    _seed_graph_text(tmp_graph, json.dumps({"entries": [
-        {"id": "ab-87878787", "title": "Multi", "priority": "p2",
-         "type": "feature", "domain": "code", "parent": None,
-         "plan_path": "x.md", "completed_at": "2026-01-01T00:00:00Z",
-         "pr_number": 540, "pr_url": "https://github.com/x/y/pull/540",
-         "additional_prs": [
-             {"number": 542, "url": "https://github.com/x/y/pull/542", "note": "wrap-up"},
-             {"number": 543, "url": "https://github.com/x/y/pull/543"},
-         ],
-         "created_at": "2026-01-01T00:00:00Z"}
-    ]}))
-    from fno.graph.store import read_graph_strict
-    from fno.graph.render import render_graph_md
-    entries = read_graph_strict(tmp_graph)
-    md_path = tmp_graph.parent / "graph.md"
-    render_graph_md(entries, md_path)
-    text = md_path.read_text()
-    assert "https://github.com/x/y/pull/540" in text
-    assert "https://github.com/x/y/pull/542" in text
-    assert "wrap-up" in text
-    assert "https://github.com/x/y/pull/543" in text
 
 
 # --- --completion-note setter ---

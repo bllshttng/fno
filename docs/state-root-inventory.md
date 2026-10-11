@@ -120,7 +120,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `backups/state-recovery/<digest>/` | `crates/fno/src/state_recovery.rs::apply` | verified SQLite snapshots, consumer sidecar snapshots and the immutable recovery batch manifest. Retain until the operator approves a separate rollback or removal; open attention items still resolve `recovery_batch` here, so the reclaim sweep reports the pile but never deletes it (the legacy `state-root-recovery/` spelling is in the same report-only set) |
 | `inbox/` | `paths.inbox_agents_root()` (`cli/src/fno/paths.py`), the mail bus's fallback root: one mailbox per agent handle under `agents/` | mail drains per handle; a drained envelope is acked away |
 | `.interrupted-writes/` | `crates/fno-agents/src/daemon.rs` (quarantine) | writes caught mid-flight; released after the write settles |
-| `logs/` | `cli/src/fno/agents/mux_spawn.py` (spawn logs), `pr_watch/_install.py` and `backlog/groom.py` (the launchd plist `StandardOutPath`/`StandardErrorPath`), `hooks/git-protection.py` (`logs/merge-gate-overrides.log`), the corrections hook family (`logs/corrections.log`, resolved through `scripts/lib/corrections-lock.sh` and `crates/fno-agents/src/finalize.rs::corrections_log_path`), `health_monitor.py` (`logs/health-alerts.log` via `paths.logs_file()`, renamed from the root spelling on first resolve) | unrotated spawn logs plus the moved writers |
+| `logs/` | `cli/src/fno/agents/mux_spawn.py` (spawn logs), `pr_watch/_install.py` and `crates/fno-agents/src/backlog/groom.rs` (the launchd plist `StandardOutPath`/`StandardErrorPath`), `hooks/git-protection.py` (`logs/merge-gate-overrides.log`), the corrections hook family (`logs/corrections.log`, resolved through `scripts/lib/corrections-lock.sh` and `crates/fno-agents/src/finalize.rs::corrections_log_path`), `health_monitor.py` (`logs/health-alerts.log` via `paths.logs_file()`, renamed from the root spelling on first resolve) | unrotated spawn logs plus the moved writers |
 | `logs/cargo-fallback-writers.log` | `scripts/lib/cargo-rustc-wrapper.sh` | one line per cargo that builds without the build-dir env; self-trims to its last 500 lines at 1,000 |
 | `mail-escalations/` | `cli/src/fno/mail/cli.py` (debounce markers via `O_CREAT|O_EXCL`) | one empty marker per sender/recipient pair inside the debounce window; safe to delete, the next escalation re-creates it |
 | `notes/` | `cli/src/fno/research/core.py` (`notes/research`) | permanent research notes |
@@ -177,7 +177,7 @@ Real writers, no rotation, no deleter. `ledger.md` stays at the root for now (a 
 |---|---|---|
 | `ledger.md` | `cost/_register.py` | append-only, ~1 MB and growing |
 | `logs/pr-watcher.out.log`, `logs/pr-watcher.err.log` | `pr_watch/_install.py` | unbounded |
-| `logs/groom.out.log`, `logs/groom.err.log` | `backlog/groom.py` | unbounded |
+| `logs/groom.out.log`, `logs/groom.err.log` | `crates/fno-agents/src/backlog/groom.rs` | unbounded |
 
 ## Session-scoped state
 

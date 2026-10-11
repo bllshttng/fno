@@ -511,7 +511,7 @@ def test_an_unknown_node_refuses_with_the_verb_text(tmp_path) -> None:
 
 def test_an_archived_node_refuses_with_the_archive_remedy(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
-        "fno.graph._archive_lookup.archived_entry",
+        "fno.backlog.note_notify.archived_entry",
         lambda node_id: {"id": "x-3a64"} if node_id == "x-3a64" else None,
     )
     got = readers_before_append("x-3a64", _graph(tmp_path, [{"id": "x-0d08"}]))
@@ -780,7 +780,7 @@ def _run_note_quiet(monkeypatch, node_id: str, live_rows: list[dict]):
         "fno.graph.api.wire_rows", lambda *, path=None: list(live_rows)
     )
     monkeypatch.setattr(
-        "fno.graph._archive_lookup.archived_entry",
+        "fno.backlog.note_notify.archived_entry",
         lambda nid: {"id": node_id} if nid == node_id else None,
     )
     monkeypatch.setattr(

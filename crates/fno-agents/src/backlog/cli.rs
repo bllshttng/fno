@@ -263,6 +263,23 @@ pub fn run(args: &[String]) -> i32 {
         // owns every triage tail: the wheel's triage route forwards here,
         // so a forward back would loop.
         "triage" => super::triage_cli::run(resolved.tail),
+        // The projections: the shared kanban classifier, the post-publish
+        // view pass, and the read verbs over it.
+        "render-views" => super::projections::run_render_views(resolved.tail),
+        "view" => super::projections::run_view(resolved.tail),
+        "board" => super::projections::run_board(resolved.tail),
+        "bases" => super::projections::run_bases(resolved.tail),
+        "roadmap" => super::projections::run_roadmap(resolved.tail),
+        "album" => super::projections::run_album(resolved.tail),
+        // Archive residency, the hygiene pass, the daily groom, and the
+        // one-shot row migrations.
+        "archive" => super::maintenance_archive::run_archive(resolved.tail),
+        "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
+        // PENDING "maintain" => super::maintenance::run_maintain(resolved.tail),
+        "groom" => super::groom::run_groom(resolved.tail),
+        "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
+        "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
+        "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
         _ => forward_python(&resolved),
     }
 }

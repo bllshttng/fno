@@ -225,7 +225,7 @@ def cmd_note(
     # mode never bypasses it (it guards the write, not the delivery). Live
     # first, then the archive: a live id is live whatever the archive holds
     # (the same order update, reopen, and unarchive take).
-    from fno.graph._archive_lookup import refuse_update_if_archived
+    from fno.backlog.note_notify import archived_refusal
     from fno.graph._intake import _find_node
     from fno.graph.api import wire_rows
     from fno.graph.store import read_nodes_by_ids
@@ -248,7 +248,9 @@ def cmd_note(
             live = _find_node(wire_rows(path=graph_path), task_id)
         except Exception:  # noqa: BLE001 - an unreadable store is the write path's error to report
             live = None
-    if live is None and refuse_update_if_archived(task_id):
+    refusal = archived_refusal(task_id) if live is None else None
+    if refusal is not None:
+        typer.echo(refusal, err=True)
         raise typer.Exit(code=1)
 
     # Refuse BEFORE the write: an unread note is a silent drop wearing a
