@@ -2316,8 +2316,10 @@ mod tests {
         }
 
         // A removal the hold does not name passes.
-        hold_names_blockers(&rows[0], "t-bf51", &["t-other".to_string()], &rows)
-            .expect("an unnamed removal passes");
+        assert!(
+            hold_names_blockers(&rows[0], "t-bf51", &["t-other".to_string()], &rows).is_ok(),
+            "an unnamed removal passes"
+        );
 
         // An INVALID hold (a malformed block, not an active one) never
         // refuses: there is nothing to strand.
@@ -2334,13 +2336,16 @@ mod tests {
             "cwd": dir.path().display().to_string(),
         });
         let broken_rows = vec![broken_row, rows[1].clone()];
-        hold_names_blockers(
-            &broken_rows[0],
-            "t-bf51",
-            &["t-fcb4".to_string()],
-            &broken_rows,
-        )
-        .expect("an INVALID hold never refuses");
+        assert!(
+            hold_names_blockers(
+                &broken_rows[0],
+                "t-bf51",
+                &["t-fcb4".to_string()],
+                &broken_rows,
+            )
+            .is_ok(),
+            "an INVALID hold never refuses"
+        );
     }
 
     #[test]
