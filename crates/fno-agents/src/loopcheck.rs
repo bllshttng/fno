@@ -85,7 +85,7 @@ pub enum TerminationReason {
     Budget,
     NoProgress,
     /// A node held on an open operator question: the first fire blocked once
-    /// naming the question and the decide verb; this fire is the second on
+    /// naming the question and the user-side clear; this fire is the second on
     /// the same still-open question, so the loop terminates instead of
     /// re-asking. The journal (not the fingerprint) carries the held state.
     /// Terminal, NOT a ship reason: the operator answers, a later run ships.
