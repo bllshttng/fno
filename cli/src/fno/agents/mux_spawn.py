@@ -2266,7 +2266,6 @@ def _await_pane_binding(
     sleep: Optional[Callable] = None,
     label: str = "the worker",
     condition_sink: Optional[list] = None,
-    modal_responder: Optional[Callable[[str], Optional[str]]] = None,
 ) -> PaneBinding:
     """Wait out the gap between "a pane exists" and "a worker reached its provider".
 
@@ -2307,12 +2306,6 @@ def _await_pane_binding(
     wait reads it onto every outcome. That is what lets a blown window report
     what it OBSERVED rather than only how long it waited - the defect four
     measured `binding-window-expired` failures had in common.
-
-    ``modal_responder`` is the one provider-aware hook besides ``bind_probe``:
-    handed each fresh non-empty tail, it may answer a provider modal that
-    would otherwise park the pane for the whole window (codex's hooks-review
-    modal). It sees only what this loop already read; it never adds a
-    read or a send of its own beyond the answer it records.
     """
     naptime = sleep or time.sleep
     window = max(window_s if window_s is not None else _binding_window_s(), 0.0)
@@ -2358,8 +2351,6 @@ def _await_pane_binding(
         fresh = _read_pane_tail(mux, runner)
         if fresh.strip():
             tail = fresh
-            if modal_responder is not None:
-                modal_responder(fresh)
         # Checked BETWEEN probes, not only at the tick boundary: one tick issues
         # three subprocesses, so a slow mux would otherwise carry the loop far
         # past the ceiling even with each probe individually bounded.
@@ -2907,8 +2898,6 @@ def _codex_trust_refusal(
     hook_trust_bypassed: bool,
 ) -> Optional[str]:
     """Name a Codex trust screen without answering its security decision."""
-    from fno.agents.codex_pane import _CODEX_HOOK_REVIEW_MODAL_RE
-
     if re.search(
         r"do you trust the contents of this (?:directory|folder)", frame, re.I
     ):
@@ -2918,7 +2907,7 @@ def _codex_trust_refusal(
             f"Codex project trust required for {worktree}. Review that worktree, "
             f"then set projects.{config_path}.trust_level = \"trusted\" and spawn again"
         )
-    if not hook_trust_bypassed and _CODEX_HOOK_REVIEW_MODAL_RE.search(frame):
+    if not hook_trust_bypassed and re.search(r"hooks need review", frame, re.I):
         return (
             "Codex hooks need review. Run /hooks in Codex, inspect the changed "
             "hooks, trust them explicitly, and spawn again"
@@ -4290,11 +4279,6 @@ def dispatch_spawn_pane(
                     window_s=binding_window_s,
                     label="codex",
                     condition_sink=bind_condition,
-                    modal_responder=_codex_pane._make_codex_hook_modal_responder(
-                        {"session": session, "pane_id": pane_id},
-                        runner,
-                        bind_condition,
-                    ),
                 )
                 session_uuid = binding.session_id
                 pane_alive = binding.pane_alive

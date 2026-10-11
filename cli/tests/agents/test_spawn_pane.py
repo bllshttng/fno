@@ -4872,59 +4872,58 @@ def test_codex_hook_review_bypass_posture_keeps_argv_seed_contract(
     assert result.seed_source == "argv"
 
 
-def test_codex_hook_modal_responder_answers_once_then_never_again():
-    """x-d545: the bind-wait responder answers a hooks-review modal exactly
-    once with option 3 (continue without trusting), records the answer in the
-    condition sink, and on a still-parked later tick downgrades to a note
-    instead of a second keystroke."""
+def test_codex_hook_modal_probe_answers_once_then_never_again(monkeypatch):
+    """The bind probe answers a hooks-review modal exactly once with option 3
+    (continue WITHOUT trusting: untrusted hooks do not run, which a bounded
+    pane already implies), records the answer in the condition sink, and on a
+    still-parked later tick downgrades to a note instead of a second
+    keystroke. The answer lives in the probe - not the generic wait loop - so
+    the loop stays provider-agnostic and mux_spawn stays flat."""
     import subprocess
 
-    from fno.agents.mux_spawn import (
-        DispatchAskError,
-        _make_codex_hook_modal_responder,
-    )
+    import fno.agents.mux_spawn as mux_spawn
+    from fno.agents.codex_pane import _make_codex_bind_probe
 
-    calls: list[list[str]] = []
+    monkeypatch.setattr(mux_spawn, "_backfill_codex_session_id", lambda *a, **k: None)
+
+    sends: list[list[str]] = []
+    reads = {"modal": True}
 
     def runner(argv, **kwargs):
-        calls.append(list(argv))
+        if argv[1:4] == ["mux", "pane", "read"]:
+            frame = "Hooks need review\n" if reads["modal"] else "ready\n"
+            return subprocess.CompletedProcess(argv, 0, frame, "")
+        if argv[1:4] == ["mux", "pane", "send"]:
+            sends.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, "", "")
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     condition: list = []
-    respond = _make_codex_hook_modal_responder(
-        {"session": "sess", "pane_id": 7}, runner, condition
+    probe = _make_codex_bind_probe(
+        cwd=Path("/tmp"),
+        spawn_started_ms=0,
+        child_pid=1,
+        codex_sessions_dir=None,
+        daemon_baseline_ids=set(),
+        mux={"session": "sess", "pane_id": 7},
+        runner=runner,
+        condition=condition,
     )
 
-    modal_tail = "Hooks need review - 1 hook is new or changed"
-    note = respond(modal_tail)
-    assert note is not None and "answered once" in note
-    assert condition == [note]
-    sends = [c for c in calls if c[1:4] == ["mux", "pane", "send"]]
+    assert probe() is None
     assert len(sends) == 1
     assert sends[0][sends[0].index("--text") + 1] == "3"
     assert "--submit" in sends[0] and "--raw" in sends[0]
+    assert "answered once" in condition[0]
 
-    parked = respond(modal_tail)
-    assert parked is not None and "still parked" in parked
-    assert condition == [parked]
-    assert len([c for c in calls if c[1:4] == ["mux", "pane", "send"]]) == 1
+    assert probe() is None
+    assert len(sends) == 1
+    assert "still parked" in condition[0]
 
-    assert respond("regular composer frame") is None
-    assert condition == [parked]
-
-    def failing_runner(argv, **kwargs):
-        calls.append(list(argv))
-        raise DispatchAskError("mux did not answer", exit_code=1)
-
-    failed_condition: list = []
-    respond_failed = _make_codex_hook_modal_responder(
-        {"session": "sess", "pane_id": 7}, failing_runner, failed_condition
-    )
-    failed_note = respond_failed(modal_tail)
-    assert failed_note is not None and "send failed" in failed_note
-    assert failed_condition == [failed_note]
-    again = respond_failed(modal_tail)
-    assert again is not None and "still parked" in again
+    reads["modal"] = False
+    assert probe() is None
+    assert len(sends) == 1
+    assert "still parked" not in condition[0]
 
 
 class _SequencedReadRunner(FakeRunner):
@@ -4948,11 +4947,11 @@ class _SequencedReadRunner(FakeRunner):
 def test_codex_hook_modal_late_paint_answered_during_bind_window(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """x-d545: the hooks modal paints AFTER the readiness gate's read (the
-    live codex 0.156.1 observation: 60s blown with 'daemon: no new codex
-    session for this cwd'), so the bind loop is the first lane to see it. The
-    responder's option-3 answer lands during the window and the spawn binds;
-    the answer is sent exactly once and the pane is never reaped."""
+    """The hooks modal paints AFTER the readiness gate's read (the live codex
+    0.156.1 observation: 60s blown with 'daemon: no new codex session for this
+    cwd'), so the bind probe is the first lane to see it. The probe's option-3
+    answer lands during the window and the spawn binds; the answer is sent
+    exactly once and the pane is never reaped."""
     import fno.agents.mux_spawn as mux_spawn
 
     sequenced = _SequencedReadRunner(

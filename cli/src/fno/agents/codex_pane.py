@@ -8,7 +8,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import replace
@@ -20,6 +19,7 @@ from fno.agents.registry import TERMINAL_STATUSES, load_registry, update_registr
 
 _CODEX_DAEMON_START_TIMEOUT_S = 15  # `daemon start` no-ops when running.
 _ENV_KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_CODEX_HOOK_REVIEW_MODAL_RE = re.compile(r"hooks need review", re.I)
 
 
 def ensure_codex_daemon(
@@ -220,6 +220,7 @@ def _make_codex_bind_probe(
     used = oracle_used if oracle_used is not None else []
     last_probe_s = [0.0]
     prev_candidate: list = [None]
+    modal_answered = [False]
 
     def _mark_oracle(name: str) -> None:
         used[:] = [name]
@@ -228,12 +229,36 @@ def _make_codex_bind_probe(
         if condition is not None:
             condition[:] = [text]
 
+    def _answer_hook_modal() -> None:
+        # Codex 0.148+ parks a fresh pane on a Hooks need review modal that
+        # can paint after the readiness gate's single read; unanswered it
+        # holds the pane for the whole window (measured on codex 0.156.1).
+        # Answer with the modal's option 3, continue WITHOUT trusting:
+        # untrusted hooks do not run, which a bounded pane already implies.
+        # Once only - a raised send may still have landed, and a second `3`
+        # into a closed modal would type a turn.
+        if not _CODEX_HOOK_REVIEW_MODAL_RE.search(_read_pane_tail(mux, runner)):
+            return
+        if modal_answered[0]:
+            _note("hooks-review modal still parked after the option-3 answer")
+            return
+        modal_answered[0] = True
+        try:
+            _run_mux(["mux", "pane", "send", "--server", str(mux["session"]),
+                      str(mux["pane_id"]), "--text", "3", "--submit", "--raw"],
+                     runner)
+            _note("hooks-review modal answered once (option 3, continue without trusting)")
+        except DispatchAskError as exc:
+            _note(f"hooks-review modal answer send failed: {exc}")
+
     def _probe() -> Optional[str]:
         # Lazy: mux_spawn imports this module; a top-level import loops.
         from fno.agents.mux_spawn import (
             _PROBE_TIMEOUT_S,
             _backfill_codex_session_id,
             _mux_pane_alive,
+            _read_pane_tail,
+            _run_mux,
         )
 
         sid = _backfill_codex_session_id(
@@ -250,6 +275,7 @@ def _make_codex_bind_probe(
         now_s = time.monotonic()
         if now_s - last_probe_s[0] < _CODEX_DAEMON_PROBE_INTERVAL_S:
             # A rate-limit skip is not an observation; the fd note stands.
+            _answer_hook_modal()
             return None
         last_probe_s[0] = now_s
         candidate = _codex_daemon_candidate(
@@ -262,6 +288,7 @@ def _make_codex_bind_probe(
             if candidate is not None:
                 _note(f"daemon: candidate {candidate} awaiting a repeat probe")
             prev_candidate[0] = candidate
+            _answer_hook_modal()
             return None
         # The candidate repeated - trust it unless the pane is gone.
         if _mux_pane_alive(mux, runner, timeout=_PROBE_TIMEOUT_S) is False:
@@ -271,77 +298,6 @@ def _make_codex_bind_probe(
         return candidate
 
     return _probe
-
-
-#: Codex 0.148+ parks a fresh pane on a `Hooks need review` modal whenever a
-#: hook is new or changed. The argv arm clears it on bypass postures with
-#: --dangerously-bypass-hook-trust, and the readiness gate refuses + reaps when
-#: its frame read catches the modal before any payload is committed - both
-#: deliberate. The gap is the paint race: the modal can land after the gate's
-#: single read, and the bind loop then declines for the whole window with no
-#: lane acting (measured live on codex 0.156.1).
-_CODEX_HOOK_REVIEW_MODAL_RE = re.compile(r"hooks need review", re.I)
-
-
-def _make_codex_hook_modal_responder(
-    mux: dict,
-    runner: Callable[..., "subprocess.CompletedProcess[str]"],
-    condition: Optional[list] = None,
-) -> Callable[[str], Optional[str]]:
-    """Answer a codex hooks-review modal once from the bind wait.
-
-    :func:`fno.agents.mux_spawn._await_pane_binding` hands each fresh pane
-    tail to the returned responder. On the modal it sends one `3` + Enter
-    keystroke - the modal's option 3, continue WITHOUT trusting, the answer a
-    bounded pane already implies: untrusted hooks simply do not run.
-    Answering belongs here and not at the readiness gate because the gate
-    fires before any payload exists, where refusing costs nothing; by bind
-    time the spawn is committed and a parked pane holds a slot while
-    executing nothing.
-
-    The answer is sent exactly once and never retried, on the same doctrine
-    as the seed submit: a send that raised may still have landed, and a
-    second `3` into a modal that already closed would type a turn. A later
-    tick that still sees the modal downgrades the condition note to "still
-    parked" instead of sending again.
-    """
-    answered = False
-
-    def _respond(tail: str) -> Optional[str]:
-        nonlocal answered
-        from fno.agents.mux_spawn import _run_mux
-
-        if not _CODEX_HOOK_REVIEW_MODAL_RE.search(tail):
-            return None
-        if not answered:
-            answered = True
-            try:
-                _run_mux(
-                    [
-                        "mux", "pane", "send", "--server", str(mux["session"]),
-                        str(mux["pane_id"]), "--text", "3", "--submit", "--raw",
-                    ],
-                    runner,
-                )
-            except DispatchAskError as exc:
-                note = f"hooks-review modal answer send failed: {exc}"
-                if condition is not None:
-                    condition[:] = [note]
-                return note
-            note = (
-                "hooks-review modal answered once with 'continue without "
-                "trusting' (option 3)"
-            )
-            if condition is not None:
-                condition[:] = [note]
-            print(f"spawn: pane {mux.get('pane_id')}: {note}", file=sys.stderr)
-            return note
-        note = "hooks-review modal still parked after the option-3 answer"
-        if condition is not None:
-            condition[:] = [note]
-        return note
-
-    return _respond
 
 
 def codex_backfill_stamp_applies(
