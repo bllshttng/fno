@@ -4,8 +4,7 @@
 
 use std::time::Duration;
 
-use super::{agent_harness_session_id, first_line_or, fno_bin, ResumeOutcome};
-use crate::restore_liveness::worker_registry_match;
+use super::{first_line_or, fno_bin, ResumeOutcome};
 use crate::spawn_journal::ReentryVerdict;
 use crate::tree::{Rect, TabId};
 
@@ -594,6 +593,7 @@ impl super::Core {
                 squad,
                 tab,
                 notice,
+                rebind_identity,
             } => {
                 if let Some(notice) = notice {
                     self.notice(client_id, notice);
@@ -604,44 +604,26 @@ impl super::Core {
                 }
                 self.push_layout(true);
                 self.notice(client_id, format!("resumed {name}"));
-                self.resume_gesture_rebind(client_id, &name, pane);
+                if let Some((harness, session)) = &rebind_identity {
+                    self.resume_gesture_rebind(client_id, harness, session, pane);
+                }
             }
             // The gesture never dry-runs.
             ResumeOutcome::Planned => {}
         }
     }
 
-    /// The single-row gesture's post-resume rebind: the
-    /// `ResumeAgent` resume just spawned the row's pane, and the registry row
-    /// still names the dead one, so mail, pane send and `fno agents resume`
-    /// refuse the row until the next full restore. Fires the same bounded
-    /// [`run_pane_rebind`] the restore walk fires, off-loop, the receipt
-    /// riding the gesture's own notice channel (`DispatchResult`). Best
-    /// effort: every skip or failure degrades to its notice, never the
-    /// resume outcome.
-    pub(super) fn resume_gesture_rebind(&self, id: u64, name: &str, pane: u64) {
+    /// The single-row gesture's post-resume rebind: the resume just spawned
+    /// the row's pane, and the registry row still names the dead one, so
+    /// mail, pane send and `fno agents resume` refuse the row until the next
+    /// full restore. Fires the same bounded [`run_pane_rebind`] the restore
+    /// walk fires, off-loop, the receipt riding the gesture's own notice
+    /// channel (`DispatchResult`). Best effort: every skip or failure
+    /// degrades to its notice, never the resume outcome. `harness` and
+    /// `session` are the resumed row's identity, resolved by the caller's
+    /// resume walk - never re-derived here.
+    pub(super) fn resume_gesture_rebind(&self, id: u64, harness: &str, session: &str, pane: u64) {
         let Some(pid) = self.panes.get(&pane).and_then(|p| p.pty.child_pid()) else {
-            return;
-        };
-        // The row selection `resume_one` gated on: the plain name when no
-        // stored member narrows it, the harness + session pair otherwise.
-        let stored: Vec<_> = self
-            .squad_members
-            .values()
-            .flatten()
-            .filter(|member| !member.tombstone && member.worker.as_deref() == Some(name))
-            .cloned()
-            .collect();
-        let Some(row) = self.agents.iter().find(|a| match stored.as_slice() {
-            [member] => worker_registry_match(member, a, name),
-            _ => a.name == name,
-        }) else {
-            return;
-        };
-        let (Some(harness), Some(session)) = (
-            row.harness.clone(),
-            agent_harness_session_id(row).map(str::to_string),
-        ) else {
             return;
         };
         if !super::workspace_restore::rebind_runtime_ready() {
@@ -649,6 +631,8 @@ impl super::Core {
         }
         let mux_session = self.session_name.clone();
         let codex = harness == "codex";
+        let harness = harness.to_string();
+        let session = session.to_string();
         let core_tx = self.self_tx.clone();
         tokio::spawn(async move {
             let mut notice =

@@ -2364,11 +2364,15 @@ enum RowResumeDisposition {
 enum ResumeOutcome {
     /// A pane now runs the session. Carries the pane id, its workspace and
     /// tab, and the vanished-cwd notice when the stored directory was gone.
+    /// `rebind_identity` is the (harness, harness session id) the gesture's
+    /// post-resume registry rebind fires with; `None` on the detached-pane
+    /// reattach, where the pane id never changed and no row went stale.
     Resumed {
         pane: u64,
         squad: u64,
         tab: TabId,
         notice: Option<String>,
+        rebind_identity: Option<(String, String)>,
     },
     /// The session already had a live pane and it was focused, never
     /// respawned (AC6-ERR). Carries where the pane lives.
@@ -5238,6 +5242,7 @@ impl Core {
                         squad,
                         tab,
                         notice: None,
+                        rebind_identity: None,
                     },
                     Err(reason) => ResumeOutcome::Refused {
                         reason: format!("reattach failed: {reason}"),
@@ -5424,6 +5429,7 @@ impl Core {
             squad: sid,
             tab: tid,
             notice: fallback_notice,
+            rebind_identity: Some((facts.harness.clone(), facts.harness_session_id.clone())),
         }
     }
 
@@ -9769,6 +9775,14 @@ impl Core {
                                     self.notice(client_id, notice);
                                 }
                                 self.notice(client_id, format!("resumed {}", facts.name));
+                                // The seat's fresh pane needs the same
+                                // registry rebind a gesture resume gets.
+                                self.resume_gesture_rebind(
+                                    client_id,
+                                    &facts.harness,
+                                    &facts.harness_session_id,
+                                    resumed,
+                                );
                             }
                             Err(error) => {
                                 self.held_workers.remove(&pid);

@@ -246,6 +246,7 @@ impl super::Core {
                     squad,
                     tab,
                     notice,
+                    ..
                 } => RestoreRow {
                     member: name,
                     harness: harness_name,
