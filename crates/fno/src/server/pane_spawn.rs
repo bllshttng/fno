@@ -40,11 +40,117 @@ struct SpawnJob {
 }
 
 /// A spawned child, not yet registered. `ring` is the keeper's handshake
-/// replay; `fell_back` names the keeper failure that sent the pane inline.
+/// replay; `fell_back` names the keeper failure that sent the pane inline;
+/// `rc_dir` is the shell-integration rc dir a keeper-hosted SHELL pane owns
+/// (the inline road carries none - its `ShellRc` cleans up on drop).
 pub(crate) struct SpawnedPane {
     shell: PtyShell,
     ring: Vec<u8>,
     fell_back: Option<String>,
+    rc_dir: Option<std::path::PathBuf>,
+}
+
+/// The fresh-squad attach's login-shell job: the `spawn_pane_kept` candidate
+/// walk and the legacy multi-candidate inline spawn, snapshotted from `Core`
+/// in the turn that reserved the pane id. Everything the blocking half needs,
+/// so the per-candidate keeper handshake never holds the core loop.
+pub(super) struct AttachShellJob {
+    pub(super) id: u64,
+    rows: u16,
+    cols: u16,
+    cwd: String,
+    session: String,
+    shells: Vec<OsString>,
+    out_tx: mpsc::Sender<(u64, PaneChunk)>,
+    exit_tx: mpsc::Sender<u64>,
+}
+
+impl AttachShellJob {
+    /// The blocking half: the candidate walk first (production), then the
+    /// legacy inline spawn as the fallback. Unit fixtures keep today's split
+    /// and go straight inline (short-lived shells, no keeper in fixtures).
+    fn run(self) -> Result<SpawnedPane, String> {
+        #[cfg(not(test))]
+        {
+            let mut last = String::from("no shell candidate produced a keeper argv");
+            let mut attempted = false;
+            for cand in &self.shells {
+                let Some((argv, rc_dir)) =
+                    crate::pty::keeper_shell_argv(cand.as_os_str(), &self.session, self.id)
+                else {
+                    continue;
+                };
+                attempted = true;
+                let permit = match crate::process_admission::admit_fleet() {
+                    Ok(permit) => permit,
+                    Err(e) => {
+                        let _ = std::fs::remove_dir_all(&rc_dir);
+                        return Err(e.to_string());
+                    }
+                };
+                match PtyShell::spawn_cmd_keeper_with_permit(
+                    &keeper_worker_bin(),
+                    &argv,
+                    self.rows,
+                    self.cols,
+                    self.dir().as_deref(),
+                    &self.session,
+                    self.id,
+                    self.out_tx.clone(),
+                    self.exit_tx.clone(),
+                    permit,
+                ) {
+                    Ok((shell, ring)) => {
+                        return Ok(SpawnedPane {
+                            shell,
+                            ring,
+                            fell_back: None,
+                            rc_dir: Some(rc_dir),
+                        });
+                    }
+                    Err(e) => {
+                        last = e.to_string();
+                        let _ = std::fs::remove_dir_all(&rc_dir);
+                    }
+                }
+            }
+            if attempted {
+                // Carried to the loop in `fell_back`: registration marks the
+                // pane unkept and notices, the same shape the `pane run` road
+                // uses for a keeper that cannot start.
+                return Ok(SpawnedPane {
+                    shell: self.inline_spawn()?,
+                    ring: Vec::new(),
+                    fell_back: Some(last),
+                    rc_dir: None,
+                });
+            }
+        }
+        Ok(SpawnedPane {
+            shell: self.inline_spawn()?,
+            ring: Vec::new(),
+            fell_back: None,
+            rc_dir: None,
+        })
+    }
+
+    fn inline_spawn(&self) -> Result<PtyShell, String> {
+        PtyShell::spawn(
+            &self.shells,
+            self.rows,
+            self.cols,
+            self.dir().as_deref(),
+            &self.session,
+            self.id,
+            self.out_tx.clone(),
+            self.exit_tx.clone(),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn dir(&self) -> Option<std::path::PathBuf> {
+        Some(std::path::PathBuf::from(&self.cwd)).filter(|_| !self.cwd.is_empty())
+    }
 }
 
 /// A spawn in flight: the tail to run when it lands, plus the output its
@@ -99,6 +205,7 @@ impl SpawnJob {
                 shell,
                 ring: Vec::new(),
                 fell_back: None,
+                rc_dir: None,
             })
             .map_err(|e| e.to_string());
         }
@@ -118,6 +225,7 @@ impl SpawnJob {
                 shell,
                 ring,
                 fell_back: None,
+                rc_dir: None,
             }),
             // A keeper that cannot start (missing binary, failed handshake,
             // held seat) must not cost the pane: fall back to the inline pty
@@ -141,6 +249,7 @@ impl SpawnJob {
                     shell,
                     ring: Vec::new(),
                     fell_back: Some(keeper_err.to_string()),
+                    rc_dir: None,
                 })
             }
         }
@@ -245,6 +354,72 @@ impl Core {
             Err(e) => return tail(self, Err(e)),
         };
         let id = job.id;
+        self.park_and_run(id, argv, rows, cols, cwd, client, move || job.run(), tail)
+    }
+
+    /// The fresh-squad attach's shell: the same off-loop road, for the
+    /// login-shell job whose candidate walk (and its per-candidate keeper
+    /// handshake) runs entirely in the blocking half. The pane id was
+    /// reserved in the caller's turn - the squad tree already names it.
+    pub(super) fn spawn_attach_shell_then(
+        &mut self,
+        job: AttachShellJob,
+        tail: impl FnOnce(&mut Core, Result<u64, String>) -> Flow + Send + 'static,
+    ) -> Flow {
+        let (id, rows, cols, cwd) = (job.id, job.rows, job.cols, job.cwd.clone());
+        // An empty argv is exact here: the shell's argv resolves per candidate
+        // in the blocking half, and registration derives shell provenance
+        // (all-none) from it.
+        self.park_and_run(
+            id,
+            Vec::new(),
+            rows,
+            cols,
+            cwd,
+            None,
+            move || job.run(),
+            tail,
+        )
+    }
+
+    /// Snapshot the fresh-squad attach's login-shell job. Runs in the same
+    /// turn that reserved `pid`, so the blocking half reads nothing from
+    /// `Core`.
+    pub(super) fn attach_shell_job(
+        &mut self,
+        id: u64,
+        rows: u16,
+        cols: u16,
+        cwd: String,
+    ) -> AttachShellJob {
+        AttachShellJob {
+            id,
+            rows,
+            cols,
+            cwd,
+            session: self.session_name.clone(),
+            shells: self.shells.clone(),
+            out_tx: self.out_tx.clone(),
+            exit_tx: self.exit_tx.clone(),
+        }
+    }
+
+    /// Park `tail` under `id` and produce the pane off the loop, landing at
+    /// [`Core::pane_spawn_ready`] (inline under `cfg(test)`, where fixtures
+    /// drive no loop and every synchronous assert keeps holding). `argv` is
+    /// what registration derives provenance from; the shell road passes an
+    /// empty argv on purpose.
+    fn park_and_run(
+        &mut self,
+        id: u64,
+        argv: Vec<String>,
+        rows: u16,
+        cols: u16,
+        cwd: String,
+        client: Option<u64>,
+        job: impl FnOnce() -> Result<SpawnedPane, String> + Send + 'static,
+        tail: impl FnOnce(&mut Core, Result<u64, String>) -> Flow + Send + 'static,
+    ) -> Flow {
         self.spawn_flight.pending.insert(
             id,
             PendingSpawn {
@@ -258,14 +433,14 @@ impl Core {
             },
         );
         if cfg!(test) {
-            let outcome = job.run();
+            let outcome = job();
             return self.pane_spawn_ready(id, outcome);
         }
         let core_tx = self.self_tx.clone();
         tokio::task::spawn_blocking(move || {
             // A panicking job must still land: the parked tail is what
             // releases this gesture's row and portal gates.
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job.run()))
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))
                 .unwrap_or_else(|_| Err(format!("pane {id} spawn panicked")));
             // A closed loop (server shutting down) drops the outcome: a
             // keeper-hosted child survives for the next server to adopt.
@@ -398,6 +573,7 @@ impl Core {
             shell,
             ring,
             fell_back,
+            rc_dir,
         } = spawned;
         self.register_pane(
             id,
@@ -414,6 +590,11 @@ impl Core {
             portal_hold_from_argv(argv),
             transient_view_from_argv(argv),
         )?;
+        if let Some(dir) = rc_dir {
+            // A keeper-hosted shell's rc dir is the server's to clean at pane
+            // close, exactly as the synchronous road's `spawn_pane_kept` records it.
+            self.shell_rc_dirs.insert(id, dir);
+        }
         if let Some(keeper_err) = fell_back {
             if let Some(entry) = self.panes.get_mut(&id) {
                 entry.unkept = true;

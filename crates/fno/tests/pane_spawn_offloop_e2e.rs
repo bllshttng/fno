@@ -121,3 +121,59 @@ fn stalled_keeper_handshake_keeps_keys_echoing() {
         .unwrap()
         .expect("pane run lands on the inline fallback");
 }
+
+#[test]
+fn fresh_attach_pushes_its_layout_while_the_keeper_handshake_stalls() {
+    let scratch = Scratch::new("stalled-attach");
+    let stall = scratch.0.join("stall");
+    let stalled = scratch.0.join("stalled");
+    let stub = stalling_keeper(&scratch.0, &stall, &stalled);
+    // Every keeper launch stalls from the start: the fresh attach's OWN
+    // shell is the stalled spawn.
+    std::fs::write(&stall, "").unwrap();
+    let sock = scratch.0.join("s.sock");
+    let _server = spawn_server(
+        &sock,
+        &[
+            ("SHELL", "/bin/sh"),
+            ("FNO_AGENTS_WORKER_BIN", stub.to_str().unwrap()),
+        ],
+    );
+    let cwd = scratch.0.join("w");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    // The first Layout must land well inside the 3 s keeper handshake
+    // deadline: the fresh-squad attach builds the squad around a reserved
+    // pane id and pushes, while the handshake runs off the core loop. The
+    // old synchronous spawn held the attach (and every other client) for
+    // the full bound.
+    let t0 = Instant::now();
+    let mut c = FakeClient::attach(&sock, 24, 80, cwd.to_str().unwrap());
+    let pane = c
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    let to_layout = t0.elapsed();
+    assert!(
+        to_layout < Duration::from_secs(2),
+        "the first Layout took {to_layout:?}; the fresh-squad attach is still waiting on the keeper handshake"
+    );
+
+    // The shell spawn is genuinely in flight (the stub exec'd and is
+    // mid-stall) while the client is already drawn.
+    let deadline = Instant::now() + Duration::from_millis(500);
+    while !stalled.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the keeper stub never started, so nothing was proven in-flight"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        to_layout + Duration::from_millis(500) < Duration::from_secs(3),
+        "the stub's stall marker arrived after the handshake could have ended; the timing proof is void"
+    );
+
+    // The stalled spawn still lands: the handshake times out, the shell
+    // falls back inline (unkept), and the pane paints.
+    c.wait_prompt(pane);
+}
