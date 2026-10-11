@@ -2305,7 +2305,6 @@ def dispatch_spawn(
     role_level: Optional[int] = None,
     role_scope: Optional[str] = None,
     succession: bool = False,
-    redraw: bool = False,
     route_provider: Optional[str] = None,
     provider_gate: object | None = None,
     parent_edge: Optional[tuple] = None,
@@ -2499,7 +2498,7 @@ def dispatch_spawn(
     if role_level is not None and harness != "claude":
         promotion = plan_thread_promotion(
             message, role_level, role_scope, succession, harness, parent_edge,
-            name=name, revive=bool(resume_session_id), redraw=redraw)
+            name=name, revive=bool(resume_session_id))
         message = promotion["message"]
         name = adopt_drawn_name(succession, promotion.get("plan"), name)
 
@@ -2633,7 +2632,6 @@ def dispatch_spawn(
                 role_refusal, role_plan = plan_spawn_role(
                     role_scope or "", caller_row, succession,
                     exclude_name=name if revive else None, proposed_name=name,
-                    redraw=redraw,
                 )
                 if role_refusal is not None:
                     raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)

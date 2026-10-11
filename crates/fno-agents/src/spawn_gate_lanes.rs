@@ -869,7 +869,7 @@ pub(crate) fn succession_replaces(
         // This lane settles occupancy only: it never carries a draw, so a
         // hand-off here refuses with the teaching text instead of the
         // misleading not-sole-holder.
-        Err("the machine draws successor names and this lane does not draw: hand the team over from a seam that draws (spawn --promote --hand-off with no --name, or --redraw)")
+        Err("the machine draws successor names and this lane does not draw: hand the team over from a seam that draws (spawn --promote --hand-off with no --name, or --name redraw)")
     } else {
         Err("caller_not_sole_holder")
     }

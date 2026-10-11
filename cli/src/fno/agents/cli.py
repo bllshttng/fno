@@ -1335,10 +1335,6 @@ def cmd_spawn(
             "--succeed is the retired spelling."
         ),
     ),
-    redraw: bool = typer.Option(
-        False, "--redraw",
-        help="Succession hand-offs: draw a fresh successor name; accept it or ask again.",
-    ),
     node: str | None = typer.Option(
         None,
         "--node",
@@ -2403,7 +2399,6 @@ def cmd_spawn(
                     role_level=role_level,
                     role_scope=role_scope,
                     succession=hand_off,
-                    redraw=redraw,
                     provenance=prov_env,
                     account_env=account_env,
                     route_env=route_env,
@@ -2668,7 +2663,6 @@ def cmd_spawn(
                 role_level=role_level,
                 role_scope=role_scope,
                 succession=hand_off,
-                redraw=redraw,
                 route_provider=route_provider,
                 provider_gate=gate,
                 sandbox_settings=sandbox_settings,

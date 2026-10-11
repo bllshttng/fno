@@ -1011,7 +1011,7 @@ pub fn carry_succession(
     pending: Option<PendingSuccession>,
 ) -> Result<Option<PendingSuccession>, String> {
     let pending = pending.ok_or(
-        "--hand-off without a successor: the settle draws the successor name; accept it (--name <drawn>) or ask for a redraw (--redraw)",
+        "--hand-off without a successor: the settle draws the successor name; accept it (--name <drawn>) or ask for a redraw (--name redraw)",
     )?;
     if !valid_person_name(&pending.successor_name) {
         return Err(
@@ -1028,7 +1028,7 @@ pub fn carry_succession(
         let used = crate::team_names::history_names(store_path)?;
         if used.contains(&pending.successor_name.to_ascii_lowercase()) {
             return Err(format!(
-                "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Take the machine's draw (--name <drawn> to accept, --redraw for a fresh draw)",
+                "the name {} is retired: an earlier lead, worker or draw used it, and names are never reused. Take the machine's draw (--name <drawn> to accept, --name redraw for a fresh draw)",
                 display(&pending.successor_name, 1)
             ));
         }

@@ -23,12 +23,11 @@ def lead_typed_message(message: str, level: Optional[int], scope: Optional[str],
 
 def plan_thread_promotion(message: str, level: int, scope: Optional[str], succession: bool,
                           harness: str, parent_edge: Optional[tuple], *, name: str,
-                          revive: bool = False, redraw: bool = False) -> dict:
+                          revive: bool = False) -> dict:
     from fno.agents.dispatch import DispatchAskError, _capture_parent_edge
 
     caller = calling_agent_row()
-    refusal, plan = plan_spawn_role(scope or "", caller, succession, proposed_name=name,
-                                    redraw=redraw)
+    refusal, plan = plan_spawn_role(scope or "", caller, succession, proposed_name=name)
     if refusal is not None:
         raise DispatchAskError(f"--promote: {refusal}", exit_code=2)
     message, typed = lead_typed_message(message, level, scope, revive, harness)

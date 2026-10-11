@@ -11,7 +11,7 @@
 //!
 //! The wire: a succession spawn with no `--name` draws and answers
 //! `{"draw": {"name": ...}}`; an explicit `--name` must equal the scope's
-//! pending draw (accept) or refuse naming it; `--redraw` draws a fresh name.
+//! pending draw (accept) or refuse naming it; `--name redraw` draws fresh.
 //! Every draw is consumed into the history ledger, so a redraw and a peer
 //! host never see the same name twice.
 
@@ -409,12 +409,12 @@ pub fn draw_successor_name(
             if !accepted {
                 return Err(match pending.as_deref() {
                     Some(p) => format!(
-                        "the machine draws successor names; the draw over {canon} is {}. Accept it (--name {}) or ask for a redraw (--redraw)",
+                        "the machine draws successor names; the draw over {canon} is {}. Accept it (--name {}) or ask for a redraw (--name redraw)",
                         crate::team_names::display(p, 1),
                         crate::team_names::display(p, 1),
                     ),
                     None => format!(
-                        "no successor name is drawn over {canon} yet; drop --name to take the machine's draw, or pass --redraw to draw one now"
+                        "no successor name is drawn over {canon} yet; drop --name to take the machine's draw, or pass --name redraw to draw one now"
                     ),
                 });
             }
@@ -604,7 +604,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("the machine draws successor names"), "{err}");
-        assert!(err.contains("--redraw"), "{err}");
+        assert!(err.contains("--name redraw"), "{err}");
         // The drawn name is accepted; anything else refuses.
         let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
             .unwrap();

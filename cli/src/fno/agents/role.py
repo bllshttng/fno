@@ -731,7 +731,6 @@ def plan_spawn_role(
     succession: bool,
     exclude_name: Optional[str] = None,
     proposed_name: Optional[str] = None,
-    redraw: bool = False,
 ) -> "tuple[Optional[str], Optional[dict]]":
     """Check authority, then ask team_settle for a pre-launch occupancy plan.
     Return the refusal and native answer. A failed read refuses before launch;
@@ -745,6 +744,11 @@ def plan_spawn_role(
     from fno.agents.registry import load_registry
     from fno.agents.spawn_overlay_client import SpawnOverlayUnavailable, spawn_overlay_call
 
+    # The machine draws successor names; "redraw" is the reserved ask for a
+    # fresh draw, never a name (the pool excludes it and the refusals teach it).
+    redraw = bool(proposed_name) and proposed_name.strip().lower() == "redraw"
+    if redraw:
+        proposed_name = None
     caller_name = getattr(caller_row, "name", None)
     caller = {"kind": "agent", "name": caller_name} if caller_name else {"kind": "human"}
     try:
