@@ -491,6 +491,33 @@ fno backlog update <id> --no-public
 fno backlog roadmap --project fno --out ROADMAP.md
 ```
 
-The roadmap emits only title / priority / size grouped Now / Next / Later / Shipped (Triage folds into Later), markdown only: the rendered public HTML projections retired with the second board (2026-09-30), and the flags refuse by name. The output emits no IDs, details, plan paths, cwd, blockers, PR links, or sessions.
+The roadmap emits only title / priority / size grouped Now / Next / Later / Shipped (Triage folds into Later), markdown only. The output emits no IDs, details, plan paths, cwd, blockers, PR links, or sessions. The public HTML board now rides `fno backlog publish` (below), or `fno backlog roadmap --backlog-html <path>` for a local file.
 
-Before any public file is replaced, the shared gate scans every emitted title for PR references, graph IDs, home paths, and session IDs. One offender makes the command exit nonzero, prints the complete cleanup queue on private stderr, and leaves every requested output unchanged.
+Before any public file is replaced, the shared gate scans every emitted title for home paths and session IDs. One offender makes the command exit nonzero, prints the complete cleanup queue on private stderr, and leaves every requested output unchanged.
+
+## Publish a public board
+
+One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection: open rows only (in progress, ready, blocked, idea), a row stays private when marked `--no-public`, and every title clears the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
+
+```bash
+fno backlog publish --project fno --out site/backlog
+```
+
+Three targets:
+
+- `--out <dir>` writes `<dir>/index.html` for any static host and prints a `file://` URL. Pass `--url` to print a different address.
+- `--exec '<command with {file}>'` hands the staged page to any uploader. The Cloudflare KV line that serves footnote.sh/backlog:
+
+```bash
+fno backlog publish --project fno --exec 'npx wrangler kv key put --binding ROADMAP fno-backlog --path {file} --remote' --url https://footnote.sh/backlog
+```
+
+- With neither flag, the board publishes a `backlog/` subtree to the project repo's `gh-pages` branch through git plumbing: your checkout never moves, the first publish enables Pages (`gh-pages`, `/`), and an unchanged board pushes nothing (`unchanged: <url>`). A repo whose origin is not GitHub, and a project with no path in `work.workspaces`, refuse naming `--out` and `--exec`.
+
+Keep it fresh with cron or launchd; a rerun over an unchanged graph writes byte-identical output, so a scheduler can run the command as often as it wants.
+
+```bash
+*/15 * * * * fno backlog publish --project <slug>
+```
+
+Cards whose titles carry a home path or session id are withheld with one warning line on stderr; the rest publish.
