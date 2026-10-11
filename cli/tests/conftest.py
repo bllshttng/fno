@@ -11,6 +11,18 @@ from pathlib import Path
 
 import pytest
 
+# TEMPORARY bisect exclusion (revert before merge): CI kills the runner
+# about two minutes into the changed-smoke pytest phase on every shard
+# holding these files, with every earlier test green. Ruling fmail-30b51a18bbff
+# authorizes the ignore set and the halved re-add that follows.
+collect_ignore_glob = [
+    "observer/test_fold.py",
+    "relay/test_router.py",
+    "scoreboard/test_scoreboard.py",
+    "unit/test_graph_tx_backoff.py",
+    "unit/test_groom.py",
+]
+
 
 
 @pytest.fixture(autouse=True)
