@@ -1652,9 +1652,10 @@ impl Probes for RealProbes {
             ),
             ".behind_by",
         ) {
-            Ok((true, output)) => match output.trim().parse::<u64>() {
-                Ok(value) => value,
-                Err(_) => {
+            // run_gh appends stderr, so a gh proxy notice can follow the value.
+            Ok((true, output)) => match output.lines().find_map(|l| l.trim().parse::<u64>().ok()) {
+                Some(value) => value,
+                None => {
                     return ProbeOutcome::Inconclusive(format!(
                         "ci base compare unreadable: expected behind_by, got {}",
                         first_line(&output)
