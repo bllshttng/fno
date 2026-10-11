@@ -184,8 +184,7 @@ pub(crate) fn read_evidence(home: &AgentsHome, now_ms: i64) -> Result<Vec<Eviden
     read_evidence_since(home, now_ms, WINDOW_MS)
 }
 
-/// The same fold over a caller-chosen window: a seat-park reader bounds its
-/// read to the watch-episode scale instead of the whole 24h journal.
+/// The same fold over a caller-chosen window (a bounded seat-park read).
 pub(crate) fn read_evidence_since(
     home: &AgentsHome,
     now_ms: i64,

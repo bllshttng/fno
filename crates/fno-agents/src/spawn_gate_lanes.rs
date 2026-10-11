@@ -1668,8 +1668,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Stages the watch-park home: agents home at `dir/agents`, events
-    /// journal at `dir/events.jsonl`, claims root at `dir/claims-root`.
+    /// Stages the watch-park home: agents home, events journal, claims root.
     fn stage_watch_home(dir: &Path) -> (PathBuf, impl Fn(&str, &str, i64) -> String) {
         std::fs::create_dir_all(dir.join("agents")).unwrap();
         std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
@@ -1733,8 +1732,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Seeds a live zai worker:a reservation under the active claims root,
-    /// the share a resumed or never-parked row still holds.
+    /// Seeds a live zai worker:a reservation under the active claims root.
     fn seed_worker_a_claim(dir: &std::path::Path) {
         let host = claims::hostname();
         let now = std::time::SystemTime::now()
@@ -1748,9 +1746,7 @@ mod tests {
         crate::claim_store::seed_yaml_at_path(&lock, &format!("schema_version: {}\nkey: worker:a\nholder: h\nacquired_at: {now}\npid: {}\nhost: {host}\nmetadata:\n  model_provider: zai\n", claims::SCHEMA_VERSION, std::process::id()));
     }
 
-    /// A watch ended by later activity is not a park: a loop_check row with a
-    /// non-watching intent after the idle row un-parks the row, and the seat
-    /// its reservation names counts again.
+    /// A watch ended by later activity un-parks the row; the seat counts again.
     #[test]
     fn provider_count_counts_a_worker_whose_watch_ended() {
         let _guard = claims::test_env_lock()
@@ -1760,13 +1756,10 @@ mod tests {
         let (reg, watch_row) = stage_watch_home(&dir);
         let a = "aaaaaaaa-0000-0000-0000-00000000000a";
         let expires = chrono::Utc::now().timestamp_millis() + 600_000;
-        let resumed = serde_json::json!({
-            "ts": chrono::Utc::now().to_rfc3339(),
-            "type": "loop_check",
-            "source": "hook",
-            "data": {"session_id": a, "intent": "work"}
-        })
-        .to_string();
+        let resumed = format!(
+            r#"{{"ts":"{}","type":"loop_check","source":"hook","data":{{"session_id":"{a}","intent":"work"}}}}"#,
+            chrono::Utc::now().to_rfc3339()
+        );
         std::fs::write(
             dir.join("events.jsonl"),
             format!("{}\n{}\n", watch_row(a, "ci", expires), resumed),
@@ -1788,8 +1781,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A watch whose blocker is not a seat wait (a local build) never parked
-    /// the row: the seat counts.
+    /// A blocker outside the seat-wait set never parked the row.
     #[test]
     fn provider_count_counts_a_worker_whose_blocker_is_not_a_seat_wait() {
         let _guard = claims::test_env_lock()
@@ -1821,9 +1813,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An unreadable events journal never shrinks the count: the reader warns
-    /// and counts the watched worker, the same posture as the questions
-    /// journal.
+    /// An unreadable events journal warns and counts everyone.
     #[test]
     fn provider_count_counts_everyone_when_the_watch_journal_is_unreadable() {
         let _guard = claims::test_env_lock()
