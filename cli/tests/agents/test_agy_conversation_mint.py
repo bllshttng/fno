@@ -4,17 +4,20 @@ The stream's init line is the ONLY surface that returns the id before the
 harness Stop hook holds the process alive, so every way that read can fail
 has to raise rather than hand the keeper a name it made up. The live shape
 asserted here is the stream-json one measured on agy 1.3.3: line 1 is
-``{"event":"init","conversation_id":...}``.
+``{"event":"init","conversation_id":...}``. The turn runs in the Rust
+runtime (crates/fno-agents/src/agy_mint.rs); these tests pin the adapter's
+answer mapping and the runtime's reader through the real binary.
 """
 from __future__ import annotations
 
 import json
 import os
-import subprocess
 
 import pytest
 
 from fno.agents.harnesses import agy
+from fno.agents.spawn_axes_client import SpawnAxesUnavailable
+from fno.agents.dispatch import DispatchAskError
 
 
 @pytest.fixture
@@ -30,36 +33,15 @@ def rust_door(monkeypatch):
     monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
 
 
-class _FakeAgy:
-    """Popen double with a REAL pipe: select/os.read in the mint reader need
-    a true fd, so CompletedProcess doubles do not work here."""
-
-    def __init__(self, lines: list[str], returncode: int = 0, hold: bool = False):
-        read_fd, write_fd = os.pipe()
-        self.stdout = os.fdopen(read_fd, "rb", buffering=0)
-        os.write(write_fd, "".join(line + "\n" for line in lines).encode())
-        if not hold:
-            os.close(write_fd)
-        self._write_fd = write_fd
-        self.returncode = None if hold else returncode
-        self.terminated = False
-        self.killed = False
-        self.waited = False
-
-    def poll(self) -> int | None:
-        return self.returncode
-
-    def terminate(self) -> None:
-        self.terminated = True
-        self.returncode = -15
-
-    def kill(self) -> None:
-        self.killed = True
-        self.returncode = -9
-
-    def wait(self, timeout: float | None = None) -> int | None:
-        self.waited = True
-        return self.returncode
+def _fake_agy_on_path(monkeypatch, tmp_path, body: str) -> None:
+    """A PATH fake for the agy binary: the runtime resolves argv[0] through
+    PATH, so a script pins the reader's real behavior end-to-end."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "agy"
+    script.write_text(f"#!/bin/sh\n{body}\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
 
 
 ENVELOPE = {
@@ -75,98 +57,68 @@ INIT_LINE = json.dumps(
 )
 
 
-def _agy_only_popen(monkeypatch, maker):
-    """Stub ONLY the agy process: the mint-argv door runs the real fno-agents
-    binary through the same stdlib subprocess.Popen, so a blanket stub would
-    answer for the binary too (its answer would be mint-nonsense)."""
-    real_popen = subprocess.Popen
+def _seam(monkeypatch, answer: dict) -> None:
+    """Pin the spawn-axes seam: the adapter reads its answer through the same
+    spawn_axes_call every other ask rides on."""
+    import fno.agents.spawn_axes_client as sac
 
-    def _popen(argv, *positional, **kwargs):
-        if argv and argv[0] == agy.AGY_BINARY:
-            return maker(argv, kwargs)
-        return real_popen(argv, *positional, **kwargs)
+    def _call(payload):
+        return answer
 
-    monkeypatch.setattr(agy.subprocess, "Popen", _popen)
+    monkeypatch.setattr(sac, "spawn_axes_call", _call)
 
 
 @pytest.mark.dev_build
-def test_mint_reads_the_conversation_id_and_pins_the_argv(monkeypatch, tmp_path, rust_door):
-    seen: dict = {}
-
-    def responder(argv, kwargs):
-        seen["argv"] = argv
-        seen["cwd"] = kwargs.get("cwd")
-        seen["proc"] = _FakeAgy([INIT_LINE], hold=True)
-        return seen["proc"]
-
-    _agy_only_popen(monkeypatch, responder)
-
-    assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
-    # `-p` is agy's print form; stream-json's init line carries the id; the
-    # bypass keeps an unattended mint from wedging on a tool approval.
-    assert seen["argv"][:2] == ["agy", "-p"]
-    assert "--output-format" in seen["argv"] and "stream-json" in seen["argv"]
-    assert "--dangerously-skip-permissions" in seen["argv"]
-    assert seen["cwd"] == str(tmp_path)
-    # The 1.3.3 print turn never exits on its own: a found id terminates it
-    # and reaps it (terminate + wait).
-    assert seen["proc"].terminated and seen["proc"].waited
-
-
-@pytest.mark.dev_build
-def test_mint_carries_the_spawn_axes(monkeypatch, tmp_path, rust_door):
-    """The mint turn launches on the spawn's selected model, effort and
-    permission posture - not the harness defaults (the audit's A4: the first
-    turn of every agy thread ran on whatever the binary defaulted to)."""
-    seen: dict = {}
-
-    def responder(argv, kwargs):
-        seen["argv"] = argv
-        return _FakeAgy([INIT_LINE])
-
-    _agy_only_popen(monkeypatch, responder)
-
-    agy.create_conversation(
-        tmp_path, model="m-1", effort="high", permission_mode="accept-edits"
+def test_the_runtime_reads_the_init_line_of_a_holder(monkeypatch, tmp_path, rust_door):
+    """End-to-end through the real binary: the fake agy prints the init line
+    then holds; the runtime kills it and answers the id."""
+    _fake_agy_on_path(
+        monkeypatch,
+        tmp_path,
+        "printf '%s\\n' '" + INIT_LINE + "'\nsleep 30",
     )
-    argv = seen["argv"]
-    assert argv[argv.index("--model") + 1] == "m-1"
-    assert argv[argv.index("--effort") + 1] == "high"
-    assert argv[argv.index("--mode") + 1] == "accept-edits"
-    assert "--dangerously-skip-permissions" not in argv
-
-
-@pytest.mark.parametrize(
-    "proc_factory, fragment",
-    [
-        (lambda: _FakeAgy([], returncode=1), "exited 1"),
-        (lambda: _FakeAgy(["Welcome to the Antigravity CLI"]), "was not JSON"),
-        (lambda: _FakeAgy(['{"status": "SUCCESS"}']), "no conversation_id"),
-        (
-            lambda: _FakeAgy(['{"conversation_id": "c5661b28"}']),
-            "not a full UUID",
-        ),
-    ],
-)
-@pytest.mark.dev_build
-def test_every_unreadable_mint_refuses(monkeypatch, tmp_path, proc_factory, fragment, rust_door):
-    _agy_only_popen(monkeypatch, lambda argv, kwargs: proc_factory())
-
-    with pytest.raises(agy.AgySessionError) as caught:
-        agy.create_conversation(tmp_path)
-    assert fragment in str(caught.value)
+    assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
 
 
 @pytest.mark.dev_build
-def test_a_timed_out_mint_refuses_rather_than_inventing_an_id(monkeypatch, tmp_path, rust_door):
-    proc = _FakeAgy(["harness chatter"], hold=True)
-    _agy_only_popen(monkeypatch, lambda argv, kwargs: proc)
-
-    with pytest.raises(agy.AgySessionError) as caught:
+def test_a_holding_turn_refuses_at_the_ceiling(monkeypatch, tmp_path, rust_door):
+    _fake_agy_on_path(monkeypatch, tmp_path, "sleep 30")
+    with pytest.raises(DispatchAskError) as caught:
         agy.create_conversation(tmp_path, timeout_s=0.3)
     assert "minted no conversation id" in str(caught.value)
-    # A wedged mint is never left behind.
-    assert proc.terminated
+
+
+def test_the_adapter_answers_a_validated_id(monkeypatch, tmp_path):
+    _seam(monkeypatch, {"conversation_id": ENVELOPE["conversation_id"]})
+    assert agy.create_conversation(tmp_path) == ENVELOPE["conversation_id"]
+
+
+def test_a_refused_mint_names_the_reason(monkeypatch, tmp_path):
+    _seam(
+        monkeypatch,
+        {
+            "refused": "agy exited 1 while minting a conversation id: "
+            "not signed in"
+        },
+    )
+    with pytest.raises(DispatchAskError) as caught:
+        agy.create_conversation(tmp_path)
+    assert "not signed in" in str(caught.value)
+    assert "exited 1" in str(caught.value)
+
+
+def test_a_stale_binary_reads_as_unavailable(monkeypatch, tmp_path):
+    _seam(monkeypatch, {})
+    with pytest.raises(SpawnAxesUnavailable) as caught:
+        agy.create_conversation(tmp_path)
+    assert "conversation_id" in str(caught.value)
+
+
+def test_a_truncated_id_never_reaches_a_spawn(monkeypatch, tmp_path):
+    _seam(monkeypatch, {"conversation_id": "c5661b28"})
+    with pytest.raises(agy.AgySessionError) as caught:
+        agy.create_conversation(tmp_path)
+    assert "not a full UUID" in str(caught.value)
 
 
 def test_store_path_names_agys_own_conversation_db():
