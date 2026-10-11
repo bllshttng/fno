@@ -2478,7 +2478,7 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     let door = seg.unwrap_or("resolve by hand, then re-run `fno do pr push`");
                     let text = format!("heal: {key} onto origin/main{at}. {door}");
                     let run = if err.contains("already merges origin/main") {
-                        "fno do pr push".to_string()
+                        format!("fno do pr push --pr {pr}")
                     } else {
                         format!("fno do pr rebase {pr}")
                     };

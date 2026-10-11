@@ -233,6 +233,9 @@ fn a_merge_commit_branch_conflict_tells_the_owner_to_merge_not_rebase() {
             && store.contains("crates/fno-agents/src/a.rs"),
         "{store}"
     );
-    assert!(store.contains(r#""run":"fno do pr push""#), "{store}");
+    assert!(
+        store.contains(r#""run":"fno do pr push --pr 1""#),
+        "{store}"
+    );
     assert!(!store.contains("fno do pr rebase"), "{store}");
 }
