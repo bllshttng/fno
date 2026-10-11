@@ -1585,7 +1585,7 @@ fn require_nodes(rows: &[Value], ids: &[String]) -> Result<(), String> {
 
 /// The shared non-graph backend guard (the update door's guard, per verb):
 /// these verbs own graph state; under an external backend they refuse.
-fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
+pub(crate) fn refuse_non_graph_backend(verb: &str) -> Option<i32> {
     let backend = active_backend_name();
     if backend == "graph" {
         return None;

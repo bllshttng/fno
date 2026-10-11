@@ -143,6 +143,22 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // The ported tracker-owned verbs own graph state: under an external
+    // backend they refuse before any read or write. Help still answers.
+    if matches!(
+        resolved.legacy,
+        "archive"
+            | "unarchive"
+            | "maintain"
+            | "migrate-priorities"
+            | "migrate-difficulty"
+            | "migrate-updated-at"
+    ) && !carries(resolved.tail, &["--help", "-h"])
+    {
+        if let Some(code) = super::workflows::refuse_non_graph_backend(resolved.legacy) {
+            return code;
+        }
+    }
     match resolved.legacy {
         // The folded corpus/history reader: fully native, engine owns the
         // whole surface (inventory, migrate, history, stale, findings).

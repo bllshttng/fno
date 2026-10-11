@@ -795,6 +795,10 @@ pub fn run_groom(tail: &[String]) -> i32 {
         println!("{}", py_json_pretty(&receipt));
         return i32::from(receipt["status"] == "failed");
     }
+    // The pass owns graph state; --check and the agent flags above do not.
+    if let Some(code) = super::workflows::refuse_non_graph_backend("groom") {
+        return code;
+    }
     let cwd = std::env::current_dir()
         .map(|d| d.display().to_string())
         .unwrap_or_else(|_| ".".into());

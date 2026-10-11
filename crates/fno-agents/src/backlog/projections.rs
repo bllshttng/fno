@@ -1707,17 +1707,19 @@ pub fn run_album(tail: &[String]) -> i32 {
         );
         return 2;
     }
-    let archive = match crate::graph_store::read_archive(&super::settings::graph_path(), false) {
+    // Archive residents are store rows stamped archived_at, not a side file.
+    let rows = match crate::graph_store::read_rows(&super::settings::graph_path()) {
         Ok(rows) => rows,
         Err(e) => {
             eprintln!("fno backlog album: archive read failed: {e}");
             return 1;
         }
     };
-    let mut shipped: Vec<Value> = archive
+    let mut shipped: Vec<Value> = rows
         .into_iter()
         .filter(|e| {
             is_dict(e)
+                && truthy(e.get("archived_at"))
                 && crate::org_board::prs::derived_status(e) == "done"
                 && !truthy(e.get("superseded_by"))
                 && project

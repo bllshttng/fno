@@ -1523,17 +1523,13 @@ mod tests {
     #[test]
     fn fingerprint_matches_the_python_bytes_and_moves_on_edit() {
         let node = json!({"id": "ab-x", "title": "café", "details": "d"});
-        // sha256 of the json.dumps(sort_keys=True, ensure_ascii=False) bytes.
+        // Decks the Python sweep wrote watermark this digest: sha256 of
+        // json.dumps(sort_keys=True, ensure_ascii=False) over the premise fields.
         assert_eq!(
-            py_dumps(
-                &json!({"title": "café", "id": "ab-x", "cwd": null}),
-                true,
-                false
-            ),
-            r#"{"cwd": null, "id": "ab-x", "title": "café"}"#
+            node_fingerprint(&node),
+            "e304fc143afe6e9fcebbfa9bf8364f28a1594776f87240c3692937f56210e129"
         );
         let edited = json!({"id": "ab-x", "title": "rewritten", "details": "d"});
-        assert_eq!(node_fingerprint(&node), node_fingerprint(&node.clone()));
         assert_ne!(node_fingerprint(&node), node_fingerprint(&edited));
     }
 
