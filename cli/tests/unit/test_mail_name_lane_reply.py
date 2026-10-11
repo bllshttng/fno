@@ -43,9 +43,12 @@ def _seed_name_lane_inbound(*, to: str, from_: str, body: str) -> str:
 
 
 def _bus_msgs():
-    from fno.bus.log import iter_messages
+    # The audit view: one row per id, the receipt's final state. A live miss
+    # leaves a staged body row and its durable fallback twin under one id; a
+    # hosted hit leaves the staged row and its receipt.
+    from fno.bus.log import dedupe_by_id, iter_messages
 
-    return list(iter_messages())
+    return dedupe_by_id(iter_messages(), last=True)
 
 
 def _isolate_empty_discovery(monkeypatch, tmp_path):
@@ -564,7 +567,7 @@ def test_name_lane_audit_failure_keeps_hosted_receipt(
 
     assert result.exit_code == 0, result.output
     assert "delivered (hosted)" in result.stdout
-    assert "outbox record failed" in (result.stderr or "")
+    assert "receipt row failed" in (result.stderr or "")
     assert "do not retry" in (result.stderr or "")
     assert all(m.delivery != "hosted" for m in _bus_msgs())
 

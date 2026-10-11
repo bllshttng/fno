@@ -186,6 +186,22 @@ mod tests {
             crate::agent_lock::pid_is_alive(child.id() as u64),
             "the zombie still answers kill(pid,0)"
         );
+        // The kill is asynchronous: between SIGKILL and the kernel marking the
+        // child ZOMBIE there is a window where /proc still reads state R or S
+        // with the start time unchanged, and a scan inside that window calls
+        // the ticket live (seen once on a loaded CI runner). Hold the fixture
+        // at the state the prune below relies on.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !matches!(
+            crate::process_probe::process_bsd(child.id()),
+            Some((_, true))
+        ) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never reached zombie state"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
         let start = crate::process_probe::process_bsd(child.id())
             .expect("zombie start readable")
             .0;

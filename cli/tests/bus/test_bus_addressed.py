@@ -136,8 +136,11 @@ def test_dispatch_send_writes_addressed_session_envelope(env, tmp_path):
     )
 
     addressed = [m for m in iter_messages() if m.to == "00000bob"]
-    assert len(addressed) == 1
-    env_ = addressed[0]
+    # The write-ahead stage row and the delivery row share one id.
+    assert len(addressed) == 2
+    assert addressed[0].id == addressed[-1].id
+    assert addressed[0].delivery is None
+    env_ = addressed[-1]
     assert env_.to_kind == "session"
     # The durable row carries the same canonical sender as the wire envelope
     # and rolling-budget pair, so an inbound reply resets the right ledger.

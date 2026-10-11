@@ -7717,11 +7717,10 @@ def dispatch_send(
                 # so it cannot drain during a live window, and there is no live
                 # window to crash in. Write its durable placeholder BEFORE
                 # anything else so a sender crash before the recipient wakes does
-                # not lose the message. A recipient we WILL attempt live gets no
-                # bus placeholder: it can drain while the live turn is in flight,
-                # before the id lands in its transcript, so W2 cannot skip it and
-                # the message would double-deliver. Its stored copy is written
-                # first to the chats record instead (before_live below).
+                # not lose the message. A recipient we WILL attempt live gets its
+                # body row staged just before the inject (stage_before_live
+                # below): the bus row is the body's only home. A drain firing
+                # mid-inject can print a duplicate; a duplicate beats a drop.
                 if durable_recipient is not None and not family1_attemptable:
                     _write_durable()
                 delivery = "durable"
@@ -7736,7 +7735,7 @@ def dispatch_send(
                     live_miss_reason = f"transcript-{family1_state}"
                 if family1_attemptable:
                     from fno import rust_binary
-                    from fno.bus.log import record_hosted_delivery
+                    from fno.bus.log import record_hosted_delivery, stage_before_live
                     from fno.mail.envelope import wrap_fno_mail
 
                     record: dict[str, Any] = dict(
@@ -7754,34 +7753,35 @@ def dispatch_send(
                         word_count=rust_binary.style_word_count(message),
                         subject=mail_ctx.subject,
                     )
+                    # Stage before the inject; a staging failure demotes to the
+                    # durable floor. An empty recipient (mcp-only row) stages nothing.
                     try:
-                        record_hosted_delivery(**record, before_live=True)
-                    except Exception as exc:  # noqa: BLE001 - the live attempt still runs
-                        print(f"stored copy not written before live delivery: {exc}", file=sys.stderr)
-                    live_attempted = True
-                    _live_delivered = _deliver_live(
-                        existing,
-                        message,
-                        from_name,
-                        mail_ctx,
-                        sender_entry=sender_entry,
-                        reason_out=_live_reason,
-                        family1_state=family1_state,
-                    )
-                    if _live_delivered:
-                        delivery = "hosted"
-                        try:
-                            record_hosted_delivery(**record)
-                        except Exception as exc:  # noqa: BLE001 - delivery already succeeded
-                            print(
-                                "delivery succeeded; outbox record failed; "
-                                f"do not retry: {exc}",
-                                file=sys.stderr,
-                            )
+                        if record["recipient"]:
+                            stage_before_live(**record)
+                    except Exception as exc:  # noqa: BLE001 - demote to durable
+                        print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
+                        live_miss_reason = "stage-failed"
                     else:
-                        live_miss_reason = ";".join(_live_reason) if _live_reason else None
-                        if live_miss_reason and existing.mux:
-                            live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
+                        live_attempted = True
+                        _live_delivered = _deliver_live(
+                            existing,
+                            message,
+                            from_name,
+                            mail_ctx,
+                            sender_entry=sender_entry,
+                            reason_out=_live_reason,
+                            family1_state=family1_state,
+                        )
+                        if _live_delivered:
+                            delivery = "hosted"
+                            try:
+                                record_hosted_delivery(**record)
+                            except Exception as exc:  # noqa: BLE001 - delivery already succeeded
+                                print(f"delivery succeeded; receipt row failed; the staged bus row holds the body; do not retry: {exc}", file=sys.stderr)
+                        else:
+                            live_miss_reason = ";".join(_live_reason) if _live_reason else None
+                            if live_miss_reason and existing.mux:
+                                live_miss_reason = f"{live_miss_reason};owner={durable_owner}"
                 if _bus_only:
                     live_miss_reason = BUS_ONLY_POLICY
                 if not _live_delivered and (durable_recipient is None or family1_attemptable):

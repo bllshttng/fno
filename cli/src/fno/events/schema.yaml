@@ -5700,7 +5700,7 @@ event_types:
 
   - name: mission_activated
     description: "Emitted by `fno backlog advance --epic <id>` (K1) on the first epic advance of an epic mission: the epic node is marked mission_active=true (a durable graph field K2's drain loop reads) and converge pass 1 begins. Emitted once per activation - a re-run of an already-active mission runs the idempotent converge pass without re-emitting this. A mission is an epic node plus its transitive children (the parent edge is the mission key; mission_id is untouched). A role grant over an epic (fno agents org promote / fno agents spawn --promote) also emits this with source=role, so a titled epic can never lack the flag the drain reads."
-    sources: [backlog]
+    sources: [backlog, agents]
     data:
       required: [epic_id]
       properties:

@@ -1541,7 +1541,7 @@ fn valid_chat_id(id: &str) -> bool {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: fno-agents chats <append|bus-append|migrate|rebuild|list|read|resolve|show> ..."
+        "usage: fno-agents chats <append|bus-append|stage|migrate|rebuild|list|read|resolve|show> ..."
     );
     eprintln!(
         "  migrate --envelopes: one-time rewrite of stored legacy <fno_mail> bodies \
@@ -1656,6 +1656,130 @@ pub fn run_chats(args: &[String]) -> i32 {
                 }
                 Err(e) => {
                     eprintln!("chats bus-append: {e}");
+                    1
+                }
+            }
+        }
+        "stage" => {
+            // The pre-live body row: the caller sends RAW fields on
+            // stdin, this mints the envelope with no delivery mark and rides
+            // the same door as bus-append, so the chats record lands
+            // fail-closed before the bus write. The envelope contract lives
+            // here; the Python caller stays a thin call. The id is the
+            // caller's: the receipt row (record_hosted_delivery) must share
+            // it, so nothing is minted on this side.
+            let mut input = String::new();
+            if std::io::stdin().read_to_string(&mut input).is_err() {
+                eprintln!("chats stage: could not read the fields from stdin");
+                return 1;
+            }
+            let fields: Value = match serde_json::from_str(input.trim()) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("chats stage: not a JSON object: {e}");
+                    return 1;
+                }
+            };
+            let obj = match fields.as_object() {
+                Some(o) => o,
+                None => {
+                    eprintln!("chats stage: expected a JSON object of envelope fields");
+                    return 1;
+                }
+            };
+            // The record vocabulary rides both spellings: the Python send
+            // paths hold msg_id/sender/recipient, the envelope says
+            // id/from/to.
+            let id = match obj
+                .get("id")
+                .or_else(|| obj.get("msg_id"))
+                .and_then(Value::as_str)
+            {
+                Some(s) if !s.is_empty() => s,
+                _ => {
+                    eprintln!("chats stage: id is required (the receipt row shares it)");
+                    return 1;
+                }
+            };
+            let from = obj
+                .get("from")
+                .or_else(|| obj.get("sender"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let to = obj
+                .get("to")
+                .or_else(|| obj.get("recipient"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let body = obj.get("body").and_then(Value::as_str).unwrap_or("");
+            if from.is_empty() || to.is_empty() {
+                eprintln!("chats stage: from and to are required");
+                return 1;
+            }
+            let mut line = serde_json::Map::new();
+            line.insert("v".into(), json!(1));
+            line.insert("id".into(), json!(id));
+            line.insert("ts".into(), json!(crate::announce::now_iso()));
+            line.insert("thread".into(), json!(id));
+            line.insert("from".into(), json!(from));
+            line.insert("to".into(), json!(to));
+            line.insert("kind".into(), json!("send"));
+            // Optional tags ride the envelope's additive shape; absent stays
+            // absent so lines stay scannable. to_session/to_harness fold into
+            // meta, the copy the landed check reads.
+            for tag in [
+                "from_harness",
+                "to_harness",
+                "request_id",
+                "in_reply_to",
+                "from_session",
+                "from_model",
+                "to_kind",
+                "word_count",
+                "subject",
+            ] {
+                if let Some(v) = obj.get(tag) {
+                    if !v.is_null() {
+                        line.insert(tag.into(), v.clone());
+                    }
+                }
+            }
+            let to_session = obj.get("to_session").and_then(Value::as_str);
+            let to_harness_tag = obj.get("to_harness").and_then(Value::as_str);
+            if to_session.is_some() || to_harness_tag.is_some() {
+                let mut meta = serde_json::Map::new();
+                if let Some(s) = to_session {
+                    meta.insert("to_session".into(), json!(s));
+                }
+                if let Some(h) = to_harness_tag {
+                    meta.insert("to_harness".into(), json!(h));
+                }
+                line.insert("meta".into(), Value::Object(meta));
+            }
+            if let Ok(s) = std::env::var("FNO_MAIL_SUBJECT") {
+                let s = s.trim();
+                if !s.is_empty() {
+                    if let Some(m) = line
+                        .entry("meta")
+                        .or_insert_with(|| json!({}))
+                        .as_object_mut()
+                    {
+                        m.insert("subject".into(), json!(s));
+                    }
+                }
+            }
+            line.insert("body".into(), json!(body));
+            let live = args
+                .get(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(bus_append_live_path);
+            match crate::announce::append_line_open(&live, &Value::Object(line), &dir) {
+                Ok(()) => {
+                    println!("{{\"staged\":true,\"id\":\"{id}\"}}");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("chats stage: {e}");
                     1
                 }
             }

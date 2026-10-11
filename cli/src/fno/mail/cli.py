@@ -1792,7 +1792,6 @@ def _forced_pane_send(
     it. Returns True when the bytes were written.
     """
     from fno.agents.dispatch import _mux_pane_send
-    from fno.bus.log import record_typed_delivery
 
     from fno.mail.thread_force import prepare_forced_entry
 
@@ -1859,41 +1858,66 @@ def _forced_pane_send(
         )
         raise typer.Exit(code=1)
 
+    # One field set feeds both rows: the staged body row before the first
+    # keystroke and the typed receipt after confirmation. The bus row is the
+    # body's only home, so a staging failure types nothing -- typing into an
+    # id whose row never landed is the dangling-Read-line bug this prevents.
+    from fno.bus.log import record_typed_delivery, stage_before_live
+
+    record: dict[str, Any] = dict(
+        msg_id=msg_id,
+        sender=sender,
+        recipient=recipient,
+        body=record_body or wrapped,
+        from_harness=sender_harness,
+        to_harness=provider,
+        in_reply_to=reply_to,
+        from_session=sender_session,
+        from_model=sender_model,
+        to_kind="name",
+        word_count=authored_words,
+        subject=subject,
+    )
+    try:
+        stage_before_live(**record)
+    except Exception as exc:  # noqa: BLE001 - nothing typed, nothing confirmed
+        _release_budget(reservation)
+        print(
+            f"error: body row not staged before the forced send; nothing was "
+            f"typed. Send without --force to queue durable. ({exc})",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=1) from exc
+
     if _mux_pane_send(entry, wrapped, guarded=False) in (False, "unconfirmed"):
         _release_budget(reservation)
         # NOT "nothing was sent". One bool covers two worlds here: a refusal
         # before any bytes moved, and a paste that landed whose submit key then
-        # failed, which leaves the envelope sitting in the recipient's composer.
-        # No outbox row exists either way, so a sender told "nothing was sent"
-        # retries and pastes it twice. The raw lane already says this honestly.
+        # failed, leaving the envelope in the recipient's composer. No typed
+        # receipt exists either way, but the staged body row does, so a drain
+        # delivers the message -- a sender told "nothing was sent" retries and
+        # pastes it twice on top of the drain copy.
         print(
-            f"error: --force did not confirm a send into pane {pane_id}, and no "
-            f"row claims otherwise. The payload may still be sitting unsent in "
-            f"the recipient's composer, so check the pane before retrying. The "
-            f"refusal is on stderr above.",
+            f"error: --force did not confirm a send into pane {pane_id}. The "
+            f"payload may still be sitting unsent in the recipient's composer, "
+            f"and the staged body row will deliver by drain, so check the pane "
+            f"before retrying. The refusal is on stderr above.",
             file=sys.stderr,
         )
         raise typer.Exit(code=1)
 
     try:
         record_typed_delivery(
-            msg_id=msg_id,
-            sender=sender,
-            recipient=recipient,
-            body=record_body or wrapped,
+            **record,
             pane_id=str(pane_id),
             mux_session=str(mux_session) if mux_session else None,
-            from_harness=sender_harness,
-            to_harness=provider,
-            in_reply_to=reply_to,
-            from_session=sender_session,
-            from_model=sender_model,
-            to_kind="name",
-            word_count=authored_words,
-            subject=subject,
         )
     except Exception as exc:  # noqa: BLE001 - the bytes are already typed
-        print(f"typed; outbox record failed; do not retry: {exc}", file=sys.stderr)
+        print(
+            "typed; receipt row failed; the staged bus row holds the body; "
+            f"do not retry: {exc}",
+            file=sys.stderr,
+        )
     corr = f" re:{reply_to}" if reply_to else ""
     label = f"thread viewport {mux_session}:{pane_id}" if thread_viewport else f"pane {pane_id}"
     print(json_receipt(
@@ -2178,26 +2202,32 @@ def _name_lane_send(
         )
         return
 
-    from fno.bus.log import record_hosted_delivery
+    from fno.bus.log import record_hosted_delivery, stage_before_live
 
     record: dict[str, Any] = dict(
         msg_id=msg_id, sender=sender, recipient=recipient, body=wrapped,
         from_harness=sender_harness, in_reply_to=reply_to, from_session=sender_session,
         from_model=sender_model, to_kind="name", word_count=authored_words, subject=subject,
     )
-    # Write first for a known recipient. A token no store knows exits 16
-    # having sent nothing, so it gets no stored copy.
+    # Stage the body row first for a known recipient: the bus row is the body's
+    # only home, so it must be on the bus before the inject can confirm. A token
+    # no store knows exits 16 having sent nothing, so it gets no staged row. A
+    # staging failure means the bus door is unhealthy; skip the live rungs and
+    # let the durable floor below carry the message.
+    live_reason: Optional[str] = None
+    staged = False
     if not self_send and (resolved is not None or (token and token_reachable)):
         try:
-            record_hosted_delivery(**record, before_live=True)
-        except Exception as exc:  # noqa: BLE001 - the live attempt still runs
-            print(f"stored copy not written before live delivery: {exc}", file=sys.stderr)
+            stage_before_live(**record)
+            staged = True
+        except Exception as exc:  # noqa: BLE001 - demote to durable
+            print(f"body row not staged; skipping live delivery: {exc}", file=sys.stderr)
+            live_reason = "stage-failed"
     injected = False
     woken_as: Optional[str] = None
     lanes: list[str] = []
     # node: the live lane's own cause when a claude inject misses, so the
     # durable receipt names it (e.g. not-confirmed) instead of a bare live-miss.
-    live_reason: Optional[str] = None
     to_session: Optional[str] = recipient_session
     to_harness: Optional[str] = resolved.agent if resolved is not None else None
 
@@ -2211,6 +2241,11 @@ def _name_lane_send(
             # deadlocks a live session and revives a second writer on an asleep
             # one. Durable is the only honest lane.
             lanes.append("self-send")
+        elif live_reason == "stage-failed":
+            # The bus door refused the staged body row, so no rung may confirm
+            # into the id; demote to the durable floor. A stage that was never
+            # attempted (no resolvable recipient) keeps the base ladder below.
+            lanes.append("stage-failed")
         else:
             # Rung 3: inject-as-probe. The socket is its own source of truth --
             # a confirmed delivery IS the receipt, so no roster query is needed
@@ -2283,7 +2318,7 @@ def _name_lane_send(
 
     if resolved is not None and self_send:
         lanes.append("self-send")
-    elif resolved is not None:
+    elif staged and resolved is not None:
         # keeper-lane membership is contract-derived. The non-raising
         # read keeps a row whose harness the table has dropped on its
         # pre-keeper fall-through lanes (roster rung, durable floor).
@@ -2364,8 +2399,8 @@ def _name_lane_send(
             record_hosted_delivery(**record, to_harness=to_harness, to_session=to_session)
         except Exception as exc:  # noqa: BLE001 - delivery already succeeded
             print(
-                "delivery succeeded; outbox record failed; "
-                f"do not retry: {exc}",
+                "delivery succeeded; receipt row failed; the staged bus row "
+                f"holds the body; do not retry: {exc}",
                 file=sys.stderr,
             )
     if injected and woken_as:
@@ -4284,7 +4319,13 @@ def cmd_sent(
     that the agent read or acted on it -- that fourth state isn't observable.
     """
     from fno.agents.self_stamp import stamp_from
-    from fno.bus.log import HOSTED_DELIVERY, TYPED_DELIVERY, iter_messages, withdrawn_ids
+    from fno.bus.log import (
+        HOSTED_DELIVERY,
+        TYPED_DELIVERY,
+        dedupe_by_id,
+        iter_messages,
+        withdrawn_ids,
+    )
     from fno.config import load_settings
     from fno.mail.landed import _sent_unclaimed, age_minutes, landed_states
 
@@ -4299,7 +4340,9 @@ def cmd_sent(
     handle = stamp_from(from_name)
 
     is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
-    all_msgs = list(iter_messages())
+    # One id, one row, the receipt's state: a staged body row and its receipt
+    # share an id, and the outbox lists the send once, in its final state.
+    all_msgs = dedupe_by_id(iter_messages(), last=True)
     if unclaimed_only:
         msgs = _sent_unclaimed(handle, load_settings().inbox.unclaimed_ttl)
         unclaimed_ids = {m.id for m in msgs}

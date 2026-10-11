@@ -38,6 +38,10 @@ One JSON object per line (`fno.bus.log.Envelope`):
 
 A root message threads under its own id. A reply sets `in_reply_to`.
 
+### The staged body row
+
+Every live injection leg stages the body row first: the name-lane ladder, the dispatch live leg, and a `--force` pane send. The stage is one ordinary `send` row with no `delivery` mark, written through the bus-append door before the first keystroke. The bus row is the body's only home. It must be on the bus before an inject can confirm into its id. A post-confirm append failure otherwise leaves the delivered Read line pointing at a row that never lands. The door's record seam writes the chats record before the bus line and fails closed. A confirmed inject therefore always finds its row. When the inject confirms, the receipt row (`hosted` or `typed`) lands under the same id. A hosted receipt supersedes the staged twin at the drain (`scan_unread`). A typed receipt does not supersede. Pane bytes are not proven consumed, and the staged row is the recovery after a pane discards them. A staged row whose inject never confirmed is simply a durable row. The recipient's drain delivers it once.
+
 From the Messages tab, the user types a reply into the chosen pane. After focus and input succeed, the client records one `delivery: "typed"` bus row. The row sets `from` to `user` and `in_reply_to` to the tapped message id, then enters the paired chat projection. Typed rows are audit records, so the drain does not deliver them again. If the selected session has no pane, the client writes no reply.
 
 ### Control lane word ledger
