@@ -62,9 +62,7 @@ def _opencode_serve_spawn(
         name,
         "--harness",
         "opencode",
-        # thread, never the retired bg spelling: the binary refuses bg
-        # (default_substrate answers thread for opencode), so a default
-        # opencode spawn failed at exit 2 until this carried thread.
+        # thread: the binary refuses the retired bg spelling.
         "--substrate",
         "thread",
         "--cwd",

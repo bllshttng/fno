@@ -721,6 +721,13 @@ pub fn run_spawn_axes(args: &[String]) -> i32 {
         println!("{answer}");
         return 0;
     }
+    // An `agy_mint_run` field asks the runtime to EXECUTE the mint turn and
+    // answer the conversation id (the argv owner stays in agy_launch.rs; the
+    // process mechanics live in agy_mint.rs).
+    if let Some(ask) = parsed.get("agy_mint_run") {
+        println!("{}", crate::agy_mint::run(ask));
+        return 0;
+    }
     // A `resume_pin` field routes the same way: which model a resume comes
     // back on, answered by crates/fno-agents/src/resume_pin.rs.
     if let Some(pin) = parsed.get("resume_pin") {
