@@ -548,14 +548,17 @@ mod tests {
                 .to_string(),
         );
         // The draw answers a pool name and records it as the pending draw.
-        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
+        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
+            .unwrap();
         let lowered = drawn.to_ascii_lowercase();
         assert!(NAME_POOL.contains(&lowered.as_str()), "{drawn}");
-        let pending =
-            crate::team_names::pending_draw(&store, "x-aaaa").unwrap().unwrap();
+        let pending = crate::team_names::pending_draw(&store, "x-aaaa")
+            .unwrap()
+            .unwrap();
         assert_eq!(pending, lowered);
         // A consumed draw never repeats: the second draw excludes it.
-        let again = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
+        let again = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
+            .unwrap();
         assert_ne!(again, drawn);
 
         // A separate store proves the exclusion absolute: retiring every
@@ -581,7 +584,15 @@ mod tests {
             )
             .unwrap();
         }
-        let forced = draw_successor_name(&store2, &registry2, "x-zzzz", None, false, Some(tmp2.path())).unwrap();
+        let forced = draw_successor_name(
+            &store2,
+            &registry2,
+            "x-zzzz",
+            None,
+            false,
+            Some(tmp2.path()),
+        )
+        .unwrap();
         assert_eq!(forced.to_ascii_lowercase(), NAME_POOL[0]);
     }
 
@@ -608,7 +619,8 @@ mod tests {
         assert!(err.contains("the machine draws successor names"), "{err}");
         assert!(err.contains("--redraw"), "{err}");
         // The drawn name is accepted; anything else refuses.
-        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path())).unwrap();
+        let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
+            .unwrap();
         let ok = draw_successor_name(
             &store,
             &registry,
