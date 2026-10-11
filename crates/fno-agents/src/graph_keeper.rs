@@ -412,9 +412,10 @@ fn flush_gate_metrics(state: &StoreState) {
 /// incumbent instead of failing the spawn.
 pub const EXIT_SEAT_OWNED: i32 = 3;
 
-/// How long the store must stay quiet after the last write before the view
-/// pass runs: a burst of writes renders once, not once per write.
-const RENDER_SETTLE: Duration = Duration::from_secs(2);
+/// How long the store must stay quiet after a write burst before the view
+/// pass runs: a burst of writes renders once, not once per write. The const
+/// moved to board_render_arm with the pass; the backoff doubles from here.
+use crate::board_render_arm::RENDER_SETTLE;
 
 /// Whether the canonical view pass is owed right now: the store's version
 /// moved since the last render AND the write burst has settled. `None`
@@ -441,19 +442,10 @@ fn render_due(state: &StoreState, current: &str, rendered: Option<&str>, settle:
 /// `graph_render_failed` on failure. Never touches the write gate: a slow or
 /// failing render delays nothing, and the next settled tick retries.
 fn trigger_render(state: &StoreState) {
-    trigger_render_with(state, run_render_pass);
+    trigger_render_with(state, crate::board_render_arm::run_render_pass);
 }
 
-/// Backoff between render attempts after consecutive failures: double from
-/// the settle floor each time, capped at ten minutes. A permanently failing
-/// pass then costs one spawn per cap window, not one per second.
-fn render_backoff(failures: u32) -> Duration {
-    let shift = failures.min(10);
-    RENDER_SETTLE
-        .checked_mul(1u32 << shift)
-        .unwrap_or(Duration::from_secs(600))
-        .min(Duration::from_secs(600))
-}
+use crate::board_render_arm::render_backoff;
 
 /// The injectable body of [`trigger_render`]: tests pass their own pass
 /// runner instead of the subprocess.
@@ -535,53 +527,6 @@ fn trigger_render_with(state: &StoreState, run: impl FnOnce() -> Result<(), (i32
         }
     }
     state.render_in_flight.store(false, Ordering::SeqCst);
-}
-
-/// Run the canonical view pass as a subprocess. The keeper is a Rust worker:
-/// the pass is Python-owned (config.toml targets, vault rendering), so it
-/// shells to the `fno` CLI the same way the mux's retired replay did.
-/// `Err` carries the exit code and the stderr tail for the failure event.
-fn run_render_pass() -> Result<(), (i32, String)> {
-    let bin = match std::env::var_os("FNO_BIN") {
-        Some(v) => PathBuf::from(v),
-        None => {
-            // A lib unit test declared no fno: refuse before the PATH walk,
-            // the same declared-only rule scrape::fno_bin applies.
-            if cfg!(test) {
-                return Err((-1, "no fno declared under a unit test".into()));
-            }
-            let path = match std::env::var_os("PATH") {
-                Some(p) => p,
-                None => return Err((-1, "PATH is unset; the view pass cannot run".into())),
-            };
-            match std::env::split_paths(&path)
-                .map(|dir| dir.join("fno"))
-                .find(|candidate| candidate.is_file())
-            {
-                Some(p) => p,
-                None => {
-                    return Err((-1, "no fno CLI on PATH; the view pass cannot run".into()));
-                }
-            }
-        }
-    };
-    let out = std::process::Command::new(bin)
-        .args(["backlog", "render-views"])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| (-1, format!("spawn failed: {e}")))?;
-    if out.status.success() {
-        return Ok(());
-    }
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    // Tail only, char-safe: the emitter caps payloads at 500 B, so the tail
-    // must leave room for the envelope fields.
-    let tail: String = {
-        let skip = stderr.chars().count().saturating_sub(300);
-        stderr.chars().skip(skip).collect()
-    };
-    Err((code, tail))
 }
 
 /// How often an idle keeper re-checks that the socket path still names the

@@ -44,6 +44,9 @@ pub(super) struct FleetArms {
     lease_heartbeat: crate::lease_heartbeat::Arm,
     backlog_share: crate::backlog_share::Arm,
     mail: crate::mail_arm::Arm,
+    // The board render: off the Python write path (law d-bad5a42f), the
+    // daemon ticks it every interval and stamps rendered_version.
+    board_render: crate::board_render_arm::Arm,
     // Retirement-sweep cadence: the throttle stamp beside the gate,
     // plus the next interval cell the sweep body hands back (the idle-probe
     // verdict pattern), so the tick reads a mutex instead of config files.
@@ -111,6 +114,7 @@ impl FleetArms {
             lease_heartbeat: crate::lease_heartbeat::Arm::default(),
             backlog_share: crate::backlog_share::Arm::default(),
             mail: crate::mail_arm::Arm::default(),
+            board_render: crate::board_render_arm::Arm::default(),
             last_gc_sweep: Instant::now(),
             retire_interval_next: crate::gc::seed_retire_interval_cell(&opts.agents_config_cwd),
             gc_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -268,6 +272,9 @@ impl FleetArms {
         );
         crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
         crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
+        // The board render: graph.md plus every configured board target,
+        // once per moved version, off every caller's write path.
+        crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
         crate::rundown::maybe_tick(&self.team_ledger, ctx.home.clone());
         crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
         crate::fleet_page::maybe_tick(&self.fleet_page, ctx.home.clone());

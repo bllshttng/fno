@@ -264,6 +264,14 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         reader: None,
     },
     ArmSpec {
+        arm: "board_render",
+        default_interval_s: crate::board_render_arm::BOARD_RENDER_INTERVAL_S,
+        scheduler: SCHED_DAEMON,
+        upstream: None,
+        arm_key: None,
+        reader: None,
+    },
+    ArmSpec {
         arm: "team_ledger",
         default_interval_s: crate::rundown::TEAM_LEDGER_INTERVAL_S,
         scheduler: SCHED_DAEMON,
