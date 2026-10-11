@@ -70,6 +70,12 @@ pub(crate) fn blocked_child_grace_minutes(cwd: &Path) -> i64 {
         .unwrap_or(30)
 }
 
+/// The refusal when no config holds a work map. It names the table to add,
+/// because the lead board and the lead verdict both surface this text.
+pub(crate) const NO_WORK_MAP: &str = "no work.workspaces in any candidate config.toml; \
+     add [work.workspaces.<slug>] with projects = [{ name = \"<project>\", path = \"<checkout>\" }] \
+     to ~/.fno/config.toml";
+
 /// The {alias: canonical} project map from `work.workspaces.*.projects[]`
 /// (projects/resolve.py's cache builder). `Err` names why the map is absent so
 /// a scope spelling that is neither project nor epic can be refused with the
@@ -77,7 +83,7 @@ pub(crate) fn blocked_child_grace_minutes(cwd: &Path) -> i64 {
 pub(crate) fn project_map(cwd: &Path) -> Result<HashMap<String, String>, String> {
     let work = match crate::agents_config::config_lookup(cwd, &["work", "workspaces"]) {
         Some(v) => v,
-        None => return Err("no work.workspaces in any candidate config.toml".to_string()),
+        None => return Err(NO_WORK_MAP.to_string()),
     };
     let Some(table) = work.as_table() else {
         return Ok(HashMap::new());
