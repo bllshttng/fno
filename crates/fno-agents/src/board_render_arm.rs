@@ -171,18 +171,18 @@ fn emit_one(
 }
 
 /// The failure event the AC names: `graph_render_failed`, daemon-sourced,
-/// into the same journal the tick row lands in.
+/// into BOTH journals the tick row lands in - the project file the folds
+/// read and the machine-global path the daemon's consumers read.
 fn render_failed(home: &AgentsHome, current: &str, exit: i32, stderr_tail: &str) {
-    let emitter =
-        crate::events::EventEmitter::new(crate::daemon::global_events_path(home), "daemon");
-    let _ = emitter.emit(
-        "graph_render_failed",
-        &serde_json::json!({
-            "version": current,
-            "exit": exit,
-            "stderr_tail": stderr_tail,
-        }),
-    );
+    let payload = serde_json::json!({
+        "version": current,
+        "exit": exit,
+        "stderr_tail": stderr_tail,
+    });
+    for path in [home.events_jsonl(), crate::daemon::global_events_path(home)] {
+        let emitter = crate::events::EventEmitter::new(path, "daemon");
+        let _ = emitter.emit("graph_render_failed", &payload);
+    }
 }
 
 /// Run the canonical view pass as one bounded subprocess: `fno backlog
