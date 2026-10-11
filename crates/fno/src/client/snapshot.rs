@@ -281,11 +281,7 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!("fno-snapshot-{}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
     let page = dir.join("shot.html");
-    std::fs::write(
-        &page,
-        format!("<!doctype html><style>html,body{{margin:0}}svg{{display:block}}</style>{svg}"),
-    )
-    .map_err(|e| format!("temp page: {e}"))?;
+    std::fs::write(&page, page_html(svg)).map_err(|e| format!("temp page: {e}"))?;
     let out_abs = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut cmd = std::process::Command::new(&chrome);
     // Chrome hangs on macOS under a HOME that is not the user's, and the demo
@@ -350,6 +346,17 @@ fn png(svg: &str, frame: &Frame, out: &Path) -> Result<(), String> {
         s if s.success() && out_abs.exists() => Ok(()),
         s => Err(format!("{} exited {s} and wrote no png", chrome.display())),
     }
+}
+
+/// The zero-margin page png() rasterizes. overflow:hidden: the last row's
+/// glyph descenders poke a fraction of a px past the svg height, and an
+/// exact-fit window then screenshots a composite whose bottom tile repeats
+/// the page's first rows (the doubled chrome the iMac reported). Clamping
+/// the page kills the repeat.
+fn page_html(svg: &str) -> String {
+    format!(
+        "<!doctype html><style>html,body{{margin:0;overflow:hidden}}svg{{display:block}}</style>{svg}"
+    )
 }
 
 fn find_chrome() -> Option<PathBuf> {
@@ -695,5 +702,14 @@ mod tests {
             ),
             "{e}"
         );
+    }
+
+    #[test]
+    fn raster_page_clamps_overflow() {
+        // The unclamped page screenshots a composite whose bottom tile repeats
+        // the first rows at an exact-fit window (the doubled chrome report).
+        let page = page_html("<svg>x</svg>");
+        assert!(page.contains("overflow:hidden"), "{page}");
+        assert!(page.contains("<svg>x</svg>"), "{page}");
     }
 }
