@@ -4239,7 +4239,7 @@ event_types:
           description: "Target session identifier."
         reason:
           type: string
-          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DonePlanned, NoWork, Budget, NoProgress, Interrupted, Aborted]
+          enum: [DonePRGreen, DoneUnreviewed, DoneAdvisory, DoneDelivery, DoneBatched, DoneAwaitingMerge, DoneAwaitingReview, DonePlanned, NoWork, Budget, NoProgress, HeldOnQuestion, Interrupted, Aborted]
           description: "TerminationReason enum value."
         axis:
           type: string
@@ -5218,6 +5218,27 @@ event_types:
           type: string
           enum: [COMPLETE, BLOCKED, ABORTED]
           description: "Legacy status value found in the manifest."
+    consumers: [operator]
+
+  - name: loop_check_question_gate
+    description: "One row per stop the question gate blocks. gate names the fold. held lists the open questions a held_on_question block named, and unrecorded lists the decided questions an unrecorded_decision block named. The next fire reads the held list to end the loop instead of blocking again. Not a fire observation, so it never counts toward the no-progress streak."
+    sources: [hook]
+    data:
+      required: [session_id, gate]
+      properties:
+        session_id:
+          type: string
+          description: "Target session identifier from the manifest."
+        gate:
+          type: string
+          enum: [held_on_question, unrecorded_decision]
+          description: "Which question fold blocked."
+        held:
+          type: array
+          description: "Question ids a held_on_question block named."
+        unrecorded:
+          type: array
+          description: "Question ids an unrecorded_decision block named."
     consumers: [operator]
 
   - name: loop_unit_dispatched
