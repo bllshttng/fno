@@ -2794,6 +2794,14 @@ impl Drop for ResumeEnvGuard {
     }
 }
 
+/// Serializes the env-mutating resume tests inside THIS test binary. The
+/// lib-side helper (`claims::test_env_lock`) is cfg(test) of the lib crate,
+/// so the bin's test build cannot see it.
+fn resume_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 /// main block_ons `run`, and a codex thread row's wake builds its own
 /// runtime and block_ons again (`resume_wake.rs`). Drive the verb through
 /// the same entry main uses, inside a tokio runtime: it must refuse 16
@@ -2803,7 +2811,7 @@ impl Drop for ResumeEnvGuard {
 fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
     // Serializes against the other env-mutating resume tests (shared
     // FNO_AGENTS_HOME / CODEX_HOME / PATH mutation, parallel threads).
-    let _env = fno_agents::claims::test_env_lock();
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
@@ -2871,7 +2879,7 @@ fn resume_by_predecessor_full_id_refuses_13() {
     // Serialize against the sibling resume tests that mutate the same env
     // vars: parallel threads swapping FNO_AGENTS_HOME read each other's
     // registries mid-test.
-    let _env = fno_agents::claims::test_env_lock();
+    let _env = resume_env_lock().lock().unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let home_dir = temp.path().join("agents-home");
     std::fs::create_dir_all(&home_dir).unwrap();
