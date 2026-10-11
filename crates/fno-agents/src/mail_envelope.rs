@@ -581,14 +581,12 @@ mod tests {
         .unwrap_err()
         .contains("body contains"));
         // A header-only mail still refuses a subject that could forge a
-        // header field: there, the subject rides. The refusal sits behind
-        // the registry read, so this one renders against a real registry.
-        let known = tempfile::TempDir::new().unwrap();
-        let known_registry = known.path().join("registry.json");
-        registry(&known_registry);
+        // header field: there, the subject rides. Header-only is an EMPTY
+        // body, never an absent one: a wrap with no body key stops at the
+        // body-shape check long before the subject is read.
         assert!(render_at(
-            &json!({"mode":"wrap", "from":"folio-short", "id":"msg-1", "subject":"a · b"}),
-            &known_registry
+            &json!({"mode":"wrap", "from":"a", "id":"msg-1", "body":"", "subject":"a · b"}),
+            &path
         )
         .unwrap_err()
         .contains("subject must not hold"));
