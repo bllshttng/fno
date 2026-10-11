@@ -707,9 +707,9 @@ fn server_answers_queries_while_a_pane_spawn_is_wedged() {
     // the real host can wedge openpty forever (2026-08-14 incident: two
     // stack samples, minutes apart, both
     // 100% in ttyname_r/lstat). `FNO_MUX_OPENPTY_HANG_MS` simulates that
-    // deterministically; a fresh squad's first pane spawn happens INSIDE
-    // `CoreMsg::Attach` (Locked 7: PTY spawn before the model), so client A's
-    // own Attach is the call that wedges.
+    // deterministically; a fresh squad's first pane spawn runs as client A's
+    // own attach's shell job (off the core loop since the fresh-attach
+    // placeholder change), so A's attach is the one whose spawn wedges.
     //
     // Before the fix, `open_pty` has no timeout knob at all - the env vars
     // below are inert, the real (unwedged, on a test host) openpty returns
@@ -760,16 +760,30 @@ fn server_answers_queries_while_a_pane_spawn_is_wedged() {
         "a wedged pane spawn must bound the outage to the deadline, not the injected 60s hang: query took {query_elapsed:?}"
     );
 
-    // A's own attach refuses (AC1-ERR: nothing spawnable, refuse THIS
-    // attach, the server keeps serving), and the refusal names the syscall
-    // and the host check (change 2).
+    // A's own attach answers with its placeholder Layout first (the shell
+    // job runs off the core loop), then refuses when the spawn lands
+    // (AC1-ERR: nothing spawnable, refuse THIS attach, the server keeps
+    // serving), and the refusal names the syscall and the host check.
     a.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-    match read_msg_sync::<_, ServerMsg>(&mut a) {
-        Ok(ServerMsg::Bye { reason }) => {
-            assert!(reason.contains("openpty"), "{reason}");
-            assert!(reason.contains("ls /dev"), "{reason}");
+    // Interleaved pushes (a 1s core tick re-pushes Layouts) may arrive
+    // between the placeholder Layout and the refusal, so skip Layouts until
+    // the Bye lands, inside the same bound.
+    let bye_deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match read_msg_sync::<_, ServerMsg>(&mut a) {
+            Ok(ServerMsg::Bye { reason }) => {
+                assert!(reason.contains("openpty"), "{reason}");
+                assert!(reason.contains("ls /dev"), "{reason}");
+                break;
+            }
+            Ok(ServerMsg::Layout { .. }) => {
+                assert!(
+                    Instant::now() < bye_deadline,
+                    "no Bye naming openpty arrived before the bound"
+                );
+            }
+            other => panic!("expected a Bye naming openpty, got {other:?}"),
         }
-        other => panic!("expected a Bye naming openpty, got {other:?}"),
     }
 }
 

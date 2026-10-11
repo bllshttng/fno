@@ -72,6 +72,7 @@ mod client_input;
 mod client_read;
 mod drift_retire;
 mod first_attach;
+mod fresh_attach;
 mod grid_reconcile;
 mod human_input;
 mod keeper_adopt;
@@ -7803,6 +7804,10 @@ impl Core {
         // anchors to any existing squad's MRU tab for a sane `active_squad`
         // highlight - its frames come from `visible` = all panes, not `view`.
         let passive = rows == 0 && cols == 0;
+        // The fresh squad's shell job, when this attach births a squad: built
+        // in the match below (the reservation and the model happen there),
+        // spawned off the loop at the end of this fn.
+        let mut shell_job = None;
         let view = match self.session.find_by_cwd(&key) {
             Some(sid) => {
                 // Existing squad: the attach lands IN it (AC6-HP, worktree
@@ -7837,26 +7842,17 @@ impl Core {
                 }
             }
             None => {
-                // Fresh squad: PTY spawn FIRST (Locked 7), then the model.
-                // The first shell starts in the client's literal launch dir.
-                match self.spawn_pane(rows, cols, &cwd) {
-                    Ok(pid) => {
-                        let sid = self.next_squad_id;
-                        self.next_squad_id += 1;
-                        let tid = self.session.mint_tab_id();
-                        self.session.add_squad(
-                            sid,
-                            vec![key],
-                            None,
-                            Tab {
-                                name: None,
-                                id: tid,
-                                root: Node::Leaf(pid),
-                                focus: pid,
-                            },
-                        );
-                        (sid, tid)
-                    }
+                // Fresh squad: the model builds around a RESERVED pane id and
+                // the client attaches NOW; the shell spawns off the core loop
+                // (its keeper handshake can hold the old synchronous spawn
+                // for seconds at load, stalling every other client with it).
+                // The leaf renders as an empty cell until the landing
+                // registers the pane and re-pushes. The atomic ordering
+                // (PTY first, model second) moved with the spawn: a failed
+                // spawn tears this placeholder squad down and refuses this
+                // attach (fresh_attach.rs).
+                let pid = match self.reserve_pane_id() {
+                    Ok(pid) => pid,
                     Err(e) => {
                         // AC1-ERR terminal case at attach: nothing spawnable.
                         // Refuse THIS attach; the server keeps serving (an
@@ -7866,7 +7862,23 @@ impl Core {
                         });
                         return;
                     }
-                }
+                };
+                let sid = self.next_squad_id;
+                self.next_squad_id += 1;
+                let tid = self.session.mint_tab_id();
+                self.session.add_squad(
+                    sid,
+                    vec![key],
+                    None,
+                    Tab {
+                        name: None,
+                        id: tid,
+                        root: Node::Leaf(pid),
+                        focus: pid,
+                    },
+                );
+                shell_job = Some(self.attach_shell_job(pid, rows, cols, cwd));
+                (sid, tid)
             }
         };
         // `id` is a primary key everywhere a client is looked up
@@ -7906,43 +7918,21 @@ impl Core {
         // after the Layout queued above - and drop the now-redundant
         // droppable seeds. Steady-state delivery (DirtyMap + broadcast_pane)
         // is unchanged; the wire message set is unchanged (same `Frame`
-        // variant, so no proto bump).
-        if let Some(c) = self.clients.iter().find(|c| c.id == id) {
-            let mut sent_n = 0usize;
-            let mut pids: Vec<u64> = c.visible.iter().copied().collect();
-            pids.sort_unstable();
-            let visible_n = pids.len();
-            let mut d = c.dirty.lock().unwrap();
-            for pid in pids {
-                if let Some(entry) = self.panes.get(&pid) {
-                    entry
-                        .stats
-                        .frames_composited
-                        .fetch_add(1, Ordering::Relaxed);
-                    let sent = c
-                        .reliable_tx
-                        .try_send(ServerMsg::Frame {
-                            pane_id: pid,
-                            frame: entry.vt.frame(),
-                        })
-                        .is_ok();
-                    // Only drop the droppable seed push_layout wrote once the
-                    // reliable frame actually landed. A failed send means a
-                    // wedged client (unreachable at birth: fresh 256-cap
-                    // channel, dead clients already reaped by push_layout) -
-                    // but if it ever happens, keep the seed so the already-
-                    // notified droppable path stays the fallback rather than
-                    // leaving the pane with no delivery at all.
-                    if sent {
-                        sent_n += 1;
-                        d.remove(&pid);
-                    }
-                }
-            }
-            drop(d);
-            e2e_log(format_args!(
-                "attach client {id}: {visible_n} visible panes, {sent_n} reliable frames"
-            ));
+        // variant, so no proto bump). Lives in fresh_attach.rs with the
+        // fresh-attach landing that reuses it.
+        let mut pids: Vec<u64> = self
+            .clients
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.visible.iter().copied().collect())
+            .unwrap_or_default();
+        pids.sort_unstable();
+        self.seed_reliable_frames(id, &pids);
+        // The fresh squad's shell: the reservation, tree, and client are
+        // live; the spawn (keeper handshake bounded at seconds per shell
+        // candidate) runs off the loop and the landing finishes the gesture.
+        if let Some(job) = shell_job {
+            self.spawn_attach_shell_after(job, id, view.0, view.1);
         }
     }
 
