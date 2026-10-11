@@ -120,7 +120,7 @@ mod exact_id_tests {
             Some("77770002-2222-3333-4444-555555555555")
         );
         assert_eq!(
-            matched("77770003-2222-3333-4444-555555555555".to_uppercase()).as_deref(),
+            matched(&"77770003-2222-3333-4444-555555555555".to_uppercase()).as_deref(),
             Some("77770003-2222-3333-4444-555555555555")
         );
         assert!(matched("77770001").is_none(), "primary short keeps current");
