@@ -1496,9 +1496,9 @@ fn behind_numbers(out: &str) -> (String, String) {
     (grab("behind-before="), grab("behind-after="))
 }
 
-/// The push verb's conflict exit: the rebase leg refused because the branch
-/// is not safely rebasable (needs_resolver or refused). The verb's other
-/// exit-3 refusals (protected branch, dirty tree) are NOT conflicts.
+/// The push verb's conflict exit: the integrate leg refused because the branch
+/// is not safely rebasable (needs_resolver, refused, or a merge the verb
+/// aborted). The verb's other exit-3 refusals (protected branch, dirty tree) are NOT conflicts.
 fn is_rebase_conflict(stderr: &str) -> bool {
     stderr.contains("not safely rebasable")
 }
@@ -2470,18 +2470,19 @@ fn run_all_apply(a: &Args, dry_run: bool) -> i32 {
                     bump(&mut counts, "skip_rebase_conflict");
                     receipt(&pr, "skip_rebase_conflict", &files);
                     let key = format!("PR {pr} rebase conflict");
-                    let text = if files.is_empty() {
-                        format!(
-                            "heal: {key} onto origin/main. Resolve with \
-                             `fno do pr rebase {pr}` from the PR's worktree."
-                        )
+                    let at = (!files.is_empty())
+                        .then(|| format!(" in: {files}"))
+                        .unwrap_or_default();
+                    // The verb's own door rides in its stderr; quoting it keeps the question on the integrate leg.
+                    let seg = err.split("). ").nth(1);
+                    let door = seg.unwrap_or("resolve by hand, then re-run `fno do pr push`");
+                    let text = format!("heal: {key} onto origin/main{at}. {door}");
+                    let run = if err.contains("already merges origin/main") {
+                        "fno do pr push".to_string()
                     } else {
-                        format!(
-                            "heal: {key} onto origin/main in: {files}. Resolve with \
-                             `fno do pr rebase {pr}` from the PR's worktree."
-                        )
+                        format!("fno do pr rebase {pr}")
                     };
-                    if file_task(a, &key, &text, &format!("fno do pr rebase {pr}"), &head_ref) {
+                    if file_task(a, &key, &text, &run, &head_ref) {
                         println!("escalated: PR {pr} rebase conflict is now a fleet task");
                     }
                     continue;
