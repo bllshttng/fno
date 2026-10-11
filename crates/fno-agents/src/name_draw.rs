@@ -608,7 +608,10 @@ mod tests {
             Some(tmp.path()),
         )
         .unwrap_err();
-        assert!(err.contains("the machine draws successor names"), "{err}");
+        assert!(
+            err.contains("no successor name is drawn over x-aaaa"),
+            "{err}"
+        );
         assert!(err.contains("--name redraw"), "{err}");
         // The drawn name is accepted; anything else refuses.
         let drawn = draw_successor_name(&store, &registry, "x-aaaa", None, false, Some(tmp.path()))
