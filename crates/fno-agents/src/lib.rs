@@ -58,6 +58,7 @@ pub mod agents_top;
 pub mod agy_ask;
 pub mod agy_hooks;
 pub mod agy_launch;
+pub mod agy_mint;
 pub mod announce;
 pub mod arm_repair;
 pub mod arm_watch;

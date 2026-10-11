@@ -1727,6 +1727,9 @@ def test_opencode_bridge_carries_marker_before_the_message_fence(monkeypatch) ->
     argv = captured["argv"]
     assert argv[1] == "spawn"
     assert argv[2].startswith("--defaults-applied=")
+    # The serve lane's substrate is thread: the binary refuses the retired bg
+    # spelling, so a default opencode spawn died at exit 2 on it.
+    assert argv[argv.index("--substrate") + 1] == "thread"
     assert argv.index("--effort=high") < argv.index("--")
     tail = argv[argv.index("--") + 1 :]
     assert tail == ["/target x-90a9"]
