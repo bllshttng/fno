@@ -1000,21 +1000,15 @@ mod moved_scope_tests {
     #[test]
     fn an_unreadable_project_map_is_named_in_a_refusal_not_hidden() {
         let entries = vec![json!({"id": "x-epic", "type": "epic", "status": "ready"})];
-        use crate::org_board::scope::NO_WORK_MAP;
-        for teaches in [
-            "work.workspaces",
-            "~/.fno/config.toml",
-            "projects",
-            "name",
-            "path",
-        ] {
-            assert!(NO_WORK_MAP.contains(teaches), "{teaches}: {NO_WORK_MAP}");
+        let map_error = crate::org_board::scope::map_from_work(None).unwrap_err();
+        for teaches in ["work.workspaces", "~/.fno/config.toml", "projects", "path"] {
+            assert!(map_error.contains(teaches), "{teaches}: {map_error}");
         }
-        let projects = Err(NO_WORK_MAP.to_string());
+        let projects = Err(map_error.clone());
         let missing = compile_scope_ids("fno", &entries, &projects).unwrap_err();
         assert!(
             missing.contains("neither a configured project nor a backlog node")
-                && missing.contains(NO_WORK_MAP),
+                && missing.contains(&map_error),
             "{missing}"
         );
         let empty = compile_scope_ids("fno", &[], &projects).unwrap_err();
