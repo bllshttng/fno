@@ -206,11 +206,8 @@ identity; pass --from-name instead"
         .to_string()
 }
 
-fn cmd_send(args: &[OsString]) -> i32 {
-    let words: Vec<String> = args
-        .iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+fn cmd_send(args: &[String]) -> i32 {
+    let words: Vec<String> = args.to_vec();
     let Some(target) = words.first() else {
         eprintln!("usage: fno agents mail send <name>@<host> [args...] <message>");
         return 2;
@@ -422,11 +419,8 @@ fn relay(host: &str, words: &[String]) -> i32 {
     }
 }
 
-fn cmd_peek(args: &[OsString]) -> i32 {
-    let words: Vec<String> = args
-        .iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
+fn cmd_peek(args: &[String]) -> i32 {
+    let words: Vec<String> = args.to_vec();
     let Some(target) = words.first() else {
         eprintln!("usage: fno agents peek <handle>@<host> [flags]");
         return 2;
@@ -451,7 +445,7 @@ fn cmd_peek(args: &[OsString]) -> i32 {
     relay(&host, &relay_words)
 }
 
-fn cmd_status(_args: &[OsString]) -> i32 {
+fn cmd_status(_args: &[String]) -> i32 {
     match store_path() {
         StorePath::Primary(remote) => {
             if let Err(e) = mail_bus::ensure_schema(&remote) {
@@ -487,7 +481,8 @@ cross-host target answered over the ssh fallback leave no bus rows"
 }
 
 /// Binary-direct entry from `fno-agents mail-remote <send|peek|status> ...`.
-pub fn run(args: &[OsString]) -> i32 {
+/// The dispatcher holds `Vec<String>`, so the tail rides as `&[String]`.
+pub fn run(args: &[String]) -> i32 {
     match args.first().and_then(|a| a.to_str()) {
         Some("send") => cmd_send(&args[1..]),
         Some("peek") => cmd_peek(&args[1..]),
