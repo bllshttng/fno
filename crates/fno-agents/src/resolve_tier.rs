@@ -50,6 +50,32 @@ pub(crate) fn entry_session_tier(entry: &Value, token: &str) -> Option<u8> {
         })
 }
 
+/// The row's stored session id a token named at the FULL tier: primary
+/// first, then the one optional related id, then predecessors. `None` for
+/// every shorter address (name, handle, short) -- by contract those select
+/// the row's current session, so the exact-id resume contract only fires
+/// when this returns one.
+pub(crate) fn entry_matched_full_id(entry: &Value, token: &str) -> Option<String> {
+    let id_at_full_tier = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| session_handle_tier(token, id) == Some(0))
+            .map(str::to_string)
+    };
+    id_at_full_tier("harness_session_id")
+        .or_else(|| id_at_full_tier("related_session_id"))
+        .or_else(|| {
+            entry
+                .get("predecessor_session_ids")
+                .and_then(Value::as_array)?
+                .iter()
+                .filter_map(Value::as_str)
+                .find(|id| session_handle_tier(token, id) == Some(0))
+                .map(str::to_string)
+        })
+}
+
 /// True for a token worth probing a harness store with -- the Rust mirror of
 /// `store_fallback.is_session_shaped`. A plain unknown NAME never probes, so a
 /// typo keeps today's refusal instead of paying for three store reads.

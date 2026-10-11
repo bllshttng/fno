@@ -1822,6 +1822,25 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
         .filter(|s| !s.is_empty())
         .or_else(|| entry.get("provider").and_then(Value::as_str))
         .unwrap_or("");
+    // Exact-id contract (the Python lane's ruling, mirrored): a full
+    // non-primary session id names a historical session, while the re-entry
+    // plan below serves the row's PRIMARY id. Re-entering a session the
+    // caller did not name is a silent drop, so refuse with the same remedy.
+    if harness == "claude" {
+        let primary = entry
+            .get("harness_session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if let Some(matched) = crate::resolve_tier::entry_matched_full_id(entry, &name) {
+            if !primary.is_empty() && matched != primary {
+                eprintln!(
+                    "fno agents resume: {matched} is a predecessor of claude row {:?}, and this runtime cannot restore its model or route. Seed a new session from it with `fno agents spawn --resume {matched}`, or resume the row by name.",
+                    entry.get("name").and_then(Value::as_str).unwrap_or(&name)
+                );
+                return 13;
+            }
+        }
+    }
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {
         Ok(contract) => contract,
         Err(error) => {

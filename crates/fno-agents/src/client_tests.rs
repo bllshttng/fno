@@ -2857,6 +2857,93 @@ fn resume_through_run_inside_a_runtime_refuses_16_without_panicking() {
     assert_eq!(code, 16);
 }
 
+/// x-0270: the exact-id detector names a stored id only at the FULL tier.
+/// The primary returns itself; a related or predecessor full id returns the
+/// stored id the caller spelled (case-insensitively, the uuid family's
+/// contract); a name, a short, or a predecessor's retired short form
+/// returns None -- those keep the row's current session.
+#[test]
+fn exact_id_detector_matches_full_ids_only() {
+    let entry = json!({
+        "name": "w1",
+        "harness_session_id": "77770001-2222-3333-4444-555555555555",
+        "related_session_id": "77770002-2222-3333-4444-555555555555",
+        "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
+    });
+    let matched = |token: &str| fno_agents::resolve_tier::entry_matched_full_id(&entry, token);
+    assert_eq!(
+        matched("77770001-2222-3333-4444-555555555555").as_deref(),
+        Some("77770001-2222-3333-4444-555555555555")
+    );
+    assert_eq!(
+        matched("77770003-2222-3333-4444-555555555555").as_deref(),
+        Some("77770003-2222-3333-4444-555555555555")
+    );
+    assert_eq!(
+        matched("77770002-2222-3333-4444-555555555555").as_deref(),
+        Some("77770002-2222-3333-4444-555555555555")
+    );
+    assert_eq!(
+        matched("77770003-2222-3333-4444-555555555555".to_uppercase()).as_deref(),
+        Some("77770003-2222-3333-4444-555555555555")
+    );
+    assert!(matched("77770001").is_none(), "primary short keeps current");
+    assert!(
+        matched("77770003").is_none(),
+        "predecessor short stays retired"
+    );
+    assert!(matched("w1").is_none(), "a name never names a session");
+}
+
+/// x-0270: `resume <predecessor uuid>` on a live claude row refuses with
+/// the spawn --resume remedy and launches nothing - it never re-enters the
+/// row's current session. The refusal precedes the route and PATH work, so
+/// no stub is needed; the codex runtime test above covers the dispatch
+/// path this rides.
+#[test]
+fn resume_by_predecessor_full_id_refuses_13() {
+    let temp = tempfile::tempdir().unwrap();
+    let home_dir = temp.path().join("agents-home");
+    std::fs::create_dir_all(&home_dir).unwrap();
+    let cwd_dir = temp.path().join("cwd");
+    std::fs::create_dir_all(&cwd_dir).unwrap();
+    std::fs::write(
+        home_dir.join("registry.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "agents": [
+                {
+                    "name": "w1",
+                    "harness": "claude",
+                    "substrate": "pane",
+                    "cwd": cwd_dir.display().to_string(),
+                    "log_path": "w1.log",
+                    "harness_session_id": "77770001-2222-3333-4444-555555555555",
+                    "predecessor_session_ids": ["77770003-2222-3333-4444-555555555555"]
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let _restore = ResumeEnvGuard {
+        home: std::env::var_os("FNO_AGENTS_HOME"),
+        codex_home: std::env::var_os("CODEX_HOME"),
+        path: std::env::var_os("PATH"),
+    };
+    std::env::set_var("FNO_AGENTS_HOME", &home_dir);
+    let code = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run(vec![
+            "resume".into(),
+            "77770003-2222-3333-4444-555555555555".into(),
+        ]));
+    assert_eq!(code, 13);
+}
+
 mod tier_remap_guard {
     // The native tier-remap refusal: a direct native
     // claude spawn naming a tier alias the ambient env redefines refuses
