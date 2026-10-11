@@ -895,7 +895,6 @@ pub(crate) fn succession_replaces(
     live: &[RegistryEntry],
     caller: Option<&str>,
     scope: &str,
-    proposed_name: &str,
 ) -> Result<String, &'static str> {
     let caller = caller
         .filter(|session| !session.is_empty())
@@ -909,11 +908,15 @@ pub(crate) fn succession_replaces(
         return Err("caller_ambiguous");
     }
     let rows = serde_json::to_value(live).map_err(|_| "settle_unreadable")?;
+    // Occupancy probe only: an empty proposal skips the name contract and
+    // slot_probe keeps the settle from drawing, so a gate retry never burns
+    // a name. The successor's name settles on the spawn path.
     let answer = crate::team_settle::resolve(&serde_json::json!({
         "scope": scope,
         "rows": rows,
         "succession": true,
-        "proposed_name": proposed_name,
+        "proposed_name": "",
+        "slot_probe": true,
         "caller": {"kind": "agent", "name": row.name.clone()},
     }))
     .map_err(|_| "settle_unreadable")?;

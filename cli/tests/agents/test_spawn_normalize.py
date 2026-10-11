@@ -42,6 +42,9 @@ def test_ac1_hp_nameless_spawn_mints_slug():
     out = _norm(["spawn"])
     assert out == ["spawn", "--name", out[2]]
     assert "-" in out[2]  # adjective-noun slug
+    # A succession hand-off names nobody: the settle draws the name, and a
+    # minted slug would arrive as an explicit proposal and decline the draw.
+    assert "--name" not in _norm(["spawn", "--hand-off", "--promote", "lead"])
 
 
 def test_workspace_value_flag_not_misread_as_name_or_substrate():

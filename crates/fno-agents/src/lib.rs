@@ -306,6 +306,7 @@ mod mint_guard_tests;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod name_draw;
 pub mod naming;
 pub mod needs;
 pub mod node_branch;

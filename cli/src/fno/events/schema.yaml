@@ -6367,12 +6367,6 @@ event_types:
         skip_deadline:
           type: integer
           description: "PRs past the root's slice of the 480s drive budget; they wait for the next tick."
-        skip_unchanged:
-          type: integer
-          description: "PRs whose head sha and checks digest both match the last sweep's record; skipped after the one checks read, before the pulls read and the job logs."
-        pr_states:
-          type: object
-          description: "Per-PR (head sha, checks digest) this sweep recorded for the root; the next sweep's unchanged-skip baseline."
         still_red:
           type: integer
           description: "PRs acted on that remain red (escalations or read errors after apply)."
