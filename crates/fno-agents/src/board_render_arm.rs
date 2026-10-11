@@ -282,59 +282,26 @@ mod tests {
         (Arm::default(), AgentsHome::at(dir.join("home")), dir)
     }
 
-    /// AC7-HP: a moved version renders once and stamps; a second tick at
-    /// the same version runs no pass.
+    /// A moved version renders once and stamps, and a failing pass stays
+    /// unstamped, journals `graph_render_failed`, and backs off: the two
+    /// phases share one seeded store, the retry phase past the backoff
+    /// window shows the stamp landing.
     #[test]
-    fn a_moved_version_renders_once_and_stamps() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let (arm, home, dir) = arm_home();
-        std::env::set_var("FNO_STATE_DIR", &dir);
-        let graph = crate::backlog::settings::graph_path();
-        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
-        let current = seed_render_store(&graph);
-        let mut runs = 0;
-        emit_one(&home, &arm.state, || {
-            runs += 1;
-            Ok(())
-        });
-        assert_eq!(runs, 1, "the owed pass ran");
-        assert_eq!(
-            crate::backlog::rendered_version(&graph)
-                .ok()
-                .flatten()
-                .as_deref(),
-            Some(current.as_str()),
-            "the stamp rode the current version"
-        );
-        emit_one(&home, &arm.state, || {
-            runs += 1;
-            Ok(())
-        });
-        assert_eq!(runs, 1, "a second tick at the same version ran no pass");
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(log.contains("\"arm\":\"board_render\""), "log: {log}");
-        assert!(log.contains("\"acted\":1"), "log: {log}");
-        std::env::remove_var("FNO_STATE_DIR");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC8-EDGE: a failing pass leaves the stamp unstamped, emits
-    /// graph_render_failed, and the next tick inside the backoff window
-    /// runs no pass.
-    #[test]
-    fn a_failing_pass_stays_unstamped_and_backs_off() {
+    fn the_arm_renders_a_moved_version_once_and_backs_off_failures() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (arm, home, dir) = arm_home();
         std::env::set_var("FNO_STATE_DIR", &dir);
         let graph = crate::backlog::settings::graph_path();
         std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
         seed_render_store(&graph);
+        // The failing phase: the pass errs, nothing stamps, the failure
+        // journals, and the retry waits out the backoff window.
         let mut runs = 0;
         emit_one(&home, &arm.state, || {
             runs += 1;
             Err((-1, "boom".to_string()))
         });
-        assert_eq!(runs, 1);
+        assert_eq!(runs, 1, "the owed pass ran");
         assert_eq!(
             crate::backlog::rendered_version(&graph).ok().flatten(),
             None,
@@ -352,6 +319,36 @@ mod tests {
         assert!(log.contains("graph_render_failed"), "log: {log}");
         assert!(log.contains("\"skip_reason\":\"error\""), "log: {log}");
         assert!(log.contains("\"skip_reason\":\"backoff\""), "log: {log}");
+        // The happy phase, past the backoff: the pass runs once, stamps the
+        // current version, and a second tick at the same version runs no
+        // pass.
+        *arm.state
+            .last_attempt
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) =
+            Some(Instant::now() - render_backoff(1) - Duration::from_secs(1));
+        emit_one(&home, &arm.state, || {
+            runs += 1;
+            Ok(())
+        });
+        assert_eq!(runs, 2, "the retry ran once past the backoff window");
+        let current = crate::backlog::version(&graph).unwrap();
+        assert_eq!(
+            crate::backlog::rendered_version(&graph)
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some(current.as_str()),
+            "the stamp rode the current version"
+        );
+        emit_one(&home, &arm.state, || {
+            runs += 1;
+            Ok(())
+        });
+        assert_eq!(runs, 2, "a second tick at the same version ran no pass");
+        let log = crate::events::committed_journal_text(&home.events_jsonl());
+        assert!(log.contains("\"arm\":\"board_render\""), "log: {log}");
+        assert!(log.contains("\"acted\":1"), "log: {log}");
         std::env::remove_var("FNO_STATE_DIR");
         let _ = std::fs::remove_dir_all(&dir);
     }

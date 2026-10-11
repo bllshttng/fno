@@ -4666,35 +4666,6 @@ mod tests {
         assert!(render_due(&fresh, &current, None, RENDER_SETTLE));
     }
 
-    /// The happy path: the pass runs, the marker stamps, and the next tick
-    /// is a no-op (positive marker: the stamp exists and the runner ran).
-    #[test]
-    fn render_trigger_runs_the_pass_and_stamps_the_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        let current = seed_render_store(&graph);
-        let state = render_trigger_state(graph.clone(), None);
-        let runs = std::cell::Cell::new(0u32);
-        trigger_render_with(&state, || {
-            runs.set(runs.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs.get(), 1);
-        assert_eq!(
-            crate::backlog::rendered_version(&graph).unwrap(),
-            Some(current),
-            "the marker names the version the pass rendered"
-        );
-
-        // The stamped marker retires the debt: the next tick does not run.
-        let runs2 = std::cell::Cell::new(0u32);
-        trigger_render_with(&state, || {
-            runs2.set(runs2.get() + 1);
-            Ok(())
-        });
-        assert_eq!(runs2.get(), 0);
-    }
-
     /// A failed pass journals `graph_render_failed` with the exit code and
     /// the stderr tail, leaves the marker unstamped, and the next tick
     /// retries the debt.

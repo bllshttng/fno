@@ -717,11 +717,12 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// A gather still riding past the deadline is wedged, not slow: every
-    /// target fails inside the caller's proof bound, the error names the
-    /// deadline, and nothing is written.
+    /// The gather deadline arms wedged runs and rides healthy ones: a
+    /// never-answering store read fails every target inside the caller's
+    /// proof bound with the deadline named, and a finishing gather still
+    /// writes every target.
     #[test]
-    fn a_gather_past_the_deadline_fails_every_target_fast() {
+    fn the_gather_deadline_fails_wedged_runs_and_rides_healthy_ones() {
         let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fno-board-deadline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -757,21 +758,9 @@ mod tests {
             "{:?}",
             receipt.failed
         );
-        std::env::remove_var("FNO_GRAPH_JSON");
         drop(listener);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A healthy gather still writes every target: the deadline arms the
-    /// gather leg, never a good run.
-    #[test]
-    fn a_gather_that_finishes_writes_every_target() {
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("fno-board-render-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let graph = dir.join("graph.json");
-        std::env::set_var("FNO_GRAPH_JSON", &graph);
+        // The healthy half: an instant worker stub answers the gather (the
+        // refused socket routes to the exec lane) and every target writes.
         let stub = dir.join("worker-instant");
         std::fs::write(
             &stub,
@@ -781,14 +770,6 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::env::set_var("FNO_AGENTS_WORKER", &stub);
-        let request = Request {
-            targets: vec![Target {
-                path: dir.join("board.html").to_string_lossy().into_owned(),
-                scope: None,
-            }],
-            vault: None,
-            public: None,
-        };
         let receipt = render_request_within(&request, Duration::from_secs(10)).unwrap();
         assert!(receipt.failed.is_empty(), "{:?}", receipt.failed);
         assert_eq!(receipt.written.len(), 1, "{:?}", receipt.written);
