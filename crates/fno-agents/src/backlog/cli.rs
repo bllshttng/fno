@@ -275,7 +275,7 @@ pub fn run(args: &[String]) -> i32 {
         // one-shot row migrations.
         "archive" => super::maintenance_archive::run_archive(resolved.tail),
         "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
-        // PENDING "maintain" => super::maintenance::run_maintain(resolved.tail),
+        "maintain" => super::maintenance::run_maintain(resolved.tail),
         "groom" => super::groom::run_groom(resolved.tail),
         "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
         "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),

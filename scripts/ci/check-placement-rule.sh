@@ -307,7 +307,6 @@ cli/src/fno/cost/_session_cost.py
 cli/src/fno/context_audit.py
 cli/src/fno/doctor.py
 cli/src/fno/graph/cli.py
-cli/src/fno/graph/maintain.py
 cli/src/fno/inbox/drain.py
 cli/src/fno/observer/isolation.py
 cli/src/fno/paths.py

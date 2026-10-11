@@ -1180,7 +1180,7 @@ fn merge_event_histories(histories: Vec<Vec<Value>>) -> Vec<Value> {
 /// the Rust agents-home mirror (fno.graph.failure._default_event_paths,
 /// deduped preserving order), then the node's own project journal when it
 /// exists.
-fn read_failure_events(node_cwd: Option<&str>) -> Vec<Value> {
+pub(super) fn read_failure_events(node_cwd: Option<&str>) -> Vec<Value> {
     let mut journals: Vec<PathBuf> = Vec::new();
     let cwd = std::env::current_dir().unwrap_or_default();
     if let Some(root) = crate::agents_config::state_dir(&cwd) {
@@ -1209,12 +1209,12 @@ fn read_failure_events(node_cwd: Option<&str>) -> Vec<Value> {
 /// `node_*` envelopes and the flat agents shape both carry the node id under
 /// `unit_id` / `node_id` / `graph_node_id`.
 #[derive(Clone, Copy, PartialEq)]
-enum StreakSignal {
+pub(super) enum StreakSignal {
     Fail,
     Reset,
 }
 
-fn classify_streak_row(raw: &Value) -> Option<(String, StreakSignal)> {
+pub(super) fn classify_streak_row(raw: &Value) -> Option<(String, StreakSignal)> {
     let etype = raw
         .get("type")
         .and_then(Value::as_str)
@@ -1249,7 +1249,7 @@ fn classify_streak_row(raw: &Value) -> Option<(String, StreakSignal)> {
 /// boundary (a success close or an undefer), scanning newest -> oldest
 /// (fno.graph.failure.consecutive_failures). Unclassified rows and other
 /// nodes' rows neither inflate nor reset the streak.
-fn consecutive_failures(node_id: &str, events: &[Value]) -> i64 {
+pub(super) fn consecutive_failures(node_id: &str, events: &[Value]) -> i64 {
     let mut streak: i64 = 0;
     for raw in events.iter().rev() {
         if let Some((event_node, signal)) = classify_streak_row(raw) {

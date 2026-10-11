@@ -148,7 +148,7 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `pages/` | `graph/_constants.py` (`pages/graph.md`, `pages/graph.html`), `cli/src/fno/lead/ledger.py` (`pages/term.html`, `pages/rundown.html` via the org-title rename), `crates/fno-agents/src/fleet_page.rs` (`pages/fleet.html` via `place`), served back by `crates/fno/src/web.rs` through the same resolver | regenerated per render; the web bridge reads the same paths |
 | `worktrees/` | `fno agents workspace worktree ensure` under the worktree policy (`.claude/rules/worktrees.md`) | fno-managed external worktree base, `<repo>/<name>`; reaped on merge |
 | `board.py`, `board.sh`, `board_ids.py`, `board_render.py` | the operator, by hand (not repo files; the `my-priorities.md` row above already names `board.py`) | permanent operator tools |
-| `validity-decks/` | `cli/src/fno/graph/maintain.py::write_validity_deck` (via `graph/cli.py`) | one deck per validity run, keyed by timestamp and node; permanent record |
+| `validity-decks/` | `crates/fno-agents/src/backlog/maintenance_validity.rs::write_validity_deck` (via `fno backlog maintain`) | one deck per validity run, keyed by timestamp and node; permanent record |
 | `.env` | the operator, by hand: the file's own header says it holds global fno secrets (model-routing keys) | until the operator rotates the key. Never echo its contents into a log, a receipt, a fixture, or a PR body, and read it only when the task requires it. |
 
 ## Machine and foreign junk

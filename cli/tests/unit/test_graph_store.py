@@ -1176,3 +1176,27 @@ def test_cli_renders_empty_field_refusal_and_preserves_invalid_text(monkeypatch,
     with pytest.raises(RuntimeError) as invalid:
         store._raise_store_error("invalid", "unknown store method \"plan_refs\"")
     assert str(invalid.value) == 'store error (invalid): unknown store method "plan_refs"'
+
+
+def test_normalize_plan_path_caches_the_keeper_round_trip(monkeypatch):
+    """The keeper fold is pure, so one request serves every repeat of the
+    same input for the life of the process."""
+    import os
+
+    requests: list = []
+
+    class _FakeClient:
+        def request(self, method, params):
+            requests.append(params["path"])
+            return {"path": os.path.normpath(params["path"])}
+
+    monkeypatch.setattr(store_mod, "_client_for", lambda _graph: _FakeClient())
+    store_mod.normalize_plan_path.cache_clear()
+    try:
+        first = store_mod.normalize_plan_path("/plans/./p.md")
+        second = store_mod.normalize_plan_path("/plans/./p.md")
+        assert first == second == "/plans/p.md"
+        assert requests == ["/plans/./p.md"]
+    finally:
+        store_mod.normalize_plan_path.cache_clear()
+

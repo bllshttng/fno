@@ -1842,7 +1842,7 @@ def test_maintain_apply_defers_stale_ready(tmp_graph):
             "contained_in": "ab-old", "created_at": _recent_iso(1),
         },
     ])
-    r = _invoke("backlog", "maintain", "--apply", "--json")
+    r = _door_graph(tmp_graph, "maintain", "--apply", "--json", "--no-validity")
     data = json.loads(r.stdout)
     applied = [x["node_id"] for x in data["stale_ready"]["applied"]]
     assert "ab-old" in applied
@@ -1874,7 +1874,7 @@ def test_maintain_apply_skips_in_review_node(tmp_graph):
         "plan_path": "/nonexistent/plan.md", "priority": "p2",
         "created_at": "2026-01-01T00:00:00+00:00", "pr_number": 42,
     }])
-    r = _invoke("backlog", "maintain", "--apply", "--json")
+    r = _door_graph(tmp_graph, "maintain", "--apply", "--json", "--no-validity")
     data = json.loads(r.stdout)
     applied = [x["node_id"] for x in data["stale_ready"]["applied"]]
     assert "ab-inrev" not in applied

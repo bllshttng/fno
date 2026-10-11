@@ -219,6 +219,8 @@ def positive_control(
 
 
 _PATH_RE = re.compile(r"(?<![A-Za-z0-9_])(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+")
+# The reason `fno backlog maintain` stale drains stamp, at any staleness_days.
+_STALE_DRAIN_REASON_RE = re.compile(r"^stale >\d+d, drained by maintain")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _QUOTED_SPAN_RE = re.compile(r"(?<![A-Za-z0-9])(['\"])[^'\"\n]*\1(?![A-Za-z0-9])")
 
@@ -250,13 +252,11 @@ def _file_evidence(node: dict[str, Any]) -> list[str]:
 
 
 def _stale_reason_still_true(node: dict[str, Any]) -> bool:
-    from fno.graph.maintain import _STALE_IDEAS_DEFERRED_REASON_RE
-
     reason = node.get("deferred_reason")
     deferred_at = node.get("deferred_at")
     if (
         not isinstance(reason, str)
-        or not _STALE_IDEAS_DEFERRED_REASON_RE.match(reason)
+        or not _STALE_DRAIN_REASON_RE.match(reason)
         or not isinstance(deferred_at, str)
     ):
         return False

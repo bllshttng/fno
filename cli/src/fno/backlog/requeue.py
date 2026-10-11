@@ -133,6 +133,53 @@ def _unclaim_node(task_id: str) -> None:
     typer.echo(f"Unclaimed {node_id} ({lock_note})")
 
 
+def _do_row_idle_s(entry: dict, row: dict, now_s: float) -> Optional[int]:
+    """Seconds since the row last showed life: its start, or a note its own session wrote."""
+    from datetime import datetime, timezone
+
+    def parse(value: object) -> Optional[datetime]:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    notes = [n.get("ts") for n in entry.get("progress_notes") or [] if isinstance(n, dict) and n.get("source_session_id") == row.get("session_id")]
+    stamps = [s.timestamp() for s in map(parse, [row.get("started_at"), *notes]) if s]
+    return int(now_s - max(stamps)) if stamps else None
+
+
+def _execute_row_hold_reason(entry: dict, row: dict, now_s: float) -> Optional[str]:
+    """Why the abandoned-do-row sweep holds this row, or None when it reads gone.
+
+    The same order as `fno backlog maintain`: the roster is read only once some
+    open row is past the bound, a reachable worker outranks the idle clock, and
+    an unread roster holds.
+    """
+    from fno.config import load_settings
+    from fno.graph.statuses import TERMINAL_RUNGS, is_open_do_row
+
+    if entry.get("status") in TERMINAL_RUNGS or entry.get("superseded_by"):
+        return None
+    bound = load_settings().backlog.maintain.abandoned_do_row_hours * 3600
+    workers: list[str] = []
+    if any((_do_row_idle_s(entry, r, now_s) or 0) > bound for r in entry.get("sessions") or [] if is_open_do_row(r)):
+        from fno.claims.roster import classify_workers, read_roster
+
+        reading = read_roster(require_live_probe=False)
+        if not reading.consulted:
+            return f"roster unread ({reading.reason})"
+        workers = [str(w.get("name")) for w in classify_workers(reading.workers_by_node.get(entry.get("id")) or [])[0]]
+    if workers:
+        return f"reachable worker on node {', '.join(workers)}"
+    idle = _do_row_idle_s(entry, row, now_s)
+    if idle is not None and idle > bound:
+        return None
+    return f"row idle {'?' if idle is None else idle // 3600}h, inside the {int(bound // 3600)}h bound"
+
+
 def cmd_requeue(node: str, *, json_out: bool = False) -> None:
     """Return a node wedged ``in_progress`` by a dead worker to the queue."""
     from fno.agents.reachability import REACHABLE, classify_reachability, inference_samples
@@ -191,9 +238,8 @@ def cmd_requeue(node: str, *, json_out: bool = False) -> None:
         )
         if reach.verdict == REACHABLE:
             from datetime import datetime, timezone
-            from fno.graph.maintain import abandoned_do_rows, do_row_idle_s
 
-            why = next((a.reason for a in abandoned_do_rows([{**row, "locked_by": None}], set(), strict=False) if a.session_id == r.get("session_id") and a.verdict == "held"), None)
+            why = _execute_row_hold_reason(row, r, datetime.now(timezone.utc).timestamp())
             if why is None:
                 continue
             # reap-open is NOT named here: this worker reads reachable, so a
@@ -228,8 +274,7 @@ def cmd_requeue(node: str, *, json_out: bool = False) -> None:
     # `working, 0 samples` names a corpse and `working, 31 samples` names a
     # worker. None is a harness that keeps no transcript, never a zero.
     from datetime import datetime, timezone
-    from fno.graph.maintain import do_row_idle_s
-    settled = [{"harness": r.get("harness"), "session_id": r.get("session_id"), "state": truth.get("state"), "samples": inference_samples(truth.get("observed_model")), "last_event_at": truth.get("last_event_at"), "age": _humanize_age(truth.get("last_activity_age_s")), "row_idle_s": do_row_idle_s(row, r, datetime.now(timezone.utc).timestamp())} for r, truth in pairs]
+    settled = [{"harness": r.get("harness"), "session_id": r.get("session_id"), "state": truth.get("state"), "samples": inference_samples(truth.get("observed_model")), "last_event_at": truth.get("last_event_at"), "age": _humanize_age(truth.get("last_activity_age_s")), "row_idle_s": _do_row_idle_s(row, r, datetime.now(timezone.utc).timestamp())} for r, truth in pairs]
     receipt = {"node_id": node_id, "status_before": status_before, "status_after": status_after, "settled": settled}
     if json_out:
         typer.echo(json.dumps(receipt, sort_keys=True))

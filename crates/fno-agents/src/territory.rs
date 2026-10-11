@@ -502,8 +502,8 @@ pub(crate) fn node_owners(
 }
 
 /// The workspace project map: canonical project name -> normalized absolute
-/// path (mirrors `fno.graph.maintain.load_workspaces`). Best-effort like the
-/// Python read: a missing map contributes nothing, and the drain assembly
+/// path, the one map `backlog maintain` re-scopes against. Best-effort: a
+/// missing map contributes nothing, and the drain assembly
 /// treats an unmapped territory as unrootable.
 pub fn workspace_paths(cwd: &Path) -> HashMap<String, String> {
     let mut out = HashMap::new();

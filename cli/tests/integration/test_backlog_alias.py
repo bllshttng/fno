@@ -387,7 +387,7 @@ def test_intake_empty_project_flag_errors(tmp_graph, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Phase 04 - cmd_update --project / --cwd, validator warn, list_misscoped
+# Phase 04 - cmd_update --project / --cwd, validator warn
 # ---------------------------------------------------------------------------
 
 
