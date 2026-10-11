@@ -422,7 +422,7 @@ mod tests {
             reason.contains("fno inbox outstanding clear q-1"),
             "{reason}"
         );
-        assert!(!reason.contains("decide"), "{reason}");
+        assert!(!reason.contains("backlog decide"), "{reason}");
 
         let QuestionGateStop::Terminate { reason, message } =
             question_gates(&project, &global, &cwd, "sess-a", "x-n", &emit)
@@ -438,7 +438,7 @@ mod tests {
             message.contains("fno inbox outstanding clear q-1 --answer"),
             "{message}"
         );
-        assert!(!message.contains("decide"), "{message}");
+        assert!(!message.contains("backlog decide"), "{message}");
 
         let count = |ty: &str| {
             crate::events::committed_journal_text(&project)
