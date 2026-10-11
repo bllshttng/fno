@@ -76,26 +76,5 @@ def agy_mint_argv(
     return [str(t) for t in argv]
 
 
-def agy_mint_run(
-    cwd: str,
-    model: str | None,
-    effort: str | None,
-    permission_mode: str | None,
-    yolo: bool,
-    timeout_s: float,
-) -> str:
-    """One ask: the runtime EXECUTES the agy mint turn (stream-json, init
-    line) and answers the conversation id or a named refusal. A stale binary
-    predating the field reads as unavailable, never as an empty answer."""
-    ask = {
-        "cwd": cwd,
-        "model": model or "",
-        "effort": effort or "",
-        "permission_mode": permission_mode or "",
-        "yolo": bool(yolo),
-        "timeout_s": timeout_s,
-    }
-    return str(_answer_or_raise(spawn_axes_call({"agy_mint_run": ask}), "conversation_id"))
-
 
 

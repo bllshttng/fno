@@ -57,12 +57,18 @@ def create_conversation(
     runtime reads the id from the stream (the init line) and kills the held
     process - the turn answers but never exits on agy 1.3.3; an id that fails
     validation never reaches a spawn."""
-    from fno.agents.spawn_axes_client import agy_mint_run
+    from fno.agents.spawn_axes_client import _answer_or_raise, spawn_axes_call
 
-    conversation_id = agy_mint_run(
-        str(cwd), model, effort, permission_mode, yolo, timeout_s
-    )
-    return require_conversation_id(conversation_id)
+    ask = {
+        "cwd": str(cwd),
+        "model": model or "",
+        "effort": effort or "",
+        "permission_mode": permission_mode or "",
+        "yolo": bool(yolo),
+        "timeout_s": timeout_s,
+    }
+    answer = spawn_axes_call({"agy_mint_run": ask})
+    return require_conversation_id(str(_answer_or_raise(answer, "conversation_id")))
 
 
 def conversation_store_path(conversation_id: str) -> Path:
