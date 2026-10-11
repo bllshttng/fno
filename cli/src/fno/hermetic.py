@@ -94,6 +94,7 @@ _AMBIENT_NAMES: tuple[str, ...] = (
     "XDG_CONFIG_HOME",  # redirects user config discovery, including opencode
     "GROK_HOME",  # grok's session store root; the same category pi once read a store-root var for
     "GROK_SESSION_ID",  # a live grok session marker; identity, not test input
+    "LOGNAME",  # login identity; the mail sender fallback reads it, and a suite must not inherit the developer's
     "CLAUDE_CLI",
     "CLI",  # legacy harness selector; CLI=codex flips harness resolution
     "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP",
