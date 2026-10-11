@@ -312,6 +312,7 @@ All events land in BOTH `<cwd>/.fno/events.jsonl` AND `~/.fno/events.jsonl` with
 | `loop_advisory_mode` | verb | session is in advisory mode |
 | `loop_check_binary_missing` | shim | `fno-agents` binary not found |
 | `loop_check_legacy_manifest` | verb | manifest has `status:` key (pre-wedge) |
+| `loop_check_question_gate` | verb | the question gate blocks a stop; its held list lets the next fire end the loop with `HeldOnQuestion` |
 
 ## Back-compat
 
