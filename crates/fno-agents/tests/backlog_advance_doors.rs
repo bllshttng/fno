@@ -604,7 +604,7 @@ fn advance_reads_real_selection_and_preserves_launch_pins() {
     assert_eq!(receipt["node_id"], "x-aaaa");
     let calls = std::fs::read_to_string(&log).unwrap();
     assert_eq!(calls.lines().count(), 1);
-    assert!(calls.contains("--effort high"));
+    assert!(calls.contains("--effort high"), "{calls}");
     assert!(calls.contains("--model glm-5.3-flash[1m]"));
     w.claim("x-aaaa", &seed.root);
     let _ = decode(&invoke());

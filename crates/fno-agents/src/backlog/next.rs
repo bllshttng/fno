@@ -477,6 +477,8 @@ pub fn run(args: &[String]) -> i32 {
                 .chain([
                     "size",
                     "model",
+                    "provider",
+                    "effort",
                     "dispatch_verb",
                     "dispatch_brief",
                     "mission_id",

@@ -58,7 +58,12 @@ def _stub_pane_path(monkeypatch, *, rec=None, brief=("the brief", "explicit")):
             pass
 
     monkeypatch.setattr(spawn_gate, "run_gate", lambda *a, **k: _Gate())
-    monkeypatch.setattr("fno.agents.cli._spawn_guard_decision", lambda *a, **k: ({"verdict": "dispatchable"}, 0))
+
+    def dispatchable(node, holder, **kwargs):
+        return {"verdict": "dispatchable", "reservation_key": f"dispatch:{node}",
+                "reservation_holder": holder}, 0
+
+    monkeypatch.setattr("fno.agents.cli._spawn_guard_decision", dispatchable)
     monkeypatch.setattr(
         mux_spawn,
         "resolve_provenance",
