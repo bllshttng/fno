@@ -45,6 +45,28 @@ If the primary holds no seeded backlog, a flush refuses and names the seed verb.
 
 A later fno version that adds a backlog column does not change the primary. Writes then refuse with the primary's "no such column" error. Export, unset the keys, and seed again from a current machine.
 
+## A node on a second machine
+
+These facts travel with the store. The backlog rows in `SHARED_TABLES` move: nodes, notes, decisions, sessions and pull requests. The dispatch claims move. Mail to `<name>@<host>` moves.
+
+These facts stay on each machine. The agent registry, the roles, the questions, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. The plan file stays. A node's `plan_path` is a path on the machine that wrote it, and fno does not copy the file.
+
+To build a node on this machine, follow these steps in order:
+
+1. Share the backlog with the steps above. Then `fno backlog get <node>` answers.
+2. Map the node's project to this machine's checkout. Add `[work.workspaces.<slug>]` with `projects = [{ name = "<project>", path = "<checkout>" }]` to `~/.fno/config.toml`. Then `fno backlog get <node> --field _resolved_cwd` must print a directory that exists here. Without the entry, it prints the path of the machine that filed the node.
+3. Run `fno do target start <node>`. The node claim lives on the primary, so two machines never build one node.
+
+To lead a scope on this machine, follow these steps in order:
+
+1. Run `fno agents register`, so this session has a row in this machine's registry.
+2. Check that the scope is an epic. If it is mistyped, `fno backlog update <id> --type epic` fixes it.
+3. Run `fno config set lead.enabled true`. While it is false, a grant gives the role and arms no lead loop.
+4. A person at an attended shell on this machine runs `fno agents org promote <handle> --scope <scope>`. A lead on another machine cannot grant here, because its role is not in this registry.
+5. If the grant armed no manifest, run `fno agents org init --scope <scope> --harness-session-id <full session id>`.
+
+A session with no role still reads, reports and mails a named peer. The lead skill lists the three forms.
+
 ## The store clock decides a peer's lease
 
 A machine cannot probe a peer's pids. So for a row another machine wrote, only the lease decides, read on the primary's clock. A takeover of a peer's row carries `claims.expires_at <= <store clock>` in its compare-and-swap. Two machines with skewed clocks still agree on the moment a lease ran out.
