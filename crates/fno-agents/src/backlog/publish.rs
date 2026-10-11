@@ -677,14 +677,10 @@ mod tests {
             err.contains("exited 7") && err.contains("nothing else was published"),
             "{err}"
         );
-    }
-
-    /// The staged path rides as `$1`, so a temp dir whose name carries a
-    /// single quote reaches the uploader intact; the old splice turned that
-    /// name into a shell syntax error. The wrapped `'{file}'` spelling
-    /// keeps working beside the bare one.
-    #[test]
-    fn exec_target_survives_a_quoted_temp_dir() {
+        // The staged path rides as `$1`, so a temp dir whose name carries a
+        // single quote reaches the uploader intact; the old splice turned
+        // that name into a shell syntax error. The wrapped `'{file}'`
+        // spelling keeps working beside the bare one.
         let dir =
             std::env::temp_dir().join(format!("fno-publish-quote'dir-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
