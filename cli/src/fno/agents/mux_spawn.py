@@ -78,6 +78,7 @@ from fno.agents.registry import (
     update_registry,
 )
 from fno.agents.role import (
+    adopt_drawn_name,
     calling_agent_row,
     role_validation_error,
     journal_spawn_role,
@@ -3366,6 +3367,7 @@ def dispatch_spawn_pane(
     role_level: Optional[int] = None,
     role_scope: Optional[str] = None,
     succession: bool = False,
+    redraw: bool = False,
     provenance: Optional[dict[str, str]] = None,
     account_env: Optional[dict[str, str]] = None,
     route_env: Optional[dict[str, str]] = None,
@@ -3411,10 +3413,11 @@ def dispatch_spawn_pane(
         # successor from launching unpromoted. Both doors check, either is a door.
         role_caller_name = getattr((caller_row := calling_agent_row()), "name", None)
         role_refusal, role_plan = plan_spawn_role(
-            role_scope or "", caller_row, succession, proposed_name=name,
+            role_scope or "", caller_row, succession, proposed_name=name, redraw=redraw,
         )
         if role_refusal is not None:
             raise DispatchAskError(f"--promote: {role_refusal}", exit_code=2)
+        name = adopt_drawn_name(succession, role_plan, name)
 
     conflict = pane_placement_conflict(
         pane, workspace=squad, split=split, at=at, tab=tab, tab_id=tab_id,

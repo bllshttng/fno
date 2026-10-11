@@ -720,12 +720,18 @@ def settle_spawn_role(
     return [updates.get(i, row) for i, row in enumerate(rows)], outcome, vacated
 
 
+def adopt_drawn_name(succession: bool, plan: Optional[dict], name: str) -> str:
+    """Adopt a succession settle's draw: the machine names the successor."""
+    return (plan or {}).get("draw", {}).get("name") or name if succession else name
+
+
 def plan_spawn_role(
     scope: str,
     caller_row,
     succession: bool,
     exclude_name: Optional[str] = None,
     proposed_name: Optional[str] = None,
+    redraw: bool = False,
 ) -> "tuple[Optional[str], Optional[dict]]":
     """Check authority, then ask team_settle for a pre-launch occupancy plan.
     Return the refusal and native answer. A failed read refuses before launch;
@@ -750,6 +756,7 @@ def plan_spawn_role(
         "scope": scope,
         "succession": succession,
         "proposed_name": proposed_name,
+        "redraw": redraw,
         "caller": caller,
         "exclude_name": exclude_name,
         "rows": [asdict(row) for row in rows],
