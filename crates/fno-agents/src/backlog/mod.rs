@@ -61,6 +61,7 @@ pub mod pr_link;
 pub mod projections;
 pub(crate) mod promise;
 pub mod provenance_cli;
+pub mod publish;
 pub mod pull_requests;
 pub mod quota_route;
 pub mod rank_cli;

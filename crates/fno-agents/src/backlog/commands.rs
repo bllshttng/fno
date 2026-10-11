@@ -128,6 +128,7 @@ pub const GROUPS: &[Group] = &[
             ("bases", "bases"),
             ("demand", "demand"),
             ("cost", "cost"),
+            ("publish", "publish"),
         ],
     },
     Group {
