@@ -1069,6 +1069,7 @@ pub fn carry_succession(
         Ok(Some(pending))
     })
     .and_then(|settled| {
+        let settled = settled.ok_or("succession carry produced no record")?;
         history_append(
             store_path,
             NameHistoryEntry {
