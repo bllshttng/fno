@@ -175,7 +175,7 @@ pub fn record_verdict(
     let path = login_probes_path(home);
     let mut doc: serde_json::Value = std::fs::read_to_string(&path)
         .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .filter(|v| v.is_object())
         .unwrap_or_else(|| serde_json::json!({}));
     let entry = match doc.get_mut("probes").and_then(|p| p.as_object_mut()) {
