@@ -7,6 +7,7 @@
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -133,12 +134,46 @@ pub(crate) fn is_current_watch(watch: &Watch, evidence: &[Evidence]) -> bool {
     })
 }
 
-fn millis_now() -> i64 {
+pub(crate) fn millis_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
         .min(i64::MAX as u128) as i64
+}
+
+/// The wait blockers whose watch parks a provider seat: the session has
+/// pushed and the remaining blocker is external (CI pending, an outstanding
+/// review, the merge slot), so the seat sits idle until the settle arm's or
+/// expiry arm's wake resumes the session.
+const SEAT_WAIT_BLOCKERS: &[&str] = &["ci", "review", "merge_slot"];
+
+/// Registry-row identity -> the blocker of the session's CURRENT watch, for
+/// the seat-wait blockers. Two identities per watch: the manifest session id
+/// and, for codex, the thread id the registry row keys. Supersession is the
+/// same rule the wake arms read: a later loop_check row with a non-watching
+/// intent, or any later terminal row, ends the watch and the seat works
+/// again.
+pub(crate) fn watch_blockers(evidence: &[Evidence]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for watch in watches(evidence) {
+        if !SEAT_WAIT_BLOCKERS.contains(&watch.blocker.as_str())
+            || !is_current_watch(&watch, evidence)
+        {
+            continue;
+        }
+        out.insert(watch.session_id.clone(), watch.blocker.clone());
+        let thread = evidence
+            .iter()
+            .find(|row| row.event_id == watch.event_id)
+            .and_then(|row| row.data.get("codex_thread_id"))
+            .and_then(Value::as_str)
+            .filter(|thread| !thread.trim().is_empty());
+        if let Some(thread) = thread {
+            out.insert(thread.to_string(), watch.blocker.clone());
+        }
+    }
+    out
 }
 
 fn event_id(line: &str) -> String {
