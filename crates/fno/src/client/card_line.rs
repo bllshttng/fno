@@ -10,10 +10,12 @@ use crate::proto::{AgentRow, BacklogCard};
 pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
     let node = a.node.as_deref().filter(|s| !s.is_empty());
     let node_w = node.map_or(0, |s| s.width());
+    // A bare PR number keeps main's six-column age-slot cap; the binding
+    // suffix rides on top of an admitted number, never rescues an oversized
+    // one.
+    let bare_w = a.pr.map(|n| format!("#{n}").width()).filter(|w| *w <= 6);
     let suffix = binding_suffix(a);
-    let pr_w =
-        a.pr.map(|n| format!("#{n}{suffix}").width())
-            .filter(|w| *w <= 18);
+    let pr_w = bare_w.map(|w| w + suffix.width());
     let pr = pr_w.filter(|w| *w <= text_w).map(|w| text_w - w..text_w);
     let gap = usize::from(node_w > 0 && pr.is_some()) * 3;
     let node_end = pr
