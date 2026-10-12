@@ -436,6 +436,7 @@ pub(crate) fn scan_and_emit(
     harness: Option<&str>,
     transcript_path: &Path,
     last_assistant_message: Option<&str>,
+    harness_session: Option<&str>,
 ) -> Option<(HelpClass, u64)> {
     // The payload parse leads; the turn read always runs for the key and
     // covers the payload miss. A fire with no transcript (loopcheck payloads
@@ -467,6 +468,7 @@ pub(crate) fn scan_and_emit(
         harness,
         &distress,
         &turn_key,
+        harness_session,
     )?;
     Some((distress.class, rung))
 }
@@ -489,6 +491,7 @@ pub(crate) fn emit_help_distress_blocked(
     harness: Option<&str>,
     distress: &HelpDistress,
     turn_key: &str,
+    harness_session: Option<&str>,
 ) -> Option<u64> {
     let Some(rung) = append_blocked_event(
         project_events,
@@ -501,6 +504,29 @@ pub(crate) fn emit_help_distress_blocked(
     ) else {
         return None;
     };
+    let origin = match distress.kind {
+        DistressKind::ResultBlocked => crate::friction::Origin::ResultBlocked,
+        DistressKind::Help => crate::friction::Origin::Help,
+    };
+    let _ = crate::friction::record(
+        &crate::friction::Sinks {
+            project: project_events,
+            global: global_events,
+        },
+        &crate::friction::FrictionInput {
+            harness_session,
+            node,
+            harness,
+            origin,
+            key: distress.reason.chars().take(BLOCKED_DATA_STR_CAP).collect(),
+            gate: None,
+            pr: None,
+            head_sha: None,
+            stage: None,
+            reason: &distress.reason,
+            evidence: distress.evidence.as_deref().unwrap_or(&distress.reason),
+        },
+    );
     push_blocked_to_parent(cwd, run, node, &distress.reason);
     crate::help_router::route_emitted_distress(
         cwd,
@@ -625,10 +651,12 @@ fn push_blocked_to_parent(cwd: &Path, run: &str, node: Option<&str>, reason: &st
 
 const DISTRESS_SCAN_USAGE: &str = "\
 usage: fno-agents distress-scan --transcript <path> --run <id> [--node <id>]
-       [--harness <name>] [--cwd <dir>] [--events <p>] [--global-events <p>]
+       [--harness <name>] [--harness-session <id>] [--cwd <dir>] [--events <p>]
+       [--global-events <p>]
 
 Reads a transcript for a <help> tag or a RESULT: BLOCKED return and, on a
-hit, appends a blocked row -
+hit, appends a blocked row, and a friction row when --harness-session names
+the session -
 the pre-manifest counterpart of the read loop_check runs inline. Best-effort
 throughout: always exits 0. Prints 'distress: emitted <reason>' on a write,
 'distress: none' otherwise (no tag, no --run, or a transcript that does not
@@ -657,6 +685,7 @@ pub fn run_distress_scan(args: &[String]) -> i32 {
     let mut run: Option<String> = None;
     let mut node: Option<String> = None;
     let mut harness: Option<String> = None;
+    let mut harness_session: Option<String> = None;
     let mut cwd: Option<PathBuf> = None;
     let mut events_path: Option<PathBuf> = None;
     let mut global_events_path: Option<PathBuf> = None;
@@ -670,6 +699,8 @@ pub fn run_distress_scan(args: &[String]) -> i32 {
             node = Some(val);
         } else if let Some(val) = try_flag_value(&args[i], "--harness", args, &mut i) {
             harness = Some(val);
+        } else if let Some(val) = try_flag_value(&args[i], "--harness-session", args, &mut i) {
+            harness_session = Some(val);
         } else if let Some(val) = try_flag_value(&args[i], "--cwd", args, &mut i) {
             cwd = Some(PathBuf::from(val));
         } else if let Some(val) = try_flag_value(&args[i], "--events", args, &mut i) {
@@ -713,6 +744,7 @@ pub fn run_distress_scan(args: &[String]) -> i32 {
         harness.as_deref(),
         &distress,
         &turn_key,
+        harness_session.as_deref(),
     );
     if wrote.is_some() {
         println!("distress: emitted {reason}");
@@ -999,6 +1031,7 @@ mod tests {
             None,
             &transcript,
             Some("all clear, nothing stuck here"),
+            None,
         );
         assert!(wrote.is_none());
         assert!(!project.exists());
@@ -1031,6 +1064,7 @@ mod tests {
             Some("x-bbbb"),
             Some("codex"),
             &transcript,
+            None,
             None,
         );
         assert!(wrote.is_some());
@@ -1183,6 +1217,7 @@ mod tests {
             None,
             &transcript,
             Some("RESULT: BLOCKED\nREASON: probe reason"),
+            None,
         );
         assert!(wrote.is_some());
         let row: serde_json::Value =
@@ -1209,6 +1244,7 @@ mod tests {
             None,
             &transcript2,
             Some(json_msg),
+            None,
         );
         assert!(wrote2.is_some());
         let row2: serde_json::Value =
@@ -1225,7 +1261,8 @@ mod tests {
             None,
             None,
             &transcript2,
-            Some(json_msg)
+            Some(json_msg),
+            None
         )
         .is_none());
         assert_eq!(
@@ -1256,6 +1293,7 @@ mod tests {
             None,
             &transcript,
             Some(both),
+            None,
         );
         assert!(wrote.is_some());
         let row: serde_json::Value =
@@ -1329,7 +1367,8 @@ mod tests {
             None,
             None,
             &transcript,
-            Some(r#"<help reason="stuck">ev</help>"#)
+            Some(r#"<help reason="stuck">ev</help>"#),
+            None
         )
         .is_some());
         let row: serde_json::Value =
@@ -1394,6 +1433,7 @@ mod tests {
             None,
             &transcript,
             Some("RESULT: BLOCKED\nREASON: probe reason"),
+            None,
         );
         assert!(wrote.is_some());
         let calls = std::fs::read_to_string(&log).unwrap();
@@ -1415,6 +1455,7 @@ mod tests {
             None,
             &transcript,
             Some("RESULT: BLOCKED\nREASON: probe reason"),
+            None,
         );
         match prior {
             Some(v) => std::env::set_var(var, v),
@@ -1508,6 +1549,7 @@ mod tests {
                 None,
                 fixture,
                 None,
+                None,
             );
             assert!(wrote.is_some(), "fixture {fixture:?} must write a row");
             let row: serde_json::Value =
@@ -1529,6 +1571,7 @@ mod tests {
             None,
             &claude_fixture.join("no-such-file.jsonl"),
             Some("all clear, nothing stuck here"),
+            None,
         );
         assert!(wrote.is_none());
         assert!(!project.exists());

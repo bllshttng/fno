@@ -31,6 +31,9 @@ Options:
                        node, and the casting session's id is kept on the record
                        when provable.
   -J, --json           Emit the appended record as JSON.
+  --friction TEXT      The fingerprint of a friction offer this session was
+                       shown. Adds the working node, stage and fingerprint to
+                       the vote; an unknown fingerprint refuses (exit 2).
   -h, --help           Show this message and exit.
 ";
 
@@ -39,6 +42,7 @@ struct Args {
     evidence: String,
     operator: bool,
     json: bool,
+    friction: Option<String>,
 }
 
 fn parse(tail: &[String]) -> Result<Args, String> {
@@ -46,6 +50,7 @@ fn parse(tail: &[String]) -> Result<Args, String> {
     let mut evidence = None;
     let mut operator = false;
     let mut json = false;
+    let mut friction = None;
     let mut it = tail.iter();
     while let Some(arg) = it.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -56,6 +61,10 @@ fn parse(tail: &[String]) -> Result<Args, String> {
             "-e" | "--evidence" => {
                 let value = inline.or_else(|| it.next().cloned());
                 evidence = Some(value.ok_or("Option '--evidence' requires an argument.")?);
+            }
+            "--friction" => {
+                let value = inline.or_else(|| it.next().cloned());
+                friction = Some(value.ok_or("Option '--friction' requires an argument.")?);
             }
             "--operator" => operator = true,
             "-J" | "--json" => json = true,
@@ -71,6 +80,7 @@ fn parse(tail: &[String]) -> Result<Args, String> {
         evidence: evidence.ok_or("Missing option '-e' / '--evidence'.")?,
         operator,
         json,
+        friction,
     })
 }
 
@@ -306,7 +316,37 @@ fn run_with(
         harness,
         operator: args.operator,
     };
-    let record = vote_record("created_at", evidence, &voter);
+    let mut record = vote_record("created_at", evidence, &voter);
+    if let Some(fp) = &args.friction {
+        let offer = voter
+            .session_id
+            .as_deref()
+            .ok_or_else(|| std::path::PathBuf::from("<no provable session>"))
+            .and_then(|sid| crate::friction::offer_for(sid, fp));
+        let offer = match offer {
+            Ok(offer) => offer,
+            Err(ledger) => {
+                let _ = writeln!(
+                    err,
+                    "Error: no friction offer {fp} in this session's ledger ({}). \
+                     Vote without --friction, or use the fingerprint the offer named.",
+                    ledger.display()
+                );
+                return 2;
+            }
+        };
+        for (key, from) in [("working_node", "node"), ("stage", "stage")] {
+            if let Some(v) = offer.get(from).filter(|v| !v.is_null()) {
+                record.insert(key.into(), v.clone());
+            }
+        }
+        record.insert("friction".into(), Value::String(fp.clone()));
+        if !record.contains_key("model") {
+            if let Some(m) = offer.get("model").filter(|v| !v.is_null()) {
+                record.insert("model".into(), m.clone());
+            }
+        }
+    }
     let total = match append_vote(graph, &args.task_id, record.clone()) {
         Ok((_, total)) => total,
         Err(VoteRefusal::Duplicate(e)) => {
@@ -522,5 +562,34 @@ mod tests {
         drop(gateway);
         let _gateway = EnvVarGuard::set("ANTHROPIC_BASE_URL", "https://gw.example");
         assert_eq!(vote_provenance(Some("claude"))["model"], "glm-5");
+    }
+
+    #[test]
+    fn a_friction_vote_carries_the_offer_and_an_unknown_one_refuses() {
+        let f = fixture(true);
+        let home = f._dir.path().join("agents");
+        let _home = EnvVarGuard::set("FNO_AGENTS_HOME", home.to_str().unwrap());
+        std::fs::create_dir_all(home.join("friction")).unwrap();
+        let ledger = json!({"offers": [{"fingerprint": "0123456789ab", "node": "x-a47a",
+                             "stage": "execute", "candidates": ["zz-0001"]}], "seen": []});
+        let path = home.join("friction").join(format!("{A}.json"));
+        std::fs::write(path, ledger.to_string()).unwrap();
+        let unknown = ["zz-0001", "-e", "x.", "--friction", "ffffffffffff"];
+        let (code, _, err) = vote(&f.graph, &unknown, Some(A));
+        assert_eq!(code, 2, "{err}");
+        assert!(err.contains("ffffffffffff"), "{err}");
+        assert!(encounters(&f.graph).is_empty());
+        let argv = [
+            "zz-0001",
+            "-e",
+            "the keeper lock.",
+            "--friction",
+            "0123456789ab",
+        ];
+        assert_eq!(vote(&f.graph, &argv, Some(A)).0, 0);
+        let stored = &encounters(&f.graph)[0];
+        assert_eq!(stored["working_node"], "x-a47a");
+        assert_eq!(stored["stage"], "execute");
+        assert_eq!(stored["friction"], "0123456789ab");
     }
 }

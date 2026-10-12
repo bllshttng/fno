@@ -67,6 +67,16 @@ Exit codes are distinct so a probe can tell the refusals apart. 1 evidence (or a
 
 The record carries model and effort only for claude, and reads them from the env. A codex session launched from a claude shell inherits those names, so writing them onto a codex vote would name a model that did not cast it. `CLAUDE_EFFORT` is the claude binary's own name. `ANTHROPIC_MODEL` counts only when `ANTHROPIC_BASE_URL` is set beside it: the launcher that owns the route sets both, and a lone model string proves nothing. A harness with nothing to report omits the keys.
 
+### Friction offers and `--friction`
+
+A `friction` event (`crates/fno-agents/src/friction.rs`) records that a session hit a real problem. Six doors write it, and nothing else does. The Stop path writes one for a `<help>` tag or a `RESULT: BLOCKED` return. The spawn, join and done gates write one when they refuse the session's own action. Loop-check's read of the session's own PR writes one for a review round spent without a pass, and one for a red CI check. PreToolUse guards and style refusals never write one: they fire on ordinary tool calls.
+
+Each row names the harness session, the working node, the stage when known, the evidence and a 12-hex fingerprint. A session writes one row per fingerprint. The row lands even when the match is off, which is the default.
+
+With `friction.match.enabled = true`, the producer runs one guarded match before it writes the row. Three offers per session is the cap. A fingerprint already in the session ledger is skipped. The match is one read connection that is interrupted past 200 ms, and it never waits. A match that finds open nodes writes `agents/friction/<session>.offer`, and `hooks/friction-offer-inject.sh` prints it once at the next tool call or prompt. Nothing votes on its own.
+
+`fno backlog encounter <id> --evidence "..." --friction <fingerprint>` is the confirm. The flag reads the offer from this session's ledger and adds `working_node`, `stage` and `friction` to the vote. It also adds `model` when the vote has none. An unknown fingerprint refuses with exit 2 and writes nothing. The one-vote-per-node rule still holds.
+
 ## cmd_demand
 
 Show where agent encounters and operator priority DISAGREE.

@@ -1322,9 +1322,16 @@ pub fn run_gate(
     registry_path: &Path,
     input: GateInput,
 ) -> Result<GateGuard, Refusal> {
+    let node = input.node.clone();
     decide_gate(config_cwd, registry_path, input)
         .map_err(|r| {
             let home = crate::paths::AgentsHome::from_env();
+            crate::friction::record_gate_refusal(
+                &home.events_jsonl(),
+                "spawn",
+                node.as_deref(),
+                &verdict_line(&r),
+            );
             // Every gate refusal leaves a feed-visible row: a refused
             // launch previously wrote nothing, so the feed showed nothing
             // for a launch the operator watched refuse.

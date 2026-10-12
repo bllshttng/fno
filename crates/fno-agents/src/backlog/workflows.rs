@@ -754,6 +754,17 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
                     "backlog_done_refused",
                     json!({"node_id": task_id, "pr_number": refs[0].0, "reason": msg}),
                 );
+                if let Some(space) = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| crate::paths::space_dir_opt(&cwd))
+                {
+                    crate::friction::record_gate_refusal(
+                        &space.join("events.jsonl"),
+                        "done",
+                        Some(task_id),
+                        &msg,
+                    );
+                }
                 return evidence.exit_code();
             }
         }
