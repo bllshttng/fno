@@ -560,7 +560,7 @@ fn publish(remote: &Remote, origin: &str, batch: &str, changes: &[Change]) -> Re
             String::new()
         } else {
             match step.and_then(|s| owner.get(s).copied().flatten()) {
-                Some(i) if orphaned(&error) => format!(
+                Some(i) if orphaned(&error) && changes[i].op != Op::Delete => format!(
                     " The {} write names a parent row the primary does not hold. This machine took the primary's rows back; a retry sends the same write, so report this refusal.",
                     changes[i].table
                 ),
@@ -579,9 +579,10 @@ fn unseeded(error: &str) -> bool {
     error.contains("no such table: backlog_seed")
 }
 
-/// The step named a parent row the primary lacks. No peer changed anything,
-/// so the changed-row hint would send the caller to retry a write that
-/// cannot succeed.
+/// An insert or update named a parent row the primary lacks. No peer changed
+/// anything, so the changed-row hint would send the caller to retry a write
+/// that cannot succeed. A delete refused the same way means a peer added a
+/// child row first, which is a real conflict.
 fn orphaned(error: &str) -> bool {
     error.contains("FOREIGN KEY constraint failed")
 }
@@ -1474,7 +1475,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let flushed = flush(&a.graph);
+        flush(&a.graph).unwrap();
         let (on_node, on_parent): (Option<String>, i64) = primary
             .db
             .lock()
@@ -1486,8 +1487,30 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        route_to_primary(None);
-        flushed.unwrap();
         assert_eq!((on_node.as_deref(), on_parent), (Some("s-new"), 1));
+
+        // A parent the primary lost while this machine still holds it: the
+        // refusal names the missing parent, not a peer's change.
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 DELETE FROM agent_sessions WHERE id = 's-new';
+                 PRAGMA foreign_keys=ON;",
+            )
+            .unwrap();
+        retitle(&a, "x-1", "again");
+        let refusal = flush(&a.graph).unwrap_err();
+        route_to_primary(None);
+        assert!(
+            refusal.contains("FOREIGN KEY") && refusal.contains("parent row"),
+            "{refusal}"
+        );
+        assert!(
+            !refusal.contains(CHANGED) && !refusal.contains("retry the write"),
+            "{refusal}"
+        );
     }
 }
