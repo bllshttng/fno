@@ -2,7 +2,7 @@
 
 ## What does this change?
 
-<!-- One or two sentences. Link any related issue: "Closes #123". -->
+<!-- One or two sentences. Link the issue this solves: "Closes #123". A pull request with no linked issue gets a comment asking for one. -->
 
 ## Why?
 
