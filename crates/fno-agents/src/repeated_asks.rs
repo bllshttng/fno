@@ -39,7 +39,6 @@ const ASK: &[&str] = &[
     "please run",
     "please confirm",
     "can you ",
-    "can you confirm",
 ];
 const START: &[&str] = &["answer ", "approve ", "confirm ", "pick ", "choose "];
 const NOT_ASK: &[&str] = &[
