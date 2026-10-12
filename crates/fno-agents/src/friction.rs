@@ -587,6 +587,16 @@ mod tests {
         }
     }
 
+    /// A row the store can represent: a row missing a required field is
+    /// parked in nodes_raw, which the match never reads.
+    fn node(id: &str, title: &str, status: &str) -> Value {
+        json!({
+            "id": id, "slug": id, "title": title, "type": "feature",
+            "status": status, "priority": "p2", "domain": "code",
+            "created_at": "2026-09-11T00:00:00+00:00"
+        })
+    }
+
     fn help<'a>(reason: &'a str) -> FrictionInput<'a> {
         FrictionInput {
             harness_session: Some(SID),
@@ -649,10 +659,10 @@ mod tests {
     #[test]
     fn a_match_offers_open_nodes_once_and_never_the_working_node() {
         let w = world(&[
-            json!({"id": "zz-0001", "title": "keeper lock hangs cargo test", "status": "ready", "priority": "p2"}),
-            json!({"id": "zz-0002", "title": "keeper lock hangs cargo test runs", "status": "ready", "priority": "p2"}),
-            json!({"id": "zz-0003", "title": "keeper lock hangs cargo", "status": "done", "priority": "p2"}),
-            json!({"id": "zz-0004", "title": "unrelated lock", "status": "ready", "priority": "p2"}),
+            node("zz-0001", "keeper lock hangs cargo test", "ready"),
+            node("zz-0002", "keeper lock hangs cargo test runs", "ready"),
+            node("zz-0003", "keeper lock hangs cargo", "done"),
+            node("zz-0004", "unrelated lock", "ready"),
         ]);
         let input = help("cargo keeper lock hangs the test run");
         assert_eq!(go(&w, &input, true), Some("offered"));
