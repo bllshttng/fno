@@ -163,6 +163,8 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     b.cursor = 0;
     let prefs = tempfile::tempdir().unwrap();
     crate::view_store::set_test_path(prefs.path());
+    let saved_term = view.term;
+    let saved_full = view.board_full;
     view.term = (24, 100);
     view.board_full = true;
     let tap = |row, col| crate::mouse::MouseReport {
