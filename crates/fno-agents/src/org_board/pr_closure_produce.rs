@@ -121,7 +121,8 @@ fn escape_json_string(s: &str) -> String {
             '\r' => out.push_str("\\r"),
             _ if (0x20..0x7f).contains(&(ch as u32)) => out.push(ch),
             _ => {
-                for unit in ch.encode_utf16() {
+                let mut utf16 = [0u16; 2];
+                for unit in ch.encode_utf16(&mut utf16) {
                     out.push_str(&format!("\\u{:04x}", unit));
                 }
             }
@@ -194,7 +195,7 @@ fn read_current_branch(cwd: &Path) -> Result<String, String> {
         "--show-current".to_string(),
     ];
     match run_with_timeout_full(&cmd, cwd, Duration::from_secs(5)) {
-        Ok(out) => Ok(out.stdout.trim().to_string()),
+        Ok(out) => Ok(String::from_utf8_lossy(&out.stdout).trim().to_string()),
         Err(f) => Err(format!("branch lookup failed: {}", f.message())),
     }
 }
@@ -353,7 +354,7 @@ fn leg_ensure(payload: &serde_json::Value) -> (i32, String, String) {
             wanted.push(id.to_string());
         }
     };
-    for id in candidates.iter().filter(|c| known.contains(**c)) {
+    for id in candidates.iter().filter(|c| known.contains(*c)) {
         push_wanted(id);
     }
     for id in extra_ids.iter().filter(|e| is_wellformed_node_id(e)) {
@@ -387,7 +388,10 @@ fn leg_ensure(payload: &serde_json::Value) -> (i32, String, String) {
 
 fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     if external_backend_selected() {
-        return bind_envelope(&refused(Some("graph backend is not active".to_string())), &[]);
+        return bind_envelope(
+            &refused(Some("graph backend is not active".to_string())),
+            &[],
+        );
     }
     let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
     let node = payload.get("node").and_then(|v| v.as_str());
@@ -417,9 +421,7 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
     let path = graph_path();
     let mut rows = match read_rows_strict(&path) {
         Ok(r) => r,
-        Err(e) => {
-            return bind_envelope(&refused(Some(format!("graph read failed: {e}"))), &[])
-        }
+        Err(e) => return bind_envelope(&refused(Some(format!("graph read failed: {e}"))), &[]),
     };
     let (probe, matched) = bind_created_pr(&mut rows, &head_ref, url, node);
     if probe.outcome != "bound" {
@@ -439,16 +441,16 @@ fn leg_bind(payload: &serde_json::Value) -> (i32, String, String) {
         ));
         Ok(true)
     });
-    let final = match live {
+    let bound = match live {
         Ok(_) => boxed.unwrap_or_else(|| refused(Some("the graph write failed".to_string()))),
         Err(e) => refused(Some(format!("the graph write failed: {e}"))),
     };
-    if final.outcome == "bound" {
-        for id in final.bound_ids() {
+    if bound.outcome == "bound" {
+        for id in bound.bound_ids() {
             stamp_ship_on_link(&path, &id);
         }
     }
-    bind_envelope(&final, &matched)
+    bind_envelope(&bound, &matched)
 }
 
 fn leg_trailer(argv: &[String]) -> i32 {
@@ -548,7 +550,10 @@ fn find_gh_on_path() -> Option<String> {
 /// The gh lookup is a live-process surface with no goldens; the parity test
 /// pins it with a stub gh script instead of a byte contract.
 fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
-    let pr_value = payload.get("pr").cloned().unwrap_or(serde_json::Value::Null);
+    let pr_value = payload
+        .get("pr")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let pr_str = match &pr_value {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
@@ -591,7 +596,9 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
                     return (
                         3,
                         String::new(),
-                        format!("pr-closure-context: gh pr view #{pr_str} failed (rc={rc}): {detail}\n"),
+                        format!(
+                            "pr-closure-context: gh pr view #{pr_str} failed (rc={rc}): {detail}\n"
+                        ),
                     );
                 }
             }
@@ -602,16 +609,14 @@ fn leg_context(payload: &serde_json::Value) -> (i32, String, String) {
             );
         }
     };
-    if out.stdout.trim().is_empty() {
+    if String::from_utf8_lossy(&out.stdout).trim().is_empty() {
         return (
             3,
             String::new(),
-            format!(
-                "pr-closure-context: gh pr view #{pr_str} returned no output (exit 0)\n"
-            ),
+            format!("pr-closure-context: gh pr view #{pr_str} returned no output (exit 0)\n"),
         );
     }
-    let row: serde_json::Value = match serde_json::from_str(&out.stdout) {
+    let row: serde_json::Value = match serde_json::from_slice(&out.stdout) {
         Ok(v) => v,
         Err(e) => {
             return (
