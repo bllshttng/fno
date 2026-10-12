@@ -89,7 +89,11 @@ fn is_test_program(program: &str) -> bool {
 /// install build run their tests, and a checkout holding a live
 /// `test:priority` grant does too.
 fn refuses_agent_tests(program: &str, worktree: &Path) -> bool {
-    if program.is_empty() || !is_test_program(program) || install_build() || !agent_cargo() {
+    if program.is_empty()
+        || !is_test_program(program)
+        || install_build()
+        || !crate::spawn_gate_admission::gate_agent_origin()
+    {
         return false;
     }
     let worktree = std::fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
@@ -180,20 +184,6 @@ fn readout_due(cargo_pid: u32, line: &str) -> Option<bool> {
     Some(first)
 }
 
-/// True when this cargo runs inside an unattended agent session. FNO_AGENT_SELF
-/// names fno-spawned workers. A Claude Code background job carries no
-/// FNO_AGENT_SELF; CLAUDECODE with CLAUDE_CODE_SESSION_ATTENDED=0 is the
-/// harness's own unattended marker, and without it such a session read as
-/// user origin, which is how builds reached the slots unasked in the
-/// 2026-10-03 load investigation (rustc the single largest measured
-/// contributor). Law d-705a00a3 keeps a person's cargo out of every gate: an
-/// attended session, or any session without both markers, is the user's.
-fn agent_cargo() -> bool {
-    crate::spawn_gate_admission::gate_agent_origin()
-        || (std::env::var_os("CLAUDECODE").is_some_and(|v| !v.is_empty())
-            && std::env::var_os("CLAUDE_CODE_SESSION_ATTENDED").is_some_and(|v| v == "0"))
-}
-
 /// The build-freeze refusal: the config key is set, so an agent session
 /// builds nothing here; CI is the gate.
 const AGENT_FREEZE_LINE: &str = "[cargo freeze] build.agent_freeze is set: an agent session builds and tests nothing on this machine. Commit, push with `fno do pr push`, and CI builds and tests it. The user's cargo and `fno doctor update` still compile.";
@@ -220,7 +210,7 @@ fn refuses_frozen_build(worktree: &Path) -> bool {
     if std::env::var_os("CI").is_some_and(|v| !v.is_empty()) {
         return false;
     }
-    agent_cargo()
+    crate::spawn_gate_admission::gate_agent_origin()
 }
 
 /// The sanctioned queue lane: a whole-suite run (FNO_TEST_FULL=1) may queue,
@@ -1230,14 +1220,14 @@ fn run_build_admit(args: &[String]) -> i32 {
         // waiters then queue behind it; when an agent holds the door it
         // compiles beside that holder instead of waiting out its crates (law
         // d-705a00a3). An unattended session with no spawn identity reads as
-        // agent (agent_cargo): the slot try-lock already gated its admission,
+        // agent (gate_agent_origin): the slot try-lock already gated its admission,
         // and here it queues like any agent, bounded by the holder-idle
         // takeover. No preempt-release: the holder keeps its claim, so its
         // next crate queues normally and no third compile starts.
         // An install build is the user's fno loading (law d-829648bb), so it
         // takes this lane too: queued behind agent builds, `fno update` sat
         // 999s twice and blew the post-merge sync's 600s bound.
-        if install_build() || !agent_cargo() {
+        if install_build() || !crate::spawn_gate_admission::gate_agent_origin() {
             // The user's build takes slot 0 when it is free, so agent waiters
             // count it. It never takes slots 1 and 2: those are the agents'
             // load-scaled extra seats. When slot 0 is held it compiles beside
@@ -1625,7 +1615,7 @@ fn admit_run_slot(cargo_pid: u32, new_worktree: &Path, reentry: bool) -> Result<
     // (law d-705a00a3), it never waits at the tests hold, never queues
     // behind worker run slots, and skips the build queue too
     // (run_build_admit below).
-    if install_build() || !agent_cargo() {
+    if install_build() || !crate::spawn_gate_admission::gate_agent_origin() {
         return Ok(());
     }
     // The tests hold parks the cargo doors instead of failing them: a
@@ -1686,7 +1676,12 @@ fn admit_run_slot(cargo_pid: u32, new_worktree: &Path, reentry: bool) -> Result<
     // queues too, ahead of the rest: its place in the order is the point, and
     // its session parks on the wait instead of spending turns.
     let lane = cargo_lane(&worktree);
-    if !reentry && try_lock_admission(agent_cargo(), full_suite_lane() || lane != Lane::Normal) {
+    if !reentry
+        && try_lock_admission(
+            crate::spawn_gate_admission::gate_agent_origin(),
+            full_suite_lane() || lane != Lane::Normal,
+        )
+    {
         // A try-lock never takes a slot a better lane is queued for.
         if let Some(ahead) = keys
             .first()
@@ -3512,7 +3507,7 @@ mod tests {
     /// identity: that gap is how builds reached the slots unasked. Absent or
     /// attended markers stay the user's (law d-705a00a3 fail-open).
     #[test]
-    fn agent_cargo_reads_spawn_identity_or_the_unattended_claude_markers() {
+    fn gate_agent_origin_reads_spawn_identity_or_the_unattended_claude_markers() {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -3534,7 +3529,7 @@ mod tests {
             Option<&std::ffi::OsStr>,
             Option<&std::ffi::OsStr>,
             bool,
-        ); 5] = [
+        ); 6] = [
             (
                 "spawn identity names the worker",
                 Some("w1".as_ref()),
@@ -3564,6 +3559,13 @@ mod tests {
                 false,
             ),
             ("no markers at all is the user", None, None, None, false),
+            (
+                "claude marker zero value is not claude",
+                None,
+                Some("0".as_ref()),
+                Some("0".as_ref()),
+                false,
+            ),
         ];
         for (name, self_env, code, attended, want) in cases {
             restore([
@@ -3572,7 +3574,11 @@ mod tests {
                 ("CLAUDE_CODE_SESSION_ATTENDED", attended),
                 ("FNO_TEST_FULL", None),
             ]);
-            assert_eq!(agent_cargo(), want, "case: {name}");
+            assert_eq!(
+                crate::spawn_gate_admission::gate_agent_origin(),
+                want,
+                "case: {name}"
+            );
         }
         restore([
             ("FNO_AGENT_SELF", saved_self.as_deref()),
@@ -3595,7 +3601,7 @@ mod tests {
     /// the user's cargo, an install build, and CI. A malformed or absent
     /// key reads off, like every other gate on this wrapper.
     #[test]
-    fn build_freeze_gates_agent_cargo_only() {
+    fn build_freeze_gates_agent_origin_only() {
         let _guard = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
