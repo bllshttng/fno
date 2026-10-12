@@ -1788,23 +1788,16 @@ def _bounded_command(argv: list[str]) -> Optional[tuple[int, str, str]]:
 
 
 def _git_checkout_identity(path: Path) -> Optional[tuple[Path, Path]]:
-    result = _bounded_command(
-        [
-            "git",
-            "-C",
-            str(path),
-            "rev-parse",
-            "--path-format=absolute",
-            "--show-toplevel",
-            "--git-common-dir",
-        ]
-    )
-    if result is None or result[0] != 0:
+    from fno.paths import git_common_dir
+
+    result = _bounded_command(["git", "-C", str(path), "rev-parse", "--show-toplevel"])
+    common = git_common_dir(path)
+    if result is None or result[0] != 0 or common is None:
         return None
     lines = result[1].splitlines()
-    if len(lines) != 2:
+    if len(lines) != 1:
         return None
-    return Path(lines[0]).resolve(), Path(lines[1]).resolve()
+    return Path(lines[0]).resolve(), common.resolve()
 
 
 def _preamble_budget_line(
@@ -2040,6 +2033,16 @@ def _disk_free_report() -> dict[str, Any]:
     }
 
 
+def _git_version_report() -> dict[str, Any]:
+    """git under 2.31 echoes ``--path-format=absolute`` back as a path."""
+    out = _bounded_command(["git", "--version"])
+    found = re.search(r"git version (\d+)\.(\d+)", out[1]) if out and out[0] == 0 else None
+    if found is None:
+        return {"verdict": "unreadable"}
+    major, minor = int(found[1]), int(found[2])
+    return {"version": f"{major}.{minor}", "verdict": "old" if (major, minor) < (2, 31) else "ok"}
+
+
 def _blockers(result: dict[str, Any]) -> list[str]:
     """The findings that mean the fleet will misbehave, in the order a new
     user should act on them. Pure: reads only the assembled result dict.
@@ -2089,6 +2092,13 @@ def _blockers(result: dict[str, Any]) -> list[str]:
         blockers.append(
             f"free disk is {disk_free.get('free_gb')} GB, under the {disk_free.get('floor_gb')} GB floor; "
             "builds, stores and downloads fail near zero. Fix: fno doctor reclaim --apply"
+        )
+
+    git_version = result.get("git_version") or {}
+    if git_version.get("verdict") == "old":
+        blockers.append(
+            f"git {git_version['version']} is under 2.31: shell hooks take its echoed "
+            "--path-format flag as a repo root. Fix: upgrade git."
         )
 
     plugin_hooks = result.get("plugin_hooks") or {}
@@ -4348,6 +4358,7 @@ def build_report(source: Optional[Path] = None) -> dict[str, Any]:
 
     # Advisory free-disk reading; under the floor is a blocker. Never changes status/exit.
     result["disk_free"] = _disk_free_report()
+    result["git_version"] = _git_version_report()
 
     # Advisory silent-switch legibility (Wave 6): default-off switches
     # silently producing inaction + default-on/armed switches silently merging.

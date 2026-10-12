@@ -148,7 +148,7 @@ The counting rule, in words, so a reader can audit a row without reading the scr
 | 6 | test_target_init_plan_backfill (leaf) | 353 | 0 | 1/- | 0 | 2 |
 | 7 | plugins (leaf) | 2436 | 0 | 1/- | 39 | 4 |
 | 8 | executor (leaf) | 658 | 0 | 1/- | 145 | 0 |
-| 9 | verify_advise (leaf) | 346 | 0 | 2/- | 0 | 2 |
+| 9 | verify_advise (leaf; ported to Rust and deleted 2026-10, gone on next regen) | 346 | 0 | 2/- | 0 | 2 |
 | 10 | test_dispatch_flags (leaf) | 153 | 0 | 3/- | 0 | 1 |
 | 11 | project (leaf) | 182 | 0 | 4/- | 997 | 2 |
 | 12 | conftest (leaf) | 85 | 0 | 5/- | 0 | 3 |

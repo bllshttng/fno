@@ -19,12 +19,12 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from fno.config import SettingsModel
@@ -1799,6 +1799,28 @@ def _is_plugin_root(root: Path) -> bool:
     return (root / _PLUGIN_MARKER_RELPATH).is_file()
 
 
+def git_common_dir(
+    cwd: Path | str, *, timeout: float = 5.0, runner: Callable[..., Any] | None = None
+) -> Path | None:
+    """Absolute git common dir of ``cwd``, or None. git under 2.31 echoes
+    ``--path-format=absolute`` back and exits 0, so that read counts only as one
+    absolute path; else plain ``--git-common-dir`` is joined to ``cwd``."""
+    for flags in (["--path-format=absolute"], []):
+        try:
+            out = (runner or subprocess.run)(
+                ["git", "rev-parse", *flags, "--git-common-dir"], cwd=str(cwd),
+                capture_output=True, text=True, check=False, timeout=timeout,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        lines = (getattr(out, "stdout", "") or "").splitlines()
+        if getattr(out, "returncode", 1) != 0:
+            return None
+        if len(lines) == 1 and (not flags or os.path.isabs(lines[0])):
+            return Path(cwd) / lines[0]
+    return None
+
+
 def _canonical_plugin_root(root: Path) -> Path:
     """Map a linked-worktree plugin root to its canonical checkout.
 
@@ -1810,19 +1832,11 @@ def _canonical_plugin_root(root: Path) -> Path:
     root (OSS ``--plugin-dir`` tarball) returns unchanged. Fail-open on any
     error (missing git, timeout, permission, a stubbed run without stdout): the
     pointer stays usable, resolution just skips canonicalization."""
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(root), "rev-parse",
-             "--path-format=absolute", "--git-common-dir"],
-            capture_output=True, text=True, check=False, timeout=2,
-        )
-        common = (getattr(out, "stdout", "") or "").strip()
-        if getattr(out, "returncode", 1) == 0 and common.endswith("/.git"):
-            canon = Path(common[: -len("/.git")])
-            if (canon / ".claude-plugin" / "plugin.json").is_file():
-                return canon
-    except (OSError, subprocess.SubprocessError):
-        pass
+    common = git_common_dir(root, timeout=2)
+    if common is not None and common.name == ".git":
+        canon = common.parent
+        if (canon / ".claude-plugin" / "plugin.json").is_file():
+            return canon
     return root
 
 

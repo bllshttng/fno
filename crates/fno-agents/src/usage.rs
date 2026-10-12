@@ -9,13 +9,6 @@
 /// slice order is the `--help` display order. This MUST cover every routable
 /// verb (the `build_request` match arms plus the directly-dispatched specials).
 /// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
-/// parity; `print_help_lists_every_routable_verb` guards this display
-/// list against that set, so a new verb cannot land without a `--help` entry
-///.
-/// Usage line per dispatchable verb; the leading token is the verb name and the
-/// slice order is the `--help` display order. This MUST cover every routable
-/// verb (the `build_request` match arms plus the directly-dispatched specials).
-/// `test_rust_client_verbs_match_client_rs` (Python) guards client.rs<->router
 /// parity; `print_help_lists_every_routable_verb` (below) guards this display
 /// list against that set, so a new verb cannot land without a `--help` entry
 ///.
@@ -55,7 +48,7 @@ pub const CLIENT_VERB_USAGE: &[&str] = &[
     "subscribe [--agent <name>] [--kinds state,exit] [--json]",
     "digest --session <s> [--since <ts> | --since-epoch <secs>] [--json]",
     "needs [--since-epoch <secs>] [--fires-floor <n>] [--json]",
-    "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json]",
+    "feed [--since-epoch <secs>] [--until-epoch <secs>] [--limit <n>] [--before <cursor>] [--after <cursor>] [--node <ids>] [--session <id>] [--kind <prefix>] [--area <names>] [--agent <name>] [--harness <names>] [--lead <name>] [--json] [--otlp]",
     // `review-coverage` deliberately has NO entry here: the per-verb --help
     // intercept would print a one-line usage and shadow the verb's own
     // --help, which states the load-bearing contract (no way to assert

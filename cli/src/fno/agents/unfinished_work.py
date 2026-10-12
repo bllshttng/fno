@@ -723,18 +723,11 @@ def _main_worktree(listed: list, runner=None) -> str:
     git dir. A normal repo answers ``<repo>/.git``; a bare container answers
     the bare repo itself (there is no main tree to exclude). Falls back to
     the first listed row only when git will not answer."""
-    for _branch, path in listed[:1]:
-        proc = _run_git(
-            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            cwd=Path(path),
-            runner=runner,
-        )
-        if proc.returncode == 0:
-            common = (proc.stdout or "").strip()
-            if common.endswith("/.git"):
-                return str(Path(common).parent)
-            if common:
-                return common
+    from fno.paths import git_common_dir
+
+    common = git_common_dir(listed[0][1], runner=runner)
+    if common is not None:
+        return str(common.parent if common.name == ".git" else common)
     return str(Path(listed[0][1]))
 
 

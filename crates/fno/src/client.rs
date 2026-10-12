@@ -7383,10 +7383,10 @@ async fn attach_and_run(
     let (yard_tx, mut yard_rx) =
         tokio::sync::mpsc::unbounded_channel::<(u64, Option<Vec<crate::yard_overlay::YardItem>>)>();
 
-    // The org fold leg: single-flight + the TTL are the whole
-    // concurrency contract; no generation to supersede.
+    // The org fold leg: one channel, three halves, each half single-flight
+    // on its own stamp; no generation to supersede.
     let (org_fold_tx, mut org_fold_rx) =
-        tokio::sync::mpsc::unbounded_channel::<Option<crate::org_overlay::Org>>();
+        tokio::sync::mpsc::unbounded_channel::<crate::org_overlay::FoldPart>();
 
     // the Connections modal's read fold runs off the UI loop and reports
     // back here, tagged with the generation it was kicked under, so a slow `fno`
@@ -7533,11 +7533,8 @@ async fn attach_and_run(
                 let _ = tx.send((gen, result));
             });
         }
-        if view.org.take_want() {
-            let tx = org_fold_tx.clone();
-            tokio::spawn(async move {
-                let _ = tx.send(crate::org_overlay::fold_now().await);
-            });
+        if let Some(want) = view.org.take_want(&view.layout.agents) {
+            crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }
         // kick a wanted Connections read off the UI loop, at most one in
         // flight, tagged with the current gen so a stale result is dropped.

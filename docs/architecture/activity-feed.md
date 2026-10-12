@@ -172,6 +172,31 @@ For a `node_created` row with a node id, the footer offers `b: blueprint`. Press
 
 Open questions also show as a block in the sideline, pinned above the org block. The block reads `fno-agents needs --items`, not the feed: the feed shows a question's history, and the block shows only what is open. An answer picked in the block's overlay records `sink: mux`, and the row shows the delivery rung for 15 minutes. See [attention-items](attention-items.md) for the delivery ladder.
 
+## OTLP export
+
+The feed is a local view. When you opt in, it can also feed an OpenTelemetry collector. The exporter is a daemon arm. Every five minutes it collects the feed rows of the last 24 hours and posts them as one OTLP/HTTP JSON logs batch. A batch is oldest first, at most 1000 rows.
+
+```toml
+[telemetry.otlp]
+enabled = true
+endpoint = "https://collector.example.com"  # /v1/logs is appended when absent
+log_content = false                         # titles and free text stay local
+```
+
+Auth headers come from an env var, never from the config file: `FNO_OTLP_HEADERS`, comma-separated `name=value` pairs. An unset or empty variable refuses the export rather than shipping an unauthenticated payload. The variable name itself is overridable with `headers_env`.
+
+The export is off unless `enabled = true`. Two env kill switches outrank the config: `OTEL_SDK_DISABLED` or `DO_NOT_TRACK` set to `true` or `1` force it off. The daemon reads its own environment at start. Set kill switches and the headers var where the daemon sees them. Restart the daemon after a config change.
+
+One row becomes one log record. Always-on attributes: `fno.kind`, `fno.area`, `session.id`, `event.name`, and the stable `fno.row.id`. The row id is a sha256 over kind, timestamp, node, session, ref, team, holder and name. The title is excluded, so a title edit does not resend the row. Conditional attributes: `fno.node.id`, `fno.harness`, `fno.model`, `fno.effort`, `fno.phase`, `fno.team`, `fno.actor`, `fno.parent.session.id`, `fno.ref`. With `log_content = true` the record also carries free text: `fno.title`, `fno.cwd`, `fno.reason`, `fno.detail`, `fno.url`, `fno.name`, `fno.holder`, `fno.owner`, `fno.lead`.
+
+Delivery is at-least-once keyed on `fno.row.id`. Deduplicate on that attribute at the backend. A 2xx marks the batch delivered. A 4xx other than 401, 403, 408 and 429 drops the batch, because the endpoint said never. Anything else holds it for the next beat, and the held error shows in the status line. Undelivered ids expire after 48 hours.
+
+State and receipts live under `~/.fno/agents/otlp_export/`: `state.json` holds the delivery memory, `receipts.jsonl` holds one line per post attempt.
+
+`fno agents feed --otlp` previews, never sends: it prints the batch the next beat will post to stdout, and the resolved posture to stderr. It combines with the filter flags and refuses `--json`.
+
+One risk to know: the OTLP spec does not require a server to accept the JSON encoding over HTTP. Most backends do. If yours does not, point `endpoint` at a local Collector and let it convert and forward.
+
 ## Deploy rule
 
 The feed reads the durable stores and the graph for lifecycle. No writer is added.

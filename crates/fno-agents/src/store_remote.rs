@@ -503,9 +503,12 @@ pub(crate) mod test_primary {
 
     pub(crate) fn start() -> Primary {
         let dir = tempfile::tempdir().unwrap();
-        let db = Arc::new(Mutex::new(
-            rusqlite::Connection::open(dir.path().join("primary.db")).unwrap(),
-        ));
+        let connection = rusqlite::Connection::open(dir.path().join("primary.db")).unwrap();
+        // The real primary enforces foreign keys.
+        connection
+            .pragma_update(None, "foreign_keys", true)
+            .unwrap();
+        let db = Arc::new(Mutex::new(connection));
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let served = Arc::clone(&db);

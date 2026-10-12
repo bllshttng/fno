@@ -33,6 +33,7 @@ pub(super) struct FleetArms {
     provider_cap: crate::provider_cap_verbs::Arm,
     slot_cutover: crate::slot_cutover::Arm,
     attention: crate::attention_arm::Arm,
+    otlp_export: crate::otlp_export::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
     codex_watch: crate::codex_watch::Arm,
@@ -103,6 +104,7 @@ impl FleetArms {
             provider_cap: crate::provider_cap_verbs::Arm::new(opts.agents_config_cwd.clone()),
             slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
             attention: crate::attention_arm::Arm::new(opts.agents_config_cwd.clone()),
+            otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
             codex_watch: crate::codex_watch::Arm::default(),
@@ -282,6 +284,7 @@ impl FleetArms {
         crate::provider_cap_verbs::maybe_tick(&self.provider_cap, ctx.home.clone());
         crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());
         crate::attention_arm::maybe_tick(&self.attention, ctx.home.clone());
+        crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
         // The settle waker: on CI settle it wakes the parked session

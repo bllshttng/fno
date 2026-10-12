@@ -386,7 +386,8 @@ crates/fno-agents/src/delivery_completion.rs
 crates/fno-agents/src/hook/diff_budget.rs
 crates/fno-agents/src/kill_criteria.rs
 crates/fno-agents/src/merge_hold.rs
-crates/fno-agents/src/surface_check.rs"
+crates/fno-agents/src/surface_check.rs
+crates/fno-agents/src/verify_advise.rs"
 # create_cli.rs reads only the plan frontmatter `status` scalar and hands it
 # to the shared rung table (graph_store::supplied_plan_rung) for the wave
 # append's plan-rung map; it classifies nothing itself, so the shelling rule
@@ -412,6 +413,9 @@ crates/fno-agents/src/surface_check.rs"
 # The plan-doc writer writes the status line the graph decides (stamp,
 # graduate, projection). It reads status only to keep its writes forward-only,
 # so it is exempt from both scans; readiness stays with `fno do plan rung`.
+# verify_advise.rs reads only the plan's acceptance-criteria section
+# (`read_plan_acs`) to build the verification prompt; it never extracts a
+# plan status, so the shelling rule does not apply to it.
 RUST_PLAN_DOC_WRITER_DIR="crates/fno-agents/src/plan_doc/"
 
 # The spelling detector below catches ordinary plan readers; the semantic

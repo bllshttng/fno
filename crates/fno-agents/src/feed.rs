@@ -1006,7 +1006,7 @@ fn parse_team_events(team_raw: &str) -> Vec<TeamEvent> {
             .and_then(Value::as_str)
             .map(crate::event_store::event_type_alias)
         {
-            Some("agent_teamed") => {
+            Some("agent_promoted") => {
                 let Some(name) = s_field(&data, "name") else {
                     continue;
                 };
@@ -1484,6 +1484,7 @@ pub(crate) struct Prefilter {
 #[derive(Debug)]
 struct FeedArgs {
     json: bool,
+    otlp: bool,
     since_epoch: Option<u64>,
     until_epoch: Option<u64>,
     page: Page,
@@ -1493,6 +1494,7 @@ struct FeedArgs {
 fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     let mut args = FeedArgs {
         json: false,
+        otlp: false,
         since_epoch: None,
         until_epoch: None,
         page: Page::default(),
@@ -1502,6 +1504,7 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--json" | "-J" => args.json = true,
+            "--otlp" => args.otlp = true,
             "--since-epoch" => {
                 args.since_epoch = Some(
                     it.next()
@@ -1545,6 +1548,9 @@ fn parse_args(rest: &[String]) -> Result<FeedArgs, String> {
     }
     if args.page.before.is_some() && args.page.after.is_some() {
         return Err("--before and --after cannot combine: page from one edge".into());
+    }
+    if args.otlp && args.json {
+        return Err("--otlp and --json cannot combine".into());
     }
     let live = |v: Option<String>| v.filter(|s| !s.is_empty());
     args.pre.node = live(args.pre.node);
@@ -1595,7 +1601,7 @@ fn agents_journal(
 /// emitter wrote. Unbounded by the window: a team is granted before the
 /// events it owns.
 fn team_journals(home: &AgentsHome) -> String {
-    let types = ["agent_teamed", "agent_team_vacated"];
+    let types = ["agent_promoted", "agent_team_vacated"];
     let mut raw = agents_journal(home, &types, None, None);
     if let Some(parent) = home.root().parent() {
         let path = parent.join("events.jsonl");
@@ -1648,6 +1654,150 @@ fn main_store_journal(
     }
 }
 
+/// The questions leg: the four question kinds plus the empty type read typed
+/// off questions.jsonl (corrupt rows still count). The store's other kinds,
+/// 119k+ attention_delivery rows alone, never reach the parser, so they stop
+/// reading as malformed. An unreadable store is an empty leg plus the note
+/// the caller prints.
+fn questions_leg(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> (String, Option<String>) {
+    let fno_dir = home
+        .root()
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".fno"));
+    let questions_path = fno_dir.join("questions.jsonl");
+    let questions_query = crate::event_store::EventQuery {
+        since_ms: since_epoch.map(|s| s as i64 * 1000),
+        until_ms: until_epoch.map(|u| u as i64 * 1000),
+        ..crate::event_store::EventQuery::of_types(&[
+            "operator_question",
+            "operator_question_closed",
+            "operator_decision",
+            "day_boundary",
+        ])
+    };
+    match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
+        Ok(raw) => (raw, None),
+        Err(e) => (
+            String::new(),
+            Some(format!(
+                "questions store unreadable, skipped: {} ({e})",
+                questions_path.display()
+            )),
+        ),
+    }
+}
+
+/// The lifecycle leg reads the store, never the file. An absent store is
+/// still a skipped store for the feed's purposes: the operator should know
+/// the lifecycle leg is absent, so its absence keeps its own note (AC3)
+/// where a present-but-empty store is just empty.
+fn graph_leg(home: &AgentsHome) -> (Vec<Value>, Option<String>) {
+    let path = graph_path(home);
+    if !crate::backlog::database_path(&path).exists() {
+        return (Vec::new(), Some("graph store skipped (absent)".to_string()));
+    }
+    match crate::graph_store::read_rows_where(
+        &path,
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "id",
+                    "title",
+                    "parent",
+                    "cwd",
+                    "sessions",
+                    "created_at",
+                    "completed_at",
+                    "status",
+                    "merge_status",
+                    "pr_number",
+                    "pr_url",
+                    "source_session_id",
+                    "source_harness",
+                    "source_model",
+                    "source_effort",
+                    "source_parent_session",
+                    "source_team",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
+    {
+        Ok(list) => (list, None),
+        Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
+    }
+}
+
+/// The full window for a non-interactive reader: every leg on, no page, no
+/// prefilter. Returns the rows plus each store-skip note, so a caller can say
+/// why a leg contributed nothing when its store failed instead of reporting
+/// the window as simply quiet. The OTLP exporter reads through this, so the
+/// daemon arm and the `--otlp` preview see the same window.
+pub(crate) fn collect_window(
+    home: &AgentsHome,
+    since_epoch: Option<u64>,
+    until_epoch: Option<u64>,
+) -> (Vec<FeedRow>, Vec<String>) {
+    let mut notes: Vec<String> = Vec::new();
+    let (questions_raw, note) = questions_leg(home, since_epoch, until_epoch);
+    notes.extend(note);
+    let (graph_entries, note) = graph_leg(home);
+    notes.extend(note);
+    let (removals, removal_notes) =
+        crate::removals::read(home, since_epoch.map(|s| s as i64 * 1000));
+    notes.extend(removal_notes);
+    let spawns_raw = agents_journal(
+        home,
+        &["agent_spawned", "agent_spawn_refused"],
+        since_epoch,
+        until_epoch,
+    );
+    let team_raw = team_journals(home);
+    let closes_raw = agents_journal(
+        home,
+        &[
+            "pane_closed",
+            "server_stopped",
+            "composer_shell_ran",
+            "composer_shell_refused",
+            "daemon_started",
+        ],
+        since_epoch,
+        until_epoch,
+    );
+    let (main_raw, note) = main_store_journal(home, since_epoch, until_epoch);
+    notes.extend(note);
+    let Projection { rows, .. } = project(
+        &questions_raw,
+        &graph_entries,
+        &removals,
+        &spawns_raw,
+        &team_raw,
+        &closes_raw,
+        &main_raw,
+        None,
+    );
+    let rows = filter_rows(
+        rows,
+        &Page::default(),
+        &Prefilter::default(),
+        since_epoch,
+        until_epoch,
+    );
+    (rows, notes)
+}
+
 /// The `fno-agents feed` verb. A missing or unreadable store is not fatal: the
 /// rows the other store yielded still emit, with one stderr line naming the
 /// store skipped. Non-JSON output is one line per row, `ts kind node session title`.
@@ -1660,88 +1810,19 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
         }
     };
 
-    let fno_dir = home
-        .root()
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(".fno"));
-    let questions_path = fno_dir.join("questions.jsonl");
-    // Typed read: the four question kinds plus the empty type (corrupt rows
-    // still count). The store's other kinds, 119k+ attention_delivery rows
-    // alone, never reach the parser, so they stop reading as malformed.
-    let questions_query = crate::event_store::EventQuery {
-        since_ms: args.since_epoch.map(|s| s as i64 * 1000),
-        until_ms: args.until_epoch.map(|u| u as i64 * 1000),
-        ..crate::event_store::EventQuery::of_types(&[
-            "operator_question",
-            "operator_question_closed",
-            "operator_decision",
-            "day_boundary",
-        ])
-    };
-    let questions_raw = if leg_skipped(&args.pre, QUESTION_KINDS) {
-        String::new()
+    let (questions_raw, questions_note) = if leg_skipped(&args.pre, QUESTION_KINDS) {
+        (String::new(), None)
     } else {
-        match crate::event_store::journal_text_checked(&questions_path, &questions_query) {
-            Ok(raw) => raw,
-            Err(e) => {
-                eprintln!(
-                    "fno-agents feed: questions store unreadable, skipped: {} ({e})",
-                    questions_path.display()
-                );
-                String::new()
-            }
-        }
+        questions_leg(home, args.since_epoch, args.until_epoch)
     };
+    if let Some(note) = questions_note {
+        eprintln!("fno-agents feed: {note}");
+    }
 
-    let (graph_entries, graph_note): (Vec<Value>, Option<String>) = {
-        // The lifecycle leg reads the store, never the file. An absent store
-        // is still a skipped store for the feed's purposes: the operator
-        // should know the lifecycle leg is absent, so its absence keeps its
-        // own note (AC3) where a present-but-empty store is just empty.
-        let path = graph_path(home);
-        if leg_skipped(&args.pre, GRAPH_KINDS) {
-            (Vec::new(), None)
-        } else if !crate::backlog::database_path(&path).exists() {
-            (Vec::new(), Some("graph store skipped (absent)".to_string()))
-        } else {
-            match crate::graph_store::read_rows_where(
-                &path,
-                &crate::backlog::RowQuery {
-                    fields: Some(
-                        [
-                            "id",
-                            "title",
-                            "parent",
-                            "cwd",
-                            "sessions",
-                            "created_at",
-                            "completed_at",
-                            "status",
-                            "merge_status",
-                            "pr_number",
-                            "pr_url",
-                            "source_session_id",
-                            "source_harness",
-                            "source_model",
-                            "source_effort",
-                            "source_parent_session",
-                            "source_team",
-                        ]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                    ),
-                    with_blockers: true,
-                    ..Default::default()
-                },
-            )
-            .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-            {
-                Ok(list) => (list, None),
-                Err(e) => (Vec::new(), Some(format!("graph store skipped ({})", e.0))),
-            }
-        }
+    let (graph_entries, graph_note) = if leg_skipped(&args.pre, GRAPH_KINDS) {
+        (Vec::new(), None)
+    } else {
+        graph_leg(home)
     };
     if let Some(note) = graph_note {
         eprintln!("fno-agents feed: {note}");
@@ -1822,6 +1903,30 @@ pub async fn run_feed(rest: &[String], home: &AgentsHome) -> i32 {
     }
     if skipped_entries > 0 {
         eprintln!("fno-agents feed: skipped {skipped_entries} non-object graph entr(ies)");
+    }
+
+    if args.otlp {
+        // A preview, never a send: the body is what a beat WOULD post, and
+        // the posture line names the resolved config. Off machines can still
+        // preview, so an operator sees the shape before opting in; content
+        // attrs stay off unless the config turns them on. Selection runs over
+        // the full window the flags select, the beat's own input, never the
+        // newest-200 head page the panel prints.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let window = filter_rows(
+            rows,
+            &Page::default(),
+            &args.pre,
+            args.since_epoch,
+            args.until_epoch,
+        );
+        let (body, notes) = crate::otlp_export::preview(&cwd, home, &window);
+        println!("{body}");
+        for note in &notes {
+            eprintln!("fno-agents feed: {note}");
+        }
+        eprintln!("{}", crate::otlp_export::status_line(&cwd, home));
+        return 0;
     }
 
     let mut page = args.page;
@@ -2452,7 +2557,7 @@ mod tests {
         // The lead route: a node-less row whose parent session is a held
         // role holder's spawn rolls up to that holder; the node route keeps
         // setting lead beside owner.
-        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
+        let team = r#"{"ts":"2026-09-02T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"nd-aaaa"}}"#;
         let spawns = concat!(
             r#"{"ts":"2026-09-02T16:00:00Z","type":"agent_spawned","source":"python","data":{"name":"successor","harness":"claude","harness_session_id":"20260904T151442Z-cl54345-58af0c","substrate":"pane","spawned_by_session":"s-op"}}"#,
             "\n",
@@ -2854,7 +2959,7 @@ mod tests {
         // AC5: the same team pair landing in both journals yields exactly
         // one granted and one vacated row.
         let team = [
-            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_teamed","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
+            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_promoted","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee"}}"#,
             r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_team_vacated","source":"python","data":{"cause":"succession","grantor":"vellum","holder":"warden","level":2,"scope":"x-eeee","successor":"jolly-finch"}}"#,
         ]
         .join("\n");
@@ -2885,7 +2990,7 @@ mod tests {
                 "id": "x-epic", "title": "the epic", "created_at": "2026-09-28T16:00:00Z",
             }),
         ];
-        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_teamed","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
+        let team = r#"{"ts":"2026-09-28T15:30:00Z","type":"agent_promoted","source":"python","data":{"grantor":"s-lead","level":2,"name":"successor","scope":"x-epic"}}"#;
         let p = project("", &entries, &[], "", team, "", "", None);
         let child = p
             .rows
@@ -3039,5 +3144,12 @@ mod tests {
         assert_eq!(rows[2].lead.as_deref(), Some("candor"));
         assert!(!rows[2].lead_current, "a fallback name is not the live one");
         assert_eq!(rows[2].owner.as_deref(), Some("Lead of x-gone (candor)"));
+    }
+
+    /// The preview prints a body, not JSON: the two output flags refuse.
+    #[test]
+    fn otlp_refuses_json() {
+        let err = parse_args(&["--otlp".into(), "--json".into()]).unwrap_err();
+        assert_eq!(err, "--otlp and --json cannot combine");
     }
 }
