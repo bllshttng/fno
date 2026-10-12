@@ -108,11 +108,9 @@ pub(crate) fn layout(tree: &OrgTree) -> Graph {
             state: None,
         });
         let node_r = ring(lead.nodes.len());
-        let base_r = if lead.nodes.len() <= 1 {
-            0.0
-        } else {
-            node_r.max(2.0)
-        };
+        // Matches the sizing pre-pass: a node on its lead's cell would let
+        // the node glyph paint over the lead.
+        let base_r = node_r.max(2.0);
         let m = lead.nodes.len();
         for (j, node) in lead.nodes.iter().enumerate() {
             let na = -std::f64::consts::FRAC_PI_2 + j as f64 * TAU / m as f64;
