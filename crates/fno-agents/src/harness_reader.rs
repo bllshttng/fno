@@ -580,6 +580,28 @@ impl IsolatedRoot {
         }
     }
 
+    /// Copy the real config's record for `provider` into the isolated global
+    /// config, so `-P <provider>` resolves inside the root.
+    fn route_provider(&self, provider: &str) -> Result<(), String> {
+        let cwd = std::env::current_dir().map_err(|e| format!("cannot read the cwd: {e}"))?;
+        let real_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or("HOME is unset; the provider key file cannot be pinned")?;
+        let record = crate::footnote_harness::endpoint::provider_record(&cwd, provider)
+            .ok_or_else(|| {
+                format!("provider {provider:?} has no config.model_routing.providers record")
+            })?;
+        let config_dir = self.home.join(".fno");
+        std::fs::create_dir_all(&config_dir)
+            .and_then(|()| {
+                std::fs::write(
+                    config_dir.join("config.toml"),
+                    isolated_provider_config(provider, &record, &real_home),
+                )
+            })
+            .map_err(|e| format!("cannot write the isolated provider record: {e}"))
+    }
+
     fn fno(&self, argv: &[&str]) -> (Option<i32>, String) {
         let fno_bin = std::env::var("FNO_PROBE_FNO").unwrap_or_else(|_| "fno".to_string());
         let mut cmd = Command::new(fno_bin);
@@ -711,6 +733,43 @@ fn dry_run_argv(contract: &HarnessContract, harness: &str) -> Result<Vec<String>
         .map_err(|e| e.to_string())
 }
 
+/// The substrate the live SPAWN asks for, read from the harness's declared
+/// create forms. A harness with no interactive create form and a declared
+/// headless one (footnote) spawns headless; every other harness keeps the
+/// spawn default.
+pub fn probe_substrate(contract: &HarnessContract, harness: &str) -> Option<&'static str> {
+    let caps = contract.capabilities(harness).ok()?;
+    let declared = |lane: &str| {
+        caps.resume_strategy
+            .forms
+            .get(lane)
+            .is_some_and(|form| form.kind != "unsupported")
+    };
+    (!declared("interactive_create") && declared("headless_create")).then_some("headless")
+}
+
+/// The isolated config's one provider record, as TOML text. A `~/` key file
+/// is pinned to the real home, because the child's `~` is the isolated home.
+/// Only this record crosses: the rest of the real config stays out.
+pub fn isolated_provider_config(provider: &str, record: &toml::Table, real_home: &Path) -> String {
+    let mut record = record.clone();
+    if let Some(rest) = record
+        .get("api_key_file")
+        .and_then(toml::Value::as_str)
+        .and_then(|file| file.strip_prefix("~/"))
+    {
+        let pinned = real_home.join(rest).to_string_lossy().into_owned();
+        record.insert("api_key_file".into(), toml::Value::String(pinned));
+    }
+    let mut providers = toml::Table::new();
+    providers.insert(provider.into(), toml::Value::Table(record));
+    let mut routing = toml::Table::new();
+    routing.insert("providers".into(), toml::Value::Table(providers));
+    let mut root = toml::Table::new();
+    root.insert("model_routing".into(), toml::Value::Table(routing));
+    toml::to_string(&root).unwrap_or_default()
+}
+
 /// The wait-for-CI journey's per-harness answer, read from the watch lease's
 /// own rule: a harness the lease admits may park, and the daemon's settle and
 /// expiry arms wake it. Every other harness reads absent with the refusal
@@ -743,22 +802,50 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     let seed = probe_seed(&nonce, &name, &claim_key);
     let mut lines: Vec<LineVerdict> = Vec::new();
 
-    let (spawn_code, spawn_output) = root.fno_bounded(
-        &[
-            "agents",
-            "spawn",
-            &seed,
-            "--name",
-            &name,
-            "--harness",
-            harness,
-            "--cwd",
-            &std::env::temp_dir().to_string_lossy(),
-            "--timeout",
-            "60",
-        ],
-        LIVE_SPAWN_TIMEOUT_S,
-    );
+    // A model-borrowing harness (footnote) needs -m and -P, and a strict
+    // routing config refuses any harness without them. The probe takes both
+    // from the env, beside FNO_PROBE_FNO.
+    let contract = HarnessContract::packaged().ok();
+    let substrate = contract
+        .as_ref()
+        .and_then(|contract| probe_substrate(contract, harness));
+    let model = std::env::var("FNO_PROBE_MODEL")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let provider = std::env::var("FNO_PROBE_PROVIDER")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let routed = match provider.as_deref() {
+        Some(provider) => root.route_provider(provider),
+        None => Ok(()),
+    };
+    let spawn_cwd = std::env::temp_dir().to_string_lossy().into_owned();
+    let mut spawn_argv: Vec<&str> = vec![
+        "agents",
+        "spawn",
+        seed.as_str(),
+        "--name",
+        name.as_str(),
+        "--harness",
+        harness,
+        "--cwd",
+        spawn_cwd.as_str(),
+        "--timeout",
+        "60",
+    ];
+    if let Some(substrate) = substrate {
+        spawn_argv.extend(["--substrate", substrate]);
+    }
+    if let Some(provider) = provider.as_deref() {
+        spawn_argv.extend(["--provider", provider]);
+    }
+    if let Some(model) = model.as_deref() {
+        spawn_argv.extend(["--model", model]);
+    }
+    let (spawn_code, mut spawn_output) = root.fno_bounded(&spawn_argv, LIVE_SPAWN_TIMEOUT_S);
+    if let Err(why) = routed {
+        spawn_output.push_str(&format!("\nprobe provider: {why}"));
+    }
 
     // SPAWN probes with the same retry the Python rubric used: registration
     // is asynchronous, and a single read would race the row into existence.
@@ -944,7 +1031,15 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     lines.push(mail);
 
     // VIEW: the harness's own pane, read through its reference.
-    if !mux_session.is_empty() && !mux_pane.is_empty() {
+    if substrate == Some("headless") {
+        lines.push(LineVerdict::new(
+            "VIEW",
+            "skip",
+            "harness-owned screen",
+            1,
+            format!("declared unsupported: {harness} has no interactive form, so no screen exists"),
+        ));
+    } else if !mux_session.is_empty() && !mux_pane.is_empty() {
         let pane_ref = format!("{mux_session}:{mux_pane}");
         let view = retry_marker(
             "VIEW",
@@ -970,7 +1065,60 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     }
 
     // SURVIVE: the prior turn is visible after the process is stopped.
-    if !mux_session.is_empty() && !mux_pane.is_empty() {
+    // A headless one-shot has already exited after its answer, so the stop
+    // is given; the declared headless_resume form carries the next turn.
+    if substrate == Some("headless") {
+        let resume_argv = contract
+            .as_ref()
+            .filter(|_| !session_id.is_empty())
+            .and_then(|contract| {
+                contract
+                    .render_session_argv_with_ids(
+                        harness,
+                        "headless_resume",
+                        Some(&session_id),
+                        None,
+                    )
+                    .ok()
+            });
+        match resume_argv {
+            Some(argv) if !argv.is_empty() => {
+                let seed_marker = format!("PROBE_SEED={nonce}");
+                let survive_marker = format!("PROBE_SURVIVE={nonce}");
+                let (_, logs_at_start) = root.fno(&["agents", "logs", &name]);
+                let mut cmd = Command::new(&argv[0]);
+                cmd.args(&argv[1..])
+                    .arg(format!("PROBE_SURVIVE_REQUEST={nonce}"));
+                root.child_env(&mut cmd);
+                let (resume_code, reply) = run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S);
+                let survive = retry_marker(
+                    "SURVIVE",
+                    "prior turn after process stop",
+                    || {
+                        let (_, logs_after) = root.fno(&["agents", "logs", &name]);
+                        if resume_code == Some(0)
+                            && logs_at_start.contains(&seed_marker)
+                            && !logs_at_start.contains(&survive_marker)
+                            && (reply.contains(&survive_marker)
+                                || logs_after.contains(&survive_marker))
+                        {
+                            return survive_marker.clone();
+                        }
+                        String::new()
+                    },
+                    Duration::from_millis(500),
+                );
+                lines.push(survive);
+            }
+            _ => lines.push(LineVerdict::new(
+                "SURVIVE",
+                "skip",
+                "prior turn after process stop",
+                1,
+                "no session id to render the declared headless_resume form".to_string(),
+            )),
+        }
+    } else if !mux_session.is_empty() && !mux_pane.is_empty() {
         let (kill_code, _) =
             root.fno(&["mux", "pane", "kill", "--server", &mux_session, &mux_pane]);
         let (survive_resume_code, _) = root.fno(&["agents", "resume", &name]);
@@ -1015,6 +1163,17 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     }
 
     lines.push(row_matches_line(harness));
+    if substrate == Some("headless") {
+        lines.push(LineVerdict::new(
+            "MANIFEST PINNED",
+            "skip",
+            "live readiness-grid capture",
+            1,
+            format!("declared unsupported: {harness} has no interactive form, so no readiness grid exists"),
+        ));
+        lines.push(cleanup_line(root, &name));
+        return (lines, isolation);
+    }
     // The readiness capture is the repo's own smoke script, run through the
     // isolated env so its pane lands in the isolated mux state too.
     let repo_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

@@ -1,9 +1,12 @@
 //! The capability reader's contract tests: the control refusal, the
 //! blind-pattern conviction, the shipped-table assertion, the journey
-//! declarations, the watch-lease journey cell, and the isolation nonce pair.
+//! declarations, the watch-lease journey cell, the isolation nonce pair, and
+//! the live spawn's substrate and provider route.
 
 use fno_agents::harness_capabilities::{HarnessContract, ProbeDecl, JOURNEY_KEYS};
-use fno_agents::harness_reader::{retry_marker, wait_for_ci_cell, LineVerdict};
+use fno_agents::harness_reader::{
+    isolated_provider_config, probe_substrate, retry_marker, wait_for_ci_cell, LineVerdict,
+};
 use std::time::Duration;
 
 fn decl(kind: &str, authority: &str, pattern: &str, control: &str) -> ProbeDecl {
@@ -255,4 +258,36 @@ fn the_watch_lease_answers_the_wait_for_ci_journey() {
             "{harness}: the refusal is quoted, got: {refusal}"
         );
     }
+}
+
+#[test]
+fn the_live_spawn_takes_the_declared_headless_form_for_a_paneless_harness() {
+    let contract = HarnessContract::packaged().expect("the shipped table parses");
+    // footnote declares interactive_create unsupported and headless_create
+    // supported, so a pane spawn refuses it at birth.
+    assert_eq!(probe_substrate(&contract, "footnote"), Some("headless"));
+    // A harness with an interactive create form keeps the spawn default.
+    assert_eq!(probe_substrate(&contract, "claude"), None);
+}
+
+#[test]
+fn the_isolated_config_carries_one_provider_with_its_key_file_pinned_to_the_real_home() {
+    let mut record = toml::Table::new();
+    record.insert("base_url".into(), "https://example.test/v1".into());
+    record.insert("api_key_env".into(), "EXAMPLE_KEY".into());
+    record.insert("api_key_file".into(), "~/.fno/.env".into());
+    let text = isolated_provider_config("example", &record, std::path::Path::new("/real/home"));
+    let parsed: toml::Table = toml::from_str(&text).expect("the record is valid TOML");
+    assert_eq!(parsed.len(), 1, "no other config section crosses");
+    let providers = parsed["model_routing"]["providers"]
+        .as_table()
+        .expect("model_routing.providers is a table");
+    assert_eq!(providers.len(), 1, "only the named provider crosses");
+    let copied = &providers["example"];
+    // The child's `~` is the isolated home, so the key file is pinned.
+    assert_eq!(
+        copied["api_key_file"].as_str(),
+        Some("/real/home/.fno/.env")
+    );
+    assert_eq!(copied["base_url"].as_str(), Some("https://example.test/v1"));
 }
