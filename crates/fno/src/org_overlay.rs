@@ -55,20 +55,28 @@ pub const MINIMIZED_ROWS: usize = 4;
 const HISTORY: usize = 12;
 
 /// The simple glance's second line: where the agents stand against the
-/// limit that decides whether another worker starts.
-fn simple_limit_line(org: &Org) -> String {
+/// limit that decides whether another worker starts. Two segments, so a
+/// narrow column drops the consequence before the verdict.
+fn simple_limit(org: &Org) -> BlockLine {
     match (
         org.arm_num("cpu admission", "share_low"),
         org.arm_num("cpu admission", "ceiling"),
     ) {
-        (Some(low), Some(ceiling)) if low > ceiling => format!(
-            "  agents    over their {:.0}% limit, so new workers wait",
-            ceiling * 100.0
-        ),
-        (Some(_), Some(ceiling)) => {
-            format!("  agents    under their {:.0}% limit", ceiling * 100.0)
-        }
-        _ => "  agents    limit unknown".to_string(),
+        (Some(low), Some(ceiling)) if low > ceiling => BlockLine {
+            label: "agents",
+            segs: vec![
+                format!("over their {:.0}% limit", ceiling * 100.0),
+                "so new workers wait".to_string(),
+            ],
+        },
+        (Some(_), Some(ceiling)) => BlockLine {
+            label: "agents",
+            segs: vec![format!("under their {:.0}% limit", ceiling * 100.0)],
+        },
+        _ => BlockLine {
+            label: "agents",
+            segs: vec!["limit unknown".to_string()],
+        },
     }
 }
 
@@ -83,20 +91,27 @@ fn spark(history: &[f64]) -> String {
 }
 
 /// The glance's team line: leads first, then the workers by how recently
-/// each one did something. A lead count that failed to read is left out,
-/// never shown as zero.
-fn census_line(org: &Org, ages: &[Option<u64>]) -> String {
-    let mut parts = Vec::new();
+/// each one did something, one bucket per segment so a narrow column drops
+/// the least alive buckets first. A lead count that failed to read is left
+/// out, never shown as zero.
+fn census_block(org: &Org, ages: &[Option<u64>]) -> BlockLine {
+    let mut segs = Vec::new();
     if let Some(leads) = org.census.leads {
-        parts.push(format!("{leads} leads"));
+        segs.push(format!("{leads} leads"));
     }
     if !ages.is_empty() {
-        parts.push(census_split(ages).render());
+        // render() joins with ` · `; the glance wants each bucket as its
+        // own droppable segment, so re-split on the same separator.
+        for bucket in census_split(ages).render().split(" · ") {
+            segs.push(format!("· {bucket}"));
+        }
     }
-    if parts.is_empty() {
-        "  team      no workers held".to_string()
-    } else {
-        format!("  team      {}", parts.join(" · "))
+    if segs.is_empty() {
+        segs.push("no workers held".to_string());
+    }
+    BlockLine {
+        label: "team",
+        segs,
     }
 }
 
@@ -407,121 +422,165 @@ impl Panel {
         }
     }
 
-    /// The minimized block: exactly four lines, painted at the bottom of
-    /// the sideline on every frame. Cpu, limit, memory, census.
+    /// The minimized block: exactly four glance lines, painted at the
+    /// bottom of the sideline on every frame. Cpu, limit, memory, census.
     /// Every number carries its unit or its comparand here too; the expanded
-    /// view adds the detail.
-    pub fn minimized_lines(&self, ages: &[Option<u64>]) -> Vec<String> {
+    /// view adds the detail. `width` is the sideline's text width: each
+    /// line keeps whole segments while they fit and drops the rest.
+    pub fn minimized_lines(&self, ages: &[Option<u64>], width: usize) -> Vec<String> {
+        fit_glance(self.glance_lines(ages), width)
+    }
+
+    /// The glance's four logical lines, each a label plus its ordered
+    /// segments, most important first.
+    fn glance_lines(&self, ages: &[Option<u64>]) -> Vec<BlockLine> {
         let Some(org) = self.fold.as_ref() else {
             // No reading in hand and minimized: the fold is expanded-only,
             // so nothing is reading. Say where the reading lives instead of
             // promising activity that is not running.
             return vec![
-                "  org     expand for a machine reading".to_string(),
-                String::new(),
-                String::new(),
-                String::new(),
+                BlockLine {
+                    label: "org",
+                    segs: vec!["expand for a machine reading".to_string()],
+                },
+                BlockLine {
+                    label: "",
+                    segs: Vec::new(),
+                },
+                BlockLine {
+                    label: "",
+                    segs: Vec::new(),
+                },
+                BlockLine {
+                    label: "",
+                    segs: Vec::new(),
+                },
             ];
         };
-        if !self.detailed {
-            return vec![
-                self.simple_cpu_line(org),
-                simple_limit_line(org),
-                self.memory_line(org),
-                census_line(org, ages),
-            ];
+        if self.detailed {
+            vec![
+                self.fleet_line(org),
+                self.detailed_cpu_line(org),
+                self.glance_memory(org),
+                census_block(org, ages),
+            ]
+        } else {
+            vec![
+                self.simple_cpu(org),
+                simple_limit(org),
+                self.glance_memory(org),
+                census_block(org, ages),
+            ]
         }
-        let load_line = match (
+    }
+
+    /// The detailed glance's fleet line: the fleet's attributed share is
+    /// what decides, so that is what renders - never a load average. The
+    /// expanded view appends the load trio after this line, never inside it:
+    /// the glance must not grow a trend it has no column to show.
+    fn fleet_line(&self, org: &Org) -> BlockLine {
+        let mut segs = Vec::new();
+        match (
             org.arm_num("cpu admission", "share_low"),
             org.arm_num("cpu admission", "capacity_cores"),
             org.arm_num("cpu admission", "ceiling"),
         ) {
             (Some(low), Some(cores), Some(ceiling)) => {
-                // the fleet's attributed share is what decides, so
-                // that is what renders - never a load average.
-                let mut l = format!(
-                    "  fleet     {:.0}% of {cores:.0} cores against {:.0}%",
+                segs.push(format!(
+                    "{:.0}% of {cores:.0} cores against {:.0}%",
                     low * 100.0,
                     ceiling * 100.0
-                );
+                ));
                 if let Some(high) = org.arm_num("cpu admission", "share_high") {
                     if high > low {
-                        l.push_str(&format!(" up to {:.0}%", high * 100.0));
+                        segs.push(format!("up to {:.0}% (gap)", high * 100.0));
                     }
                 }
                 if low > ceiling {
                     // The over verdict names the axis it read, so a busy box
                     // is never mistaken for the fleet being over.
-                    l.push_str(&format!(" · {:.1}x over on fleet_cpu_share", low / ceiling));
+                    segs.push(format!("{:.1}x over on fleet_cpu_share", low / ceiling));
                 }
-                l
             }
-            _ => format!(
-                "  fleet     unknown - {}",
-                org.arm("cpu admission")
-                    .map_or("arm absent", |a| a.reason.as_str())
-            ),
-        };
-        let cpu_line = match (
+            _ => {
+                let reason = org
+                    .arm("cpu admission")
+                    .map_or("arm absent", |a| a.reason.as_str());
+                segs.push(format!("unknown - {reason}"));
+            }
+        }
+        BlockLine {
+            label: "fleet",
+            segs,
+        }
+    }
+
+    /// The detailed glance's cpu line.
+    fn detailed_cpu_line(&self, org: &Org) -> BlockLine {
+        match (
             org.arm_num("whole-machine cpu", "busy_fraction"),
             org.arm_num("whole-machine cpu", "capacity_cores"),
         ) {
-            (Some(busy), Some(cores)) => {
-                format!(
-                    "  cpu       {} {:.0}% busy of {cores:.0} cores",
+            (Some(busy), Some(cores)) => BlockLine {
+                label: "cpu",
+                segs: vec![
                     self.spark(),
-                    busy * 100.0
-                )
-            }
-            _ => "  cpu       unknown".to_string(),
-        };
-        vec![
-            load_line,
-            cpu_line,
-            self.memory_line(org),
-            census_line(org, ages),
-        ]
+                    format!("{:.0}% busy of {cores:.0} cores", busy * 100.0),
+                ],
+            },
+            _ => BlockLine {
+                label: "cpu",
+                segs: vec!["unknown".to_string()],
+            },
+        }
     }
 
     /// The simple glance's first line: the whole machine, then how much of
     /// it is ours, so both numbers read on one base. The agents' share is a
-    /// slice of the busy total, never a second total beside it.
-    fn simple_cpu_line(&self, org: &Org) -> String {
+    /// slice of the busy total, never a second total beside it. Segments
+    /// lead with the figures; the spark rides last, so a narrow column
+    /// cuts the graph before it cuts a number.
+    fn simple_cpu(&self, org: &Org) -> BlockLine {
         let busy = org.arm_num("whole-machine cpu", "busy_fraction");
         let agents = org.arm_num("cpu admission", "share_low");
+        let mut segs = Vec::new();
         match (busy, agents) {
             (Some(busy), Some(agents)) => {
                 // Split the ROUNDED numbers so the printed parts add up.
                 let (busy, agents) = ((busy * 100.0).round(), (agents * 100.0).round());
-                format!(
-                    "  CPU       {} {busy:.0}% busy: agents {agents:.0}%, everything else {:.0}%",
-                    self.spark(),
-                    (busy - agents).max(0.0)
-                )
+                segs.push(format!("{busy:.0}% busy:"));
+                segs.push(format!("agents {agents:.0}%,"));
+                segs.push(format!("rest {:.0}%", (busy - agents).max(0.0)));
             }
-            (Some(busy), None) => format!("  CPU       {} {:.0}% busy", self.spark(), busy * 100.0),
-            (None, Some(agents)) => format!("  CPU       agents {:.0}%", agents * 100.0),
-            (None, None) => "  CPU       unknown".to_string(),
+            (Some(busy), None) => segs.push(format!("{:.0}% busy", busy * 100.0)),
+            (None, Some(agents)) => segs.push(format!("agents {:.0}%", agents * 100.0)),
+            (None, None) => segs.push("unknown".to_string()),
         }
+        if busy.is_some() {
+            segs.push(self.spark());
+        }
+        BlockLine { label: "CPU", segs }
     }
 
     /// Memory in use with its graph: one line in both views, since a full
     /// machine swaps long before its CPU line looks alarming. The figure is
     /// the capacity state's own (one reader with the meter); the fold's
     /// arms stay the fallback when no state exists yet.
-    fn memory_line(&self, org: &Org) -> String {
+    fn glance_memory(&self, org: &Org) -> BlockLine {
         if let Some(state) = crate::client::meter::capacity_state() {
             if let Some(mem) = state.get("memory") {
                 if let (Some(fraction), Some(total)) = (
                     mem.get("used_fraction").and_then(|v| v.as_f64()),
                     mem.get("total_gb").and_then(|v| v.as_f64()),
                 ) {
-                    return format!(
-                        "  memory    {} {:.0}% used, {:.1} GB free",
-                        spark(&self.mem_history),
-                        fraction * 100.0,
-                        ((1.0 - fraction) * total).max(0.0)
-                    );
+                    return BlockLine {
+                        label: "memory",
+                        segs: vec![
+                            spark(&self.mem_history),
+                            format!("{:.0}% used,", fraction * 100.0),
+                            format!("{:.1} GB free", ((1.0 - fraction) * total).max(0.0)),
+                        ],
+                    };
                 }
             }
         }
@@ -529,13 +588,22 @@ impl Panel {
             org.arm_num("memory", "free_fraction"),
             org.arm_num("memory", "available_gb"),
         ) {
-            (Some(free), Some(gb)) => format!(
-                "  memory    {} {:.0}% used, {gb:.1} GB free",
-                spark(&self.mem_history),
-                (1.0 - free) * 100.0
-            ),
-            (None, Some(gb)) => format!("  memory    {gb:.1} GB free"),
-            _ => "  memory    unknown".to_string(),
+            (Some(free), Some(gb)) => BlockLine {
+                label: "memory",
+                segs: vec![
+                    spark(&self.mem_history),
+                    format!("{:.0}% used,", (1.0 - free) * 100.0),
+                    format!("{gb:.1} GB free"),
+                ],
+            },
+            (None, Some(gb)) => BlockLine {
+                label: "memory",
+                segs: vec![format!("{gb:.1} GB free")],
+            },
+            _ => BlockLine {
+                label: "memory",
+                segs: vec!["unknown".to_string()],
+            },
         }
     }
 
@@ -548,97 +616,78 @@ impl Panel {
     /// always shows the fold's age and says `stale` rather than `unknown`.
     /// The attribution gap gets its own line and is never folded into a
     /// count. A refusal prints the advisor's own words verbatim with no lane
-    /// number beside them.
-    pub fn expanded_lines(&self, ages: &[Option<u64>]) -> Vec<String> {
+    /// number beside them. `width` is the sideline's text width: segments
+    /// wrap whole onto continuation lines indented to the value column.
+    pub fn expanded_lines(&self, ages: &[Option<u64>], width: usize) -> Vec<String> {
         let Some(org) = self.fold.as_ref() else {
-            return vec![if self.degraded {
+            let line = if self.degraded {
                 format!(
-                    "  fold failed - `fno doctor lanes` did not answer inside {}s",
+                    "fold failed - `fno doctor lanes` did not answer inside {}s",
                     SHELLOUT_TIMEOUT.as_secs()
                 )
             } else {
-                "  reading the machine...".to_string()
-            }];
+                "reading the machine...".to_string()
+            };
+            return wrap_reading(
+                vec![BlockLine {
+                    label: "",
+                    segs: vec![line],
+                }],
+                width,
+            );
         };
-        let mut lines = Vec::new();
+        let mut lines: Vec<BlockLine> = Vec::new();
 
         // the fleet's CPU admission: the operator's own question, first.
         // The share is what decides; the 1m/5m/15m trio is trend
-        // only, and the 15-minute figure sits beside its backstop.
-        match (
-            org.arm_num("cpu admission", "share_low"),
-            org.arm_num("cpu admission", "capacity_cores"),
-            org.arm_num("cpu admission", "ceiling"),
-        ) {
-            (Some(low), Some(cores), Some(ceiling)) => {
-                let mut first = format!(
-                    "  {label:<8} {:.0}% of {cores:.0} cores against {:.0}%",
-                    low * 100.0,
-                    ceiling * 100.0,
-                    label = "fleet"
-                );
-                if let Some(high) = org.arm_num("cpu admission", "share_high") {
-                    if high > low {
-                        first.push_str(&format!(" up to {:.0}% (gap)", high * 100.0));
-                    }
-                }
-                lines.push(first);
-                let mut second = String::from("            ");
-                if let (Some(l1), Some(l5), Some(l15)) = (
-                    org.arm_num("cpu admission", "load_1m"),
-                    org.arm_num("cpu admission", "load_5m"),
-                    org.arm_num("cpu admission", "load_15m"),
-                ) {
-                    second.push_str(&format!("· {l1:.1} 1m · {l5:.1} 5m · {l15:.1} 15m "));
-                }
-                if let Some(backstop) = org.arm_num("cpu admission", "backstop") {
-                    second.push_str(&format!("· backstop {backstop:.1}"));
-                }
-                if !second.trim().is_empty() {
-                    lines.push(second.trim_end().to_string());
-                }
-                if low > ceiling {
-                    lines.push(format!(
-                        "            · {:.1}x over on fleet_cpu_share",
-                        low / ceiling
-                    ));
-                }
+        // only, and the 15-minute figure sits beside its backstop. The
+        // trio appends AFTER the shared fleet line, so the glance never
+        // grows it.
+        lines.push(self.fleet_line(org));
+        {
+            let fleet = lines.last_mut().expect("the fleet line was just pushed");
+            if let (Some(l1), Some(l5), Some(l15)) = (
+                org.arm_num("cpu admission", "load_1m"),
+                org.arm_num("cpu admission", "load_5m"),
+                org.arm_num("cpu admission", "load_15m"),
+            ) {
+                fleet.segs.push(format!("· {l1:.1} 1m"));
+                fleet.segs.push(format!("· {l5:.1} 5m"));
+                fleet.segs.push(format!("· {l15:.1} 15m"));
             }
-            _ => {
-                let reason = org
-                    .arm("cpu admission")
-                    .map_or("arm absent", |a| a.reason.as_str());
-                lines.push(format!("  {label:<8} unknown - {reason}", label = "fleet"));
+            if let Some(backstop) = org.arm_num("cpu admission", "backstop") {
+                fleet.segs.push(format!("· backstop {backstop:.1}"));
             }
         }
 
         // the machine the lanes compete for, not the fleet alone. The 100%
         // reading was TRUE and unbelievable, so a saturated box names the
         // place the explanation lives.
-        match (
+        let cpu_segs = match (
             org.arm_num("whole-machine cpu", "busy_fraction"),
             org.arm_num("whole-machine cpu", "capacity_cores"),
         ) {
             (Some(busy), Some(cores)) => {
-                let saturated = if busy >= 0.995 {
-                    format!(" (all {cores:.0} saturated; see top)")
-                } else {
-                    String::new()
-                };
-                lines.push(format!(
-                    "  {label:<8} {} {:.0}% busy of {cores:.0} cores{saturated}",
+                let mut segs = vec![
                     self.spark(),
-                    busy * 100.0,
-                    label = "cpu"
-                ));
+                    format!("{:.0}% busy of {cores:.0} cores", busy * 100.0),
+                ];
+                if busy >= 0.995 {
+                    segs.push(format!("(all {cores:.0} saturated; see top)"));
+                }
+                segs
             }
-            _ => lines.push(format!("  {label:<8} unknown", label = "cpu")),
-        }
+            _ => vec!["unknown".to_string()],
+        };
+        lines.push(BlockLine {
+            label: "cpu",
+            segs: cpu_segs,
+        });
         if let Some(free) = org.arm_num("memory", "available_gb") {
-            lines.push(format!(
-                "  {label:<8} {free:.1} GB available",
-                label = "memory"
-            ));
+            lines.push(BlockLine {
+                label: "memory",
+                segs: vec![format!("{free:.1} GB available")],
+            });
         }
 
         // the census, split by what the operator actually asked: how many
@@ -646,101 +695,108 @@ impl Panel {
         // one source the client holds; the lanes census keeps only what this
         // panel cannot see.
         if ages.is_empty() {
-            lines.push(format!(
-                "  {label:<8} no roster rows held",
-                label = "workers"
-            ));
+            lines.push(BlockLine {
+                label: "workers",
+                segs: vec!["no roster rows held".to_string()],
+            });
         } else {
             let split = census_split(ages);
-            lines.push(format!(
-                "  {label:<8} {} ({} rows)",
-                split.render(),
-                ages.len(),
-                label = "workers"
-            ));
+            let mut segs = vec![format!("{} ({} rows)", split.render(), ages.len())];
             if split.dead > 0 {
-                lines.push(format!(
-                    "            {} dead: run `fno agents reap --apply`",
+                segs.push(format!(
+                    "{} dead: run `fno agents reap --apply`",
                     split.dead
                 ));
             }
+            lines.push(BlockLine {
+                label: "workers",
+                segs,
+            });
         }
         let census = &org.census;
-        lines.push(format!(
-            "  {label:<8} {} leads · {} test processes",
-            count_or_unknown(census.leads),
-            count_or_unknown(census.tests),
-            label = "org"
-        ));
+        lines.push(BlockLine {
+            label: "org",
+            segs: vec![format!(
+                "{} leads · {} test processes",
+                count_or_unknown(census.leads),
+                count_or_unknown(census.tests)
+            )],
+        });
         if let Some(conflicts) = census.lead_conflicts.filter(|c| *c > 0) {
-            lines.push(format!(
-                "  {label:<8} {conflicts} scope(s) held by more than one team",
-                label = "warn"
-            ));
+            lines.push(BlockLine {
+                label: "warn",
+                segs: vec![format!("{conflicts} scope(s) held by more than one team")],
+            });
         }
         // the caller's own share, from the one function the spawn
         // gate refuses on. The unattributed bucket renders only when it
         // holds someone - a count that sees nobody says so by being absent.
         if let Some(share) = &census.share {
-            let mut line = format!(
-                "  {label:<8} held {} of share {} across {} leads",
+            let mut segs = vec![format!(
+                "held {} of share {} across {} leads",
                 count_or_unknown(share.held),
                 count_or_unknown(share.share),
-                count_or_unknown(share.leads),
-                label = "share"
-            );
+                count_or_unknown(share.leads)
+            )];
             if let Some(unattributed) = share.unattributed.as_ref().filter(|u| u.count > 0) {
                 let shown = unattributed.rows.join(", ");
-                line.push_str(&format!(" · {} unattributed ({shown})", unattributed.count));
+                segs.push(format!("· {} unattributed ({shown})", unattributed.count));
             }
-            lines.push(line);
+            lines.push(BlockLine {
+                label: "share",
+                segs,
+            });
         }
 
         // what is saturating the box, from the ps read the fold already
         // performed - never a second instrument.
         match census.top_consumers.as_ref().map(Vec::as_slice) {
-            Some([]) => lines.push(format!(
-                "  {label:<8} no fleet processes measured",
-                label = "top"
-            )),
+            Some([]) => lines.push(BlockLine {
+                label: "top",
+                segs: vec!["no fleet processes measured".to_string()],
+            }),
             Some(consumers) => {
-                let items = consumers
+                let mut segs: Vec<String> = consumers
                     .iter()
                     .map(|c| format!("{} {} procs {:.0}%", c.name, c.procs, c.cpu_pct))
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                lines.push(format!("  {label:<8} {items}", label = "top"));
+                    .collect();
                 for c in consumers
                     .iter()
                     .filter(|c| c.worktree_procs >= 2 && c.worktree.is_some())
                 {
-                    lines.push(format!(
-                        "            {} of {} in {}",
+                    segs.push(format!(
+                        "{} of {} in {}",
                         c.worktree_procs,
                         c.name,
                         c.worktree.as_deref().unwrap_or_default()
                     ));
                 }
+                lines.push(BlockLine { label: "top", segs });
             }
-            None => lines.push(format!(
-                "  {label:<8} unavailable - the fleet footprint reading is dark",
-                label = "top"
-            )),
+            None => lines.push(BlockLine {
+                label: "top",
+                segs: vec!["unavailable - the fleet footprint reading is dark".to_string()],
+            }),
         }
 
         // the advisor's answer, or the advisor's refusal in its own words.
         match org.lane_count {
             Some(count) => {
-                let cost = match (org.per_lane_cpu_cores, org.per_lane_mem_gb) {
-                    (Some(c), Some(g)) => format!(" · {c:.3} cores, {g:.2} GB per lane"),
-                    _ => String::new(),
-                };
-                lines.push(format!(
-                    "  {label:<8} {count} more fit{cost}",
-                    label = "lanes"
-                ));
+                let mut segs = vec![format!("{count} more fit")];
+                if let (Some(c), Some(g)) = (org.per_lane_cpu_cores, org.per_lane_mem_gb) {
+                    segs.push(format!("· {c:.3} cores, {g:.2} GB per lane"));
+                }
+                lines.push(BlockLine {
+                    label: "lanes",
+                    segs,
+                });
+                // the cost's provenance keeps its own line, value-column
+                // indented, so a source sentence never masquerades as data.
                 if !org.cost_source.is_empty() {
-                    lines.push(format!("          {}", org.cost_source));
+                    lines.push(BlockLine {
+                        label: "",
+                        segs: vec![org.cost_source.clone()],
+                    });
                 }
             }
             None => {
@@ -749,13 +805,24 @@ impl Panel {
                 } else {
                     org.refused_reason.as_str()
                 };
-                lines.push(format!("  {label:<8} REFUSED - {reason}", label = "lanes"));
+                lines.push(BlockLine {
+                    label: "lanes",
+                    segs: vec![format!("REFUSED - {reason}")],
+                });
             }
         }
 
         if let Some(gap) = census.attribution_gap.as_ref() {
-            lines.push(format!("  {label:<8} {gap}", label = "gap"));
-            lines.push("          fleet share is an undercount, not headroom".to_string());
+            lines.push(BlockLine {
+                label: "gap",
+                segs: vec![gap.clone()],
+            });
+            // the gap's honesty note keeps its own line, never folded into
+            // a count.
+            lines.push(BlockLine {
+                label: "",
+                segs: vec!["fleet share is an undercount, not headroom".to_string()],
+            });
         }
 
         let age = self.fold_at.map_or_else(
@@ -769,13 +836,110 @@ impl Panel {
                 }
             },
         );
-        let degraded = if self.degraded {
-            " · last refresh failed"
-        } else {
-            ""
-        };
-        lines.push(format!("  {label:<8} {age}{degraded}", label = "read"));
-        lines
+        let mut read_segs = vec![age];
+        if self.degraded {
+            read_segs.push("· last refresh failed".to_string());
+        }
+        lines.push(BlockLine {
+            label: "read",
+            segs: read_segs,
+        });
+        wrap_reading(lines, width)
+    }
+}
+
+/// One logical block line: a label and its ordered segments, most important
+/// first. The renderers below drop or wrap whole segments to fit the
+/// sideline column, so a segment is never cut inside a word.
+struct BlockLine {
+    label: &'static str,
+    segs: Vec<String>,
+}
+
+/// The value column: the longest label in the block, plus one space.
+fn label_width(lines: &[BlockLine]) -> usize {
+    lines
+        .iter()
+        .map(|l| l.label.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// The minimized glance: each line keeps whole segments while they fit and
+/// drops the rest - the tail is the least important, so a narrow column
+/// loses the spark before it loses a number, and never loses a word's
+/// letters. The first segment always renders: a line that says nothing
+/// would read as a reading that says nothing.
+fn fit_glance(lines: Vec<BlockLine>, width: usize) -> Vec<String> {
+    let lw = label_width(&lines);
+    lines
+        .into_iter()
+        .map(|l| {
+            if l.segs.is_empty() {
+                return String::new();
+            }
+            let mut out = format!("{:<w$} ", l.label, w = lw);
+            let mut used = lw + 1;
+            for (i, seg) in l.segs.iter().enumerate() {
+                let seg_w = seg.chars().count();
+                if i > 0 && used + 1 + seg_w > width {
+                    break;
+                }
+                if i > 0 {
+                    out.push(' ');
+                    used += 1;
+                }
+                out.push_str(seg);
+                used += seg_w;
+            }
+            out
+        })
+        .collect()
+}
+
+/// The expanded reading: segments wrap whole onto continuation lines
+/// indented to the value column. A word too long for the column sits on
+/// its own line and the painter's edge stop guards it - the renderer
+/// itself never cuts inside a word.
+fn wrap_reading(lines: Vec<BlockLine>, width: usize) -> Vec<String> {
+    let lw = label_width(&lines);
+    let budget = width.saturating_sub(lw + 1).max(1);
+    let mut out = Vec::new();
+    for l in lines {
+        let words: Vec<&str> = l.segs.iter().flat_map(|s| s.split_whitespace()).collect();
+        let mut cur = String::new();
+        let mut used = 0usize;
+        let mut first = true;
+        for word in words {
+            let w = word.chars().count();
+            let sep = usize::from(!cur.is_empty());
+            if !cur.is_empty() && used + sep + w > budget {
+                out.push(prefixed(l.label, lw, first, &cur));
+                first = false;
+                cur.clear();
+                used = 0;
+            }
+            if !cur.is_empty() {
+                cur.push(' ');
+                used += 1;
+            }
+            cur.push_str(word);
+            used += w;
+        }
+        if first || !cur.is_empty() {
+            out.push(prefixed(l.label, lw, first, &cur));
+        }
+    }
+    out
+}
+
+/// One rendered line: the label opens the entry's first line; a
+/// continuation starts at the value column.
+fn prefixed(label: &str, lw: usize, first: bool, text: &str) -> String {
+    if first {
+        format!("{:<w$} {text}", label, w = lw)
+    } else {
+        format!("{:<w$} {text}", "", w = lw)
     }
 }
 
@@ -969,7 +1133,7 @@ mod tests {
         let mut org = live();
         org.lane_count = None;
         org.refused_reason = String::new();
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("REFUSED"), "{text}");
         assert!(text.contains("without naming a reason"), "{text}");
@@ -981,10 +1145,10 @@ mod tests {
         )
         .expect("parses");
 
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(
-            text.contains("fleet    unknown - the footprint reading is dark"),
+            text.contains("fleet   unknown - the footprint reading is dark"),
             "{text}"
         );
         assert!(!text.contains("fleet 58%"), "{text}");
@@ -994,21 +1158,42 @@ mod tests {
         org.refused_reason =
             "the machine arms cannot answer the lane question: memory dark (macmon not on PATH)"
                 .to_string();
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
-        assert!(text.contains("lanes    REFUSED"), "{text}");
+        assert!(text.contains("lanes   REFUSED"), "{text}");
         assert!(text.contains("memory dark (macmon not on PATH)"), "{text}");
         assert!(!text.contains("more fit"), "{text}");
+
+        // (x-93ab) AC1-ERR: the full refusal wraps whole words at a 27-col
+        // sideline; no word is lost.
+        let mut org = live();
+        org.lane_count = None;
+        org.refused_reason =
+            "the machine arms cannot answer the lane question: memory dark (macmon not on PATH)"
+                .to_string();
+        let narrow = opened(org).expanded_lines(&AC6_AGES, 27);
+        for l in &narrow {
+            assert!(l.chars().count() <= 27, "{l:?}");
+        }
+        for word in
+            "the machine arms cannot answer the lane question: memory dark (macmon not on PATH)"
+                .split_whitespace()
+        {
+            assert!(
+                narrow.iter().any(|l| l.contains(word)),
+                "a refusal word was lost in the wrap: {word}"
+            );
+        }
     }
 
     #[test]
     fn expanded_fleet_rows() {
-        let text = opened(live()).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(live()).expanded_lines(&AC6_AGES, 200).join("\n");
 
         // the share renders as the deciding number, the trend trio is
         // display-only, and the over-line names the fleet_cpu_share axis.
         assert!(
-            text.contains("fleet    58% of 12 cores against 50%"),
+            text.contains("fleet   58% of 12 cores against 50%"),
             "{text}"
         );
         assert!(
@@ -1031,11 +1216,11 @@ mod tests {
             .find(|a| a.name == "whole-machine cpu")
             .expect("the cpu arm exists");
         arm.value["busy_fraction"] = serde_json::json!(1.0);
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("(all 12 saturated; see top)"), "{text}");
 
-        let text = opened(live()).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(live()).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("fno-py 23 procs 41%"), "{text}");
         assert!(
@@ -1049,42 +1234,53 @@ mod tests {
 
         let mut org = live();
         org.census.top_consumers = None;
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(
             text.contains("unavailable - the fleet footprint reading is dark"),
             "{text}"
         );
         assert!(
-            text.contains("fleet    58% of 12 cores against 50%"),
+            text.contains("fleet   58% of 12 cores against 50%"),
             "{text}"
         );
         assert!(text.contains("80% busy of 12 cores"), "{text}");
         assert!(text.contains("2 working"), "{text}");
+
+        // (x-93ab) AC1-HP: the expanded reading fits a 27-col sideline by
+        // wrapping whole words; continuations indent to the value column.
+        let narrow = opened(live()).expanded_lines(&AC6_AGES, 27);
+        for l in &narrow {
+            assert!(l.chars().count() <= 27, "{l:?}");
+        }
+        assert!(
+            narrow.iter().any(|l| l.starts_with("        ")),
+            "wrapped continuations indent to the value column: {narrow:?}"
+        );
+        for word in "58% of 12 cores against 50%".split_whitespace() {
+            assert!(
+                narrow.iter().any(|l| l.contains(word)),
+                "a fleet word was lost in the wrap: {word}"
+            );
+        }
     }
 
     #[test]
     fn glance_rows() {
-        let lines = opened(live()).minimized_lines(&AC6_AGES);
+        let lines = opened(live()).minimized_lines(&AC6_AGES, 200);
 
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
         // The default glance is plain words, with the CPU graph.
-        assert_eq!(
-            lines[0],
-            "  CPU       ▇ 80% busy: agents 58%, everything else 22%"
-        );
-        assert_eq!(
-            lines[1],
-            "  agents    over their 50% limit, so new workers wait"
-        );
-        assert_eq!(lines[2], "  memory    ▄ 37% used, 64.9 GB free");
+        assert_eq!(lines[0], "CPU    80% busy: agents 58%, rest 22% ▇");
+        assert_eq!(lines[1], "agents over their 50% limit so new workers wait");
+        assert_eq!(lines[2], "memory ▄ 37% used, 64.9 GB free");
 
         let mut panel = Panel::with_detail(true);
         panel.toggle();
         assert!(panel.take_want());
         panel.apply(Some(live()));
         panel.apply(Some(live()));
-        let detail = panel.minimized_lines(&AC6_AGES);
+        let detail = panel.minimized_lines(&AC6_AGES, 200);
         assert!(
             detail[0].contains("58% of 12 cores against 50%"),
             "{detail:?}"
@@ -1093,12 +1289,27 @@ mod tests {
         assert!(detail[1].contains("▇▇ 80% busy of 12 cores"), "{detail:?}");
         assert_eq!(
             lines[3],
-            "  team      5 leads · 2 working · 2 idle · 1 stale · 1 dead · 1 unknown age"
+            "team   5 leads · 2 working · 2 idle · 1 stale · 1 dead · 1 unknown age"
         );
+        // (x-93ab) a 27-col sideline: whole segments drop, letters never do.
+        let narrow = opened(live()).minimized_lines(&AC6_AGES, 27);
+        assert_eq!(narrow.len(), MINIMIZED_ROWS, "{narrow:?}");
+        for l in &narrow {
+            assert!(l.chars().count() <= 27, "{l:?}");
+            for word in l.split_whitespace() {
+                assert!(
+                    lines[0].contains(word)
+                        || lines[1].contains(word)
+                        || lines[2].contains(word)
+                        || lines[3].contains(word),
+                    "a word was cut in the narrow render: {l:?}"
+                );
+            }
+        }
 
         let panel = Panel::default();
 
-        let lines = panel.minimized_lines(&[]);
+        let lines = panel.minimized_lines(&[], 200);
 
         assert_eq!(lines.len(), MINIMIZED_ROWS, "{lines:?}");
         assert!(
@@ -1119,13 +1330,13 @@ mod tests {
         // Minimized, a failure reads as the same honest pointer (nothing is
         // retrying while minimized); the fold-failed words live in the
         // expanded view, where the retry actually runs.
-        let lines = panel.minimized_lines(&[]);
+        let lines = panel.minimized_lines(&[], 200);
 
         assert!(
             lines[0].contains("expand for a machine reading"),
             "{lines:?}"
         );
-        let expanded = panel.expanded_lines(&[]).join("\n");
+        let expanded = panel.expanded_lines(&[], 200).join("\n");
 
         assert!(expanded.contains("fold failed"), "{expanded:?}");
     }
@@ -1141,7 +1352,7 @@ mod tests {
         // Expanding never spawns a fold and never drops the cached reading.
         assert!(!panel.take_want(), "inside the TTL no refetch");
         assert!(panel
-            .expanded_lines(&AC6_AGES)
+            .expanded_lines(&AC6_AGES, 200)
             .join("\n")
             .contains("5 leads"));
 
@@ -1157,7 +1368,7 @@ mod tests {
 
     #[test]
     fn census_rows() {
-        let text = opened(live()).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(live()).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(
             text.contains("2 working · 2 idle · 1 stale · 1 dead · 1 unknown age (7 rows)"),
@@ -1178,7 +1389,7 @@ mod tests {
         assert_eq!(split.unknown_age, 1);
 
         let ages = [None::<u64>, None, None];
-        let text = opened(live()).expanded_lines(&ages).join("\n");
+        let text = opened(live()).expanded_lines(&ages, 200).join("\n");
 
         assert!(text.contains("3 unknown age (3 rows)"), "{text}");
         assert!(!text.contains("0 working"), "{text}");
@@ -1187,14 +1398,14 @@ mod tests {
         assert!(!text.contains("0 dead"), "{text}");
         assert!(!text.contains("reap"), "{text}");
 
-        let text = opened(live()).expanded_lines(&[]).join("\n");
+        let text = opened(live()).expanded_lines(&[], 200).join("\n");
 
         assert!(text.contains("no roster rows held"), "{text}");
 
-        let text = opened(live()).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(live()).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(
-            text.contains("share    held 2 of share 7 across 4 leads"),
+            text.contains("share   held 2 of share 7 across 4 leads"),
             "{text}"
         );
         assert!(text.contains("2 unattributed (ghost-a, ghost-b)"), "{text}");
@@ -1205,9 +1416,9 @@ mod tests {
         if let Some(share) = org.census.share.as_mut() {
             share.unattributed = None;
         }
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
-        assert!(text.contains("share    held 2 of share 7"), "{text}");
+        assert!(text.contains("share   held 2 of share 7"), "{text}");
         assert!(!text.contains("unattributed"), "{text}");
     }
 
@@ -1218,7 +1429,7 @@ mod tests {
         assert!(panel.take_want());
         panel.apply(None);
 
-        let lines = panel.expanded_lines(&[]);
+        let lines = panel.expanded_lines(&[], 200);
 
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("fold failed"), "{lines:?}");
@@ -1251,7 +1462,7 @@ mod tests {
         assert!(panel.take_want());
         panel.apply(None);
 
-        let text = panel.expanded_lines(&AC6_AGES).join("\n");
+        let text = panel.expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("last refresh failed"), "{text}");
         assert!(text.contains("5 leads"), "{text}");
@@ -1272,7 +1483,7 @@ mod tests {
         panel.apply(Some(live()));
 
         assert!(!panel
-            .expanded_lines(&AC6_AGES)
+            .expanded_lines(&AC6_AGES, 200)
             .join("\n")
             .contains("last refresh failed"));
     }
@@ -1288,7 +1499,7 @@ mod tests {
         panel.fold_at = Some(Instant::now() - CACHE_TTL - Duration::from_secs(1));
 
         assert!(panel.take_want(), "a stale reading refetches");
-        let text = panel.expanded_lines(&AC6_AGES).join("\n");
+        let text = panel.expanded_lines(&AC6_AGES, 200).join("\n");
         assert!(text.contains("stale, refreshing"), "{text}");
         assert!(text.contains("5 leads"), "{text}");
         // While the refetch runs, no timer wake is armed: a past-due
@@ -1304,7 +1515,7 @@ mod tests {
         let mut org = live();
         org.census.attribution_gap =
             Some("11 pidless row(s) with no identity route (codex)".to_string());
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("11 pidless row(s)"), "{text}");
         assert!(text.contains("undercount, not headroom"), "{text}");
@@ -1315,14 +1526,14 @@ mod tests {
             tests: Some(3),
             ..Census::default()
         };
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(text.contains("unknown leads · 3 test processes"), "{text}");
 
         let mut org = live();
         org.census.lead_conflicts = Some(2);
 
-        let text = opened(org).expanded_lines(&AC6_AGES).join("\n");
+        let text = opened(org).expanded_lines(&AC6_AGES, 200).join("\n");
 
         assert!(
             text.contains("2 scope(s) held by more than one team"),
