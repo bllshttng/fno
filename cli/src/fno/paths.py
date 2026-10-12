@@ -19,12 +19,12 @@ import re
 import shutil
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from fno.config import SettingsModel
@@ -1799,7 +1799,9 @@ def _is_plugin_root(root: Path) -> bool:
     return (root / _PLUGIN_MARKER_RELPATH).is_file()
 
 
-def git_common_dir(cwd: Path | str, *, timeout: float = 5.0, runner=None) -> Path | None:
+def git_common_dir(
+    cwd: Path | str, *, timeout: float = 5.0, runner: Callable[..., Any] | None = None
+) -> Path | None:
     """Absolute git common dir of ``cwd``, or None. git under 2.31 echoes
     ``--path-format=absolute`` back and exits 0, so that read counts only as one
     absolute path; else plain ``--git-common-dir`` is joined to ``cwd``."""
