@@ -47,7 +47,7 @@ A frame cell holds one `char` (`Cell`, `crates/fno/src/proto.rs:2261`). Protocol
 
 1. The viewer paints its image rect as blank cells.
 2. `Compositor::draw` (`crates/fno/src/client/compositor.rs:42`) does its row diff as today.
-3. After the diff, the compositor moves the cursor to the rect origin and writes the encoded image bytes. If the image and the rect did not change, it does not write them again.
+3. After the diff, the compositor moves the cursor to the rect origin and writes the encoded image bytes. A changed row is written whole from column 0 (`draw_row`, `crates/fno/src/client/compositor.rs:80`), so its blank cells erase a sixel or iTerm2 image on that row. So the compositor writes the image again on each frame that wrote a row inside the rect, or that changed the image or the rect. A kitty image sits on its own layer, so a row write does not erase it.
 4. When the viewer closes, or any overlay covers part of the rect, the compositor removes the image. Kitty needs an explicit delete command. Text that overwrites the cells clears a sixel or iTerm2 image. So the compositor marks those rows dirty for one full redraw. The spike confirms this in both terminals.
 
 The client picks the protocol once at start, before the input loop owns stdin, because the probe reads the terminal's reply. If the probe gets no reply, an env check (`TERM_PROGRAM`, `KITTY_WINDOW_ID` and the like) is the fallback. Half-blocks come last, and they paint as ordinary cells, so they need no second layer. The client decodes and scales the image off the UI loop.
@@ -80,12 +80,12 @@ The slice will be small. `md_lines` (`crates/fno/src/client/backlog_md.rs:7`) al
 
 The router is the one function that `Route::File` calls in `open_link::start`. It is pure: it takes the path, the line and the config and returns a target. Tests assert the target, and only the caller spawns. The client reads both keys with `config_str` (`crates/fno/src/digest_overlay.rs:962`) and latches them at client start, like `mux.card_graph`.
 
-Both keys must also be registered in `cli/src/fno/config/registry.py`, or each config load warns about an unknown key and `fno config set` refuses them. That file is Python, and a standing ruling bars new Python. Registration waits for the user's grant. The router slice can ship before the grant and read the keys from Rust only.
+Both keys need two Python edits. One is a field on `MuxBlock` (`cli/src/fno/config/__init__.py:3633`), the schema that `fno config set` resolves against. The other is a row in `cli/src/fno/config/registry.py`, the presentation metadata. Without them, each config load warns about an unknown key, and `fno config set` refuses both keys. A standing ruling bars new Python, so these edits wait for the user's grant. The router slice waits for that grant too. It does not ship keys that the supported config path cannot set.
 
 ## 7. Slices, in order
 
 1. Clickable file paths in pane text. Shipped (section 1).
-2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots.
+2. The open router with `mux.open_with` and `mux.viewer`, and obsidian URIs for vault files (section 6). It paints nothing, so it needs no screenshots. It starts after the user grants the two Python edits.
 3. The viewer surface: panel or modal, the keys, and the text preview (section 2).
 4. Images through `ratatui-image`, drawn as a layer after the cell frame (section 3). It starts with the spike.
 5. PDF pages through `hayro` and the image path (section 4).
