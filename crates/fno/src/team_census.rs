@@ -174,9 +174,10 @@ pub fn census(rows: &[AgentRow], gate: &GateReading, org: Option<&OrgTree>) -> T
                     .iter()
                     .any(|p| p.merge_status.as_deref() == Some("merged"));
                 for session in &node.current {
-                    if let Some(name) = &session.agent {
-                        row_pr.entry(name.as_str()).or_insert((has_pr, merged));
-                        owner.entry(name.as_str()).or_insert(i);
+                    if let Some(joined) = &session.agent {
+                        let name = joined.name.as_str();
+                        row_pr.entry(name).or_insert((has_pr, merged));
+                        owner.entry(name).or_insert(i);
                     }
                 }
             }

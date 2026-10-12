@@ -912,7 +912,7 @@ impl Panel {
                         label = "workers"
                     ));
                 } else {
-                    let split = census_split(ages);
+                    let split = census_split(&ages);
                     lines.push(format!(
                         "  {label:<8} {} ({} rows)",
                         split.render(),
@@ -937,12 +937,7 @@ impl Panel {
         }
         // The team section: the census fold over the gate reading, the org
         // tree and the rows already in hand. No I/O; the halves landed.
-        lines.extend(self.team_section(
-            agents,
-            &ages,
-            text_w,
-            team_budget.saturating_sub(lines.len()),
-        ));
+        lines.extend(self.team_section(agents, text_w, team_budget.saturating_sub(lines.len())));
         // The reap hint survives the all-rows line that used to carry it:
         // dead rows are a backlog, whatever line answered the census.
         let all_split = census_split(&ages);
@@ -1075,13 +1070,7 @@ impl Panel {
     /// budget, the unowned line, and one provider line per lane. A gate
     /// reading past the TTL keeps its numbers and names its age; a failed
     /// or unread one says unknown and names the reason.
-    fn team_section(
-        &self,
-        agents: &[AgentRow],
-        ages: &[Option<u64>],
-        text_w: usize,
-        budget: usize,
-    ) -> Vec<String> {
+    fn team_section(&self, agents: &[AgentRow], text_w: usize, budget: usize) -> Vec<String> {
         let mut lines = Vec::new();
         match self.gate.as_ref() {
             Some(gate) if gate.usable() => {
@@ -1092,7 +1081,7 @@ impl Panel {
                 }
                 lines.push(crate::team_census::fit("team", &segments, text_w));
                 let lead_budget = budget.saturating_sub(lines.len());
-                if let Some(org) = self.org_tree.as_ref() {
+                if self.org_tree.is_some() {
                     lines.extend(crate::team_census::lead_lines(
                         &team.leads,
                         text_w,
