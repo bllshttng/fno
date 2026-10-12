@@ -653,8 +653,13 @@ impl Panel {
                 vec![load_line, cpu_line, self.memory_line(org)]
             }
         };
-        lines.push(self.minimized_team_line(agents, &ages, text_w));
-        lines.push(self.minimized_lanes_line(agents, text_w));
+        let team = self
+            .gate
+            .as_ref()
+            .filter(|g| g.usable())
+            .map(|gate| crate::team_census::census(agents, gate, self.org_tree.as_ref()));
+        lines.push(self.minimized_team_line(team.as_ref(), &ages, text_w));
+        lines.push(self.minimized_lanes_line(team.as_ref(), text_w));
         lines
     }
 
@@ -662,13 +667,12 @@ impl Panel {
     /// else today's lanes-payload census, else the honest unknown.
     fn minimized_team_line(
         &self,
-        agents: &[AgentRow],
+        team: Option<&crate::team_census::Team>,
         ages: &[Option<u64>],
         text_w: usize,
     ) -> String {
-        if let Some(gate) = self.gate.as_ref().filter(|g| g.usable()) {
-            let team = crate::team_census::census(agents, gate, self.org_tree.as_ref());
-            let mut segments = crate::team_census::fleet_segments(&team, gate);
+        if let (Some(gate), Some(team)) = (self.gate.as_ref().filter(|g| g.usable()), team) {
+            let mut segments = crate::team_census::fleet_segments(team, gate);
             if let Some(word) = self.gate_age_word() {
                 segments.push(word);
             }
@@ -685,9 +689,12 @@ impl Panel {
 
     /// The glance's lanes line: one segment per provider, `zai 13/16`, with
     /// the lane's working count beside it.
-    fn minimized_lanes_line(&self, agents: &[AgentRow], text_w: usize) -> String {
-        if let Some(gate) = self.gate.as_ref().filter(|g| g.usable()) {
-            let team = crate::team_census::census(agents, gate, self.org_tree.as_ref());
+    fn minimized_lanes_line(
+        &self,
+        team: Option<&crate::team_census::Team>,
+        text_w: usize,
+    ) -> String {
+        if let Some(team) = team {
             let mut segments = Vec::new();
             for lane in &team.providers {
                 match lane.limit {

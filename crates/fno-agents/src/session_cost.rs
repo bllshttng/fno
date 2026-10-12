@@ -418,14 +418,15 @@ fn test_run_door_keys() -> Vec<String> {
 }
 
 /// Pids waiting at a test door: the waiter tickets of the priority, queue
-/// and full lanes of the suite door and the first cargo run slot.
+/// and full lanes of the suite door and the first cargo run slot. A cap of
+/// zero seats leaves no run slot to wait on, so only the suite door reads.
 fn queued_test_pids() -> HashSet<u32> {
     let mut doors = vec![crate::test_run::SUITE_CLAIM_KEY.to_string()];
-    doors.push(
-        crate::test_run::test_door_keys(&PathBuf::from("."))
+    doors.extend(
+        test_run_door_keys()
             .into_iter()
-            .find(|key| key.starts_with("test:cargo-run:"))
-            .unwrap_or_else(|| "test:cargo-run:0".into()),
+            .filter(|key| key.starts_with("test:cargo-run:"))
+            .take(1),
     );
     let mut out = HashSet::new();
     for key in doors {
