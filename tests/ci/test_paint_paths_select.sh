@@ -16,6 +16,9 @@
 #   T07 - the single-string config form                -> paint=true
 #   T08 - an unparseable config                        -> disarm, rc=0, paint=false
 #   T09 - a non-list, non-string value                 -> disarm, rc=0, paint=false
+#   T11 - an explicitly empty list                     -> disarm, rc=0, paint=false
+#         (the gate treats an explicit empty list as its
+#         own override, distinct from a missing config)
 #   T10 - the changed-file read fails                  -> refuse: rc=1, no output
 #         written, stderr names the refusal
 #
@@ -100,6 +103,7 @@ case_run "T06-exact-path"       0 "true"  "$TMP/exact_files"    '[merge]\nvisual
 case_run "T07-single-string"    0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = "crates/fno/src/client/**"\n'
 case_run "T08-unparseable"      0 "false" "$TMP/mix_files"      '[merge\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
 case_run "T09-non-list-value"   0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = 3\n'
+case_run "T11-empty-list"       0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = []\n'
 
 export STUB_FAIL=1
 case_run "T10-refusal"          1 "none"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
