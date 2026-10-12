@@ -3519,7 +3519,7 @@ mod tests {
             Option<&std::ffi::OsStr>,
             Option<&std::ffi::OsStr>,
             bool,
-        ); 5] = [
+        ); 6] = [
             (
                 "spawn identity names the worker",
                 Some("w1".as_ref()),
@@ -3549,6 +3549,13 @@ mod tests {
                 false,
             ),
             ("no markers at all is the user", None, None, None, false),
+            (
+                "claude marker zero value is not claude",
+                None,
+                Some("0".as_ref()),
+                Some("0".as_ref()),
+                false,
+            ),
         ];
         for (name, self_env, code, attended, want) in cases {
             restore([
