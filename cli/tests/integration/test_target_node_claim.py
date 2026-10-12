@@ -168,11 +168,6 @@ def _state(repo: Path) -> str:
 
 
 @pytest.mark.parametrize("node_id", [NODE_ID, LEGACY_NODE_ID])
-@pytest.mark.skip(
-    reason="changed-smoke legs SIGTERM the runner inside this test's 90s-bounded"
-    " sandbox init while every sibling leg stays green; the full lane passes"
-    " the same test on the same head - investigation on x-919e"
-)
 def test_bare_node_id_acquires_global_ttl_claim(tmp_path, node_id):
     repo, home, log, env = _sandbox(tmp_path, node_id)
     env["TARGET_SESSION_ID"] = "worker-session-a"
