@@ -272,7 +272,7 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
         OrgInputs {
             backlog,
             fold: Ok(
-                json!({"scope_nodes":{"team":{"status":"ok","nodes":[{"id":"x-1"},{"id":"x-2"}]}},"team2":{"status":"ok","nodes":[{"id":"x-3"}]}},"owned_scopes":{"x-1":"team","x-2":"team","x-3":"team2"}),
+                json!({"scope_nodes":{"team":{"status":"ok","nodes":[{"id":"x-1"},{"id":"x-2"}]},"team2":{"status":"ok","nodes":[{"id":"x-3"}]}},"owned_scopes":{"x-1":"team","x-2":"team","x-3":"team2"}}),
             ),
             measured_at: now(),
         },
