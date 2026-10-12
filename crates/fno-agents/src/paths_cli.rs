@@ -535,6 +535,31 @@ pub fn global_events_json(cwd: &Path) -> PathBuf {
         .join("events.jsonl")
 }
 
+/// Python `paths.ledger_json()`: the cross-project ledger, one row per
+/// terminal session across every repo, so it must never fork into a
+/// per-repo stray. The `FNO_STATE_DIR` seal wins, then an absolute or `~`
+/// `paths.ledger_json` override (a relative one anchors under the default
+/// state root), then an absolute `state_dir`. A relative `state_dir` falls
+/// back to the default state root rather than landing the ledger inside a
+/// checkout, as in Python.
+pub fn ledger_json(cwd: &Path) -> PathBuf {
+    let sealed = std::env::var_os("FNO_STATE_DIR").is_some_and(|v| !v.is_empty());
+    if let Some(raw) = cfg_str(cwd, &["paths", "ledger_json"]).filter(|_| !sealed) {
+        if let Ok(resolved) = resolve_override(&raw) {
+            let p = PathBuf::from(resolved);
+            if p.is_absolute() {
+                return p;
+            }
+            return crate::decision_index::default_state_path("").join(p);
+        }
+    }
+    state_dir_resolved(cwd)
+        .ok()
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join("ledger.json"))
+        .unwrap_or_else(|| crate::decision_index::default_state_path("").join("ledger.json"))
+}
+
 /// One `paths.<key>` override value, the shape Python's emitter shares for
 /// every override: a `{template}` resolves at codegen time, a `~` value
 /// goes `$HOME`-relative, anything else passes through verbatim.

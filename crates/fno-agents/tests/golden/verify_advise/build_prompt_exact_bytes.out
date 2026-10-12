@@ -1,0 +1,15 @@
+You are an independent verification agent. Objectively judge whether the shipped diff plausibly satisfies the plan's acceptance criteria. Be factual; do not trust claims. You may Read files and run read-only commands to check.
+
+## Acceptance criteria
+AC1: x
+
+## Ship diffstat (origin/main...HEAD)
+ file | 2 +-
+
+
+## Commits
+abc1234 do it
+
+Reply with your reasoning, then a final line exactly of the form
+VERDICT: pass|concerns|fail
+(pass = criteria met; concerns = partially met or unverifiable; fail = a criterion is clearly not met).

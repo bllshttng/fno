@@ -18,7 +18,7 @@ use std::path::Path;
 
 use crate::graph_keeper::{cached_entries, StoreState};
 
-const LOCK_PATH: &str = "/tmp/fno-ledger.lock";
+pub(crate) const LOCK_PATH: &str = "/tmp/fno-ledger.lock";
 const UNRESOLVED: &str = "unresolved:no-harness-session";
 const AXES: [&str; 4] = ["harness", "provider", "model", "effort"];
 /// Terminal reasons that mark a NON-delivery attempt (the ported
@@ -287,7 +287,7 @@ fn sessions_or_unresolved(candidates: &[String]) -> Value {
 
 /// Atomic replace, matching `_write_ledger_data`: temp file in the ledger's
 /// directory, then rename. Pretty JSON, 2-space indent, trailing newline.
-fn write_ledger(path: &Path, doc: &Value) -> Result<(), String> {
+pub(crate) fn write_ledger(path: &Path, doc: &Value) -> Result<(), String> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map_or_else(
         || "ledger.json".to_string(),
