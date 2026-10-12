@@ -941,6 +941,27 @@ fn close_node(tail: &[String], args: &DoneArgs, task_id: &str) -> i32 {
 
 /// `fno backlog reopen` — clears a node's completion. Fully native: the
 /// Python twin and its registry row are gone.
+/// The reopen verb's done fact: a completion stamp, or a children-rollup
+/// derived done (status done with every child closed and the row's own
+/// completion cleared). A bare status-done row nothing derives is stale
+/// data, and the golden contract keeps it out of reopen's reach: the
+/// completion stamp is the evidence of done, not the status field.
+fn reopenable_done(rows: &[Value], node: &Value, task_id: &str) -> bool {
+    if truthy_field(node, "completed_at") {
+        return true;
+    }
+    if text_at(node, "status") != Some("done") {
+        return false;
+    }
+    let kids: Vec<&Value> = rows
+        .iter()
+        .filter(|e| {
+            text_at(e, "contained_in") != Some(task_id) && text_at(e, "parent") == Some(task_id)
+        })
+        .collect();
+    children_all_closed(node, &kids)
+}
+
 pub fn run_reopen(tail: &[String]) -> i32 {
     let (id, reason, force, help, unknown) = parse_reopen_args(tail);
     if help {
@@ -1019,11 +1040,10 @@ pub fn run_reopen(tail: &[String]) -> i32 {
     let task_id: String = text_at(node, "id").map(String::from).unwrap_or(task_id);
     // The done fact, not the derived column (is_done_door_fact's twin at
     // the patch door): `status: done` is also written by the children
-    // rollup. A derived-done row (no completed_at) reopens and its
-    // reopened_at stamps the hold the derivation respects; only a row that
-    // reads neither done fact is truly nothing to reopen.
-    let reads_done = truthy_field(node, "completed_at") || text_at(node, "status") == Some("done");
-    if !reads_done {
+    // rollup, and a derived-done row reopens with its reopened_at stamping
+    // the hold the derivation respects. A bare status-done row that nothing
+    // derives is stale data, not done.
+    if !reopenable_done(&rows, node, &task_id) {
         eprintln!("warning: {task_id} is not done; nothing to reopen");
         return 0;
     }
@@ -1102,15 +1122,13 @@ pub fn run_reopen(tail: &[String]) -> i32 {
             not_found.replace(true);
             return Ok(false);
         };
-        if !truthy_field(&rows[idx], "completed_at")
-            && text_at(&rows[idx], "status") != Some("done")
-        {
-            raced.replace(true);
-            return Ok(false);
-        }
         let canonical_id = text_at(&rows[idx], "id")
             .map(String::from)
             .unwrap_or_else(|| task_id.clone());
+        if !reopenable_done(rows, &rows[idx], &canonical_id) {
+            raced.replace(true);
+            return Ok(false);
+        }
         {
             let status = rungs
                 .get(&canonical_id)
