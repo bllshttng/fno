@@ -9,10 +9,11 @@
 //! outbox to the primary in one request, under its own lock file, after the
 //! graph lock is gone: one transaction of conditional statements, where each
 //! update and delete matches every old column and each insert must not
-//! collide. A row a peer changed first refuses the whole batch, and the
-//! replica takes the primary's rows back for every row the batch touched.
-//! So the primary decides, and no machine overwrites a peer's change it never
-//! saw.
+//! collide. The statements run parent table first, so a parent row exists
+//! before the update that names it. A row a peer changed first refuses the
+//! whole batch, and the replica takes the primary's rows back for every row
+//! the batch touched. So the primary decides, and no machine overwrites a
+//! peer's change it never saw.
 //!
 //! Read: reads stay local. One daemon arm per machine runs [`flush`] and then
 //! [`sync`], which applies the primary's change log to the replica.
@@ -391,9 +392,11 @@ fn row_key(table: &str, row: &[SqlValue]) -> String {
 /// it and as it is now. Triggers can record a nested change (a touch
 /// trigger's update) before the change that caused it, so the fold chains
 /// records by value, each one's new row being the next one's old row,
-/// instead of trusting the record order. Deletes go first, then updates,
-/// then inserts, so a key freed by one row is free before another row takes
-/// it. Inserts go parent table first and deletes child table first.
+/// instead of trusting the record order. Deletes go first, child table
+/// first. Then the writes go parent table first, and inside one table the
+/// updates go before the inserts, so a key freed by one row is free before
+/// another row takes it and a parent row exists before the update that
+/// names it.
 fn net(changes: Vec<Change>) -> Vec<Change> {
     let mut by_old: std::collections::HashMap<String, Vec<usize>> = Default::default();
     let mut news = std::collections::HashSet::new();
@@ -446,9 +449,9 @@ fn net(changes: Vec<Change>) -> Vec<Change> {
         });
     }
     out.sort_by_key(|c| match c.op {
-        Op::Delete => (0, SHARED_TABLES.len() - rank(&c.table)),
-        Op::Update => (1, 0),
-        Op::Insert => (2, rank(&c.table)),
+        Op::Delete => (0, SHARED_TABLES.len() - rank(&c.table), 0),
+        Op::Update => (1, rank(&c.table), 0),
+        Op::Insert => (1, rank(&c.table), 1),
     });
     out
 }
