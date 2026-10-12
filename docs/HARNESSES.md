@@ -52,6 +52,8 @@ One-time setup: put a `zcode` launcher on PATH that execs `node /Applications/ZC
 
 Other CLIs (Cursor's GUI editor, GitHub Copilot Agents, Kiro, Qoder, Rovo Dev, Trae) are out of scope for footnote orchestration. For a new harness that enters scope, run `fno doctor harness <name> --live` and record its positive markers before adding a capability row; the runnable rubric is the evidence gate, not this summary.
 
+The live rubric reads the spawn form from the capability table. A harness that declares no interactive create form and a headless one (footnote) spawns with `--substrate headless`. Its VIEW and MANIFEST PINNED lines then skip as declared unsupported. The one-shot exits after its answer, so MAIL BOTH WAYS and SURVIVE send their turns through the declared `headless_resume` form. A model-borrowing harness needs a model and a provider. Set `FNO_PROBE_MODEL` and `FNO_PROBE_PROVIDER`, for example `FNO_PROBE_PROVIDER=zai FNO_PROBE_MODEL=glm-5.3-flash fno doctor harness footnote --live`. The probe copies only that provider's `model_routing.providers` record into the isolated config.
+
 What each CLI can DO - a review command, a spawn arm, rpc, plugins, MCP - is the features dimension of the capability table, rendered per harness in [docs/harnesses/capability-matrix.md](harnesses/capability-matrix.md). That matrix is generated; never edit it by hand.
 
 ## What this means in practice
