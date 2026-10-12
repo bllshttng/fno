@@ -50,6 +50,89 @@ fn reads_and_help_are_not_launches() {
     }
 }
 
+/// AC5: the keeper-hosted native launch rides the pane-run fence, and the
+/// argv after `--` is parsed as the command it is.
+#[test]
+fn a_pane_run_unwraps_the_fenced_native_argv() {
+    let got = one(
+        r#"fno mux pane run -- codex --remote unix:// "$fno:target x-ab12""#,
+        "/repo",
+    );
+    assert_eq!(got.harness, "codex");
+    assert_eq!(got.node.as_deref(), Some("x-ab12"));
+    assert_eq!(got.cwd, "/repo");
+}
+
+/// AC6 plus the rest of the codex subcommand table: none of them is a launch.
+#[test]
+fn a_codex_resume_and_subcommands_are_not_launches() {
+    for cmd in [
+        "codex resume 0197abcd-1234-7abc-9def-0123456789ab --remote unix://run.sock",
+        "codex app-server daemon start",
+        "codex thread list",
+        "codex login",
+        "codex",
+    ] {
+        assert!(parse_command(cmd, "/repo").is_empty(), "{cmd}");
+    }
+}
+
+/// The interactive codex launch records: the first non-flag word is the
+/// prompt, `--remote` value included.
+#[test]
+fn an_interactive_codex_launch_is_recorded() {
+    let got = one(
+        r#"codex --remote unix://run.sock "$fno:target x-ab12""#,
+        "/repo",
+    );
+    assert_eq!(got.harness, "codex");
+    assert_eq!(got.node.as_deref(), Some("x-ab12"));
+    assert_eq!(got.cwd, "/repo");
+}
+
+/// The prompt-harness arm reads `--title` as the name (the opencode form).
+#[test]
+fn an_opencode_title_names_the_worker() {
+    let got = one(
+        "opencode run --attach http://127.0.0.1:4096 --title w1 -m zai/glm-5.3 --command fno:target x-ab12",
+        "/repo",
+    );
+    assert_eq!(got.harness, "opencode");
+    assert_eq!(got.name.as_deref(), Some("w1"));
+    assert_eq!(got.node.as_deref(), Some("x-ab12"));
+}
+
+/// A dispatcher with no Bash hook writes the same record a hook would, slot
+/// included, and the child claims it.
+#[test]
+fn a_dispatcher_writes_a_record_the_child_claims() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = home.path().to_string_lossy().into_owned();
+    write_record(
+        home.path(),
+        Launch {
+            harness: "claude".into(),
+            name: Some("w9".into()),
+            node: Some("x-ab12".into()),
+            slot: Some("g2".into()),
+            cwd: cwd.clone(),
+        },
+        "lead-9",
+        Some("claude"),
+        &cwd,
+        1_000_000,
+    )
+    .unwrap();
+    let got = claim(
+        home.path(),
+        &child("c-9", "claude", &cwd, Some("w9"), 1_001_000),
+    )
+    .unwrap();
+    assert_eq!(got.launch.slot.as_deref(), Some("g2"));
+    assert_eq!(got.launch.node.as_deref(), Some("x-ab12"));
+    assert_eq!(got.launcher_session, "lead-9");
+}
+
 fn child(sid: &str, harness: &str, cwd: &str, name: Option<&str>, at: i64) -> Child {
     Child {
         harness: harness.into(),
