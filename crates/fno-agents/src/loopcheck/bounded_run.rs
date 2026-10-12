@@ -256,6 +256,19 @@ impl GhReadError {
         }
     }
 
+    /// The fleet request budget refused before the spawn; `detail` carries
+    /// the ledger's refusal line, which every existing classifier already
+    /// reads as `budget_lock` (it names `gh budget:`).
+    pub(super) fn budget_refused_with_detail(read: &str, detail: String) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::BudgetRefused,
+            stderr_tail: detail,
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
     pub(super) fn unrunnable_spawn(
         read: &str,
         spawn_kind: std::io::ErrorKind,
@@ -294,9 +307,15 @@ impl GhReadError {
                 "external read '{}' could not run; retrying next fire. {}",
                 self.read, self.stderr_tail
             ),
-            ReadErrorKind::BudgetRefused => format!(
+            ReadErrorKind::BudgetRefused if self.stderr_tail.is_empty() => format!(
                 "external read '{}' was not run: the fire budget was spent before the read",
                 self.read
+            ),
+            // A non-empty tail names the fleet ledger's own refusal line, so
+            // the render prints that instead of the fire-budget prose.
+            ReadErrorKind::BudgetRefused => format!(
+                "external read '{}' was not run: {}",
+                self.read, self.stderr_tail
             ),
         }
     }
@@ -391,6 +410,20 @@ pub(crate) fn bounded_read(
     read_name: &str,
     timeout: std::time::Duration,
 ) -> Result<BoundedOutput, GhReadError> {
+    // The fleet request budget admits before the spawn: a refusal leaves no
+    // child and carries the ledger's refusal line. gh only - fno and git
+    // reads are not GitHub traffic, and the 0-point shapes (version probes,
+    // `api rate_limit`) admit untouched.
+    if std::path::Path::new(bin)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        == Some("gh")
+    {
+        let argv: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
+        if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
+            return Err(GhReadError::budget_refused_with_detail(read_name, line));
+        }
+    }
     match run_bounded(bin, args, cwd, timeout) {
         BoundedRun::Completed(out) => Ok(out),
         BoundedRun::TimedOut(elapsed, tail) => Err(GhReadError::timed_out(

@@ -86,6 +86,30 @@ fn bounded_read_diagnostic_preserves_transport_classification() {
 }
 
 #[test]
+fn a_ledger_budget_refusal_renders_its_own_line_not_the_fire_budget_prose() {
+    let refused = GhReadError::budget_refused("main_run_view");
+    assert!(
+        refused.render().contains("fire budget"),
+        "{}",
+        refused.render()
+    );
+    let ledger = GhReadError::budget_refused_with_detail(
+        "main_run_view",
+        "gh budget: fleet GitHub rate limit held locally (backoff: 0/450 points in 60s | \
+         backoff 42s left); this command did not reach GitHub."
+            .into(),
+    );
+    let rendered = ledger.render();
+    assert!(rendered.contains("gh budget:"), "{rendered}");
+    assert!(
+        !rendered.contains("fire budget"),
+        "the ledger line replaces the fire-budget prose: {rendered}"
+    );
+    // The tail the budget_lock classifier keys on rides unchanged.
+    assert!(ledger.stderr_tail.contains("gh budget:"));
+}
+
+#[test]
 fn bounded_run_completed_keeps_a_nonzero_exit_code_distinct_from_success() {
     let tmp = tempfile::tempdir().unwrap();
     let fno = write_exec(tmp.path(), "fno", "#!/bin/sh\necho boom 1>&2\nexit 3\n");

@@ -241,6 +241,15 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             calls: std::sync::atomic::AtomicUsize::new(0),
         };
         let counter = || {
+            // A live fleet hold rides out here too: wait_review reads None
+            // as no-answer (never a wake), so the tick spends nothing and
+            // recovery is noticed when the hold expires.
+            if crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
+                .backoff_remaining_s
+                > 0
+            {
+                return None;
+            }
             let slug = match &slug {
                 Some(s) => s.clone(),
                 None => match super::cache::git_slug(cwd) {
@@ -254,17 +263,28 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         return wait_review(pr, timeout, interval, counter, sleeper, clock, calls);
     }
     let mut poll = || {
-        // The head guard: one light read per tick, and its block rides into
-        // the cache as both the fresh-serve guard and the key material, so
-        // the tick spends the read once. After a push the newest row is the
-        // old head's settled record; serving it exited this wait at once
-        // having watched nothing. A refused head read guards with an empty
-        // sha, so only the degraded ride-out remains until it recovers.
-        let (head, head_calls) = super::cache::head_read(cwd, pr);
-        let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
-        let (code, payload, lines, tick_calls) =
-            super::cache::cached_status(cwd_str, pr, false, Some(&block));
-        (code, payload, lines, tick_calls + head_calls)
+        // A live fleet hold rides out on the cache alone: no head read, no
+        // live mint. A fresh row serves fresh, a stale row serves degraded,
+        // and the only network a hold can still spend is a cold cache's
+        // first mint. Retrying on a fixed interval is exactly what sustains
+        // GitHub's secondary refusal. The head guard below is the normal
+        // tick: one light read whose block is both the fresh-serve guard and
+        // the key material, so the tick spends the read once; a refused read
+        // guards with an empty sha, so only the degraded ride-out remains
+        // until it recovers.
+        let hold_live = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms())
+            .backoff_remaining_s
+            > 0;
+        let (code, payload, lines, tick_calls) = if hold_live {
+            super::cache::cached_status(cwd_str, pr, false, None)
+        } else {
+            let (head, head_calls) = super::cache::head_read(cwd, pr);
+            let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
+            let (code, payload, lines, tick_calls) =
+                super::cache::cached_status(cwd_str, pr, false, Some(&block));
+            (code, payload, lines, tick_calls + head_calls)
+        };
+        (code, payload, lines, tick_calls)
     };
     let on_red = |payload: &Value| {
         let head = payload.get("head").and_then(Value::as_str).unwrap_or("");

@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 /// lead name. Every other key names a machine-local resource
 /// (`build:cargo`, `session:`, `worker:`) and stays in this machine's
 /// graph.db.
-pub(crate) const SHARED_PREFIXES: &[&str] = &["node:", "dispatch:", "reconcile:", "name:"];
+pub(crate) const SHARED_PREFIXES: &[&str] =
+    &["node:", "dispatch:", "reconcile:", "name:", "gh-budget:"];
 
 pub(crate) fn shared(key: &str) -> bool {
     SHARED_PREFIXES.iter().any(|p| key.starts_with(p))
@@ -580,6 +581,93 @@ pub(crate) fn read(key: &str, root: Option<&Path>) -> Result<Option<ClaimRecord>
         return Ok(None);
     }
     record_for(&db_in(&dir, key)?, key)
+}
+
+/// The GitHub request budget's shared refusal hold: one row keyed
+/// `gh-budget:fleet` whose `expires_at` IS the backoff deadline, with the
+/// escalation step and the refusal stamp riding `metadata`. GitHub limits
+/// the user, not the machine, so one host's refusal stands every host down.
+/// Monotone: a write replaces the row only when the new hold ends later, so
+/// two machines recording one refusal never shorten each other's hold.
+pub(crate) const BUDGET_HOLD_KEY: &str = "gh-budget:fleet";
+
+/// `(backoff_until_ms, backoff_step, last_refusal_ms)` from the shared row,
+/// or None when the row is absent or expired on the READER's clock - an
+/// expired hold reads as no hold, exactly like an expired lease. `root` is
+/// the test seam (None = the global claims dir, which is what shares).
+pub(crate) fn budget_hold_read(
+    root: Option<&Path>,
+    now: i64,
+) -> Result<Option<(i64, i64, i64)>, String> {
+    let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
+    if !(shared(BUDGET_HOLD_KEY) && primary_for(&dir)?.is_some()) && store_absent(&dir) {
+        return Ok(None);
+    }
+    let row = db_in(&dir, BUDGET_HOLD_KEY)?.one(
+        "SELECT expires_at, \
+                COALESCE(json_extract(metadata, '$.backoff_step'), 0), \
+                COALESCE(json_extract(metadata, '$.last_refusal_ms'), 0) \
+         FROM claims WHERE key = ?1",
+        &[SqlValue::Text(BUDGET_HOLD_KEY.to_string())],
+    )?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let at = |i: usize| row.get(i);
+    let Some(SqlValue::Integer(until)) = at(0) else {
+        // No deadline (a NULL expires_at never times out for a lease; for a
+        // hold it can only be a torn write) reads as no hold rather than an
+        // infinite one.
+        return Ok(None);
+    };
+    if *until <= now {
+        return Ok(None);
+    }
+    let int = |v: Option<&SqlValue>| -> i64 {
+        match v {
+            Some(SqlValue::Integer(n)) => *n,
+            _ => 0,
+        }
+    };
+    Ok(Some((*until, int(at(1)), int(at(2)))))
+}
+
+/// Write the shared hold. `root` is the same test seam `budget_hold_read`
+/// takes. The WHERE on the upsert makes the hold monotone: a peer's later
+/// deadline wins, an earlier one is a no-op.
+pub(crate) fn budget_hold_write(
+    root: Option<&Path>,
+    holder: &str,
+    backoff_until_ms: i64,
+    backoff_step: i64,
+    last_refusal_ms: i64,
+) -> Result<(), String> {
+    let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
+    let now = crate::claims::now_ms();
+    db_in(&dir, BUDGET_HOLD_KEY)?.execute(
+        "INSERT INTO claims (key, holder, schema_version, acquired_at, expires_at, \
+                             pid_unavailable, host, machine_id, reason, metadata) \
+         VALUES (?1, ?2, 1, ?3, ?4, 1, ?2, ?2, 'fleet github refusal backoff', \
+                 json_object('backoff_step', ?5, 'last_refusal_ms', ?6)) \
+         ON CONFLICT(key) DO UPDATE SET \
+             holder = excluded.holder, \
+             acquired_at = excluded.acquired_at, \
+             expires_at = excluded.expires_at, \
+             host = excluded.host, \
+             machine_id = excluded.machine_id, \
+             reason = excluded.reason, \
+             metadata = excluded.metadata \
+         WHERE excluded.expires_at > claims.expires_at",
+        &[
+            SqlValue::Text(BUDGET_HOLD_KEY.to_string()),
+            SqlValue::Text(holder.to_string()),
+            SqlValue::Integer(now),
+            SqlValue::Integer(backoff_until_ms),
+            SqlValue::Integer(backoff_step),
+            SqlValue::Integer(last_refusal_ms),
+        ],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn read_at_path(path: &Path) -> Result<Option<ClaimRecord>, String> {
@@ -1256,6 +1344,40 @@ mod tests {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => panic!("{e}"),
         }
+    }
+
+    #[test]
+    fn the_shared_budget_hold_reads_back_and_never_moves_backwards() {
+        let root = tempfile::tempdir().unwrap();
+        let t0 = 1_760_000_000_000i64;
+        // Absent reads as no hold.
+        assert_eq!(budget_hold_read(Some(root.path()), t0).unwrap(), None);
+        budget_hold_write(Some(root.path()), "machine-a", t0 + 60_000, 0, t0).unwrap();
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0 + 1_000).unwrap(),
+            Some((t0 + 60_000, 0, t0)),
+            "the row's deadline, step and refusal stamp read back"
+        );
+        // Monotone: an earlier hold (a peer's stale record) replaces nothing.
+        budget_hold_write(Some(root.path()), "machine-b", t0 + 30_000, 1, t0 + 5_000).unwrap();
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0 + 2_000).unwrap(),
+            Some((t0 + 60_000, 0, t0)),
+            "a peer's earlier deadline never shortens the hold"
+        );
+        // A later hold replaces it.
+        budget_hold_write(Some(root.path()), "machine-b", t0 + 120_000, 1, t0 + 5_000).unwrap();
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0 + 3_000).unwrap(),
+            Some((t0 + 120_000, 1, t0 + 5_000)),
+            "a peer's later deadline takes over the hold"
+        );
+        // Expired on the READER's clock is no hold.
+        assert_eq!(
+            budget_hold_read(Some(root.path()), t0 + 120_000).unwrap(),
+            None,
+            "an expired hold reads as no hold"
+        );
     }
 
     #[test]
