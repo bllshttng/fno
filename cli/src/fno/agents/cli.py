@@ -566,20 +566,13 @@ def _spawn_guard_decision(
         if cleared is None:
             # A live spawner is mid-launch: benign dedup, and naming a
             # force-release here would be worse advice than none.
-            held_by = getattr(held_exc, "holder", "") or str(
-                claim_status(res_key).get("holder") or ""
-            )
+            held_by = getattr(held_exc, "holder", "") or claim_status(res_key).get("holder") or ""
             if not held_by:
-                # Nobody is on disk, so this was never a held slot:
-                # CLAIM_UNAVAILABLE also catches ClaimVerdictError, which a
-                # transient native exit raises. Refuse as an error the caller
-                # may retry, never as a held reservation naming no one.
+                # Nobody on disk: a claim-store error, not a held slot.
                 return {
                     "verdict": "error",
-                    "detail": (
-                        f"could not acquire dispatch reservation {res_key} "
-                        f"({held_exc}); no holder is on disk, retry"
-                    ),
+                    "detail": f"could not acquire dispatch reservation {res_key} "
+                              f"({held_exc}); no holder is on disk, retry",
                 }, 3
             return {
                 "verdict": "already-running",
