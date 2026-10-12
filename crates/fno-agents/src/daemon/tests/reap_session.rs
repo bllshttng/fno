@@ -938,7 +938,7 @@ fn x7066_a_typed_turn_past_every_window_still_keeps_the_row() {
             "status": "done",
             "merge_status": "merged",
             "sessions": [
-                {"phase": "execute", "harness": "claude", "session_id": "s-typed", "started_at": "2026-09-01T01:00:00Z"}
+                {"phase": "execute", "harness": "claude", "session_id": "s-typed", "started_at": "2026-09-01T01:00:00Z", "ended_at": "2026-09-01T02:00:00Z"}
             ]
         }]),
     );
