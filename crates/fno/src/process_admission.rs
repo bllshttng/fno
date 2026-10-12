@@ -469,7 +469,8 @@ fn agent_origin() -> bool {
 /// demoted. Stripping the identity and the markers and clearing the
 /// inherited policy keeps fno's most important process out of both traps. A
 /// real claude worker re-mints its own markers, so this spares only the
-/// server's own shells the agent classification. A no-op on Linux.
+/// server's own shells the agent classification. The priority half is a
+/// no-op on Linux.
 pub fn claim_server_priority() {
     std::env::remove_var("FNO_AGENT_SELF");
     std::env::remove_var("CLAUDECODE");
