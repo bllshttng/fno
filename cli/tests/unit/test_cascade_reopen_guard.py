@@ -138,6 +138,26 @@ def test_cascade_positive_control_same_fixture_closes_without_the_reopen():
     assert parent.get("completed_at")
 
 
+def _plan_pair():
+    """A parent carrying its own plan work with no PR of its own."""
+    parent, child = _pair()
+    parent["plan_path"] = "plans/p.md"
+    return parent, child
+
+
+def test_sweep_skips_a_parent_with_its_own_plan_work():
+    """The self-heal sweep leaves a plan-having parent open: its own
+    deliverables are unverified, and the note today admits it."""
+    parent, child = _plan_pair()
+    assert _strandable_epic_ids([parent, child]) == set()
+
+
+def test_cascade_skips_a_parent_with_its_own_plan_work():
+    parent, child = _plan_pair()
+    assert _cascade_close_parents([parent, child], "c") == []
+    assert parent.get("completed_at") is None
+
+
 def _contained_pair(*, reopened_at=None):
     """A contained child whose delivery unit already closed."""
     owner = {"id": "unit", "status": "done", "completed_at": CHILD_CLOSE}

@@ -77,6 +77,7 @@ fn fixture() -> (PathBuf, PathBuf) {
 fn request(question: &str, root: &Path) -> IntakeRequest {
     IntakeRequest {
         question: question.to_string(),
+        template: false,
         ask: None,
         options: vec![],
         blocks: vec![],

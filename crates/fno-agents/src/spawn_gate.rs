@@ -128,6 +128,26 @@ impl Refusal {
 /// the receipt's scalar fields in key order (serde_json `preserve_order`),
 /// skipping the words already named. Contract:
 /// docs/architecture/spawn-gate.md (Reading a refusal).
+fn refusal_axis(r: &Refusal) -> &str {
+    let ev_str = |k: &str| r.event.get(k).and_then(serde_json::Value::as_str);
+    let rc_str = |k: &str| r.receipt.as_ref()?.get(k)?.as_str();
+    ev_str("axis")
+        .or_else(|| rc_str("axis"))
+        .or_else(|| rc_str("held_on"))
+        .or_else(|| rc_str("reason"))
+        .or_else(|| ev_str("reason"))
+        .unwrap_or("unknown")
+}
+
+fn refusal_reason(r: &Refusal) -> &str {
+    r.receipt
+        .as_ref()
+        .and_then(|v| v.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| r.event.get("reason").and_then(serde_json::Value::as_str))
+        .unwrap_or("unknown")
+}
+
 pub(crate) fn verdict_line(r: &Refusal) -> String {
     let ev_str = |k: &str| r.event.get(k).and_then(serde_json::Value::as_str);
     let rc = r.receipt.as_ref();
@@ -135,15 +155,8 @@ pub(crate) fn verdict_line(r: &Refusal) -> String {
         rc.and_then(|v| v.get(k))
             .and_then(serde_json::Value::as_str)
     };
-    let axis = ev_str("axis")
-        .or_else(|| rc_str("axis"))
-        .or_else(|| rc_str("held_on"))
-        .or_else(|| rc_str("reason"))
-        .or_else(|| ev_str("reason"))
-        .unwrap_or("unknown");
-    let reason = rc_str("reason")
-        .or_else(|| ev_str("reason"))
-        .unwrap_or("unknown");
+    let axis = refusal_axis(r);
+    let reason = refusal_reason(r);
     let mut figures: Vec<String> = Vec::new();
     let collect = |map: &serde_json::Map<String, serde_json::Value>, figures: &mut Vec<String>| {
         for (k, v) in map {
@@ -1322,9 +1335,17 @@ pub fn run_gate(
     registry_path: &Path,
     input: GateInput,
 ) -> Result<GateGuard, Refusal> {
+    let node = input.node.clone();
     decide_gate(config_cwd, registry_path, input)
         .map_err(|r| {
             let home = crate::paths::AgentsHome::from_env();
+            crate::friction::record_gate_refusal(
+                &home.events_jsonl(),
+                "spawn",
+                node.as_deref(),
+                &format!("{} {}", refusal_axis(&r), refusal_reason(&r)),
+                &verdict_line(&r),
+            );
             // Every gate refusal leaves a feed-visible row: a refused
             // launch previously wrote nothing, so the feed showed nothing
             // for a launch the operator watched refuse.

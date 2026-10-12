@@ -586,8 +586,8 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
                 raise AssertionError(
                     f"live launchctl mutation blocked under pytest in "
                     f"{request.node.nodeid}: {args[:2]} would change the "
-                    "operator's launchd domain. Stub _run_launchctl, "
-                    "_run_launchctl_timed or bounce, or pass activate=False."
+                    "operator's launchd domain. Stub _run_launchctl_timed "
+                    "or bounce, or pass activate=False."
                 )
             if guard_providers and _is_real_provider_exec(args):
                 name = args[0] if isinstance(args, (list, tuple)) and args else args

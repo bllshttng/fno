@@ -75,9 +75,21 @@ pub(crate) fn blocked_child_grace_minutes(cwd: &Path) -> i64 {
 /// a scope spelling that is neither project nor epic can be refused with the
 /// Python resolver's wording.
 pub(crate) fn project_map(cwd: &Path) -> Result<HashMap<String, String>, String> {
-    let work = match crate::agents_config::config_lookup(cwd, &["work", "workspaces"]) {
-        Some(v) => v,
-        None => return Err("no work.workspaces in any candidate config.toml".to_string()),
+    map_from_work(crate::agents_config::config_lookup(
+        cwd,
+        &["work", "workspaces"],
+    ))
+}
+
+/// The map builder, split from the config read so the missing-table refusal is
+/// testable without a config on disk. The refusal names the table to add,
+/// because the lead board and the lead verdict both surface this text.
+pub(crate) fn map_from_work(work: Option<toml::Value>) -> Result<HashMap<String, String>, String> {
+    let Some(work) = work else {
+        return Err("no work.workspaces in any candidate config.toml; \
+             add [work.workspaces.<slug>] with projects = [{ name = \"<project>\", \
+             path = \"<checkout>\" }] to ~/.fno/config.toml"
+            .to_string());
     };
     let Some(table) = work.as_table() else {
         return Ok(HashMap::new());

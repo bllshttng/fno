@@ -31,6 +31,7 @@ pub mod done_evidence;
 pub(crate) mod drift_emit;
 pub(crate) mod drift_scan;
 pub mod edges;
+pub mod encounter_cli;
 pub mod encounters;
 pub mod entities;
 pub mod epic_cap;
@@ -451,7 +452,7 @@ fn store_owes_a_fold(connection: &Connection) -> Result<bool, String> {
     Ok(materialized_rows(connection)? == 0)
 }
 
-fn read_connection(graph: &Path) -> Result<Connection, String> {
+pub(crate) fn read_connection(graph: &Path) -> Result<Connection, String> {
     crate::state_layout_sqlite::wait_for_fence(state_root_of(graph));
     let path = database_path(graph);
     if path.exists() {

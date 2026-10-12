@@ -2110,59 +2110,9 @@ fn apply_op_impl(entries: &mut Vec<Value>, name: &str, p: &Value) -> Result<Valu
                 .get("record")
                 .cloned()
                 .ok_or_else(|| StoreError::Invalid("append_encounter needs a record".into()))?;
-            // demand.voter_key: the record's own voter_key, else its
-            // session_id - never a params-level field.
-            let key = record
-                .get("voter_key")
-                .and_then(Value::as_str)
-                .or_else(|| record.get("session_id").and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_string();
-            if key.is_empty() {
-                return Ok(json!({"appended": false,
-                    "error": "an encounter with no voter key (session_id) is not readable back to a transcript",
-                    "reason": "unidentified"}));
-            }
-            let Some(idx) = find_exact(entries, node_id) else {
-                return Ok(json!({"appended": false,
-                    "error": format!("no node resolves to '{node_id}'"), "reason": "missing"}));
-            };
-            let obj = entries[idx].as_object_mut().unwrap();
-            let existing = obj
-                .get("encounters")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for prior in &existing {
-                let prior_key = prior
-                    .get("voter_key")
-                    .and_then(Value::as_str)
-                    .or_else(|| prior.get("session_id").and_then(Value::as_str))
-                    .unwrap_or_default();
-                if prior_key == key {
-                    return Ok(json!({"appended": false,
-                        "error": format!(
-                            "voter {key} already recorded an encounter on {} at {}",
-                            obj.get("id").and_then(Value::as_str).unwrap_or(node_id),
-                            // Python's f-string prints the None of a missing
-                            // stamp as "None"; byte parity keeps that spelling.
-                            prior
-                                .get("created_at")
-                                .or_else(|| prior.get("ts"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("None")
-                        ),
-                        "reason": "duplicate"}));
-                }
-            }
-            let encounters = obj
-                .entry("encounters".to_string())
-                .or_insert_with(|| Value::Array(vec![]));
-            if !encounters.is_array() {
-                *encounters = Value::Array(vec![]);
-            }
-            encounters.as_array_mut().unwrap().push(record);
-            Ok(json!({"appended": true, "error": Value::Null, "reason": Value::Null}))
+            Ok(crate::backlog::encounters::append_refusing_duplicate(
+                entries, node_id, record,
+            ))
         }
         "append_wave_note" => {
             let node_id = param_str(p, "node_id")?;

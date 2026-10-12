@@ -884,7 +884,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                 for part in v.split(',') {
                     match part.trim() {
                         "" => {}
-                        "claude" | "codex" | "opencode" | "all" => {
+                        "claude" | "codex" | "opencode" | "footnote" | "pi" | "agy" | "all" => {
                             let part = part.trim();
                             if !harness_spec.iter().any(|s| s == part) {
                                 harness_spec.push(part.to_string());
@@ -892,7 +892,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                         }
                         other => {
                             eprintln!(
-                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, all)"
+                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, footnote, pi, agy, all)"
                             );
                             return 2;
                         }
@@ -1050,8 +1050,8 @@ pub fn run_intel(args: &[String]) -> i32 {
 }
 
 /// The selected harnesses in canonical order: `all` (or nothing named) expands to every harness, otherwise the named values intersect the canonical order.
-fn selected_harnesses(spec: &[String]) -> Vec<&'static str> {
-    const ALL: [&str; 4] = ["claude", "codex", "opencode", "footnote"];
+pub(crate) fn selected_harnesses(spec: &[String]) -> Vec<&'static str> {
+    const ALL: [&str; 6] = ["claude", "codex", "opencode", "footnote", "pi", "agy"];
     if spec.iter().any(|s| s == "all") || spec.is_empty() {
         return ALL.to_vec();
     }
@@ -1176,6 +1176,31 @@ fn fold_all(
         };
         if let Err(why) = source.probe() {
             skipped.insert("opencode".to_string(), why);
+        } else {
+            sources.push(Box::new(source));
+        }
+    }
+    if selected.contains(&"pi") {
+        let source = crate::pi_transcript::PiSource {
+            sessions_dir: None,
+            roots: roots.clone(),
+        };
+        if let Err(why) = source.probe() {
+            skipped.insert("pi".to_string(), why);
+        } else {
+            sources.push(Box::new(source));
+        }
+    }
+    if selected.contains(&"agy") {
+        let (summaries_db, history, conversations_dir) = crate::agy_transcript::agy_stores();
+        let source = crate::agy_transcript::AgySource {
+            summaries_db,
+            history,
+            conversations_dir,
+            roots: roots.clone(),
+        };
+        if let Err(why) = source.probe() {
+            skipped.insert("agy".to_string(), why);
         } else {
             sources.push(Box::new(source));
         }

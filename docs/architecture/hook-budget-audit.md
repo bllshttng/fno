@@ -74,6 +74,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `hooks/inside-leg-report.sh <state>` (stub) | No registration | Tombstone kept one release for out-of-tree callers; maps the state word onto the shim and execs it. |
 | `review-hold.sh acquire` | Claude PreToolUse (`Skill`) | Records that the review skill acquired the review hold. |
 | `born-with-why-offer-inject.sh` | Claude and Codex UserPromptSubmit | Offers the born-with-why intake prompt when its state says one is due. |
+| `friction-offer-inject.sh` | Claude and Codex PostToolUse (no matcher) and UserPromptSubmit | Prints this session's pending friction offer once. With no `.offer` file it exits before reading stdin. |
 | `inject-mail-notify.sh` | Claude and Codex UserPromptSubmit | Injects unread mail notifications. |
 | `inject-announce.sh prompt` | Claude and Codex UserPromptSubmit | Injects queued announcements at the prompt boundary. |
 | `inject-announce.sh compact` | Codex PostCompact | Re-injects queued announcements after compaction. |

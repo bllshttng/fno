@@ -28,6 +28,10 @@ def _strandable_epic_ids(entries: list[dict]) -> set[str]:
             and not parent.get("completed_at")
             and children_all_closed(parent, kids)
             and not _reopen_outranks_child_closes(parent, kids)
+            and not (
+                parent.get("plan_path")
+                and not (parent.get("pr_number") or parent.get("additional_prs"))
+            )
         ):
             out.add(pid)
     return out
