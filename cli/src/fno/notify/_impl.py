@@ -191,11 +191,13 @@ def send_notification(title: str, message: str, pointer: str = "") -> tuple[int,
     title = title or "target"
     message = message or "Complete"
 
+    # The journal leg first: it is load-bearing for status sinks, so even a
+    # mux delivery must not skip it (a codex round on this PR).
+    row = _emit_operator_notice(title, message, pointer)
     if _mux_clients(title, message):  # client-first; zero falls through
         return 0, ""
 
     local = _dispatch_local(title, message)
-    row = _emit_operator_notice(title, message, pointer)
     if local:
         return 0, ""
     # No local tool: the sink lane is the only possible channel, so the only

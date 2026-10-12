@@ -1780,10 +1780,18 @@ impl Notice {
     fn from_raw(code: u16, raw: &[u8]) -> Notice {
         let text = String::from_utf8_lossy(raw).into_owned();
         let body = match code {
-            // iTerm2 OSC 99: the payload is `data[;id][;options]` - the body
-            // is the first field only; the rest are options/ids we do not
-            // forward.
-            99 => text.split(';').next().unwrap_or("").to_string(),
+            // iTerm2 OSC 99: `[metadata];payload` - metadata first when
+            // present (`99;i=1:d=0;Hello`), an empty one still carries its
+            // separator (`99;;Hello`), and a bare payload has no separator.
+            99 => {
+                let mut fields = text.splitn(2, ';');
+                match (fields.next(), fields.next()) {
+                    (Some(meta), Some(rest)) if meta.is_empty() => rest.to_string(),
+                    (Some(_meta), Some(rest)) => rest.split(';').next().unwrap_or("").to_string(),
+                    (Some(only), None) => only.to_string(),
+                    _ => String::new(),
+                }
+            }
             // rxvt-style OSC 777: `notify;TITLE;BODY` when the app speaks the
             // notify command; anything else treats the whole payload as body.
             777 => {
@@ -2660,7 +2668,7 @@ mod tests {
         // code (9: whole payload; 99: first field; 777: notify's third).
         let mut pane = Pane::new(24, 80);
         pane.feed(
-            b"\x1b]9;claude needs you\x07rest\x1b]99;iterm body;opt\x07\x1b]777;notify;Title;Body\x07",
+            b"\x1b]9;claude needs you\x07rest\x1b]99;i=1;iterm body\x07\x1b]777;notify;Title;Body\x07",
         );
         let notices = pane.take_notices();
         let bodies: Vec<&str> = notices.iter().map(|n| n.body.as_str()).collect();

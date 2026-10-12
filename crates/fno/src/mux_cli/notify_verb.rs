@@ -6,15 +6,17 @@
 //! strings, and the client-side builder strips control characters, so no raw
 //! OSC payload can ride this verb to the outer terminal.
 
-use crate::mux_cli::{control_roundtrip, resolve_session, EXIT_ERROR, EXIT_OK};
+use crate::mux_cli::{control_roundtrip, env_server, resolve_session, EXIT_ERROR, EXIT_OK};
 use crate::proto::{self, ControlVerb, ServerMsg};
 
 /// Run one notify delivery and print the receipt. Registered in `lib.rs`
 /// beside the other mux one-shots (`server_stats`), not inside `mux_cli.rs`:
 /// that file is over the line budget and may only shrink.
 pub fn cli(title: &str, message: &str, json: bool) -> i32 {
-    let env_session = std::env::var("FNO_MUX_SESSION").ok();
-    let session = resolve_session(None, env_session.as_deref());
+    // Same resolution every mux one-shot uses: FNO_SERVER, else legacy
+    // FNO_SESSION, else the default session - never FNO_MUX_SESSION, which
+    // nothing sets (a codex round on this PR).
+    let session = resolve_session(None, env_server().as_deref());
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,
         Err(e) => {

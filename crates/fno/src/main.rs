@@ -678,7 +678,7 @@ fn main() {
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
-            std::process::exit(crate::notify_verb::cli(&title, &message, json))
+            std::process::exit(fno::notify_verb::cli(&title, &message, json))
         }
         Role::MuxSnapshot(tail) => match fno::client::snapshot::parse(&tail) {
             Ok(args) => std::process::exit(fno::client::snapshot::run(args)),

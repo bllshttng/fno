@@ -4,7 +4,7 @@
 //! instance, so its answer carries the measurement window instead of posing
 //! as an all-time fact. Reading never resets the counter.
 
-use crate::mux_cli::{control_roundtrip, resolve_session, EXIT_ERROR, EXIT_OK};
+use crate::mux_cli::{control_roundtrip, env_server, resolve_session, EXIT_ERROR, EXIT_OK};
 use crate::proto::{self, ControlVerb, ServerMsg};
 
 /// Current time as a `YYYY-MM-DDThh:mm:ssZ` UTC stamp (same shape the squad
@@ -30,8 +30,7 @@ pub fn answer(touch_emit_failures: u64, started_at: &str) -> ServerMsg {
 /// `fno mux stats [--json]`: server-instance telemetry over one control
 /// roundtrip. Read-only; the counter is never reset by reading it.
 pub fn cli(json: bool) -> i32 {
-    let env_session = std::env::var("FNO_MUX_SESSION").ok();
-    let session = resolve_session(None, env_session.as_deref());
+    let session = resolve_session(None, env_server().as_deref());
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,
         Err(e) => {
