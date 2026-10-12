@@ -716,7 +716,7 @@ pub fn run_uninstall(args: &[String]) -> i32 {
     } else {
         println!("Nothing to remove: {} does not exist", plist_path.display());
     }
-    println!("Watermark store preserved (reinstall picks up existing history.)");
+    println!("Watermark store preserved (reinstall picks up existing history).");
     0
 }
 
