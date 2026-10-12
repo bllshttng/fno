@@ -341,7 +341,7 @@ pub(crate) fn headless_spawn(
     }
 }
 
-fn default_spawn(
+pub(crate) fn default_spawn(
     name: &str,
     prompt: &str,
     cwd: &Path,
