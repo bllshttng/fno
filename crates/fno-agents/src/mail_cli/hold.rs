@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 
 /// The identity refusal shared by both verbs: hold stamps a delivery policy
 /// on a registry row, so an unprovable self is a hard stop, not a default.
+/// The ambiguous case prints its own detail; the generic line is the
+/// missing-identity message only, matching the Python leg's per-case output.
 fn self_identity_or_exit() -> Option<(String, String)> {
     let home = AgentsHome::from_env();
     let ident = resolve_self_identity(&|name| std::env::var(name).ok(), None, None, &home);
@@ -28,15 +30,18 @@ fn self_identity_or_exit() -> Option<(String, String)> {
         eprintln!("a hold stamped on the wrong row holds another agent's mail");
         return None;
     }
-    let session_id = ident.session_id.clone()?;
-    let harness = ident.harness.clone()?;
-    Some((session_id, harness))
+    match (ident.session_id.clone(), ident.harness.clone()) {
+        (Some(session_id), Some(harness)) => Some((session_id, harness)),
+        _ => {
+            eprintln!("no provable harness identity - there is no session to hold mail for");
+            None
+        }
+    }
 }
 
 /// `hold` (alias `dnd`): stamp bus-only on the self row and arm the clock.
 pub fn run_hold(args: &[String]) -> i32 {
     let Some((session_id, harness)) = self_identity_or_exit() else {
-        eprintln!("no provable harness identity - there is no session to hold mail for");
         return 3;
     };
     let handle = crate::identity::canonical_handle(&session_id);
@@ -166,7 +171,15 @@ pub fn run_hold_release(args: &[String]) -> i32 {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--handle" => handle = it.next().cloned(),
+            // A flag-shaped value is a typo'd invocation; the old typer
+            // surface refused it, so a quiet no-clock exit would hide the miss.
+            "--handle" => match it.next() {
+                Some(v) if !v.starts_with("--") => handle = Some(v.clone()),
+                _ => {
+                    eprintln!("error: --handle is required");
+                    return 2;
+                }
+            },
             "--poll-s" => match it.next().and_then(|v| v.parse::<f64>().ok()) {
                 Some(v) => poll_s = v,
                 None => {
