@@ -411,14 +411,15 @@ pub(crate) fn bounded_read(
     timeout: std::time::Duration,
 ) -> Result<BoundedOutput, GhReadError> {
     // The fleet request budget admits before the spawn: a refusal leaves no
-    // child and carries the ledger's refusal line. gh only - fno and git
-    // reads are not GitHub traffic, and the 0-point shapes (version probes,
-    // `api rate_limit`) admit untouched.
-    if std::path::Path::new(bin)
-        .file_stem()
+    // child and carries the ledger's refusal line. gh and the loop-check
+    // adapters that wrap it are GitHub traffic; fno and git reads are not,
+    // and the 0-point shapes (version probes, `api rate_limit`) admit
+    // untouched.
+    let bin_name = std::path::Path::new(bin)
+        .file_name()
         .and_then(|s| s.to_str())
-        == Some("gh")
-    {
+        .unwrap_or("");
+    if bin_name == "gh" || super::gh_read::internal_gh_adapter(bin_name) {
         let argv: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
         if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
             return Err(GhReadError::budget_refused_with_detail(read_name, line));

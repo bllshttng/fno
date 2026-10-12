@@ -599,6 +599,23 @@ pub(crate) fn budget_hold_read(
     root: Option<&Path>,
     now: i64,
 ) -> Result<Option<(i64, i64, i64)>, String> {
+    match budget_hold_query(root)? {
+        Some((until, step, last)) if until > now => Some((until, step, last)),
+        _ => Ok(None),
+    }
+}
+
+/// The shared row's refusal history even after its deadline expires: the
+/// last refusal stamp and escalation step are what let a refusal that
+/// alternates hosts inside the window keep escalating instead of restarting
+/// at the base cooldown on every host.
+pub(crate) fn budget_hold_history(root: Option<&Path>) -> Result<(i64, i64), String> {
+    Ok(budget_hold_query(root)?
+        .map(|(_, step, last)| (step, last))
+        .unwrap_or((0, 0)))
+}
+
+fn budget_hold_query(root: Option<&Path>) -> Result<Option<(i64, i64, i64)>, String> {
     let dir = crate::claims_root::claims_dir(BUDGET_HOLD_KEY, root)?;
     if !(shared(BUDGET_HOLD_KEY) && primary_for(&dir)?.is_some()) && store_absent(&dir) {
         return Ok(None);
@@ -613,16 +630,12 @@ pub(crate) fn budget_hold_read(
     let Some(row) = row else {
         return Ok(None);
     };
-    let at = |i: usize| row.get(i);
-    let Some(SqlValue::Integer(until)) = at(0) else {
+    let Some(SqlValue::Integer(until)) = row.get(0) else {
         // No deadline (a NULL expires_at never times out for a lease; for a
         // hold it can only be a torn write) reads as no hold rather than an
         // infinite one.
         return Ok(None);
     };
-    if *until <= now {
-        return Ok(None);
-    }
     let num = |i: usize| match row.get(i) {
         Some(SqlValue::Integer(n)) => *n,
         _ => 0,
@@ -1370,11 +1383,22 @@ mod tests {
             Some((t0 + 120_000, 1, t0 + 5_000)),
             "a peer's later deadline takes over the hold"
         );
-        // Expired on the READER's clock is no hold.
+        // Expired on the READER's clock is no hold - but the history
+        // survives, which is what keeps cross-host escalation alive.
         assert_eq!(
             budget_hold_read(Some(root.path()), t0 + 120_000).unwrap(),
             None,
             "an expired hold reads as no hold"
+        );
+        assert_eq!(
+            budget_hold_history(Some(root.path())).unwrap(),
+            (1, t0 + 5_000),
+            "an expired row still yields its step and refusal stamp"
+        );
+        assert_eq!(
+            budget_hold_history(Some(tempfile::tempdir().unwrap().path())).unwrap(),
+            (0, 0),
+            "a store with no row reads as no history"
         );
     }
 

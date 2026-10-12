@@ -487,11 +487,18 @@ pub fn record_refusal(path: &Path, now: i64) -> Result<(), String> {
         return Ok(());
     }
     // 0 is the "never" sentinel, not the epoch: a first refusal must not
-    // escalate off an unset field.
-    let escalated =
-        ledger.last_refusal_ms > 0 && now - ledger.last_refusal_ms <= ESCALATION_WINDOW_MS;
+    // escalate off an unset field. The shared row's history counts even
+    // after its deadline expires, so refusals alternating hosts inside the
+    // window keep escalating instead of restarting at the base cooldown.
+    let (shared_step, shared_last) = if path == ledger_path().as_path() {
+        crate::claim_store::budget_hold_history(None).unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+    let last_refusal = ledger.last_refusal_ms.max(shared_last);
+    let escalated = last_refusal > 0 && now - last_refusal <= ESCALATION_WINDOW_MS;
     ledger.backoff_step = if escalated {
-        ledger.backoff_step + 1
+        ledger.backoff_step.max(shared_step) + 1
     } else {
         0
     };
