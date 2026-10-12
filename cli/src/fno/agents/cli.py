@@ -569,10 +569,10 @@ def _spawn_guard_decision(
             held_by = getattr(held_exc, "holder", "")
             if not held_by:
                 # No holder on the exception: a store error, not a held slot.
+                _release_dispatch_claims((res_key, holder))
                 return {
                     "verdict": "error",
-                    "detail": f"could not acquire dispatch reservation {res_key} "
-                              f"({held_exc}); retry",
+                    "detail": f"could not acquire {res_key} ({held_exc}); retry",
                 }, 3
             return {
                 "verdict": "already-running",
