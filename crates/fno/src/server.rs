@@ -12148,7 +12148,7 @@ async fn run_wait(
     let _ = reply.send(ServerMsg::WaitDone { outcome });
 }
 
-pub(super) use pane_output::drain_pty_output;
+use pane_output::drain_pty_output;
 
 /// Resolve a client cwd to its canonical squad key, OFF the core loop: the
 /// git run blocks (bounded 2s) and the loop must never wait on it. Cache

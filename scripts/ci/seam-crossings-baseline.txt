@@ -123,8 +123,11 @@ resolver	crates/fno-agents/src/harness_reader.rs	pub fn establish(harness: &str)
 resolver	crates/fno-agents/src/hook/test_run_guard.rs	fn is_footnote_checkout(root: &Path) -> bool {
 resolver	crates/fno-agents/src/loop_dispatch.rs	pub(crate) fn fno_cmd(fno_bin: &str) -> Command {
 resolver	crates/fno-agents/src/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
+resolver	crates/fno-agents/src/loopcheck.rs	fn best_effort_notify(title: &str, body: &str) {
 resolver	crates/fno-agents/src/loops_pause.rs	fn fno_cli_binary() -> PathBuf {
 resolver	crates/fno-agents/src/opencode_install.rs	fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
+resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator(title: &str, body: &str, pointer: Option<&str>) -> bool {
+resolver	crates/fno-agents/src/operator_notice.rs	pub fn notify_operator_confirmed(title: &str, body: &str, pointer: Option<&str>) -> bool {
 resolver	crates/fno-agents/src/plugin_install.rs	fn restage_stage(source_dir: &Path, stage_parent: &Path) -> Result<RestageOutcome, String> {
 resolver	crates/fno-agents/src/reclaim.rs	fn fno_plugin_dir(root: &Path) -> PathBuf {
 resolver	crates/fno-agents/src/scrape.rs	pub fn fno_bin() -> std::ffi::OsString {
