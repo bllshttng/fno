@@ -148,13 +148,15 @@ pub(crate) fn search_any(
     }
     let mut statement = connection
         .prepare(
+            // The state filter runs before the LIMIT: closed rows that rank
+            // first must not use up the limit.
             "SELECT n.id, n.title, n.slug, COALESCE(n.description, '')
-             FROM (SELECT rowid AS rid, rank AS score FROM nodes_fts
-                   WHERE nodes_fts MATCH ?1 ORDER BY rank LIMIT ?2) m
-             JOIN nodes n ON n.rowid = m.rid
-             WHERE n.status NOT IN ('done', 'superseded', 'deferred')
+             FROM nodes_fts f
+             JOIN nodes n ON n.rowid = f.rowid
+             WHERE nodes_fts MATCH ?1
+               AND n.status NOT IN ('done', 'superseded', 'deferred')
                AND n.archived_at IS NULL AND n.superseded_by IS NULL
-             ORDER BY m.score",
+             ORDER BY f.rank LIMIT ?2",
         )
         .map_err(|error| error.to_string())?;
     let found = statement

@@ -61,7 +61,9 @@ pass "no offer: stdin never read"
 
 printf 'line one "quoted"\n  - x-0002: a title\n' > "$DIR/$SID.offer"
 printf 'not yours\n' > "$DIR/$OTHER.offer"
-payload="{\"session_id\": \"$SID\", \"hook_event_name\": \"UserPromptSubmit\"}"
+# A nested session_id that comes first must not claim that session's offer.
+nested="{\"tool_input\": {\"session_id\": \"$OTHER\"}, \"session_id\": \"$SID\", \"hook_event_name\": \"UserPromptSubmit\"}"
+payload="$nested"
 first="$(printf '%s' "$payload" | bash "$HOOK")"
 ctx="$(printf '%s' "$first" | python3 -c '
 import json, sys
@@ -74,7 +76,7 @@ grep -q 'x-0002: a title' <<<"$ctx" || fail "offer second line lost: $first"
 second="$(printf '%s' "$payload" | bash "$HOOK")"
 [[ -z "$second" ]] || fail "offer surfaced twice: $second"
 [[ -f "$DIR/$OTHER.offer" ]] || fail "another session's offer was touched"
-pass "offer printed once for its own session, then deleted"
+pass "offer printed once for its own top-level session, then deleted"
 
 python3 - "$REPO_ROOT" <<'PY' || fail "hook not registered under PostToolUse and UserPromptSubmit"
 import json, sys

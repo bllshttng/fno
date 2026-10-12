@@ -15,7 +15,9 @@
 
 set -uo pipefail
 
-DIR="${FNO_AGENTS_HOME:-${FNO_STATE_DIR:-$HOME/.fno}/agents}/friction"
+# The same root as AgentsHome::from_env, the writer: FNO_AGENTS_HOME, else
+# $HOME/.fno/agents.
+DIR="${FNO_AGENTS_HOME:-$HOME/.fno/agents}/friction"
 shopt -s nullglob
 offers=("$DIR"/*.offer)
 shopt -u nullglob
@@ -26,13 +28,14 @@ shopt -u nullglob
 # shellcheck source=../scripts/lib/with-timeout.sh
 source "${BASH_SOURCE[0]%/*}/../scripts/lib/with-timeout.sh" 2>/dev/null || true
 
+# Only the top-level session_id counts. A tool input or response can carry a
+# nested one, and a regex over the whole payload would claim that session's
+# offer.
 payload="$(cat)"
-[[ "$payload" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9_.-]+)\" ]] || exit 0
-sid="${BASH_REMATCH[1]}"
-event="PostToolUse"
-if [[ "$payload" =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"([A-Za-z]+)\" ]]; then
-    event="${BASH_REMATCH[1]}"
-fi
+sid="$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null)"
+[[ "$sid" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 0
+event="$(jq -r '.hook_event_name // empty' <<<"$payload" 2>/dev/null)"
+[[ "$event" =~ ^[A-Za-z]+$ ]] || event="PostToolUse"
 
 offer="$DIR/$sid.offer"
 [[ -f "$offer" ]] || exit 0
