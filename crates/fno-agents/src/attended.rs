@@ -157,12 +157,16 @@ pub(crate) fn newest_typed_turn_age_s(
 /// and the mtime short-circuit cannot answer it - the incident row sat
 /// quiet 17 minutes when the sweep retired it, past every window here.
 /// The all-time read's one process-lifetime memo, keyed by the file's stat
-/// trio (path, len, mtime secs). An appended transcript misses (new len or
-/// mtime) and rescans; an unchanged one never pays the full read twice in
-/// this process - without it, a kept-forever row's transcript is read
+/// trio (path, len, mtime secs) PLUS the recorded seed the read exempts by:
+/// two rows can resolve to one transcript with different payloads, and a
+/// memo keyed without it would answer one row with another row's
+/// exemption. An appended transcript misses (new len or mtime) and
+/// rescans; an unchanged one never pays the full read twice in this
+/// process - without it, a kept-forever row's transcript is read
 /// end-to-end on every sweep pass.
-fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64), Option<i64>>> {
-    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64), Option<i64>>>> = OnceLock::new();
+fn scan_memo() -> &'static Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>> {
+    static MEMO: OnceLock<Mutex<HashMap<(PathBuf, u64, i64, Option<String>), Option<i64>>>> =
+        OnceLock::new();
     MEMO.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -190,7 +194,7 @@ pub(crate) fn newest_typed_turn_age_ever(
         let Ok((len, mtime)) = stat else {
             continue;
         };
-        let key = (path.clone(), len, mtime);
+        let key = (path.clone(), len, mtime, spawn_payload.map(str::to_string));
         if let Some(hit) = scan_memo()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -391,7 +395,9 @@ mod tests {
         );
         // The memo short-circuits the read on an unchanged stat trio, and an
         // append (new len) misses and rescans - a stale cache must never
-        // swallow a later typed turn.
+        // swallow a later typed turn. The seed is part of the key: two rows
+        // resolving to one transcript with different recorded seeds must
+        // never read each other's exemption.
         let stat = std::fs::metadata(&path).unwrap();
         let key = (
             path.clone(),
@@ -401,6 +407,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs() as i64,
+            None,
         );
         scan_memo()
             .lock()
@@ -424,9 +431,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            newest_typed_turn_age_ever(&[path], &bus, "old", now, None),
+            newest_typed_turn_age_ever(&[path.clone()], &bus, "old", now, None),
             Some(30),
             "the append is a new stat trio: the memo misses and the rescan answers"
+        );
+        assert_eq!(
+            newest_typed_turn_age_ever(&[path], &bus, "old", now, Some("/fno:target 42")),
+            Some(30),
+            "a different recorded seed is a different memo key: the rescan answers"
         );
     }
 
