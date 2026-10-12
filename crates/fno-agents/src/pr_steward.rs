@@ -253,7 +253,7 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
                 write_stage_state(&dir, &file, &st);
                 return "steward_asked_issue";
             }
-            Some("intaken") => match analyse(io, cwd, &slug, pr, &st, pull) {
+            Some("intaken") => match analyse(io, &slug, pr, &st, pull) {
                 Ok((question, note)) => {
                     if io
                         .fno(&note_args(st.node.as_deref().unwrap_or_default(), &note))
@@ -592,7 +592,6 @@ fn details_text(html_url: &str, slug: &str, pr: u64, login: &str, author_id: i64
 /// in UNTRUSTED blocks; the note lands on the intake node as data.
 fn analyse(
     io: &dyn Io,
-    cwd: &Path,
     slug: &str,
     pr: u64,
     st: &StageState,
