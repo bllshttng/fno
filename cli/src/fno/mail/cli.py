@@ -4651,45 +4651,6 @@ def _scan_held_job_mail(ident) -> "tuple[Optional[str], list]":
     return key, scan_unread(key)
 
 
-def _self_handle_or_exit() -> "tuple[str, object]":
-    """This session's canonical mail handle AND the identity it came from.
-
-    Returns both so the caller never re-resolves. A second resolve can answer
-    differently from the one this function validated, and then the row written
-    is not the row checked.
-
-    Fails closed on a contaminated env, for the same reason `--to-self` does
-    and with worse consequences. An inherited marker from a parent harness
-    makes a precedence-only resolve answer with the PARENT session. A
-    misaddressed `--to-self` sends one message to the wrong place, which is
-    visible and recoverable. A misaddressed hold stamps a DELIVERY POLICY on
-    another agent's row and arms a timer against their handle, silently holding
-    their mail.
-
-    The refusal is the shared one now. `resolve_harness_identity` already
-    refuses a mixed-family env, so nothing is laundered either way; what the
-    owned path adds is that a mixed env the process tree CAN decide resolves
-    instead of refusing, which is the difference between a real claude worker
-    holding its own mail and being told it has no identity.
-    """
-    from fno.agents.self_stamp import IdentityAmbiguousError, require_self_identity
-    from fno.harness_identity import canonical_handle
-
-    try:
-        ident = require_self_identity()
-    except IdentityAmbiguousError as exc:
-        sys.stderr.write(
-            f"{exc}\na hold stamped on the wrong row holds another agent's mail\n"
-        )
-        raise typer.Exit(code=3) from exc
-    if not ident.harness or not ident.session_id:
-        sys.stderr.write(
-            "no provable harness identity - there is no session to hold mail for\n"
-        )
-        raise typer.Exit(code=3)
-    return canonical_handle(ident.session_id), ident
-
-
 def _forward_mail_hold(argv: list[str]) -> None:
     """Forward one hold-front verb to the bundled fno-agents binary.
 

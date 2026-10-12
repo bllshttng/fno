@@ -377,56 +377,6 @@ def test_a_row_with_no_hold_renders_a_null_dnd():
     assert row["dnd"] is None
 
 
-def test_hold_refuses_a_contaminated_env_rather_than_stamping_a_guessed_row(monkeypatch):
-    """Precedence order is not ownership, so an inherited marker from a parent
-    harness makes a precedence-only resolve answer with the PARENT session.
-
-    `--to-self` already fails closed here. A hold must too, and the stakes are
-    higher: a misaddressed send delivers one message to the wrong place, while
-    a misaddressed hold stamps a delivery policy on another agent's row and
-    arms a timer against their handle. This was live on the machine that wrote
-    the test, where claude and codex markers were both present.
-
-    The hold now shares the one owned-identity path rather than hand-rolling a
-    >1-family check, so this drives the real seam: two families the process
-    tree cannot decide between refuse, one family resolves.
-    """
-    import typer
-
-    from fno.harness_identity import OwnedHarnessIdentity
-    from fno.mail import cli as mail_cli
-
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda *a, **k: OwnedHarnessIdentity(
-            None,
-            None,
-            (
-                ("CLAUDE_CODE_SESSION_ID", "claude", "x"),
-                ("CODEX_THREAD_ID", "codex", "y"),
-            ),
-            "ambiguous",
-        ),
-    )
-
-    with pytest.raises(typer.Exit) as caught:
-        mail_cli._self_handle_or_exit()
-    assert caught.value.exit_code == 3
-
-    # One family present is a clean session and must still resolve.
-    monkeypatch.setattr(
-        "fno.agents.self_stamp.resolve_self_identity",
-        lambda *a, **k: OwnedHarnessIdentity(
-            f"{HANDLE}-full", "codex", (("CODEX_THREAD_ID", "codex", "y"),), "single"
-        ),
-    )
-    resolved_handle, resolved_ident = mail_cli._self_handle_or_exit()
-    assert resolved_handle == HANDLE
-    # The identity travels back with the handle, so the caller writes the row
-    # this function validated rather than re-resolving and getting another.
-    assert resolved_ident.session_id == f"{HANDLE}-full"
-
-
 def test_an_unreadable_clock_renders_a_question_mark_not_an_empty_cell(monkeypatch):
     """An instrument that declines to answer must not answer anyway.
 
