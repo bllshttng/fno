@@ -365,8 +365,12 @@ fn segment_launches(seg: &[String], here: &mut String, out: &mut Vec<Launch>) {
         if let Some(j) = args.iter().position(|a| a == "--") {
             let inner = &args[j + 1..];
             if !inner.is_empty() {
+                // The fence's own cd moves the pane's parse, never the outer
+                // command's cwd: a `pane run -- cd /w && claude --bg x` line
+                // runs its cd inside the pane.
+                let mut inner_here = here.clone();
                 let inner_seg: Vec<String> = inner.to_vec();
-                segment_launches(&inner_seg, here, out);
+                segment_launches(&inner_seg, &mut inner_here, out);
             }
         }
         return;

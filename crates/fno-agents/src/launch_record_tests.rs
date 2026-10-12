@@ -71,9 +71,21 @@ fn a_pane_run_unwraps_the_fenced_native_argv() {
     assert_eq!(got.harness, "codex");
     assert_eq!(got.node.as_deref(), Some("x-ab12"));
     assert_eq!(got.cwd, "/repo");
-    let bare = one(r#"codex --remote unix://run.sock "$fno:target x-ab12""#, "/repo");
+    let bare = one(
+        r#"codex --remote unix://run.sock "$fno:target x-ab12""#,
+        "/repo",
+    );
     assert_eq!(bare.harness, "codex");
     assert_eq!(bare.node.as_deref(), Some("x-ab12"));
+    // The fence's own cd stays inside the fence: the next outer launch keeps
+    // the caller's cwd.
+    let fenced_cd = parse_command(
+        r#"fno mux pane run -- cd /w && claude --bg -n w "/fno:target x-ab12""#,
+        "/repo",
+    );
+    let outer = fenced_cd.last().expect("outer launch parsed");
+    assert_eq!(outer.harness, "claude");
+    assert_eq!(outer.cwd, "/repo");
 }
 
 /// A dispatcher with no Bash hook writes the same record a hook would, slot
