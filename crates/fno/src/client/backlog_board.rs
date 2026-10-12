@@ -1251,6 +1251,22 @@ pub(crate) fn cycle_sideline_view(view: &mut View) {
     }
 }
 
+/// `G`: the org view's own key. From any sideline view it drops the
+/// boards the cycle drops and opens Org in one press; from Org it closes
+/// to Agents. It shares `cycle_sideline_view`'s board-dropping rule: an
+/// open board owns the whole surface and would hijack input off its view.
+pub(crate) fn toggle_org_view(view: &mut View) {
+    view.messages_board = None;
+    match view.sideline_view {
+        crate::view_store::SidelineView::Org => {
+            view.org_board = None;
+            view.backlog_board = None;
+            set_sideline_view(view, crate::view_store::SidelineView::Agents);
+        }
+        _ => super::org_board::open(view),
+    }
+}
+
 /// A fresh board view at the next generation (the stale fold of a
 /// previous open can never land).
 fn backlog_board_open_fresh(view: &mut View) {
