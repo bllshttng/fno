@@ -156,19 +156,37 @@ fn read_event_lines(journal: &Path) -> Result<Vec<String>, String> {
     Ok(rows.into_iter().map(|r| r.line).collect())
 }
 
+/// The journal's verdict lines: the file's text when it exists (importing it
+/// into the store first), else the sibling store's rows, since the backfill
+/// commits there without creating the file. Gating on one source existing
+/// keeps `import_all`'s create-on-read side effect off a path with neither.
+fn verdict_lines(events_path: &Path) -> Option<Vec<String>> {
+    if events_path.exists() {
+        let lines = match read_event_lines(events_path) {
+            Ok(lines) => lines,
+            Err(_) => match fs::read_to_string(events_path) {
+                Ok(text) => text.lines().map(str::to_string).collect(),
+                Err(_) => return None,
+            },
+        };
+        return Some(lines);
+    }
+    let store = crate::event_store::try_store_path(events_path).ok()?;
+    if !store.exists() {
+        return None;
+    }
+    let q = crate::event_store::EventQuery::of_types(&["verifier_verdict"]);
+    let rows = crate::event_store::query_events(events_path, &q).ok()?;
+    Some(rows.into_iter().map(|r| r.line).collect())
+}
+
 /// The verdict already recorded for `session_id`, walking forward so the
 /// LAST non-empty verdict wins.
 fn recorded_verdict(session_id: &str, events_path: &Path) -> Option<String> {
-    if session_id.is_empty() || !events_path.exists() {
+    if session_id.is_empty() {
         return None;
     }
-    let lines = match read_event_lines(events_path) {
-        Ok(lines) => lines,
-        Err(_) => match fs::read_to_string(events_path) {
-            Ok(text) => text.lines().map(str::to_string).collect(),
-            Err(_) => return None,
-        },
-    };
+    let lines = verdict_lines(events_path)?;
     let mut verdict = None;
     for line in &lines {
         let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -406,7 +424,7 @@ pub(crate) fn run(args: &AdviseArgs, spawn: Spawn<'_>) -> String {
         }
     }
     let _ = stamp_ledger(&args.session_id, &verdict, &args.ledger);
-    println!("verify_advise: verdict={verdict}");
+    eprintln!("verify_advise: verdict={verdict}");
     verdict
 }
 
@@ -456,18 +474,21 @@ mod tests {
         };
         let verdict = run(&args, &never_spawn);
         assert_eq!(verdict, "pass");
-        let backfilled = fs::read_to_string(&global).unwrap();
+        let q = crate::event_store::EventQuery::of_types(&["verifier_verdict"]);
+        let rows = crate::event_store::query_events(&global, &q).unwrap();
+        assert_eq!(rows.len(), 1, "backfill commits exactly one store row");
+        let backfilled = rows[0].line.clone();
         assert!(backfilled.contains(r#""type":"verifier_verdict""#));
         assert!(backfilled.contains(r#""session_id":"S1""#));
         assert!(backfilled.contains(r#""verdict":"pass""#));
         assert!(backfilled.contains(r#""source":"ship-gate""#));
         assert_eq!(fs::read_to_string(&project).unwrap().lines().count(), 1);
         assert!(!ledger.exists());
-        let before_project = fs::read_to_string(&project).unwrap();
-        let before_global = fs::read_to_string(&global).unwrap();
         let _ = run(&args, &never_spawn);
-        assert_eq!(fs::read_to_string(&project).unwrap(), before_project);
-        assert_eq!(fs::read_to_string(&global).unwrap(), before_global);
+        let after = crate::event_store::query_events(&global, &q).unwrap();
+        assert_eq!(after.len(), rows.len(), "second run must not re-backfill");
+        assert_eq!(after[0].line, backfilled);
+        assert_eq!(fs::read_to_string(&project).unwrap().lines().count(), 1);
     }
 
     #[test]
