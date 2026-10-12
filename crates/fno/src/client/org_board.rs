@@ -42,10 +42,10 @@ fn fold_mark(collapsed: bool) -> BSeg {
 type GraphMemo = (
     u64,
     usize,
+    usize,
     OrgSessions,
     String,
     super::org_graph::Graph,
-    Vec<(usize, String)>,
 );
 pub(crate) struct OrgBoard {
     pub(crate) snapshot: OrgSnapshot,
@@ -324,13 +324,20 @@ impl OrgBoard {
             }
         }
     }
-    fn graph_lines(&self, width: usize, height: usize) -> Vec<String> {
+    /// The memoized graph layout: rebuilt only when the tree body, the
+    /// viewport, the session filter or the query changed, so a repaint
+    /// never moves a dot. The caller reprojects for the live pan.
+    fn refresh_graph(&self, width: usize, height: usize) -> super::org_graph::Graph {
         let Some(tree) = &self.snapshot.tree else {
-            return vec![];
+            return super::org_graph::Graph::default();
         };
         let mut memo = self.graph.borrow_mut();
         let changed = memo.as_ref().is_none_or(|m| {
-            m.0 != self.body_gen || m.1 != width || m.2 != self.filter || m.3 != self.query
+            m.0 != self.body_gen
+                || m.1 != width
+                || m.2 != height
+                || m.3 != self.filter
+                || m.4 != self.query
         });
         if changed {
             let mut filtered = tree.clone();
@@ -338,7 +345,7 @@ impl OrgBoard {
             for lead in &mut filtered.leads {
                 lead.nodes.retain(|n| {
                     visible.iter().any(
-                        |r| matches!(&r.selected,Selected::Node(v) if v.card.id==n.view.card.id),
+                        |r| matches!(&r.selected, Selected::Node(v) if v.card.id == n.view.card.id),
                     )
                 });
                 for node in &mut lead.nodes {
@@ -364,48 +371,22 @@ impl OrgBoard {
             filtered
                 .leads
                 .retain(|l| !l.nodes.is_empty() || self.query.is_empty());
-            filtered.unowned.retain(|a| self.session_shown(true) && visible.iter().any(|r|matches!(&r.selected,Selected::Session(s) if s.agent.as_ref().is_some_and(|r|r == a))));
-            let layout = super::org_graph::layout(&filtered, width);
-            let keys = visible
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| layout.boxes.iter().any(|p| p.key == r.key))
-                .map(|(i, r)| (i, r.key.clone()))
-                .collect();
+            filtered.unowned.retain(|a| {
+                self.session_shown(true)
+                    && visible.iter().any(|r| {
+                        matches!(&r.selected, Selected::Session(s) if s.agent.as_ref().is_some_and(|g| g == a))
+                    })
+            });
             *memo = Some((
                 self.body_gen,
                 width,
+                height,
                 self.filter,
                 self.query.clone(),
-                layout,
-                keys,
+                super::org_graph::layout(&filtered),
             ));
         }
-        let cached = memo.as_ref().expect("graph memo filled");
-        let selected = cached
-            .5
-            .iter()
-            .find(|(i, _)| *i == self.cursor)
-            .map(|(_, key)| key.as_str());
-        super::org_graph::lines(&cached.4, width, height, self.pan, selected)
-    }
-
-    fn move_graph_cursor(&mut self, down: bool) {
-        let memo = self.graph.borrow();
-        let Some(cached) = memo
-            .as_ref()
-            .filter(|m| m.0 == self.body_gen && m.2 == self.filter && m.3 == self.query)
-        else {
-            return;
-        };
-        let next = if down {
-            cached.5.iter().find(|(i, _)| *i > self.cursor)
-        } else {
-            cached.5.iter().rev().find(|(i, _)| *i < self.cursor)
-        };
-        if let Some((index, _)) = next {
-            self.cursor = *index;
-        }
+        memo.as_ref().expect("graph memo filled").5.clone()
     }
     pub(crate) fn lines(&self, width: usize, height: usize) -> Vec<BLine> {
         if let Some(detail) = &self.detail {
@@ -444,19 +425,14 @@ impl OrgBoard {
             header.push(seg(format!(" · /{query}"), BRole::Meta));
         }
         if self.mode == OrgMode::Graph {
-            let graph = self.graph_lines(width, height.saturating_sub(2));
-            let memo = self.graph.borrow();
-            if let Some(cached) = memo.as_ref() {
-                if let Some((_, key)) = cached.5.iter().find(|(i, _)| *i == self.cursor) {
-                    if let Some(placed) = cached.4.boxes.iter().find(|p| &p.key == key) {
-                        let label = placed.text.trim_matches(['┌', '┐', '├', '└', ' ']);
-                        header.push(seg(format!(" · ▶ {label}"), BRole::Meta));
-                    }
+            let graph = self.refresh_graph(width, height.saturating_sub(2));
+            let rows = self.mode_rows(width, height.saturating_sub(2));
+            if let Some(r) = rows.get(self.cursor) {
+                if let Some(d) = graph.dots.iter().find(|d| d.key == r.key) {
+                    header.push(seg(format!(" · \u{25b6} {}", d.label), BRole::Meta));
                 }
             }
-            let mut lines = vec![BLine::of(&header)];
-            lines.extend(graph.into_iter().map(BLine::plain));
-            return lines;
+            return vec![BLine::of(&header)];
         }
         let mut lines = vec![BLine::of(&header)];
         if self.mode == OrgMode::Table {
@@ -542,16 +518,11 @@ impl OrgBoard {
                 session_rows
             }
             OrgMode::Graph => {
-                let memo = self.graph.borrow();
-                match memo.as_ref() {
-                    Some(m) if m.0 == self.body_gen && m.2 == self.filter && m.3 == self.query => {
-                        m.5.iter()
-                            .map(|(i, _)| rows.get(*i).cloned())
-                            .flatten()
-                            .collect()
-                    }
-                    _ => rows,
-                }
+                let graph = self.refresh_graph(width, height.saturating_sub(2));
+                let dot_keys: HashSet<&str> = graph.dots.iter().map(|d| d.key.as_str()).collect();
+                rows.into_iter()
+                    .filter(|r| dot_keys.contains(r.key.as_str()))
+                    .collect()
             }
         }
     }
@@ -737,27 +708,36 @@ pub(crate) fn paint(
         }
     }
     let lines = b.lines(width, height);
-    super::backlog_style::paint_panel(
-        cells,
-        rows,
-        cols,
-        0,
-        width,
-        height.saturating_sub(1),
-        &lines,
-        if b.detail.is_some() {
-            None
-        } else {
-            Some(if b.mode == OrgMode::Graph {
-                b.cursor + 1
+    if b.mode == OrgMode::Graph && b.detail.is_none() && !b.keys_help {
+        super::backlog_style::paint_panel(
+            cells,
+            rows,
+            cols,
+            0,
+            width,
+            1,
+            &lines,
+            None,
+            &view.theme,
+        );
+        paint_graph_body(view, b, cells, rows, cols, width, height);
+    } else {
+        super::backlog_style::paint_panel(
+            cells,
+            rows,
+            cols,
+            0,
+            width,
+            height.saturating_sub(1),
+            &lines,
+            if b.detail.is_some() {
+                None
             } else {
-                let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
-                let (_, map) = b.body(width);
-                map.get(b.cursor).map(|l| l + offset).unwrap_or(0)
-            })
-        },
-        &view.theme,
-    );
+                body_follow_for(b, width)
+            },
+            &view.theme,
+        );
+    }
     super::backlog_style::paint_panel(
         cells,
         rows,
@@ -773,6 +753,54 @@ pub(crate) fn paint(
         &view.theme,
     );
 }
+/// The follow offset paint hands [`paint_panel`]: the first line of the
+/// cursor row, offset by the header (plus the Table's own header row).
+fn body_follow_for(b: &OrgBoard, width: usize) -> Option<usize> {
+    let offset = if b.mode == OrgMode::Table { 2 } else { 1 };
+    let (_, map) = b.body(width);
+    map.get(b.cursor).map(|l| l + offset)
+}
+
+/// The Graph mode's body: a degenerate tree renders its one honest line;
+/// otherwise the canvas frame blits under the header row.
+fn paint_graph_body(
+    view: &View,
+    b: &OrgBoard,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    width: usize,
+    height: usize,
+) {
+    let body_h = height.saturating_sub(2);
+    if body_h == 0 {
+        return;
+    }
+    let graph = b.refresh_graph(width, body_h);
+    let dot_rows = b.mode_rows(width, body_h);
+    let key = dot_rows.get(b.cursor).map(|r| r.key.clone());
+    let degenerate =
+        matches!(&b.snapshot.tree, Some(t) if t.leads.is_empty() && t.unowned.is_empty());
+    if degenerate {
+        let line = BLine::meta("no leads or workers");
+        super::backlog_style::paint_panel(
+            cells,
+            rows,
+            cols,
+            1,
+            width,
+            1,
+            &[line],
+            None,
+            &view.theme,
+        );
+        return;
+    }
+    let colors = super::org_graph::GraphColors::of(&view.theme);
+    let buf = super::org_graph::frame(&graph, width, body_h, b.pan, key.as_deref(), &colors);
+    crate::ratatui_blit::blit_area(&buf, 1, 0, cells, cols);
+}
+
 pub(crate) async fn route_keys(
     view: &mut View,
     scanner: &mut Scanner,
@@ -904,21 +932,11 @@ pub(crate) async fn keys(
                 b.pan.0 = b.pan.0.saturating_add(4);
             }
             ModalKey::Up | ModalKey::Byte(b'k') => {
-                if b.mode == OrgMode::Graph {
-                    b.graph_lines(graph_width, graph_height);
-                    b.move_graph_cursor(false);
-                } else {
-                    b.cursor = b.cursor.saturating_sub(1);
-                }
+                b.cursor = b.cursor.saturating_sub(1);
             }
             ModalKey::Down | ModalKey::Byte(b'j') => {
-                if b.mode == OrgMode::Graph {
-                    b.graph_lines(graph_width, graph_height);
-                    b.move_graph_cursor(true);
-                } else {
-                    let rows = b.mode_rows(graph_width, graph_height);
-                    b.cursor = (b.cursor + 1).min(rows.len().saturating_sub(1));
-                }
+                let rows = b.mode_rows(graph_width, graph_height);
+                b.cursor = (b.cursor + 1).min(rows.len().saturating_sub(1));
             }
             ModalKey::Left | ModalKey::Byte(b'h') => {
                 if let Some(r) = b.rows().get(b.cursor) {
@@ -1008,16 +1026,20 @@ pub(crate) async fn mouse(
             return Ok(());
         }
         let index = if b.mode == OrgMode::Graph {
-            b.graph_lines(width, height.saturating_sub(1));
-            let memo = b.graph.borrow();
-            let x = rep.col as usize + b.pan.0;
-            let y = (rep.row as usize).saturating_sub(1) + b.pan.1;
-            let hit = memo.as_ref().and_then(|m| {
-                m.4.boxes
-                    .iter()
-                    .find(|p| p.y == y && x >= p.x && x < p.x + p.text.chars().count())
-            });
-            let Some(index) = hit.and_then(|p| rows.iter().position(|r| r.key == p.key)) else {
+            let body_h = height.saturating_sub(1);
+            let graph = b.refresh_graph(width, body_h);
+            let sel = b
+                .mode_rows(width, body_h)
+                .get(b.cursor)
+                .map(|r| r.key.clone());
+            let x = rep.col as usize;
+            let y = (rep.row as usize).saturating_sub(1);
+            let Some(key) =
+                super::org_graph::hit_test(&graph, width, body_h, b.pan, sel.as_deref(), x, y)
+            else {
+                return Ok(());
+            };
+            let Some(index) = rows.iter().position(|r| r.key == key) else {
                 return Ok(());
             };
             index

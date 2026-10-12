@@ -135,93 +135,11 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
     );
     b.filter = OrgSessions::Current;
     b.mode = OrgMode::Graph;
-    let first = b.graph_lines(100, 20);
-    let allocation = b.graph.borrow().as_ref().unwrap().4.boxes.as_ptr();
-    assert_eq!(first, b.graph_lines(100, 20));
-    assert_eq!(
-        allocation,
-        b.graph.borrow().as_ref().unwrap().4.boxes.as_ptr(),
-        "same frame reuses layout storage"
-    );
-    assert!(
-        first.iter().any(|l| l.contains('◀')),
-        "dependency edge has a visible endpoint"
-    );
-    assert!(first[0].contains('▶'), "selected Lead is marked");
-    assert!(
-        b.lines(100, 20)[0].text.ends_with("· ▶ finch L1 team"),
-        "the header names the selected box without its border"
-    );
-    b.move_graph_cursor(true);
-    let moved = b.graph_lines(100, 20);
-    assert!(!moved[0].contains('▶'));
-    assert!(moved.iter().any(|line| line.contains('▶')));
-    assert_eq!(
-        allocation,
-        b.graph.borrow().as_ref().unwrap().4.boxes.as_ptr()
-    );
-    b.cursor = 0;
-    let bare = |pane| AgentRow {
-        name: "shared label".into(),
-        pane_id: Some(pane),
-        ..Default::default()
-    };
-    b.snapshot.tree.as_mut().unwrap().unowned = vec![bare(44), bare(45)];
-    *b.graph.borrow_mut() = None;
-    b.pan = (88, 0);
-    b.graph_lines(100, 20);
-    let keys = b
-        .graph
-        .borrow()
-        .as_ref()
-        .unwrap()
-        .4
-        .boxes
-        .iter()
-        .filter(|p| p.key.starts_with("unowned:"))
-        .map(|p| p.key.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(keys.len(), 2);
-    assert_ne!(
-        keys[0], keys[1],
-        "equal labels retain different pane identities"
-    );
-    let saved_term = view.term;
-    let saved_full = view.board_full;
-    view.term = (24, 100);
-    view.board_full = true;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let (mut socket, _receiver) = tokio::io::duplex(4096);
-        mouse(
-            view,
-            crate::mouse::MouseReport {
-                row: 3,
-                col: 12,
-                kind: MouseKind::Press(MouseButton::Left),
-                shift: false,
-            },
-            &mut socket,
-        )
-        .await
-        .unwrap();
-    });
-    assert!(
-        matches!(view.org_board.as_ref().unwrap().selected(), Some(Selected::Session(s)) if s.agent.as_ref().unwrap().pane_id == Some(45))
-    );
-    view.term = saved_term;
-    view.board_full = saved_full;
-    let b = view.org_board.as_mut().unwrap();
-    b.snapshot.tree.as_mut().unwrap().unowned.clear();
-    b.pan = (0, 0);
-    b.cursor = 0;
-    *b.graph.borrow_mut() = None;
+    let graph = b.refresh_graph(60, 20);
+    assert!(graph.dots.iter().any(|d| d.key == "node:x-2"));
     b.query = "first".into();
-    let graph = b.graph_lines(100, 20);
-    assert!(!graph.iter().any(|l| l.contains("second")));
+    let graph = b.refresh_graph(60, 20);
+    assert!(!graph.dots.iter().any(|d| d.label.contains("second")));
     b.query.clear();
     b.mode = OrgMode::Tree;
     let mut departed = b.snapshot.tree.as_ref().unwrap().leads[0].nodes[0].clone();
@@ -396,4 +314,231 @@ fn table_is_one_row_per_worker_with_fitting_columns() {
     for l in &narrow[2..6] {
         assert!(l.split_whitespace().count() >= 2, "a blank cell: {l:?}");
     }
+}
+
+// (x-93ab) AC5-HP: the fixture org renders as a node-link drawing: dots
+// over braille lines, labels beside, and no box-text graph left behind.
+#[test]
+fn graph_renders_a_node_link_drawing() {
+    use serde_json::json;
+    let mut view = org_board_for_graph();
+    let colors = crate::client::org_graph::GraphColors::of(&view.theme);
+    let b = view.org_board.as_mut().unwrap();
+    let graph = b.refresh_graph(60, 20);
+    let buf = crate::client::org_graph::frame(&graph, 60, 20, (0, 0), Some("lead:finch"), &colors);
+    let (mut lead, mut node, mut worker, mut blocks, mut braille) = (0u32, 0u32, 0u32, 0u32, 0u32);
+    let mut rows: Vec<String> = vec![String::new(); 20];
+    for y in 0..20u16 {
+        for x in 0..60u16 {
+            let sym = buf[(x, y)].symbol().to_string();
+            let mut chars = sym.chars();
+            let c = chars.next().unwrap_or(' ');
+            match c {
+                '\u{25c6}' => lead += 1,
+                '\u{25cf}' => node += 1,
+                '\u{2022}' => worker += 1,
+                '\u{25c0}' => blocks += 1,
+                c if (c as u32) >= 0x2800 && (c as u32) <= 0x28FF => braille += 1,
+                _ => {}
+            }
+            rows[y as usize].push(c);
+        }
+    }
+    assert_eq!(lead, 1, "one lead dot");
+    assert_eq!(node, 2, "two node dots");
+    assert_eq!(worker, 3, "three worker dots");
+    assert_eq!(blocks, 0, "no box-graph arrow survives");
+    assert!(braille > 0, "edges draw in braille between dots");
+
+    for label in ["finch", "x-1", "x-2", "first", "second", "third"] {
+        assert!(
+            rows.iter().any(|r| r.contains(label)),
+            "label {label} paints beside its dot"
+        );
+    }
+    // The selected lead's dot answers a tap through the shared placement.
+    let cells_pos = crate::client::org_graph::dot_cells(&graph, 60, 20, (0, 0));
+    let (cx, cy) = cells_pos[0];
+    let key =
+        crate::client::org_graph::hit_test(&graph, 60, 20, (0, 0), Some("lead:finch"), cx, cy)
+            .expect("a tap on the lead dot selects it");
+    assert_eq!(key, "lead:finch");
+}
+
+// Two registry rows sharing one label keep distinct unowned keys.
+#[test]
+fn unowned_keys_keep_pane_identity() {
+    let bare = |pane| crate::proto::AgentRow {
+        name: "shared label".into(),
+        pane_id: Some(pane),
+        ..Default::default()
+    };
+    let keys: Vec<String> = vec![bare(44), bare(45)]
+        .iter()
+        .enumerate()
+        .map(|(i, a)| crate::client::org_graph::unowned_key(a, i))
+        .collect();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(
+        keys[0], keys[1],
+        "equal labels retain different pane identities"
+    );
+}
+
+/// The AC5 fixture org as a graph-ready view: one lead, two nodes with
+/// x-2 blocked by x-1, and three live workers.
+fn org_board_for_graph() -> View {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+
+    let lead = AgentRow {
+        name: "finch".into(),
+        role_scope: Some("team".into()),
+        role_level: Some(1),
+        ..Default::default()
+    };
+    let worker = |name: &str, sid: &str, node: &str| AgentRow {
+        name: name.into(),
+        harness_session_id: Some(sid.into()),
+        node: Some(node.into()),
+        ..Default::default()
+    };
+
+    let backlog = crate::backlog_model::Inputs {
+        rows: vec![
+            json!({"id":"x-1","status":"ready","title":"First","sessions":[{"session_id":"s1"}]}),
+            json!({"id":"x-2","status":"ready","title":"Second","blocked_by":["x-1"],"sessions":[{"session_id":"s2"},{"session_id":"s3"}]}),
+        ],
+        agents: vec![
+            lead,
+            worker("first", "s1", "x-1"),
+            worker("second", "s2", "x-2"),
+            worker("third", "s3", "x-2"),
+        ],
+        ..Default::default()
+    };
+
+    open(&mut view);
+    let gen = view.org_generation;
+    apply_fold(
+        &mut view,
+        gen,
+        OrgInputs {
+            backlog,
+            fold: Ok(
+                json!({"scope_nodes":{"team":{"status":"ok","nodes":[{"id":"x-1"},{"id":"x-2"}]}},"owned_scopes":{"x-1":"team","x-2":"team"}}),
+            ),
+            measured_at: now(),
+        },
+    );
+    let b = view.org_board.as_mut().unwrap();
+    b.mode = OrgMode::Graph;
+    b.filter = OrgSessions::Current;
+    view
+}
+
+// (x-93ab) AC5-ERR: forty dots fit a 27x20 view, and the selected dot's
+// label paints while colliding labels are skipped instead of cut.
+#[test]
+fn graph_fits_forty_dots_in_a_narrow_view() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+
+    let mut rows = Vec::new();
+    let mut agents = Vec::new();
+    for i in 0..10 {
+        let node = format!("x-{}", i + 1);
+        rows.push(json!({"id": node, "status":"ready","title":"Node","scope": format!("t{i}"), "sessions":[{"session_id": format!("s{i}a")},{"session_id": format!("s{i}b")},{"session_id": format!("s{i}c")}]}));
+        agents.push(AgentRow {
+            name: format!("lead{i}").into(),
+            role_scope: Some(format!("t{i}")),
+            role_level: Some(1),
+            ..Default::default()
+        });
+        for (w, sid) in [("wa", "a"), ("wb", "b"), ("wc", "c")] {
+            agents.push(AgentRow {
+                name: format!("{w}{i}").into(),
+                harness_session_id: Some(format!("{sid}{i}").into()),
+                node: Some(node.clone()),
+                ..Default::default()
+            });
+        }
+    }
+
+    let mut scope_nodes = serde_json::Map::new();
+    let mut owned = serde_json::Map::new();
+    for i in 0..10 {
+        scope_nodes.insert(
+            format!("t{i}"),
+            json!({"status":"ok","nodes":[{"id": format!("x-{}", i + 1)}]}),
+        );
+        owned.insert(format!("x-{}", i + 1), json!(format!("t{i}")));
+    }
+    open(&mut view);
+    let gen = view.org_generation;
+    apply_fold(
+        &mut view,
+        gen,
+        OrgInputs {
+            backlog: crate::backlog_model::Inputs {
+                rows,
+                agents,
+                ..Default::default()
+            },
+            fold: Ok(json!({"scope_nodes": scope_nodes, "owned_scopes": owned})),
+            measured_at: now(),
+        },
+    );
+    let b = view.org_board.as_mut().unwrap();
+    b.mode = OrgMode::Graph;
+    b.filter = OrgSessions::Current;
+    let colors = crate::client::org_graph::GraphColors::of(&view.theme);
+    let graph = b.refresh_graph(27, 20);
+    assert_eq!(graph.dots.len(), 40, "ten leads, ten nodes, twenty workers");
+    let buf = crate::client::org_graph::frame(&graph, 27, 20, (0, 0), Some("lead:lead0"), &colors);
+    let mut painted = 0u32;
+    for y in 0..20u16 {
+        for x in 0..27u16 {
+            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
+            if matches!(c, '\u{25c6}' | '\u{25cf}' | '\u{2022}') {
+                painted += 1;
+            }
+        }
+    }
+    assert_eq!(painted, 40, "every dot paints in the narrow view");
+    let mut label_rows: Vec<String> = vec![String::new(); 20];
+    for y in 0..20u16 {
+        for x in 0..27u16 {
+            let c = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
+            label_rows[y as usize].push(c);
+        }
+    }
+    assert!(
+        label_rows.iter().any(|r| r.contains("lead0")),
+        "the selected dot's label paints: {label_rows:?}"
+    );
 }
