@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -146,18 +147,38 @@ def _sandbox(tmp_path: Path, node_id: str = NODE_ID):
     return repo, home, log, env
 
 
+class _InitResult(NamedTuple):
+    returncode: int
+    stderr: str
+
+
 def _run_init(repo: Path, env: dict):
-    return subprocess.run(
+    """Run the init script under a bounded process group. A hung delegate
+    (the mock `exec`s into the real front) survives a lone child kill and
+    holds the output pipes, so the group dies together and a stall reports
+    its own captured output instead of hanging the runner."""
+    import os
+    import signal
+
+    proc = subprocess.Popen(
         ["bash", str(INIT_SCRIPT)],
         cwd=repo,
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        # These integration paths exercise the real writer and can approach the
-        # old ceiling under the parallel full suite. Bound hangs without turning
-        # scheduler pressure into a false functional failure.
-        timeout=90,
+        start_new_session=True,
     )
+    try:
+        out, err = proc.communicate(timeout=40)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        out, err = proc.communicate()
+        raise AssertionError(
+            f"init stalled: group-killed at 40s\nSTDOUT tail:\n{out[-2000:]}\n"
+            f"STDERR tail:\n{err[-2000:]}"
+        )
+    return _InitResult(proc.returncode, err)
 
 
 def _state(repo: Path) -> str:
