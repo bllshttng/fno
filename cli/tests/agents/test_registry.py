@@ -1074,7 +1074,9 @@ def test_us2_schema_version_is_three() -> None:
     # v39 (x-fdab): additive `tool_calls`/`tool_errors` - the daemon's
     # incremental transcript fold, the sideline card graph's input.
     # v40 migrates the authority vocabulary and fences older writers.
-    assert SCHEMA_VERSION == 40
+    # v41: additive `spawn_payload` - the delivered seed, so the attended
+    # guard exempts the machine's own slash-command turn.
+    assert SCHEMA_VERSION == 41
 
 
 def test_session_lineage_fields_round_trip(tmp_path: Path, monkeypatch) -> None:

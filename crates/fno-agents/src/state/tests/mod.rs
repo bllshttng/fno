@@ -2847,6 +2847,7 @@ fn registry_schema_fields() {
         requested_model: Some("value".into()),
         requested_provider: Some("value".into()),
         requested_effort: Some("value".into()),
+        spawn_payload: Some("value".into()),
         harness_args: vec!["value".into()],
         route_provider_id: Some("value".into()),
         model_name: Some("value".into()),
