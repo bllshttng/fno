@@ -1,4 +1,5 @@
 //! parity-stage: characterization
+//! parity-oracle: fno.verify_advise.decide_verdict
 //!
 //! Characterization tests for the `verify_advise` Rust port, frozen against
 //! the live Python module before its deletion. Golden encoding: a `Some(v)`
