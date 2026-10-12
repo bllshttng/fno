@@ -12,20 +12,22 @@ pub(crate) enum Selected {
     Session(OrgSession),
 }
 #[derive(Clone)]
-struct Row {
+pub(crate) struct Row {
     key: String,
     text: String,
     segs: Vec<BSeg>,
     depth: usize,
-    selected: Selected,
+    pub(crate) selected: Selected,
+    pub(crate) lead: String,
 }
-fn row(key: String, depth: usize, segs: Vec<BSeg>, selected: Selected) -> Row {
+fn row(key: String, depth: usize, lead: String, segs: Vec<BSeg>, selected: Selected) -> Row {
     Row {
         key,
         text: segs.iter().map(|s| s.text.as_str()).collect(),
         segs,
         depth,
         selected,
+        lead,
     }
 }
 fn seg(text: impl Into<String>, role: BRole) -> BSeg {
@@ -133,6 +135,7 @@ impl OrgBoard {
                         sessions.push(row(
                             format!("session:{}:{}", node.view.card.id, sessions.len()),
                             2,
+                            lead.holder.name.clone(),
                             segs,
                             Selected::Session(session.clone()),
                         ));
@@ -153,7 +156,13 @@ impl OrgBoard {
                 if let Some(pr) = node.view.prs.first() {
                     segs.push(seg(format!(" #{}", pr.number), BRole::Meta));
                 }
-                children.push(row(key.clone(), 1, segs, Selected::Node(node.view.clone())));
+                children.push(row(
+                    key.clone(),
+                    1,
+                    lead.holder.name.clone(),
+                    segs,
+                    Selected::Node(node.view.clone()),
+                ));
                 if self.mode != OrgMode::Tree || !self.collapsed.contains(&key) {
                     children.extend(sessions);
                 }
@@ -180,6 +189,7 @@ impl OrgBoard {
             rows.push(row(
                 key.clone(),
                 0,
+                lead.holder.name.clone(),
                 segs,
                 Selected::Lead(lead.holder.clone()),
             ));
@@ -189,6 +199,7 @@ impl OrgBoard {
                     rows.push(row(
                         format!("left-team:{}", lead.scope),
                         1,
+                        lead.holder.name.clone(),
                         vec![
                             fold_mark(!self.departures.contains(&lead.scope)),
                             seg(
@@ -217,6 +228,7 @@ impl OrgBoard {
                         rows.push(row(
                             format!("left:{}", node.view.card.id),
                             2,
+                            lead.holder.name.clone(),
                             segs,
                             Selected::Node(node.view.clone()),
                         ));
@@ -249,6 +261,7 @@ impl OrgBoard {
             let unowned = row(
                 super::org_graph::unowned_key(agent, unowned_index),
                 0,
+                "unowned".to_string(),
                 segs,
                 Selected::Session(session),
             );
@@ -447,11 +460,21 @@ impl OrgBoard {
         }
         let mut lines = vec![BLine::of(&header)];
         if self.mode == OrgMode::Table {
-            lines.push(BLine::meta(table_header(width)));
+            let mail = self.any_unread();
+            lines.push(BLine::meta(super::org_table::header(width, mail)));
         }
         let (body, _map) = self.body(width);
         lines.extend(body);
         lines
+    }
+
+    /// Whether any worker row carries unread mail: the one condition that
+    /// shows the Table's MAIL column, so a quiet roster never paints an
+    /// always-empty column.
+    fn any_unread(&self) -> bool {
+        self.rows().iter().any(
+            |r| matches!(&r.selected, Selected::Session(s) if s.agent.as_ref().is_some_and(|a| a.mail_unread.is_some_and(|n| n > 0))),
+        )
     }
 
     /// The body lines under the header, plus the row index each line
@@ -467,10 +490,11 @@ impl OrgBoard {
         let guides = tree_guides(&rows);
         let mut lines = Vec::new();
         let mut map = Vec::new();
+        let mail = self.any_unread();
         for (i, r) in rows.iter().enumerate() {
             if self.mode == OrgMode::Table {
                 map.push(i);
-                let mut line = BLine::plain(table_row(r, width));
+                let mut line = BLine::plain(super::org_table::row(r, now(), width, mail));
                 line.band = i == self.cursor;
                 lines.push(line);
                 continue;
@@ -535,17 +559,6 @@ impl OrgBoard {
 
 fn now() -> u64 {
     chrono::Utc::now().timestamp().max(0) as u64
-}
-fn status(a: &AgentRow) -> &'static str {
-    if a.exited {
-        return "former";
-    }
-    match a.badge {
-        Some(AgentBadge::Working) => "working",
-        Some(AgentBadge::Blocked) => "blocked",
-        Some(AgentBadge::Done) => "done",
-        None => "",
-    }
 }
 /// The header's mode tabs: one list feeds both the paint and the tap target.
 fn mode_tabs() -> [(std::ops::Range<usize>, OrgMode); 3] {
@@ -649,89 +662,6 @@ fn session_segs(session: &OrgSession, now: u64) -> Vec<BSeg> {
         text.push_str(&part);
     }
     vec![seg(text, BRole::Meta)]
-}
-const COLUMNS: [(&str, usize); 12] = [
-    ("LEAD", 12),
-    ("NODE", 10),
-    ("SESSION", 18),
-    ("RT", 8),
-    ("MODEL", 15),
-    ("CTX", 8),
-    ("STATE", 12),
-    ("UP", 6),
-    ("AGE", 7),
-    ("MAIL", 4),
-    ("PR", 7),
-    ("LAST", 36),
-];
-fn cells(values: &[String], width: usize) -> String {
-    let mut text = String::new();
-    for ((_, w), value) in COLUMNS.iter().zip(values) {
-        if text.chars().count() + w + 1 > width {
-            break;
-        }
-        let trimmed = value.chars().take(*w).collect::<String>();
-        text.push_str(&trimmed);
-        text.push_str(&" ".repeat(w - trimmed.chars().count() + 1));
-    }
-    text
-}
-fn table_header(width: usize) -> String {
-    cells(
-        &COLUMNS
-            .iter()
-            .map(|(n, _)| n.to_string())
-            .collect::<Vec<_>>(),
-        width,
-    )
-}
-fn table_row(row: &Row, width: usize) -> String {
-    let mut values = vec![String::new(); 12];
-    match &row.selected {
-        Selected::Lead(a) => {
-            values[0] = a.name.clone();
-        }
-        Selected::Node(n) => {
-            values[1] = n.card.id.clone();
-            values[6] = n.card.status.clone().unwrap_or_default();
-            values[10] = n
-                .prs
-                .first()
-                .map(|p| p.number.to_string())
-                .unwrap_or_default();
-            values[11] = n.card.title.clone();
-        }
-        Selected::Session(s) => {
-            values[2] = s
-                .agent
-                .as_ref()
-                .map(|a| a.name.clone())
-                .or(s.view.session_id.clone())
-                .unwrap_or_default();
-            values[3] = s.view.harness.clone().unwrap_or_default();
-            values[4] = s.view.model.clone().unwrap_or_default();
-            values[6] = "former".into();
-            if let Some(a) = &s.agent {
-                values[1] = a.node.clone().unwrap_or_default();
-                values[4] = a.model.clone().unwrap_or_default();
-                values[5] = super::row_meter::ctx_cell(a.context_used_pct);
-                values[6] = if a.exited {
-                    "former".into()
-                } else {
-                    status(a).into()
-                };
-                values[7] = super::row_meter::up_cell(a.started_at, now());
-                values[8] = a
-                    .last_activity_age_s
-                    .map(|n| format!("{n}s"))
-                    .unwrap_or_default();
-                values[9] = a.mail_unread.map(|n| n.to_string()).unwrap_or_default();
-                values[10] = a.pr.map(|n| n.to_string()).unwrap_or_default();
-                values[11] = a.tail.clone().unwrap_or_default();
-            }
-        }
-    }
-    cells(&values, width)
 }
 pub(crate) fn open(view: &mut View) {
     view.org_generation = view.org_generation.wrapping_add(1);

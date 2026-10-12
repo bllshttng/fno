@@ -290,3 +290,110 @@ pub(in crate::client) fn check_fixture(view: &mut View) {
         Some("fresh failure")
     );
 }
+
+// (x-93ab) AC4: the Table paints one row per worker, in lead-then-node
+// order, with columns that earn a place and a basis where a reading is
+// missing.
+#[test]
+fn table_is_one_row_per_worker_with_fitting_columns() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    let lead = AgentRow {
+        name: "finch".into(),
+        role_scope: Some("team".into()),
+        role_level: Some(1),
+        ..Default::default()
+    };
+    let lead2 = AgentRow {
+        name: "wren".into(),
+        role_scope: Some("team2".into()),
+        role_level: Some(1),
+        ..Default::default()
+    };
+    let worker = |name: &str, sid: &str, node: &str, exited: bool| AgentRow {
+        name: name.into(),
+        harness_session_id: Some(sid.into()),
+        node: Some(node.into()),
+        exited,
+        ..Default::default()
+    };
+    let backlog = crate::backlog_model::Inputs {
+        rows: vec![
+            json!({"id":"x-1","status":"ready","title":"First","sessions":[{"session_id":"s1"},{"session_id":"old1"}]}),
+            json!({"id":"x-2","status":"ready","title":"Second","sessions":[{"session_id":"s2"}]}),
+            json!({"id":"x-3","status":"ready","title":"Third","sessions":[{"session_id":"s3"}]}),
+        ],
+        agents: vec![
+            lead,
+            lead2,
+            worker("first", "s1", "x-1", false),
+            worker("second", "s2", "x-2", false),
+            worker("third", "s3", "x-3", false),
+            worker("gone", "old1", "x-1", true),
+        ],
+        ..Default::default()
+    };
+    open(&mut view);
+    let gen = view.org_generation;
+    apply_fold(
+        &mut view,
+        gen,
+        OrgInputs {
+            backlog,
+            fold: Ok(
+                json!({"scope_nodes":{"team":{"status":"ok","nodes":[{"id":"x-1"},{"id":"x-2"}]}},"team2":{"status":"ok","nodes":[{"id":"x-3"}]}},"owned_scopes":{"x-1":"team","x-2":"team","x-3":"team2"}),
+            ),
+            measured_at: now(),
+        },
+    );
+    let b = view.org_board.as_mut().unwrap();
+    b.mode = OrgMode::Table;
+    b.filter = OrgSessions::All;
+    let rows = b.mode_rows(60, 24);
+    assert_eq!(
+        rows.len(),
+        4,
+        "{}",
+        rows.iter()
+            .map(|r| r.text.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+    assert!(rows
+        .iter()
+        .all(|r| matches!(r.selected, Selected::Session(_))));
+    assert_eq!(rows[0].lead, "finch", "lead order: {}", rows[0].lead);
+    let lines: Vec<String> = b
+        .lines(60, 24)
+        .into_iter()
+        .map(|l| l.text.clone())
+        .collect();
+    assert_eq!(lines.len(), 6, "header plus four worker rows: {lines:?}");
+    assert!(lines[1].starts_with("WORKER"), "{:?}", lines[1]);
+    for l in &lines[2..6] {
+        assert!(l.split_whitespace().count() >= 6, "a blank cell: {l:?}");
+    }
+    let narrow: Vec<String> = b
+        .lines(27, 24)
+        .into_iter()
+        .map(|l| l.text.clone())
+        .collect();
+    assert!(narrow[1].starts_with("WORKER"), "{:?}", narrow[1]);
+    assert!(narrow[1].contains("STATE"), "{:?}", narrow[1]);
+    assert!(!narrow[1].contains("NODE"), "{:?}", narrow[1]);
+    for l in &narrow[2..6] {
+        assert!(l.split_whitespace().count() >= 2, "a blank cell: {l:?}");
+    }
+}

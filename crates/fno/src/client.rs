@@ -1805,6 +1805,7 @@ mod messages_view;
 mod org_board;
 mod org_detail;
 mod org_graph;
+mod org_table;
 mod overlay_paint;
 mod release_check;
 mod settings_modal;
