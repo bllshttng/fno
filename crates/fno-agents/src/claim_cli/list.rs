@@ -313,17 +313,59 @@ fn render_field(v: Option<&Value>) -> String {
     }
 }
 
-/// Python's `{m:g}` for the threshold minutes: the fixed-six form with
-/// trailing zeros and the dot trimmed.
+/// Python's `{m:g}`: six significant digits, scientific below 1e-4 or from
+/// 1e6 up. The exponent comes from the `{:e}` form, so the six-digit
+/// rounding carry is already in the exponent and 999999.9 formats as
+/// `1e+06`, like %g does.
 fn fmt_g(m: f64) -> String {
-    let mut s = format!("{m:.6}");
-    while s.ends_with('0') {
-        s.pop();
+    if m == 0.0 {
+        return "0".to_string();
     }
-    if s.ends_with('.') {
-        s.pop();
+    let sci = format!("{m:.5e}");
+    let (mant_s, exp_s) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
+    let mut exp: i32 = exp_s.parse().unwrap_or(0);
+    let mut mant: f64 = mant_s.parse().unwrap_or(1.0);
+    if mant >= 10.0 {
+        mant /= 10.0;
+        exp += 1;
     }
-    s
+    let trim = |mut s: String| -> String {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+        s
+    };
+    let mantissa = trim(format!("{mant:.5}"));
+    if !(-4..6).contains(&exp) {
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{mantissa}e{sign}{:02}", exp.abs())
+    } else {
+        trim(format!("{:.*}", (5 - exp).max(0) as usize, m))
+    }
+}
+
+#[cfg(test)]
+mod fmt_g_tests {
+    use super::fmt_g;
+
+    #[test]
+    fn matches_python_g() {
+        assert_eq!(fmt_g(0.0), "0");
+        assert_eq!(fmt_g(60.0), "60");
+        assert_eq!(fmt_g(0.25), "0.25");
+        assert_eq!(fmt_g(1.5), "1.5");
+        assert_eq!(fmt_g(1.0 / 60.0), "0.0166667");
+        assert_eq!(fmt_g(61.0 / 60.0), "1.01667");
+        assert_eq!(fmt_g(1e-4), "0.0001");
+        assert_eq!(fmt_g(1.0 / 60000.0), "1.66667e-05");
+        assert_eq!(fmt_g(999999.0), "999999");
+        assert_eq!(fmt_g(999999.9), "1e+06");
+        assert_eq!(fmt_g(1e6), "1e+06");
+        assert_eq!(fmt_g(1234567.0), "1.23457e+06");
+    }
 }
 
 fn row_key(row: &Value) -> String {

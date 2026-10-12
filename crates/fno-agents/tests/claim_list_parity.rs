@@ -164,8 +164,19 @@ const SUBJECT: &str = "claim_list";
 /// holder and trailing metadata exposed so the silence cases can plant a
 /// target-session holder plus a worktree path.
 fn plant_lock(dir_parent: &Path, key: &str, holder: &str, expires_at: &str, metadata: &str) {
-    let dir = dir_parent.join(".fno/claims");
-    std::fs::create_dir_all(&dir).unwrap();
+    plant_lock_in(
+        &dir_parent.join(".fno/claims"),
+        key,
+        holder,
+        expires_at,
+        metadata,
+    )
+}
+
+/// Same, but naming the claims dir itself: the two-roots case plants into
+/// the resolved space store, whose parent is not the root.
+fn plant_lock_in(dir: &Path, key: &str, holder: &str, expires_at: &str, metadata: &str) {
+    std::fs::create_dir_all(dir).unwrap();
     let encoded = key.replace(':', "%3A");
     std::fs::write(
         dir.join(format!("{encoded}.lock")),
@@ -500,5 +511,83 @@ fn the_list_leaf_matches_the_python_leg_on_every_frozen_case() {
         "silent_after_bad_format",
         &["--silent-after", "abc"],
         |_| {},
+    );
+}
+
+/// The bare form (no --root, no FNO_CLAIMS_ROOT): the leaf scans the
+/// HOME-resolved global store and the cwd-resolved store, so both pins
+/// ride the child directly.
+fn run_rust_bare_form(root: &Path, args: &[String]) -> Leg {
+    let out = Command::new(binary_path())
+        .args(["claim", "list"])
+        .args(args)
+        .envs(base_env())
+        .envs(fno_agents::test_run::self_owner_env())
+        .current_dir(root)
+        .env("HOME", root)
+        .env("FNO_SPACES_DIR", root.join("spaces"))
+        .env("FNO_STATE_DIR", root)
+        .env("FNO_AGENTS_HOME", root.join("agents-home"))
+        .env("FNO_EVENTS_PATH", root.join("events.jsonl"))
+        .env_remove("FNO_CLAIMS_ROOT")
+        .output()
+        .expect("run rust claim list in bare form");
+    Leg {
+        exit: out.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&out.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&out.stderr).to_string(),
+    }
+}
+
+/// The merge contract the goldens cannot reach: one key sighted in two
+/// roots. The global store (HOME-resolved) holds a stale sighting and the
+/// space store (cwd-resolved) holds a live one. The live sighting wins, the
+/// surviving row names the winning sighting's root, and the key lists
+/// exactly once.
+#[test]
+fn two_roots_one_key_live_in_second_root_wins() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path();
+    // The global store: HOME == root makes global_claims_root land here.
+    plant_lock(root, "node:tworoots", "pty:old", "1591138000000", "");
+    // The space store: resolve it with the same pins the child gets. The
+    // env pin is set and removed around the call (edition 2021).
+    let spaces = root.join("spaces");
+    std::env::set_var("FNO_SPACES_DIR", &spaces);
+    let space_claims = fno_agents::paths::space_dir(root).join("claims");
+    std::env::remove_var("FNO_SPACES_DIR");
+    plant_lock_in(
+        &space_claims,
+        "node:tworoots",
+        "pty:new",
+        "1891138000000",
+        "",
+    );
+
+    let leg = run_rust_bare_form(root, &[]);
+
+    let rows: Vec<&str> = leg
+        .stdout
+        .lines()
+        .filter(|l| l.contains("node:tworoots"))
+        .collect();
+    assert_eq!(rows.len(), 1, "exactly one merged row, got: {:?}", rows);
+    let global_claims = root.join(".fno/claims");
+    assert!(
+        !leg.stdout.contains(&global_claims.display().to_string()),
+        "the losing root leaks into the row: {}",
+        leg.stdout
+    );
+    let root_label = format!("root={}", space_claims.display());
+    assert!(
+        rows[0].starts_with("live"),
+        "the live sighting wins: {}",
+        rows[0]
+    );
+    assert!(
+        rows[0].contains(&root_label),
+        "the row names the winning sighting's root: {}\nwant: {}",
+        rows[0],
+        root_label
     );
 }
