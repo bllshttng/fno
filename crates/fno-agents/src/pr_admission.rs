@@ -131,9 +131,11 @@ fn write_cached(dir: &Path, slug: &str, pr: u64, facts: &Value) {
 /// in process with the ledger's own line.
 fn real_fetch(slug: &str, pr: u64) -> Result<Value, String> {
     let path = format!("repos/{slug}/pulls/{pr}");
-    let argv = ["api".to_string(), path.clone()];
-    if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
-        return Err(line);
+    if crate::gh_budget::admission_armed() {
+        let argv = ["api".to_string(), path.clone()];
+        if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
+            return Err(line);
+        }
     }
     let out = std::process::Command::new("gh")
         .args(["api", &path])
@@ -206,9 +208,11 @@ pub(crate) type GhRun<'a> = &'a dyn Fn(&[&str]) -> Result<(bool, String), String
 
 fn real_gh(args: &[&str]) -> Result<(bool, String), String> {
     // Same decide-path poll admission as real_fetch.
-    let owned: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
-    if let Some(line) = crate::gh_budget::admit_fleet(&owned) {
-        return Ok((false, line));
+    if crate::gh_budget::admission_armed() {
+        let owned: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+        if let Some(line) = crate::gh_budget::admit_fleet(&owned) {
+            return Ok((false, line));
+        }
     }
     let out = std::process::Command::new("gh")
         .args(args)

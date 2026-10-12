@@ -476,6 +476,17 @@ pub fn admit_fleet(argv: &[String]) -> Option<String> {
     }
 }
 
+/// Whether the in-process consult is armed. A unit-test build runs dozens of
+/// gh-named stubs in one process, and their aggregate stamps would exhaust
+/// (or inherit a hold from) the operator's machine-wide ledger - the stubs
+/// are not GitHub traffic. The consult disarms there; budget behavior is
+/// tested at admit()/record_refusal() with injected paths and clocks, and a
+/// test that wants the transport consult live opts in with
+/// FNO_GH_BUDGET_TEST_ARMED.
+pub(crate) fn admission_armed() -> bool {
+    !(cfg!(test) && std::env::var_os("FNO_GH_BUDGET_TEST_ARMED").is_none())
+}
+
 /// A GitHub refusal reached one caller. One fleet-wide backoff opens in the
 /// ledger, escalating while refusals stay within 900s of each other. A no-op
 /// while a backoff is already live, so two writers reporting one refusal

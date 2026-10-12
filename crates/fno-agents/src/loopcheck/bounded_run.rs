@@ -419,7 +419,9 @@ pub(crate) fn bounded_read(
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    if bin_name == "gh" || super::gh_read::internal_gh_adapter(bin_name) {
+    if (bin_name == "gh" || super::gh_read::internal_gh_adapter(bin_name))
+        && crate::gh_budget::admission_armed()
+    {
         let argv: Vec<String> = args.iter().map(|arg| (*arg).to_string()).collect();
         if let Some(line) = crate::gh_budget::admit_fleet(&argv) {
             return Err(GhReadError::budget_refused_with_detail(read_name, line));
