@@ -22,15 +22,11 @@ the message (a local tool dispatched, or the event landed and an enabled sink
 routes it); non-zero only when no channel exists at all. The AC2-FR shape is
 unchanged - the code stays an honest channel count, in both directions.
 
- adds the third leg, ahead of the local toast: when a mux server has
-attached clients, the notice rides ``fno mux notify`` and lands as OSC 777
-on the attached terminal's tty, so the desktop alert comes from the terminal
-(Ghostty), not from Script Editor. The receipt's ``clients`` count decides:
-at least one client took it and the local toast is skipped; zero (no mux, no
-attached client, old Rust front) and the osascript fallback runs as before.
-Under pytest the mux leg is skipped and a REAL local tool dispatch is
-refused outright - the guard below raises instead of toasting, so a test
-that reaches the real subprocess is a failure, never a screen notification.
+ adds the third leg, ahead of the local toast: ``fno mux notify`` posts the
+notice through every attached mux client (OSC 777, so the alert comes from
+the terminal, not Script Editor); zero clients or any non-delivery falls
+back to the local tool. Under pytest the mux leg is skipped and a REAL
+local dispatch raises - see the guard below.
 """
 from __future__ import annotations
 
@@ -40,7 +36,6 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 
 _log = logging.getLogger(__name__)
 
@@ -49,67 +44,44 @@ _NO_TOOL_MSG = (
     "macOS or notify-send on Linux); notification not sent."
 )
 
-# The real subprocess seam, captured at import. A test that replaces
-# ``subprocess.run`` (the documented way to fake a dispatch) makes the
-# identity check below False, so the fake is allowed; the identity holding
-# under pytest means a REAL OS alert was about to fire - that is the leak
-# this module refuses.
+# The subprocess seam at import: a test that fakes subprocess.run makes the
+# identity False, so fakes are exempt from the real-alert guard.
 _REAL_SUBPROCESS_RUN = subprocess.run
 
 
 def _under_pytest() -> bool:
-    """True while code runs inside a pytest test (active test or imported)."""
-    return bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules
-
-
-def _refuse_real_os_alert() -> None:
-    """Raise when a REAL OS notification is about to fire under pytest.
-
-    The 2026-10-01 leak: a control-plane alert with a test-fixture body
-    reached the operator's screen. Hermetic stamping (``FNO_TEST_HERMETIC``)
-    covers the suites that set it; this guard covers the ones that forget.
-    A faked subprocess (``monkeypatch.setattr(_impl.subprocess, "run", ...)``)
-    is exempt - the identity against :data:`_REAL_SUBPROCESS_RUN` is False -
-    so every existing dispatch-pinning test keeps working.
-    """
-    if _under_pytest() and subprocess.run is _REAL_SUBPROCESS_RUN:
-        raise RuntimeError(
-            "fno notify: refusing a real OS notification under pytest; "
-            "monkeypatch fno.notify._impl.subprocess.run or set FNO_TEST_HERMETIC=1"
-        )
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def _mux_clients(title: str, message: str) -> int | None:
-    """Attached clients that took the notice via ``fno mux notify``, or None.
-
-    None on every non-delivery: no Rust front on PATH, no mux server, no
-    attached client, an old front without the verb, or a pytest run (the mux
-    leg is an optimization, never worth a real side effect in a test).
-    """
+    """Clients that took the notice via ``fno mux notify``, else None (also
+    None under a hermetic stamp or pytest: an optimization leg, never worth a
+    real side effect in a test)."""
     if _suppressed() or _under_pytest():
-        return None
-    fno = shutil.which("fno")
-    if not fno:
         return None
     try:
         proc = subprocess.run(
-            # `--json` before `--`: a leading-dash title or message must
-            # parse as a positional, never as a flag.
-            [fno, "mux", "notify", "--json", "--", title, message],
-            check=False,
+            # `--json` before `--`: a leading-dash title or message parses as
+            # a positional, never a flag.
+            [shutil.which("fno") or "fno", "mux", "notify", "--json", "--", title, message],
             capture_output=True,
             text=True,
             timeout=5,
             env={**os.environ, "FNO_PY_HANDOFF": "1"},
         )
+        return int(json.loads(proc.stdout).get("clients", 0)) if proc.returncode == 0 else None
     except Exception:
         return None
-    if proc.returncode != 0:
-        return None
-    try:
-        return int(json.loads(proc.stdout).get("clients", 0))
-    except Exception:
-        return None
+
+
+def _refuse_real_os_alert() -> None:
+    """Raise when a REAL OS alert would fire under pytest (the 2026-10-01
+    leak class); a faked subprocess seam is exempt."""
+    if _under_pytest() and subprocess.run is _REAL_SUBPROCESS_RUN:
+        raise RuntimeError(
+            "fno notify: refusing a real OS notification under pytest; fake "
+            "fno.notify._impl.subprocess.run or set FNO_TEST_HERMETIC=1"
+        )
 
 
 def _suppressed() -> bool:
