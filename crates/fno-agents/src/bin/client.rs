@@ -1875,6 +1875,7 @@ async fn run(args: Vec<String>) -> i32 {
     }
 }
 
+/// Read the `timeout` param as whole seconds; `None` when absent, negative, or fractional.
 fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
     params
         .get("timeout")
@@ -1882,6 +1883,7 @@ fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
         .map(std::time::Duration::from_secs)
 }
 
+/// Read the `yolo` param as a bool, defaulting to false when absent.
 fn flag_yolo(params: &Value) -> bool {
     params
         .get("yolo")
