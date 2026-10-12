@@ -8,11 +8,6 @@ use crate::pr_push::{any_pending, rest_bucket};
 use serde_json::json;
 use std::path::Path;
 
-use super::*;
-use crate::pr_push::{any_pending, rest_bucket};
-use serde_json::json;
-use std::path::Path;
-
 /// A real `cargo fmt --check (pinned)` failure, timestamps and all.
 const FMT_LOG: &str = concat!(
     "2026-09-03T03:06:02.1431957Z ##[group]Run cargo \"+$RUSTFMT_TOOLCHAIN\" fmt --all --check\n",
