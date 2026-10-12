@@ -1206,7 +1206,6 @@ async fn run(args: Vec<String>) -> i32 {
         // `--json`/`-J` selects the machine payload; the default renders the
         // human arms table + daemon lines. Anything else is rejected rather
         // than silently ignored (Codex P3).
-        //
         // d-fe66560a makes the action list shrink-only, so the read
         // leaves over the capability table and the merge-posture family ride
         // `status` as arguments instead of actions of their own. The Python
@@ -1368,7 +1367,6 @@ async fn run(args: Vec<String>) -> i32 {
         // dispatch_ask after Task 1.1 (unknown-name check precedes provider
         // selection). Provider-mismatch logic (inside maybe_run_claude_ask) still
         // applies for existing rows.
-        //
         // (AC20): ONE registry read for the whole ask path. The
         // codex-thread-target lookup below derives from THIS read - the old
         // second load ran for EVERY client verb and swallowed failures at
@@ -1657,14 +1655,12 @@ async fn run(args: Vec<String>) -> i32 {
     // evaluation per spawn, and the first spawn's row is counted before the
     // second is evaluated. Other verbs skip this entirely. Read before
     // `method`/`params` move into the request.
-    //
     // Daemon-bound is DERIVED from the same capability contract the daemon
     // routes on (attach lane + a harness-owned server). Both binaries
     // embed the same packaged table, so this predicate and the daemon's route
     // cannot disagree the way a name test here and a derived route there
     // could: the next attach-with-server harness arrives with its state_dirs
     // attached and its gate run without this line learning its name.
-    //
     // The provider default MUST match the daemon's, which is `codex` when the
     // param is absent (`handle_spawn`). A predicate requiring an explicit
     // "codex" here reads false for a spawn with no `-H`, while the daemon still
@@ -1879,6 +1875,22 @@ async fn run(args: Vec<String>) -> i32 {
     }
 }
 
+/// Read the `timeout` param as whole seconds; `None` when absent, negative, or fractional.
+fn opt_timeout(params: &Value) -> Option<std::time::Duration> {
+    params
+        .get("timeout")
+        .and_then(|v| v.as_u64())
+        .map(std::time::Duration::from_secs)
+}
+
+/// Read the `yolo` param as a bool, defaulting to false when absent.
+fn flag_yolo(params: &Value) -> bool {
+    params
+        .get("yolo")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// Route a claude `ask` to the client-side `claude --bg` path, bypassing the
 /// daemon. Returns `Some(exit_code)` when the target is claude
 /// (resolved from an existing registry row, else the `--provider` flag), or
@@ -1930,14 +1942,8 @@ fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str) -> Option
         .unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
         });
-    let timeout = params
-        .get("timeout")
-        .and_then(|v| v.as_u64())
-        .map(std::time::Duration::from_secs);
-    let yolo = params
-        .get("yolo")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let timeout = opt_timeout(params);
+    let yolo = flag_yolo(params);
 
     let claude_home = ClaudeHome::from_env();
     let outcome = dispatch_claude_ask(
@@ -2322,12 +2328,10 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
     // spawn that returns None below and completes over the daemon RPC - one
     // gate evaluation per spawn, on both routes. `pane` is excluded because it
     // re-execs the Python CLI, whose own seam spends the grant.
-    //
     // The public substrate name is what the capability table is keyed on; the
     // local `substrate` above has already been mapped to the historical `bg`
     // selector, so map it back rather than adding a second spelling to the
     // table.
-    //
     // Skipped for a provider this binary does not know: the dispatch arms below
     // already refuse an unknown provider with exit 2 and the supported list,
     // which is the message that reader needs. Refusing first with grant advice
@@ -2381,14 +2385,8 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
             Ok(None) => fno_agents::spawn_cwd::resolve_dispatch_cwd(params),
         }
     };
-    let timeout = params
-        .get("timeout")
-        .and_then(|v| v.as_u64())
-        .map(std::time::Duration::from_secs);
-    let yolo = params
-        .get("yolo")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let timeout = opt_timeout(params);
+    let yolo = flag_yolo(params);
     // Optional --model, forwarded as the provider's exact --model token.
     let model = params.get("model").and_then(|v| v.as_str());
     // permission mode for the bg/headless lanes. The pane substrate
@@ -2907,7 +2905,6 @@ fn maybe_run_spawn(home: &AgentsHome, params: &Value, name: &str) -> Option<i32>
         // opencode's row read `keeper` here - a stale answer this match arm
         // had to route around by name; the row now agrees with the dispatch
         // below.)
-        //
         // The REFUSAL is derived, because a provider name list goes stale the
         // moment a lane is built and then misdirects the reader it was meant
         // to help. Hard error pointing to headless; never a silent substrate
