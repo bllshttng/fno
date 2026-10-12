@@ -67,7 +67,7 @@ There is also a large set of bash integration tests under `tests/` (hooks, gates
 
 ## Start with an issue
 
-Open a GitHub issue before sending a pull request. The issue states the problem: what breaks or is missing, and who hits it. Link it from the PR with `Closes #<number>`. A pull request from outside the project with no linked issue gets a comment asking for one, and an agent reads the linked issue to judge whether the work fits the project's direction. Accepted work is planned from the backlog and credits the outside author as a co-author.
+Open a GitHub issue before sending a pull request. The issue states the problem: what breaks or is missing, and who hits it. Link it from the PR with `Closes #<number>`. A pull request from outside the project with no linked issue gets a comment asking for one. An agent then reads the linked issue to judge whether the work fits the project's direction. Accepted work is planned from the backlog and credits the outside author as a co-author.
 
 ## Gates your PR must pass
 
