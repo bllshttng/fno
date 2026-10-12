@@ -139,7 +139,7 @@ def test_cascade_positive_control_same_fixture_closes_without_the_reopen():
 
 
 def _plan_pair():
-    """The x-4b02 shape: a parent carrying its own plan work."""
+    """A parent carrying its own plan work with no PR of its own."""
     parent, child = _pair()
     parent["plan_path"] = "plans/p.md"
     return parent, child

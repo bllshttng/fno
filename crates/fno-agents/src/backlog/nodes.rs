@@ -1835,6 +1835,7 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
         plan_path: Option<String>,
         reopened_at: Option<String>,
         completed_at: Option<String>,
+        has_any_pr: bool,
     }
     let claims = node_claims_by_id()?;
     let mut statement = connection
@@ -1849,6 +1850,8 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                            AND s.phase = 'execute' AND s.ended_at IS NULL),
                     EXISTS(SELECT 1 FROM pull_requests p WHERE p.node_id = n.id
                            AND p.seq = 0 AND p.number IS NOT NULL),
+                    EXISTS(SELECT 1 FROM pull_requests p WHERE p.node_id = n.id
+                           AND p.number IS NOT NULL),
                     n.ownership_defect,
                     n.plan_path,
                     n.reopened_at,
@@ -1873,10 +1876,11 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 holder: claim.locked_by,
                 open_do: row.get::<_, i64>(6)? != 0,
                 has_pr: row.get::<_, i64>(7)? != 0,
-                defect: row.get(8)?,
-                plan_path: row.get(9)?,
-                reopened_at: row.get(10)?,
-                completed_at: row.get(11)?,
+                has_any_pr: row.get::<_, i64>(8)? != 0,
+                defect: row.get(9)?,
+                plan_path: row.get(10)?,
+                reopened_at: row.get(11)?,
+                completed_at: row.get(12)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -2010,7 +2014,8 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
             .map(|row| row.status.clone())
             .collect();
         // The same holds the whole-graph pass reads: own plan work (the
-        // has_own_plan_work typed twin) and a deliberate reopen postdating
+        // has_own_plan_work typed twin; any PR row is evidence, an
+        // additional-PR list included) and a deliberate reopen postdating
         // every child close (reopen_outranks_stamps).
         let holds = {
             let kid_stamps: Vec<Option<&str>> = rows
@@ -2019,10 +2024,11 @@ pub fn recompute_status(connection: &Connection) -> Result<(), String> {
                 .map(|row| row.completed_at.as_deref())
                 .collect();
             matches!(rows[pidx].status.as_str(), "in_review" | "in_progress")
-                || rows[pidx]
+                || (rows[pidx]
                     .plan_path
                     .as_deref()
                     .is_some_and(|p| !p.trim().is_empty())
+                    && !rows[pidx].has_any_pr)
                 || crate::graph_store::reopen_outranks_stamps(
                     rows[pidx].reopened_at.as_deref(),
                     &kid_stamps,

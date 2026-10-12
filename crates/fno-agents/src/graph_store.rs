@@ -1542,13 +1542,23 @@ pub fn work_state(index: &HashMap<String, Vec<(String, String)>>, session_id: &s
 /// True when a row carries plan work of its own with no PR to evidence it:
 /// the shape the children rollup once false-closed, where the UNVERIFIED
 /// completion note used to be the only flag. No rollup may close such a
-/// row; its own door does, on its own evidence.
+/// row; its own door does, on its own evidence. Any PR ref counts as
+/// evidence, an additional-PR list included: the model permits that list
+/// without a primary PR.
 pub fn has_own_plan_work(entry: &Value) -> bool {
+    let has_pr = entry.get("pr_number").and_then(Value::as_i64).is_some()
+        || entry
+            .get("additional_prs")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter()
+                    .any(|r| r.get("number").and_then(Value::as_i64).is_some())
+            });
     entry
         .get("plan_path")
         .and_then(Value::as_str)
         .is_some_and(|p| !p.trim().is_empty())
-        && entry.get("pr_number").and_then(Value::as_i64).is_none()
+        && !has_pr
 }
 
 /// One comparison core for the reopen guard: a deliberate reopen postdating
@@ -1573,14 +1583,20 @@ pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&s
     true
 }
 
-/// RFC3339 stamp parser for the guard comparisons: None on blank or
-/// unreadable. Naive and Z-suffixed spellings both ride chrono's parser the
-/// way the Python twin's does.
+/// Stamp parser for the guard comparisons: None on blank or unreadable.
+/// Mirrors the Python twin's _parse_iso: an RFC3339 stamp parses as itself,
+/// a naive stamp reads UTC (the graph carries both spellings).
 fn parse_rfc3339_stamp(raw: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-    if raw.trim().is_empty() {
+    let raw = raw.trim();
+    if raw.is_empty() {
         return None;
     }
-    chrono::DateTime::parse_from_rfc3339(raw).ok()
+    if let Ok(stamp) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(stamp);
+    }
+    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
+        .ok()
+        .map(|naive| naive.and_utc().fixed_offset())
 }
 
 /// Recompute status for all entries based on graph state
@@ -3581,16 +3597,24 @@ mod tests {
                    "plan_path": "plans/p.md"}),
             json!({"id": "plan-kid", "parent": "plan-parent",
                    "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // An additional-PR list is PR evidence too: the plan parent with
+            // one closes like a PR-shipped parent.
+            json!({"id": "plan2-parent", "parent": null, "status": "ready",
+                   "plan_path": "plans/p2.md",
+                   "additional_prs": [{"number": 9, "url": null}]}),
+            json!({"id": "plan2-kid", "parent": "plan2-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
             // A deliberate reopen postdating every child's close holds.
             json!({"id": "reopened-parent", "parent": null, "status": "idea",
                    "reopened_at": "2026-02-01T00:00:00+00:00"}),
             json!({"id": "reopened-kid", "parent": "reopened-parent",
                    "completed_at": "2026-01-01T00:00:00+00:00"}),
             // A reopen that a NEW child close postdates expires: re-close.
+            // The child stamp is the naive spelling the graph also carries.
             json!({"id": "stale-parent", "parent": null, "status": "idea",
                    "reopened_at": "2026-01-01T00:00:00+00:00"}),
             json!({"id": "stale-kid", "parent": "stale-parent",
-                   "completed_at": "2026-03-01T00:00:00+00:00"}),
+                   "completed_at": "2026-03-01T00:00:00"}),
         ];
         recompute_statuses(&mut entries);
         // Parent with all-done children and no live work of its own -> done.
@@ -3602,13 +3626,18 @@ mod tests {
         );
         assert_eq!(
             s_str(&entries[4], "status"),
+            Some("done"),
+            "an additional PR is evidence: the plan parent closes"
+        );
+        assert_eq!(
+            s_str(&entries[6], "status"),
             Some("idea"),
             "a deliberate reopen outranks the child closes"
         );
         assert_eq!(
-            s_str(&entries[6], "status"),
+            s_str(&entries[8], "status"),
             Some("done"),
-            "a new child close postdating the reopen re-closes"
+            "a naive child close postdating the reopen re-closes"
         );
     }
 

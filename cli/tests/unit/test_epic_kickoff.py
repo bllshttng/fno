@@ -201,11 +201,12 @@ def test_cascade_close_clears_mission_active(monkeypatch):
 def test_auto_close_holds_on_both_close_paths():
     """A plan_path+no-pr container is NOT closed on EITHER close path.
 
-    The x-b9a5 flag was the mitigation: the close still fired and the
-    completion_note marked the deliverables UNVERIFIED. The x-4b02 hold
-    replaces it: the plan-having parent stays open on both the cascade
-    (child-close walk) and the sweep (reconcile self-heal), and both paths
-    auto-fire on a fresh session, so pinning both is still load-bearing.
+    The old UNVERIFIED completion_note flag was the mitigation: the close
+    still fired and the note marked the deliverables unverified. The
+    own-plan-work hold replaces it: the plan-having parent stays open on
+    both the cascade (child-close walk) and the sweep (reconcile
+    self-heal), and both paths auto-fire on a fresh session, so pinning
+    both is still load-bearing.
     """
     from fno.graph.cli import _cascade_close_parents, _sweep_close_done_epics
 
@@ -233,9 +234,9 @@ def test_auto_close_holds_on_both_close_paths():
 
 def test_auto_close_short_note_without_unverified_marker():
     """A container with no plan_path, or one that shipped its own PR, still
-    closes and keeps the short note. The own-plan-work hold (x-4b02) is
-    gated on plan_path AND no pr_number, so the PR-shipped shape is not
-    held; this pins that predicate."""
+    closes and keeps the short note. The own-plan-work hold is gated on
+    plan_path AND no PR ref, so the PR-shipped shape is not held; this
+    pins that predicate."""
     from fno.graph.cli import _cascade_close_parents
 
     def note_for(parent_extra):

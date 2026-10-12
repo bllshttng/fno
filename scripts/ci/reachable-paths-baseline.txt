@@ -47,7 +47,6 @@ A	anthropic_default_haiku_model	py=cli/src/fno/route_cli.py;rs=crates/fno-agents
 A	anthropic_default_opus_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/claude_supervisor.rs|crates/fno-agents/src/client_tests.rs|crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	anthropic_default_sonnet_model	py=evals/harness-fit/run/launch.py;rs=crates/fno-agents/src/model_env_scrub.rs	# CLASSIFY protocol|msg-twin|data
 A	auto-closed: all children complete	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
-A	auto-closed: all children complete; own plan deliverables unverified (plan_path set, no pr)	py=cli/src/fno/graph/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
 A	auto_merge.require_checks_pass	py=cli/src/fno/config/optouts.py|cli/src/fno/config/registry.py;rs=crates/fno-agents/src/claims.rs|crates/fno-agents/src/finalize.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog.epic_max_open_children	py=cli/src/fno/config/registry.py;rs=crates/fno-agents/src/backlog/epic_cap.rs|crates/fno-agents/src/graph_store.rs	# CLASSIFY protocol|msg-twin|data
 A	backlog_done_operator_initiated	py=cli/src/fno/done/cli.py;rs=crates/fno-agents/src/backlog/workflows.rs	# CLASSIFY protocol|msg-twin|data
