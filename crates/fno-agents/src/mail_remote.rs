@@ -661,13 +661,16 @@ mod tests {
             1,
             "the next beat delivers the row the earlier beat could not"
         );
-        // The finality rule: a signal kill (no code) and the transient
-        // refusals (failed durable write 12, unknown name 13) stay pending;
-        // every other non-zero exit is final and marks the row refused.
-        assert!(!crate::mail_arm::refusal_is_final(None));
-        assert!(!crate::mail_arm::refusal_is_final(Some(12)));
-        assert!(!crate::mail_arm::refusal_is_final(Some(13)));
-        assert!(crate::mail_arm::refusal_is_final(Some(1)));
-        assert!(crate::mail_arm::refusal_is_final(Some(2)));
+        // The finality rule: the style door naming violations is the
+        // deterministic refusal; a clean receipt and unparseable output
+        // read transient, so the row stays pending for the next beat.
+        assert!(crate::mail_arm::door_confirms_refusal(
+            br#"{"violations":[{"rule":3,"sentence_index":3}]}"#
+        ));
+        assert!(!crate::mail_arm::door_confirms_refusal(
+            br#"{"violations":[]}"#
+        ));
+        assert!(!crate::mail_arm::door_confirms_refusal(b"{}"));
+        assert!(!crate::mail_arm::door_confirms_refusal(b"not json"));
     }
 }

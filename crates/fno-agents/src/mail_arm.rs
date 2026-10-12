@@ -131,8 +131,8 @@ fn home_root() -> PathBuf {
 }
 
 /// Deliver pending rows in seq order. A row leaves the pending pool only
-/// through a successful local send (exit 0) or a final refusal (below): a
-/// transient failure waits for the next beat, and the TTL bounds it. The
+/// through a successful local send (exit 0) or a style-refused body (below):
+/// a transient failure waits for the next beat, and the TTL bounds it. The
 /// seen ledger records msg_ids after a zero exit, so a redelivered row
 /// never injects twice (at-least-once, edge 5).
 pub(crate) fn pull_rows(remote: &Remote, rows: Vec<BusRow>, home: &std::path::Path) -> usize {
@@ -159,15 +159,6 @@ pub(crate) fn pull_rows_with(
     delivered
 }
 
-/// True when a non-zero local-send exit will repeat on every retry, so the
-/// row is marked refused instead of riding pending to the TTL. Exit 12 is
-/// the receiver's own durable-floor write failing (transient), 13 an unknown
-/// name (the roster may still join); both wait for the next beat. A signal
-/// kill carries no code and waits too.
-fn refusal_is_final(code: Option<i32>) -> bool {
-    !matches!(code, None | Some(12) | Some(13))
-}
-
 /// The send's stderr as one log-sized line: whitespace collapsed, then cut
 /// on a char boundary, so a refusal's reason reaches the daemon log without
 /// a multi-line splatter.
@@ -181,6 +172,53 @@ fn brief(text: &[u8], cap: usize) -> String {
         format!("{cut}...")
     } else {
         cut
+    }
+}
+
+/// The style door's receipt naming violations: the deterministic refusal.
+/// A clean receipt, an exception receipt, and unparseable output all read
+/// transient, so the caller leaves the row pending for the next beat.
+pub(crate) fn door_confirms_refusal(stdout: &[u8]) -> bool {
+    serde_json::from_str::<serde_json::Value>(&String::from_utf8_lossy(stdout))
+        .ok()
+        .and_then(|receipt| {
+            receipt
+                .get("violations")
+                .and_then(|violations| violations.as_array().cloned())
+        })
+        .is_some_and(|violations| !violations.is_empty())
+}
+
+/// Ask the receiver's own style door about the body, the same door the
+/// local send consults, through this binary's `style-check`. Runs only on
+/// an exit-1 refusal, where the exit alone is ambiguous: the style gate
+/// refuses for good, but so does a budget window, a down door, or an
+/// internal error. The body rides a writer thread, so a payload wider than
+/// the pipe buffer cannot deadlock the read.
+fn style_door_refuses(payload: &str) -> bool {
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut child = match std::process::Command::new(exe)
+        .args(["style-check", "--surface", "mail", "--stdin", "--json"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let payload = payload.to_string();
+    let mut pipe = child.stdin.take();
+    std::thread::spawn(move || {
+        if let Some(stdin) = pipe.as_mut() {
+            let _ = stdin.write_all(payload.as_bytes());
+        }
+    });
+    match child.wait_with_output() {
+        Ok(output) => door_confirms_refusal(&output.stdout),
+        Err(_) => false,
     }
 }
 
@@ -211,12 +249,11 @@ fn record_seen(home: &std::path::Path, msg_id: &str) -> Result<(), String> {
 
 /// The delivery leg: the receiver's own local send answers. Its registry
 /// resolves the name (an unknown name refuses, exit 13, and the row stays
-/// pending for the TTL), and its holds apply untouched (edge 8). A final
-/// refusal (any other non-zero exit, see `refusal_is_final`) marks the row
-/// refused, so the sender's `mail status` shows the loss instead of a
-/// pending row that every retry refuses again. Returns true when the row is
-/// done (delivered or refused), false to leave it pending for the next
-/// beat.
+/// pending for the TTL), and its holds apply untouched (edge 8). An exit 1
+/// whose style door names the body's violations marks the row refused, so
+/// the sender's `mail status` shows the loss instead of a pending row that
+/// every retry refuses again. Returns true when the row is done (delivered
+/// or refused), false to leave it pending for the next beat.
 fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // Edge 6: a raw row is a command typed into a pane. Anyone on the
     // tailnet can write a bus row, and the sender-written from_id proves
@@ -242,11 +279,13 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
         }
         Ok(output) => {
             let code = output.status.code();
-            if refusal_is_final(code) {
-                // The receiver's own send refused the body for good (the
-                // style gate, the forged-envelope check, the size cap): a
-                // retry replays the same refusal, so marking refused is what
-                // makes the loss visible to the sender's `mail status`.
+            // The receiver's own style gate refusing the body replays the
+            // same refusal on every retry, so marking refused is what makes
+            // the loss visible to the sender's `mail status`. The door
+            // consult keeps a transient exit 1 (a budget window, a down
+            // door, an internal error) riding pending to a beat that can
+            // still deliver.
+            if code == Some(1) && style_door_refuses(&row.payload) {
                 eprintln!(
                     "mail-arm: local send for {} refused (exit {code:?}): {}",
                     row.msg_id,
