@@ -17,6 +17,7 @@ pub(crate) const STEWARD_MODEL: &str = "sonnet";
 const READER_TIMEOUT_SECS: u64 = 240;
 const FNO_TIMEOUT_SECS: u64 = 30;
 const DIFF_CAP_BYTES: usize = 60_000;
+const BODY_CAP_BYTES: usize = 20_000;
 const FIND_OUT_CAP_BYTES: usize = 4_000;
 const FIND_TITLE_CAP: usize = 80;
 const NOTE_FIELD_CAP: usize = 600;
@@ -188,6 +189,10 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
     let _pass_lock =
         crate::gh_budget::FileLock::acquire(&crate::gh_budget::lock_path(&dir.join("pass")));
 
+    // A per-PR failure is remembered, not fatal: the pass walks on so one bad
+    // PR cannot starve the rest, and the error token still surfaces at the end.
+    let mut had_error = false;
+
     for pull in pages {
         if !is_outside_non_bot(pull) {
             continue;
@@ -204,7 +209,10 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
         if st.stage.is_none() {
             let comments = match io.gh(&comment_read_args(&slug, pr)) {
                 Ok(c) => c,
-                Err(_) => return "steward_error",
+                Err(_) => {
+                    had_error = true;
+                    continue;
+                }
             };
             if comments.contains(CLARITY_MARKER) {
                 st.stage = Some("done".to_string());
@@ -227,7 +235,10 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
                             return "steward_intaken";
                         }
                         Ok(None) => {}
-                        Err(_) => return "steward_error",
+                        Err(_) => {
+                            had_error = true;
+                            continue;
+                        }
                     }
                 }
                 if st.stage.as_deref() == Some("asked_issue") {
@@ -235,7 +246,8 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
                 }
                 let text = format!("{ISSUE_FIRST_COMMENT}\n\n{ISSUE_FIRST_MARKER}");
                 if io.gh(&comment_args(&slug, pr, &text)).is_err() {
-                    return "steward_error";
+                    had_error = true;
+                    continue;
                 }
                 st.stage = Some("asked_issue".to_string());
                 write_stage_state(&dir, &file, &st);
@@ -247,7 +259,8 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
                         .fno(&note_args(st.node.as_deref().unwrap_or_default(), &note))
                         .is_err()
                     {
-                        return "steward_error";
+                        had_error = true;
+                        continue;
                     }
                     st.stage = Some("analysed".to_string());
                     st.question = question;
@@ -267,14 +280,15 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
                         st.stage = Some("done".to_string());
                     }
                     write_stage_state(&dir, &file, &st);
-                    return "steward_error";
+                    had_error = true;
                 }
             },
             Some("analysed") => match st.question.clone() {
                 Some(q) => {
                     let text = format!("Thanks. The project's triage agent read the linked issue and this change, and has one question before the work goes further: {q}\n\n{CLARITY_MARKER}");
                     if io.gh(&comment_args(&slug, pr, &text)).is_err() {
-                        return "steward_error";
+                        had_error = true;
+                        continue;
                     }
                     st.stage = Some("done".to_string());
                     write_stage_state(&dir, &file, &st);
@@ -288,6 +302,9 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
             },
             _ => continue,
         }
+    }
+    if had_error {
+        return "steward_error";
     }
     "steward_idle"
 }
@@ -303,6 +320,8 @@ struct StageState {
 }
 
 fn state_dir(cwd: &Path) -> Option<std::path::PathBuf> {
+    // set_file_name replaces the last component, so an FNO_PR_STATUS_CACHE_DIR
+    // override lands its stage dir one level up; tests set a throwaway child.
     crate::agents_config::pr_status_cache_dir(cwd).map(|mut p| {
         p.set_file_name("pr-steward");
         p
@@ -526,11 +545,22 @@ fn intake(
         pr,
         issue
     ));
-    std::fs::write(
-        &details_path,
-        details_text(&html_url, slug, pr, login, author_id),
-    )
-    .map_err(|e| format!("details write: {e}"))?;
+    // create_new refuses a pre-planted symlink; one stale-file retry covers a
+    // reused pid that left the file behind on a crash.
+    let write_details = || -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&details_path)?;
+        std::io::Write::write_all(
+            &mut f,
+            details_text(&html_url, slug, pr, login, author_id).as_bytes(),
+        )
+    };
+    if write_details().is_err() {
+        let _ = std::fs::remove_file(&details_path);
+        write_details().map_err(|e| format!("details write: {e}"))?;
+    }
     let args = vec![
         "backlog".to_string(),
         "idea".to_string(),
@@ -603,13 +633,21 @@ fn analyse(
     prompt.push_str(&untrusted(
         &nonce,
         "pull-request-title-and-body",
-        &format!("title: {}\nbody: {}", title_of(pull), body_of(pull)),
+        &cap_bytes(
+            format!("title: {}\nbody: {}", title_of(pull), body_of(pull)),
+            BODY_CAP_BYTES,
+            "the pull request body",
+        ),
     ));
     prompt.push('\n');
     prompt.push_str(&untrusted(
         &nonce,
         "linked-issue-title-and-body",
-        &format!("title: {issue_title}\nbody: {issue_body}"),
+        &cap_bytes(
+            format!("title: {issue_title}\nbody: {issue_body}"),
+            BODY_CAP_BYTES,
+            "the linked issue body",
+        ),
     ));
     prompt.push('\n');
     prompt.push_str(&untrusted(
@@ -648,14 +686,23 @@ fn untrusted(nonce: &str, name: &str, content: &str) -> String {
 }
 
 fn nonce() -> String {
+    use std::io::Read;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    // /dev/urandom read is bounded: fs::read would drain a stream that never ends.
+    let mut rand = 0u32;
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let mut buf = [0u8; 4];
+        if f.read_exact(&mut buf).is_ok() {
+            rand = u32::from_le_bytes(buf);
+        }
+    }
     format!(
         "{:08x}{:08x}",
         (now & 0xffff_ffff) as u32,
-        std::process::id()
+        std::process::id() ^ rand
     )
 }
 
@@ -756,12 +803,15 @@ fn is_outside_non_bot(pull: &Value) -> bool {
 }
 
 fn node_for_key(find_out: &str, key: &str) -> Option<String> {
+    // The needle is scanned across every column: display-format changes may
+    // shift the title out of its column, and a false positive only skips a mint.
+    let needle = format!("Outside issue {key} ");
     for line in find_out.lines() {
         let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() < 5 {
+        if cols.len() < 2 {
             continue;
         }
-        if !cols[4].starts_with(&format!("Outside issue {key} ")) {
+        if !cols[1..].iter().any(|col| col.starts_with(&needle)) {
             continue;
         }
         if let Some(node) = id_from_slug_col(cols[0]) {
@@ -847,7 +897,10 @@ mod tests {
             ),
         )
         .unwrap();
-        std::env::set_var("FNO_PR_STATUS_CACHE_DIR", &dir);
+        // state_dir replaces the env path's last component with "pr-steward",
+        // so the override must name a throwaway child dir for the fixture
+        // paths to line up.
+        std::env::set_var("FNO_PR_STATUS_CACHE_DIR", dir.join("status"));
         std::env::set_var(
             "FNO_GLOBAL_SETTINGS_PATH",
             dir.join("global").join("settings.yaml"),
