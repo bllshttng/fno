@@ -2875,13 +2875,9 @@ mod tests {
                 Some(KeepReason::UserTyped { age_s: 17 * 60 })
             ),
         );
-    }
-
-    /// The sweep resolves the typed-turn scan lazily: only a verdict that
-    /// would retire pays for the read, and a typed answer flips the verdict
-    /// before the retirement lands.
-    #[test]
-    fn the_typed_turn_scan_runs_only_for_a_retire_bound_row() {
+        // The sweep resolves the fact lazily: only a verdict that would
+        // retire pays for the read, and a typed answer flips the verdict
+        // before the retirement lands.
         let mut row = retiring();
         assert_eq!(
             resolve_typed_turn(&mut row, (GcAction::Retire, None), GRACE, || Some(17 * 60)),
