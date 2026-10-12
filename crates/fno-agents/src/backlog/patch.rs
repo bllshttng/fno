@@ -1625,15 +1625,16 @@ mod tests {
         // A rollup-derived stale done (status done, completion cleared) is
         // not the done door's fact for a plan-holding row: the update door
         // owns leaving it, or the row deadlocks (reopen says not done,
-        // update says done).
+        // update says done). The rung door still owns the WORD: a plan
+        // deriving ready takes ready, not idea.
         let stale_done = node(
             "x-10",
             json!({ "status": "done", "plan_path": "plans/p.md" }),
         );
         let (_d, graph) = write_graph(&[stale_done]);
-        let receipt = apply(&graph, &req("x-10", Some("idea"), &[]))
+        let receipt = apply(&graph, &req("x-10", Some("ready"), &[]))
             .expect("a stale done leaves through the update door");
-        assert_eq!(receipt.status.to, "idea");
+        assert_eq!(receipt.status.to, "ready");
         // A derived-done row that holds nothing against the rollup (no plan
         // work) still routes to reopen, which stamps the durable hold.
         let derived_done = node("x-11", json!({ "status": "done" }));
