@@ -147,12 +147,7 @@ FIELD_META: dict[str, Meta] = {
     "batch.max_nodes": Meta("advanced", "Nodes per batch before it closes (default 3)."),
     "batch.max_loc": Meta("advanced", "Optional cumulative-diff LOC ceiling for a batch (off by default)."),
     # --- config.build.* ---
-    "build.agent_freeze": Meta(
-        "never",
-        "Agent build freeze: while set, the rustc wrapper's doors refuse an agent "
-        "session's compile and test run with exit 86 and name CI as the gate; the "
-        "user's own cargo and the install build still compile.",
-    ),
+    "build.agent_freeze": Meta("never", "Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile."),
     # --- config.post_merge.* ---
     "post_merge.parking_lot_path": Meta(
         "advanced", "Per-repo vault parking-lot path for the post-merge ritual (repo-relative).",
