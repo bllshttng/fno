@@ -577,6 +577,7 @@ pub(crate) fn dispatch_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
                 [
                     "id",
                     "slug",
+                    "status",
                     "parent",
                     "contained_in",
                     "plan_path",
@@ -697,8 +698,8 @@ fn hold_outcome(pr_number: u64, v: &crate::backlog_ready::HoldVerdictReceipt) ->
     let note = crate::merge_hold::disarm_automerge(pr_number);
     eprintln!("hold: auto-merge disarm for PR {pr_number}: {note}");
     ProbeOutcome::Refused(format!(
-        "{}: {}; set_by={}; release_when={}; review_on={}",
-        v.guard_reason, v.reason, v.set_by, v.release_when, v.review_on
+        "{}: {}; set_by={}; release_when={}; review_on={}; exempt={}",
+        v.guard_reason, v.reason, v.set_by, v.release_when, v.review_on, v.exempt
     ))
 }
 

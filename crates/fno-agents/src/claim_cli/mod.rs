@@ -11,6 +11,7 @@
 pub mod acquire;
 pub mod refresh;
 pub mod release;
+pub mod session_pid;
 pub mod status;
 
 use serde_json::Value;

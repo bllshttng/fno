@@ -334,3 +334,18 @@ def test_unknown_scope_is_refused_not_routed_to_global(tmp_path, monkeypatch):
     assert exc.value.exit_code == 2
     assert not (tmp_path / ".fno" / "config.toml").exists()
     assert not (tmp_path / "home" / ".fno" / "config.toml").exists()
+
+
+# ---------------------------------------------------------------------------
+# The build-freeze key is modeled, so the front door arms it and the stored
+# shape is a real table (the Rust reader walks nested keys).
+# ---------------------------------------------------------------------------
+
+
+def test_build_agent_freeze_roundtrip_writes_a_toml_table(tmp_path):
+    res = set_config_value(
+        "build.agent_freeze", "true", scope="project", repo_root=tmp_path
+    )
+    assert res.value is True
+    stored = _read(tmp_path)
+    assert stored["build"]["agent_freeze"] is True

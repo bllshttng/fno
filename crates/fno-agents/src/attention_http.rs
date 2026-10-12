@@ -559,6 +559,37 @@ fn full_message(item: &AttentionItem) -> String {
     parts.join(" | ")
 }
 
+/// Build the curl `--config` payload for one post. Every quoted value is
+/// escaped for the config grammar: a backslash or double quote inside a URL,
+/// a header or a temp path would otherwise close the quoted string early.
+fn curl_config(
+    url: &str,
+    headers: &[(String, String)],
+    body_path: &Path,
+    resp_path: &Path,
+) -> String {
+    fn quoted(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+    let mut config = format!(
+        "url = \"{}\"\nmax-time = \"{HTTP_POST_TIMEOUT_S}\"\nsilent\nshow-error\n",
+        quoted(url)
+    );
+    for (name, value) in headers {
+        config.push_str(&format!(
+            "header = \"{}: {}\"\n",
+            quoted(name),
+            quoted(value)
+        ));
+    }
+    config.push_str(&format!(
+        "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
+        quoted(&body_path.display().to_string()),
+        quoted(&resp_path.display().to_string())
+    ));
+    config
+}
+
 /// The real post: one `curl` child, config on stdin, body from a 0600 temp
 /// file. Exit non-zero or a timeout reads as no status (transient).
 pub struct CurlPost;
@@ -566,7 +597,7 @@ pub struct CurlPost;
 impl HttpPost for CurlPost {
     fn post(&mut self, url: &str, headers: &[(String, String)], body: &str) -> PostResult {
         let body_path = std::env::temp_dir().join(format!(
-            "fno-attention-post-{}-{}",
+            "fno-http-post-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -575,16 +606,7 @@ impl HttpPost for CurlPost {
         ));
         let _ = std::fs::write(&body_path, body);
         let resp_path = body_path.with_extension("resp");
-        let mut config =
-            format!("url = \"{url}\"\nmax-time = \"{HTTP_POST_TIMEOUT_S}\"\nsilent\nshow-error\n");
-        for (name, value) in headers {
-            config.push_str(&format!("header = \"{name}: {value}\"\n"));
-        }
-        config.push_str(&format!(
-            "data-binary = \"@{}\"\noutput = \"{}\"\nwrite-out = \"%{{http_code}}\"\n",
-            body_path.display(),
-            resp_path.display()
-        ));
+        let config = curl_config(url, headers, &body_path, &resp_path);
         let output = std::process::Command::new("curl")
             .arg("--config")
             .arg("-")

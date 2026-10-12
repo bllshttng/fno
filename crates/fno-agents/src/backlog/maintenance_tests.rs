@@ -220,7 +220,6 @@ fn stale_ideas_read_the_curation_touch_strictly_and_spare_movement() {
         }
         n
     };
-    let now = now_ms();
     let recent_vote = iso_days_ago(1);
     let entries = [
         idea("ab-old", json!({"created_at": iso_days_ago(40)})),
@@ -244,6 +243,9 @@ fn stale_ideas_read_the_curation_touch_strictly_and_spare_movement() {
         idea("ab-nots", json!({})),
         node("ab-ready", json!({"created_at": iso_days_ago(40)})),
     ];
+    // Read after the stamps: a clock read before them makes a 40-day stamp
+    // a millisecond short of 40 days, and the age floors to 39.
+    let now = now_ms();
     let stale = detect_stale_ideas(&entries, 30, now);
     assert_eq!(
         ids(&stale, |s| s.node_id.as_str()),

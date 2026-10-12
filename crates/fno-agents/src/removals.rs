@@ -63,7 +63,7 @@ fn parse_events(raw: &str) -> Vec<JEvent> {
             let v = serde_json::from_str::<Value>(line.trim()).ok()?;
             Some(JEvent {
                 ts: v.get("ts")?.as_str()?.to_string(),
-                kind: v.get("type")?.as_str()?.to_string(),
+                kind: crate::event_store::event_type_alias(v.get("type")?.as_str()?).to_string(),
                 data: v.get("data").cloned().unwrap_or(Value::Null),
             })
         })
@@ -144,7 +144,7 @@ fn team_at(grants: &[JEvent], vacates: &[JEvent], name: &str, before_ts: &str) -
     let g = grants
         .iter()
         .filter(|e| {
-            e.kind == "agent_teamed"
+            e.kind == "agent_promoted"
                 && s_str(&e.data, "name") == Some(name)
                 && tord(&e.ts) <= tord(before_ts)
         })
@@ -183,7 +183,7 @@ pub fn fold(
         .collect();
     let grants: Vec<JEvent> = global
         .iter()
-        .filter(|e| e.kind == "agent_teamed")
+        .filter(|e| e.kind == "agent_promoted")
         .cloned()
         .collect();
     let vacates: Vec<JEvent> = global
@@ -336,7 +336,7 @@ pub fn read(home: &AgentsHome, since_ms: Option<i64>) -> (Vec<Removal>, Vec<Stri
             read_journal(
                 &p,
                 EventQuery::of_types(&[
-                    "agent_teamed",
+                    "agent_promoted",
                     "agent_team_vacated",
                     "agent_session_id_uncaptured",
                 ]),
@@ -405,7 +405,7 @@ mod tests {
             r#"{"ts":"2026-09-28T16:48:49Z","type":"registry_row_removed","source":"python","data":{"harness":"codex","harness_session_id":"","name":"jolly-finch","pid":40417,"reason":"row 'jolly-finch': missing harness session identity","receipt_staged":false,"remover":"fno-py","short_id":""}}"#,
         ]);
         let global = lines(&[
-            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_teamed","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee,x-4444","vacated_scope":null}}"#,
+            r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_promoted","source":"python","data":{"grantor":"49a80492","level":2,"name":"jolly-finch","scope":"x-eeee,x-4444","vacated_scope":null}}"#,
             r#"{"ts":"2026-09-28T16:45:58Z","type":"agent_session_id_uncaptured","source":"python","data":{"harness":"codex","name":"jolly-finch","reason":"no unique codex rollout for this cwd after spawn"}}"#,
         ]);
         let out = fold(&[], &agent, &global);
@@ -485,12 +485,26 @@ mod tests {
     #[test]
     fn a_team_vacated_before_the_removal_is_not_reported() {
         let global = lines(&[
-            r#"{"ts":"2026-09-28T10:00:00Z","type":"agent_teamed","source":"python","data":{"level":1,"name":"quill","scope":"fno"}}"#,
+            r#"{"ts":"2026-09-28T10:00:00Z","type":"agent_promoted","source":"python","data":{"level":1,"name":"quill","scope":"fno"}}"#,
             r#"{"ts":"2026-09-28T11:00:00Z","type":"agent_team_vacated","source":"python","data":{"cause":"stepped_down","holder":"quill","level":1,"scope":"fno"}}"#,
         ]);
         let agent = r#"{"ts":"2026-09-28T12:00:00Z","type":"registry_row_removed","source":"python","data":{"name":"quill","receipt_staged":false,"remover":"daemon"}}"#;
         let out = fold(&[], agent, &global);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].team, None, "the team was vacated first");
+    }
+
+    /// A vacate stored under the old spelling still voids the team: the
+    /// parser canonicalizes the stored type before the fold reads it.
+    #[test]
+    fn an_old_spelling_vacate_still_voids_the_team() {
+        let global = lines(&[
+            r#"{"ts":"2026-09-28T10:00:00Z","type":"agent_promoted","source":"python","data":{"level":1,"name":"quill","scope":"fno"}}"#,
+            r#"{"ts":"2026-09-28T11:00:00Z","type":"agent_role_vacated","source":"python","data":{"cause":"stepped_down","holder":"quill","level":1,"scope":"fno"}}"#,
+        ]);
+        let agent = r#"{"ts":"2026-09-28T12:00:00Z","type":"registry_row_removed","source":"python","data":{"name":"quill","receipt_staged":false,"remover":"daemon"}}"#;
+        let out = fold(&[], agent, &global);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].team, None, "the old-spelling vacate still voids");
     }
 }
