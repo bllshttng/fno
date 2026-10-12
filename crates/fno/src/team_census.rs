@@ -526,7 +526,7 @@ mod tests {
     fn org_lead(
         holder: &str,
         title: Option<&str>,
-        sessions: &[(&str, Option<(&str, Option<&str>)>)],
+        sessions: &[(&str, Option<(u64, Option<&str>)>)],
     ) -> crate::org_model::OrgLead {
         crate::org_model::OrgLead {
             holder: AgentRow {
@@ -776,7 +776,7 @@ mod tests {
             .iter()
             .filter_map(|l| l.split(" live").next())
             .filter_map(|head| head.trim().rsplit(' ').next())
-            .filter_map(|n| n.parse().ok())
+            .filter_map(|n| n.parse::<u32>().ok())
             .sum();
         assert_eq!(
             shown + 7,

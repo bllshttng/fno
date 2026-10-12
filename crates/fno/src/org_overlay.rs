@@ -1170,9 +1170,13 @@ pub async fn gate_now() -> Result<GateReading, String> {
     command
         .args(["spawn-gate"])
         .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         // Dropped on timeout; kill_on_drop reaps the child so a hung probe
-        // cannot leak a process per TTL.
+        // cannot leak a process per TTL. stdout MUST be piped here: unlike
+        // `tokio_output`, `wait_with_output` reads the stdio this command
+        // already carries, and an inherited stdout paints the answer on the
+        // pane instead of parsing it.
         .kill_on_drop(true);
     let mut child = crate::process_admission::tokio_spawn(&mut command)
         .map_err(|e| format!("fno-agents spawn-gate could not start: {e}"))?;
@@ -1703,7 +1707,7 @@ mod tests {
 
         // The failure armed a retry delay, so the always-visible block does
         // not turn an instantly-failing fold into a hot refetch loop.
-        assert!(!panel.take_want(&[]));
+        assert!(panel.take_want(&[]).is_none());
         assert!(panel.refresh_deadline().is_some_and(|t| t > Instant::now()));
 
         // The spin: a stale reading arms a refresh, the refresh fails, and
