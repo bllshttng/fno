@@ -630,11 +630,33 @@ fn probe_fno_bin() -> PathBuf {
     bin
 }
 
-/// One headless turn through the declared `headless_resume` argv. A
-/// `fno-agents <verb>` form runs as `fno agents <verb>`, so the turn uses the
-/// FNO_PROBE_FNO build the run drives.
-fn ask_headless(root: &IsolatedRoot, argv: &[String], message: &str) -> (Option<i32>, String) {
-    if argv[0] == "fno-agents" {
+/// One headless line: send `message` through the declared `headless_resume`
+/// argv, then read `marker` in the reply or the logs. A marker the logs held
+/// before the turn is not this turn's answer, and a `prior` marker must
+/// already be in the logs. A `fno-agents <verb>` form runs as
+/// `fno agents <verb>`, so the turn uses the FNO_PROBE_FNO build.
+#[allow(clippy::too_many_arguments)]
+fn headless_turn(
+    root: &IsolatedRoot,
+    name: &str,
+    argv: Option<&Vec<String>>,
+    line: &str,
+    label: &str,
+    message: &str,
+    marker: &str,
+    prior: Option<&str>,
+) -> LineVerdict {
+    let Some(argv) = argv else {
+        return LineVerdict::new(
+            line,
+            "skip",
+            label,
+            1,
+            "no session id to render the declared headless_resume form".to_string(),
+        );
+    };
+    let (_, logs_before) = root.fno(&["agents", "logs", name]);
+    let (code, reply) = if argv[0] == "fno-agents" {
         let mut ask: Vec<&str> = vec!["agents"];
         ask.extend(argv[1..].iter().map(String::as_str));
         ask.push(message);
@@ -644,7 +666,23 @@ fn ask_headless(root: &IsolatedRoot, argv: &[String], message: &str) -> (Option<
         cmd.args(&argv[1..]).arg(message);
         root.child_env(&mut cmd);
         run_command_bounded(cmd, LIVE_SPAWN_TIMEOUT_S)
-    }
+    };
+    retry_marker(
+        line,
+        label,
+        || {
+            let (_, logs_after) = root.fno(&["agents", "logs", name]);
+            if code == Some(0)
+                && prior.is_none_or(|prior| logs_before.contains(prior))
+                && !logs_before.contains(marker)
+                && (reply.contains(marker) || logs_after.contains(marker))
+            {
+                return marker.to_string();
+            }
+            String::new()
+        },
+        Duration::from_millis(500),
+    )
 }
 
 impl Drop for IsolatedRoot {
@@ -1047,34 +1085,16 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     let mail_message = format!("PROBE_MAIL={mail_nonce}");
     let reply_marker = format!("PROBE_REPLY={mail_nonce}");
     let mail = if substrate == Some("headless") {
-        match &resume_argv {
-            Some(argv) => {
-                let (_, logs_before_mail) = root.fno(&["agents", "logs", &name]);
-                let (ask_code, reply) = ask_headless(root, argv, &mail_message);
-                retry_marker(
-                    "MAIL BOTH WAYS",
-                    "worker response to sent message",
-                    || {
-                        let (_, logs_after) = root.fno(&["agents", "logs", &name]);
-                        if ask_code == Some(0)
-                            && !logs_before_mail.contains(&reply_marker)
-                            && (reply.contains(&reply_marker) || logs_after.contains(&reply_marker))
-                        {
-                            return reply_marker.clone();
-                        }
-                        String::new()
-                    },
-                    Duration::from_millis(500),
-                )
-            }
-            None => LineVerdict::new(
-                "MAIL BOTH WAYS",
-                "skip",
-                "worker response to sent message",
-                1,
-                "no session id to render the declared headless_resume form".to_string(),
-            ),
-        }
+        headless_turn(
+            root,
+            &name,
+            resume_argv.as_ref(),
+            "MAIL BOTH WAYS",
+            "worker response to sent message",
+            &mail_message,
+            &reply_marker,
+            None,
+        )
     } else {
         let (_mail_code, _) = root.fno(&["agents", "mail", "send", &name, &mail_message]);
         let (_, logs_before_mail) = root.fno(&["agents", "logs", &name]);
@@ -1131,40 +1151,16 @@ fn run_live_rubric(harness: &str, root: &IsolatedRoot) -> (Vec<LineVerdict>, Iso
     // A headless one-shot has already exited after its answer, so the stop
     // is given; the declared headless_resume form carries the next turn.
     if substrate == Some("headless") {
-        match &resume_argv {
-            Some(argv) => {
-                let seed_marker = format!("PROBE_SEED={nonce}");
-                let survive_marker = format!("PROBE_SURVIVE={nonce}");
-                let (_, logs_at_start) = root.fno(&["agents", "logs", &name]);
-                let (resume_code, reply) =
-                    ask_headless(root, argv, &format!("PROBE_SURVIVE_REQUEST={nonce}"));
-                let survive = retry_marker(
-                    "SURVIVE",
-                    "prior turn after process stop",
-                    || {
-                        let (_, logs_after) = root.fno(&["agents", "logs", &name]);
-                        if resume_code == Some(0)
-                            && logs_at_start.contains(&seed_marker)
-                            && !logs_at_start.contains(&survive_marker)
-                            && (reply.contains(&survive_marker)
-                                || logs_after.contains(&survive_marker))
-                        {
-                            return survive_marker.clone();
-                        }
-                        String::new()
-                    },
-                    Duration::from_millis(500),
-                );
-                lines.push(survive);
-            }
-            None => lines.push(LineVerdict::new(
-                "SURVIVE",
-                "skip",
-                "prior turn after process stop",
-                1,
-                "no session id to render the declared headless_resume form".to_string(),
-            )),
-        }
+        lines.push(headless_turn(
+            root,
+            &name,
+            resume_argv.as_ref(),
+            "SURVIVE",
+            "prior turn after process stop",
+            &format!("PROBE_SURVIVE_REQUEST={nonce}"),
+            &format!("PROBE_SURVIVE={nonce}"),
+            Some(format!("PROBE_SEED={nonce}").as_str()),
+        ));
     } else if !mux_session.is_empty() && !mux_pane.is_empty() {
         let (kill_code, _) =
             root.fno(&["mux", "pane", "kill", "--server", &mux_session, &mux_pane]);
