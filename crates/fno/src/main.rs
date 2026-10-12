@@ -85,6 +85,11 @@ enum Role {
     /// (v78) `mux stats [--json]`: server-instance telemetry (the human_touch
     /// emission-failure counter with its measurement window). Hidden, read-only.
     MuxStats(bool),
+    /// (v110) `mux notify <title> <message> [--json]`: one desktop
+    /// notification through every attached client's tty. Hidden transport for
+    /// `fno notify`'s client-first leg; the receipt's `clients` count is the
+    /// delivery verdict.
+    MuxNotify(String, String, bool),
     /// `mux pane <verb> ...`: the v4 script API. The operation is the typed
     /// tree's verdict; the argv is the re-sliced family tail. No TTY needed
     /// (control verbs are scriptable one-shots).
@@ -470,6 +475,11 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Ls { json } => Role::MuxLs(json.json),
             cli_args::MuxCmd::Doctor { json } => Role::MuxDoctor(json.json),
             cli_args::MuxCmd::Stats { json } => Role::MuxStats(json.json),
+            cli_args::MuxCmd::Notify {
+                title,
+                message,
+                json,
+            } => Role::MuxNotify(title, message, json.json),
             cli_args::MuxCmd::KillServer {
                 name,
                 json,
@@ -667,6 +677,9 @@ fn main() {
         Role::InboxDecide(rest) => std::process::exit(fno::law_cli::run_decide(&rest)),
         Role::BoardRender(rest) => std::process::exit(fno::backlog_snapshot::run(&rest)),
         Role::MuxStats(json) => std::process::exit(mux_cli::stats(json)),
+        Role::MuxNotify(title, message, json) => {
+            std::process::exit(mux_cli::notify(&title, &message, json))
+        }
         Role::MuxSnapshot(tail) => match fno::client::snapshot::parse(&tail) {
             Ok(args) => std::process::exit(fno::client::snapshot::run(args)),
             Err(usage) => {
